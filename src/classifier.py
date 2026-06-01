@@ -60,32 +60,50 @@ def fits_context(prompt: str, n_hunks: int, context_window: int = DEFAULT_CONTEX
     return (est_in + est_out <= usable, est_in, usable)
 
 
-def find_claude_bin(override: str | None = None) -> str:
-    """Locate the `claude` executable.
-
-    Order: explicit override → CLAUDE_BIN env → PATH → newest VSCode extension.
-    """
-    if override:
-        if Path(override).is_file():
-            return override
-        raise ClassifierError(f"--claude-bin not found: {override}")
-
+def _locate_claude() -> str | None:
+    """Find the `claude` executable: CLAUDE_BIN env → PATH → newest VSCode ext."""
     env = os.environ.get("CLAUDE_BIN")
     if env and Path(env).is_file():
         return env
-
     on_path = shutil.which("claude")
     if on_path:
         return on_path
+    candidates = sorted((Path.home() / ".vscode" / "extensions").glob(_VSCODE_EXT_GLOB))
+    return str(candidates[-1]) if candidates else None  # lexically-last ≈ newest
 
-    ext_root = Path.home() / ".vscode" / "extensions"
-    candidates = sorted(ext_root.glob(_VSCODE_EXT_GLOB))
-    if candidates:
-        return str(candidates[-1])  # lexically-last ≈ newest version
+
+def _locate_copilot() -> str | None:
+    """Find the GitHub Copilot CLI: COPILOT_BIN env → `copilot` on PATH."""
+    env = os.environ.get("COPILOT_BIN")
+    if env and Path(env).is_file():
+        return env
+    return shutil.which("copilot")
+
+
+def resolve_backend(claude_override: str | None = None) -> tuple[str, str]:
+    """Pick the LLM backend, preferring Claude, falling back to GitHub Copilot.
+
+    Both run on the user's existing subscription (no API key). Returns
+    (kind, binary) where kind is "claude" or "copilot". An explicit
+    --claude-bin forces Claude.
+    """
+    if claude_override:
+        if Path(claude_override).is_file():
+            return ("claude", claude_override)
+        raise ClassifierError(f"--claude-bin not found: {claude_override}")
+
+    claude = _locate_claude()
+    if claude:
+        return ("claude", claude)
+
+    copilot = _locate_copilot()
+    if copilot:
+        return ("copilot", copilot)
 
     raise ClassifierError(
-        "Could not find the `claude` CLI. Put it on PATH, set CLAUDE_BIN, "
-        "or pass --claude-bin /path/to/claude."
+        "Could not find an LLM CLI. Install the `claude` CLI (Claude Code "
+        "subscription) or the GitHub `copilot` CLI, put one on PATH, or set "
+        "CLAUDE_BIN / COPILOT_BIN."
     )
 
 
@@ -184,7 +202,13 @@ def _extract_json_array(text: str) -> list[dict]:
     return json.loads(m.group(0))
 
 
-def _run_claude(prompt: str, claude_bin: str, model: str) -> str:
+def _run_backend(kind: str, binary: str, prompt: str, model: str) -> str:
+    """Run the chosen backend and return the model's raw text reply."""
+    return _run_claude(binary, prompt, model) if kind == "claude" \
+        else _run_copilot(binary, prompt)
+
+
+def _run_claude(claude_bin: str, prompt: str, model: str) -> str:
     # Feed the prompt via stdin, NOT as an argv entry: a large diff easily exceeds
     # the OS ARG_MAX limit (OSError [Errno 7] Argument list too long).
     cmd = [claude_bin, "-p", "--output-format", "json", "--model", model]
@@ -202,6 +226,29 @@ def _run_claude(prompt: str, claude_bin: str, model: str) -> str:
     return envelope.get("result", "")
 
 
+def _run_copilot(copilot_bin: str, prompt: str) -> str:
+    """Run the GitHub Copilot CLI headless, on the user's Copilot subscription.
+
+    Prompt goes via stdin (large diffs would blow ARG_MAX as an argv entry). We
+    let the Copilot subscription pick the model (override with COPILOT_MODEL).
+    Copilot prints its answer to stdout; the prompt asks for a bare JSON array and
+    `_extract_json_array` tolerates any surrounding chatter, so we return stdout
+    as-is. `--allow-all-tools` keeps it non-interactive (no per-tool prompts).
+    """
+    cmd = [copilot_bin, "-p", "--allow-all-tools"]
+    model = os.environ.get("COPILOT_MODEL")
+    if model:
+        cmd += ["--model", model]
+    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise ClassifierError(
+            f"copilot CLI failed (exit {proc.returncode}): {proc.stderr.strip()[:300]}"
+        )
+    if not proc.stdout.strip():
+        raise ClassifierError(f"copilot CLI returned no output: {proc.stderr.strip()[:200]!r}")
+    return proc.stdout
+
+
 def classify(
     hunks: list[Hunk],
     *,
@@ -217,17 +264,18 @@ def classify(
     if not hunks:
         return
 
-    binary = find_claude_bin(claude_bin)
+    kind, binary = resolve_backend(claude_bin)
     prompt = _build_prompt(hunks)
 
     fits, est_in, usable = fits_context(prompt, len(hunks), context_window)
     if verbose:
-        print(f"[classifier] {len(hunks)} hunks -> {binary} (model={model})")
+        shown_model = model if kind == "claude" else (os.environ.get("COPILOT_MODEL") or "copilot default")
+        print(f"[classifier] {len(hunks)} hunks -> {kind}: {binary} (model={shown_model})")
         print(f"[classifier] ~{est_in:,} input tokens estimated; ~{usable:,} usable")
     if not fits:
         print(
             f"warning: diff is ~{est_in:,} tokens, near/over the ~{usable:,}-token "
-            f"usable budget for {model}. The classify pass may truncate or fail. "
+            f"usable budget. The classify pass may truncate or fail. "
             f"Try a narrower --git range, or split the diff (chunking is on the roadmap).",
             file=sys.stderr,
         )
@@ -236,7 +284,7 @@ def classify(
     last_err: Exception | None = None
     for attempt in (1, 2):  # one retry on malformed JSON
         try:
-            raw = _run_claude(prompt, binary, model)
+            raw = _run_backend(kind, binary, prompt, model)
             for item in _extract_json_array(raw):
                 if isinstance(item, dict) and "id" in item:
                     labels[str(item["id"])] = item

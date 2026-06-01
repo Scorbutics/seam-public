@@ -73,9 +73,12 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-You also need the Claude Code `claude` CLI available (it ships with the desktop /
-VSCode app). It is auto-detected from PATH, `$CLAUDE_BIN`, or the VSCode
-extension; override with `--claude-bin /path/to/claude`.
+You need a subscription-backed LLM CLI (no API key). The classifier prefers the
+Claude Code `claude` CLI (auto-detected from PATH, `$CLAUDE_BIN`, or the VSCode
+extension; override with `--claude-bin`). If `claude` is not found, it **falls
+back to the GitHub `copilot` CLI** (auto-detected from PATH or `$COPILOT_BIN`),
+using your Copilot subscription model — set `$COPILOT_MODEL` to pick a specific
+one. Order: `--claude-bin` → `claude` → `copilot`.
 
 ## Usage
 
