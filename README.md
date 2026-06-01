@@ -105,8 +105,6 @@ inspect; each CLI's own progress logs (if any) show up on its stderr, which
 
 ### Speed & cost
 
-`claude -p` is run **lean**: extended thinking is disabled
-(`MAX_THINKING_TOKENS=0`) and ambient MCP servers are ignored
 (`--strict-mcp-config`). This is a labeling task, not agentic work — thinking
 otherwise burns ~10× the output tokens (≈80s / $0.05 → ≈3s / $0.008 on a small
 diff). If seaming/wiring quality ever dips, re-enable some reasoning by setting

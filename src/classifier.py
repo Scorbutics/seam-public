@@ -209,12 +209,7 @@ def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = 
 def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -> str:
     # Feed the prompt via stdin, NOT as an argv entry: a large diff easily exceeds
     # the OS ARG_MAX limit (OSError [Errno 7] Argument list too long).
-    #
-    # Run LEAN. This is a structuring task, not agentic work, so:
-    #   - MAX_THINKING_TOKENS=0 turns OFF extended thinking, which otherwise burns
-    #     ~10x the output tokens (≈80s/$0.05 -> ≈3s/$0.008 on a small diff). Set
-    #     the env var yourself to re-enable some reasoning if seaming quality dips.
-    #   - --strict-mcp-config ignores ambient MCP servers (their tool schemas add
+    # --strict-mcp-config ignores ambient MCP servers (their tool schemas add
     #     latency and input tokens we never use).
     cmd = [claude_bin, "-p", "--output-format", "json", "--model", model,
            "--strict-mcp-config"]
