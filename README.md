@@ -1,4 +1,4 @@
-# code-review-sort
+# Seam
 
 An MVP that takes a real diff and presents it **decomposed by role** —
 **core / link / environment / noise** — so you can review *by intent* instead of
