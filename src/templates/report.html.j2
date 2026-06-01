@@ -38,6 +38,23 @@
   .chip.environment { background: var(--environment); } .chip.noise { background: var(--noise); }
   .chip.clusters { background: #555; }
 
+  /* --- diff view toggle (unified / split) --- */
+  .viewtoggle {
+    margin-left: auto; display: inline-flex; align-items: stretch;
+    border: 1px solid var(--border); border-radius: 999px; overflow: hidden;
+  }
+  .viewtoggle button {
+    border: 0; background: var(--card); color: var(--muted); cursor: pointer;
+    font: inherit; font-size: .8rem; font-weight: 600; padding: .25rem .85rem;
+  }
+  .viewtoggle button + button { border-left: 1px solid var(--border); }
+  .viewtoggle button.active { background: #555; color: #fff; }
+  body.split-view .wrap { max-width: 1600px; }
+  @media (max-width: 700px) {
+    .viewtoggle { margin-left: 0; }
+    body.split-view .wrap { max-width: 1100px; }
+  }
+
   /* --- intent cluster --- */
   details.cluster {
     border: 1px solid var(--border); border-radius: 12px; margin: 1rem 0;
@@ -154,6 +171,10 @@
     {% if isolated_cores %}
     <span class="chip isolated">⚠ isolated core<span class="n">{{ isolated_cores }}</span></span>
     {% endif %}
+    <div class="viewtoggle" role="group" aria-label="Diff view mode">
+      <button type="button" data-format="line-by-line">Unified</button>
+      <button type="button" data-format="side-by-side">Split</button>
+    </div>
   </div>
 
   {% for cl in clusters %}
@@ -218,20 +239,38 @@
 <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
 <script>
   const DIFFS = {{ diffs_json | safe }};
-  const config = {
-    drawFileList: false,
-    matching: "lines",
-    outputFormat: "line-by-line",
-    highlight: true,
-  };
-  for (const [key, diffString] of Object.entries(DIFFS)) {
-    const el = document.getElementById("diff-" + key);
-    if (el && diffString) {
-      const ui = new Diff2HtmlUI(el, diffString, config);
-      ui.draw();
-      ui.highlightCode();
+  const BASE_CONFIG = { drawFileList: false, matching: "lines", highlight: true };
+  const STORAGE_KEY = "crs-diff-view";
+
+  function renderDiffs(format) {
+    const config = Object.assign({}, BASE_CONFIG, { outputFormat: format });
+    for (const [key, diffString] of Object.entries(DIFFS)) {
+      const el = document.getElementById("diff-" + key);
+      if (el && diffString) {
+        el.innerHTML = "";
+        const ui = new Diff2HtmlUI(el, diffString, config);
+        ui.draw();
+        ui.highlightCode();
+      }
     }
   }
+
+  function applyView(format) {
+    document.body.classList.toggle("split-view", format === "side-by-side");
+    document.querySelectorAll(".viewtoggle button").forEach(function (b) {
+      b.classList.toggle("active", b.dataset.format === format);
+    });
+    renderDiffs(format);
+    try { localStorage.setItem(STORAGE_KEY, format); } catch (e) {}
+  }
+
+  document.querySelectorAll(".viewtoggle button").forEach(function (b) {
+    b.addEventListener("click", function () { applyView(b.dataset.format); });
+  });
+
+  let initial = "line-by-line";
+  try { initial = localStorage.getItem(STORAGE_KEY) || initial; } catch (e) {}
+  applyView(initial);
 </script>
 </body>
 </html>
