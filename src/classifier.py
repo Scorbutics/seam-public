@@ -93,7 +93,7 @@ _PROMPT_HEADER = """\
 You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
 review, judge, score, approve, or comment on quality. You only structure.
 
-Do TWO things, using the whole diff as context:
+Do THREE things, using the whole diff as context:
 
 1) GROUP the hunks into INTENT CLUSTERS — coherent sub-changes. A diff often
    contains several distinct intents; each becomes one group. Grouping is
@@ -112,7 +112,22 @@ Do TWO things, using the whole diff as context:
    - Split into separate clusters ONLY when two intents could ship in separate
      PRs without depending on each other. If unsure, MERGE.
 
-2) ROLE each hunk within its group (roles only make sense together — links tell
+2) Within each cluster, SEAM the hunks into core↔link wirings. A seam is ONE
+   core (the new/changed thing) together with the SPECIFIC link(s) that wire
+   THAT core into the system — and any environment ripple for that wiring. This
+   is the finest grammar: a link belongs in the seam of the exact core it joins.
+   - Give each seam an id unique WITHIN its cluster ("s1", "s2", ...) and a short
+     seam label (<= 6 words) naming the wiring (e.g. "editable-table call-site").
+   - PAIR, don't split: a link and the core it wires MUST share a seam. Do NOT
+     put every hunk in its own seam. A single-role seam (core-only or link-only)
+     is allowed ONLY when that hunk genuinely has no counterpart in the diff (a
+     truly isolated core, or a dangling link) — not merely because pairing is
+     uncertain. If a link plausibly wires a core present here, seam them together.
+   - If a cluster is a single core + its links, that is just one seam.
+   Seaming is what lets a reviewer read a core RIGHT NEXT TO the link that wires
+   it — keep paired hunks in the same seam.
+
+3) ROLE each hunk within its seam (roles only make sense together — links tell
    you where to expect cores):
    - core: the new or changed logic the sub-change is fundamentally about.
    - link: the joints wiring the new thing in — params threading across layers,
@@ -122,9 +137,10 @@ Do TWO things, using the whole diff as context:
    - noise: formatting/indentation that slipped through — no logical effect.
 
 Return ONLY a JSON array, no prose, no markdown fences. One object per hunk:
-[{"id":"h1","group":"g1","intent":"add currency to checkout","role":"core","rationale":"<=12 words"}]
-Every hunk in the same group MUST repeat the same intent string. The rationale
-is a STRUCTURING note (why this role), never a quality judgement.
+[{"id":"h1","group":"g1","intent":"add currency to checkout","seam":"s1","seam_label":"gateway call-site","role":"core","rationale":"<=12 words"}]
+Every hunk in the same group MUST repeat the same intent string; every hunk in
+the same seam MUST repeat the same seam_label. The rationale is a STRUCTURING
+note (why this role), never a quality judgement.
 
 === HUNKS ===
 """
@@ -218,14 +234,19 @@ def classify(
     if not labels and last_err:
         raise ClassifierError(f"Classification failed after retry: {last_err}")
 
-    # Collect a fallback intent label per group, so a hunk missing its own
-    # `intent` still inherits the group's label.
+    # Collect fallback labels so a hunk missing its own label inherits its
+    # group's intent / seam's seam_label.
     group_intent: dict[str, str] = {}
+    seam_label: dict[tuple[str, str], str] = {}
     for item in labels.values():
         g = str(item.get("group", "")).strip()
         it = str(item.get("intent", "")).strip()
         if g and it and g not in group_intent:
             group_intent[g] = it
+        s = str(item.get("seam", "")).strip()
+        sl = str(item.get("seam_label", "")).strip()
+        if g and s and sl and (g, s) not in seam_label:
+            seam_label[(g, s)] = sl
 
     for h in hunks:
         item = labels.get(h.id) or {}
@@ -235,6 +256,9 @@ def classify(
             h.rationale = str(item.get("rationale", "")).strip()
             h.group = str(item.get("group", "")).strip()
             h.intent = str(item.get("intent", "")).strip() or group_intent.get(h.group, "")
+            h.seam = str(item.get("seam", "")).strip()
+            h.seam_label = (str(item.get("seam_label", "")).strip()
+                            or seam_label.get((h.group, h.seam), ""))
         else:
             # Unclassified → default to core (heaviest verification = safe direction).
             h.role = "core"

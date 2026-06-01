@@ -40,13 +40,20 @@ presentation deliver the value, or was the value the mental discipline?
    per file. Noise is pulled into one global collapsed section. Self-contained
    responsive HTML (diff2html via CDN).
 
+   Two grouping levels make core↔link triangulation tight:
+   - **Intent cluster** (coarse, "why") — the sub-change's purpose.
+   - **Seam** (fine, "which wiring") — one core and the *specific* link(s) that
+     wire it, shown adjacent so you read a core right next to its link. Seams are
+     labeled blocks within a cluster; the §3 self-check ("is this link where this
+     core led you to expect it?") runs per seam.
+
    The report is **intent-first drill-down**: clusters are collapsed by default,
    so you scan the intent headings, role pills, and any warnings, then expand only
-   what looks risky. Each cluster runs a **triangulation check**: a core with no
-   link in its cluster is flagged *⚠ isolated core* ("verify its consumer — it may
-   be in another cluster or outside the diff"); a link with no core, or an
-   ambient-only cluster (data/config delegation), gets its own note. The tool still
-   only structures — these are flags to look at, never a score.
+   what looks risky. The **triangulation check** runs per seam: a core with no
+   link in its seam is flagged *⚠ isolated core*; a link with no core is a
+   *dangling link*; an ambient-only seam is *delegated* (data/config). Seam-level
+   warnings roll up to a badge on the collapsed cluster so risk stays visible. The
+   tool still only structures — these are flags to look at, never a score.
 
 ## Install
 

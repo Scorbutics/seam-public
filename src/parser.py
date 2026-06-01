@@ -29,6 +29,8 @@ class Hunk:
     rationale: str = ""
     group: str = ""          # intent-cluster id, e.g. "g1" (empty for noise)
     intent: str = ""         # short human label of the cluster's intent
+    seam: str = ""           # within-cluster wiring id, e.g. "s1" (one core↔link pairing)
+    seam_label: str = ""     # short human label of the seam (the wiring)
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""

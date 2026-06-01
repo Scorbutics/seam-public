@@ -17,6 +17,7 @@ different tier (§2), not part of any intent's triangulation.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
@@ -100,7 +101,7 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     """
     non_noise = [h for h in hunks if h.role != "noise"]
 
-    # Preserve first-appearance order of groups; gather a label per group.
+    # Preserve first-appearance order of groups.
     group_order: list[str] = []
     for h in non_noise:
         gid = h.group or "ungrouped"
@@ -113,74 +114,134 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
         members = [h for h in non_noise if (h.group or "ungrouped") == gid]
         intent = next((h.intent for h in members if h.intent), "") or "(unlabeled change)"
 
-        blocks = []
-        for role in _CLUSTER_ROLES:
-            role_hunks = [h for h in members if h.role == role]
-            if not role_hunks:
-                continue
-            key = f"{gid}-{role}"
-            diff_str = _merged_diff(role_hunks)
-            if diff_str.strip():
-                diffs[key] = diff_str
-            items = _file_items(role_hunks)
-            whys: list[str] = []
-            for it in items:
-                for r in it["rationales"]:
-                    if r not in whys:
-                        whys.append(r)
-            blocks.append({
-                "role": role,
-                "key": key,
-                "has_diff": bool(diff_str.strip()),
-                "items": items,
-                "files": [it["file"] for it in items],
-                "whys": whys,
-                "notes": _notes(role_hunks),
-                "count": len(role_hunks),
+        # Seams within the cluster (first-appearance order). Each seam is one
+        # core↔link wiring; role blocks live inside it so a core sits next to
+        # the link that wires it.
+        seam_order: list[str] = []
+        for h in members:
+            sid = h.seam or "s0"
+            if sid not in seam_order:
+                seam_order.append(sid)
+        # Order seams by their id (s1, s2, …) so the primary wiring leads, rather
+        # than by file-appearance order which would surface ambient seams first.
+        seam_order.sort(key=lambda s: (int(m.group()) if (m := re.search(r"\d+", s)) else 1_000_000, s))
+
+        seams: list[dict] = []
+        cluster_kinds: dict[str, int] = {}
+        for sid in seam_order:
+            seam_hunks = [h for h in members if (h.seam or "s0") == sid]
+            label = next((h.seam_label for h in seam_hunks if h.seam_label), "")
+            blocks = _role_blocks(seam_hunks, f"{gid}-{sid}", diffs)
+            s_has_core = any(b["role"] == "core" for b in blocks)
+            s_has_link = any(b["role"] == "link" for b in blocks)
+            verification = _verify_pair(s_has_core, s_has_link)
+            for w in verification["warnings"]:
+                cluster_kinds[w["kind"]] = cluster_kinds.get(w["kind"], 0) + 1
+            seams.append({
+                "id": sid,
+                "label": label,
+                "blocks": blocks,
+                "has_core": s_has_core,
+                "has_link": s_has_link,
+                "verification": verification,
+                "count": len(seam_hunks),
             })
 
-        has_core = any(b["role"] == "core" for b in blocks)
-        has_link = any(b["role"] == "link" for b in blocks)
+        role_pills = [
+            {"role": role, "count": sum(1 for h in members if h.role == role)}
+            for role in _CLUSTER_ROLES
+            if any(h.role == role for h in members)
+        ]
         clusters.append({
             "id": gid,
             "intent": intent,
-            "blocks": blocks,
+            "seams": seams,
+            "n_seams": len(seams),
+            "role_pills": role_pills,
             "count": len(members),
-            "has_link": has_link,
-            "has_core": has_core,
-            "verification": _verify_cluster(has_core, has_link),
+            "warnings": _aggregate_warnings(cluster_kinds),
         })
 
     return clusters, diffs
 
 
-def _verify_cluster(has_core: bool, has_link: bool) -> dict:
-    """Per-cluster triangulation check (§3) — a flag + warnings, NOT a re-bucketing.
+def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> list[dict]:
+    """Build the per-role blocks (core → link → environment) for a set of hunks,
+    merged per file, and register each block's diff string under `key_prefix`."""
+    blocks: list[dict] = []
+    for role in _CLUSTER_ROLES:
+        role_hunks = [h for h in hunks if h.role == role]
+        if not role_hunks:
+            continue
+        key = f"{key_prefix}-{role}"
+        diff_str = _merged_diff(role_hunks)
+        if diff_str.strip():
+            diffs[key] = diff_str
+        items = _file_items(role_hunks)
+        whys: list[str] = []
+        for it in items:
+            for r in it["rationales"]:
+                if r not in whys:
+                    whys.append(r)
+        blocks.append({
+            "role": role,
+            "key": key,
+            "has_diff": bool(diff_str.strip()),
+            "items": items,
+            "files": [it["file"] for it in items],
+            "whys": whys,
+            "notes": _notes(role_hunks),
+            "count": len(role_hunks),
+        })
+    return blocks
 
-    Cluster-granularity only: we flag when a role is *entirely* absent of its
-    counterpart. We deliberately do NOT claim "impact not in diff" — an isolated
-    core may have its link in another cluster (the tool can't tell without the
-    deferred cross-cluster/meta-link detector), so the warning says only what it
-    knows: "no link in this cluster".
+
+def _verify_pair(has_core: bool, has_link: bool) -> dict:
+    """Triangulation check (§3) for one seam — a flag + warning, NOT a re-bucketing.
+
+    A seam IS the core↔link unit, so this is where the check is most natural: we
+    flag when one side is absent. We deliberately do NOT claim "impact not in
+    diff" — an isolated core may have its consumer in another seam/cluster (the
+    tool can't tell without the deferred meta-link detector), so the warning says
+    only what it knows: "no link in this seam".
     """
     warnings: list[dict] = []
     if has_core and not has_link:
         warnings.append({
             "kind": "isolated-core",
-            "text": "isolated core — no link in this cluster; verify the consumer "
-                    "(may be in another cluster or outside the diff)",
+            "text": "isolated core — no link in this seam; verify the consumer "
+                    "(may be in another seam/cluster or outside the diff)",
         })
     elif has_link and not has_core:
         warnings.append({
             "kind": "dangling-link",
-            "text": "link with no core in this cluster — wires to something changed elsewhere",
+            "text": "dangling link — no core in this seam; wires to something changed elsewhere",
         })
     elif not has_core and not has_link:
         warnings.append({
             "kind": "delegated",
-            "text": "no core/link — data/config or ambient ripple; trust delegated to the consumer",
+            "text": "ambient only — no core/link; trust delegated to the consumer",
         })
     return {"triangulated": has_core and has_link, "warnings": warnings}
+
+
+_WARN_LABELS = {
+    "isolated-core": "isolated core",
+    "dangling-link": "dangling link",
+    "delegated": "ambient only",
+}
+
+
+def _aggregate_warnings(kinds: dict[str, int]) -> list[dict]:
+    """Roll seam-level warnings up to one badge per kind for the (collapsed)
+    cluster summary, so risk stays visible before you expand."""
+    out = []
+    for kind, label in _WARN_LABELS.items():
+        n = kinds.get(kind, 0)
+        if n:
+            suffix = " seams" if n > 1 else " seam"
+            out.append({"kind": kind, "count": n, "text": f"{n} {label}{suffix}"})
+    return out
 
 
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
@@ -202,8 +263,8 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     counts = {role: sum(1 for h in hunks if h.role == role)
               for role in ("core", "link", "environment", "noise")}
     isolated_cores = sum(
-        1 for cl in clusters
-        if any(w["kind"] == "isolated-core" for w in cl["verification"]["warnings"])
+        w["count"] for cl in clusters for w in cl["warnings"]
+        if w["kind"] == "isolated-core"
     )
 
     # JSON destined for a <script> block: escape so it can't break out of the

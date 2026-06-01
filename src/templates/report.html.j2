@@ -79,7 +79,24 @@
   details.cluster[open] .drill::after { content: "▾ hide hunks"; }
   details.cluster:not([open]) .drill::after { content: "▸ show hunks"; }
 
-  /* --- role block inside a cluster --- */
+  /* --- seam: one core↔link wiring inside a cluster --- */
+  .seam {
+    border: 1px solid var(--border); border-radius: 9px; margin: .8rem 0;
+    padding: .2rem .8rem .6rem; background: var(--bg);
+  }
+  .seam.seam-warn { border-color: var(--warn); background: var(--warn-bg); }
+  .seam.seam-warn .roleblock, .seam.seam-warn .selfcheck { background: var(--bg); border-radius: 6px; }
+  .seam-head {
+    display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap;
+    padding: .5rem 0 .2rem; border-bottom: 1px solid var(--border); margin-bottom: .3rem;
+  }
+  .seam-tag {
+    font-family: ui-monospace, monospace; font-size: .7rem; color: var(--muted);
+    background: var(--card2); border-radius: 5px; padding: .08rem .35rem;
+  }
+  .seam-label { font-weight: 600; font-size: .9rem; }
+
+  /* --- role block inside a seam --- */
   .roleblock { margin: .7rem 0 1rem; }
   .roleblock-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 .4rem; }
   .roleblock-head .files { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all; }
@@ -145,28 +162,39 @@
       <span class="cl-tag">{{ cl.id }}</span>
       <span class="cl-intent">{{ cl.intent }}</span>
       <span class="cl-roles">
-        {% for b in cl.blocks %}<span class="pill {{ b.role }}">{{ b.role }} {{ b.count }}</span>{% endfor %}
+        {% for p in cl.role_pills %}<span class="pill {{ p.role }}">{{ p.role }} {{ p.count }}</span>{% endfor %}
       </span>
       <span class="drill"></span>
-      {% for w in cl.verification.warnings %}
-      <span class="warn-badge">{{ w.text }}</span>
+      {% for w in cl.warnings %}
+      <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
       {% endfor %}
     </summary>
     <div class="cluster-body">
-      {% for b in cl.blocks %}
-      <div class="roleblock border-{{ b.role }}">
-        <div class="roleblock-head">
-          <span class="pill {{ b.role }}">{{ b.role }}</span>
-          <span class="files">{{ b.files | join(', ') }}</span>
-          {% if b.whys %}<span class="why">— {{ b.whys | join('; ') }}</span>{% endif %}
+      {% for seam in cl.seams %}
+      <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}">
+        <div class="seam-head">
+          <span class="seam-tag">{{ seam.id }}</span>
+          <span class="seam-label">{{ seam.label or "(wiring)" }}</span>
+          {% for w in seam.verification.warnings %}
+          <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
+          {% endfor %}
         </div>
-        {% if b.has_diff %}<div class="diff-target" id="diff-{{ b.key }}"></div>{% endif %}
-        {% if b.notes %}<ul class="notes">{% for n in b.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
+        {% for b in seam.blocks %}
+        <div class="roleblock border-{{ b.role }}">
+          <div class="roleblock-head">
+            <span class="pill {{ b.role }}">{{ b.role }}</span>
+            <span class="files">{{ b.files | join(', ') }}</span>
+            {% if b.whys %}<span class="why">— {{ b.whys | join('; ') }}</span>{% endif %}
+          </div>
+          {% if b.has_diff %}<div class="diff-target" id="diff-{{ b.key }}"></div>{% endif %}
+          {% if b.notes %}<ul class="notes">{% for n in b.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
+        </div>
+        {% endfor %}
+        {% if seam.has_core and seam.has_link %}
+        <div class="selfcheck">↳ self-check: is this link where this core led you to expect it?</div>
+        {% endif %}
       </div>
       {% endfor %}
-      {% if cl.has_core and cl.has_link %}
-      <div class="selfcheck">↳ self-check: is each link where the core led you to expect it?</div>
-      {% endif %}
     </div>
   </details>
   {% endfor %}
