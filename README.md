@@ -55,17 +55,6 @@ presentation deliver the value, or was the value the mental discipline?
    warnings roll up to a badge on the collapsed cluster so risk stays visible. The
    tool still only structures — these are flags to look at, never a score.
 
-   **Wiring connectors (the bipartite graph).** A seam is a linear partition, but
-   a link can wire cores that live in *different* seams or clusters. The classifier
-   emits, per link, the core hunk id(s) it `wires`; the renderer surfaces the edges
-   seaming could not keep adjacent as navigable connectors: *↗ wires* / *↙ wired by*
-   chips (blue = **cross-seam**, purple = **cross-cluster** — the meta-link signal).
-   Hover highlights both endpoints; click expands and scrolls to the target. A
-   cross-seam connector often *explains* an isolated-core flag ("its link is in
-   seam s1"). The summary bar shows **cross-seam / cross-cluster counts** — a tangle
-   metric: if they're ~0 on real diffs, seams alone suffice and the graph adds
-   nothing; if they're high, it's surfacing structure the linear view hid.
-
 ## Install
 
 ```bash

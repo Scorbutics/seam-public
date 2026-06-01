@@ -93,12 +93,11 @@ def _file_items(hunks: list[Hunk]) -> list[dict]:
     return [by_file[f] for f in order]
 
 
-def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str], dict]:
+def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     """Assemble intent clusters and the diff strings they reference.
 
-    Returns (clusters, diffs, graph) where each cluster has seams of role blocks,
-    `diffs` maps a diff key (e.g. "g1-s1-core") to its unified-diff string, and
-    `graph` holds the wiring-edge stats (cross-seam / cross-cluster counts).
+    Returns (clusters, diffs) where each cluster has role blocks, and `diffs`
+    maps a diff key (e.g. "g1-core") to its unified-diff string.
     """
     non_noise = [h for h in hunks if h.role != "noise"]
 
@@ -111,11 +110,6 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str], dict
 
     diffs: dict[str, str] = {}
     clusters: list[dict] = []
-    seam_index: dict[tuple[str, str], dict] = {}   # (gid, sid) -> seam dict
-    loc: dict[str, tuple[str, str]] = {}           # hunk id -> (gid, sid)
-    for h in non_noise:
-        loc[h.id] = (h.group or "ungrouped", h.seam or "s0")
-
     for gid in group_order:
         members = [h for h in non_noise if (h.group or "ungrouped") == gid]
         intent = next((h.intent for h in members if h.intent), "") or "(unlabeled change)"
@@ -143,20 +137,15 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str], dict
             verification = _verify_pair(s_has_core, s_has_link)
             for w in verification["warnings"]:
                 cluster_kinds[w["kind"]] = cluster_kinds.get(w["kind"], 0) + 1
-            seam = {
+            seams.append({
                 "id": sid,
-                "dom_id": f"seam-{gid}-{sid}",
                 "label": label,
                 "blocks": blocks,
                 "has_core": s_has_core,
                 "has_link": s_has_link,
                 "verification": verification,
                 "count": len(seam_hunks),
-                "wires_out": [],   # this seam's link wires a core in another seam/cluster
-                "wired_by": [],    # this seam's core is wired by a link elsewhere
-            }
-            seam_index[(gid, sid)] = seam
-            seams.append(seam)
+            })
 
         role_pills = [
             {"role": role, "count": sum(1 for h in members if h.role == role)}
@@ -173,54 +162,7 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str], dict
             "warnings": _aggregate_warnings(cluster_kinds),
         })
 
-    graph = _build_wiring(non_noise, loc, seam_index)
-    return clusters, diffs, graph
-
-
-def _build_wiring(non_noise, loc, seam_index) -> dict:
-    """Resolve link→core `wires` edges and attach the ones that seaming could not
-    keep adjacent (cross-seam / cross-cluster) as connectors on the seams.
-
-    This is the bipartite graph seaming had to flatten: a link can wire cores in
-    several seams or clusters. Within-seam edges are skipped (adjacency already
-    shows them). Returns tangle counts so the value is measurable.
-    """
-    cross_seam = cross_cluster = 0
-    seen_out: set = set()
-    seen_in: set = set()
-
-    for h in non_noise:
-        if h.role != "link" or not h.wires:
-            continue
-        src = loc.get(h.id)
-        if src not in seam_index:
-            continue
-        for target in h.wires:
-            dst = loc.get(target)
-            if dst is None or dst == src or dst not in seam_index:
-                continue
-            scope = "cross-seam" if src[0] == dst[0] else "cross-cluster"
-            if scope == "cross-seam":
-                cross_seam += 1
-            else:
-                cross_cluster += 1
-            src_seam, dst_seam = seam_index[src], seam_index[dst]
-            # One connector per (source seam → target seam), de-duplicated.
-            if (src, dst) not in seen_out:
-                seen_out.add((src, dst))
-                src_seam["wires_out"].append({
-                    "scope": scope, "to": dst_seam["dom_id"],
-                    "cluster": dst[0], "seam": dst[1],
-                    "label": dst_seam["label"] or "(wiring)",
-                })
-            if (dst, src) not in seen_in:
-                seen_in.add((dst, src))
-                dst_seam["wired_by"].append({
-                    "scope": scope, "to": src_seam["dom_id"],
-                    "cluster": src[0], "seam": src[1],
-                    "label": src_seam["label"] or "(wiring)",
-                })
-    return {"cross_seam": cross_seam, "cross_cluster": cross_cluster}
+    return clusters, diffs
 
 
 def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> list[dict]:
@@ -304,7 +246,7 @@ def _aggregate_warnings(kinds: dict[str, int]) -> list[dict]:
 
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     """Render the report to `out_path`; returns the absolute path written."""
-    clusters, diffs, graph = _build_clusters(hunks)
+    clusters, diffs = _build_clusters(hunks)
 
     noise_hunks = [h for h in hunks if h.role == "noise"]
     noise_diff = _merged_diff(noise_hunks)
@@ -348,7 +290,6 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
         total=len(hunks),
         n_clusters=len(clusters),
         isolated_cores=isolated_cores,
-        graph=graph,
         source_label=source_label,
     )
 

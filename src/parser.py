@@ -31,7 +31,6 @@ class Hunk:
     intent: str = ""         # short human label of the cluster's intent
     seam: str = ""           # within-cluster wiring id, e.g. "s1" (one core↔link pairing)
     seam_label: str = ""     # short human label of the seam (the wiring)
-    wires: list[str] = field(default_factory=list)  # for links: core hunk ids this link wires in
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""
