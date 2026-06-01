@@ -34,6 +34,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--claude-bin", help="path to the claude CLI (else auto-detected)")
     ap.add_argument("--open", action="store_true", help="open the report in a browser")
     ap.add_argument("-v", "--verbose", action="store_true")
+    ap.add_argument("--debug", action="store_true",
+                    help="print the model's raw reply + backend diagnostics to stderr, "
+                         "and dump <out>.prompt.txt / <out>.reply.txt")
     args = ap.parse_args(argv)
 
     try:
@@ -55,7 +58,8 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         classifier.classify(remaining, model=args.model, claude_bin=args.claude_bin,
-                            context_window=args.context_window, verbose=args.verbose)
+                            context_window=args.context_window, verbose=args.verbose,
+                            debug=args.debug, debug_path=args.out)
     except classifier.ClassifierError as exc:
         print(f"error: classification failed: {exc}", file=sys.stderr)
         return 3

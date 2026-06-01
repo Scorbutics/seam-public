@@ -2,8 +2,10 @@
 __pycache__/
 *.pyc
 
-# generated reports
+# generated reports + debug dumps
 report*.html
+*.prompt.txt
+*.reply.txt
 
 # diffs fed to the tool (keep the sample fixture)
 *.patch

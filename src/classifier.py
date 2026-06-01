@@ -23,6 +23,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 from . import ROLES
@@ -202,13 +203,24 @@ def _extract_json_array(text: str) -> list[dict]:
     return json.loads(m.group(0))
 
 
-def _run_backend(kind: str, binary: str, prompt: str, model: str) -> str:
+def _dbg(msg: str) -> None:
+    print(f"[debug] {msg}", file=sys.stderr)
+
+
+def _write_debug_file(path: str, content: str) -> None:
+    try:
+        Path(path).write_text(content, encoding="utf-8")
+    except OSError as exc:
+        _dbg(f"could not write {path}: {exc}")
+
+
+def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = False) -> str:
     """Run the chosen backend and return the model's raw text reply."""
-    return _run_claude(binary, prompt, model) if kind == "claude" \
-        else _run_copilot(binary, prompt)
+    return _run_claude(binary, prompt, model, debug) if kind == "claude" \
+        else _run_copilot(binary, prompt, debug)
 
 
-def _run_claude(claude_bin: str, prompt: str, model: str) -> str:
+def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -> str:
     # Feed the prompt via stdin, NOT as an argv entry: a large diff easily exceeds
     # the OS ARG_MAX limit (OSError [Errno 7] Argument list too long).
     cmd = [claude_bin, "-p", "--output-format", "json", "--model", model]
@@ -223,30 +235,65 @@ def _run_claude(claude_bin: str, prompt: str, model: str) -> str:
         raise ClassifierError(f"claude CLI did not return JSON: {proc.stdout[:200]!r}") from exc
     if envelope.get("is_error"):
         raise ClassifierError(f"claude CLI reported error: {envelope.get('result')}")
+    if debug:
+        usage = envelope.get("usage", {})
+        _dbg(f"claude: model(s)={list((envelope.get('modelUsage') or {}).keys())} "
+             f"in={usage.get('input_tokens')} out={usage.get('output_tokens')} "
+             f"duration_ms={envelope.get('duration_ms')} cost_usd={envelope.get('total_cost_usd')}")
+        if proc.stderr.strip():
+            _dbg(f"claude stderr: {proc.stderr.strip()[:1000]}")
     return envelope.get("result", "")
 
 
-def _run_copilot(copilot_bin: str, prompt: str) -> str:
+def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
     """Run the GitHub Copilot CLI headless, on the user's Copilot subscription.
 
-    Prompt goes via stdin (large diffs would blow ARG_MAX as an argv entry). We
-    let the Copilot subscription pick the model (override with COPILOT_MODEL).
+    Unlike `claude -p`, the Copilot CLI does NOT read its prompt from stdin — its
+    `-p` flag takes the prompt as an argv value. Passing a whole diff there would
+    blow ARG_MAX, so instead we write the prompt to a temp file and hand Copilot a
+    tiny pointer instructing it to read that file (it can: `--allow-all-tools`
+    enables its file-read tool non-interactively). The diff never touches argv, and
+    the file is left on disk under `debug` for inspection.
+
+    We let the Copilot subscription pick the model (override with COPILOT_MODEL).
     Copilot prints its answer to stdout; the prompt asks for a bare JSON array and
     `_extract_json_array` tolerates any surrounding chatter, so we return stdout
-    as-is. `--allow-all-tools` keeps it non-interactive (no per-tool prompts).
+    as-is.
     """
-    cmd = [copilot_bin, "-p", "--allow-all-tools"]
-    model = os.environ.get("COPILOT_MODEL")
-    if model:
-        cmd += ["--model", model]
-    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=False)
-    if proc.returncode != 0:
-        raise ClassifierError(
-            f"copilot CLI failed (exit {proc.returncode}): {proc.stderr.strip()[:300]}"
+    fd, prompt_path = tempfile.mkstemp(prefix="copilot-prompt-", suffix=".txt")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(prompt)
+
+        pointer = (
+            f"Read the file {prompt_path} and follow the instructions it contains "
+            f"exactly. Output only what those instructions ask for."
         )
-    if not proc.stdout.strip():
-        raise ClassifierError(f"copilot CLI returned no output: {proc.stderr.strip()[:200]!r}")
-    return proc.stdout
+        cmd = [copilot_bin, "-p", pointer, "--allow-all-tools"]
+        model = os.environ.get("COPILOT_MODEL")
+        if model:
+            cmd += ["--model", model]
+        proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        if debug:
+            _dbg(f"copilot: cmd={' '.join(cmd)} exit={proc.returncode}")
+            _dbg(f"copilot prompt file: {prompt_path} ({len(prompt)} chars)")
+            if proc.stderr.strip():
+                _dbg(f"copilot stderr: {proc.stderr.strip()[:1000]}")
+        if proc.returncode != 0:
+            raise ClassifierError(
+                f"copilot CLI failed (exit {proc.returncode}): {proc.stderr.strip()[:300]}"
+            )
+        if not proc.stdout.strip():
+            raise ClassifierError(
+                f"copilot CLI returned no output: {proc.stderr.strip()[:200]!r}"
+            )
+        return proc.stdout
+    finally:
+        if not debug:
+            try:
+                os.unlink(prompt_path)
+            except OSError:
+                pass
 
 
 def classify(
@@ -256,10 +303,15 @@ def classify(
     claude_bin: str | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
     verbose: bool = False,
+    debug: bool = False,
+    debug_path: str | None = None,
 ) -> None:
     """Fill role/rationale on each hunk in `hunks` (mutates in place).
 
     `hunks` should already exclude deterministic noise. No-op on empty input.
+    When `debug`, prints the model's raw reply (and backend diagnostics) to stderr
+    and, if `debug_path` is given, writes `<debug_path>.prompt.txt` /
+    `<debug_path>.reply.txt` for inspection.
     """
     if not hunks:
         return
@@ -280,21 +332,33 @@ def classify(
             file=sys.stderr,
         )
 
+    if debug and debug_path:
+        _write_debug_file(f"{debug_path}.prompt.txt", prompt)
+        _dbg(f"wrote prompt ({len(prompt)} chars) -> {debug_path}.prompt.txt")
+
     labels: dict[str, dict] = {}
     last_err: Exception | None = None
     for attempt in (1, 2):  # one retry on malformed JSON
         try:
-            raw = _run_backend(kind, binary, prompt, model)
+            raw = _run_backend(kind, binary, prompt, model, debug)
+            if debug:
+                _dbg(f"=== raw model reply (attempt {attempt}, {len(raw)} chars) ===")
+                print(raw, file=sys.stderr)
+                _dbg("=== end raw model reply ===")
+                if debug_path:
+                    _write_debug_file(f"{debug_path}.reply.txt", raw)
             for item in _extract_json_array(raw):
                 if isinstance(item, dict) and "id" in item:
                     labels[str(item["id"])] = item
             break
         except (ClassifierError, json.JSONDecodeError) as exc:
             last_err = exc
-            if verbose:
+            if verbose or debug:
                 print(f"[classifier] attempt {attempt} failed: {exc}")
     if not labels and last_err:
         raise ClassifierError(f"Classification failed after retry: {last_err}")
+    if debug:
+        _dbg(f"parsed {len(labels)} labelled hunks from reply")
 
     # Collect fallback labels so a hunk missing its own label inherits its
     # group's intent / seam's seam_label.

@@ -91,7 +91,28 @@ python decompose.py --git main..HEAD --repo /path/to/repo --open
 ```
 
 Options: `--out report.html`, `--model claude-haiku-4-5`, `--claude-bin PATH`,
-`-v/--verbose`.
+`-v/--verbose`, `--debug`.
+
+### Debugging the AI output
+
+`-v/--verbose` shows the plumbing (which backend, token estimate, retries).
+`--debug` shows what the model actually produced:
+
+- the **raw model reply** (before parsing) printed to stderr — this is what to
+  read when a hunk is mis-classified or the JSON fails to parse;
+- backend diagnostics — for `claude`, the model(s) used, input/output tokens,
+  duration, and cost from its JSON envelope; for `copilot`, the exact command,
+  exit code, and its stderr;
+- the full prompt and reply dumped to `<out>.prompt.txt` / `<out>.reply.txt`.
+
+```bash
+python decompose.py --file change.patch --debug 2>debug.log
+```
+
+Note: in `-p` (headless) mode neither CLI exposes its chain-of-thought — the JSON
+envelope / stdout carries only the final answer. The reply is the artifact to
+inspect; each CLI's own progress logs (if any) show up on its stderr, which
+`--debug` prints.
 
 ## Running the experiment (the actual point — §10)
 
