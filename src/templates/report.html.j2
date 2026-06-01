@@ -6,6 +6,12 @@
 <title>Change decomposition — {{ source_label }}</title>
 <link rel="stylesheet"
       href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
+<!-- highlight.js theme (the diff2html-ui bundle ships highlight.js; this gives its
+     tokens colour). Light/dark picked by the OS scheme. -->
+<link rel="stylesheet" media="(prefers-color-scheme: light)"
+      href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github.min.css">
+<link rel="stylesheet" media="(prefers-color-scheme: dark)"
+      href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
 <style>
   :root {
     --core: #d64545; --link: #2f80ed; --environment: #2d9d78; --noise: #8a8f98;
@@ -178,6 +184,11 @@
   .notes { font-size: .82rem; color: var(--muted); margin: .3rem 0; }
   .notes li { margin: .2rem 0; }
   .d2h-wrapper { font-size: .82rem; }
+  /* diff2html line numbers are position:absolute with no positioned wrapper, so
+     their containing block defaults to the (non-scrolling) modal panel and they
+     stay put while the body scrolls. Give each diff its own positioning context
+     so the gutters scroll with their lines. */
+  .d2h-file-diff, .d2h-file-side-diff { position: relative; }
   .modal-empty { color: var(--muted); font-size: .85rem; padding: 1.4rem .2rem; }
 
   /* --- global noise --- */
