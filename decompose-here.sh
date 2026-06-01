@@ -20,7 +20,7 @@
 set -euo pipefail
 
 # Directory where code-review-sort (and its .venv) lives.
-TOOL_DIR="/home/scorbutics/dev/code-review-sort"
+TOOL_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # The repo to analyze is wherever the user invoked this script from.
 REPO_DIR="$PWD"
