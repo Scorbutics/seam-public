@@ -1,0 +1,55 @@
+diff --git a/src/api.py b/src/api.py
+index 6692208..c459e76 100644
+--- a/src/api.py
++++ b/src/api.py
+@@ -1,5 +1,5 @@
+ from src.payment import charge
+ 
+ 
+-def handle_checkout(order, gateway):
+-    return charge(order, gateway)
++def handle_checkout(order, gateway, currency="USD"):
++    return charge(order, gateway, currency=currency)
+diff --git a/src/format_only.py b/src/format_only.py
+index c5051b9..299eec0 100644
+--- a/src/format_only.py
++++ b/src/format_only.py
+@@ -1,2 +1,2 @@
+ def greet(name):
+-    return "hi " + name
++    return "hi "   +   name
+diff --git a/src/legacy_helpers.py b/src/helpers.py
+similarity index 100%
+rename from src/legacy_helpers.py
+rename to src/helpers.py
+diff --git a/src/payment.py b/src/payment.py
+index ac0044b..5c2b5a9 100644
+--- a/src/payment.py
++++ b/src/payment.py
+@@ -1,6 +1,7 @@
+-from src.utils import to_cents
++from src.utils import to_cents, apply_discount
+ 
+ 
+-def charge(order, gateway):
++def charge(order, gateway, currency="USD"):
+     total = sum(item.price for item in order.items)
+-    return gateway.charge(to_cents(total))
++    total = apply_discount(total, order.coupon)
++    return gateway.charge(to_cents(total), currency=currency)
+diff --git a/src/utils.py b/src/utils.py
+index f73c8fb..6504337 100644
+--- a/src/utils.py
++++ b/src/utils.py
+@@ -2,5 +2,11 @@ def to_cents(amount):
+     return int(amount * 100)
+ 
+ 
++def apply_discount(amount, coupon):
++    if not coupon:
++        return amount
++    return amount * (1 - coupon.rate)
++
++
+ def fmt(amount):
+     return f"${amount:.2f}"

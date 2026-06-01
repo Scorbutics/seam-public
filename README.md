@@ -1,0 +1,102 @@
+# code-review-sort
+
+An MVP that takes a real diff and presents it **decomposed by role** —
+**core / link / environment / noise** — so you can review *by intent* instead of
+scrolling file-by-file.
+
+It **structures, it does not judge.** No score, no approval, no "the LLM reviewed
+it for you." It only pays the tax of manually reconstructing a change's structure
+so the structured, triangulating review can happen without the linear scroll
+fighting it. The human still trusts.
+
+See `decomposition-model-and-mvp.md` for the full model. This tool exists to
+answer **one** question (§9): *tool vs. discipline* — does the auto-decomposed
+presentation deliver the value, or was the value the mental discipline?
+
+## The four roles
+
+| Role | What it is | Trust mechanism |
+|---|---|---|
+| **core** | The new/changed logic the change is about | Behavioral — does it work, is it complete |
+| **link** | Joints wiring the new thing in (params across layers, call sites) | Contract — do the integration points hold |
+| **environment** | Ambient ripple (shared utils, global CSS/config) | Impact — what else does this affect |
+| **noise** | Renames, formatting, indentation | None — confirm it really is noise |
+
+## How it works
+
+1. **diff_source** — load a unified diff from a file or `git diff <range>`.
+2. **parser** — `unidiff` splits it into hunks with stable ids (`h1`, `h2`, …).
+3. **noise_filter** — deterministic pre-pass marks whitespace/rename/binary noise
+   (no LLM needed for the one role where determinism matters).
+4. **classifier** — ONE pass over the whole remaining diff via the local `claude`
+   CLI (your Claude Code subscription — no API key). It does two things at once,
+   using full-diff context: (a) **groups** hunks into *intent clusters* (coherent
+   sub-changes — grammar-driven: a link goes with the core it wires in), and
+   (b) **roles** each hunk (core/link/environment/noise). It labels, it does not
+   evaluate; the cluster is a *proposal* the human's self-check can violate.
+5. **renderer** — primary axis is the **intent cluster** (§3 triangulation): each
+   cluster shows its core next to the links that wire it in, so "links tell you
+   where to expect cores". Within a cluster, hunks are shown per role and merged
+   per file. Noise is pulled into one global collapsed section. Self-contained
+   responsive HTML (diff2html via CDN).
+
+   The report is **intent-first drill-down**: clusters are collapsed by default,
+   so you scan the intent headings, role pills, and any warnings, then expand only
+   what looks risky. Each cluster runs a **triangulation check**: a core with no
+   link in its cluster is flagged *⚠ isolated core* ("verify its consumer — it may
+   be in another cluster or outside the diff"); a link with no core, or an
+   ambient-only cluster (data/config delegation), gets its own note. The tool still
+   only structures — these are flags to look at, never a score.
+
+## Install
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+You also need the Claude Code `claude` CLI available (it ships with the desktop /
+VSCode app). It is auto-detected from PATH, `$CLAUDE_BIN`, or the VSCode
+extension; override with `--claude-bin /path/to/claude`.
+
+## Usage
+
+```bash
+# from a patch file
+python decompose.py --file change.patch --open
+
+# from a git range in a repo
+python decompose.py --git main..HEAD --repo /path/to/repo --open
+```
+
+Options: `--out report.html`, `--model claude-haiku-4-5`, `--claude-bin PATH`,
+`-v/--verbose`.
+
+## Running the experiment (the actual point — §10)
+
+This is a pre-registered experiment, not a product. Before you open the report:
+
+1. Pick a real, tangled change (legacy or AI-authored). Small clean PRs don't need
+   this — the linear process already handles them.
+2. **Write your prediction first** (time, trust 0–10) — for both a normal linear
+   review and a by-role review. Writing it before looking is the lie detector.
+3. Review once linearly, once by role (with a real break between). Record actual
+   time + trust + any "why is this linked *here*?" self-check moments.
+4. The question to answer: is reviewing-by-role-without-scrolling **dramatically**
+   better than the manual decomposition that already beats linear review? Dramatic
+   → the tool is the product. Marginal → the value was the discipline, and the
+   deliverable is a written method, not software.
+
+## Known MVP limitations
+
+- **Hunk-level granularity:** a single hunk can mix core + link, or even straddle
+  two intents — and it can only land in one cluster. (Seen on the sample: a
+  `payment.py` hunk carrying *both* currency and discount changes lands in one
+  cluster, leaving the other cluster's view thinner than the real change.) We
+  don't split below the hunk yet; this is the next thing to fix if clustering
+  proves valuable.
+- **One model pass:** large diffs may exceed context. The classifier estimates
+  token count from diff size (~3.5 chars/token) and **warns** when it nears the
+  usable window (`--context-window`, default 200k); it does not yet chunk.
+- No GitHub PR ingestion, no persistence, no line-level roles. Add only if the
+  tool-vs-discipline question returns positive.
