@@ -223,8 +223,18 @@ def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = 
 def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -> str:
     # Feed the prompt via stdin, NOT as an argv entry: a large diff easily exceeds
     # the OS ARG_MAX limit (OSError [Errno 7] Argument list too long).
-    cmd = [claude_bin, "-p", "--output-format", "json", "--model", model]
-    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True, check=False)
+    #
+    # Run LEAN. This is a structuring task, not agentic work, so:
+    #   - MAX_THINKING_TOKENS=0 turns OFF extended thinking, which otherwise burns
+    #     ~10x the output tokens (≈80s/$0.05 -> ≈3s/$0.008 on a small diff). Set
+    #     the env var yourself to re-enable some reasoning if seaming quality dips.
+    #   - --strict-mcp-config ignores ambient MCP servers (their tool schemas add
+    #     latency and input tokens we never use).
+    cmd = [claude_bin, "-p", "--output-format", "json", "--model", model,
+           "--strict-mcp-config"]
+    env = dict(os.environ)
+    proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+                          check=False, env=env)
     if proc.returncode != 0:
         raise ClassifierError(
             f"claude CLI failed (exit {proc.returncode}): {proc.stderr.strip()[:300]}"
@@ -238,6 +248,7 @@ def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -
     if debug:
         usage = envelope.get("usage", {})
         _dbg(f"claude: model(s)={list((envelope.get('modelUsage') or {}).keys())} "
+             f"think_budget={env.get('MAX_THINKING_TOKENS')} turns={envelope.get('num_turns')} "
              f"in={usage.get('input_tokens')} out={usage.get('output_tokens')} "
              f"duration_ms={envelope.get('duration_ms')} cost_usd={envelope.get('total_cost_usd')}")
         if proc.stderr.strip():
@@ -269,7 +280,10 @@ def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
             f"Read the file {prompt_path} and follow the instructions it contains "
             f"exactly. Output only what those instructions ask for."
         )
-        cmd = [copilot_bin, "-p", pointer, "--allow-all-tools"]
+        # -s/--silent: output only the agent's response (no stats/decoration) so
+        #   stdout is clean to parse. --no-ask-user: never block on a prompt in
+        #   non-interactive use. --allow-all-tools: lets it use the file-read tool.
+        cmd = [copilot_bin, "-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"]
         model = os.environ.get("COPILOT_MODEL")
         if model:
             cmd += ["--model", model]
