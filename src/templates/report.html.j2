@@ -189,6 +189,11 @@
      stay put while the body scrolls. Give each diff its own positioning context
      so the gutters scroll with their lines. */
   .d2h-file-diff, .d2h-file-side-diff { position: relative; }
+  /* highlightCode() runs highlight.js on each line's .d2h-code-line-ctn, which
+     adds the `hljs` class. The github theme paints `.hljs { background:#fff }`,
+     an opaque layer that hides the red/green .d2h-ins/.d2h-del row background.
+     Keep the token colours, drop the background so the diff colour shows. */
+  .d2h-wrapper .hljs { background: transparent; }
   .modal-empty { color: var(--muted); font-size: .85rem; padding: 1.4rem .2rem; }
 
   /* --- global noise --- */
