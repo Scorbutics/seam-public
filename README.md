@@ -34,26 +34,34 @@ presentation deliver the value, or was the value the mental discipline?
    sub-changes — grammar-driven: a link goes with the core it wires in), and
    (b) **roles** each hunk (core/link/environment/noise). It labels, it does not
    evaluate; the cluster is a *proposal* the human's self-check can violate.
-5. **renderer** — primary axis is the **intent cluster** (§3 triangulation): each
-   cluster shows its core next to the links that wire it in, so "links tell you
-   where to expect cores". Within a cluster, hunks are shown per role and merged
-   per file. Noise is pulled into one global collapsed section. Self-contained
-   responsive HTML (diff2html via CDN).
+5. **renderer** — primary axis is the **intent cluster** (§3 triangulation),
+   drawn as a **cluster graph**: each intent is a box, the seams inside it are
+   nodes, and two kinds of edge connect them — a **solid wiring edge** joins
+   seams stitched by the *same link* (one link wiring more than one core: the
+   shared joint), and a **dashed file edge** joins seams in *different* clusters
+   that touch the same file (a literal seam between two intents, the thread you'd
+   cut to ship them apart). Click a seam to open a detail panel with its core
+   next to the links that wire it in, per role and merged per file, so "links
+   tell you where to expect cores". Noise is pulled into one global collapsed
+   section. Self-contained responsive HTML (cytoscape + diff2html via CDN).
 
    Two grouping levels make core↔link triangulation tight:
    - **Intent cluster** (coarse, "why") — the sub-change's purpose.
    - **Seam** (fine, "which wiring") — one core and the *specific* link(s) that
-     wire it, shown adjacent so you read a core right next to its link. Seams are
-     labeled blocks within a cluster; the §3 self-check ("is this link where this
-     core led you to expect it?") runs per seam.
+     wire it, shown adjacent so you read a core right next to its link. The
+     core↔link relation is **many-to-many**: a single link can wire several cores
+     (a shared call-site), so it appears in every seam it wires rather than being
+     forced into one. Seams are labeled blocks within a cluster; the §3 self-check
+     ("is this link where this core led you to expect it?") runs per seam.
 
-   The report is **intent-first drill-down**: clusters are collapsed by default,
-   so you scan the intent headings, role pills, and any warnings, then expand only
-   what looks risky. The **triangulation check** runs per seam: a core with no
-   link in its seam is flagged *⚠ isolated core*; a link with no core is a
-   *dangling link*; an ambient-only seam is *delegated* (data/config). Seam-level
-   warnings roll up to a badge on the collapsed cluster so risk stays visible. The
-   tool still only structures — these are flags to look at, never a score.
+   The report is **intent-first**: you scan the cluster boxes and the seam nodes
+   inside them, follow the wiring edges (shared links) and the cross-cluster
+   file edges (entangled intents), then click only the seams that look risky.
+   The **triangulation
+   check** runs per seam: a core with no link in its seam is flagged *⚠ isolated
+   core* (node ringed in amber); a link with no core is a *dangling link*; an
+   ambient-only seam is *delegated* (data/config). The tool still only
+   structures — these are flags to look at, never a score.
 
 ## Install
 
@@ -81,6 +89,24 @@ python decompose.py --git main..HEAD --repo /path/to/repo --open
 
 Options: `--out report.html`, `--model claude-haiku-4-5`, `--claude-bin PATH`,
 `-v/--verbose`, `--debug`.
+
+### Re-rendering without the LLM (intermediate state)
+
+The classify pass (the only LLM step) dumps to a JSON of fully-labeled hunks —
+the *intermediate state* between classification and rendering. Save it once, then
+iterate on the renderer/template against a fixed, real example with no LLM cost:
+
+```bash
+# classify once and keep the intermediate state
+python decompose.py --file sample.patch --dump-classified samples/sample.classified.json
+
+# re-render straight from it — no diff parsing, no classifier
+python decompose.py --from-classified samples/sample.classified.json --open
+```
+
+A ready-made example is checked in at `samples/sample.classified.json` (from
+`sample.patch`); it includes a shared link wiring two cores, so the many-to-many
+seam view is visible out of the box.
 
 ### Debugging the AI output
 

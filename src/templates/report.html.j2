@@ -17,18 +17,19 @@
             --card2:#23262d; --border:#2c313a; }
   }
   * { box-sizing: border-box; }
+  html, body { height: 100%; }
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   }
-  .wrap { max-width: 1100px; margin: 0 auto; padding: 1rem; }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 1rem; }
   header h1 { font-size: 1.25rem; margin: .2rem 0; }
   .sub { color: var(--muted); font-size: .85rem; }
   .legend-note {
     background: var(--card); border: 1px solid var(--border); border-radius: 8px;
     padding: .6rem .8rem; margin: .8rem 0 1rem; font-size: .85rem; color: var(--muted);
   }
-  .summary-bar { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0 1.4rem; }
+  .summary-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .5rem; margin: .8rem 0 1rem; }
   .chip {
     display: inline-flex; align-items: center; gap: .4rem; padding: .25rem .6rem;
     border-radius: 999px; font-size: .8rem; font-weight: 600; color: #fff;
@@ -49,41 +50,89 @@
   }
   .viewtoggle button + button { border-left: 1px solid var(--border); }
   .viewtoggle button.active { background: #555; color: #fff; }
-  body.split-view .wrap { max-width: 1600px; }
-  @media (max-width: 700px) {
-    .viewtoggle { margin-left: 0; }
-    body.split-view .wrap { max-width: 1100px; }
-  }
+  @media (max-width: 700px) { .viewtoggle { margin-left: 0; } }
 
-  /* --- intent cluster --- */
-  details.cluster {
-    border: 1px solid var(--border); border-radius: 12px; margin: 1rem 0;
+  /* --- graph canvas (the primary view) --- */
+  .graph-card {
+    position: relative; border: 1px solid var(--border); border-radius: 12px;
     overflow: hidden; background: var(--card);
   }
-  details.cluster > summary {
-    cursor: pointer; list-style: none; padding: .85rem 1rem; user-select: none;
-    display: flex; align-items: baseline; gap: .55rem; flex-wrap: wrap;
+  #cy { width: 100%; height: 68vh; min-height: 420px; }
+  .graph-hint {
+    position: absolute; left: .6rem; bottom: .5rem; font-size: .72rem; color: var(--muted);
+    background: var(--bg); border: 1px solid var(--border); border-radius: 6px;
+    padding: .15rem .45rem; pointer-events: none; opacity: .85;
   }
-  details.cluster > summary::-webkit-details-marker { display: none; }
+  .graph-legend {
+    display: flex; flex-wrap: wrap; gap: .8rem; margin: .55rem .1rem 0;
+    font-size: .76rem; color: var(--muted);
+  }
+  .graph-legend .gl { display: inline-flex; align-items: center; gap: .35rem; }
+  .gl .swatch { width: 22px; height: 0; border-top-width: 2px; border-top-style: solid; }
+  .gl .swatch.intra { border-top-color: var(--muted); }
+  .gl .swatch.cross { border-top-color: var(--core); border-top-style: dashed; }
+  .gl .dot { width: 11px; height: 11px; border-radius: 50%; display: inline-block; }
+  .gl .dot.warn { box-shadow: 0 0 0 2px var(--warn); }
+  @media (max-width: 700px) { #cy { height: 58vh; } }
+
+  /* --- triangulation warning palette --- */
+  :root { --warn: #b7791f; --warn-bg: #fef3c7; --warn-fg: #92400e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --warn:#d6a040; --warn-bg:#3a2e12; --warn-fg:#f5d896; }
+  }
+
+  /* --- seam detail modal (centered; the diff becomes the focus) --- */
+  .modal {
+    position: fixed; inset: 0; z-index: 50; display: none;
+    align-items: center; justify-content: center; padding: 1.2vh 1vw;
+  }
+  .modal.open { display: flex; }
+  .modal-backdrop {
+    position: absolute; inset: 0; background: rgba(0,0,0,.55);
+    opacity: 0; transition: opacity .18s ease;
+  }
+  .modal.open .modal-backdrop { opacity: 1; }
+  .modal-panel {
+    position: relative; width: min(1800px, 97.6vw); height: 97.6vh; max-height: 97.6vh;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+    box-shadow: 0 18px 60px rgba(0,0,0,.4);
+    display: flex; flex-direction: column; overflow: hidden;
+    opacity: 0; transform: translateY(8px) scale(.985);
+    transition: opacity .18s ease, transform .18s ease;
+  }
+  .modal.open .modal-panel { opacity: 1; transform: none; }
+  .modal-head {
+    display: flex; align-items: center; gap: .5rem; flex-wrap: wrap;
+    padding: .7rem 1rem; border-bottom: 1px solid var(--border);
+    border-top: 4px solid var(--muted);  /* tinted to the cluster colour at runtime */
+  }
+  .modal-head .cl-tag { margin-right: 0; }
+  .modal-title { font-weight: 700; font-size: 1.02rem; }
+  .modal-sub { flex-basis: 100%; color: var(--muted); font-size: .8rem; }
+  .modal-close {
+    margin-left: auto; border: 1px solid var(--border); background: var(--card);
+    color: var(--fg); cursor: pointer; border-radius: 8px; width: 32px; height: 32px;
+    font-size: 1.2rem; line-height: 1;
+  }
+  .modal-body { padding: .2rem 1rem 1.2rem; overflow: auto; }
+  @media (max-width: 700px) {
+    .modal { padding: 0; }
+    .modal-panel {
+      width: 100%; max-height: 100%; height: 100%; border: 0; border-radius: 0;
+    }
+  }
+
   .cl-tag {
     font-family: ui-monospace, monospace; font-size: .72rem; color: var(--muted);
     background: var(--card2); border-radius: 6px; padding: .1rem .4rem;
   }
-  .cl-intent { font-weight: 700; font-size: 1.02rem; }
-  .cl-roles { display: inline-flex; gap: .3rem; margin-left: auto; }
   .pill {
     font-size: .68rem; font-weight: 700; color: #fff; border-radius: 999px;
     padding: .05rem .45rem; text-transform: uppercase; letter-spacing: .02em;
   }
   .pill.core { background: var(--core); } .pill.link { background: var(--link); }
   .pill.environment { background: var(--environment); } .pill.noise { background: var(--noise); }
-  .cluster-body { padding: 0 1rem 1rem; }
 
-  /* --- triangulation warning (isolated core / dangling link / delegated) --- */
-  :root { --warn: #b7791f; --warn-bg: #fef3c7; --warn-fg: #92400e; }
-  @media (prefers-color-scheme: dark) {
-    :root { --warn:#d6a040; --warn-bg:#3a2e12; --warn-fg:#f5d896; }
-  }
   .warn-badge {
     display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem;
     font-weight: 600; color: var(--warn-fg); background: var(--warn-bg);
@@ -92,11 +141,8 @@
   }
   .warn-badge::before { content: "⚠"; }
   .chip.isolated { background: var(--warn); }
-  .drill { color: var(--muted); font-size: .74rem; font-weight: 500; white-space: nowrap; }
-  details.cluster[open] .drill::after { content: "▾ hide hunks"; }
-  details.cluster:not([open]) .drill::after { content: "▸ show hunks"; }
 
-  /* --- seam: one core↔link wiring inside a cluster --- */
+  /* --- seam + role block (reused inside the modal) --- */
   .seam {
     border: 1px solid var(--border); border-radius: 9px; margin: .8rem 0;
     padding: .2rem .8rem .6rem; background: var(--bg);
@@ -112,8 +158,11 @@
     background: var(--card2); border-radius: 5px; padding: .08rem .35rem;
   }
   .seam-label { font-weight: 600; font-size: .9rem; }
+  .shared-note {
+    font-size: .72rem; color: var(--link); background: rgba(47,128,237,.1);
+    border-radius: 6px; padding: .08rem .4rem;
+  }
 
-  /* --- role block inside a seam --- */
   .roleblock { margin: .7rem 0 1rem; }
   .roleblock-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 .4rem; }
   .roleblock-head .files { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all; }
@@ -129,6 +178,7 @@
   .notes { font-size: .82rem; color: var(--muted); margin: .3rem 0; }
   .notes li { margin: .2rem 0; }
   .d2h-wrapper { font-size: .82rem; }
+  .modal-empty { color: var(--muted); font-size: .85rem; padding: 1.4rem .2rem; }
 
   /* --- global noise --- */
   details.noise-sec {
@@ -152,15 +202,16 @@
   </header>
 
   <div class="legend-note">
-    Read <strong>intent-first</strong>: scan the cluster headings (closed by default),
-    then expand only what looks risky or surprising. Inside a cluster the
-    <span style="color:var(--core);font-weight:600">core</span> sits next to the
-    <span style="color:var(--link);font-weight:600">links</span> that wire it in —
-    that adjacency is the point (§3): links tell you where to expect the core. If you
-    think “why is this core linked <em>here</em>?”, your model of the change has
-    failed — that surprise is the signal. An
-    <span style="color:var(--warn-fg);font-weight:600">⚠ isolated core</span> has no
-    link in its cluster — verify its consumer. The tool structures; you trust.
+    Each <strong>box is an intent cluster</strong> (a sub-change that could ship on its
+    own); the <strong>nodes inside are seams</strong> — one core and the link(s) that
+    wire it. <strong>Click a seam</strong> to read its hunks. A
+    <strong>solid line</strong> joins seams stitched by the <em>same link</em> — one
+    link wiring more than one core (the shared joint);
+    <span style="color:var(--core);font-weight:600">a dashed line</span> joins seams in
+    <em>different</em> clusters that touch the same file — a thread you'd cut to split
+    two intents. A node ringed in
+    <span style="color:var(--warn-fg);font-weight:600">⚠ amber</span> is an isolated
+    core (no link in its seam) — verify its consumer. The tool structures; you trust.
   </div>
 
   <div class="summary-bar">
@@ -177,54 +228,22 @@
     </div>
   </div>
 
-  {% for cl in clusters %}
-  <details class="cluster">
-    <summary>
-      <span class="cl-tag">{{ cl.id }}</span>
-      <span class="cl-intent">{{ cl.intent }}</span>
-      <span class="cl-roles">
-        {% for p in cl.role_pills %}<span class="pill {{ p.role }}">{{ p.role }} {{ p.count }}</span>{% endfor %}
-      </span>
-      <span class="drill"></span>
-      {% for w in cl.warnings %}
-      <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
-      {% endfor %}
-    </summary>
-    <div class="cluster-body">
-      {% for seam in cl.seams %}
-      <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}">
-        <div class="seam-head">
-          <span class="seam-tag">{{ seam.id }}</span>
-          <span class="seam-label">{{ seam.label or "(wiring)" }}</span>
-          {% for w in seam.verification.warnings %}
-          <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
-          {% endfor %}
-        </div>
-        {% for b in seam.blocks %}
-        <div class="roleblock border-{{ b.role }}">
-          <div class="roleblock-head">
-            <span class="pill {{ b.role }}">{{ b.role }}</span>
-            <span class="files">{{ b.files | join(', ') }}</span>
-            {% if b.whys %}<span class="why">— {{ b.whys | join('; ') }}</span>{% endif %}
-          </div>
-          {% if b.has_diff %}<div class="diff-target" id="diff-{{ b.key }}"></div>{% endif %}
-          {% if b.notes %}<ul class="notes">{% for n in b.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
-        </div>
-        {% endfor %}
-        {% if seam.has_core and seam.has_link %}
-        <div class="selfcheck">↳ self-check: is this link where this core led you to expect it?</div>
-        {% endif %}
-      </div>
-      {% endfor %}
-    </div>
-  </details>
-  {% endfor %}
+  <div class="graph-card">
+    <div id="cy"></div>
+    <div class="graph-hint">drag to pan · scroll to zoom · click a seam to read it</div>
+  </div>
+  <div class="graph-legend">
+    <span class="gl"><span class="swatch intra"></span> shared link (wires both cores)</span>
+    <span class="gl"><span class="swatch cross"></span> shared file (across clusters)</span>
+    <span class="gl"><span class="dot warn" style="background:var(--core)"></span> ⚠ isolated core</span>
+    <span class="gl">node size ≈ hunks in the seam</span>
+  </div>
 
   {% if noise.count %}
   <details class="noise-sec">
     <summary><span class="pill noise">noise</span> {{ noise.count }} hunk(s) — formatting · renames · binary (skim, don't read)</summary>
     <div class="noise-body">
-      {% if noise.has_diff %}<div class="diff-target" id="diff-noise"></div>{% endif %}
+      {% if noise.has_diff %}<div class="diff-target" data-diff-key="noise"></div>{% endif %}
       {% if noise.notes %}<ul class="notes">{% for n in noise.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
     </div>
   </details>
@@ -236,41 +255,271 @@
   </footer>
 </div>
 
+<!-- Seam detail modal: graph clicks fill this with the matching seam panel. -->
+<div class="modal" id="modal" aria-hidden="true">
+  <div class="modal-backdrop" data-close></div>
+  <aside class="modal-panel" role="dialog" aria-modal="true" aria-label="Seam detail">
+    <div class="modal-head" id="modal-head">
+      <span class="cl-tag" id="modal-cltag"></span>
+      <span class="modal-title" id="modal-title"></span>
+      <button type="button" class="modal-close" data-close aria-label="Close">×</button>
+      <span class="modal-sub" id="modal-clintent"></span>
+    </div>
+    <div class="modal-body" id="modal-body"></div>
+  </aside>
+</div>
+
+<!-- Server-rendered seam panels (one per seam), cloned into the modal on click.
+     Diffs render lazily via data-diff-key so ids never collide across clones. -->
+<div id="panels" hidden>
+  {% for cl in clusters %}{% for seam in cl.seams %}
+  <template data-node="{{ cl.id }}-{{ seam.id }}"
+            data-cltag="{{ cl.id }}"
+            data-clintent="{{ cl.intent }}"
+            data-color="{{ cl.color }}"
+            data-title="{{ seam.id }} · {{ seam.label or '(wiring)' }}">
+    <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}">
+      <div class="seam-head">
+        <span class="seam-tag">{{ seam.id }}</span>
+        <span class="seam-label">{{ seam.label or "(wiring)" }}</span>
+        {% if seam.shares_with %}
+        <span class="shared-note">↔ a link here also wires {{ seam.shares_with | join(', ') }}</span>
+        {% endif %}
+        {% for w in seam.verification.warnings %}
+        <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
+        {% endfor %}
+      </div>
+      {% for b in seam.blocks %}
+      <div class="roleblock border-{{ b.role }}">
+        <div class="roleblock-head">
+          <span class="pill {{ b.role }}">{{ b.role }}</span>
+          <span class="files">{{ b.files | join(', ') }}</span>
+          {% if b.whys %}<span class="why">— {{ b.whys | join('; ') }}</span>{% endif %}
+        </div>
+        {% if b.has_diff %}<div class="diff-target" data-diff-key="{{ b.key }}"></div>{% endif %}
+        {% if b.notes %}<ul class="notes">{% for n in b.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
+      </div>
+      {% endfor %}
+      {% if seam.has_core and seam.has_link %}
+      <div class="selfcheck">↳ self-check: is this link where this core led you to expect it?</div>
+      {% endif %}
+    </div>
+  </template>
+  {% endfor %}{% endfor %}
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape@3.30.2/dist/cytoscape.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/layout-base@2.0.1/layout-base.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cose-base@2.2.0/cose-base.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/cytoscape-fcose@2.2.0/cytoscape-fcose.js"></script>
 <script>
   const DIFFS = {{ diffs_json | safe }};
+  const GRAPH = {{ graph_json | safe }};
   const BASE_CONFIG = { drawFileList: false, matching: "lines", highlight: true };
   const STORAGE_KEY = "crs-diff-view";
 
-  function renderDiffs(format) {
-    const config = Object.assign({}, BASE_CONFIG, { outputFormat: format });
-    for (const [key, diffString] of Object.entries(DIFFS)) {
-      const el = document.getElementById("diff-" + key);
-      if (el && diffString) {
-        el.innerHTML = "";
-        const ui = new Diff2HtmlUI(el, diffString, config);
-        ui.draw();
-        ui.highlightCode();
-      }
-    }
+  let currentFormat = "line-by-line";
+  try { currentFormat = localStorage.getItem(STORAGE_KEY) || currentFormat; } catch (e) {}
+
+  // Render every not-yet-rendered diff target inside `root` for the active format.
+  function renderDiffsIn(root, force) {
+    const config = Object.assign({}, BASE_CONFIG, { outputFormat: currentFormat });
+    root.querySelectorAll(".diff-target[data-diff-key]").forEach(function (el) {
+      const key = el.dataset.diffKey;
+      const diffString = DIFFS[key];
+      if (!diffString) return;
+      if (el.dataset.format === currentFormat && !force) return;
+      el.innerHTML = "";
+      const ui = new Diff2HtmlUI(el, diffString, config);
+      ui.draw();
+      ui.highlightCode();
+      el.dataset.format = currentFormat;
+    });
   }
 
+  /* ---------- seam detail modal ---------- */
+  const modal = document.getElementById("modal");
+  const modalBody = document.getElementById("modal-body");
+  const modalHead = document.getElementById("modal-head");
+
+  function openSeam(nodeId) {
+    const tpl = document.querySelector('#panels template[data-node="' + CSS.escape(nodeId) + '"]');
+    if (!tpl) return;
+    document.getElementById("modal-cltag").textContent = tpl.dataset.cltag;
+    document.getElementById("modal-title").textContent = tpl.dataset.title;
+    document.getElementById("modal-clintent").textContent = tpl.dataset.clintent;
+    modalHead.style.borderTopColor = tpl.dataset.color || "var(--muted)";
+    modalBody.innerHTML = "";
+    modalBody.appendChild(tpl.content.cloneNode(true));
+    renderDiffsIn(modalBody, true);
+    modalBody.scrollTop = 0;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+  function closeModal() {
+    modal.classList.remove("open");
+    modal.setAttribute("aria-hidden", "true");
+    modalBody.innerHTML = "";
+  }
+  modal.querySelectorAll("[data-close]").forEach(function (el) {
+    el.addEventListener("click", closeModal);
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && modal.classList.contains("open")) closeModal();
+  });
+
+  /* ---------- diff view toggle ---------- */
   function applyView(format) {
-    document.body.classList.toggle("split-view", format === "side-by-side");
+    currentFormat = format;
     document.querySelectorAll(".viewtoggle button").forEach(function (b) {
       b.classList.toggle("active", b.dataset.format === format);
     });
-    renderDiffs(format);
+    // Re-render whatever diffs are currently mounted (open modal + noise section).
+    renderDiffsIn(document.body, false);
     try { localStorage.setItem(STORAGE_KEY, format); } catch (e) {}
   }
-
   document.querySelectorAll(".viewtoggle button").forEach(function (b) {
     b.addEventListener("click", function () { applyView(b.dataset.format); });
   });
+  // Reflect the stored preference and render the always-visible noise diff.
+  document.querySelectorAll(".viewtoggle button").forEach(function (b) {
+    b.classList.toggle("active", b.dataset.format === currentFormat);
+  });
+  renderDiffsIn(document.body, false);
 
-  let initial = "line-by-line";
-  try { initial = localStorage.getItem(STORAGE_KEY) || initial; } catch (e) {}
-  applyView(initial);
+  /* ---------- cluster graph (cytoscape) ---------- */
+  function cssVar(name) {
+    return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  }
+  function withAlpha(hex, a) {
+    const h = hex.replace("#", "");
+    const n = parseInt(h.length === 3 ? h.replace(/(.)/g, "$1$1") : h, 16);
+    return "rgba(" + ((n >> 16) & 255) + "," + ((n >> 8) & 255) + "," + (n & 255) + "," + a + ")";
+  }
+
+  (function initGraph() {
+    if (typeof cytoscape === "undefined") {
+      document.getElementById("cy").innerHTML =
+        '<div class="modal-empty" style="padding:1rem">Graph library failed to load (offline?).</div>';
+      return;
+    }
+    let layoutName = "cose";
+    try {
+      if (window.cytoscapeFcose) { cytoscape.use(window.cytoscapeFcose); layoutName = "fcose"; }
+    } catch (e) { layoutName = "cose"; }
+
+    const warnColor = cssVar("--warn");
+    const coreColor = cssVar("--core");
+    const muted = cssVar("--muted");
+    const fg = cssVar("--fg");
+    const border = cssVar("--border");
+    // Boxes stay a neutral panel tint so the saturated seam nodes pop against
+    // them (cluster identity is carried by the node colour + the box's border).
+    const boxFill = cssVar("--card2") || cssVar("--card");
+
+    const cy = cytoscape({
+      container: document.getElementById("cy"),
+      elements: GRAPH,
+      wheelSensitivity: 0.25,
+      minZoom: 0.2, maxZoom: 2.5,
+      style: [
+        {
+          selector: "node[kind = 'cluster']",
+          style: {
+            "shape": "round-rectangle",
+            "background-color": boxFill,
+            "background-opacity": 1,
+            "border-width": 2,
+            "border-color": function (n) { return n.data("color"); },
+            "label": "data(label)",
+            "color": fg,
+            "font-size": 13, "font-weight": 700,
+            "text-valign": "top", "text-halign": "center",
+            "text-margin-y": 6, "text-wrap": "wrap", "text-max-width": 220,
+            "padding": "26px",
+          },
+        },
+        {
+          selector: "node[kind = 'seam']",
+          style: {
+            "shape": "ellipse",
+            "background-color": "data(color)",
+            "width": function (n) { return 26 + 7 * Math.min(n.data("count") || 1, 8); },
+            "height": function (n) { return 26 + 7 * Math.min(n.data("count") || 1, 8); },
+            "label": "data(label)",
+            "color": fg, "font-size": 10, "font-weight": 600,
+            "text-valign": "bottom", "text-margin-y": 4,
+            "text-wrap": "wrap", "text-max-width": 120,
+            "text-background-color": boxFill, "text-background-opacity": 0.7,
+            "text-background-padding": 2,
+            "border-width": 2, "border-color": "#ffffff",
+            "border-opacity": 0.85,
+          },
+        },
+        {
+          selector: "node[kind = 'seam'][warn = 'isolated-core']",
+          style: { "border-width": 4, "border-color": warnColor },
+        },
+        {
+          selector: "node[kind = 'seam'][warn = 'dangling-link']",
+          style: { "border-width": 4, "border-color": warnColor, "border-style": "dashed" },
+        },
+        {
+          selector: "edge",
+          style: {
+            "curve-style": "bezier",
+            "line-color": muted, "opacity": 0.5,
+            "width": function (e) { return 1 + Math.min(e.data("weight") || 1, 5); },
+          },
+        },
+        {
+          selector: "edge[?cross]",
+          style: { "line-color": coreColor, "line-style": "dashed", "opacity": 0.8 },
+        },
+        {
+          selector: "node:selected",
+          style: { "border-width": 4, "border-color": fg },
+        },
+        {
+          selector: ".faded",
+          style: { "opacity": 0.12, "text-opacity": 0.12 },
+        },
+      ],
+      layout: layoutParams(layoutName),
+    });
+
+    function layoutParams(name) {
+      if (name === "fcose") {
+        return {
+          name: "fcose", quality: "default", animate: false, randomize: true,
+          nodeSeparation: 90, idealEdgeLength: 90, nodeRepulsion: 9000,
+          packComponents: true, nestingFactor: 0.1, padding: 24,
+        };
+      }
+      return { name: "cose", animate: false, nodeRepulsion: 9000,
+               idealEdgeLength: 90, padding: 24, nestingFactor: 0.9, gravity: 0.4 };
+    }
+
+    cy.fit(undefined, 28);
+
+    // Click a seam → open its detail modal + spotlight its neighbourhood.
+    cy.on("tap", "node[kind = 'seam']", function (evt) {
+      const node = evt.target;
+      cy.elements().addClass("faded");
+      node.closedNeighborhood().removeClass("faded");
+      node.parent().removeClass("faded");
+      openSeam(node.id());
+    });
+    cy.on("tap", "node[kind = 'cluster']", function (evt) {
+      cy.elements().removeClass("faded");
+      evt.target.descendants().removeClass("faded");
+    });
+    // Tap empty canvas → clear spotlight.
+    cy.on("tap", function (evt) {
+      if (evt.target === cy) cy.elements().removeClass("faded");
+    });
+  })();
 </script>
 </body>
 </html>

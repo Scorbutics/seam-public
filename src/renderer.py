@@ -30,6 +30,20 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 # Order roles within a cluster so the core is read first, then its links.
 _CLUSTER_ROLES = ("core", "link", "environment")
 
+# Distinct hues per intent cluster for the graph view — one box/colour per
+# intent, cycled if there are more clusters than colours. Chosen to read on both
+# light and dark backgrounds (the boxes use a translucent tint of the same hue).
+_CLUSTER_COLORS = (
+    "#e86b9a",  # pink
+    "#6bbf73",  # green
+    "#4fd0b0",  # mint
+    "#e8a07a",  # peach
+    "#8b7bd8",  # violet
+    "#5aa9e6",  # blue
+    "#e6c34f",  # amber
+    "#d87ad8",  # magenta
+)
+
 
 def _is_renderable(hunk: Hunk) -> bool:
     """Only real textual hunks can go through diff2html."""
@@ -114,23 +128,45 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
         members = [h for h in non_noise if (h.group or "ungrouped") == gid]
         intent = next((h.intent for h in members if h.intent), "") or "(unlabeled change)"
 
-        # Seams within the cluster (first-appearance order). Each seam is one
-        # core↔link wiring; role blocks live inside it so a core sits next to
-        # the link that wires it.
-        seam_order: list[str] = []
-        for h in members:
-            sid = h.seam or "s0"
-            if sid not in seam_order:
-                seam_order.append(sid)
-        # Order seams by their id (s1, s2, …) so the primary wiring leads, rather
-        # than by file-appearance order which would surface ambient seams first.
-        seam_order.sort(key=lambda s: (int(m.group()) if (m := re.search(r"\d+", s)) else 1_000_000, s))
+        # A seam is one CORE plus the link(s) that wire it. The core anchors the
+        # seam (its `seam` id); links/environment attach to every seam they wire
+        # (`wires`) — so a link shared across several cores appears in several
+        # seams. That many-to-many is the point: we do NOT partition a link into
+        # one seam.
+        cores = [h for h in members if h.role == "core"]
+        links = [h for h in members if h.role == "link"]
+        envs = [h for h in members if h.role == "environment"]
+
+        # Seam ids come from the cores, sorted s1, s2, … so the primary wiring
+        # leads rather than file-appearance order surfacing ambient seams first.
+        seam_ids: list[str] = []
+        for c in cores:
+            sid = c.seam or "s0"
+            if sid not in seam_ids:
+                seam_ids.append(sid)
+        seam_ids.sort(key=lambda s: (int(m.group()) if (m := re.search(r"\d+", s)) else 1_000_000, s))
+        known = set(seam_ids)
+
+        # (sid, label, hunks, link-hunk-ids) per seam, then synthetic seams for
+        # links/environment that wire no core present in this cluster.
+        specs: list[tuple[str, str, list[Hunk], list[str]]] = []
+        for sid in seam_ids:
+            core_hunks = [c for c in cores if (c.seam or "s0") == sid]
+            link_hunks = [l for l in links if sid in l.wires]
+            env_hunks = [e for e in envs if sid in e.wires]
+            label = next((h.seam_label for h in core_hunks if h.seam_label), "")
+            specs.append((sid, label, core_hunks + link_hunks + env_hunks,
+                          [l.id for l in link_hunks]))
+        dangling = [l for l in links if not any(s in known for s in l.wires)]
+        if dangling:
+            specs.append(("s-unwired", "unwired links", dangling, [l.id for l in dangling]))
+        ambient = [e for e in envs if not any(s in known for s in e.wires)]
+        if ambient:
+            specs.append(("s-ambient", "ambient ripple", ambient, []))
 
         seams: list[dict] = []
         cluster_kinds: dict[str, int] = {}
-        for sid in seam_order:
-            seam_hunks = [h for h in members if (h.seam or "s0") == sid]
-            label = next((h.seam_label for h in seam_hunks if h.seam_label), "")
+        for sid, label, seam_hunks, link_ids in specs:
             blocks = _role_blocks(seam_hunks, f"{gid}-{sid}", diffs)
             s_has_core = any(b["role"] == "core" for b in blocks)
             s_has_link = any(b["role"] == "link" for b in blocks)
@@ -145,7 +181,22 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
                 "has_link": s_has_link,
                 "verification": verification,
                 "count": len(seam_hunks),
+                "link_ids": link_ids,
             })
+
+        # Which other seams each seam shares a link with (a link wiring >1 core) —
+        # surfaced in the detail panel so the shared joint is legible.
+        link_to_seams: dict[str, list[str]] = {}
+        for s in seams:
+            for lid in s["link_ids"]:
+                link_to_seams.setdefault(lid, []).append(s["id"])
+        for s in seams:
+            others: list[str] = []
+            for lid in s["link_ids"]:
+                for sid2 in link_to_seams[lid]:
+                    if sid2 != s["id"] and sid2 not in others:
+                        others.append(sid2)
+            s["shares_with"] = others
 
         role_pills = [
             {"role": role, "count": sum(1 for h in members if h.role == role)}
@@ -244,9 +295,103 @@ def _aggregate_warnings(kinds: dict[str, int]) -> list[dict]:
     return out
 
 
+def _seam_files(seam: dict) -> list[str]:
+    """Distinct files touched by a seam, across all its role blocks."""
+    files: list[str] = []
+    for b in seam["blocks"]:
+        for f in b["files"]:
+            if f not in files:
+                files.append(f)
+    return files
+
+
+def _build_graph(clusters: list[dict]) -> dict:
+    """Cytoscape-ready elements: clusters as compound parents, seams as child
+    nodes, and two kinds of seam↔seam edge.
+
+    - WIRING edges: a single link that wires more than one core joins those
+      seams. This is the real many-to-many joint the model keeps — the shared
+      link literally stitches two wirings together (intra-cluster, solid).
+    - FILE edges (cross-cluster only): two *intents* bound by a shared file —
+      the thread you'd cut to ship them apart (dashed). Within a cluster the
+      wiring edges already carry the genuine coupling, so we don't add file edges
+      there.
+    """
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    file_to_nodes: dict[str, list[str]] = {}
+    link_to_nodes: dict[str, list[str]] = {}
+    node_cluster: dict[str, str] = {}
+
+    for ci, cl in enumerate(clusters):
+        color = _CLUSTER_COLORS[ci % len(_CLUSTER_COLORS)]
+        cl["color"] = color  # let the template tint the detail panel to match
+        nodes.append({"data": {
+            "id": cl["id"], "kind": "cluster", "label": cl["intent"], "color": color,
+        }})
+        for seam in cl["seams"]:
+            nid = f'{cl["id"]}-{seam["id"]}'
+            warns = seam["verification"]["warnings"]
+            files = _seam_files(seam)
+            nodes.append({"data": {
+                "id": nid,
+                "parent": cl["id"],
+                "kind": "seam",
+                "label": seam["label"] or seam["id"],
+                "seam": seam["id"],
+                "color": color,
+                "count": seam["count"],
+                "roles": [b["role"] for b in seam["blocks"]],
+                "has_core": seam["has_core"],
+                "has_link": seam["has_link"],
+                "warn": warns[0]["kind"] if warns else "",
+            }})
+            node_cluster[nid] = cl["id"]
+            for f in files:
+                file_to_nodes.setdefault(f, []).append(nid)
+            for lid in seam["link_ids"]:
+                link_to_nodes.setdefault(lid, []).append(nid)
+
+    # Wiring edges — one per pair of seams that share a link hunk; weight counts
+    # how many links they share. A link wiring N cores produces a clique of N
+    # seams. These are intra-cluster (a link only wires cores in its own cluster).
+    wiring: dict[tuple[str, str], int] = {}
+    for nids in link_to_nodes.values():
+        uniq = sorted(set(nids))
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                key = (uniq[i], uniq[j])
+                wiring[key] = wiring.get(key, 0) + 1
+    for (a, b), w in wiring.items():
+        edges.append({"data": {
+            "id": f"w-{a}--{b}", "source": a, "target": b,
+            "kind": "wiring", "weight": w,
+            "cross": node_cluster[a] != node_cluster[b],
+        }})
+
+    # File edges — kept only ACROSS clusters (two intents bound by a shared file).
+    pair_files: dict[tuple[str, str], list[str]] = {}
+    for f, nids in file_to_nodes.items():
+        uniq = sorted(set(nids))
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                a, b = uniq[i], uniq[j]
+                if node_cluster[a] != node_cluster[b]:
+                    pair_files.setdefault((a, b), []).append(f)
+    for (a, b), files in pair_files.items():
+        edges.append({"data": {
+            "id": f"f-{a}--{b}", "source": a, "target": b,
+            "kind": "file", "shared": sorted(files), "weight": len(files),
+            "cross": True,
+        }})
+
+    return {"nodes": nodes, "edges": edges}
+
+
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     """Render the report to `out_path`; returns the absolute path written."""
     clusters, diffs = _build_clusters(hunks)
+    graph = _build_graph(clusters)
 
     noise_hunks = [h for h in hunks if h.role == "noise"]
     noise_diff = _merged_diff(noise_hunks)
@@ -269,12 +414,16 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
 
     # JSON destined for a <script> block: escape so it can't break out of the
     # element or be HTML-escaped by autoescape (we mark it |safe in the template).
-    diffs_json = (
-        json.dumps(diffs)
-        .replace("<", "\\u003c")
-        .replace(">", "\\u003e")
-        .replace("&", "\\u0026")
-    )
+    def _script_json(obj) -> str:
+        return (
+            json.dumps(obj)
+            .replace("<", "\\u003c")
+            .replace(">", "\\u003e")
+            .replace("&", "\\u0026")
+        )
+
+    diffs_json = _script_json(diffs)
+    graph_json = _script_json(graph)
 
     env = Environment(
         loader=FileSystemLoader(str(_TEMPLATE_DIR)),
@@ -287,6 +436,7 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
         counts=counts,
         descriptions=ROLE_DESCRIPTIONS,
         diffs_json=diffs_json,
+        graph_json=graph_json,
         total=len(hunks),
         n_clusters=len(clusters),
         isolated_cores=isolated_cores,

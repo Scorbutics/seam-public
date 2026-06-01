@@ -132,22 +132,27 @@ Do THREE things, using the whole diff as context:
      PRs without depending on each other. If unsure, MERGE.
 
 2) Within each cluster, SEAM the hunks into core↔link wirings. A seam is ONE
-   core (the new/changed thing) together with the SPECIFIC link(s) that wire
-   THAT core into the system — and any environment ripple for that wiring. This
-   is the finest grammar: a link belongs in the seam of the exact core it joins.
-   - Give each seam an id unique WITHIN its cluster ("s1", "s2", ...) and a short
-     seam label (<= 6 words) naming the wiring (e.g. "editable-table call-site").
-   - PAIR, don't split: a link and the core it wires MUST share a seam. Do NOT
-     put every hunk in its own seam. A single-role seam (core-only or link-only)
-     is allowed ONLY when that hunk genuinely has no counterpart in the diff (a
-     truly isolated core, or a dangling link) — not merely because pairing is
-     uncertain. If a link plausibly wires a core present here, seam them together.
-   - If a cluster is a single core + its links, that is just one seam.
-   Seaming is what lets a reviewer read a core RIGHT NEXT TO the link that wires
-   it — keep paired hunks in the same seam.
+   core (the new/changed thing) together with the link(s) that wire THAT core
+   into the system. The core ANCHORS the seam; links POINT AT the cores they
+   wire. The relationship is MANY-TO-MANY — this is the key grammar:
+   - Every CORE hunk anchors its own seam: give it a `seam` id unique WITHIN its
+     cluster ("s1", "s2", ...) and a short `seam_label` (<= 6 words) naming the
+     wiring (e.g. "editable-table call-site"). Put `seam`/`seam_label` ONLY on
+     cores.
+   - Every LINK (and environment) hunk lists `wires`: the seam id(s) of the
+     core(s) it wires. A single link that wires SEVERAL cores lists ALL of them
+     (e.g. one call-site threading params for two new cores → "wires":["s1","s2"]).
+     Do NOT force a shared link into one seam — that is exactly the wiring this
+     model must keep. A link appears in every seam it wires.
+   - A truly dangling link (wires something changed elsewhere / outside the diff)
+     has "wires":[]. A core that nothing in the diff wires is just a seam with no
+     links pointing at it. Use these only when genuinely true, not when unsure —
+     if a link plausibly wires a core present here, list that core in `wires`.
+   Seaming is what lets a reviewer read a core RIGHT NEXT TO the link(s) that
+   wire it, including links shared across several cores.
 
-3) ROLE each hunk within its seam (roles only make sense together — links tell
-   you where to expect cores):
+3) ROLE each hunk (roles only make sense together — links tell you where to
+   expect cores):
    - core: the new or changed logic the sub-change is fundamentally about.
    - link: the joints wiring the new thing in — params threading across layers,
            call sites, signature/interface matches.
@@ -155,11 +160,14 @@ Do THREE things, using the whole diff as context:
            elsewhere, cross-cutting concerns touched.
    - noise: formatting/indentation that slipped through — no logical effect.
 
-Return ONLY a JSON array, no prose, no markdown fences. One object per hunk:
-[{"id":"h1","group":"g1","intent":"add currency to checkout","seam":"s1","seam_label":"gateway call-site","role":"core","rationale":"<=12 words"}]
-Every hunk in the same group MUST repeat the same intent string; every hunk in
-the same seam MUST repeat the same seam_label. The rationale is a STRUCTURING
-note (why this role), never a quality judgement.
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk.
+A core anchors a seam (carries seam + seam_label); a link/environment lists the
+seam(s) it wires (carries wires):
+[{"id":"h1","group":"g1","intent":"add currency to checkout","role":"core","seam":"s1","seam_label":"gateway call-site","rationale":"<=12 words"},
+ {"id":"h2","group":"g1","intent":"add currency to checkout","role":"link","wires":["s1"],"rationale":"<=12 words"}]
+Every hunk in the same group MUST repeat the same intent string. A link that
+wires several cores lists every one of their seam ids in `wires`. The rationale
+is a STRUCTURING note (why this role), never a quality judgement.
 
 === HUNKS ===
 """
@@ -378,6 +386,14 @@ def classify(
             h.group = str(item.get("group", "")).strip()
             h.intent = str(item.get("intent", "")).strip() or group_intent.get(h.group, "")
             h.seam = str(item.get("seam", "")).strip()
+            # A link/environment lists the seam(s) it wires (many-to-many). Tolerate
+            # a model that still emitted the old single `seam` on a link by treating
+            # it as wiring that one seam.
+            raw = item.get("wires", [])
+            wires = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
+            if not wires and role in ("link", "environment") and h.seam:
+                wires = [h.seam]
+            h.wires = wires
             h.seam_label = (str(item.get("seam_label", "")).strip()
                             or seam_label.get((h.group, h.seam), ""))
         else:

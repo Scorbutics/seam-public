@@ -8,7 +8,8 @@ diff2html when hunks are regrouped by role.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field, fields
 
 from unidiff import PatchSet
 
@@ -29,12 +30,36 @@ class Hunk:
     rationale: str = ""
     group: str = ""          # intent-cluster id, e.g. "g1" (empty for noise)
     intent: str = ""         # short human label of the cluster's intent
-    seam: str = ""           # within-cluster wiring id, e.g. "s1" (one core↔link pairing)
-    seam_label: str = ""     # short human label of the seam (the wiring)
+    seam: str = ""           # for a CORE: the seam id it anchors, e.g. "s1"
+    seam_label: str = ""     # short human label of the seam (the wiring), set on the core
+    wires: list[str] = field(default_factory=list)
+    # for a LINK/environment hunk: the seam id(s) of the core(s) it wires. A link
+    # may wire several cores (many-to-many), so it appears in several seams; an
+    # empty list is a dangling link (wires something outside the diff).
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""
         return self.text.splitlines()[0] if self.text else ""
+
+
+_HUNK_FIELDS = {f.name for f in fields(Hunk)}
+
+
+def hunks_to_json(hunks: list[Hunk]) -> str:
+    """Serialize fully-labeled hunks — the post-classification INTERMEDIATE STATE.
+
+    This is the artifact between the (expensive, LLM-driven) classify pass and the
+    renderer: dumping it lets a report be regenerated, or the renderer iterated on,
+    WITHOUT re-running the classifier.
+    """
+    return json.dumps([asdict(h) for h in hunks], indent=2)
+
+
+def hunks_from_json(text: str) -> list[Hunk]:
+    """Rebuild hunks from `hunks_to_json` output, ignoring unknown keys so older
+    dumps still load if the dataclass gains fields."""
+    return [Hunk(**{k: v for k, v in d.items() if k in _HUNK_FIELDS})
+            for d in json.loads(text)]
 
 
 def _display_path(pf) -> str:
