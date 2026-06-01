@@ -123,6 +123,13 @@ Do THREE things, using the whole diff as context:
      is allowed ONLY when that hunk genuinely has no counterpart in the diff (a
      truly isolated core, or a dangling link) — not merely because pairing is
      uncertain. If a link plausibly wires a core present here, seam them together.
+   - HELPER cores belong with their caller: if a core exists ONLY to serve
+     another core in the same cluster — a new helper/utility function defined and
+     then called by other new logic (core-uses-core) — put the helper in the SAME
+     seam as its primary consumer. Do not give a helper definition its own seam,
+     separate from the code that uses it. EXCEPTION: if one helper is used by
+     several cores that live in different seams, keep it in its own seam (it is a
+     genuine shared hub) rather than forcing it next to just one consumer.
    - If a cluster is a single core + its links, that is just one seam.
    Seaming is what lets a reviewer read a core RIGHT NEXT TO the link that wires
    it — keep paired hunks in the same seam.
@@ -136,8 +143,15 @@ Do THREE things, using the whole diff as context:
            elsewhere, cross-cutting concerns touched.
    - noise: formatting/indentation that slipped through — no logical effect.
 
+4) WIRES (edges): for each LINK hunk, set "wires" to the list of CORE hunk ids it
+   wires into the system — the cores whose new/changed symbols this link calls,
+   imports, threads, or routes to. List EVERY core it wires, even cores in other
+   seams or other clusters (a call-site that uses two new functions wires both).
+   This is the actual grammar — what connects to what. For core/environment/noise
+   hunks, use an empty list. Only reference ids that exist in the hunks below.
+
 Return ONLY a JSON array, no prose, no markdown fences. One object per hunk:
-[{"id":"h1","group":"g1","intent":"add currency to checkout","seam":"s1","seam_label":"gateway call-site","role":"core","rationale":"<=12 words"}]
+[{"id":"h1","group":"g1","intent":"add currency to checkout","seam":"s1","seam_label":"gateway call-site","role":"link","rationale":"<=12 words","wires":["h2","h5"]}]
 Every hunk in the same group MUST repeat the same intent string; every hunk in
 the same seam MUST repeat the same seam_label. The rationale is a STRUCTURING
 note (why this role), never a quality judgement.
@@ -259,7 +273,18 @@ def classify(
             h.seam = str(item.get("seam", "")).strip()
             h.seam_label = (str(item.get("seam_label", "")).strip()
                             or seam_label.get((h.group, h.seam), ""))
+            raw = item.get("wires") or []
+            h.wires = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
         else:
             # Unclassified → default to core (heaviest verification = safe direction).
             h.role = "core"
             h.rationale = "unclassified — defaulted to core for review"
+
+    # Keep only edges that point from a link to a real core hunk (drop self-edges,
+    # dangling ids, and edges to non-core hunks).
+    core_ids = {h.id for h in hunks if h.role == "core"}
+    for h in hunks:
+        if h.role == "link":
+            h.wires = [t for t in dict.fromkeys(h.wires) if t in core_ids and t != h.id]
+        else:
+            h.wires = []

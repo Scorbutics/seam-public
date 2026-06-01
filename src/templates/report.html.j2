@@ -96,6 +96,24 @@
   }
   .seam-label { font-weight: 600; font-size: .9rem; }
 
+  /* --- wiring connectors (the bipartite graph seaming couldn't keep adjacent) --- */
+  :root { --xcluster: #8b5cf6; }
+  .connectors { display: flex; flex-wrap: wrap; gap: .35rem; margin: .1rem 0 .5rem; }
+  .conn {
+    font-size: .72rem; text-decoration: none; border-radius: 6px;
+    padding: .1rem .45rem; border: 1px solid; cursor: pointer; white-space: nowrap;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis;
+  }
+  .conn-cross-seam { color: var(--link); border-color: var(--link); background: rgba(47,128,237,.08); }
+  .conn-cross-cluster { color: var(--xcluster); border-color: var(--xcluster); background: rgba(139,92,246,.10); }
+  .conn.incoming { opacity: .85; }
+  .chip.tangle { background: var(--link); }
+  .chip.tangle-x { background: var(--xcluster); }
+  .seam.hl-target { box-shadow: 0 0 0 2px var(--link); }
+  .seam.hl-source { box-shadow: 0 0 0 2px var(--muted); }
+  .seam.flash { animation: seamflash 1.3s ease-out; }
+  @keyframes seamflash { 0% { box-shadow: 0 0 0 3px var(--link); } 100% { box-shadow: 0 0 0 0 transparent; } }
+
   /* --- role block inside a seam --- */
   .roleblock { margin: .7rem 0 1rem; }
   .roleblock-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 .4rem; }
@@ -154,6 +172,12 @@
     {% if isolated_cores %}
     <span class="chip isolated">⚠ isolated core<span class="n">{{ isolated_cores }}</span></span>
     {% endif %}
+    {% if graph.cross_seam %}
+    <span class="chip tangle" title="links wiring cores in another seam">⤬ cross-seam<span class="n">{{ graph.cross_seam }}</span></span>
+    {% endif %}
+    {% if graph.cross_cluster %}
+    <span class="chip tangle-x" title="links wiring cores in another intent cluster (meta-link signal)">⤬ cross-cluster<span class="n">{{ graph.cross_cluster }}</span></span>
+    {% endif %}
   </div>
 
   {% for cl in clusters %}
@@ -171,7 +195,7 @@
     </summary>
     <div class="cluster-body">
       {% for seam in cl.seams %}
-      <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}">
+      <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}" id="{{ seam.dom_id }}">
         <div class="seam-head">
           <span class="seam-tag">{{ seam.id }}</span>
           <span class="seam-label">{{ seam.label or "(wiring)" }}</span>
@@ -179,6 +203,20 @@
           <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
           {% endfor %}
         </div>
+        {% if seam.wires_out or seam.wired_by %}
+        <div class="connectors">
+          {% for c in seam.wires_out %}
+          <a class="conn conn-{{ c.scope }}" href="#{{ c.to }}" data-target="{{ c.to }}"
+             title="this seam's link also wires a core in {{ c.cluster }}/{{ c.seam }}">↗ wires
+             {% if c.scope == 'cross-cluster' %}{{ c.cluster }}/{% endif %}{{ c.seam }} · {{ c.label }}</a>
+          {% endfor %}
+          {% for c in seam.wired_by %}
+          <a class="conn conn-{{ c.scope }} incoming" href="#{{ c.to }}" data-target="{{ c.to }}"
+             title="a link in {{ c.cluster }}/{{ c.seam }} wires this seam's core">↘ wired by
+             {% if c.scope == 'cross-cluster' %}{{ c.cluster }}/{% endif %}{{ c.seam }} · {{ c.label }}</a>
+          {% endfor %}
+        </div>
+        {% endif %}
         {% for b in seam.blocks %}
         <div class="roleblock border-{{ b.role }}">
           <div class="roleblock-head">
@@ -232,6 +270,28 @@
       ui.highlightCode();
     }
   }
+
+  // Wiring connectors: hover highlights both endpoints; click expands + scrolls.
+  document.querySelectorAll(".conn").forEach((a) => {
+    const srcSeam = a.closest(".seam");
+    const target = () => document.getElementById(a.dataset.target);
+    a.addEventListener("mouseenter", () => {
+      if (srcSeam) srcSeam.classList.add("hl-source");
+      const t = target(); if (t) t.classList.add("hl-target");
+    });
+    a.addEventListener("mouseleave", () => {
+      if (srcSeam) srcSeam.classList.remove("hl-source");
+      const t = target(); if (t) t.classList.remove("hl-target");
+    });
+    a.addEventListener("click", (e) => {
+      e.preventDefault();
+      const t = target(); if (!t) return;
+      const cluster = t.closest("details.cluster");
+      if (cluster) cluster.open = true;
+      t.scrollIntoView({ behavior: "smooth", block: "center" });
+      t.classList.remove("flash"); void t.offsetWidth; t.classList.add("flash");
+    });
+  });
 </script>
 </body>
 </html>
