@@ -34,6 +34,12 @@ def from_git(ref_range: str, repo: str = ".") -> str:
     `ref_range` is passed through verbatim (e.g. "main..HEAD", "HEAD~3..HEAD",
     or even a single ref). We force a clean unified diff with full context off
     by default but renames detected, so the noise filter can see them.
+
+    When the diff involves the working tree (a single ref such as "HEAD", i.e.
+    no ".." range), `git diff` omits untracked files. We append synthesized
+    diffs for them so newly-created files are decomposed too — without needing a
+    commit or mutating the index. For commit ranges, untracked files are not
+    part of the comparison and are left out.
     """
     repo_path = Path(repo)
     if not (repo_path / ".git").exists() and not repo_path.is_dir():
@@ -49,9 +55,43 @@ def from_git(ref_range: str, repo: str = ".") -> str:
         raise DiffSourceError(
             f"git diff failed (exit {proc.returncode}): {proc.stderr.strip()}"
         )
-    if not proc.stdout.strip():
+
+    diff_text = proc.stdout
+    if ".." not in ref_range:
+        diff_text += _untracked_diff(repo_path)
+
+    if not diff_text.strip():
         raise DiffSourceError(f"git diff produced no output for range: {ref_range}")
-    return proc.stdout
+    return diff_text
+
+
+def _untracked_diff(repo_path: Path) -> str:
+    """Synthesize unified-diff text for untracked (newly-created) files.
+
+    `git diff` against the working tree never shows untracked files. We list
+    them (honoring .gitignore) and diff each against /dev/null so they appear as
+    standard "new file" hunks the parser already understands.
+    """
+    ls = subprocess.run(
+        ["git", "-C", str(repo_path), "ls-files", "--others", "--exclude-standard", "-z"],
+        capture_output=True, text=True, check=False,
+    )
+    if ls.returncode != 0:
+        return ""  # best effort — tracked-file diff already returned above
+
+    chunks: list[str] = []
+    for path in ls.stdout.split("\0"):
+        if not path:
+            continue
+        d = subprocess.run(
+            ["git", "-C", str(repo_path), "diff", "--no-color", "--no-index", "/dev/null", path],
+            capture_output=True, text=True, check=False,
+        )
+        # --no-index exits 1 when files differ (always true vs /dev/null) and
+        # >1 on real errors; only the stdout of a successful comparison is usable.
+        if d.returncode <= 1 and d.stdout:
+            chunks.append(d.stdout)
+    return "".join(chunks)
 
 
 def get_diff(file: str | None = None, git: str | None = None, repo: str = ".") -> str:
