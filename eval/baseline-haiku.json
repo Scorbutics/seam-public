@@ -1,0 +1,49 @@
+{
+  "model": "claude-haiku-4-5",
+  "cases": {
+    "everywhere-surface-events": {
+      "stability": {
+        "runs": 3,
+        "role_agreement": 0.778,
+        "unstable_hunks": [
+          "h1",
+          "h3"
+        ],
+        "cores": {
+          "min": 1,
+          "max": 3,
+          "mean": 2,
+          "stdev": 0.82
+        },
+        "seams": {
+          "min": 1,
+          "max": 3,
+          "mean": 2,
+          "stdev": 0.82
+        },
+        "clusters": {
+          "min": 1,
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
+        }
+      },
+      "accuracy": {
+        "role_accuracy": 0.667,
+        "cluster_f1": 1.0,
+        "confusions": [
+          {
+            "gold": "environment",
+            "pred": "core",
+            "n": 2
+          },
+          {
+            "gold": "link",
+            "pred": "core",
+            "n": 1
+          }
+        ]
+      }
+    }
+  }
+}

@@ -15,6 +15,28 @@ from unidiff import PatchSet
 
 
 @dataclass
+class Span:
+    """A contiguous role-region *within* a single hunk (Direction C).
+
+    A hunk often fuses >1 role (e.g. import/boilerplate churn glued by proximity
+    to new logic). Rather than mechanically splitting the hunk — which the census
+    showed explodes/destabilizes cores & seams — we let the classifier carry the
+    sub-roles here while the HUNK stays the single seam anchor. So `spans` recovers
+    fusion without fragmenting the grouping layer.
+
+    `lines` is a 1-based inclusive index range over the hunk's BODY lines (the
+    lines after the @@ header, as numbered in the classifier prompt), e.g. "3-9".
+    A core span carries seam/seam_label; a link/environment span carries wires.
+    """
+    role: str
+    lines: str = ""          # "start-end" over the hunk body, 1-based inclusive
+    rationale: str = ""
+    seam: str = ""           # core span: the seam id it anchors
+    seam_label: str = ""     # core span: short label of the wiring
+    wires: list[str] = field(default_factory=list)  # link/env span: seam id(s) wired
+
+
+@dataclass
 class Hunk:
     id: str
     file_path: str           # display path (target, or source for deletions)
@@ -36,6 +58,12 @@ class Hunk:
     # for a LINK/environment hunk: the seam id(s) of the core(s) it wires. A link
     # may wire several cores (many-to-many), so it appears in several seams; an
     # empty list is a dangling link (wires something outside the diff).
+    spans: list[Span] = field(default_factory=list)
+    # Direction C: per-role sub-regions within this hunk. EMPTY for a mono-role
+    # hunk (use the flat role/seam/wires above). When non-empty the hunk is fused
+    # and `spans` carries the truth; the flat fields above are kept in sync as a
+    # summary (role = the core span's role if any, seam from the core span, wires
+    # = union over spans) so existing role-keyed code keeps working.
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""
@@ -55,11 +83,19 @@ def hunks_to_json(hunks: list[Hunk]) -> str:
     return json.dumps([asdict(h) for h in hunks], indent=2)
 
 
+_SPAN_FIELDS = {f.name for f in fields(Span)}
+
+
 def hunks_from_json(text: str) -> list[Hunk]:
     """Rebuild hunks from `hunks_to_json` output, ignoring unknown keys so older
     dumps still load if the dataclass gains fields."""
-    return [Hunk(**{k: v for k, v in d.items() if k in _HUNK_FIELDS})
-            for d in json.loads(text)]
+    hunks: list[Hunk] = []
+    for d in json.loads(text):
+        kw = {k: v for k, v in d.items() if k in _HUNK_FIELDS}
+        kw["spans"] = [Span(**{k: v for k, v in s.items() if k in _SPAN_FIELDS})
+                       for s in d.get("spans", []) if isinstance(s, dict)]
+        hunks.append(Hunk(**kw))
+    return hunks
 
 
 def _display_path(pf) -> str:

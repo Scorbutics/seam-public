@@ -27,7 +27,7 @@ import tempfile
 from pathlib import Path
 
 from . import ROLES
-from .parser import Hunk
+from .parser import Hunk, Span
 
 _VSCODE_EXT_GLOB = "anthropic.claude-code-*/resources/native-binary/claude"
 
@@ -160,11 +160,30 @@ Do THREE things, using the whole diff as context:
            elsewhere, cross-cutting concerns touched.
    - noise: formatting/indentation that slipped through — no logical effect.
 
+4) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. Typical case: import/include/boilerplate churn (environment)
+   sitting right next to new logic (core), or a new function (core) next to a
+   call-site edit (link).
+   STRONG BIAS: do NOT split. Only emit spans when the roles genuinely DIFFER —
+   never to chop one role into pieces. Keep the hunk as ONE seam anchor: AT MOST
+   ONE `core` span per hunk; do not invent extra cores just to split. A hunk that
+   is one role end-to-end has NO spans (use the flat role). This keeps seams
+   meaningful — a seam is a real technical sub-intent, not a fragment.
+   Each span carries its own role, line range, and (core→seam/seam_label,
+   link/env→wires). Splitting is OPTIONAL and should be the exception.
+
 Return ONLY a JSON array, no prose, no markdown fences. One object per hunk.
-A core anchors a seam (carries seam + seam_label); a link/environment lists the
-seam(s) it wires (carries wires):
+A MONO-ROLE hunk: a core anchors a seam (carries seam + seam_label); a
+link/environment lists the seam(s) it wires (carries wires):
 [{"id":"h1","group":"g1","intent":"add currency to checkout","role":"core","seam":"s1","seam_label":"gateway call-site","rationale":"<=12 words"},
  {"id":"h2","group":"g1","intent":"add currency to checkout","role":"link","wires":["s1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering), each span a {role, lines, rationale, + seam/seam_label or wires}:
+[{"id":"h3","group":"g1","intent":"add currency to checkout","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam":"s2","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
 Every hunk in the same group MUST repeat the same intent string. A link that
 wires several cores lists every one of their seam ids in `wires`. The rationale
 is a STRUCTURING note (why this role), never a quality judgement.
@@ -173,12 +192,25 @@ is a STRUCTURING note (why this role), never a quality judgement.
 """
 
 
+def _number_body(text: str) -> str:
+    """Render a hunk with its BODY lines gutter-numbered (1-based), the @@ header
+    left bare. The numbers are the index space a `spans` line-range refers to, so
+    the model can name a contiguous sub-region unambiguously (e.g. "3-9")."""
+    lines = text.rstrip("\n").splitlines()
+    if not lines:
+        return ""
+    out = [lines[0]]  # the @@ header — not numbered
+    for i, ln in enumerate(lines[1:], start=1):
+        out.append(f"{i:>4}| {ln}")
+    return "\n".join(out)
+
+
 def _build_prompt(hunks: list[Hunk]) -> str:
     parts = [_PROMPT_HEADER]
     for h in hunks:
         parts.append(
             f"\n--- HUNK {h.id} | file: {h.file_path} | change: {h.change_type} ---\n"
-            f"{h.text.rstrip()}\n"
+            f"{_number_body(h.text)}\n"
         )
     parts.append("\n=== END HUNKS ===\nReturn the JSON array now.")
     return "".join(parts)
@@ -299,6 +331,57 @@ def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
                 pass
 
 
+def _parse_spans(item: dict) -> list[Span]:
+    """Pull valid `spans` out of a hunk label object (Direction C). Returns the
+    list of well-formed spans (role in ROLES); callers decide the threshold for
+    treating a hunk as fused. Empty when the hunk has no usable spans."""
+    raw = item.get("spans")
+    if not isinstance(raw, list):
+        return []
+    out: list[Span] = []
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        role = str(s.get("role", "")).strip().lower()
+        if role not in ROLES:
+            continue
+        w = s.get("wires", [])
+        wires = [str(x).strip() for x in w if str(x).strip()] if isinstance(w, list) else []
+        out.append(Span(
+            role=role,
+            lines=str(s.get("lines", "")).strip(),
+            rationale=str(s.get("rationale", "")).strip(),
+            seam=str(s.get("seam", "")).strip(),
+            seam_label=str(s.get("seam_label", "")).strip(),
+            wires=wires,
+        ))
+    return out
+
+
+def _sync_flat_from_spans(h: Hunk, seam_label: dict[tuple[str, str], str]) -> None:
+    """Mirror a fused hunk's spans onto the flat role/seam/wires fields so existing
+    role-keyed code (renderer, verification) keeps working. The hunk is summarised
+    as its core span if it has one (cores drive seams); otherwise its first span.
+    `wires`/`rationale` are unioned/joined across spans."""
+    core = next((s for s in h.spans if s.role == "core"), None)
+    primary = core or h.spans[0]
+    h.role = primary.role
+    h.seam = primary.seam if core else ""
+    h.seam_label = (primary.seam_label
+                    or seam_label.get((h.group, h.seam), "")) if core else ""
+    wires: list[str] = []
+    for s in h.spans:
+        for x in s.wires:
+            if x and x not in wires:
+                wires.append(x)
+    # If a link/env span gave a seam instead of wires, tolerate it like the flat path.
+    for s in h.spans:
+        if s.role in ("link", "environment") and not s.wires and s.seam and s.seam not in wires:
+            wires.append(s.seam)
+    h.wires = wires
+    h.rationale = " | ".join(f"{s.role}: {s.rationale}" for s in h.spans if s.rationale)
+
+
 def classify(
     hunks: list[Hunk],
     *,
@@ -364,7 +447,7 @@ def classify(
         _dbg(f"parsed {len(labels)} labelled hunks from reply")
 
     # Collect fallback labels so a hunk missing its own label inherits its
-    # group's intent / seam's seam_label.
+    # group's intent / seam's seam_label. Scan both flat objects and span objects.
     group_intent: dict[str, str] = {}
     seam_label: dict[tuple[str, str], str] = {}
     for item in labels.values():
@@ -372,19 +455,34 @@ def classify(
         it = str(item.get("intent", "")).strip()
         if g and it and g not in group_intent:
             group_intent[g] = it
-        s = str(item.get("seam", "")).strip()
-        sl = str(item.get("seam_label", "")).strip()
-        if g and s and sl and (g, s) not in seam_label:
-            seam_label[(g, s)] = sl
+        objs = item.get("spans") if isinstance(item.get("spans"), list) else None
+        for src in (objs or [item]):
+            if not isinstance(src, dict):
+                continue
+            s = str(src.get("seam", "")).strip()
+            sl = str(src.get("seam_label", "")).strip()
+            if g and s and sl and (g, s) not in seam_label:
+                seam_label[(g, s)] = sl
 
     for h in hunks:
         item = labels.get(h.id) or {}
+        h.group = str(item.get("group", "")).strip()
+        h.intent = str(item.get("intent", "")).strip() or group_intent.get(h.group, "")
+        spans = _parse_spans(item)
+        if len(spans) >= 2:  # genuinely fused — keep the per-span roles
+            h.spans = spans
+            _sync_flat_from_spans(h, seam_label)
+            continue
+        if len(spans) == 1 and str(item.get("role", "")).strip().lower() not in ROLES:
+            # A lone span is just a mono-role hunk expressed verbosely — fold it
+            # into the flat fields rather than treat the hunk as fused.
+            s = spans[0]
+            item = {**item, "role": s.role, "seam": s.seam,
+                    "seam_label": s.seam_label, "wires": s.wires, "rationale": s.rationale}
         role = str(item.get("role", "")).strip().lower()
         if role in ROLES:
             h.role = role
             h.rationale = str(item.get("rationale", "")).strip()
-            h.group = str(item.get("group", "")).strip()
-            h.intent = str(item.get("intent", "")).strip() or group_intent.get(h.group, "")
             h.seam = str(item.get("seam", "")).strip()
             # A link/environment lists the seam(s) it wires (many-to-many). Tolerate
             # a model that still emitted the old single `seam` on a link by treating

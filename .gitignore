@@ -7,6 +7,10 @@ report*.html
 *.prompt.txt
 *.reply.txt
 
-# diffs fed to the tool (keep the sample fixture)
+# diffs fed to the tool (keep the sample fixture + the eval case fixtures)
 *.patch
 !sample.patch
+!eval/cases/*.patch
+
+# eval harness: cached LLM generations are reproducible, don't track them
+eval/_runs/
