@@ -246,7 +246,7 @@
 
   <div class="graph-card">
     <div id="cy"></div>
-    <div class="graph-hint">drag to pan · scroll to zoom · click a seam to read it</div>
+    <div class="graph-hint">drag to pan · scroll to zoom · click a seam to read it · click an edge to compare two seams</div>
   </div>
   <div class="graph-legend">
     <span class="gl"><span class="swatch intra"></span> shared link (wires both cores)</span>
@@ -373,6 +373,30 @@
     modalHead.style.borderTopColor = tpl.dataset.color || "var(--muted)";
     modalBody.innerHTML = "";
     modalBody.appendChild(tpl.content.cloneNode(true));
+    renderDiffsIn(modalBody, true);
+    modalBody.scrollTop = 0;
+    modal.classList.add("open");
+    modal.setAttribute("aria-hidden", "false");
+  }
+  // Click an EDGE to read the two connected seams together — the cross-seam thread
+  // (e.g. a core in one seam used from another) reassembled without merging them.
+  function openEdge(edge) {
+    const s = edge.data("source"), t = edge.data("target"), kind = edge.data("kind");
+    const tplS = document.querySelector('#panels template[data-node="' + CSS.escape(s) + '"]');
+    const tplT = document.querySelector('#panels template[data-node="' + CSS.escape(t) + '"]');
+    if (!tplS || !tplT) return;
+    document.getElementById("modal-cltag").textContent =
+      kind === "file" ? "shared file" : "shared wiring";
+    document.getElementById("modal-title").textContent =
+      tplS.dataset.title + "  ↔  " + tplT.dataset.title;
+    document.getElementById("modal-clintent").textContent =
+      kind === "file"
+        ? "Both seams touch: " + (edge.data("shared") || []).join(", ")
+        : "A shared link wires both seams — read them side by side to follow the thread.";
+    modalHead.style.borderTopColor = tplS.dataset.color || "var(--muted)";
+    modalBody.innerHTML = "";
+    modalBody.appendChild(tplS.content.cloneNode(true));
+    modalBody.appendChild(tplT.content.cloneNode(true));
     renderDiffsIn(modalBody, true);
     modalBody.scrollTop = 0;
     modal.classList.add("open");
@@ -537,6 +561,15 @@
       node.closedNeighborhood().removeClass("faded");
       node.parent().removeClass("faded");
       openSeam(node.id());
+    });
+    // Click an edge → compare the two seams it connects, side by side.
+    cy.on("tap", "edge", function (evt) {
+      const edge = evt.target;
+      cy.elements().addClass("faded");
+      edge.removeClass("faded");
+      edge.connectedNodes().removeClass("faded");
+      edge.connectedNodes().parent().removeClass("faded");
+      openEdge(edge);
     });
     cy.on("tap", "node[kind = 'cluster']", function (evt) {
       cy.elements().removeClass("faded");
