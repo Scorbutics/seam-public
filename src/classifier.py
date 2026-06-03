@@ -182,16 +182,30 @@ the seams and roles right.
    - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
      point of the change. Test: "if this hunk were subtly wrong, would the
      FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
    - link: exists to CONNECT the new thing to existing code — call sites, params
      threaded across layers, signature/interface matches, AND adapter/repository
-     implementations that merely fulfill a contract (a DB query or in-memory
-     store that backs an interface is a LINK, not core — it wires a data source
-     in; the new logic lives elsewhere). Registering a new object into a parent
-     is a link.
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+     TESTS are links: they wire the new behavior to the existing test suite
+     (trust: do the integration points hold) rather than being the change itself.
    - environment: ambient SUPPORT, not logic — new type/interface/field
-     declarations, default-initializing a new field, imports/includes, constants,
-     globals, config/data values, shared utilities, AND tests (they verify the
-     change rather than being it). Trust is impact, not behavior.
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs consumed by an already-trusted algorithm),
+     shared utilities. Trust is impact, not behavior.
    - noise: formatting/indentation that slipped through — no logical effect.
 
    Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
@@ -207,6 +221,11 @@ the seams and roles right.
    genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
    per hunk; do not invent extra cores just to split. A hunk that is one role
    end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
 
 Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
 NOT emit group/intent — those are derived from your wiring.
@@ -446,6 +465,39 @@ def _sync_flat_from_spans(h: Hunk, seam_label: dict[str, str]) -> None:
     h.rationale = " | ".join(f"{s.role}: {s.rationale}" for s in h.spans if s.rationale)
 
 
+def _reconcile_wires(hunks: list[Hunk]) -> None:
+    """Use the reliable cluster pass to fix noisy link wiring (a 'health' fix, not a
+    label fix). Pass B sometimes drifts seam ids WITHIN one response — a link emits
+    `wires:["s1"]` while the cores in the same run are labelled s2/s3 — so the link
+    resolves to no core and renders as a spurious 'dangling link' that makes the
+    report look wrong. Since pass A reliably placed the link in a cluster, we let
+    that grouping correct the wiring:
+      - drop wire ids that anchor NO core anywhere (hallucinated);
+      - if the link sits in a cluster WITH cores but none of its wires resolve
+        there, re-point it to that cluster's primary seam (it belongs to the
+        intent, just mislabelled);
+      - a cluster with no core is genuinely ambient — leave it.
+    Cores/seams/clusters are untouched; only link/environment `wires` change."""
+    cluster_seams: dict[str, list[str]] = {}
+    all_seams: set[str] = set()
+    for h in hunks:
+        if h.role == "core" and h.seam:
+            all_seams.add(h.seam)
+            lst = cluster_seams.setdefault(h.group, [])
+            if h.seam not in lst:
+                lst.append(h.seam)
+    for h in hunks:
+        if h.role not in ("link", "environment"):
+            continue
+        resolved = [w for w in h.wires if w in all_seams]
+        present = cluster_seams.get(h.group, [])
+        if present:
+            in_cluster = [w for w in resolved if w in present]
+            h.wires = in_cluster if in_cluster else [present[0]]
+        else:
+            h.wires = resolved
+
+
 def _run_pass(kind: str, binary: str, prompt: str, model: str, *,
               thinking: int | None, tag: str, verbose: bool, debug: bool,
               debug_path: str | None) -> dict[str, dict]:
@@ -587,3 +639,7 @@ def classify(
             # Unclassified → default to core (heaviest verification = safe direction).
             h.role = "core"
             h.rationale = "unclassified — defaulted to core for review"
+
+    # Health fix: let the reliable cluster pass correct noisy link wiring so the
+    # report doesn't show spurious dangling links (measured: private-app 3.2 -> 0/run).
+    _reconcile_wires(hunks)

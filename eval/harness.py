@@ -76,24 +76,18 @@ def generate(args) -> int:
 
 # ----------------------------------------------------------------------------- helpers
 def _effective_role(h: dict) -> str:
-    """Role used for scoring. A fused hunk (>=2 spans) is summarised by its core
-    span if present, else its first span — matching the flat-field sync."""
-    sp = h.get("spans") or []
-    if len(sp) >= 2:
-        core = next((s for s in sp if s.get("role") == "core"), None)
-        return (core or sp[0]).get("role", "")
+    """Role used for scoring. We trust the FLAT `role` field: it is the canonical,
+    post-processed value the renderer/report use (kept in sync from spans at
+    classify time, and the only field updated by the seam post-processing). Reading
+    role/seam back out of `spans` is wrong after post-processing — the spans keep
+    stale ids."""
     return h.get("role", "")
 
 
 def _seam_key(h: dict) -> tuple[str, str] | None:
-    if _effective_role(h) != "core":
+    if h.get("role") != "core":
         return None
-    sp = h.get("spans") or []
-    if len(sp) >= 2:
-        core = next((s for s in sp if s.get("role") == "core"), None)
-        seam = (core or {}).get("seam", "")
-    else:
-        seam = h.get("seam", "")
+    seam = h.get("seam", "")
     return (h.get("group", ""), seam) if seam else None
 
 

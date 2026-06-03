@@ -12,14 +12,14 @@
         "cores": {
           "min": 1,
           "max": 2,
-          "mean": 1.2,
-          "stdev": 0.4
+          "mean": 1.6,
+          "stdev": 0.49
         },
         "seams": {
           "min": 1,
-          "max": 2,
-          "mean": 1.2,
-          "stdev": 0.4
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
         },
         "clusters": {
           "min": 1,
@@ -29,24 +29,24 @@
         }
       },
       "health": {
-        "seams": 1.2,
+        "seams": 1,
         "isolated_cores": 1,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.733,
+        "role_accuracy": 0.667,
         "cluster_f1": 1.0,
         "confusions": [
           {
             "gold": "link",
             "pred": "core",
-            "n": 1
+            "n": 3
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 3
+            "n": 2
           }
         ]
       },
@@ -60,83 +60,28 @@
     "litergss3-framedview": {
       "stability": {
         "runs": 5,
-        "role_agreement": 0.967,
-        "unstable_hunks": [
-          "h5",
-          "h10"
-        ],
-        "cores": {
-          "min": 4,
-          "max": 6,
-          "mean": 5,
-          "stdev": 0.63
-        },
-        "seams": {
-          "min": 4,
-          "max": 5,
-          "mean": 4.2,
-          "stdev": 0.4
-        },
-        "clusters": {
-          "min": 1,
-          "max": 1,
-          "mean": 1,
-          "stdev": 0.0
-        }
-      },
-      "health": {
-        "seams": 4.2,
-        "isolated_cores": 1.6,
-        "dangling_links": 0.2,
-        "orphans": 0
-      },
-      "accuracy": {
-        "role_accuracy": 0.533,
-        "cluster_f1": 1.0,
-        "confusions": [
-          {
-            "gold": "core",
-            "pred": "environment",
-            "n": 9
-          },
-          {
-            "gold": "link",
-            "pred": "core",
-            "n": 19
-          }
-        ]
-      },
-      "health_gold": {
-        "seams": 1,
-        "isolated_cores": 0,
-        "dangling_links": 0,
-        "orphans": 0
-      }
-    },
-    "private-app-boosters": {
-      "stability": {
-        "runs": 5,
-        "role_agreement": 0.908,
+        "role_agreement": 0.783,
         "unstable_hunks": [
           "h2",
+          "h4",
+          "h5",
+          "h7",
           "h8",
-          "h9",
           "h10",
           "h11",
-          "h12",
-          "h22"
+          "h12"
         ],
         "cores": {
-          "min": 2,
-          "max": 3,
-          "mean": 2.8,
-          "stdev": 0.4
+          "min": 4,
+          "max": 7,
+          "mean": 5.2,
+          "stdev": 0.98
         },
         "seams": {
-          "min": 1,
-          "max": 3,
-          "mean": 2.2,
-          "stdev": 0.75
+          "min": 2,
+          "max": 4,
+          "mean": 3.4,
+          "stdev": 0.8
         },
         "clusters": {
           "min": 1,
@@ -146,13 +91,13 @@
         }
       },
       "health": {
-        "seams": 2.2,
-        "isolated_cores": 0,
-        "dangling_links": 3.2,
+        "seams": 3.4,
+        "isolated_cores": 1.2,
+        "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.867,
+        "role_accuracy": 0.7,
         "cluster_f1": 1.0,
         "confusions": [
           {
@@ -163,17 +108,100 @@
           {
             "gold": "core",
             "pred": "link",
-            "n": 7
+            "n": 8
           },
           {
-            "gold": "link",
+            "gold": "environment",
             "pred": "core",
-            "n": 3
+            "n": 6
           },
           {
             "gold": "link",
             "pred": "environment",
+            "n": 2
+          }
+        ]
+      },
+      "health_gold": {
+        "seams": 4,
+        "isolated_cores": 0,
+        "dangling_links": 0,
+        "orphans": 0
+      }
+    },
+    "private-app-boosters": {
+      "stability": {
+        "runs": 5,
+        "role_agreement": 0.9,
+        "unstable_hunks": [
+          "h7",
+          "h8",
+          "h9",
+          "h10",
+          "h11",
+          "h12",
+          "h13",
+          "h14",
+          "h15"
+        ],
+        "cores": {
+          "min": 3,
+          "max": 4,
+          "mean": 3.6,
+          "stdev": 0.49
+        },
+        "seams": {
+          "min": 3,
+          "max": 4,
+          "mean": 3.2,
+          "stdev": 0.4
+        },
+        "clusters": {
+          "min": 1,
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
+        }
+      },
+      "health": {
+        "seams": 3.2,
+        "isolated_cores": 0.2,
+        "dangling_links": 0,
+        "orphans": 0
+      },
+      "accuracy": {
+        "role_accuracy": 0.8,
+        "cluster_f1": 1.0,
+        "confusions": [
+          {
+            "gold": "core",
+            "pred": "environment",
+            "n": 2
+          },
+          {
+            "gold": "core",
+            "pred": "link",
             "n": 4
+          },
+          {
+            "gold": "environment",
+            "pred": "core",
+            "n": 2
+          },
+          {
+            "gold": "environment",
+            "pred": "link",
+            "n": 5
+          },
+          {
+            "gold": "link",
+            "pred": "core",
+            "n": 2
+          },
+          {
+            "gold": "link",
+            "pred": "environment",
+            "n": 9
           }
         ]
       },
@@ -187,11 +215,12 @@
     "psdk-starting-loader": {
       "stability": {
         "runs": 5,
-        "role_agreement": 0.911,
+        "role_agreement": 0.889,
         "unstable_hunks": [
           "h1",
-          "h2",
-          "h5"
+          "h3",
+          "h7",
+          "h8"
         ],
         "cores": {
           "min": 2,
@@ -201,9 +230,9 @@
         },
         "seams": {
           "min": 1,
-          "max": 4,
-          "mean": 2,
-          "stdev": 1.26
+          "max": 3,
+          "mean": 2.4,
+          "stdev": 0.8
         },
         "clusters": {
           "min": 1,
@@ -213,29 +242,39 @@
         }
       },
       "health": {
-        "seams": 2,
-        "isolated_cores": 0.6,
+        "seams": 2.4,
+        "isolated_cores": 0.8,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.711,
+        "role_accuracy": 0.6,
         "cluster_f1": 1.0,
         "confusions": [
           {
             "gold": "core",
             "pred": "environment",
-            "n": 4
+            "n": 2
           },
           {
             "gold": "core",
             "pred": "link",
-            "n": 6
+            "n": 9
+          },
+          {
+            "gold": "environment",
+            "pred": "core",
+            "n": 1
+          },
+          {
+            "gold": "environment",
+            "pred": "noise",
+            "n": 1
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 3
+            "n": 5
           }
         ]
       },

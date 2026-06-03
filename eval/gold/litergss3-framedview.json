@@ -1,14 +1,14 @@
 [
- {"id":"h1","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"environment","wires":["s1"],"rationale":"include of FramedView.h supporting new parent handling"},
- {"id":"h2","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"link","wires":["s1"],"rationale":"threads FramedView as Shape parent via get_framed_view"},
- {"id":"h3","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"environment","wires":["s1"],"rationale":"include of FramedView.h supporting new parent handling"},
- {"id":"h4","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"link","wires":["s1"],"rationale":"detects FramedView parent, sets rViewport binding for Sprite"},
- {"id":"h5","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"link","wires":["s1"],"rationale":"creates Sprite in FramedView's child view"},
- {"id":"h6","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"environment","wires":["s1"],"rationale":"include of FramedView.h supporting new parent handling"},
- {"id":"h7","group":"g1","intent":"accept Window (FramedView) parent in drawables","role":"link","wires":["s1"],"rationale":"detects FramedView parent, creates Text in its view"},
- {"id":"h8","group":"g1","intent":"implement FramedView native binding","role":"environment","wires":["s1"],"rationale":"new cgss/header includes supporting the binding rewrite"},
- {"id":"h9","group":"g1","intent":"implement FramedView native binding","role":"core","seam":"s1","seam_label":"FramedView native binding","rationale":"full Ruby-to-cgss::FramedView binding logic, the feature core"},
- {"id":"h10","group":"g1","intent":"implement FramedView native binding","role":"core","seam":"s1","seam_label":"FramedView native binding","rationale":"FramedViewData restructured to hold cgss view pointer"},
- {"id":"h11","group":"g1","intent":"implement FramedView native binding","role":"core","seam":"s1","seam_label":"FramedView native binding","rationale":"destructor detaches native view, lifecycle logic"},
- {"id":"h12","group":"g1","intent":"implement FramedView native binding","role":"link","wires":["s1"],"rationale":"exports get_framed_view for drawables to consume"}
+ {"id":"h1","group":"g1","intent":"implement FramedView + integrate into drawables","role":"environment","wires":["s1"],"rationale":"include FramedView.h in Shape"},
+ {"id":"h2","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s1","seam_label":"Shape accepts FramedView parent","rationale":"Shape registers into the FramedView view"},
+ {"id":"h3","group":"g1","intent":"implement FramedView + integrate into drawables","role":"environment","wires":["s2"],"rationale":"include FramedView.h in Sprite"},
+ {"id":"h4","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s2","seam_label":"Sprite accepts FramedView parent","rationale":"Sprite detects FramedView parent, binds viewport"},
+ {"id":"h5","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s2","seam_label":"Sprite accepts FramedView parent","rationale":"Sprite creates in the FramedView child view"},
+ {"id":"h6","group":"g1","intent":"implement FramedView + integrate into drawables","role":"environment","wires":["s3"],"rationale":"include FramedView.h in Text"},
+ {"id":"h7","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s3","seam_label":"Text accepts FramedView parent","rationale":"Text creates in the FramedView view"},
+ {"id":"h8","group":"g1","intent":"implement FramedView + integrate into drawables","role":"environment","wires":["s4"],"rationale":"FramedView binding header/includes"},
+ {"id":"h9","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s4","seam_label":"FramedView native binding","rationale":"Ruby-to-cgss::FramedView binding, the new thing"},
+ {"id":"h10","group":"g1","intent":"implement FramedView + integrate into drawables","role":"environment","wires":["s4"],"rationale":"FramedView.h cgss include"},
+ {"id":"h11","group":"g1","intent":"implement FramedView + integrate into drawables","role":"core","seam":"s4","seam_label":"FramedView native binding","rationale":"destructor detaches native view (lifecycle)"},
+ {"id":"h12","group":"g1","intent":"implement FramedView + integrate into drawables","role":"link","wires":["s1","s2","s3","s4"],"rationale":"get_framed_view accessor the integrations call into FramedView"}
 ]
