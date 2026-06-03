@@ -30,6 +30,10 @@ _TEMPLATE_DIR = Path(__file__).parent / "templates"
 # Order roles within a cluster so the core is read first, then its links.
 _CLUSTER_ROLES = ("core", "link", "environment")
 
+# A seam whose core got LESS than this share of the self-consistency votes is shown
+# as "uncertain" — the model was genuinely split on whether it's a distinct core.
+UNCERTAIN_THRESHOLD = 0.6
+
 # Distinct hues per intent cluster for the graph view — one box/colour per
 # intent, cycled if there are more clusters than colours. Chosen to read on both
 # light and dark backgrounds (the boxes use a translucent tint of the same hue).
@@ -173,6 +177,12 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             verification = _verify_pair(s_has_core, s_has_link)
             for w in verification["warnings"]:
                 cluster_kinds[w["kind"]] = cluster_kinds.get(w["kind"], 0) + 1
+            # A seam is UNCERTAIN when self-consistency voting was split on its
+            # core's role (the model wasn't sure this is a distinct core) — surface
+            # it so the reviewer treats the seam as a maybe, not a fact.
+            seam_cores = [h for h in seam_hunks if h.role == "core"]
+            min_conf = min((h.role_confidence for h in seam_cores), default=1.0)
+            uncertain = bool(seam_cores) and min_conf < UNCERTAIN_THRESHOLD
             seams.append({
                 "id": sid,
                 "label": label,
@@ -182,6 +192,8 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
                 "verification": verification,
                 "count": len(seam_hunks),
                 "link_ids": link_ids,
+                "uncertain": uncertain,
+                "confidence": round(min_conf, 2),
             })
 
         # Which other seams each seam shares a link with (a link wiring >1 core) —
@@ -345,6 +357,8 @@ def _build_graph(clusters: list[dict]) -> dict:
                 "has_core": seam["has_core"],
                 "has_link": seam["has_link"],
                 "warn": warns[0]["kind"] if warns else "",
+                "uncertain": seam["uncertain"],
+                "confidence": seam["confidence"],
             }})
             node_cluster[nid] = cl["id"]
             for f in files:

@@ -252,6 +252,7 @@
     <span class="gl"><span class="swatch intra"></span> shared link (wires both cores)</span>
     <span class="gl"><span class="swatch cross"></span> shared file (across clusters)</span>
     <span class="gl"><span class="dot warn" style="background:var(--core)"></span> ⚠ isolated core</span>
+    <span class="gl"><span class="dot" style="background:var(--muted);opacity:.45;border:1px dashed var(--muted)"></span> uncertain core (classifier split)</span>
     <span class="gl">node size ≈ hunks in the seam</span>
   </div>
 
@@ -300,6 +301,10 @@
         <span class="seam-label">{{ seam.label or "(wiring)" }}</span>
         {% if seam.shares_with %}
         <span class="shared-note">↔ a link here also wires {{ seam.shares_with | join(', ') }}</span>
+        {% endif %}
+        {% if seam.uncertain %}
+        <span class="warn-badge warn-uncertain">uncertain core — the classifier was split
+          ({{ (seam.confidence * 100) | round | int }}% agreement); verify this is a real seam</span>
         {% endif %}
         {% for w in seam.verification.warnings %}
         <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
@@ -480,6 +485,12 @@
         {
           selector: "node[kind = 'seam'][warn = 'dangling-link']",
           style: { "border-width": 4, "border-color": warnColor, "border-style": "dashed" },
+        },
+        {
+          // uncertain core: the classifier was split on whether this is a real seam
+          selector: "node[kind = 'seam'][?uncertain]",
+          style: { "border-style": "dashed", "border-color": muted,
+                   "background-opacity": 0.45 },
         },
         {
           selector: "edge",

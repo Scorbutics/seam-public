@@ -49,6 +49,9 @@ class Hunk:
     is_binary: bool = False
     # filled in later stages:
     role: str | None = None
+    role_confidence: float = 1.0  # share of self-consistency votes agreeing on this
+                                  # role (1.0 = single pass / unanimous); low = the
+                                  # model was genuinely split → surface as "uncertain"
     rationale: str = ""
     group: str = ""          # intent-cluster id, e.g. "g1" (empty for noise)
     intent: str = ""         # short human label of the cluster's intent

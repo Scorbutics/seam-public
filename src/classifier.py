@@ -24,6 +24,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections import Counter
 from pathlib import Path
 
 from . import ROLES
@@ -50,6 +51,14 @@ _OUTPUT_TOKENS_PER_HUNK = 60
 # for latency once the F1-vs-budget curve is measured via eval/harness.py.
 CLUSTER_THINKING: int | None = None
 ROLE_THINKING: int | None = 0
+
+# Self-consistency: the role/seam pass is sampled (no temperature control in the
+# CLI), so borderline hunks flip run-to-run. Run it N times and keep the MEDOID
+# run (the one most agreeing with the per-hunk modal) — collapses the variance on
+# dominant-role hunks to a stable answer, leaving only genuinely 50/50 hunks
+# uncertain. The slow thinking cluster pass runs ONCE; only the cheap role pass
+# repeats. Set 1 to disable.
+ROLE_VOTES = 5
 
 
 class ClassifierError(RuntimeError):
@@ -529,12 +538,64 @@ def _run_pass(kind: str, binary: str, prompt: str, model: str, *,
     return labels
 
 
+def _eff_role_from_item(item: dict) -> str:
+    """Effective role of a label object (handling spans), matching the assignment
+    logic — used to compare votes. Unclassified → core (the safe default)."""
+    spans = _parse_spans(item)
+    if len(spans) >= 2:
+        core = next((s for s in spans if s.role == "core"), None)
+        return (core or spans[0]).role
+    role = str(item.get("role", "")).strip().lower()
+    return role if role in ROLES else "core"
+
+
+def _vote_role_pass(kind: str, binary: str, prompt: str, model: str, *, votes: int,
+                    hunk_ids: list[str], verbose: bool, debug: bool,
+                    debug_path: str | None) -> tuple[dict[str, dict], dict[str, float]]:
+    """Self-consistency for the (sampled) role pass: run it `votes` times and return
+    (MEDOID run, per-hunk confidence). The medoid is the single coherent run whose
+    per-hunk roles best match the per-hunk modal. Confidence = share of votes that
+    agreed on the modal role (1.0 = unanimous; ~0.4 = a real tie → "uncertain").
+    Collapses flips on dominant-role hunks; only truly split hunks stay low-conf."""
+    runs: list[dict[str, dict]] = []
+    for v in range(max(1, votes)):
+        runs.append(_run_pass(kind, binary, prompt, model, thinking=ROLE_THINKING,
+                              tag=("role" if votes <= 1 else f"role.v{v + 1}"),
+                              verbose=verbose, debug=debug, debug_path=debug_path))
+    if len(runs) == 1:
+        return runs[0], {hid: 1.0 for hid in hunk_ids}
+    modal: dict[str, str] = {}
+    for hid in hunk_ids:
+        roles = [_eff_role_from_item(r.get(hid, {})) for r in runs]
+        modal[hid] = Counter(roles).most_common(1)[0][0]
+
+    def agreement(r: dict[str, dict]) -> int:
+        return sum(_eff_role_from_item(r.get(hid, {})) == modal[hid] for hid in hunk_ids)
+
+    medoid = max(runs, key=agreement)
+    # Confidence = share of votes agreeing with the role we ACTUALLY show (the
+    # medoid's), not the global modal — so the number reflects the displayed label.
+    confidence: dict[str, float] = {}
+    for hid in hunk_ids:
+        shown = _eff_role_from_item(medoid.get(hid, {}))
+        roles = [_eff_role_from_item(r.get(hid, {})) for r in runs]
+        confidence[hid] = roles.count(shown) / len(runs)
+    if verbose or debug:
+        spread = [(hid, dict(Counter(_eff_role_from_item(r.get(hid, {})) for r in runs)))
+                  for hid in hunk_ids
+                  if len({_eff_role_from_item(r.get(hid, {})) for r in runs}) > 1]
+        print(f"[classifier] role voting: {votes} passes, medoid agreement "
+              f"{agreement(medoid)}/{len(hunk_ids)}; still-split hunks: {spread or 'none'}")
+    return medoid, confidence
+
+
 def classify(
     hunks: list[Hunk],
     *,
     model: str = "claude-haiku-4-5",
     claude_bin: str | None = None,
     context_window: int = DEFAULT_CONTEXT_WINDOW,
+    role_votes: int = ROLE_VOTES,
     verbose: bool = False,
     debug: bool = False,
     debug_path: str | None = None,
@@ -580,11 +641,12 @@ def classify(
             group_intent[g] = it
 
     # PASS B — SEAM+ROLE (thinking OFF: local pattern-matching, fast + accurate).
-    # Independent of pass A (see _build_prompt); merged by id below.
+    # Independent of pass A (see _build_prompt); merged by id below. Run with
+    # self-consistency (medoid of `role_votes` samples) to tame run-to-run flips.
     role_prompt = _build_prompt(hunks)
-    labels = _run_pass(kind, binary, role_prompt, model,
-                       thinking=ROLE_THINKING, tag="role",
-                       verbose=verbose, debug=debug, debug_path=debug_path)
+    labels, role_conf = _vote_role_pass(kind, binary, role_prompt, model, votes=role_votes,
+                                        hunk_ids=[h.id for h in hunks],
+                                        verbose=verbose, debug=debug, debug_path=debug_path)
     if debug:
         _dbg(f"cluster pass: {len({g for g, _ in groups.values() if g})} groups; "
              f"role pass: {len(labels)} labelled hunks")
@@ -608,6 +670,8 @@ def classify(
         g, it = groups.get(h.id, ("", ""))
         h.group = g
         h.intent = it or group_intent.get(g, "")
+        # self-consistency confidence (share of votes agreeing on the role)
+        h.role_confidence = role_conf.get(h.id, 1.0)
         # role/seam/wires/spans from PASS B
         item = labels.get(h.id) or {}
         spans = _parse_spans(item)
