@@ -57,7 +57,7 @@ def _cases(only: str | None) -> list[Path]:
 
 def generate(args) -> int:
     from src import classifier, noise_filter, parser  # local import: LLM path only
-    model_dir = RUNS_DIR / args.model
+    model_dir = RUNS_DIR / (args.label or args.model)
     for case in _cases(args.case):
         out_dir = model_dir / case.stem
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -104,8 +104,48 @@ def _counts(run: list[dict]) -> dict:
     return {"cores": len(cores), "seams": len(seams), "clusters": len(clusters)}
 
 
-def _load_runs(model: str, case: str) -> list[list[dict]]:
-    d = RUNS_DIR / model / case
+def _structure_health(run: list[dict]) -> dict:
+    """The 'is this an acceptable visualization' signals — what would make a
+    reviewer distrust the report, independent of per-hunk label nitpicks:
+      - seams: total core seams (watch for explosion)
+      - isolated_cores: core seams with NO link wiring them -> a lonely-core warning
+      - dangling_links: links wiring no present core -> a dangling-link warning
+      - orphans: non-noise hunks left ungrouped (no cluster) -> floating in the UI
+    A core<->link blur INSIDE a seam doesn't show up here (it renders adjacent
+    anyway); only structure-breaking errors do. Compared to gold, the gap here is
+    the 'spurious warning' rate that erodes trust."""
+    core_seams: dict[str, set] = {}
+    links: dict[str, list] = {}
+    orphans = 0
+    for h in run:
+        role = _effective_role(h)
+        if role == "noise":
+            continue
+        g = h.get("group", "")
+        if not g:
+            orphans += 1
+            continue
+        if role == "core":
+            sk = _seam_key(h)
+            if sk:
+                core_seams.setdefault(g, set()).add(sk[1])
+        elif role in ("link", "environment"):
+            links.setdefault(g, []).append((role, set(h.get("wires") or [])))
+    seams = sum(len(s) for s in core_seams.values())
+    isolated = 0
+    for g, ss in core_seams.items():
+        wired = {w for role, ws in links.get(g, []) if role == "link" for w in ws}
+        isolated += sum(1 for s in ss if s not in wired)
+    dangling = 0
+    for g, lst in links.items():
+        cs = core_seams.get(g, set())
+        dangling += sum(1 for role, ws in lst if role == "link" and not (ws & cs))
+    return {"seams": seams, "isolated_cores": isolated,
+            "dangling_links": dangling, "orphans": orphans}
+
+
+def _load_runs(label: str, case: str) -> list[list[dict]]:
+    d = RUNS_DIR / label / case
     return [json.loads(p.read_text()) for p in sorted(d.glob("run_*.json"))]
 
 
@@ -183,16 +223,23 @@ def _accuracy(runs: list[list[dict]], gold: list[dict]) -> dict:
 
 
 def score(args) -> int:
-    report = {"model": args.model, "cases": {}}
+    label = args.label or args.model
+    report = {"model": args.model, "label": label, "cases": {}}
     for case in _cases(args.case):
-        runs = _load_runs(args.model, case.stem)
+        runs = _load_runs(label, case.stem)
         if not runs:
             print(f"[warn] no runs for {case.stem} (run `generate` first)")
             continue
         entry = {"stability": _stability(runs)}
+        # Visualization health: mean over runs, vs gold (the spurious-warning gap).
+        hkeys = ("seams", "isolated_cores", "dangling_links", "orphans")
+        hs = [_structure_health(r) for r in runs]
+        entry["health"] = {k: round(statistics.mean(h[k] for h in hs), 2) for k in hkeys}
         gold_path = GOLD_DIR / f"{case.stem}.json"
         if gold_path.exists():
-            entry["accuracy"] = _accuracy(runs, json.loads(gold_path.read_text()))
+            gold = json.loads(gold_path.read_text())
+            entry["accuracy"] = _accuracy(runs, gold)
+            entry["health_gold"] = {k: _structure_health(gold)[k] for k in hkeys}
         report["cases"][case.stem] = entry
 
     _print_report(report)
@@ -224,6 +271,13 @@ def _print_report(report: dict) -> None:
                 print(f"  confusions       {cs}")
         else:
             print("  (no gold labels — accuracy skipped; add eval/gold/%s.json)" % name)
+        if "health" in e:
+            h = e["health"]
+            hg = e.get("health_gold")
+            gtxt = (f"  (gold: seams={hg['seams']} iso={hg['isolated_cores']} "
+                    f"dangling={hg['dangling_links']} orphans={hg['orphans']})") if hg else ""
+            print(f"  health           seams={h['seams']} isolated_cores={h['isolated_cores']} "
+                  f"dangling_links={h['dangling_links']} orphans={h['orphans']}{gtxt}")
 
 
 def _gate(report: dict, baseline: dict, tol: float) -> int:
@@ -257,12 +311,15 @@ def main(argv=None) -> int:
     g = sub.add_parser("generate", help="run the classifier N times per case and cache the runs")
     g.add_argument("--runs", type=int, default=5)
     g.add_argument("--model", default="claude-haiku-4-5")
+    g.add_argument("--label", help="run-set dir name (default: model). Use to keep "
+                   "prompt/config variants from colliding, e.g. --label haiku-sharp-roles")
     g.add_argument("--case", help="only this case (filename stem)")
     g.add_argument("--force", action="store_true", help="re-generate even if cached")
     g.set_defaults(func=generate)
 
     s = sub.add_parser("score", help="score cached runs (stability always; accuracy if gold exists)")
     s.add_argument("--model", default="claude-haiku-4-5")
+    s.add_argument("--label", help="run-set dir name to score (default: model)")
     s.add_argument("--case", help="only this case (filename stem)")
     s.add_argument("--save", help="write the scorecard JSON here (e.g. a new baseline)")
     s.add_argument("--baseline", help="compare against this scorecard and gate on regression")

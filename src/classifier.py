@@ -43,6 +43,14 @@ _SYSTEM_OVERHEAD_TOKENS = 25_000
 # Rough output size per hunk (the {id, role, rationale} object).
 _OUTPUT_TOKENS_PER_HUNK = 60
 
+# Per-pass thinking budgets (passed to the backend; see _run_backend). Clustering
+# is reasoning-heavy and the LLM does it best with thinking ON (None = CLI default;
+# measured cluster F1 ~1.0). Roling is local and is more accurate AND ~16x faster
+# with thinking OFF (0). Tunable: cap CLUSTER_THINKING to trade clustering quality
+# for latency once the F1-vs-budget curve is measured via eval/harness.py.
+CLUSTER_THINKING: int | None = None
+ROLE_THINKING: int | None = 0
+
 
 class ClassifierError(RuntimeError):
     pass
@@ -108,85 +116,111 @@ def resolve_backend(claude_override: str | None = None) -> tuple[str, str]:
     )
 
 
-_PROMPT_HEADER = """\
+# Two INDEPENDENT LLM passes, each at its measured-best config, merged by id:
+#   Pass A — CLUSTER: thinking ON. Grouping is reasoning-heavy and the LLM does it
+#     holistically far better (cluster F1 ~1.0) than any reconstruction from local
+#     wiring (deterministic-from-wires measured 0.5–0.7 — rejected).
+#   Pass B — SEAM+ROLE: thinking OFF + sharp role defn. Roling is local pattern-
+#     matching, more accurate AND ~16x faster without thinking (measured).
+# The passes don't depend on each other (roles were accurate WITHOUT cluster
+# context), so they could run in parallel. Wires still come from pass B for the
+# renderer's intra-cluster seam edges, but no longer carry the partition.
+
+_PROMPT_CLUSTER = """\
 You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
-review, judge, score, approve, or comment on quality. You only structure.
+review, judge, score, or comment on quality.
 
-Do THREE things, using the whole diff as context:
+Your ONLY job in this pass: GROUP the hunks into INTENT CLUSTERS — coherent
+sub-changes, using the whole diff as context. A diff often contains several
+distinct intents; each becomes one group. Grouping is GRAMMAR-driven (what wires
+to what), NOT topic similarity: put a link in the SAME group as the core it wires
+in — the joint and the thing it joins belong together. Give each group a stable
+id ("g1", "g2", ...) and a short intent label (<= 8 words). One intent = one
+group, even if it spans several files.
 
-1) GROUP the hunks into INTENT CLUSTERS — coherent sub-changes. A diff often
-   contains several distinct intents; each becomes one group. Grouping is
-   GRAMMAR-driven (what wires to what), NOT topic similarity: put a link in the
-   SAME group as the core it wires in — the joint and the thing it joins belong
-   together. Give each group a stable id ("g1", "g2", ...) and a short intent
-   label (<= 8 words). One intent = one group, even if it spans several files.
+PREFER THE FEWEST CLUSTERS that still separate genuinely independent intents. Be
+COARSE, not fine:
+- Introducing one new thing and migrating several call-sites to it is ONE intent
+  (one core + its links across many files), NOT one cluster per call-site.
+- A helper/strategy that exists only to serve a new mechanism belongs in the SAME
+  cluster as that mechanism — even if it lives in a different file.
+- Split into separate clusters ONLY when two intents could ship in separate PRs
+  without depending on each other. If unsure, MERGE.
 
-   PREFER THE FEWEST CLUSTERS that still separate genuinely independent intents.
-   Be COARSE, not fine:
-   - Introducing one new thing and migrating several call-sites to it is ONE
-     intent (one core + its links across many files), NOT one cluster per
-     call-site. The migrated call-sites are LINKS in that single cluster.
-   - A helper/strategy that exists only to serve a new mechanism belongs in the
-     SAME cluster as that mechanism — even if it lives in a different file.
-   - Split into separate clusters ONLY when two intents could ship in separate
-     PRs without depending on each other. If unsure, MERGE.
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk:
+[{"id":"h1","group":"g1","intent":"add currency to checkout"},
+ {"id":"h2","group":"g1","intent":"add currency to checkout"}]
+Every hunk in the same group MUST repeat the same intent string.
 
-2) Within each cluster, SEAM the hunks into core↔link wirings. A seam is ONE
-   core (the new/changed thing) together with the link(s) that wire THAT core
-   into the system. The core ANCHORS the seam; links POINT AT the cores they
-   wire. The relationship is MANY-TO-MANY — this is the key grammar:
-   - Every CORE hunk anchors its own seam: give it a `seam` id unique WITHIN its
-     cluster ("s1", "s2", ...) and a short `seam_label` (<= 6 words) naming the
-     wiring (e.g. "editable-table call-site"). Put `seam`/`seam_label` ONLY on
-     cores.
+=== HUNKS ===
+"""
+
+_PROMPT_SEAM_ROLE = """\
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. The core
+   ANCHORS the seam; links POINT AT the cores they wire. MANY-TO-MANY:
+   - Every CORE hunk anchors its own seam: give it a `seam` id UNIQUE ACROSS THE
+     WHOLE DIFF ("s1", "s2", ...) and a short `seam_label` (<= 6 words). Put
+     `seam`/`seam_label` ONLY on cores.
    - Every LINK (and environment) hunk lists `wires`: the seam id(s) of the
-     core(s) it wires. A single link that wires SEVERAL cores lists ALL of them
-     (e.g. one call-site threading params for two new cores → "wires":["s1","s2"]).
-     Do NOT force a shared link into one seam — that is exactly the wiring this
-     model must keep. A link appears in every seam it wires.
-   - A truly dangling link (wires something changed elsewhere / outside the diff)
-     has "wires":[]. A core that nothing in the diff wires is just a seam with no
-     links pointing at it. Use these only when genuinely true, not when unsure —
-     if a link plausibly wires a core present here, list that core in `wires`.
-   Seaming is what lets a reviewer read a core RIGHT NEXT TO the link(s) that
-   wire it, including links shared across several cores.
+     core(s) it wires. A link wiring SEVERAL cores lists ALL of them
+     ("wires":["s1","s2"]). A truly dangling link has "wires":[].
 
-3) ROLE each hunk (roles only make sense together — links tell you where to
-   expect cores):
-   - core: the new or changed logic the sub-change is fundamentally about.
-   - link: the joints wiring the new thing in — params threading across layers,
-           call sites, signature/interface matches.
-   - environment: ambient ripple — shared utilities, global CSS/config consumed
-           elsewhere, cross-cutting concerns touched.
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory
+     store that backs an interface is a LINK, not core — it wires a data source
+     in; the new logic lives elsewhere). Registering a new object into a parent
+     is a link.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, constants,
+     globals, config/data values, shared utilities, AND tests (they verify the
+     change rather than being it). Trust is impact, not behavior.
    - noise: formatting/indentation that slipped through — no logical effect.
 
-4) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
    the hunk instead of forcing a single label. The hunk's BODY lines are
    gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
-   that numbering. Typical case: import/include/boilerplate churn (environment)
-   sitting right next to new logic (core), or a new function (core) next to a
-   call-site edit (link).
-   STRONG BIAS: do NOT split. Only emit spans when the roles genuinely DIFFER —
-   never to chop one role into pieces. Keep the hunk as ONE seam anchor: AT MOST
-   ONE `core` span per hunk; do not invent extra cores just to split. A hunk that
-   is one role end-to-end has NO spans (use the flat role). This keeps seams
-   meaningful — a seam is a real technical sub-intent, not a fragment.
-   Each span carries its own role, line range, and (core→seam/seam_label,
-   link/env→wires). Splitting is OPTIONAL and should be the exception.
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
 
-Return ONLY a JSON array, no prose, no markdown fences. One object per hunk.
-A MONO-ROLE hunk: a core anchors a seam (carries seam + seam_label); a
-link/environment lists the seam(s) it wires (carries wires):
-[{"id":"h1","group":"g1","intent":"add currency to checkout","role":"core","seam":"s1","seam_label":"gateway call-site","rationale":"<=12 words"},
- {"id":"h2","group":"g1","intent":"add currency to checkout","role":"link","wires":["s1"],"rationale":"<=12 words"}]
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core anchors a seam (seam + seam_label); a link/environment
+lists the seam(s) it wires:
+[{"id":"h1","role":"core","seam":"s1","seam_label":"gateway call-site","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["s1"],"rationale":"<=12 words"}]
 A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
-gutter numbering), each span a {role, lines, rationale, + seam/seam_label or wires}:
-[{"id":"h3","group":"g1","intent":"add currency to checkout","spans":[
+gutter numbering):
+[{"id":"h3","spans":[
     {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
     {"role":"core","lines":"5-19","seam":"s2","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
-Every hunk in the same group MUST repeat the same intent string. A link that
-wires several cores lists every one of their seam ids in `wires`. The rationale
-is a STRUCTURING note (why this role), never a quality judgement.
+Seam ids are unique across the whole diff. The rationale is a STRUCTURING note,
+never a quality judgement.
 
 === HUNKS ===
 """
@@ -206,11 +240,28 @@ def _number_body(text: str) -> str:
 
 
 def _build_prompt(hunks: list[Hunk]) -> str:
-    parts = [_PROMPT_HEADER]
+    """Pass B (seam+role) prompt — bodies gutter-numbered so spans can cite lines.
+
+    NB: pass B is INDEPENDENT of pass A (roles are accurate without cluster
+    context; feeding the intent in was measured to NOT help and to over-correct
+    toward under-coring, so it was reverted)."""
+    parts = [_PROMPT_SEAM_ROLE]
     for h in hunks:
         parts.append(
             f"\n--- HUNK {h.id} | file: {h.file_path} | change: {h.change_type} ---\n"
             f"{_number_body(h.text)}\n"
+        )
+    parts.append("\n=== END HUNKS ===\nReturn the JSON array now.")
+    return "".join(parts)
+
+
+def _build_cluster_prompt(hunks: list[Hunk]) -> str:
+    """Pass A (cluster) prompt — no line numbering needed (grouping only)."""
+    parts = [_PROMPT_CLUSTER]
+    for h in hunks:
+        parts.append(
+            f"\n--- HUNK {h.id} | file: {h.file_path} | change: {h.change_type} ---\n"
+            f"{h.text.rstrip()}\n"
         )
     parts.append("\n=== END HUNKS ===\nReturn the JSON array now.")
     return "".join(parts)
@@ -240,13 +291,20 @@ def _write_debug_file(path: str, content: str) -> None:
         _dbg(f"could not write {path}: {exc}")
 
 
-def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = False) -> str:
-    """Run the chosen backend and return the model's raw text reply."""
-    return _run_claude(binary, prompt, model, debug) if kind == "claude" \
+def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = False,
+                 thinking: int | None = 0) -> str:
+    """Run the chosen backend and return the model's raw text reply.
+
+    `thinking` controls the `claude -p` thinking budget: 0 = OFF (fast; right for
+    the role pass), a positive int caps it, None = leave the CLI default (thinking
+    ON; right for the cluster pass). Copilot ignores it.
+    """
+    return _run_claude(binary, prompt, model, debug, thinking) if kind == "claude" \
         else _run_copilot(binary, prompt, debug)
 
 
-def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -> str:
+def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False,
+                thinking: int | None = 0) -> str:
     # Feed the prompt via stdin, NOT as an argv entry: a large diff easily exceeds
     # the OS ARG_MAX limit (OSError [Errno 7] Argument list too long).
     # --strict-mcp-config ignores ambient MCP servers (their tool schemas add
@@ -254,6 +312,12 @@ def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False) -
     cmd = [claude_bin, "-p", "--output-format", "json", "--model", model,
            "--strict-mcp-config"]
     env = dict(os.environ)
+    # THINKING control (see _run_backend). The `claude -p` agent defaults interleaved
+    # thinking ON, which burns ~15-22K tokens (~160s/call). For the role pass we force
+    # it OFF (thinking=0 → ~16x faster, equal/better roles). For the cluster pass we
+    # leave it ON (thinking=None → grammar-driven grouping needs the reasoning).
+    if thinking is not None:
+        env["MAX_THINKING_TOKENS"] = str(thinking)
     proc = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
                           check=False, env=env)
     if proc.returncode != 0:
@@ -358,17 +422,17 @@ def _parse_spans(item: dict) -> list[Span]:
     return out
 
 
-def _sync_flat_from_spans(h: Hunk, seam_label: dict[tuple[str, str], str]) -> None:
+def _sync_flat_from_spans(h: Hunk, seam_label: dict[str, str]) -> None:
     """Mirror a fused hunk's spans onto the flat role/seam/wires fields so existing
     role-keyed code (renderer, verification) keeps working. The hunk is summarised
     as its core span if it has one (cores drive seams); otherwise its first span.
-    `wires`/`rationale` are unioned/joined across spans."""
+    `wires`/`rationale` are unioned/joined across spans. Seam ids are global here
+    (clusters are derived later), so seam_label is keyed by seam id."""
     core = next((s for s in h.spans if s.role == "core"), None)
     primary = core or h.spans[0]
     h.role = primary.role
     h.seam = primary.seam if core else ""
-    h.seam_label = (primary.seam_label
-                    or seam_label.get((h.group, h.seam), "")) if core else ""
+    h.seam_label = (primary.seam_label or seam_label.get(h.seam, "")) if core else ""
     wires: list[str] = []
     for s in h.spans:
         for x in s.wires:
@@ -380,6 +444,37 @@ def _sync_flat_from_spans(h: Hunk, seam_label: dict[tuple[str, str], str]) -> No
             wires.append(s.seam)
     h.wires = wires
     h.rationale = " | ".join(f"{s.role}: {s.rationale}" for s in h.spans if s.rationale)
+
+
+def _run_pass(kind: str, binary: str, prompt: str, model: str, *,
+              thinking: int | None, tag: str, verbose: bool, debug: bool,
+              debug_path: str | None) -> dict[str, dict]:
+    """Run ONE LLM pass (with one retry on malformed JSON) and return {id: label}.
+    `tag` ("cluster"/"role") names the pass for debug dumps; `thinking` is its
+    budget (0 off, None = CLI default-on)."""
+    if debug and debug_path:
+        _write_debug_file(f"{debug_path}.{tag}.prompt.txt", prompt)
+    labels: dict[str, dict] = {}
+    last_err: Exception | None = None
+    for attempt in (1, 2):
+        try:
+            raw = _run_backend(kind, binary, prompt, model, debug, thinking)
+            if debug:
+                _dbg(f"=== {tag} reply (attempt {attempt}, {len(raw)} chars) ===")
+                print(raw, file=sys.stderr)
+                if debug_path:
+                    _write_debug_file(f"{debug_path}.{tag}.reply.txt", raw)
+            for item in _extract_json_array(raw):
+                if isinstance(item, dict) and "id" in item:
+                    labels[str(item["id"])] = item
+            break
+        except (ClassifierError, json.JSONDecodeError) as exc:
+            last_err = exc
+            if verbose or debug:
+                print(f"[classifier] {tag} attempt {attempt} failed: {exc}")
+    if not labels and last_err:
+        raise ClassifierError(f"{tag} pass failed after retry: {last_err}")
+    return labels
 
 
 def classify(
@@ -403,13 +498,14 @@ def classify(
         return
 
     kind, binary = resolve_backend(claude_bin)
-    prompt = _build_prompt(hunks)
+    cluster_prompt = _build_cluster_prompt(hunks)
 
-    fits, est_in, usable = fits_context(prompt, len(hunks), context_window)
+    fits, est_in, usable = fits_context(cluster_prompt, len(hunks), context_window)
     if verbose:
         shown_model = model if kind == "claude" else (os.environ.get("COPILOT_MODEL") or "copilot default")
-        print(f"[classifier] {len(hunks)} hunks -> {kind}: {binary} (model={shown_model})")
-        print(f"[classifier] ~{est_in:,} input tokens estimated; ~{usable:,} usable")
+        print(f"[classifier] {len(hunks)} hunks -> {kind}: {binary} (model={shown_model}); "
+              f"2 passes: cluster(think) + seam/role(no-think)")
+        print(f"[classifier] ~{est_in:,} input tokens/pass; ~{usable:,} usable")
     if not fits:
         print(
             f"warning: diff is ~{est_in:,} tokens, near/over the ~{usable:,}-token "
@@ -418,64 +514,57 @@ def classify(
             file=sys.stderr,
         )
 
-    if debug and debug_path:
-        _write_debug_file(f"{debug_path}.prompt.txt", prompt)
-        _dbg(f"wrote prompt ({len(prompt)} chars) -> {debug_path}.prompt.txt")
-
-    labels: dict[str, dict] = {}
-    last_err: Exception | None = None
-    for attempt in (1, 2):  # one retry on malformed JSON
-        try:
-            raw = _run_backend(kind, binary, prompt, model, debug)
-            if debug:
-                _dbg(f"=== raw model reply (attempt {attempt}, {len(raw)} chars) ===")
-                print(raw, file=sys.stderr)
-                _dbg("=== end raw model reply ===")
-                if debug_path:
-                    _write_debug_file(f"{debug_path}.reply.txt", raw)
-            for item in _extract_json_array(raw):
-                if isinstance(item, dict) and "id" in item:
-                    labels[str(item["id"])] = item
-            break
-        except (ClassifierError, json.JSONDecodeError) as exc:
-            last_err = exc
-            if verbose or debug:
-                print(f"[classifier] attempt {attempt} failed: {exc}")
-    if not labels and last_err:
-        raise ClassifierError(f"Classification failed after retry: {last_err}")
-    if debug:
-        _dbg(f"parsed {len(labels)} labelled hunks from reply")
-
-    # Collect fallback labels so a hunk missing its own label inherits its
-    # group's intent / seam's seam_label. Scan both flat objects and span objects.
+    # PASS A — CLUSTER (thinking ON: grouping is the reasoning-heavy, holistic part).
+    cluster_labels = _run_pass(kind, binary, cluster_prompt, model,
+                               thinking=CLUSTER_THINKING, tag="cluster",
+                               verbose=verbose, debug=debug, debug_path=debug_path)
     group_intent: dict[str, str] = {}
-    seam_label: dict[tuple[str, str], str] = {}
-    for item in labels.values():
+    groups: dict[str, tuple[str, str]] = {}
+    for hid, item in cluster_labels.items():
         g = str(item.get("group", "")).strip()
         it = str(item.get("intent", "")).strip()
+        groups[hid] = (g, it)
         if g and it and g not in group_intent:
             group_intent[g] = it
+
+    # PASS B — SEAM+ROLE (thinking OFF: local pattern-matching, fast + accurate).
+    # Independent of pass A (see _build_prompt); merged by id below.
+    role_prompt = _build_prompt(hunks)
+    labels = _run_pass(kind, binary, role_prompt, model,
+                       thinking=ROLE_THINKING, tag="role",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    if debug:
+        _dbg(f"cluster pass: {len({g for g, _ in groups.values() if g})} groups; "
+             f"role pass: {len(labels)} labelled hunks")
+
+    # Seam labels fallback — seam ids are GLOBAL (cluster ids come from pass A), so
+    # key by seam id. A hunk missing its seam_label inherits it from the core that
+    # anchors the seam. Scan both flat objects and span objects.
+    seam_label: dict[str, str] = {}
+    for item in labels.values():
         objs = item.get("spans") if isinstance(item.get("spans"), list) else None
         for src in (objs or [item]):
             if not isinstance(src, dict):
                 continue
             s = str(src.get("seam", "")).strip()
             sl = str(src.get("seam_label", "")).strip()
-            if g and s and sl and (g, s) not in seam_label:
-                seam_label[(g, s)] = sl
+            if s and sl and s not in seam_label:
+                seam_label[s] = sl
 
     for h in hunks:
+        # group/intent from PASS A
+        g, it = groups.get(h.id, ("", ""))
+        h.group = g
+        h.intent = it or group_intent.get(g, "")
+        # role/seam/wires/spans from PASS B
         item = labels.get(h.id) or {}
-        h.group = str(item.get("group", "")).strip()
-        h.intent = str(item.get("intent", "")).strip() or group_intent.get(h.group, "")
         spans = _parse_spans(item)
         if len(spans) >= 2:  # genuinely fused — keep the per-span roles
             h.spans = spans
             _sync_flat_from_spans(h, seam_label)
             continue
         if len(spans) == 1 and str(item.get("role", "")).strip().lower() not in ROLES:
-            # A lone span is just a mono-role hunk expressed verbosely — fold it
-            # into the flat fields rather than treat the hunk as fused.
+            # A lone span is just a mono-role hunk expressed verbosely — fold it in.
             s = spans[0]
             item = {**item, "role": s.role, "seam": s.seam,
                     "seam_label": s.seam_label, "wires": s.wires, "rationale": s.rationale}
@@ -493,7 +582,7 @@ def classify(
                 wires = [h.seam]
             h.wires = wires
             h.seam_label = (str(item.get("seam_label", "")).strip()
-                            or seam_label.get((h.group, h.seam), ""))
+                            or seam_label.get(h.seam, ""))
         else:
             # Unclassified → default to core (heaviest verification = safe direction).
             h.role = "core"

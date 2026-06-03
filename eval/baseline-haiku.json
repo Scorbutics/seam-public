@@ -1,25 +1,25 @@
 {
   "model": "claude-haiku-4-5",
+  "label": "haiku-2pass",
   "cases": {
     "everywhere-surface-events": {
       "stability": {
-        "runs": 3,
-        "role_agreement": 0.778,
+        "runs": 5,
+        "role_agreement": 0.867,
         "unstable_hunks": [
-          "h1",
           "h3"
         ],
         "cores": {
           "min": 1,
-          "max": 3,
-          "mean": 2,
-          "stdev": 0.82
+          "max": 2,
+          "mean": 1.2,
+          "stdev": 0.4
         },
         "seams": {
           "min": 1,
-          "max": 3,
-          "mean": 2,
-          "stdev": 0.82
+          "max": 2,
+          "mean": 1.2,
+          "stdev": 0.4
         },
         "clusters": {
           "min": 1,
@@ -28,21 +28,222 @@
           "stdev": 0.0
         }
       },
+      "health": {
+        "seams": 1.2,
+        "isolated_cores": 1,
+        "dangling_links": 0,
+        "orphans": 0
+      },
       "accuracy": {
-        "role_accuracy": 0.667,
+        "role_accuracy": 0.733,
         "cluster_f1": 1.0,
         "confusions": [
-          {
-            "gold": "environment",
-            "pred": "core",
-            "n": 2
-          },
           {
             "gold": "link",
             "pred": "core",
             "n": 1
+          },
+          {
+            "gold": "link",
+            "pred": "environment",
+            "n": 3
           }
         ]
+      },
+      "health_gold": {
+        "seams": 1,
+        "isolated_cores": 0,
+        "dangling_links": 0,
+        "orphans": 0
+      }
+    },
+    "litergss3-framedview": {
+      "stability": {
+        "runs": 5,
+        "role_agreement": 0.967,
+        "unstable_hunks": [
+          "h5",
+          "h10"
+        ],
+        "cores": {
+          "min": 4,
+          "max": 6,
+          "mean": 5,
+          "stdev": 0.63
+        },
+        "seams": {
+          "min": 4,
+          "max": 5,
+          "mean": 4.2,
+          "stdev": 0.4
+        },
+        "clusters": {
+          "min": 1,
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
+        }
+      },
+      "health": {
+        "seams": 4.2,
+        "isolated_cores": 1.6,
+        "dangling_links": 0.2,
+        "orphans": 0
+      },
+      "accuracy": {
+        "role_accuracy": 0.533,
+        "cluster_f1": 1.0,
+        "confusions": [
+          {
+            "gold": "core",
+            "pred": "environment",
+            "n": 9
+          },
+          {
+            "gold": "link",
+            "pred": "core",
+            "n": 19
+          }
+        ]
+      },
+      "health_gold": {
+        "seams": 1,
+        "isolated_cores": 0,
+        "dangling_links": 0,
+        "orphans": 0
+      }
+    },
+    "private-app-boosters": {
+      "stability": {
+        "runs": 5,
+        "role_agreement": 0.908,
+        "unstable_hunks": [
+          "h2",
+          "h8",
+          "h9",
+          "h10",
+          "h11",
+          "h12",
+          "h22"
+        ],
+        "cores": {
+          "min": 2,
+          "max": 3,
+          "mean": 2.8,
+          "stdev": 0.4
+        },
+        "seams": {
+          "min": 1,
+          "max": 3,
+          "mean": 2.2,
+          "stdev": 0.75
+        },
+        "clusters": {
+          "min": 1,
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
+        }
+      },
+      "health": {
+        "seams": 2.2,
+        "isolated_cores": 0,
+        "dangling_links": 3.2,
+        "orphans": 0
+      },
+      "accuracy": {
+        "role_accuracy": 0.867,
+        "cluster_f1": 1.0,
+        "confusions": [
+          {
+            "gold": "core",
+            "pred": "environment",
+            "n": 2
+          },
+          {
+            "gold": "core",
+            "pred": "link",
+            "n": 7
+          },
+          {
+            "gold": "link",
+            "pred": "core",
+            "n": 3
+          },
+          {
+            "gold": "link",
+            "pred": "environment",
+            "n": 4
+          }
+        ]
+      },
+      "health_gold": {
+        "seams": 3,
+        "isolated_cores": 0,
+        "dangling_links": 0,
+        "orphans": 0
+      }
+    },
+    "psdk-starting-loader": {
+      "stability": {
+        "runs": 5,
+        "role_agreement": 0.911,
+        "unstable_hunks": [
+          "h1",
+          "h2",
+          "h5"
+        ],
+        "cores": {
+          "min": 2,
+          "max": 4,
+          "mean": 3,
+          "stdev": 0.63
+        },
+        "seams": {
+          "min": 1,
+          "max": 4,
+          "mean": 2,
+          "stdev": 1.26
+        },
+        "clusters": {
+          "min": 1,
+          "max": 1,
+          "mean": 1,
+          "stdev": 0.0
+        }
+      },
+      "health": {
+        "seams": 2,
+        "isolated_cores": 0.6,
+        "dangling_links": 0,
+        "orphans": 0
+      },
+      "accuracy": {
+        "role_accuracy": 0.711,
+        "cluster_f1": 1.0,
+        "confusions": [
+          {
+            "gold": "core",
+            "pred": "environment",
+            "n": 4
+          },
+          {
+            "gold": "core",
+            "pred": "link",
+            "n": 6
+          },
+          {
+            "gold": "link",
+            "pred": "environment",
+            "n": 3
+          }
+        ]
+      },
+      "health_gold": {
+        "seams": 2,
+        "isolated_cores": 0,
+        "dangling_links": 0,
+        "orphans": 0
       }
     }
   }
