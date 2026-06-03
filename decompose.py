@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
     counts = {}
     for h in hunks:
         counts[h.role] = counts.get(h.role, 0) + 1
-    summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "noise"))
+    summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test", "noise"))
     print(f"Decomposed {len(hunks)} hunks:  {summary}")
     print(f"Report: {out_path}")
 

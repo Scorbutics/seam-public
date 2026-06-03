@@ -34,6 +34,34 @@ _CLUSTER_ROLES = ("core", "link", "environment")
 # as "uncertain" — the model was genuinely split on whether it's a distinct core.
 UNCERTAIN_THRESHOLD = 0.6
 
+# Cross-seam wiring is located LANGUAGE-AGNOSTICALLY: a distinctive new identifier
+# (camelCase or snake_case, len>=6) appearing in >=2 seams links them — no syntax
+# rules, just tokenization. A symbol spanning MORE than this many seams is too
+# common (a shared type, not a specific thread) and is dropped as noise.
+_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{5,}")
+_SYMBOL_MAX_SEAMS = 4
+
+
+def _is_distinctive(tok: str) -> bool:
+    """camelCase or snake_case identifier — distinctive across languages, vs common
+    single lowercase words / ALL_CAPS that would be noise."""
+    return "_" in tok or bool(re.search(r"[a-z][A-Z]", tok))
+
+
+def _seam_symbols(seam_hunks: list[Hunk]) -> dict[str, str]:
+    """{distinctive identifier -> 'file:line' of its first appearance} over a seam's
+    ADDED lines. Pure tokenization — no per-language syntax."""
+    out: dict[str, str] = {}
+    for h in seam_hunks:
+        loc = _hunk_location(h)
+        for line in h.text.splitlines():
+            if not line.startswith("+"):
+                continue
+            for tok in _IDENT.findall(line):
+                if _is_distinctive(tok) and tok not in out:
+                    out[tok] = loc
+    return out
+
 # Distinct hues per intent cluster for the graph view — one box/colour per
 # intent, cycled if there are more clusters than colours. Chosen to read on both
 # light and dark backgrounds (the boxes use a translucent tint of the same hue).
@@ -117,7 +145,11 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     Returns (clusters, diffs) where each cluster has role blocks, and `diffs`
     maps a diff key (e.g. "g1-core") to its unified-diff string.
     """
-    non_noise = [h for h in hunks if h.role != "noise"]
+    # Tests are NOT part of a seam's logic — they COVER cores (skim posture). They
+    # are kept out of the seam decomposition (so they don't hub the wiring) and
+    # surfaced separately, with the seams they cover marked tested.
+    covered_seams = {w for h in hunks if h.role == "test" for w in h.wires}
+    non_noise = [h for h in hunks if h.role not in ("noise", "test")]
 
     # Preserve first-appearance order of groups.
     group_order: list[str] = []
@@ -183,7 +215,12 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             seam_cores = [h for h in seam_hunks if h.role == "core"]
             min_conf = min((h.role_confidence for h in seam_cores), default=1.0)
             uncertain = bool(seam_cores) and min_conf < UNCERTAIN_THRESHOLD
+            seam_syms = _seam_symbols(seam_hunks)
+            tested = sid in covered_seams
+            untested = s_has_core and not tested  # a core with no test covering it
             seams.append({
+                "tested": tested, "untested": untested,
+                "symbols": seam_syms,
                 "id": sid,
                 "label": label,
                 "blocks": blocks,
@@ -317,9 +354,10 @@ def _seam_files(seam: dict) -> list[str]:
     return files
 
 
-def _build_graph(clusters: list[dict]) -> dict:
+def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -> dict:
     """Cytoscape-ready elements: clusters as compound parents, seams as child
-    nodes, and two kinds of seam↔seam edge.
+    nodes, and two kinds of seam↔seam edge. `hunk_loc` maps a hunk id to its
+    "file:line" so wiring edges can name the joint at hunk level.
 
     - WIRING edges: a single link that wires more than one core joins those
       seams. This is the real many-to-many joint the model keeps — the shared
@@ -329,6 +367,7 @@ def _build_graph(clusters: list[dict]) -> dict:
       wiring edges already carry the genuine coupling, so we don't add file edges
       there.
     """
+    hunk_loc = hunk_loc or {}
     nodes: list[dict] = []
     edges: list[dict] = []
     file_to_nodes: dict[str, list[str]] = {}
@@ -359,6 +398,8 @@ def _build_graph(clusters: list[dict]) -> dict:
                 "warn": warns[0]["kind"] if warns else "",
                 "uncertain": seam["uncertain"],
                 "confidence": seam["confidence"],
+                "tested": seam.get("tested", False),
+                "untested": seam.get("untested", False),
             }})
             node_cluster[nid] = cl["id"]
             for f in files:
@@ -366,20 +407,20 @@ def _build_graph(clusters: list[dict]) -> dict:
             for lid in seam["link_ids"]:
                 link_to_nodes.setdefault(lid, []).append(nid)
 
-    # Wiring edges — one per pair of seams that share a link hunk; weight counts
-    # how many links they share. A link wiring N cores produces a clique of N
-    # seams. These are intra-cluster (a link only wires cores in its own cluster).
-    wiring: dict[tuple[str, str], int] = {}
-    for nids in link_to_nodes.values():
+    # Wiring edges — one per pair of seams that share a link hunk. We track WHICH
+    # link hunk(s) join them (the joint, locatable at hunk level: id + file:line) so
+    # the edge view can pinpoint exactly where the two seams are wired together.
+    wiring: dict[tuple[str, str], list[str]] = {}
+    for lid, nids in link_to_nodes.items():
         uniq = sorted(set(nids))
         for i in range(len(uniq)):
             for j in range(i + 1, len(uniq)):
-                key = (uniq[i], uniq[j])
-                wiring[key] = wiring.get(key, 0) + 1
-    for (a, b), w in wiring.items():
+                wiring.setdefault((uniq[i], uniq[j]), []).append(lid)
+    for (a, b), lids in wiring.items():
         edges.append({"data": {
             "id": f"w-{a}--{b}", "source": a, "target": b,
-            "kind": "wiring", "weight": w,
+            "kind": "wiring", "weight": len(lids),
+            "wires": [{"id": lid, "loc": hunk_loc.get(lid, "")} for lid in lids],
             "cross": node_cluster[a] != node_cluster[b],
         }})
 
@@ -402,10 +443,17 @@ def _build_graph(clusters: list[dict]) -> dict:
     return {"nodes": nodes, "edges": edges}
 
 
+def _hunk_location(h: Hunk) -> str:
+    """'file:line' of a hunk — file + the new-side start line from its @@ header."""
+    m = re.search(r"\+(\d+)", h.header_line())
+    return f"{h.file_path}:{m.group(1)}" if m else h.file_path
+
+
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     """Render the report to `out_path`; returns the absolute path written."""
     clusters, diffs = _build_clusters(hunks)
-    graph = _build_graph(clusters)
+    hunk_loc = {h.id: _hunk_location(h) for h in hunks}
+    graph = _build_graph(clusters, hunk_loc)
 
     noise_hunks = [h for h in hunks if h.role == "noise"]
     noise_diff = _merged_diff(noise_hunks)
@@ -419,8 +467,24 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
         "count": len(noise_hunks),
     }
 
+    # Tests: skim posture (execution delegated to CI). Surfaced as their own section
+    # — not decomposed as seams — with the cores they cover shown via the seams'
+    # `tested` flag. The undelegatable signal (untested cores) is on the seams.
+    test_hunks = [h for h in hunks if h.role == "test"]
+    test_diff = _merged_diff(test_hunks)
+    if test_diff.strip():
+        diffs["tests"] = test_diff
+    tests = {
+        "hunks": test_hunks,
+        "has_diff": bool(test_diff.strip()),
+        "items": _file_items(test_hunks),
+        "notes": _notes(test_hunks),
+        "count": len(test_hunks),
+    }
+    untested_cores = sum(1 for cl in clusters for s in cl["seams"] if s.get("untested"))
+
     counts = {role: sum(1 for h in hunks if h.role == role)
-              for role in ("core", "link", "environment", "noise")}
+              for role in ("core", "link", "environment", "test", "noise")}
     isolated_cores = sum(
         w["count"] for cl in clusters for w in cl["warnings"]
         if w["kind"] == "isolated-core"
@@ -447,6 +511,7 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     html = template.render(
         clusters=clusters,
         noise=noise,
+        tests=tests,
         counts=counts,
         descriptions=ROLE_DESCRIPTIONS,
         diffs_json=diffs_json,
@@ -454,6 +519,7 @@ def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
         total=len(hunks),
         n_clusters=len(clusters),
         isolated_cores=isolated_cores,
+        untested_cores=untested_cores,
         source_label=source_label,
     )
 

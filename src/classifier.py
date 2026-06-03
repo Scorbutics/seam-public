@@ -209,8 +209,11 @@ the seams and roles right.
      A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
      for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
      though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
-     TESTS are links: they wire the new behavior to the existing test suite
-     (trust: do the integration points hold) rather than being the change itself.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the seam id(s) it covers in `wires` (this
+     is COVERAGE, not wiring). A test is `test` regardless of how much logic it
+     contains.
    - environment: ambient SUPPORT, not logic — new type/interface/field
      declarations, default-initializing a new field, imports/includes, globals,
      PASSIVE config/data values (inputs consumed by an already-trusted algorithm),

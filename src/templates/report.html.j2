@@ -14,7 +14,7 @@
       href="https://cdn.jsdelivr.net/npm/highlight.js@11.9.0/styles/github-dark.min.css">
 <style>
   :root {
-    --core: #d64545; --link: #2f80ed; --environment: #2d9d78; --noise: #8a8f98;
+    --core: #d64545; --link: #2f80ed; --environment: #2d9d78; --test: #8b5cf6; --noise: #8a8f98;
     --bg: #ffffff; --fg: #1c1e21; --muted: #6b7280; --card: #f7f8fa;
     --card2: #eef0f3; --border: #e3e6ea;
   }
@@ -43,6 +43,7 @@
   .chip .n { background: rgba(255,255,255,.25); border-radius: 999px; padding: 0 .45rem; }
   .chip.core { background: var(--core); } .chip.link { background: var(--link); }
   .chip.environment { background: var(--environment); } .chip.noise { background: var(--noise); }
+  .chip.test { background: var(--test); }
   .chip.clusters { background: #555; }
 
   /* --- diff view toggle (unified / split) --- */
@@ -138,6 +139,13 @@
   }
   .pill.core { background: var(--core); } .pill.link { background: var(--link); }
   .pill.environment { background: var(--environment); } .pill.noise { background: var(--noise); }
+  .pill.test { background: var(--test); }
+  .cov-badge {
+    display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem;
+    font-weight: 600; border-radius: 6px; padding: .12rem .45rem;
+  }
+  .cov-badge.tested { color: var(--environment); background: rgba(45,157,120,.12); }
+  .cov-badge.untested { color: var(--warn-fg); background: var(--warn-bg); border: 1px solid var(--warn); }
 
   .warn-badge {
     display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem;
@@ -232,11 +240,14 @@
 
   <div class="summary-bar">
     <span class="chip clusters">clusters<span class="n">{{ n_clusters }}</span></span>
-    {% for role in ['core','link','environment','noise'] %}
+    {% for role in ['core','link','environment','test','noise'] %}
     <span class="chip {{ role }}">{{ role }}<span class="n">{{ counts[role] }}</span></span>
     {% endfor %}
     {% if isolated_cores %}
     <span class="chip isolated">⚠ isolated core<span class="n">{{ isolated_cores }}</span></span>
+    {% endif %}
+    {% if untested_cores %}
+    <span class="chip isolated">⚠ untested core<span class="n">{{ untested_cores }}</span></span>
     {% endif %}
     <div class="viewtoggle" role="group" aria-label="Diff view mode">
       <button type="button" data-format="line-by-line">Unified</button>
@@ -255,6 +266,16 @@
     <span class="gl"><span class="dot" style="background:var(--muted);opacity:.45;border:1px dashed var(--muted)"></span> uncertain core (classifier split)</span>
     <span class="gl">node size ≈ hunks in the seam</span>
   </div>
+
+  {% if tests.count %}
+  <details class="noise-sec">
+    <summary><span class="pill test">test</span> {{ tests.count }} hunk(s) — verify the change (skim the logic; trust CI runs it). Coverage is flagged on each seam above.</summary>
+    <div class="noise-body">
+      {% if tests.has_diff %}<div class="diff-target" data-diff-key="tests"></div>{% endif %}
+      {% if tests.notes %}<ul class="notes">{% for n in tests.notes %}<li>{{ n }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+  </details>
+  {% endif %}
 
   {% if noise.count %}
   <details class="noise-sec">
@@ -305,6 +326,11 @@
         {% if seam.uncertain %}
         <span class="warn-badge warn-uncertain">uncertain core — the classifier was split
           ({{ (seam.confidence * 100) | round | int }}% agreement); verify this is a real seam</span>
+        {% endif %}
+        {% if seam.tested %}
+        <span class="cov-badge tested">✓ covered by tests</span>
+        {% elif seam.untested %}
+        <span class="cov-badge untested">⚠ no test covers this core — verify the coverage</span>
         {% endif %}
         {% for w in seam.verification.warnings %}
         <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
@@ -389,10 +415,15 @@
       kind === "file" ? "shared file" : "shared wiring";
     document.getElementById("modal-title").textContent =
       tplS.dataset.title + "  ↔  " + tplT.dataset.title;
-    document.getElementById("modal-clintent").textContent =
-      kind === "file"
-        ? "Both seams touch: " + (edge.data("shared") || []).join(", ")
-        : "A shared link wires both seams — read them side by side to follow the thread.";
+    let sub;
+    if (kind === "file") {
+      sub = "Both seams touch: " + (edge.data("shared") || []).join(", ");
+    } else {
+      const wires = edge.data("wires") || [];
+      const where = wires.map(function (w) { return w.id + " (" + w.loc + ")"; }).join(", ");
+      sub = "Wired by " + (where || "a shared link") + " — the joint connecting these seams.";
+    }
+    document.getElementById("modal-clintent").textContent = sub;
     modalHead.style.borderTopColor = tplS.dataset.color || "var(--muted)";
     modalBody.innerHTML = "";
     modalBody.appendChild(tplS.content.cloneNode(true));
