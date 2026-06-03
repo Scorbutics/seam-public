@@ -373,6 +373,7 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
     file_to_nodes: dict[str, list[str]] = {}
     link_to_nodes: dict[str, list[str]] = {}
     node_cluster: dict[str, str] = {}
+    seam_symbols: dict[str, dict[str, str]] = {}
 
     for ci, cl in enumerate(clusters):
         color = _CLUSTER_COLORS[ci % len(_CLUSTER_COLORS)]
@@ -402,6 +403,7 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
                 "untested": seam.get("untested", False),
             }})
             node_cluster[nid] = cl["id"]
+            seam_symbols[nid] = seam.get("symbols", {})
             for f in files:
                 file_to_nodes.setdefault(f, []).append(nid)
             for lid in seam["link_ids"]:
@@ -440,6 +442,33 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
             "cross": True,
         }})
 
+    # SYMBOL edges — a distinctive new identifier appearing in >=2 seams links them
+    # (language-agnostic: this is how a core's definition connects to its USE across
+    # seams, which the model's link-`wires` never capture — e.g. injectLockedActions
+    # defined in one seam, called in another). Symbols spanning too many seams are a
+    # shared type, not a specific thread, so they're dropped (rarity gate). Each edge
+    # carries the symbol + its file:line in each endpoint, so the joint is locatable.
+    sym_nodes: dict[str, dict[str, str]] = {}  # symbol -> {node: loc}
+    for nid, syms in seam_symbols.items():
+        for sym, loc in syms.items():
+            sym_nodes.setdefault(sym, {})[nid] = loc
+    sym_pairs: dict[tuple[str, str], list[dict]] = {}
+    for sym, locs in sym_nodes.items():
+        if not (2 <= len(locs) <= _SYMBOL_MAX_SEAMS):
+            continue  # singleton (no link) or too common (a shared type = noise)
+        uniq = sorted(locs)
+        for i in range(len(uniq)):
+            for j in range(i + 1, len(uniq)):
+                a, b = uniq[i], uniq[j]
+                sym_pairs.setdefault((a, b), []).append(
+                    {"sym": sym, "a_loc": locs[a], "b_loc": locs[b]})
+    for (a, b), shared in sym_pairs.items():
+        edges.append({"data": {
+            "id": f"s-{a}--{b}", "source": a, "target": b,
+            "kind": "symbol", "symbols": shared, "weight": len(shared),
+            "cross": node_cluster[a] != node_cluster[b],
+        }})
+
     return {"nodes": nodes, "edges": edges}
 
 
@@ -449,9 +478,35 @@ def _hunk_location(h: Hunk) -> str:
     return f"{h.file_path}:{m.group(1)}" if m else h.file_path
 
 
+def _attach_shared_symbols(clusters: list[dict]) -> None:
+    """For each seam, attach `shared_symbols`: the distinctive identifiers it shares
+    with OTHER seams, naming those seams + locations (rarest/tightest first). Same
+    data + rarity gate as the graph's symbol-edges, but surfaced INSIDE the seam so
+    a reader sees its cross-seam threads without hunting in the graph."""
+    occ: dict[str, list[tuple]] = {}  # symbol -> [(node_id, seam_dict, loc)]
+    for cl in clusters:
+        for s in cl["seams"]:
+            for sym, loc in s.get("symbols", {}).items():
+                occ.setdefault(sym, []).append((f'{cl["id"]}-{s["id"]}', s, loc))
+    for cl in clusters:
+        for s in cl["seams"]:
+            shared = []
+            for sym, _loc in s.get("symbols", {}).items():
+                places = occ.get(sym, [])
+                if not (2 <= len(places) <= _SYMBOL_MAX_SEAMS):
+                    continue  # singleton (no thread) or too common (shared type)
+                others = [{"node": nid, "seam": os["id"], "label": os["label"] or os["id"], "loc": oloc}
+                          for (nid, os, oloc) in places if os is not s]
+                if others:
+                    shared.append({"sym": sym, "span": len(places), "others": others})
+            shared.sort(key=lambda x: x["span"])  # tightest threads first
+            s["shared_symbols"] = shared
+
+
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     """Render the report to `out_path`; returns the absolute path written."""
     clusters, diffs = _build_clusters(hunks)
+    _attach_shared_symbols(clusters)
     hunk_loc = {h.id: _hunk_location(h) for h in hunks}
     graph = _build_graph(clusters, hunk_loc)
 
