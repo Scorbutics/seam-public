@@ -1,7 +1,7 @@
 # Read-Time Change Decomposition — Model & MVP Design
 
 *Working synthesis. Supersedes the "block" method documents.*
-*Status: one strong manual test on real legacy code; several load-bearing questions still open. Treat everything here as validated-to-the-degree-stated, not as settled fact.*
+*Status: the smallest MVP (§9) has been BUILT and iterated on real diffs across 4 languages — see §12 for the architecture and the empirical findings that came out of it. §1–§11 are the conceptual foundation (still load-bearing); §12 is implementation reality. The headline model change from building: `test` is now a fifth role (§2). The core tool-vs-discipline question (§8.2) remains unanswered by data.*
 
 ---
 
@@ -44,13 +44,25 @@ A single coherent change decomposes into a small set of **roles**. The roles are
 | **Core** | The new or changed logic — the thing the change is fundamentally about | Behavioral: does it work, is it complete (the set of use cases it should cover) |
 | **Link** | The joints wiring the new thing into the existing system, including parameters threading across layers | Contract: do the integration points hold, do interfaces match at every layer |
 | **Environment** | Ambient ripple — shared utilities, global CSS, cross-cutting concerns touched by the change | Impact: what else does this affect, is it scoped correctly (often *not* fully knowable without running it) |
+| **Test** | Code that *verifies* the change — it **covers** the cores it exercises rather than being the change | Verification: execution is delegated to CI (skim the internals), but whether the coverage is *real* (would catch a regression) is delegated to no one |
 | **Noise** | Renames, formatting, indentation — no logical effect | Essentially none; confirm it really is noise |
 
 **Vocabulary provenance** (kept honest per the metaphor discipline): *core* and *environment* named after observing a new-thing-vs-ambient-ripple split; *link/joint* named after observing that integration seams are a distinct high-risk surface (a joint bears load where two parts meet); *noise* named after observing a class of change that needs no verification. The mechanical/body metaphor fits *where it was drawn from observation* and is allowed to break elsewhere — where it breaks is information (e.g. "noise" is barely mechanical, which correctly signals it is a different *tier* of thing from core/link).
 
-### Data / config — a special case, not a fifth role
+### Test — the earned fifth role (updated after building)
 
-Pure data and config changes do **not** decompose usefully. They are best understood as *input to an existing, already-trusted algorithm* — trust is **delegated to the consumer**, not verified in the change. You don't ask "is this value correct," you ask "does a trusted consumer exist, and is this input within the range it was verified to handle."
+*This document originally said tests were "not a fifth role." Building proved otherwise — and the reversal is consistent with the model's own generative rule.* Apply the rule honestly: does a test have a **distinct trust mechanism**? Yes — **verification** ("is the coverage real, would it catch a regression?"), which is none of behavioral/contract/impact. Two facts forced the promotion:
+
+1. **It passes the rule.** A test's trust is genuinely its own. Part of it is *delegated* like data/config (execution → CI; you skim the logic, you don't review it as core) — **but the delegation is incomplete**: CI happily passes a faked or vacuous test, so "is the coverage real?" is delegated to *no one*. That undelegatable residue is what makes it a category, not just delegated input.
+2. **Forcing it elsewhere broke the structure.** Jamming tests into *link* (an early simplification) made every test *wire* the features it covers → it became a hub that dominated the wiring graph. Category mismatch corrupting the structure is exactly the "where the metaphor breaks is information" signal.
+
+So a test **covers** the cores it exercises (a verification relationship — kept as useful info: an untested core is a review risk) but it does **not** wire them. Posture: lighter than core (skim, don't decompose its internals), but surface the one thing nobody else checks — **which cores are covered vs. ⚠ untested**.
+
+**Hold the line after this.** Test is the *one* extra role that earns its place. Data/config below stays *not* a role.
+
+### Data / config — a special case, *not* a role
+
+Pure data and config changes do **not** decompose usefully. They are *input to an existing, already-trusted algorithm* — trust is **fully delegated to the consumer** (unlike a test, whose coverage-quality is undelegatable). You don't ask "is this value correct," you ask "does a trusted consumer exist, and is this input within the range it was verified to handle." (Nuance learned: a config value that *decides behavior* — a threshold/policy — is a rule, so it's **core**, not passive data.)
 
 Consequence: on a *pure* data/config change the model adds little value, because there is only one role and therefore no triangulation (see §3). This is the model correctly reporting its own boundary, not a flaw. The caution: on legacy code the consumer is often *itself* unvalidated (the global-CSS-fallback case), so the delegation breaks down precisely where it matters most — which usefully names the hard part of data/config trust as *the unverifiable consumer.*
 
@@ -90,7 +102,7 @@ One thing to verify, not assume: that read-time **link** truly equals declared *
 - **Commit-untangling research** (SmartCommit and successors). Proves the decomposition operation is automatable (median 71–84% accuracy; categories like "hard/soft/refactoring/cosmetic" — cosmetic ≈ noise). Good news: the partitioning is known-feasible. Caution: pure auto-untangling is a crowded research area. The edge here is the *review lens and trust framing*, not the partitioning algorithm.
 - **Conventional Commits.** Classifies whole commits by author *intent* (feat/fix/refactor/style/...). Different axis: intent of a whole commit, not internal structure of a single change by verification need. "Noise" overlaps "style."
 
-**What appears genuinely novel:** the three-to-four role decomposition organized by *verification need*; **link as a first-class, high-risk role** (no clean equivalent in the prior art); the **triangulation/self-check mechanism**; and the application of all this at **read time** to unauthored/legacy changes.
+**What appears genuinely novel:** the role decomposition organized by *verification need* (core/link/environment/test, + noise); **link as a first-class, high-risk role** (no clean equivalent in the prior art); the **triangulation/self-check mechanism**; and the application of all this at **read time** to unauthored/legacy changes.
 
 ---
 
@@ -102,7 +114,7 @@ One thing to verify, not assume: that read-time **link** truly equals declared *
 - The static-block system (abandoned).
 - The full roadmap from the old block spec.
 
-**IS:** a tool that takes a real diff and **presents it decomposed into core / link / environment / noise**, so a human can review **non-linearly** — reading by role and by intent rather than by file, top to bottom.
+**IS:** a tool that takes a real diff and **presents it decomposed by role** (core / link / environment / test / noise — see §2), so a human can review **non-linearly** — reading by role and by intent rather than by file, top to bottom.
 
 The obstacle this removes is concrete and was felt directly in the test: with current tooling, the reviewer must **scroll the whole diff linearly first, just to manually reconstruct the decomposition.** That manual reconstruction is a tax. The MVP's job is to pay that tax for the reviewer so the structured, triangulating review can happen without the linear scroll fighting it.
 
@@ -164,3 +176,51 @@ The next step is a *small* build whose only purpose is to answer question 2 (too
 ## 11. One-line summary
 
 **Code review is breaking because it is linear, emotional, and not built for AI-scale tangled diffs; this model recovers the structure of a change at read time into roles defined by how each must be trusted, so a human can review by intent instead of by file — validated once on real code as faster *and* more trusted, with the tool-vs-discipline question still to be settled by a small, cheap build.**
+
+---
+
+## 12. What was built (implementation reality)
+
+The §9 MVP was built and iterated against 4 real diffs (C / C++ / Kotlin+Ruby / TS+SQL) under a reliability harness. The pipeline is `diff_source → parser → noise_filter (deterministic) → classifier (LLM) → renderer (HTML graph)`. What the build *taught* — each point is a measured finding, not a hope:
+
+### 12.1 The classifier is TWO passes (different jobs, different needs)
+
+The model is the headless `claude` CLI (the Claude Code subscription — no API key). One mega-pass doing everything was wrong; the work splits by what it needs:
+
+- **Pass A — cluster (thinking ON).** Group hunks into intent clusters. Grouping is reasoning-heavy and the LLM does it *holistically* well (cluster F1 ≈ 1.0). Deriving clusters mechanically from the model's wiring was tried and **rejected** (the model's per-hunk `wires` are too noisy to reconstruct the partition).
+- **Pass B — seam + role (thinking OFF).** Roles + seams + spans. Local pattern-matching: *more* accurate AND ~16× faster without thinking. They merge by id; pass B doesn't even need pass A's clusters.
+
+**Critical latency finding:** `claude -p` defaults interleaved thinking ON, burning ~15–22K tokens (~160s) for a ~550-token answer. `MAX_THINKING_TOKENS=0` on the role pass → ~10s, equal/better roles. Clustering keeps thinking.
+
+### 12.2 The role boundaries that actually hold (general, no domain leak)
+
+Sharpened from real confusions. The discriminator is **"decides an outcome" (core) vs "connects/routes" (link)**:
+- Size/shape don't decide: a one-line guard or helper that encodes a **rule/policy** (when/whether/which) is **core**, however tiny. A guard that *enforces a policy* (excludes/filters) is core; a guard that *routes by type to wire a new thing in* is a link.
+- A behavior-deciding **config value** (threshold/policy) is core; passive data is environment.
+- An **adapter/repository** is a link unless its query is the *sole home* of a business rule.
+- Import-led fused hunks: split via **spans** (imports = environment, the logic keeps its role).
+- *Open issue:* `routing→link` is probably still too broad — a guard that *adds behavior while integrating* is a core (see litergss3, where per-drawable integrations are legitimately cores).
+
+### 12.3 Reliability is the real bottleneck — measured and gated
+
+The LLM is non-deterministic (no temperature control in the CLI). On byte-identical input, role assignment swings; the variance concentrates on genuinely **borderline** hunks (boundary cases), not everywhere.
+
+- **`eval/harness.py`** is a regression gate: `generate` (LLM, cached) / `score` (pure). It separates **stability** (run-to-run agreement; no gold needed) from **accuracy** (vs hand-labeled `eval/gold/`, with a permutation-invariant clustering F1). Run it before/after any prompt/model change.
+- **Self-consistency voting:** the role pass runs N=5 times and keeps the **medoid** run → consistent output. Genuinely 50/50 hunks stay variable and are surfaced as **"uncertain"** rather than flip-flopping (honest — fits §6).
+- **Stability ≠ accuracy:** a case can be stably *wrong*. Both are measured.
+- **Optimize for the visualization, not per-hunk labels.** The role frontier is intrinsically blurry; success is "the report reads as an acceptable representation" — measured via *health* (no spurious warnings, no seam explosion, no orphans), not label-match alone.
+
+### 12.3a Seams: a core can span seams; cross-seam threads are recovered from the code
+
+Fine seams (the desired granularity) **scatter a thread** — a core's definition and its use land in different seams. The model's link-`wires` don't capture this (they connect via shared *links*; a def↔use is core→core). Recovered **language-agnostically** from the code via **shared-identifier co-occurrence** (a distinctive new identifier in ≥2 seams links them), surfaced as: clickable graph edges, per-seam shared-symbol lists, and an inline `↔ s5` badge on the diff line itself. Honest limit: textual co-occurrence can't tell a function call from a shared variable/type without per-language parsing (tree-sitter), so the links are rich/noisy — accepted as the language-agnostic ceiling.
+
+### 12.4 The renderer
+
+Intent clusters as graph boxes; seams as nodes; clickable edges open two seams side by side. Per-seam flags surfaced as *look-here* signals (never scores): ⚠ isolated core, dangling link, **uncertain core** (voting was split), and **⚠ untested core** (no `test` covers it — the undelegatable coverage signal §1 says nobody checks). Self-contained HTML (cytoscape + diff2html).
+
+### 12.5 What stayed honest / still open
+
+- **Tool vs. discipline (§8.2)** is still unanswered — we built the tool but haven't run the external-person protocol on it.
+- **Routing→link too broad** (§12.2).
+- **Clean function-only cross-seam edges** would need per-language parsing — deferred.
+- The build discipline (§10) held: cheap, reversible, measured-before-committing; several plausible ideas (deterministic clustering, the seam-merge hack, model-expressed multi-seam) were built and *rejected by measurement*.

@@ -1,7 +1,7 @@
 # Seam
 
 An MVP that takes a real diff and presents it **decomposed by role** —
-**core / link / environment / noise** — so you can review *by intent* instead of
+**core / link / environment / test / noise** — so you can review *by intent* instead of
 scrolling file-by-file.
 
 It **structures, it does not judge.** No score, no approval, no "the LLM reviewed
@@ -13,14 +13,19 @@ See `decomposition-model-and-mvp.md` for the full model. This tool exists to
 answer **one** question (§9): *tool vs. discipline* — does the auto-decomposed
 presentation deliver the value, or was the value the mental discipline?
 
-## The four roles
+## The five roles
 
 | Role | What it is | Trust mechanism |
 |---|---|---|
-| **core** | The new/changed logic the change is about | Behavioral — does it work, is it complete |
-| **link** | Joints wiring the new thing in (params across layers, call sites) | Contract — do the integration points hold |
-| **environment** | Ambient ripple (shared utils, global CSS/config) | Impact — what else does this affect |
+| **core** | The new/changed logic the change is about (incl. a *rule* — a guard/predicate/config that decides when/whether/which — however small) | Behavioral — does it work, is it complete |
+| **link** | Joints wiring the new thing in (params across layers, call sites, adapters, type-routing) | Contract — do the integration points hold |
+| **environment** | Ambient ripple (shared utils, globals, passive config/data, declarations) | Impact — what else does this affect |
+| **test** | Code that *verifies* the change — it **covers** cores rather than being the change | Verification — CI runs it (skim), but is the coverage *real*? (delegated to no one) |
 | **noise** | Renames, formatting, indentation | None — confirm it really is noise |
+
+The boundary that matters: **"decides an outcome" → core** vs **"connects/routes" → link**.
+See `decomposition-model-and-mvp.md` §2 + §12 for the reasoning (and why `test`
+earned a role).
 
 ## How it works
 
@@ -28,22 +33,34 @@ presentation deliver the value, or was the value the mental discipline?
 2. **parser** — `unidiff` splits it into hunks with stable ids (`h1`, `h2`, …).
 3. **noise_filter** — deterministic pre-pass marks whitespace/rename/binary noise
    (no LLM needed for the one role where determinism matters).
-4. **classifier** — ONE pass over the whole remaining diff via the local `claude`
-   CLI (your Claude Code subscription — no API key). It does two things at once,
-   using full-diff context: (a) **groups** hunks into *intent clusters* (coherent
-   sub-changes — grammar-driven: a link goes with the core it wires in), and
-   (b) **roles** each hunk (core/link/environment/noise). It labels, it does not
-   evaluate; the cluster is a *proposal* the human's self-check can violate.
+4. **classifier** — via the local `claude` CLI (your Claude Code subscription — no
+   API key). **Two passes**, because grouping and roling have opposite needs
+   (measured — see the design doc §12):
+   - **Pass A — cluster (thinking ON):** group hunks into *intent clusters*
+     (grammar-driven: a link goes with the core it wires in). Grouping is
+     reasoning-heavy; the LLM does it holistically well.
+   - **Pass B — seam + role (thinking OFF):** assign each hunk a role
+     (core/link/environment/test/noise), its seam, and its wiring — local
+     pattern-matching, more accurate *and* ~16× faster without thinking. Run **5×
+     with a medoid vote** (self-consistency) so the output is stable run-to-run;
+     genuinely 50/50 hunks are surfaced as *uncertain* rather than flip-flopping.
+   - A deterministic step then reconciles noisy wires (drops the spurious
+     dangling-link warnings). It labels, it does not evaluate; the cluster and
+     seams are *proposals* the human's self-check can violate.
 5. **renderer** — primary axis is the **intent cluster** (§3 triangulation),
    drawn as a **cluster graph**: each intent is a box, the seams inside it are
-   nodes, and two kinds of edge connect them — a **solid wiring edge** joins
-   seams stitched by the *same link* (one link wiring more than one core: the
-   shared joint), and a **dashed file edge** joins seams in *different* clusters
-   that touch the same file (a literal seam between two intents, the thread you'd
-   cut to ship them apart). Click a seam to open a detail panel with its core
-   next to the links that wire it in, per role and merged per file, so "links
-   tell you where to expect cores". Noise is pulled into one global collapsed
-   section. Self-contained responsive HTML (cytoscape + diff2html via CDN).
+   nodes, and edges connect them — a **solid wiring edge** (one link wiring more
+   than one core: the shared joint), a **dashed file edge** (seams in *different*
+   clusters touching the same file), and a **dotted symbol edge** (a distinctive
+   new identifier — e.g. a function — defined in one seam and used in another:
+   the def↔use thread the model's wires can't capture, recovered
+   language-agnostically from the code). **Click a seam** to read its core next to
+   the links that wire it in; **click an edge** to open the two connected seams
+   side by side. Inside a seam's diff, a line that mentions a symbol shared with
+   another seam gets an inline clickable **`↔ s5`** badge → jump to that seam.
+   Tests are pulled into a collapsed *tests* section (skim — execution is trusted
+   to CI), with the cores they cover marked; noise into its own collapsed section.
+   Self-contained responsive HTML (cytoscape + diff2html via CDN).
 
    Two grouping levels make core↔link triangulation tight:
    - **Intent cluster** (coarse, "why") — the sub-change's purpose.
@@ -57,11 +74,11 @@ presentation deliver the value, or was the value the mental discipline?
    The report is **intent-first**: you scan the cluster boxes and the seam nodes
    inside them, follow the wiring edges (shared links) and the cross-cluster
    file edges (entangled intents), then click only the seams that look risky.
-   The **triangulation
-   check** runs per seam: a core with no link in its seam is flagged *⚠ isolated
-   core* (node ringed in amber); a link with no core is a *dangling link*; an
-   ambient-only seam is *delegated* (data/config). The tool still only
-   structures — these are flags to look at, never a score.
+   Per-seam **look-here flags** (never scores, just "verify this"): *⚠ isolated
+   core* (a core with no link in its seam); *dangling link* (a link with no core);
+   *uncertain core* (self-consistency voting was split — the classifier wasn't
+   sure this is a real seam); and *⚠ untested core* (no `test` covers it — the
+   coverage signal nobody else checks). The tool still only structures.
 
 ## Install
 
@@ -131,10 +148,14 @@ inspect; each CLI's own progress logs (if any) show up on its stderr, which
 
 ### Speed & cost
 
-(`--strict-mcp-config`). This is a labeling task, not agentic work — thinking
-otherwise burns ~10× the output tokens (≈80s / $0.05 → ≈3s / $0.008 on a small
-diff). If seaming/wiring quality ever dips, re-enable some reasoning by setting
-the env var yourself, e.g. `MAX_THINKING_TOKENS=4000 python decompose.py …`.
+Roughly **~90s / diff** = 1 cluster pass (thinking ON — the slow part) + 5 role
+votes (thinking OFF, ~10s each) + deterministic post-processing. `claude -p`
+defaults thinking ON, which on a labeling task burns ~15–22K output tokens
+(~160s) for a ~550-token answer — so the role pass forces `MAX_THINKING_TOKENS=0`
+(~16× faster, equal/better roles). The cluster pass keeps thinking (grouping
+needs it). Tune votes via `ROLE_VOTES` and the cluster budget via
+`CLUSTER_THINKING` in `src/classifier.py`. This is batch review tooling — you run
+it once and read the report — so ~90s is fine.
 
 ## Running the experiment (the actual point — §10)
 
@@ -151,16 +172,40 @@ This is a pre-registered experiment, not a product. Before you open the report:
    → the tool is the product. Marginal → the value was the discipline, and the
    deliverable is a written method, not software.
 
+## Reliability harness (`eval/`)
+
+The classifier is an LLM and **not deterministic** (the CLI exposes no
+temperature). `eval/harness.py` makes reliability measurable so a prompt/model
+change can't silently make it worse:
+
+```bash
+python eval/harness.py generate --runs 5   # run each eval/cases/*.patch N times (cached)
+python eval/harness.py score                # stability (no gold) + accuracy (vs eval/gold/)
+python eval/harness.py score --save eval/baseline-haiku.json
+python eval/harness.py score --baseline eval/baseline-haiku.json   # gate: non-zero on regression
+```
+
+It separates **stability** (run-to-run agreement) from **accuracy** (vs
+hand-labeled gold, with a permutation-invariant clustering F1) and reports
+**health** (seam count, spurious warnings, orphans) — because the goal is "the
+report reads as an acceptable representation," not per-hunk label-match. Cases are
+seeded from 4 real diffs across C / C++ / Kotlin+Ruby / TS+SQL.
+
 ## Known MVP limitations
 
-- **Hunk-level granularity:** a single hunk can mix core + link, or even straddle
-  two intents — and it can only land in one cluster. (Seen on the sample: a
-  `payment.py` hunk carrying *both* currency and discount changes lands in one
-  cluster, leaving the other cluster's view thinner than the real change.) We
-  don't split below the hunk yet; this is the next thing to fix if clustering
-  proves valuable.
-- **One model pass:** large diffs may exceed context. The classifier estimates
-  token count from diff size (~3.5 chars/token) and **warns** when it nears the
-  usable window (`--context-window`, default 200k); it does not yet chunk.
-- No GitHub PR ingestion, no persistence, no line-level roles. Add only if the
-  tool-vs-discipline question returns positive.
+- **Sub-hunk fusion** is handled by **spans** (a hunk can carry >1 role — e.g.
+  imports=environment + a new rule=core), but a hunk still lands in **one
+  cluster**; cross-seam threads are recovered via shared identifiers, not by
+  splitting the hunk.
+- **Two model passes**, no chunking yet: large diffs may exceed context. The
+  classifier estimates tokens (~3.5 chars/token) and **warns** near the usable
+  window (`--context-window`, default 200k).
+- **`routing→link` is probably too broad** — a guard that *adds behavior while
+  integrating* is really a core (see litergss3); a careful prompt refinement is
+  pending.
+- **Cross-seam symbol links are rich/noisy** — textual co-occurrence can't tell a
+  function call from a shared variable/type without per-language parsing
+  (tree-sitter); accepted as the language-agnostic ceiling.
+- The **tool-vs-discipline** question (the actual point, §8.2) is still
+  unanswered — the tool is built but the external-person protocol hasn't been run.
+- No GitHub PR ingestion, no persistence, no line-level roles.
