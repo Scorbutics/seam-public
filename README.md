@@ -50,15 +50,12 @@ earned a role).
 5. **renderer** — primary axis is the **intent cluster** (§3 triangulation),
    drawn as a **cluster graph**: each intent is a box, the seams inside it are
    nodes, and edges connect them — a **solid wiring edge** (one link wiring more
-   than one core: the shared joint), a **dashed file edge** (seams in *different*
-   clusters touching the same file), and a **dotted symbol edge** (a distinctive
-   new identifier — e.g. a function — defined in one seam and used in another:
-   the def↔use thread the model's wires can't capture, recovered
-   language-agnostically from the code). **Click a seam** to read its core next to
-   the links that wire it in; **click an edge** to open the two connected seams
-   side by side. Inside a seam's diff, a line that mentions a symbol shared with
-   another seam gets an inline clickable **`↔ s5`** badge → jump to that seam.
-   Tests are pulled into a collapsed *tests* section (skim — execution is trusted
+   than one core: the shared joint) and a **dashed file edge** (seams in
+   *different* clusters touching the same file). **Click a seam** to read its core
+   next to the links that wire it in; **click an edge** to open the two connected
+   seams side by side. A core-less cluster (a legitimate link-only *rewire*) is
+   shown as one seam with a neutral "verify the connection" posture, not a false
+   warning. Tests are pulled into a collapsed *tests* section (skim — execution is trusted
    to CI), with the cores they cover marked; noise into its own collapsed section.
    Self-contained responsive HTML (cytoscape + diff2html via CDN).
 
@@ -195,17 +192,18 @@ seeded from 4 real diffs across C / C++ / Kotlin+Ruby / TS+SQL.
 
 - **Sub-hunk fusion** is handled by **spans** (a hunk can carry >1 role — e.g.
   imports=environment + a new rule=core), but a hunk still lands in **one
-  cluster**; cross-seam threads are recovered via shared identifiers, not by
-  splitting the hunk.
+  cluster**.
 - **Two model passes**, no chunking yet: large diffs may exceed context. The
   classifier estimates tokens (~3.5 chars/token) and **warns** near the usable
   window (`--context-window`, default 200k).
 - **`routing→link` is probably too broad** — a guard that *adds behavior while
   integrating* is really a core (see litergss3); a careful prompt refinement is
   pending.
-- **Cross-seam symbol links are rich/noisy** — textual co-occurrence can't tell a
-  function call from a shared variable/type without per-language parsing
-  (tree-sitter); accepted as the language-agnostic ceiling.
+- **Cross-seam def→use threads are not drawn** — a core defined in one seam and
+  used in another isn't linked in the graph. The textual shared-identifier
+  heuristic that attempted this was removed (too noisy: it can't tell a call from
+  a shared variable/type without per-language parsing); that navigation is
+  deferred to the editor's own go-to-definition.
 - The **tool-vs-discipline** question (the actual point, §8.2) is still
   unanswered — the tool is built but the external-person protocol hasn't been run.
 - No GitHub PR ingestion, no persistence, no line-level roles.

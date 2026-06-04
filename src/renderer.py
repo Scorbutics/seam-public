@@ -34,34 +34,6 @@ _CLUSTER_ROLES = ("core", "link", "environment")
 # as "uncertain" — the model was genuinely split on whether it's a distinct core.
 UNCERTAIN_THRESHOLD = 0.6
 
-# Cross-seam wiring is located LANGUAGE-AGNOSTICALLY: a distinctive new identifier
-# (camelCase or snake_case, len>=6) appearing in >=2 seams links them — no syntax
-# rules, just tokenization. A symbol spanning MORE than this many seams is too
-# common (a shared type, not a specific thread) and is dropped as noise.
-_IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]{5,}")
-_SYMBOL_MAX_SEAMS = 4
-
-
-def _is_distinctive(tok: str) -> bool:
-    """camelCase or snake_case identifier — distinctive across languages, vs common
-    single lowercase words / ALL_CAPS that would be noise."""
-    return "_" in tok or bool(re.search(r"[a-z][A-Z]", tok))
-
-
-def _seam_symbols(seam_hunks: list[Hunk]) -> dict[str, str]:
-    """{distinctive identifier -> 'file:line' of its first appearance} over a seam's
-    ADDED lines. Pure tokenization — no per-language syntax."""
-    out: dict[str, str] = {}
-    for h in seam_hunks:
-        loc = _hunk_location(h)
-        for line in h.text.splitlines():
-            if not line.startswith("+"):
-                continue
-            for tok in _IDENT.findall(line):
-                if _is_distinctive(tok) and tok not in out:
-                    out[tok] = loc
-    return out
-
 # Distinct hues per intent cluster for the graph view — one box/colour per
 # intent, cycled if there are more clusters than colours. Chosen to read on both
 # light and dark backgrounds (the boxes use a translucent tint of the same hue).
@@ -182,23 +154,39 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
                 seam_ids.append(sid)
         seam_ids.sort(key=lambda s: (int(m.group()) if (m := re.search(r"\d+", s)) else 1_000_000, s))
         known = set(seam_ids)
+        coreless = not cores
 
-        # (sid, label, hunks, link-hunk-ids) per seam, then synthetic seams for
-        # links/environment that wire no core present in this cluster.
+        # (sid, label, hunks, link-hunk-ids) per seam. A core anchors each seam;
+        # links/env attach to the seam(s) they wire.
         specs: list[tuple[str, str, list[Hunk], list[str]]] = []
-        for sid in seam_ids:
-            core_hunks = [c for c in cores if (c.seam or "s0") == sid]
-            link_hunks = [l for l in links if sid in l.wires]
-            env_hunks = [e for e in envs if sid in e.wires]
-            label = next((h.seam_label for h in core_hunks if h.seam_label), "")
-            specs.append((sid, label, core_hunks + link_hunks + env_hunks,
-                          [l.id for l in link_hunks]))
-        dangling = [l for l in links if not any(s in known for s in l.wires)]
-        if dangling:
-            specs.append(("s-unwired", "unwired links", dangling, [l.id for l in dangling]))
-        ambient = [e for e in envs if not any(s in known for s in e.wires)]
-        if ambient:
-            specs.append(("s-ambient", "ambient ripple", ambient, []))
+        if cores:
+            for sid in seam_ids:
+                core_hunks = [c for c in cores if (c.seam or "s0") == sid]
+                link_hunks = [l for l in links if sid in l.wires]
+                env_hunks = [e for e in envs if sid in e.wires]
+                label = next((h.seam_label for h in core_hunks if h.seam_label), "")
+                specs.append((sid, label, core_hunks + link_hunks + env_hunks,
+                              [l.id for l in link_hunks]))
+            # In a cluster that HAS cores, a link/env wiring none of them is
+            # genuinely suspect — surface as warned synthetic seams.
+            dangling = [l for l in links if not any(s in known for s in l.wires)]
+            if dangling:
+                specs.append(("s-unwired", "unwired links", dangling, [l.id for l in dangling]))
+            ambient = [e for e in envs if not any(s in known for s in e.wires)]
+            if ambient:
+                specs.append(("s-ambient", "ambient ripple", ambient, []))
+        else:
+            # CORE-LESS cluster: a legitimate link-only (rewire/redirect) or
+            # ambient-only intent — NOT broken. Render as ONE seam labelled by the
+            # cluster intent, with a link-only posture (see _verify_pair) instead
+            # of splitting into "unwired links" + "ambient ripple" piles with
+            # false dangling-link warnings.
+            rest = links + envs
+            if rest:
+                seam_label_txt = (intent if intent and intent != "(unlabeled change)"
+                                  else ("link-only changes" if links else "ambient changes"))
+                specs.append(("s-rewire" if links else "s-ambient",
+                              seam_label_txt, rest, [l.id for l in links]))
 
         seams: list[dict] = []
         cluster_kinds: dict[str, int] = {}
@@ -206,7 +194,7 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             blocks = _role_blocks(seam_hunks, f"{gid}-{sid}", diffs)
             s_has_core = any(b["role"] == "core" for b in blocks)
             s_has_link = any(b["role"] == "link" for b in blocks)
-            verification = _verify_pair(s_has_core, s_has_link)
+            verification = _verify_pair(s_has_core, s_has_link, coreless_cluster=coreless)
             for w in verification["warnings"]:
                 cluster_kinds[w["kind"]] = cluster_kinds.get(w["kind"], 0) + 1
             # A seam is UNCERTAIN when self-consistency voting was split on its
@@ -215,12 +203,10 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             seam_cores = [h for h in seam_hunks if h.role == "core"]
             min_conf = min((h.role_confidence for h in seam_cores), default=1.0)
             uncertain = bool(seam_cores) and min_conf < UNCERTAIN_THRESHOLD
-            seam_syms = _seam_symbols(seam_hunks)
             tested = sid in covered_seams
             untested = s_has_core and not tested  # a core with no test covering it
             seams.append({
                 "tested": tested, "untested": untested,
-                "symbols": seam_syms,
                 "id": sid,
                 "label": label,
                 "blocks": blocks,
@@ -265,38 +251,47 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     return clusters, diffs
 
 
+def _hunk_start_line(h: Hunk) -> int:
+    """New-side start line from the @@ header, for ordering hunks within a file."""
+    m = re.search(r"\+(\d+)", h.header_line())
+    return int(m.group(1)) if m else 0
+
+
 def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> list[dict]:
-    """Build the per-role blocks (core → link → environment) for a set of hunks,
-    merged per file, and register each block's diff string under `key_prefix`."""
+    """Build a seam's blocks in (file, line) order — one block per hunk, each carrying
+    its own role. This puts CLOSE core/link/environment together (a core and the
+    same-file link/env that surround it sit adjacent, in code reading order) instead
+    of bucketing all cores, then all links, then all env. The model's wiring is only
+    seam-granular (no hunk-level "this link wires this core"), so file+line proximity
+    is the available 'closeness' signal. Each block's diff is registered under a
+    per-hunk key."""
+    ordered = sorted(hunks, key=lambda h: (h.file_path, _hunk_start_line(h)))
     blocks: list[dict] = []
-    for role in _CLUSTER_ROLES:
-        role_hunks = [h for h in hunks if h.role == role]
-        if not role_hunks:
-            continue
-        key = f"{key_prefix}-{role}"
-        diff_str = _merged_diff(role_hunks)
+    for h in ordered:
+        key = f"{key_prefix}-{h.id}"
+        diff_str = _merged_diff([h])
         if diff_str.strip():
             diffs[key] = diff_str
-        items = _file_items(role_hunks)
+        items = _file_items([h])
         whys: list[str] = []
         for it in items:
             for r in it["rationales"]:
                 if r not in whys:
                     whys.append(r)
         blocks.append({
-            "role": role,
+            "role": h.role,
             "key": key,
             "has_diff": bool(diff_str.strip()),
             "items": items,
             "files": [it["file"] for it in items],
             "whys": whys,
-            "notes": _notes(role_hunks),
-            "count": len(role_hunks),
+            "notes": _notes([h]),
+            "count": 1,
         })
     return blocks
 
 
-def _verify_pair(has_core: bool, has_link: bool) -> dict:
+def _verify_pair(has_core: bool, has_link: bool, coreless_cluster: bool = False) -> dict:
     """Triangulation check (§3) for one seam — a flag + warning, NOT a re-bucketing.
 
     A seam IS the core↔link unit, so this is where the check is most natural: we
@@ -304,7 +299,19 @@ def _verify_pair(has_core: bool, has_link: bool) -> dict:
     diff" — an isolated core may have its consumer in another seam/cluster (the
     tool can't tell without the deferred meta-link detector), so the warning says
     only what it knows: "no link in this seam".
+
+    `coreless_cluster`: the WHOLE cluster has no core. Then this seam is a
+    legitimate link-only (rewire/redirect) or ambient-only intent — NOT a broken
+    seam. "Dangling link" only means something when a core exists that the link
+    failed to reach; with no core in the cluster there is nothing to dangle from.
+    So we emit NO warning, just an informational posture.
     """
+    if coreless_cluster:
+        posture = ("link-only — no new logic in this diff; it wires a core that lives "
+                   "elsewhere (existing code, or another change). Verify the connection."
+                   if has_link else
+                   "ambient only — shared/support changes; trust delegated to the consumer")
+        return {"triangulated": False, "link_only": True, "posture": posture, "warnings": []}
     warnings: list[dict] = []
     if has_core and not has_link:
         warnings.append({
@@ -373,7 +380,6 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
     file_to_nodes: dict[str, list[str]] = {}
     link_to_nodes: dict[str, list[str]] = {}
     node_cluster: dict[str, str] = {}
-    seam_symbols: dict[str, dict[str, str]] = {}
 
     for ci, cl in enumerate(clusters):
         color = _CLUSTER_COLORS[ci % len(_CLUSTER_COLORS)]
@@ -403,7 +409,6 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
                 "untested": seam.get("untested", False),
             }})
             node_cluster[nid] = cl["id"]
-            seam_symbols[nid] = seam.get("symbols", {})
             for f in files:
                 file_to_nodes.setdefault(f, []).append(nid)
             for lid in seam["link_ids"]:
@@ -442,33 +447,6 @@ def _build_graph(clusters: list[dict], hunk_loc: dict[str, str] | None = None) -
             "cross": True,
         }})
 
-    # SYMBOL edges — a distinctive new identifier appearing in >=2 seams links them
-    # (language-agnostic: this is how a core's definition connects to its USE across
-    # seams, which the model's link-`wires` never capture — e.g. injectLockedActions
-    # defined in one seam, called in another). Symbols spanning too many seams are a
-    # shared type, not a specific thread, so they're dropped (rarity gate). Each edge
-    # carries the symbol + its file:line in each endpoint, so the joint is locatable.
-    sym_nodes: dict[str, dict[str, str]] = {}  # symbol -> {node: loc}
-    for nid, syms in seam_symbols.items():
-        for sym, loc in syms.items():
-            sym_nodes.setdefault(sym, {})[nid] = loc
-    sym_pairs: dict[tuple[str, str], list[dict]] = {}
-    for sym, locs in sym_nodes.items():
-        if not (2 <= len(locs) <= _SYMBOL_MAX_SEAMS):
-            continue  # singleton (no link) or too common (a shared type = noise)
-        uniq = sorted(locs)
-        for i in range(len(uniq)):
-            for j in range(i + 1, len(uniq)):
-                a, b = uniq[i], uniq[j]
-                sym_pairs.setdefault((a, b), []).append(
-                    {"sym": sym, "a_loc": locs[a], "b_loc": locs[b]})
-    for (a, b), shared in sym_pairs.items():
-        edges.append({"data": {
-            "id": f"s-{a}--{b}", "source": a, "target": b,
-            "kind": "symbol", "symbols": shared, "weight": len(shared),
-            "cross": node_cluster[a] != node_cluster[b],
-        }})
-
     return {"nodes": nodes, "edges": edges}
 
 
@@ -478,35 +456,9 @@ def _hunk_location(h: Hunk) -> str:
     return f"{h.file_path}:{m.group(1)}" if m else h.file_path
 
 
-def _attach_shared_symbols(clusters: list[dict]) -> None:
-    """For each seam, attach `shared_symbols`: the distinctive identifiers it shares
-    with OTHER seams, naming those seams + locations (rarest/tightest first). Same
-    data + rarity gate as the graph's symbol-edges, but surfaced INSIDE the seam so
-    a reader sees its cross-seam threads without hunting in the graph."""
-    occ: dict[str, list[tuple]] = {}  # symbol -> [(node_id, seam_dict, loc)]
-    for cl in clusters:
-        for s in cl["seams"]:
-            for sym, loc in s.get("symbols", {}).items():
-                occ.setdefault(sym, []).append((f'{cl["id"]}-{s["id"]}', s, loc))
-    for cl in clusters:
-        for s in cl["seams"]:
-            shared = []
-            for sym, _loc in s.get("symbols", {}).items():
-                places = occ.get(sym, [])
-                if not (2 <= len(places) <= _SYMBOL_MAX_SEAMS):
-                    continue  # singleton (no thread) or too common (shared type)
-                others = [{"node": nid, "seam": os["id"], "label": os["label"] or os["id"], "loc": oloc}
-                          for (nid, os, oloc) in places if os is not s]
-                if others:
-                    shared.append({"sym": sym, "span": len(places), "others": others})
-            shared.sort(key=lambda x: x["span"])  # tightest threads first
-            s["shared_symbols"] = shared
-
-
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
     """Render the report to `out_path`; returns the absolute path written."""
     clusters, diffs = _build_clusters(hunks)
-    _attach_shared_symbols(clusters)
     hunk_loc = {h.id: _hunk_location(h) for h in hunks}
     graph = _build_graph(clusters, hunk_loc)
 

@@ -155,6 +155,14 @@
   }
   .warn-badge::before { content: "⚠"; }
   .chip.isolated { background: var(--warn); }
+  /* Neutral posture (NOT a warning) — e.g. a link-only / rewire seam. */
+  .posture-badge {
+    display: inline-flex; align-items: center; gap: .3rem; font-size: .72rem;
+    color: var(--muted); background: var(--card2);
+    border: 1px solid var(--border); border-radius: 6px; padding: .12rem .45rem;
+    flex-basis: 100%; margin-top: .15rem;
+  }
+  .posture-badge::before { content: "↪"; }
 
   /* --- seam + role block (reused inside the modal) --- */
   .seam {
@@ -176,14 +184,6 @@
     font-size: .72rem; color: var(--link); background: rgba(47,128,237,.1);
     border-radius: 6px; padding: .08rem .4rem;
   }
-  /* inline cross-seam symbol link, appended onto a diff line */
-  .sym-link {
-    display: inline-block; margin-left: .5rem; font-size: .68rem; font-weight: 700;
-    color: #fff; background: var(--link); border-radius: 999px; padding: 0 .4rem;
-    text-decoration: none; vertical-align: middle; white-space: nowrap;
-  }
-  .sym-link:hover { filter: brightness(1.1); }
-
   .roleblock { margin: .7rem 0 1rem; }
   .roleblock-head { display: flex; align-items: baseline; gap: .5rem; flex-wrap: wrap; margin: .2rem 0 .4rem; }
   .roleblock-head .files { font-family: ui-monospace, monospace; font-size: .8rem; word-break: break-all; }
@@ -269,7 +269,6 @@
   <div class="graph-legend">
     <span class="gl"><span class="swatch intra"></span> shared link (wires both cores)</span>
     <span class="gl"><span class="swatch cross"></span> shared file (across clusters)</span>
-    <span class="gl"><span class="swatch" style="border-top-color:var(--link);border-top-style:dotted"></span> shared symbol (def ↔ use)</span>
     <span class="gl"><span class="dot warn" style="background:var(--core)"></span> ⚠ isolated core</span>
     <span class="gl"><span class="dot" style="background:var(--muted);opacity:.45;border:1px dashed var(--muted)"></span> uncertain core (classifier split)</span>
     <span class="gl">node size ≈ hunks in the seam</span>
@@ -323,7 +322,6 @@
             data-cltag="{{ cl.id }}"
             data-clintent="{{ cl.intent }}"
             data-color="{{ cl.color }}"
-            data-symbols='{{ seam.shared_symbols | tojson }}'
             data-title="{{ seam.id }} · {{ seam.label or '(wiring)' }}">
     <div class="seam{% if seam.verification.warnings %} seam-warn{% endif %}">
       <div class="seam-head">
@@ -344,6 +342,9 @@
         {% for w in seam.verification.warnings %}
         <span class="warn-badge warn-{{ w.kind }}">{{ w.text }}</span>
         {% endfor %}
+        {% if seam.verification.posture %}
+        <span class="posture-badge">{{ seam.verification.posture }}</span>
+        {% endif %}
       </div>
       {% for b in seam.blocks %}
       <div class="roleblock border-{{ b.role }}">
@@ -409,36 +410,11 @@
     modalBody.innerHTML = "";
     modalBody.appendChild(tpl.content.cloneNode(true));
     renderDiffsIn(modalBody, true);
-    let syms = [];
-    try { syms = JSON.parse(tpl.dataset.symbols || "[]"); } catch (e) {}
-    annotateSymbols(modalBody, syms);
     modalBody.scrollTop = 0;
     modal.classList.add("open");
     modal.setAttribute("aria-hidden", "false");
   }
 
-  // Mark diff lines that mention a symbol shared with another seam — an inline,
-  // clickable "↔ s5" badge on the exact line, jumping to the seam it links to.
-  function annotateSymbols(root, symbols) {
-    if (!symbols || !symbols.length) return;
-    const esc = function (s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); };
-    root.querySelectorAll(".d2h-code-line-ctn").forEach(function (ln) {
-      const text = ln.textContent || "";
-      symbols.forEach(function (s) {
-        if (!new RegExp("\\b" + esc(s.sym) + "\\b").test(text)) return;
-        const a = document.createElement("a");
-        a.className = "sym-link";
-        a.href = "#";
-        a.textContent = " ↔ " + s.others.map(function (o) { return o.seam; }).join("/");
-        a.title = s.sym + " — also in " +
-          s.others.map(function (o) { return o.label + " (" + o.loc + ")"; }).join("; ");
-        a.addEventListener("click", function (e) {
-          e.preventDefault(); e.stopPropagation(); openSeam(s.others[0].node);
-        });
-        ln.appendChild(a);
-      });
-    });
-  }
   // Click an EDGE to read the two connected seams together — the cross-seam thread
   // (e.g. a core in one seam used from another) reassembled without merging them.
   function openEdge(edge) {
@@ -447,17 +423,12 @@
     const tplT = document.querySelector('#panels template[data-node="' + CSS.escape(t) + '"]');
     if (!tplS || !tplT) return;
     document.getElementById("modal-cltag").textContent =
-      kind === "file" ? "shared file" : kind === "symbol" ? "shared symbol" : "shared wiring";
+      kind === "file" ? "shared file" : "shared wiring";
     document.getElementById("modal-title").textContent =
       tplS.dataset.title + "  ↔  " + tplT.dataset.title;
     let sub;
     if (kind === "file") {
       sub = "Both seams touch: " + (edge.data("shared") || []).join(", ");
-    } else if (kind === "symbol") {
-      const syms = edge.data("symbols") || [];
-      sub = "Shared symbol: " + syms.map(function (s) {
-        return s.sym + " (" + s.a_loc + " ↔ " + s.b_loc + ")";
-      }).join("; ") + " — definition and use across these seams.";
     } else {
       const wires = edge.data("wires") || [];
       const where = wires.map(function (w) { return w.id + " (" + w.loc + ")"; }).join(", ");
@@ -598,13 +569,6 @@
         {
           selector: "edge[?cross]",
           style: { "line-color": coreColor, "line-style": "dashed", "opacity": 0.8 },
-        },
-        {
-          // shared-symbol edge: a new identifier defined in one seam, used in another
-          // (the def↔use thread the model's wires don't capture).
-          selector: "edge[kind = 'symbol']",
-          style: { "line-color": cssVar("--link"), "line-style": "dotted",
-                   "opacity": 0.75, "curve-style": "bezier" },
         },
         {
           selector: "node:selected",

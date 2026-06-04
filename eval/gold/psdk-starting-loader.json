@@ -2,7 +2,7 @@
  {"id":"h1","group":"g1","intent":"file-based game-ready signal","role":"core","seam":"s1","seam_label":"poll game-ready marker file","rationale":"new state/handlers for the timeout + ready-file poll mechanism"},
  {"id":"h2","group":"g1","intent":"file-based game-ready signal","role":"core","seam":"s1","seam_label":"poll game-ready marker file","rationale":"removes old log-sentinel hide path, flip side of the new mechanism"},
  {"id":"h3","group":"g1","intent":"file-based game-ready signal","role":"core","seam":"s1","seam_label":"poll game-ready marker file","rationale":"arms timeout and starts the ready-file poll loop"},
- {"id":"h4","group":"g1","intent":"file-based game-ready signal","role":"core","seam":"s1","seam_label":"poll game-ready marker file","rationale":"cancels timeout/poll handlers on hide"},
+ {"id":"h4","group":"g1","intent":"file-based game-ready signal","role":"link","wires":["s1"],"rationale":"mechanical teardown (removeCallbacks/reset) of the poll mechanism = link, not a decision"},
  {"id":"h5","group":"g1","intent":"file-based game-ready signal","role":"link","wires":["s1","s2"],"rationale":"computes the marker path the poller reads and Ruby writes"},
  {"id":"h6","group":"g1","intent":"file-based game-ready signal","role":"link","wires":["s1","s2"],"rationale":"threads the ready-file path to Ruby via env var"},
  {"id":"h7","group":"g1","intent":"file-based game-ready signal","role":"environment","wires":["s1"],"rationale":"removes old sentinel const, adds poll-interval const"},

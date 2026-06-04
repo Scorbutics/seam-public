@@ -477,6 +477,47 @@ def _sync_flat_from_spans(h: Hunk, seam_label: dict[str, str]) -> None:
     h.rationale = " | ".join(f"{s.role}: {s.rationale}" for s in h.spans if s.rationale)
 
 
+def _merge_wiring_only_clusters(hunks: list[Hunk]) -> None:
+    """Fix a CLUSTERING error the seam-build can't bridge: a cluster with NO core of
+    its own, whose links wire core(s) living in exactly ONE other cluster, is a
+    mis-grouped piece of THAT cluster's intent — the cluster pass's own rule is
+    "a link belongs with the core it wires" (introduce-a-thing + adopt-it = one
+    intent). The per-cluster seam-build can't reunite them, so the adopting cluster
+    renders as a false 'core-less' (link-only) seam even though the core is right
+    there in the diff. Merge it in (reassign its hunks' group) so the seam-build
+    puts the links next to their core.
+
+    Discriminator (deterministic, from the link `wires`):
+      - links resolve to cores in EXACTLY ONE other cluster -> merge into it;
+      - links resolve to NO core anywhere -> a genuine link-only / rewire (wires
+        existing codebase code) -> LEAVE (renders as link-only, correctly);
+      - links resolve to cores in 2+ clusters -> a real cross-intent bridge ->
+        LEAVE (don't guess which to merge into).
+    Runs BEFORE _reconcile_wires so the wiring fix then sees the merged groups."""
+    seam_group: dict[str, str] = {}          # seam id -> the group its core anchors
+    groups_with_core: set[str] = set()
+    all_groups: set[str] = set()
+    for h in hunks:
+        g = h.group or ""
+        all_groups.add(g)
+        if h.role == "core" and h.seam:
+            seam_group[h.seam] = g
+            groups_with_core.add(g)
+    group_intent = {(h.group or ""): h.intent for h in hunks if h.intent}
+    for g in all_groups - groups_with_core:
+        members = [h for h in hunks if (h.group or "") == g]
+        targets = {tg for h in members if h.role == "link"
+                   for w in h.wires if (tg := seam_group.get(w)) and tg != g}
+        if len(targets) != 1:
+            continue  # genuine link-only (0) or a real multi-intent bridge (2+)
+        dest = next(iter(targets))
+        if not dest:
+            continue
+        for h in members:
+            h.group = dest
+            h.intent = group_intent.get(dest, h.intent)
+
+
 def _reconcile_wires(hunks: list[Hunk]) -> None:
     """Use the reliable cluster pass to fix noisy link wiring (a 'health' fix, not a
     label fix). Pass B sometimes drifts seam ids WITHIN one response — a link emits
@@ -559,7 +600,11 @@ def _vote_role_pass(kind: str, binary: str, prompt: str, model: str, *, votes: i
     (MEDOID run, per-hunk confidence). The medoid is the single coherent run whose
     per-hunk roles best match the per-hunk modal. Confidence = share of votes that
     agreed on the modal role (1.0 = unanimous; ~0.4 = a real tie → "uncertain").
-    Collapses flips on dominant-role hunks; only truly split hunks stay low-conf."""
+    Collapses flips on dominant-role hunks; only truly split hunks stay low-conf.
+
+    (Per-hunk MODAL aggregation was tried 2026-06 to cut scale instability — it
+    barely moved the 66-hunk swing 8→7, cost accuracy on coin-flip hunks, and added
+    borrowed-label incoherence. Reverted; the medoid's seam coherence wins.)"""
     runs: list[dict[str, dict]] = []
     for v in range(max(1, votes)):
         runs.append(_run_pass(kind, binary, prompt, model, thinking=ROLE_THINKING,
@@ -707,6 +752,10 @@ def classify(
             h.role = "core"
             h.rationale = "unclassified — defaulted to core for review"
 
+    # Grouping fix: merge a core-less cluster into the cluster whose core its links
+    # wire (a clustering error the per-cluster seam-build can't bridge). Before
+    # _reconcile_wires so the wiring fix sees the merged groups.
+    _merge_wiring_only_clusters(hunks)
     # Health fix: let the reliable cluster pass correct noisy link wiring so the
     # report doesn't show spurious dangling links (measured: private-app 3.2 -> 0/run).
     _reconcile_wires(hunks)

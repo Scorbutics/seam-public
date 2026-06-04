@@ -210,9 +210,11 @@ The LLM is non-deterministic (no temperature control in the CLI). On byte-identi
 - **Stability ≠ accuracy:** a case can be stably *wrong*. Both are measured.
 - **Optimize for the visualization, not per-hunk labels.** The role frontier is intrinsically blurry; success is "the report reads as an acceptable representation" — measured via *health* (no spurious warnings, no seam explosion, no orphans), not label-match alone.
 
-### 12.3a Seams: a core can span seams; cross-seam threads are recovered from the code
+### 12.3a Seams: a core can span seams; cross-seam threads
 
-Fine seams (the desired granularity) **scatter a thread** — a core's definition and its use land in different seams. The model's link-`wires` don't capture this (they connect via shared *links*; a def↔use is core→core). Recovered **language-agnostically** from the code via **shared-identifier co-occurrence** (a distinctive new identifier in ≥2 seams links them), surfaced as: clickable graph edges, per-seam shared-symbol lists, and an inline `↔ s5` badge on the diff line itself. Honest limit: textual co-occurrence can't tell a function call from a shared variable/type without per-language parsing (tree-sitter), so the links are rich/noisy — accepted as the language-agnostic ceiling.
+Fine seams (the desired granularity) **scatter a thread** — a core's definition and its use land in different seams. The model's link-`wires` connect via shared *links* (core→link→core), not def→use (core→core).
+
+A **shared-identifier co-occurrence** heuristic was tried to recover the def→use threads language-agnostically (distinctive new identifier in ≥2 seams), surfaced as graph edges + inline `↔` badges. **Removed (2026-06):** too noisy (textual co-occurrence can't tell a call from a shared variable/type without tree-sitter), and it was a workaround for living outside the editor — that navigation belongs to the editor's own go-to-definition (the change↔codebase boundary). The graph now draws only the **wiring** (shared-link) and cross-cluster **file** edges.
 
 ### 12.4 The renderer
 

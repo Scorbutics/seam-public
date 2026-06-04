@@ -1,19 +1,19 @@
 {
   "model": "claude-haiku-4-5",
-  "label": "haiku-2pass",
+  "label": "sym-probe",
   "cases": {
     "everywhere-surface-events": {
       "stability": {
-        "runs": 5,
-        "role_agreement": 0.867,
+        "runs": 3,
+        "role_agreement": 0.889,
         "unstable_hunks": [
           "h3"
         ],
         "cores": {
           "min": 1,
           "max": 2,
-          "mean": 1.6,
-          "stdev": 0.49
+          "mean": 1.33,
+          "stdev": 0.47
         },
         "seams": {
           "min": 1,
@@ -41,7 +41,7 @@
           {
             "gold": "link",
             "pred": "core",
-            "n": 3
+            "n": 1
           },
           {
             "gold": "link",
@@ -59,29 +59,26 @@
     },
     "litergss3-framedview": {
       "stability": {
-        "runs": 5,
-        "role_agreement": 0.783,
+        "runs": 3,
+        "role_agreement": 0.861,
         "unstable_hunks": [
-          "h2",
-          "h4",
           "h5",
-          "h7",
           "h8",
           "h10",
           "h11",
           "h12"
         ],
         "cores": {
-          "min": 4,
+          "min": 6,
           "max": 7,
-          "mean": 5.2,
-          "stdev": 0.98
+          "mean": 6.33,
+          "stdev": 0.47
         },
         "seams": {
-          "min": 2,
-          "max": 4,
-          "mean": 3.4,
-          "stdev": 0.8
+          "min": 4,
+          "max": 6,
+          "mean": 4.67,
+          "stdev": 0.94
         },
         "clusters": {
           "min": 1,
@@ -91,34 +88,34 @@
         }
       },
       "health": {
-        "seams": 3.4,
-        "isolated_cores": 1.2,
+        "seams": 4.67,
+        "isolated_cores": 2,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.7,
+        "role_accuracy": 0.778,
         "cluster_f1": 1.0,
         "confusions": [
           {
             "gold": "core",
             "pred": "environment",
-            "n": 2
+            "n": 1
           },
           {
             "gold": "core",
             "pred": "link",
-            "n": 8
+            "n": 2
           },
           {
             "gold": "environment",
             "pred": "core",
-            "n": 6
+            "n": 4
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 2
+            "n": 1
           }
         ]
       },
@@ -131,30 +128,24 @@
     },
     "private-app-boosters": {
       "stability": {
-        "runs": 5,
-        "role_agreement": 0.9,
+        "runs": 3,
+        "role_agreement": 0.944,
         "unstable_hunks": [
-          "h7",
-          "h8",
+          "h3",
           "h9",
-          "h10",
-          "h11",
-          "h12",
-          "h13",
-          "h14",
-          "h15"
+          "h22"
         ],
         "cores": {
-          "min": 3,
-          "max": 4,
-          "mean": 3.6,
-          "stdev": 0.49
+          "min": 4,
+          "max": 7,
+          "mean": 5,
+          "stdev": 1.41
         },
         "seams": {
-          "min": 3,
-          "max": 4,
-          "mean": 3.2,
-          "stdev": 0.4
+          "min": 4,
+          "max": 6,
+          "mean": 4.67,
+          "stdev": 0.94
         },
         "clusters": {
           "min": 1,
@@ -164,44 +155,24 @@
         }
       },
       "health": {
-        "seams": 3.2,
-        "isolated_cores": 0.2,
+        "seams": 4.67,
+        "isolated_cores": 2,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.8,
+        "role_accuracy": 0.944,
         "cluster_f1": 1.0,
         "confusions": [
           {
-            "gold": "core",
-            "pred": "environment",
-            "n": 2
-          },
-          {
-            "gold": "core",
-            "pred": "link",
-            "n": 4
-          },
-          {
-            "gold": "environment",
-            "pred": "core",
-            "n": 2
-          },
-          {
-            "gold": "environment",
-            "pred": "link",
-            "n": 5
-          },
-          {
             "gold": "link",
             "pred": "core",
-            "n": 2
+            "n": 3
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 9
+            "n": 1
           }
         ]
       },
@@ -214,25 +185,24 @@
     },
     "psdk-starting-loader": {
       "stability": {
-        "runs": 5,
+        "runs": 3,
         "role_agreement": 0.889,
         "unstable_hunks": [
-          "h1",
           "h3",
           "h7",
           "h8"
         ],
         "cores": {
-          "min": 2,
-          "max": 4,
-          "mean": 3,
-          "stdev": 0.63
+          "min": 3,
+          "max": 6,
+          "mean": 4.33,
+          "stdev": 1.25
         },
         "seams": {
-          "min": 1,
-          "max": 3,
-          "mean": 2.4,
-          "stdev": 0.8
+          "min": 3,
+          "max": 5,
+          "mean": 3.67,
+          "stdev": 0.94
         },
         "clusters": {
           "min": 1,
@@ -242,39 +212,29 @@
         }
       },
       "health": {
-        "seams": 2.4,
-        "isolated_cores": 0.8,
+        "seams": 3.67,
+        "isolated_cores": 2.33,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.6,
+        "role_accuracy": 0.778,
         "cluster_f1": 1.0,
         "confusions": [
           {
             "gold": "core",
-            "pred": "environment",
-            "n": 2
-          },
-          {
-            "gold": "core",
             "pred": "link",
-            "n": 9
+            "n": 1
           },
           {
             "gold": "environment",
             "pred": "core",
-            "n": 1
-          },
-          {
-            "gold": "environment",
-            "pred": "noise",
-            "n": 1
+            "n": 2
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 5
+            "n": 3
           }
         ]
       },
