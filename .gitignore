@@ -14,3 +14,7 @@ report*.html
 
 # eval harness: cached LLM generations are reproducible, don't track them
 eval/_runs/
+
+vscode-extension/node_modules/
+vscode-extension/out/
+vscode-extension/*.vsix

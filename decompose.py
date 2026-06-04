@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import webbrowser
 from pathlib import Path
@@ -39,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="model context window in tokens, for the fit warning (default: 200000)")
     ap.add_argument("--claude-bin", help="path to the claude CLI (else auto-detected)")
     ap.add_argument("--open", action="store_true", help="open the report in a browser")
+    ap.add_argument("--emit-seams", metavar="JSON",
+                    help="write structured seam data (file + line range + role per hunk) "
+                         "to this path for the VS Code extension; skips HTML rendering")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--debug", action="store_true",
                     help="print the model's raw reply + backend diagnostics to stderr, "
@@ -92,13 +96,20 @@ def main(argv: list[str] | None = None) -> int:
 
         source_label = args.file if args.file else f"git {args.git}"
 
-    out_path = renderer.render(hunks, args.out, source_label=Path(source_label).name)
-
     counts = {}
     for h in hunks:
         counts[h.role] = counts.get(h.role, 0) + 1
     summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test", "noise"))
     print(f"Decomposed {len(hunks)} hunks:  {summary}")
+
+    if args.emit_seams:
+        # Native-rendering surface (VS Code extension): structured seam data, no HTML.
+        Path(args.emit_seams).write_text(json.dumps(renderer.emit_seams_json(hunks)),
+                                         encoding="utf-8")
+        print(f"Seams: {args.emit_seams}")
+        return 0
+
+    out_path = renderer.render(hunks, args.out, source_label=Path(source_label).name)
     print(f"Report: {out_path}")
 
     if args.open:

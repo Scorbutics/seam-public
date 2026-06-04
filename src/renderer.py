@@ -257,6 +257,17 @@ def _hunk_start_line(h: Hunk) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _hunk_line_span(h: Hunk) -> tuple[int, int]:
+    """(start, end) new-side line range from the @@ header — the lines this hunk
+    occupies in the post-change file, for the extension's editor decorations."""
+    m = re.search(r"\+(\d+)(?:,(\d+))?", h.header_line())
+    if not m:
+        return (0, 0)
+    start = int(m.group(1))
+    count = int(m.group(2)) if m.group(2) else 1
+    return (start, start + max(count, 1) - 1)
+
+
 def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> list[dict]:
     """Build a seam's blocks in (file, line) order — one block per hunk, each carrying
     its own role. This puts CLOSE core/link/environment together (a core and the
@@ -278,9 +289,14 @@ def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> l
             for r in it["rationales"]:
                 if r not in whys:
                     whys.append(r)
+        start, end = _hunk_line_span(h)
         blocks.append({
             "role": h.role,
             "key": key,
+            "hid": h.id,
+            "file": h.file_path,
+            "start": start,
+            "end": end,
             "has_diff": bool(diff_str.strip()),
             "items": items,
             "files": [it["file"] for it in items],
@@ -454,6 +470,48 @@ def _hunk_location(h: Hunk) -> str:
     """'file:line' of a hunk — file + the new-side start line from its @@ header."""
     m = re.search(r"\+(\d+)", h.header_line())
     return f"{h.file_path}:{m.group(1)}" if m else h.file_path
+
+
+def emit_seams_json(hunks: list[Hunk]) -> dict:
+    """Structured seam data for the VS Code extension (the native-rendering surface).
+
+    The classification is the shared core; the extension consumes THIS instead of
+    the HTML — it paints editor decorations (gutter bar + scrollbar map per seam)
+    and a seam tree, with VS Code itself as the renderer. Same cluster/seam assembly
+    the report uses (cross-cluster merge, link-only, synthetic seams), but reduced to
+    each hunk's file + new-side line range + role. Tests and noise are separate
+    groups (skim posture)."""
+    clusters, _ = _build_clusters(hunks)
+
+    def _hunk(b: dict) -> dict:
+        return {"id": b["hid"], "file": b["file"], "start": b["start"],
+                "end": b["end"], "role": b["role"]}
+
+    out_clusters = []
+    for ci, cl in enumerate(clusters):
+        out_clusters.append({
+            "id": cl["id"],
+            "intent": cl["intent"],
+            "colorIndex": ci,
+            "seams": [{
+                "id": s["id"],
+                "label": s["label"] or s["id"],
+                "linkOnly": bool(s["verification"].get("link_only")),
+                "uncertain": bool(s.get("uncertain")),
+                "warnings": [w["kind"] for w in s["verification"]["warnings"]],
+                "hunks": [_hunk(b) for b in s["blocks"]],
+            } for s in cl["seams"]],
+        })
+
+    def _plain(h: Hunk) -> dict:
+        start, end = _hunk_line_span(h)
+        return {"id": h.id, "file": h.file_path, "start": start, "end": end, "role": h.role}
+
+    return {
+        "clusters": out_clusters,
+        "tests": [_plain(h) for h in hunks if h.role == "test"],
+        "noise": [_plain(h) for h in hunks if h.role == "noise"],
+    }
 
 
 def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
