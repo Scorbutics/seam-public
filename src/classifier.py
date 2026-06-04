@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from . import ROLES
@@ -45,12 +46,39 @@ _SYSTEM_OVERHEAD_TOKENS = 25_000
 _OUTPUT_TOKENS_PER_HUNK = 60
 
 # Per-pass thinking budgets (passed to the backend; see _run_backend). Clustering
-# is reasoning-heavy and the LLM does it best with thinking ON (None = CLI default;
-# measured cluster F1 ~1.0). Roling is local and is more accurate AND ~16x faster
-# with thinking OFF (0). Tunable: cap CLUSTER_THINKING to trade clustering quality
-# for latency once the F1-vs-budget curve is measured via eval/harness.py.
-CLUSTER_THINKING: int | None = None
+# is reasoning-heavy and needs thinking, but NOT unbounded: uncapped it burned
+# ~15-22K thinking tokens. CAPPED at a budget that still holds cluster F1 ~1.0 on
+# the harness while cutting output tokens + the latency floor (the cluster pass is
+# the wall-clock floor after parallelization). Roling is local — thinking OFF (0),
+# more accurate AND faster. Re-measure cluster F1 via eval/harness.py if you change
+# CLUSTER_THINKING; raise it if F1 drops.
+CLUSTER_THINKING: int | None = 2048
 ROLE_THINKING: int | None = 0
+
+
+def _thinking_to_effort(thinking: int | None) -> str | None:
+    """Map the claude thinking budget onto Copilot's reasoning-effort knob.
+
+    Copilot has no thinking-token budget; its analog is a coarse reasoning effort
+    (low|medium|high) on reasoning-capable models (e.g. gpt-5.5). We approximate the
+    claude split: cluster pass (thinking ON, None) -> high; role pass (thinking 0)
+    -> low; a positive cap -> medium. This is NOT the measured 0-vs-ON regime
+    (Copilot has no true "off", its floor is `low`), only the closest knob available.
+
+    Escape hatch for the unknown CLI version on the target machine: set COPILOT_EFFORT
+    to pin a fixed level, or to "off"/"none" to omit --effort entirely (older builds
+    that lack the flag, or non-reasoning models). Returns None when no flag should be
+    passed.
+    """
+    override = os.environ.get("COPILOT_EFFORT")
+    if override is not None:
+        level = override.strip().lower()
+        return None if level in ("off", "none", "") else level
+    if thinking is None:
+        return "high"
+    if thinking == 0:
+        return "low"
+    return "medium"
 
 # Self-consistency: the role/seam pass is sampled (no temperature control in the
 # CLI), so borderline hunks flip run-to-run. Run it N times and keep the MEDOID
@@ -58,7 +86,7 @@ ROLE_THINKING: int | None = 0
 # dominant-role hunks to a stable answer, leaving only genuinely 50/50 hunks
 # uncertain. The slow thinking cluster pass runs ONCE; only the cheap role pass
 # repeats. Set 1 to disable.
-ROLE_VOTES = 5
+ROLE_VOTES = 3
 
 
 class ClassifierError(RuntimeError):
@@ -328,10 +356,11 @@ def _run_backend(kind: str, binary: str, prompt: str, model: str, debug: bool = 
 
     `thinking` controls the `claude -p` thinking budget: 0 = OFF (fast; right for
     the role pass), a positive int caps it, None = leave the CLI default (thinking
-    ON; right for the cluster pass). Copilot ignores it.
+    ON; right for the cluster pass). For Copilot, `thinking` is mapped to the coarse
+    --effort knob (see _thinking_to_effort): None -> high, 0 -> low, else medium.
     """
     return _run_claude(binary, prompt, model, debug, thinking) if kind == "claude" \
-        else _run_copilot(binary, prompt, debug)
+        else _run_copilot(binary, prompt, debug, thinking)
 
 
 def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False,
@@ -372,7 +401,8 @@ def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False,
     return envelope.get("result", "")
 
 
-def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
+def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False,
+                 thinking: int | None = 0) -> str:
     """Run the GitHub Copilot CLI headless, on the user's Copilot subscription.
 
     Unlike `claude -p`, the Copilot CLI does NOT read its prompt from stdin — its
@@ -386,6 +416,11 @@ def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
     Copilot prints its answer to stdout; the prompt asks for a bare JSON array and
     `_extract_json_array` tolerates any surrounding chatter, so we return stdout
     as-is.
+
+    `thinking` is mapped to Copilot's coarse --effort knob (see _thinking_to_effort)
+    so the two-pass thinking split survives on reasoning-capable models (e.g.
+    gpt-5.5): cluster -> high, role -> low. Set COPILOT_EFFORT=off to omit the flag
+    on CLI builds that lack it.
     """
     fd, prompt_path = tempfile.mkstemp(prefix="copilot-prompt-", suffix=".txt")
     try:
@@ -403,6 +438,9 @@ def _run_copilot(copilot_bin: str, prompt: str, debug: bool = False) -> str:
         model = os.environ.get("COPILOT_MODEL")
         if model:
             cmd += ["--model", model]
+        effort = _thinking_to_effort(thinking)
+        if effort:
+            cmd += ["--effort", effort]
         proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
         if debug:
             _dbg(f"copilot: cmd={' '.join(cmd)} exit={proc.returncode}")
@@ -593,23 +631,20 @@ def _eff_role_from_item(item: dict) -> str:
     return role if role in ROLES else "core"
 
 
-def _vote_role_pass(kind: str, binary: str, prompt: str, model: str, *, votes: int,
-                    hunk_ids: list[str], verbose: bool, debug: bool,
-                    debug_path: str | None) -> tuple[dict[str, dict], dict[str, float]]:
-    """Self-consistency for the (sampled) role pass: run it `votes` times and return
-    (MEDOID run, per-hunk confidence). The medoid is the single coherent run whose
-    per-hunk roles best match the per-hunk modal. Confidence = share of votes that
-    agreed on the modal role (1.0 = unanimous; ~0.4 = a real tie → "uncertain").
-    Collapses flips on dominant-role hunks; only truly split hunks stay low-conf.
+def _aggregate_role_votes(runs: list[dict[str, dict]], hunk_ids: list[str], *,
+                          verbose: bool = False, debug: bool = False
+                          ) -> tuple[dict[str, dict], dict[str, float]]:
+    """Self-consistency aggregation of N already-run role passes → (MEDOID run,
+    per-hunk confidence). The medoid is the single coherent run whose per-hunk roles
+    best match the per-hunk modal. Confidence = share of votes that agreed on the
+    modal role (1.0 = unanimous; ~0.4 = a real tie → "uncertain"). Collapses flips
+    on dominant-role hunks; only truly split hunks stay low-conf.
 
     (Per-hunk MODAL aggregation was tried 2026-06 to cut scale instability — it
     barely moved the 66-hunk swing 8→7, cost accuracy on coin-flip hunks, and added
     borrowed-label incoherence. Reverted; the medoid's seam coherence wins.)"""
-    runs: list[dict[str, dict]] = []
-    for v in range(max(1, votes)):
-        runs.append(_run_pass(kind, binary, prompt, model, thinking=ROLE_THINKING,
-                              tag=("role" if votes <= 1 else f"role.v{v + 1}"),
-                              verbose=verbose, debug=debug, debug_path=debug_path))
+    if not runs:
+        return {}, {hid: 1.0 for hid in hunk_ids}
     if len(runs) == 1:
         return runs[0], {hid: 1.0 for hid in hunk_ids}
     modal: dict[str, str] = {}
@@ -632,7 +667,7 @@ def _vote_role_pass(kind: str, binary: str, prompt: str, model: str, *, votes: i
         spread = [(hid, dict(Counter(_eff_role_from_item(r.get(hid, {})) for r in runs)))
                   for hid in hunk_ids
                   if len({_eff_role_from_item(r.get(hid, {})) for r in runs}) > 1]
-        print(f"[classifier] role voting: {votes} passes, medoid agreement "
+        print(f"[classifier] role voting: {len(runs)} passes, medoid agreement "
               f"{agreement(medoid)}/{len(hunk_ids)}; still-split hunks: {spread or 'none'}")
     return medoid, confidence
 
@@ -675,10 +710,29 @@ def classify(
             file=sys.stderr,
         )
 
-    # PASS A — CLUSTER (thinking ON: grouping is the reasoning-heavy, holistic part).
-    cluster_labels = _run_pass(kind, binary, cluster_prompt, model,
-                               thinking=CLUSTER_THINKING, tag="cluster",
-                               verbose=verbose, debug=debug, debug_path=debug_path)
+    # PASS A (CLUSTER, thinking ON) and PASS B (SEAM+ROLE, thinking OFF) are
+    # INDEPENDENT — role accuracy doesn't use cluster context (see _build_prompt),
+    # and the role pass is sampled N times for self-consistency. Run the cluster
+    # pass and all N role votes CONCURRENTLY: the cheap thinking-off votes then hide
+    # under the slow thinking cluster pass instead of adding to it, so wall-clock ≈
+    # the cluster pass alone rather than cluster + sum(votes). Each _run_pass is an
+    # independent subprocess with its own env, so this is thread-safe.
+    role_prompt = _build_prompt(hunks)
+    n_votes = max(1, role_votes)
+    hunk_ids = [h.id for h in hunks]
+    with ThreadPoolExecutor(max_workers=1 + n_votes) as ex:
+        cluster_future = ex.submit(_run_pass, kind, binary, cluster_prompt, model,
+                                   thinking=CLUSTER_THINKING, tag="cluster",
+                                   verbose=verbose, debug=debug, debug_path=debug_path)
+        role_futures = [
+            ex.submit(_run_pass, kind, binary, role_prompt, model, thinking=ROLE_THINKING,
+                      tag=("role" if n_votes <= 1 else f"role.v{i + 1}"),
+                      verbose=verbose, debug=debug, debug_path=debug_path)
+            for i in range(n_votes)
+        ]
+        cluster_labels = cluster_future.result()
+        role_runs = [f.result() for f in role_futures]
+
     group_intent: dict[str, str] = {}
     groups: dict[str, tuple[str, str]] = {}
     for hid, item in cluster_labels.items():
@@ -688,13 +742,8 @@ def classify(
         if g and it and g not in group_intent:
             group_intent[g] = it
 
-    # PASS B — SEAM+ROLE (thinking OFF: local pattern-matching, fast + accurate).
-    # Independent of pass A (see _build_prompt); merged by id below. Run with
-    # self-consistency (medoid of `role_votes` samples) to tame run-to-run flips.
-    role_prompt = _build_prompt(hunks)
-    labels, role_conf = _vote_role_pass(kind, binary, role_prompt, model, votes=role_votes,
-                                        hunk_ids=[h.id for h in hunks],
-                                        verbose=verbose, debug=debug, debug_path=debug_path)
+    labels, role_conf = _aggregate_role_votes(role_runs, hunk_ids,
+                                              verbose=verbose, debug=debug)
     if debug:
         _dbg(f"cluster pass: {len({g for g, _ in groups.values() if g})} groups; "
              f"role pass: {len(labels)} labelled hunks")
