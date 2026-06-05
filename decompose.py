@@ -38,6 +38,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--classifier", choices=("llm", "det"), default="llm",
                     help="classification engine: 'llm' (3-pass LLM, default) or "
                          "'det' (deterministic-first Layer-1 skeleton, no LLM) — for A/B comparison")
+    ap.add_argument("--facts", metavar="JSON",
+                    help="external HunkFacts payload (e.g. AST facts the VS Code extension "
+                         "computed) to drive the 'det' classifier; missing hunks fall back to regex")
+    ap.add_argument("--facts-engine", choices=("regex", "treesitter"), default="regex",
+                    help="syntax source for the 'det' classifier: 'regex' (default, fragment-based) "
+                         "or 'treesitter' (full-file AST via the working tree; falls back to regex "
+                         "per hunk when a file is unavailable/misaligned). Ignored if --facts is set")
     ap.add_argument("--model", default="claude-haiku-4-5", help="model for the classify pass")
     ap.add_argument("--context-window", type=int, default=200_000,
                     help="model context window in tokens, for the fit warning (default: 200000)")
@@ -85,10 +92,30 @@ def main(argv: list[str] | None = None) -> int:
                   f"{len(remaining)} sent to classifier")
 
         engine = classifier_det if args.classifier == "det" else classifier
+        extra = {}
+        if engine is classifier_det:
+            from src import facts as facts_mod
+            if args.facts:
+                payload = json.loads(Path(args.facts).read_text(encoding="utf-8"))
+                extra["facts_provider"] = facts_mod.ExternalFactsProvider(payload)
+                if args.verbose:
+                    print(f"[decompose] external facts from {args.facts} "
+                          f"({len(payload.get('hunks', {}))} hunks; regex fallback for the rest)")
+            elif args.facts_engine == "treesitter":
+                from src import facts_treesitter as ts
+                if not ts.available():
+                    print("warning: tree-sitter not installed; falling back to regex facts "
+                          "(pip install tree_sitter tree-sitter-language-pack)", file=sys.stderr)
+                else:
+                    extra["facts_provider"] = ts.TreeSitterFactsProvider(
+                        facts_mod.RepoFileSource(args.repo))
+                    if args.verbose:
+                        print(f"[decompose] tree-sitter facts (full file, repo={args.repo}); "
+                              f"regex fallback per unavailable/misaligned hunk")
         try:
             engine.classify(remaining, model=args.model, claude_bin=args.claude_bin,
                             context_window=args.context_window, verbose=args.verbose,
-                            debug=args.debug, debug_path=args.out)
+                            debug=args.debug, debug_path=args.out, **extra)
         except classifier.ClassifierError as exc:
             print(f"error: classification failed: {exc}", file=sys.stderr)
             return 3

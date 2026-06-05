@@ -1,2 +1,6 @@
 unidiff>=0.7.5
 jinja2>=3.1
+
+# Optional — only for the tree-sitter facts producer (full-file AST; the headless/harness
+# counterpart to the VS Code AST producer). The tool runs without these (regex fallback).
+# pip install tree_sitter tree-sitter-language-pack

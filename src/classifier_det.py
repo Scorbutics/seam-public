@@ -42,7 +42,7 @@ from __future__ import annotations
 import sys
 
 from . import ROLES
-from .facts import extract, HunkFacts
+from .facts import FactsProvider, HunkFacts, RegexFactsProvider
 from .lang import _STOP
 from .parser import Hunk
 from .symbol_edges import candidate_wirings
@@ -150,6 +150,7 @@ class _DSU:
 def classify(
     hunks: list[Hunk],
     *,
+    facts_provider: FactsProvider | None = None,
     model: str | None = None,
     claude_bin: str | None = None,
     context_window: int | None = None,
@@ -160,15 +161,16 @@ def classify(
 ) -> None:
     """Fill role/group/intent/seam/wires on each hunk in place — deterministically.
 
-    Drop-in for `classifier.classify`: the LLM-only kwargs (model, claude_bin, …) are
-    accepted and ignored. `hunks` should already exclude deterministic noise; any hunk
-    already roled "noise" is left untouched.
+    `facts_provider` is the syntax-source strategy (regex by default; swap in the VS Code
+    AST or tree-sitter provider with no other change). Drop-in for `classifier.classify`:
+    the LLM-only kwargs (model, claude_bin, …) are accepted and ignored. `hunks` should
+    already exclude deterministic noise; any hunk already roled "noise" is left untouched.
     """
     work = [h for h in hunks if h.role != "noise"]
     if not work:
         return
 
-    facts = {h.id: extract(h) for h in work}
+    facts = (facts_provider or RegexFactsProvider()).facts(work)
     cand = candidate_wirings(work)
 
     # Distinctive new vocabulary == the symbols candidate_wirings actually wires on
