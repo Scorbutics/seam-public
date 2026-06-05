@@ -93,26 +93,32 @@ def _diff_imports(hunks: list[Hunk]) -> dict[str, str]:
     return imp
 
 
-def external_coupling(hunks: list[Hunk]) -> dict[str, list[str]]:
-    """{hunk_id: external module roots it couples to}. A hunk couples EXTERNALLY when
-    it references an IMPORTED symbol that is NOT defined anywhere in the diff — i.e.
-    the thing it wires to lives OUTSIDE the change (the §I 'diff is not the codebase'
-    boundary). Lets an 'unwired link' read as '→ @coss/ui' instead of a blank, so a
-    migration's coupling to the system it targets is legible without reading that
-    system. Deterministic; no LLM."""
+def external_refs(hunks: list[Hunk]) -> dict[str, list[dict[str, str]]]:
+    """{hunk_id: [{"symbol","source"}]} — imported symbols a hunk references that are
+    defined NOWHERE in the diff. The thing it wires to lives OUTSIDE the change (the
+    §I 'diff is not the codebase' boundary). Prefers workspace/scoped (@scope, ./rel)
+    sources over ubiquitous runtime libs (react, next, ...): when a scoped/relative
+    source is present, drop the bare-lib noise. These (symbol, source) pairs are what
+    Layer 2's resolver looks up — where the symbol actually LIVES + its signature.
+    Deterministic; no LLM."""
     imp = _diff_imports(hunks)
     new_vocab: set[str] = set().union(*(d for d, _ in (_defs_refs(h.text) for h in hunks))) \
         if hunks else set()
-    out: dict[str, list[str]] = {}
+    out: dict[str, list[dict[str, str]]] = {}
     for h in hunks:
         _d, refs = _defs_refs(h.text)
-        srcs = {_module_root(imp[s]) for s in refs if s in imp and s not in new_vocab}
-        # Prefer workspace/local couplings (@scope, relative) — the migration TARGET
-        # — over ubiquitous runtime libs (react, next, ...): when a scoped/relative
-        # source is present, drop the bare-lib noise. Bare-only hunks keep theirs.
-        scoped = {s for s in srcs if s[0] in "@."}
-        out[h.id] = sorted(scoped) if scoped else sorted(srcs)
+        pairs = [(s, imp[s]) for s in sorted(refs) if s in imp and s not in new_vocab]
+        scoped = [(s, src) for s, src in pairs if src and src[0] in "@."]
+        chosen = scoped if scoped else pairs
+        out[h.id] = [{"symbol": s, "source": src} for s, src in chosen]
     return out
+
+
+def external_coupling(hunks: list[Hunk]) -> dict[str, list[str]]:
+    """{hunk_id: external module ROOTS} — for the '→ @coss/ui' display label. Derived
+    from external_refs (the (symbol, source) pairs), reduced to unique module roots."""
+    return {hid: sorted({_module_root(r["source"]) for r in rs})
+            for hid, rs in external_refs(hunks).items()}
 
 
 # Salient "subject" of a line: the ROOT of a call/member expression (foo(...),

@@ -39,11 +39,19 @@ def main() -> int:
 
     print("=== external coupling ===")
     for c in gold["external_cases"]:
-        got = sorted(symbol_edges.external_coupling([_H(c["hunk"], c["text"])]).get(c["hunk"], []))
+        h = _H(c["hunk"], c["text"])
+        got = sorted(symbol_edges.external_coupling([h]).get(c["hunk"], []))
         exp = sorted(c["expect"])
         ok = got == exp
+        # resolution symbols (Layer 2 input): assert the (deterministic) symbol list
+        if "expect_ref_symbols" in c:
+            got_sym = sorted(r["symbol"] for r in symbol_edges.external_refs([h]).get(c["hunk"], []))
+            exp_sym = sorted(c["expect_ref_symbols"])
+            if got_sym != exp_sym:
+                ok = False
+                print(f"       refs: expect={exp_sym} got={got_sym}")
         fails += not ok
-        print(f"  [{'ok ' if ok else 'FAIL'}] {c['id']:20} expect={exp} got={got}")
+        print(f"  [{'ok ' if ok else 'FAIL'}] {c['id']:20} roots={got}")
 
     print("=== A->B rewire (Layer 1) ===")
     rewire_fn = getattr(symbol_edges, "rewire_pairs", None)

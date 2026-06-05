@@ -7,6 +7,9 @@
       "text": "@@ -3,6 +3,7 @@\n import { TrpcProvider } from \"app/_trpc/trpc-provider\";\n import { SessionProvider } from \"next-auth/react\";\n import CacheProvider from \"react-inlinesvg/provider\";\n+import { ToastProvider } from \"@coss/ui/components/toast\";\n \n import { WebPushProvider } from \"@calcom/web/modules/notifications/components/WebPushContext\";\n import { NotificationSoundHandler } from \"@calcom/web/components/notification-sound-handler\";\n",
       "expect": [
         "@coss/ui"
+      ],
+      "expect_ref_symbols": [
+        "ToastProvider"
       ]
     },
     {
@@ -15,19 +18,32 @@
       "text": "@@ -1,6 +1,16 @@\n import { APP_NAME } from \"@calcom/lib/constants\";\n import { useLocale } from \"@calcom/lib/hooks/useLocale\";\n-import { Dialog, ConfirmationDialogContent } from \"@calcom/ui/components/dialog\";\n+import {\n+  AlertDialog,\n+  AlertDialogClose,\n+  AlertDialogDescription,\n+  AlertDialogFooter,\n+  AlertDialogHeader,\n+  AlertDialogPopup,\n+  AlertDialogTitle,\n+} from \"@coss/ui/components/alert-dialog\";\n+import { Button } from \"@coss/ui/components/button\";\n+import { Spinner } from \"@coss/ui/components/spinner\";\n \n interface DeleteWebhookDialogProps {\n   open: boolean;\n",
       "expect": [
         "@coss/ui"
+      ],
+      "expect_ref_symbols": [
+        "AlertDialog",
+        "AlertDialogClose",
+        "AlertDialogDescription",
+        "AlertDialogFooter",
+        "AlertDialogHeader",
+        "AlertDialogPopup",
+        "AlertDialogTitle",
+        "Button",
+        "Spinner"
       ]
     },
     {
       "id": "remove-utils",
       "hunk": "h28",
       "text": "@@ -40,7 +30,6 @@ type WebhookProps = {\n \n export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {\n   const { t } = useLocale();\n-  const utils = trpc.useUtils();\n   const router = useRouter();\n   const { data: installedApps, isPending } = trpc.viewer.apps.integrations.useQuery(\n     { variant: \"other\", onlyInstalled: true },\n",
-      "expect": []
+      "expect": [],
+      "expect_ref_symbols": []
     },
     {
       "id": "globals-css",
       "hunk": "h49",
       "text": "@@ -66,23 +66,23 @@\n :root {\n   --radius: 0.625rem;\n   --background: var(--color-white);\n-  --foreground: var(--color-zinc-800);\n+  --foreground: var(--color-neutral-800);\n   --card: var(--color-white);\n-  --card-foreground: var(--color-zinc-800);\n+  --card-foreground: var(--color-neutral-800);\n   --popover: var(--color-white);\n-  --popover-foreground: var(--color-zinc-800);\n-  --primary: var(--color-zinc-800);\n-  --primary-foreground: var(--color-zinc-50);\n+  --popover-foreground: var(--color-neutral-800);\n+  --primary: var(--color-neutral-800);\n+  --primary-foreground: var(--color-neutral-50);\n   --secondary: --alpha(var(--color-black) / 4%);\n-  --secondary-foreground: var(--color-zinc-800);\n+  --secondary-foreground: var(--color-neutral-800);\n   --muted: --alpha(var(--color-black) / 4%);\n   --muted-foreground: color-mix(\n     in srgb,\n-    var(--color-zinc-500) 90%,\n+    var(--color-neutral-500) 90%,\n     var(--color-black)\n   );\n   --accent: --alpha(var(--color-black) / 4%);\n-  --accent-foreground: var(--color-zinc-800);\n+  --accent-foreground: var(--color-neutral-800);\n   --destructive: var(--color-red-500);\n   --destructive-foreground: var(--color-red-700);\n   --info: var(--color-blue-500);\n",
-      "expect": []
+      "expect": [],
+      "expect_ref_symbols": []
     }
   ],
   "rewire_cases": [

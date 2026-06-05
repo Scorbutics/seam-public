@@ -5,7 +5,8 @@ import * as fs from "fs";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; rewire?: Rewire | null; }
+interface ExternalRef { symbol: string; source: string; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
@@ -122,6 +123,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
     vscode.commands.registerCommand("seam.prev", (fromId?: string) => navStep(-1, fromId)),
     vscode.commands.registerCommand("seam.open", openHunk),
+    vscode.commands.registerCommand("seam.goToDef", goToDef),
     vscode.commands.registerCommand("seam.focusSeamById", focusSeamById),
     treeView.onDidChangeSelection(onSelect),
     vscode.window.onDidChangeVisibleTextEditors(applyToVisible),
@@ -169,11 +171,12 @@ function focusSeamById(seamId: string) {
 // Selecting a node FOCUSES it (seam or hunk → that seam; cluster → all its seams).
 function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   const sel = e.selection[0];
+  if (sel && sel.kind === "extTarget") return;   // a resolved target: don't change focus
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map((h) => h.id));
     focusLabel = sel.seam.label;
-  } else {
+  } else if (sel.kind === "cluster") {
     focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map((h) => h.id)));
     focusLabel = sel.cluster.intent;
   }
@@ -226,6 +229,7 @@ function updateBanner() {
 function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   model = m;
   repoRoot = root;
+  resolveCache.clear();       // a new run invalidates resolved external targets
   focusIds = null;            // a fresh/restored run starts showing all seams
   focusLabel = "";
   lastRunBanner = `last run: ${range} · ${new Date(ts).toLocaleString()}`;
@@ -448,6 +452,7 @@ function applyToVisible(editors: readonly vscode.TextEditor[]) { editors.forEach
 function clearAll() {
   model = undefined;
   fileIndex = new Map();
+  resolveCache.clear();
   for (const editor of vscode.window.visibleTextEditors)
     for (const role of ROLES) allDecos(role).forEach((d) => editor.setDecorations(d, []));
   treeProvider?.refresh();
@@ -536,11 +541,93 @@ async function openHunk(hunk: SeamHunk) {
   }
 }
 
-// --- the seam tree: clusters → seams → hunks (role shown by codicon + label) ---
+// --- Layer 2: resolve an external coupling to WHERE it lives + its signature -----
+// An unwired link wires to code OUTSIDE the diff (e.g. ToastProvider from @coss/ui).
+// We don't BUILD codebase-awareness — we BORROW the editor's language services. A
+// Resolver is pluggable: VsCodeResolver here; a filesystem/grep backend would
+// implement the same interface for the standalone tool. Lazy (resolved only when a
+// hunk is expanded), best-effort (degrades to symbol/source when nothing answers).
+interface ExternalTarget {
+  symbol: string;
+  source: string;
+  uri?: vscode.Uri;   // resolved definition file
+  line?: number;      // 0-based line in that file
+  detail?: string;    // signature / hover, first meaningful line
+}
+interface Resolver {
+  resolve(ref: ExternalRef, hunk: SeamHunk): Promise<ExternalTarget>;
+}
+
+function findSymbolPosition(doc: vscode.TextDocument, symbol: string,
+                            fromLine: number, toLine: number): vscode.Position | undefined {
+  const re = new RegExp(`\\b${symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`);
+  const last = Math.min(toLine, doc.lineCount - 1);
+  for (let ln = Math.max(0, fromLine); ln <= last; ln++) {
+    const m = re.exec(doc.lineAt(ln).text);
+    if (m) return new vscode.Position(ln, m.index);
+  }
+  return undefined;
+}
+
+function normalizeLoc(d: vscode.Location | vscode.LocationLink): vscode.Location {
+  const link = d as vscode.LocationLink;
+  return link.targetUri ? new vscode.Location(link.targetUri, link.targetRange) : (d as vscode.Location);
+}
+
+function hoverText(hovers: vscode.Hover[] | undefined): string | undefined {
+  for (const h of hovers ?? []) {
+    for (const c of h.contents) {
+      const raw = typeof c === "string" ? c : (c as vscode.MarkdownString).value ?? "";
+      const line = raw.replace(/```[a-z]*\n?/gi, "").split("\n").map((x) => x.trim()).filter(Boolean)[0];
+      if (line) return line.length > 120 ? line.slice(0, 117) + "…" : line;
+    }
+  }
+  return undefined;
+}
+
+// Borrows VS Code's own definition + hover providers — no resolver of our own.
+class VsCodeResolver implements Resolver {
+  async resolve(ref: ExternalRef, hunk: SeamHunk): Promise<ExternalTarget> {
+    const out: ExternalTarget = { symbol: ref.symbol, source: ref.source };
+    try {
+      const uri = vscode.Uri.file(path.join(repoRoot, hunk.file));
+      const doc = await vscode.workspace.openTextDocument(uri);
+      const pos = findSymbolPosition(doc, ref.symbol, hunk.start - 1, hunk.end - 1);
+      if (!pos) return out;
+      const defs = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+        "vscode.executeDefinitionProvider", uri, pos);
+      if (defs && defs.length) {
+        const loc = normalizeLoc(defs[0]);
+        out.uri = loc.uri;
+        out.line = loc.range.start.line;
+      }
+      out.detail = hoverText(await vscode.commands.executeCommand<vscode.Hover[]>(
+        "vscode.executeHoverProvider", uri, pos));
+    } catch { /* best-effort: degrade to symbol/source only */ }
+    return out;
+  }
+}
+
+const resolver: Resolver = new VsCodeResolver();
+// hunk.id -> resolved targets (lazy, on expand). Cleared on new/cleared run.
+const resolveCache = new Map<string, Promise<ExternalTarget[]>>();
+const MAX_RESOLVE = 6;  // bound latency + clutter on import hunks with many symbols
+
+async function goToDef(t: ExternalTarget) {
+  if (!t.uri) return;
+  const doc = await vscode.workspace.openTextDocument(t.uri);
+  const ed = await vscode.window.showTextDocument(doc);
+  const r = new vscode.Range(t.line ?? 0, 0, t.line ?? 0, 0);
+  ed.revealRange(r, vscode.TextEditorRevealType.InCenter);
+  ed.selection = new vscode.Selection(r.start, r.start);
+}
+
+// --- the seam tree: clusters → seams → hunks → resolved external targets ---------
 type Node =
   | { kind: "cluster"; cluster: Cluster }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
-  | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk };
+  | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
+  | { kind: "extTarget"; target: ExternalTarget };
 
 const ROLE_ICON: Record<string, string> = {
   core: "symbol-method", link: "link", environment: "symbol-field",
@@ -552,13 +639,25 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
   readonly onDidChangeTreeData = this._onDidChange.event;
   refresh() { this._onDidChange.fire(); }
 
-  getChildren(el?: Node): Node[] {
+  getChildren(el?: Node): Node[] | Promise<Node[]> {
     if (!model) return [];
     if (!el) return model.clusters.map((cluster) => ({ kind: "cluster", cluster }));
     if (el.kind === "cluster")
       return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     if (el.kind === "seam")
       return el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
+    if (el.kind === "hunk") {
+      // Lazy Layer 2: resolve the hunk's external couplings only when it's expanded.
+      const refs = el.hunk.externalRefs ?? [];
+      if (!refs.length) return [];
+      let p = resolveCache.get(el.hunk.id);
+      if (!p) {
+        const hunk = el.hunk;
+        p = Promise.all(refs.slice(0, MAX_RESOLVE).map((r) => resolver.resolve(r, hunk)));
+        resolveCache.set(hunk.id, p);
+      }
+      return p.then((targets) => targets.map((target) => ({ kind: "extTarget", target } as Node)));
+    }
     return [];
   }
 
@@ -576,13 +675,25 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.iconPath = new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
       return it;
     }
+    if (el.kind === "extTarget") {
+      const t = el.target;
+      const it = new vscode.TreeItem(`↳ ${t.symbol}`, vscode.TreeItemCollapsibleState.None);
+      it.description = t.uri ? `${path.basename(t.uri.fsPath)}:${(t.line ?? 0) + 1}`
+                             : `${t.source} (not found)`;
+      it.tooltip = (t.detail ? t.detail + "\n" : "") + `${t.symbol} — ${t.source}` +
+        (t.uri ? `\n${t.uri.fsPath}:${(t.line ?? 0) + 1}` : "\n(definition not in workspace — likely node_modules)");
+      it.iconPath = new vscode.ThemeIcon(t.uri ? "symbol-reference" : "question");
+      if (t.uri) it.command = { command: "seam.goToDef", title: "Go to definition", arguments: [t] };
+      return it;
+    }
     const h = el.hunk;
     const unc = isUncertain(h);
     const ext = extTag(h);
     const rw = rewireStr(h);
     const it = new vscode.TreeItem(
       `${h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
-      vscode.TreeItemCollapsibleState.None);
+      (h.externalRefs && h.externalRefs.length)
+        ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const desc = [rw ? `↻ ${rw}` : "", unc ? `uncertain ${confPct(h)}%` : ""].filter(Boolean).join("  ·  ");
     if (desc) it.description = desc;
     it.tooltip =
