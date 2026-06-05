@@ -401,12 +401,16 @@ function applyDecorations(editor: vscode.TextEditor) {
   const seamBottom: Record<string, vscode.Range[]> = {};
   for (const role of ROLES) { seamTop[role] = []; seamBottom[role] = []; }
   const roleOf = (h: SeamHunk) => (ROLES.includes(h.role) ? h.role : "noise");
-  for (const e of entries) {
-    if (focusIds && !focusIds.has(e.hunk.id)) continue;
-    const b = e.seamId ? seamBounds.get(e.seamId) : undefined;
-    if (!b) continue;
-    if (e.hunk.id === b.firstId) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
-    if (e.hunk.id === b.lastId) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
+  // Only the FOCUSED seam gets a boundary bracket — in show-all, brackets from many
+  // (interleaving) seams would overlap; focus is where a single clean bracket reads.
+  if (focusIds) {
+    for (const e of entries) {
+      if (!focusIds.has(e.hunk.id)) continue;
+      const b = e.seamId ? seamBounds.get(e.seamId) : undefined;
+      if (!b) continue;
+      if (e.hunk.id === b.firstId) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
+      if (e.hunk.id === b.lastId) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
+    }
   }
 
   for (const role of ROLES) {
