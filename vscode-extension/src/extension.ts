@@ -8,6 +8,9 @@ interface SeamHunk { id: string; file: string; start: number; end: number; role:
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
+// One occurrence of a hunk in a seam (a link can appear in several) — carries the
+// labels so decorations (role) and CodeLens (intent · seam) share one index.
+interface IndexEntry { hunk: SeamHunk; seamId: string; seamLabel: string; intent: string; }
 
 // ROLE is the primary read (you review BY role), so it drives the editor colour —
 // gutter bar + scrollbar mark. Semantic, theme-safe hues; cluster grouping lives in
@@ -20,11 +23,30 @@ const ROLE_COLORS: Record<string, string> = {
   noise: "#c0c0c0",       // faint — skip
 };
 const ROLES = ["core", "link", "environment", "test", "noise"];
+// Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
+// hunk's boundary; the fill is lighter so code stays legible over it).
+const ROLE_BG_ALPHA = 0.19;      // line-background wash
+const ROLE_BORDER_ALPHA = 0.75;  // hunk outline (more opaque than the fill)
+function hexToRgba(hex: string, a: number): string {
+  const n = parseInt(hex.slice(1), 16);
+  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+}
 
+type TDeco = vscode.TextEditorDecorationType;
 let model: SeamModel | undefined;
 let repoRoot = "";
-let fileIndex: Map<string, SeamHunk[]> = new Map();   // repo-relative file → its hunks
-let decoByRole: Record<string, vscode.TextEditorDecorationType> = {};
+let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file → its hunk occurrences
+let seamBounds: Map<string, { firstId: string; lastId: string }> = new Map();  // seam → its global first/last hunk
+// Per role: a FILL (bg + gutter + ruler, all lines) and four position-specific
+// BORDER types so the outline is drawn only around the hunk's perimeter (top edge
+// on the first line, bottom on the last, sides throughout) — not a box per line.
+let decoFill: Record<string, TDeco> = {};
+// Per role: hunk-perimeter pieces (top/mid/bottom/single) + thick SEAM boundary
+// pieces (seamTop on the seam's first line, seamBottom on its last line).
+let decoBorder: Record<string, {
+  top: TDeco; mid: TDeco; bottom: TDeco; single: TDeco; seamTop: TDeco; seamBottom: TDeco;
+}> = {};
+let lensProvider: SeamLensProvider;
 let gutterDir = "";
 let treeProvider: SeamTreeProvider;
 let treeView: vscode.TreeView<Node>;
@@ -35,6 +57,7 @@ let extContext: vscode.ExtensionContext;
 let focusIds: Set<string> | null = null;
 let focusLabel = "";
 let lastRunBanner = "";
+let navCursor = -1;   // position within the current scope's ordered hunk list
 
 // Persisted per-workspace so the last run survives a window reload — no need to
 // re-spend the LLM pass on the same diff.
@@ -42,24 +65,86 @@ const STATE_KEY = "seam.lastRun";
 interface SavedRun { model: SeamModel; repoRoot: string; range: string; ts: number; }
 
 export function activate(context: vscode.ExtensionContext) {
+  try {
+    activateInner(context);
+  } catch (e) {
+    // Surface activation failures instead of dying silently (= "nothing shows").
+    vscode.window.showErrorMessage(`Seam activation error: ${e instanceof Error ? e.message : e}`);
+  }
+}
+
+function activateInner(context: vscode.ExtensionContext) {
   extContext = context;
   gutterDir = path.join(context.globalStorageUri.fsPath, "gutter");
   fs.mkdirSync(gutterDir, { recursive: true });
-  for (const role of ROLES) decoByRole[role] = makeDecoration(ROLE_COLORS[role], role);
+  for (const role of ROLES) {
+    const color = ROLE_COLORS[role];
+    decoFill[role] = makeFillDecoration(color, role);
+    decoBorder[role] = {
+      top: makeBorderDecoration(color, "1px 1px 0 1px"),     // first line: top + sides
+      mid: makeBorderDecoration(color, "0 1px 0 1px"),       // interior: sides only
+      bottom: makeBorderDecoration(color, "0 1px 1px 1px"),  // last line: bottom + sides
+      single: makeBorderDecoration(color, "1px"),            // one-line hunk: full box
+      seamTop: makeBorderDecoration(color, "5px 0 0 0"),     // SEAM start: thick top
+      seamBottom: makeBorderDecoration(color, "0 0 5px 0"),  // SEAM end: thick bottom
+    };
+  }
 
   treeProvider = new SeamTreeProvider();
   treeView = vscode.window.createTreeView("seam.tree", { treeDataProvider: treeProvider });
+  lensProvider = new SeamLensProvider();
   context.subscriptions.push(
     treeView,
+    vscode.languages.registerCodeLensProvider([{ scheme: "file" }, { scheme: "git" }], lensProvider),
     vscode.commands.registerCommand("seam.review", () => runReview("HEAD")),
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
+    vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
+    vscode.commands.registerCommand("seam.prev", (fromId?: string) => navStep(-1, fromId)),
     vscode.commands.registerCommand("seam.open", openHunk),
+    vscode.commands.registerCommand("seam.focusSeamById", focusSeamById),
     treeView.onDidChangeSelection(onSelect),
     vscode.window.onDidChangeVisibleTextEditors(applyToVisible),
   );
   restoreLast();
+  ensureDiffCodeLens();
+}
+
+// Seam labels are CodeLens, but VS Code HIDES CodeLens in the diff editor unless
+// `diffEditor.codeLens` is on (off by default) — so the labels don't exist there
+// without it. It's required for a core feature, so enable it once (and say so; the
+// user can revert in Settings). Gated by a flag so we don't fight a later opt-out.
+async function ensureDiffCodeLens() {
+  if (extContext.globalState.get("seam.enabledDiffCodeLens")) return;
+  extContext.globalState.update("seam.enabledDiffCodeLens", true);
+  const cfg = vscode.workspace.getConfiguration("diffEditor");
+  if (cfg.get<boolean>("codeLens") !== true) {
+    await cfg.update("codeLens", true, vscode.ConfigurationTarget.Global);
+    vscode.window.showInformationMessage(
+      "Seam turned on diffEditor.codeLens so the intent · seam labels show above hunks in diffs " +
+      "(revert in Settings if you don't want it).");
+  }
+}
+
+// Re-paint everything that depends on the model/focus state.
+function rerender() {
+  navCursor = -1;   // scope changed → next Next starts at the first hunk
+  applyToVisible(vscode.window.visibleTextEditors);
+  lensProvider?.refresh();
+  updateBanner();
+}
+
+function focusSeamById(seamId: string) {
+  if (!model || !seamId) return;
+  for (const cl of model.clusters)
+    for (const s of cl.seams)
+      if (s.id === seamId) {
+        focusIds = new Set(s.hunks.map((h) => h.id));
+        focusLabel = s.label;
+        rerender();
+        return;
+      }
 }
 
 // Selecting a node FOCUSES it (seam or hunk → that seam; cluster → all its seams).
@@ -73,15 +158,42 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
     focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map((h) => h.id)));
     focusLabel = sel.cluster.intent;
   }
-  applyToVisible(vscode.window.visibleTextEditors);
-  updateBanner();
+  rerender();
 }
 
 function showAll() {
   focusIds = null;
   focusLabel = "";
-  applyToVisible(vscode.window.visibleTextEditors);
-  updateBanner();
+  rerender();
+}
+
+// The hunks currently in scope (focused seam, else all), deduped, in (file, line)
+// order — the list Next/Previous step through.
+function navList(): SeamHunk[] {
+  if (!model) return [];
+  const out: SeamHunk[] = [];
+  const seen = new Set<string>();
+  const take = (h: SeamHunk) => {
+    if (focusIds && !focusIds.has(h.id)) return;
+    if (seen.has(h.id)) return;
+    seen.add(h.id);
+    out.push(h);
+  };
+  for (const cl of model.clusters) for (const s of cl.seams) for (const h of s.hunks) take(h);
+  if (!focusIds) { model.tests.forEach(take); model.noise.forEach(take); }
+  out.sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start));
+  return out;
+}
+
+function navStep(delta: number, fromId?: string) {
+  const list = navList();
+  if (!list.length) { vscode.window.showInformationMessage("Seam: no hunks in scope."); return; }
+  if (fromId) {                                   // inline ↑/↓ navigate relative to THIS hunk
+    const i = list.findIndex((h) => h.id === fromId);
+    if (i >= 0) navCursor = i;
+  }
+  navCursor = (((navCursor + delta) % list.length) + list.length) % list.length;
+  void openHunk(list[navCursor]);
 }
 
 function updateBanner() {
@@ -100,8 +212,8 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   lastRunBanner = `last run: ${range} · ${new Date(ts).toLocaleString()}`;
   buildIndex();
   treeProvider.refresh();
-  applyToVisible(vscode.window.visibleTextEditors);
-  updateBanner();
+  vscode.commands.executeCommand("setContext", "seam.active", true);  // enable nav keys
+  rerender();
 }
 
 function restoreLast() {
@@ -113,13 +225,20 @@ function restoreLast() {
   }
 }
 
-export function deactivate() {
-  // Dispose decoration types only — do NOT wipe the persisted run (that's the cache).
-  for (const role of ROLES) decoByRole[role]?.dispose();
+// All decoration types for a role (fill + the four border pieces).
+function allDecos(role: string): TDeco[] {
+  const b = decoBorder[role];
+  return [decoFill[role], b?.top, b?.mid, b?.bottom, b?.single, b?.seamTop, b?.seamBottom]
+    .filter(Boolean) as TDeco[];
 }
 
-// --- a gutter bar (SVG) + scrollbar overview mark, per ROLE colour ---
-function makeDecoration(color: string, key: string): vscode.TextEditorDecorationType {
+export function deactivate() {
+  // Dispose decoration types only — do NOT wipe the persisted run (that's the cache).
+  for (const role of ROLES) allDecos(role).forEach((d) => d.dispose());
+}
+
+// FILL: background wash + gutter bar (SVG) + scrollbar mark, on every line of the hunk.
+function makeFillDecoration(color: string, key: string): TDeco {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6" height="18">` +
               `<rect x="1.5" width="3" height="18" rx="1" fill="${color}"/></svg>`;
   const file = path.join(gutterDir, `bar-${key}.svg`);
@@ -129,6 +248,18 @@ function makeDecoration(color: string, key: string): vscode.TextEditorDecoration
     gutterIconSize: "contain",
     overviewRulerColor: color,
     overviewRulerLane: vscode.OverviewRulerLane.Left,
+    backgroundColor: hexToRgba(color, ROLE_BG_ALPHA),
+    isWholeLine: true,
+  });
+}
+
+// BORDER: only the requested sides (CSS "top right bottom left"), so applying
+// top→first line, sides→all, bottom→last line outlines the whole hunk, not each line.
+function makeBorderDecoration(color: string, widthSpec: string): TDeco {
+  return vscode.window.createTextEditorDecorationType({
+    borderWidth: widthSpec,
+    borderStyle: "solid",
+    borderColor: hexToRgba(color, ROLE_BORDER_ALPHA),
     isWholeLine: true,
   });
 }
@@ -153,15 +284,25 @@ async function reviewCommit() {
 
 function buildIndex() {
   fileIndex = new Map();
+  seamBounds = new Map();
   if (!model) return;
-  const add = (h: SeamHunk) => {
-    const list = fileIndex.get(h.file) ?? [];
-    list.push(h);
-    fileIndex.set(h.file, list);
+  const add = (e: IndexEntry) => {
+    const list = fileIndex.get(e.hunk.file) ?? [];
+    list.push(e);
+    fileIndex.set(e.hunk.file, list);
   };
-  for (const cl of model.clusters) for (const s of cl.seams) for (const h of s.hunks) add(h);
-  model.tests.forEach(add);
-  model.noise.forEach(add);
+  for (const cl of model.clusters)
+    for (const s of cl.seams) {
+      // The seam's GLOBAL boundary (cross-file) = its first and last hunk in the
+      // order the seam lists them (same order shown in the tree). The thick top
+      // goes on the first hunk, the thick bottom on the last — wherever they live.
+      if (s.hunks.length) {
+        seamBounds.set(s.id, { firstId: s.hunks[0].id, lastId: s.hunks[s.hunks.length - 1].id });
+      }
+      for (const h of s.hunks) add({ hunk: h, seamId: s.id, seamLabel: s.label, intent: cl.intent });
+    }
+  for (const h of model.tests) add({ hunk: h, seamId: "", seamLabel: "test", intent: "" });
+  for (const h of model.noise) add({ hunk: h, seamId: "", seamLabel: "noise", intent: "" });
 }
 
 function runReview(range: string) {
@@ -206,22 +347,77 @@ function runReview(range: string) {
   );
 }
 
+// Repo-relative path IF this document is the MODIFIED (new) side we should decorate:
+// the working file (`file:`) or a diff's modified side (`git:` with empty ref =
+// index/working). Returns null for the diff's BASE side (a `git:` commit ref like
+// HEAD), whose old-side lines wouldn't match our new-side ranges.
+function modifiedRelPath(uri: vscode.Uri): string | null {
+  if (!repoRoot) return null;
+  let fsPath: string | null = null;
+  if (uri.scheme === "file") {
+    fsPath = uri.fsPath;
+  } else if (uri.scheme === "git") {
+    try {
+      const q = JSON.parse(uri.query || "{}");
+      if (q.ref === "" || q.ref == null) fsPath = q.path || uri.fsPath; // modified side only
+    } catch { /* not a parseable git: uri */ }
+  }
+  if (!fsPath) return null;
+  return path.relative(repoRoot, fsPath).split(path.sep).join("/");
+}
+
 // --- decorations: paint each visible editor's changed lines with its ROLE colour ---
 function applyDecorations(editor: vscode.TextEditor) {
-  // Only the working file / modified side of a diff (a `file:` doc). NEVER the
-  // diff's base side (`git:`), whose old-side lines wouldn't match our new-side ranges.
-  if (!model || !repoRoot || editor.document.uri.scheme !== "file") return;
-  const rel = path.relative(repoRoot, editor.document.uri.fsPath).split(path.sep).join("/");
-  const hunks = fileIndex.get(rel) ?? [];
-  const byRole: Record<string, vscode.Range[]> = {};
-  for (const role of ROLES) byRole[role] = [];
-  for (const h of hunks) {
+  if (!model) return;
+  const rel = modifiedRelPath(editor.document.uri);
+  if (rel === null) return;
+  const entries = fileIndex.get(rel) ?? [];
+  const fill: Record<string, vscode.Range[]> = {};
+  const top: Record<string, vscode.Range[]> = {};
+  const mid: Record<string, vscode.Range[]> = {};
+  const bottom: Record<string, vscode.Range[]> = {};
+  const single: Record<string, vscode.Range[]> = {};
+  for (const role of ROLES) { fill[role] = []; top[role] = []; mid[role] = []; bottom[role] = []; single[role] = []; }
+  const line = (n: number) => new vscode.Range(n, 0, n, 0);
+  for (const { hunk: h } of entries) {
     if (focusIds && !focusIds.has(h.id)) continue;   // focus: hide other seams
-    const start = Math.max(0, h.start - 1);
-    const end = Math.max(start, h.end - 1);
-    (byRole[h.role] ?? byRole.noise).push(new vscode.Range(start, 0, end, 0));
+    const role = ROLES.includes(h.role) ? h.role : "noise";
+    const s = Math.max(0, h.start - 1);
+    const e = Math.max(s, h.end - 1);
+    fill[role].push(new vscode.Range(s, 0, e, 0));    // wash + gutter on every line
+    if (e === s) {
+      single[role].push(line(s));                     // one-line hunk: full box
+    } else {
+      top[role].push(line(s));
+      bottom[role].push(line(e));
+      if (e > s + 1) mid[role].push(new vscode.Range(s + 1, 0, e - 1, 0));
+    }
   }
-  for (const role of ROLES) editor.setDecorations(decoByRole[role], byRole[role]);
+  // SEAM boundaries (CROSS-FILE): the thick top sits on the seam's GLOBAL first
+  // hunk and the thick bottom on its GLOBAL last hunk (seam-canonical order, same as
+  // the tree) — so a file only shows the bracket edge if it contains that boundary
+  // hunk; middle files get none.
+  const seamTop: Record<string, vscode.Range[]> = {};
+  const seamBottom: Record<string, vscode.Range[]> = {};
+  for (const role of ROLES) { seamTop[role] = []; seamBottom[role] = []; }
+  const roleOf = (h: SeamHunk) => (ROLES.includes(h.role) ? h.role : "noise");
+  for (const e of entries) {
+    if (focusIds && !focusIds.has(e.hunk.id)) continue;
+    const b = e.seamId ? seamBounds.get(e.seamId) : undefined;
+    if (!b) continue;
+    if (e.hunk.id === b.firstId) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
+    if (e.hunk.id === b.lastId) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
+  }
+
+  for (const role of ROLES) {
+    editor.setDecorations(decoFill[role], fill[role]);
+    editor.setDecorations(decoBorder[role].top, top[role]);
+    editor.setDecorations(decoBorder[role].mid, mid[role]);
+    editor.setDecorations(decoBorder[role].bottom, bottom[role]);
+    editor.setDecorations(decoBorder[role].single, single[role]);
+    editor.setDecorations(decoBorder[role].seamTop, seamTop[role]);
+    editor.setDecorations(decoBorder[role].seamBottom, seamBottom[role]);
+  }
 }
 
 function applyToVisible(editors: readonly vscode.TextEditor[]) { editors.forEach(applyDecorations); }
@@ -230,10 +426,52 @@ function clearAll() {
   model = undefined;
   fileIndex = new Map();
   for (const editor of vscode.window.visibleTextEditors)
-    for (const role of ROLES) editor.setDecorations(decoByRole[role], []);
+    for (const role of ROLES) allDecos(role).forEach((d) => editor.setDecorations(d, []));
   treeProvider?.refresh();
+  lensProvider?.refresh();
   if (treeView) treeView.message = undefined;
+  vscode.commands.executeCommand("setContext", "seam.active", false);
   extContext?.workspaceState.update(STATE_KEY, undefined);  // forget the cached run
+}
+
+// --- CodeLens: write "intent · seam label" on top of each hunk (click → focus it) ---
+class SeamLensProvider implements vscode.CodeLensProvider {
+  private _onDidChange = new vscode.EventEmitter<void>();
+  readonly onDidChangeCodeLenses = this._onDidChange.event;
+  refresh() { this._onDidChange.fire(); }
+
+  provideCodeLenses(doc: vscode.TextDocument): vscode.CodeLens[] {
+    if (!model) return [];
+    const rel = modifiedRelPath(doc.uri);
+    if (rel === null) return [];
+    const entries = fileIndex.get(rel) ?? [];
+    const seenLabel = new Set<string>();
+    const seenNav = new Set<number>();
+    const lenses: vscode.CodeLens[] = [];
+    for (const e of entries) {
+      if (focusIds && !focusIds.has(e.hunk.id)) continue;
+      const line = Math.max(0, e.hunk.start - 1);
+      const r = new vscode.Range(line, 0, line, 0);
+      // The intent · seam label (one per seam membership), click → focus that seam.
+      const lkey = `${line}:${e.seamId}`;
+      if (!seenLabel.has(lkey)) {
+        seenLabel.add(lkey);
+        const title = e.intent ? `◆ ${e.seamLabel}  ·  ${e.intent}` : `◆ ${e.seamLabel}`;
+        lenses.push(new vscode.CodeLens(r, { title, command: "seam.focusSeamById", arguments: [e.seamId] }));
+      }
+      // Inline prev/next, once per hunk line, navigating relative to THIS hunk.
+      if (!seenNav.has(line)) {
+        seenNav.add(line);
+        lenses.push(new vscode.CodeLens(r, {
+          title: "$(arrow-up)", tooltip: "Seam: previous hunk", command: "seam.prev", arguments: [e.hunk.id],
+        }));
+        lenses.push(new vscode.CodeLens(r, {
+          title: "$(arrow-down)", tooltip: "Seam: next hunk", command: "seam.next", arguments: [e.hunk.id],
+        }));
+      }
+    }
+    return lenses;
+  }
 }
 
 // --- open a hunk in DIFF mode (working-tree vs HEAD), revealed at its line ---

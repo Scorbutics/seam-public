@@ -13,6 +13,8 @@
       { "command": "seam.review", "title": "Seam: Review working changes", "icon": "$(symbol-color)" },
       { "command": "seam.reviewCommit", "title": "Seam: Review a commit…" },
       { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
+      { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
+      { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
       { "command": "seam.clear", "title": "Seam: Clear decorations", "icon": "$(clear-all)" }
     ],
     "viewsContainers": {
@@ -28,10 +30,16 @@
     "menus": {
       "view/title": [
         { "command": "seam.review", "when": "view == seam.tree", "group": "navigation@1" },
-        { "command": "seam.showAll", "when": "view == seam.tree", "group": "navigation@2" },
-        { "command": "seam.clear", "when": "view == seam.tree", "group": "navigation@3" }
+        { "command": "seam.prev", "when": "view == seam.tree", "group": "navigation@2" },
+        { "command": "seam.next", "when": "view == seam.tree", "group": "navigation@3" },
+        { "command": "seam.showAll", "when": "view == seam.tree", "group": "navigation@4" },
+        { "command": "seam.clear", "when": "view == seam.tree", "group": "navigation@5" }
       ]
     },
+    "keybindings": [
+      { "command": "seam.next", "key": "alt+]", "when": "seam.active" },
+      { "command": "seam.prev", "key": "alt+[", "when": "seam.active" }
+    ],
     "configuration": {
       "title": "Seam",
       "properties": {

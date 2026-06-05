@@ -3,9 +3,11 @@
 A thin shell over the Seam Python pipeline. It does **not** render anything itself —
 VS Code is the renderer:
 
-- **Seam colours on the diff** — a gutter bar + scrollbar overview mark on each
-  changed hunk, coloured by its intent cluster (coexists with the diff's own
-  green/red; never tints the line background).
+- **Seam colours on the diff** — per changed hunk, coloured by **role**
+  (core=amber · link=blue · environment=gray · test=green · noise=faint): a gutter
+  bar, a scrollbar overview mark, and a very light line-background wash.
+- **Intent · seam label on top of each hunk** — a CodeLens header
+  (`◆ <seam label> · <cluster intent>`); click it to focus that seam.
 - **Seam tree** (activity-bar icon) — clusters → seams → hunks. Click a hunk to
   jump the editor to it (the "related code closer" navigation).
 
