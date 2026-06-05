@@ -163,6 +163,51 @@ def _pairwise_f1(pred_groups: dict[str, str], gold_groups: dict[str, str]) -> di
     return {"precision": prec, "recall": rec, "f1": f1}
 
 
+def _wiring_edges(hunks: list[dict]) -> set[tuple[str, str]]:
+    """The seam wiring as a set of (link_hunk_id -> core_hunk_id) edges.
+
+    A link's `wires` lists arbitrary seam ids; we resolve each seam id to the
+    CORE HUNK(S) that anchor it (seam ids are globally unique, so resolve across
+    the whole run). Reducing to stable hunk-id pairs makes the comparison
+    permutation-invariant over seam labels — same trick as the cluster pairwise
+    F1, applied to the bipartite link->core wiring instead of the core partition.
+    A hunk wiring SEVERAL seams yields one edge per target core (many-to-many)."""
+    seam_to_cores: dict[str, set[str]] = {}
+    for h in hunks:
+        if h.get("role") == "core" and h.get("seam"):
+            seam_to_cores.setdefault(h["seam"], set()).add(h["id"])
+    edges: set[tuple[str, str]] = set()
+    for h in hunks:
+        if h.get("role") == "core":
+            continue
+        for s in (h.get("wires") or []):
+            for core in seam_to_cores.get(s, ()):
+                if core != h["id"]:
+                    edges.add((h["id"], core))
+    return edges
+
+
+def _wiring_f1(runs: list[list[dict]], gold: list[dict]) -> float | None:
+    """Mean per-run F1 of the link->core wiring edge set vs gold. Restricted to the
+    hunk universe present in BOTH so it isn't penalised for split/missing hunks.
+
+    NB: this is END-TO-END — a link wired to a hunk pred wrongly thinks is core is
+    a real wiring error and counts here, so role errors that break wiring DO show
+    up (that is what the renderer shows). The junk-drawer failure — collapsing a
+    multi-seam wiring onto one dominant core — shows as low precision AND recall."""
+    gold_edges = _wiring_edges(gold)
+    f1s = []
+    for run in runs:
+        common = {h["id"] for h in run} & {h["id"] for h in gold}
+        ge = {(a, b) for a, b in gold_edges if a in common and b in common}
+        pe = {(a, b) for a, b in _wiring_edges(run) if a in common and b in common}
+        tp, fp, fn = len(ge & pe), len(pe - ge), len(ge - pe)
+        prec = tp / (tp + fp) if (tp + fp) else 1.0
+        rec = tp / (tp + fn) if (tp + fn) else 1.0
+        f1s.append(2 * prec * rec / (prec + rec) if (prec + rec) else 0.0)
+    return round(statistics.mean(f1s), 3) if f1s else None
+
+
 # ----------------------------------------------------------------------------- score
 def _stability(runs: list[list[dict]]) -> dict:
     n = len(runs)
@@ -212,6 +257,7 @@ def _accuracy(runs: list[list[dict]], gold: list[dict]) -> dict:
     return {
         "role_accuracy": round(statistics.mean(accs), 3) if accs else None,
         "cluster_f1": round(statistics.mean(f1s), 3) if f1s else None,
+        "wiring_f1": _wiring_f1(runs, gold),
         "confusions": conf,
     }
 
@@ -259,7 +305,7 @@ def _print_report(report: dict) -> None:
             print(f"  {k:<9} min={v['min']} max={v['max']} mean={v['mean']} stdev={v['stdev']}")
         if "accuracy" in e:
             a = e["accuracy"]
-            print(f"  role accuracy    {a['role_accuracy']}   cluster F1 {a['cluster_f1']}")
+            print(f"  role accuracy    {a['role_accuracy']}   cluster F1 {a['cluster_f1']}   wiring F1 {a.get('wiring_f1')}")
             if a["confusions"]:
                 cs = "; ".join(f"{c['gold']}->{c['pred']}×{c['n']}" for c in a["confusions"])
                 print(f"  confusions       {cs}")
@@ -285,7 +331,7 @@ def _gate(report: dict, baseline: dict, tol: float) -> int:
         if cur_s["role_agreement"] < base_s["role_agreement"] - tol:
             regressed.append(f"{name}: role_agreement {base_s['role_agreement']:.3f} -> {cur_s['role_agreement']:.3f}")
         if "accuracy" in e and "accuracy" in b:
-            for key in ("role_accuracy", "cluster_f1"):
+            for key in ("role_accuracy", "cluster_f1", "wiring_f1"):
                 cur, base = e["accuracy"].get(key), b["accuracy"].get(key)
                 if cur is not None and base is not None and cur < base - tol:
                     regressed.append(f"{name}: {key} {base:.3f} -> {cur:.3f}")

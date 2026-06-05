@@ -13,9 +13,13 @@ so a prompt/model/pipeline change can't silently make classification worse.
   counts. Catches "my edit made the model flakier" even when we don't know the
   right answer.
 - **Accuracy** (needs `gold/<case>.json`) — closeness to a human-agreed
-  decomposition: role accuracy + a confusion list, and a **permutation-invariant
+  decomposition: role accuracy + a confusion list, a **permutation-invariant
   clustering F1** (group ids are arbitrary, so we compare same-cluster *pairs*,
-  not label strings). Seam/wiring F1 is a planned v2 metric.
+  not label strings), and a **wiring F1** — the same permutation-invariant trick
+  applied to the seam wiring: each link's arbitrary seam ids are resolved to the
+  CORE HUNK(S) they point at, then F1 over the `(link -> core)` edge set. It is
+  end-to-end (role errors that break wiring count) and exposes the "junk-drawer"
+  failure — collapsing a multi-seam wiring onto one dominant core — as low P AND R.
 
 ## Usage
 

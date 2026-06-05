@@ -213,14 +213,30 @@ into intents — intent CLUSTERS are decided in a separate pass; here you only g
 the seams and roles right.
 
 1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
-   thing) together with the link(s) that wire THAT core into the system. The core
-   ANCHORS the seam; links POINT AT the cores they wire. MANY-TO-MANY:
-   - Every CORE hunk anchors its own seam: give it a `seam` id UNIQUE ACROSS THE
-     WHOLE DIFF ("s1", "s2", ...) and a short `seam_label` (<= 6 words). Put
-     `seam`/`seam_label` ONLY on cores.
-   - Every LINK (and environment) hunk lists `wires`: the seam id(s) of the
-     core(s) it wires. A link wiring SEVERAL cores lists ALL of them
-     ("wires":["s1","s2"]). A truly dangling link has "wires":[].
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
 
 2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
    environment and promote to core only when the hunk clears the bar below. A
@@ -251,9 +267,9 @@ the seams and roles right.
      though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
    - test: code that VERIFIES the change (unit/integration tests, assertions,
      fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
-     NOT the change and NOT a link. Put the seam id(s) it covers in `wires` (this
-     is COVERAGE, not wiring). A test is `test` regardless of how much logic it
-     contains.
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
    - environment: ambient SUPPORT, not logic — new type/interface/field
      declarations, default-initializing a new field, imports/includes, globals,
      PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
@@ -281,17 +297,17 @@ the seams and roles right.
 
 Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
 NOT emit group/intent — those are derived from your wiring.
-A MONO-ROLE hunk: a core anchors a seam (seam + seam_label); a link/environment
-lists the seam(s) it wires:
-[{"id":"h1","role":"core","seam":"s1","seam_label":"gateway call-site","rationale":"<=12 words"},
- {"id":"h2","role":"link","wires":["s1"],"rationale":"<=12 words"}]
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
 A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
-gutter numbering):
+gutter numbering); a core span names itself by the hunk's own id:
 [{"id":"h3","spans":[
     {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
-    {"role":"core","lines":"5-19","seam":"s2","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
-Seam ids are unique across the whole diff. The rationale is a STRUCTURING note,
-never a quality judgement.
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
 
 === HUNKS ===
 """
@@ -310,17 +326,39 @@ def _number_body(text: str) -> str:
     return "\n".join(out)
 
 
+def _fmt_candidates(cands: list[tuple[str, str]]) -> str:
+    """Render a hunk's symbol-grounded candidate wirings as one compact line:
+    `candidates: h10 (Platform), h14 (injectLockedActions)`. Groups symbols by the
+    other hunk id. Empty -> '' (no grounded sharing; the model wires from cues)."""
+    by_other: dict[str, list[str]] = {}
+    for other, sym in cands:
+        by_other.setdefault(other, [])
+        if sym not in by_other[other]:
+            by_other[other].append(sym)
+    if not by_other:
+        return ""
+    parts = [f"{o} ({', '.join(syms)})" for o, syms in by_other.items()]
+    return "candidates: " + "; ".join(parts)
+
+
 def _build_prompt(hunks: list[Hunk]) -> str:
-    """Pass B (seam+role) prompt — bodies gutter-numbered so spans can cite lines.
+    """Pass B (seam+role) prompt — bodies gutter-numbered so spans can cite lines,
+    plus a deterministic `candidates:` line per hunk (symbol grounding; see
+    symbol_edges.candidate_wirings). Wiring is a grounding task, so we hand pass B
+    pre-computed def->use edges to CONFIRM/PRUNE rather than discover from scratch.
 
     NB: pass B is INDEPENDENT of pass A (roles are accurate without cluster
     context; feeding the intent in was measured to NOT help and to over-correct
     toward under-coring, so it was reverted)."""
+    from .symbol_edges import candidate_wirings
+    cands = candidate_wirings(hunks)
     parts = [_PROMPT_SEAM_ROLE]
     for h in hunks:
+        cand_line = _fmt_candidates(cands.get(h.id, []))
         parts.append(
             f"\n--- HUNK {h.id} | file: {h.file_path} | change: {h.change_type} ---\n"
             f"{_number_body(h.text)}\n"
+            + (f"{cand_line}\n" if cand_line else "")
         )
     parts.append("\n=== END HUNKS ===\nReturn the JSON array now.")
     return "".join(parts)
@@ -339,16 +377,28 @@ def _build_cluster_prompt(hunks: list[Hunk]) -> str:
 
 
 def _extract_json_array(text: str) -> list[dict]:
-    """Pull the first JSON array out of the model's reply, tolerating stray prose."""
+    """Pull the first JSON array out of the model's reply, tolerating stray prose,
+    markdown code fences, and a stray leading array before the real one."""
     text = text.strip()
+    # Strip a surrounding markdown code fence (```json ... ```), which the model
+    # intermittently adds and which breaks both json.loads and the greedy regex.
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text)
+        text = re.sub(r"\s*```\s*$", "", text).strip()
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
-    m = re.search(r"\[.*\]", text, re.DOTALL)
-    if not m:
-        raise ClassifierError(f"No JSON array in model reply: {text[:200]!r}")
-    return json.loads(m.group(0))
+    # Greedy first[..]last; if that fails (e.g. a stray "[]" precedes the real
+    # array, giving "Extra data"), fall back to the LONGEST array match.
+    for pat in (r"\[.*\]", r"\[.*?\]"):
+        for m in sorted(re.finditer(pat, text, re.DOTALL),
+                        key=lambda mm: len(mm.group(0)), reverse=True):
+            try:
+                return json.loads(m.group(0))
+            except json.JSONDecodeError:
+                continue
+    raise ClassifierError(f"No JSON array in model reply: {text[:200]!r}")
 
 
 def _dbg(msg: str) -> None:
@@ -507,22 +557,18 @@ def _sync_flat_from_spans(h: Hunk, seam_label: dict[str, str]) -> None:
     """Mirror a fused hunk's spans onto the flat role/seam/wires fields so existing
     role-keyed code (renderer, verification) keeps working. The hunk is summarised
     as its core span if it has one (cores drive seams); otherwise its first span.
-    `wires`/`rationale` are unioned/joined across spans. Seam ids are global here
-    (clusters are derived later), so seam_label is keyed by seam id."""
+    A seam IS its core hunk, so a core span's seam id is the PARENT hunk's id.
+    `wires` (core hunk ids) and `rationale` are unioned/joined across spans."""
     core = next((s for s in h.spans if s.role == "core"), None)
     primary = core or h.spans[0]
     h.role = primary.role
-    h.seam = primary.seam if core else ""
-    h.seam_label = (primary.seam_label or seam_label.get(h.seam, "")) if core else ""
+    h.seam = h.id if core else ""
+    h.seam_label = (primary.seam_label or seam_label.get(h.id, "")) if core else ""
     wires: list[str] = []
     for s in h.spans:
         for x in s.wires:
             if x and x not in wires:
                 wires.append(x)
-    # If a link/env span gave a seam instead of wires, tolerate it like the flat path.
-    for s in h.spans:
-        if s.role in ("link", "environment") and not s.wires and s.seam and s.seam not in wires:
-            wires.append(s.seam)
     h.wires = wires
     h.rationale = " | ".join(f"{s.role}: {s.rationale}" for s in h.spans if s.rationale)
 
@@ -580,7 +626,16 @@ def _reconcile_wires(hunks: list[Hunk]) -> None:
         there, re-point it to that cluster's primary seam (it belongs to the
         intent, just mislabelled);
       - a cluster with no core is genuinely ambient — leave it.
-    Cores/seams/clusters are untouched; only link/environment `wires` change."""
+    Cores/seams/clusters are untouched; only link/environment `wires` change.
+
+    NB: the `present[0]` fallback is crude — in a multi-core cluster it snaps every
+    unresolved hunk onto the FIRST core, manufacturing a 'junk-drawer' seam (one
+    core hoards the cluster while siblings render isolated; see cal.com). But
+    REMOVING it is worse: the model's raw per-link wiring is too sparse, so honest
+    unwiring disconnects ~everything (measured: cal.com 35/39 unwired, wiring_f1
+    0.58->0.43). A deterministic post-process can only trade junk-drawer for barren
+    — the fix has to improve the WIRING SIGNAL (model wiring to the right core
+    hunk-ids), not this fallback. Kept crude-but-connective until that lands."""
     cluster_seams: dict[str, list[str]] = {}
     all_seams: set[str] = set()
     for h in hunks:
@@ -599,6 +654,83 @@ def _reconcile_wires(hunks: list[Hunk]) -> None:
             h.wires = in_cluster if in_cluster else [present[0]]
         else:
             h.wires = resolved
+
+
+# --- PASS C: dedicated, core-first wiring (gated by WIRE_PASS env) -------------
+# Wiring is a GROUNDING task (tracing which symbol defined here is referenced
+# there), not a reasoning one. So instead of asking the role pass to also discover
+# edges (which tangles roles with wiring and pulls links toward non-core symbol
+# neighbours), we run a SEPARATE pass AFTER roles are known. It is fed the
+# SUMMARISED role output (cores with labels, non-cores with rationales) — NOT the
+# full diff — plus the deterministic core-anchored symbol candidates as a FLOOR.
+# Thinking OFF: the hard tracing is already done; the model only confirms/prunes
+# and adds informal edges. Cheap input -> latency-positive.
+_PROMPT_WIRE = """\
+You are WIRING a decomposed change. The roles are ALREADY decided — do NOT change
+them. Your ONLY job: for each NON-CORE hunk, list the CORE hunk id(s) it wires —
+its FULL FOOTPRINT (every core it connects to, supports, or tests).
+
+Wiring is TRACING, not guessing. Each non-core hunk lists symbol-grounded CANDIDATE
+cores (high precision: it shares a NEW symbol with that core). Use them as your
+FLOOR:
+  - CONFIRM candidates that carry the change's intent (wire them).
+  - PRUNE ambient candidates (a shared util used everywhere is NOT a wiring) — that
+    hunk may wire NOTHING.
+  - ADD core wirings you infer from the rationales (informal couplings the symbol
+    scan can't see).
+A hunk wires within its OWN cluster unless it genuinely bridges intents. A purely
+ambient hunk (supports the whole change, not any one core) has "wires":[].
+
+The CORES and rationales below are a COMPLETE summary of an already-finished role
+pass — you do NOT need the source diff, and you must NOT ask for it. Always return
+the JSON array, even if a hunk's footprint is uncertain (use [] when unsure).
+
+Return ONLY a JSON array, no prose, one object per NON-CORE hunk, wiring by CORE
+hunk id only:
+[{"id":"h1","wires":["h10","h14"]},{"id":"h8","wires":["h7"]},{"id":"h2","wires":[]}]
+
+"""
+
+
+def _build_wire_prompt(hunks: list[Hunk]) -> str:
+    """Pass C prompt — SUMMARISED role output (no diff bodies) + core-anchored
+    symbol candidates. Cheap input by design."""
+    from .symbol_edges import candidate_wirings
+    cands = candidate_wirings(hunks)
+    core_ids = {h.id for h in hunks if h.role == "core"}
+    parts = [_PROMPT_WIRE, "=== CORES (each anchors a seam) ===\n"]
+    for h in hunks:
+        if h.role == "core":
+            parts.append(f"  {h.id} [{h.seam_label or '—'}] (cluster {h.group or '?'}): "
+                         f"{h.rationale or ''}\n")
+    parts.append("\n=== NON-CORE hunks to wire ===\n")
+    for h in hunks:
+        if h.role == "core":
+            continue
+        cc = list(dict.fromkeys(o for o, _ in cands.get(h.id, []) if o in core_ids))
+        cand = ", ".join(cc) if cc else "(none — infer from rationale)"
+        parts.append(f"  {h.id} {h.role} (cluster {h.group or '?'}): {h.rationale or ''}\n"
+                     f"    candidate cores: {cand}\n")
+    parts.append("\nReturn the JSON array now (one object per NON-CORE hunk).")
+    return "".join(parts)
+
+
+def _run_wire_pass(hunks: list[Hunk], kind: str, binary: str, model: str, *,
+                   verbose: bool, debug: bool, debug_path: str | None) -> None:
+    """Run Pass C and OVERWRITE each non-core hunk's `wires` (filtered to real core
+    ids). Cores keep wires=[]. Authoritative — supersedes pass B's wiring."""
+    prompt = _build_wire_prompt(hunks)
+    labels = _run_pass(kind, binary, prompt, model, thinking=0, tag="wire",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    core_ids = {h.id for h in hunks if h.role == "core"}
+    for h in hunks:
+        if h.role == "core":
+            h.wires = []
+            continue
+        item = labels.get(h.id) or {}
+        raw = item.get("wires", [])
+        w = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
+        h.wires = [x for x in w if x in core_ids]
 
 
 def _run_pass(kind: str, binary: str, prompt: str, model: str, *,
@@ -760,19 +892,20 @@ def classify(
         _dbg(f"cluster pass: {len({g for g, _ in groups.values() if g})} groups; "
              f"role pass: {len(labels)} labelled hunks")
 
-    # Seam labels fallback — seam ids are GLOBAL (cluster ids come from pass A), so
-    # key by seam id. A hunk missing its seam_label inherits it from the core that
-    # anchors the seam. Scan both flat objects and span objects.
+    # Seam labels — a seam IS its core hunk (seam id = core hunk id), so key the
+    # label by the CORE'S hunk id. Scan flat objects and span objects; only cores
+    # carry a seam_label. A core missing its label just renders unlabeled.
     seam_label: dict[str, str] = {}
-    for item in labels.values():
+    for hid, item in labels.items():
         objs = item.get("spans") if isinstance(item.get("spans"), list) else None
         for src in (objs or [item]):
             if not isinstance(src, dict):
                 continue
-            s = str(src.get("seam", "")).strip()
+            if str(src.get("role", "")).strip().lower() != "core":
+                continue
             sl = str(src.get("seam_label", "")).strip()
-            if s and sl and s not in seam_label:
-                seam_label[s] = sl
+            if sl and hid not in seam_label:
+                seam_label[hid] = sl
 
     for h in hunks:
         # group/intent from PASS A
@@ -797,22 +930,36 @@ def classify(
         if role in ROLES:
             h.role = role
             h.rationale = str(item.get("rationale", "")).strip()
-            h.seam = str(item.get("seam", "")).strip()
-            # A link/environment lists the seam(s) it wires (many-to-many). Tolerate
-            # a model that still emitted the old single `seam` on a link by treating
-            # it as wiring that one seam.
-            raw = item.get("wires", [])
-            wires = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
-            if not wires and role in ("link", "environment") and h.seam:
-                wires = [h.seam]
-            h.wires = wires
-            h.seam_label = (str(item.get("seam_label", "")).strip()
-                            or seam_label.get(h.seam, ""))
+            if role == "core":
+                # A seam IS its core hunk: the core's own id is its seam id.
+                h.seam = h.id
+                h.seam_label = (str(item.get("seam_label", "")).strip()
+                                or seam_label.get(h.id, ""))
+                h.wires = []  # cores anchor; they do not wire
+            else:
+                # link / environment / test / noise: wires reference core HUNK IDS
+                # (full footprint). Resolution to real cores happens in _reconcile.
+                raw = item.get("wires", [])
+                h.wires = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
+                h.seam = ""
+                h.seam_label = ""
         else:
             # Unclassified → default to core (heaviest verification = safe direction).
             h.role = "core"
+            h.seam = h.id  # a seam IS its core hunk
             h.rationale = "unclassified — defaulted to core for review"
 
+    # PASS C — dedicated core-first wiring, the DEFAULT wiring authority. Validated
+    # best on gold roles (wiring_f1 0.63 vs 0.47 for the present[0] junk-drawer,
+    # high precision). It overwrites non-core wires from the summarised role output +
+    # symbol floor, so we skip the present[0] reconciliation (which only ever faked
+    # footprint density). We still merge core-less clusters off the new wires. Set
+    # WIRE_PASS=0 to fall back to pass-B wires + present[0] reconciliation.
+    if os.environ.get("WIRE_PASS", "1") != "0":
+        _run_wire_pass(hunks, kind, binary, model,
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+        _merge_wiring_only_clusters(hunks)
+        return
     # Grouping fix: merge a core-less cluster into the cluster whose core its links
     # wire (a clustering error the per-cluster seam-build can't bridge). Before
     # _reconcile_wires so the wiring fix sees the merged groups.
