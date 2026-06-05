@@ -43,6 +43,11 @@ const extTag = (h: SeamHunk): string =>
 const rewireStr = (h: SeamHunk): string =>
   h.rewire && h.rewire.removed.length && h.rewire.added.length
     ? `${h.rewire.removed.join("/")} → ${h.rewire.added.join("/")}` : "";
+// Occurrence identity. A hunk can appear in several seams; once span-level wiring
+// lands, the SAME hunk id appears with DIFFERENT sub-ranges (one per core it wires),
+// so focus/nav/decorations must key on (id + range), not the id alone. Today every
+// occurrence carries the full range, so this behaves exactly like the id did.
+const spanKey = (h: SeamHunk): string => `${h.id}:${h.start}:${h.end}`;
 // Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
 // hunk's boundary; the fill is lighter so code stays legible over it).
 const ROLE_BG_ALPHA = 0.19;      // line-background wash
@@ -56,7 +61,7 @@ type TDeco = vscode.TextEditorDecorationType;
 let model: SeamModel | undefined;
 let repoRoot = "";
 let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file → its hunk occurrences
-let seamBounds: Map<string, { firstId: string; lastId: string }> = new Map();  // seam → its global first/last hunk
+let seamBounds: Map<string, { firstKey: string; lastKey: string }> = new Map();  // seam → its global first/last span occurrence
 // Per role: a FILL (bg + gutter + ruler, all lines) and four position-specific
 // BORDER types so the outline is drawn only around the hunk's perimeter (top edge
 // on the first line, bottom on the last, sides throughout) — not a box per line.
@@ -161,7 +166,7 @@ function focusSeamById(seamId: string) {
   for (const cl of model.clusters)
     for (const s of cl.seams)
       if (s.id === seamId) {
-        focusIds = new Set(s.hunks.map((h) => h.id));
+        focusIds = new Set(s.hunks.map(spanKey));
         focusLabel = s.label;
         rerender();
         return;
@@ -174,10 +179,10 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   if (sel && sel.kind === "extTarget") return;   // a resolved target: don't change focus
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
-    focusIds = new Set(sel.seam.hunks.map((h) => h.id));
+    focusIds = new Set(sel.seam.hunks.map(spanKey));
     focusLabel = sel.seam.label;
   } else if (sel.kind === "cluster") {
-    focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map((h) => h.id)));
+    focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map(spanKey)));
     focusLabel = sel.cluster.intent;
   }
   rerender();
@@ -196,9 +201,10 @@ function navList(): SeamHunk[] {
   const out: SeamHunk[] = [];
   const seen = new Set<string>();
   const take = (h: SeamHunk) => {
-    if (focusIds && !focusIds.has(h.id)) return;
-    if (seen.has(h.id)) return;
-    seen.add(h.id);
+    const k = spanKey(h);
+    if (focusIds && !focusIds.has(k)) return;
+    if (seen.has(k)) return;
+    seen.add(k);
     out.push(h);
   };
   for (const cl of model.clusters) for (const s of cl.seams) for (const h of s.hunks) take(h);
@@ -207,11 +213,11 @@ function navList(): SeamHunk[] {
   return out;
 }
 
-function navStep(delta: number, fromId?: string) {
+function navStep(delta: number, fromKey?: string) {
   const list = navList();
   if (!list.length) { vscode.window.showInformationMessage("Seam: no hunks in scope."); return; }
-  if (fromId) {                                   // inline ↑/↓ navigate relative to THIS hunk
-    const i = list.findIndex((h) => h.id === fromId);
+  if (fromKey) {                                  // inline ↑/↓ navigate relative to THIS span
+    const i = list.findIndex((h) => spanKey(h) === fromKey);
     if (i >= 0) navCursor = i;
   }
   navCursor = (((navCursor + delta) % list.length) + list.length) % list.length;
@@ -320,7 +326,7 @@ function buildIndex() {
       // order the seam lists them (same order shown in the tree). The thick top
       // goes on the first hunk, the thick bottom on the last — wherever they live.
       if (s.hunks.length) {
-        seamBounds.set(s.id, { firstId: s.hunks[0].id, lastId: s.hunks[s.hunks.length - 1].id });
+        seamBounds.set(s.id, { firstKey: spanKey(s.hunks[0]), lastKey: spanKey(s.hunks[s.hunks.length - 1]) });
       }
       for (const h of s.hunks) add({ hunk: h, seamId: s.id, seamLabel: s.label, intent: cl.intent });
     }
@@ -403,7 +409,7 @@ function applyDecorations(editor: vscode.TextEditor) {
   for (const role of ROLES) { fill[role] = []; top[role] = []; mid[role] = []; bottom[role] = []; single[role] = []; }
   const line = (n: number) => new vscode.Range(n, 0, n, 0);
   for (const { hunk: h } of entries) {
-    if (focusIds && !focusIds.has(h.id)) continue;   // focus: hide other seams
+    if (focusIds && !focusIds.has(spanKey(h))) continue;   // focus: hide other seams/spans
     const role = ROLES.includes(h.role) ? h.role : "noise";
     const s = Math.max(0, h.start - 1);
     const e = Math.max(s, h.end - 1);
@@ -428,11 +434,11 @@ function applyDecorations(editor: vscode.TextEditor) {
   // (interleaving) seams would overlap; focus is where a single clean bracket reads.
   if (focusIds) {
     for (const e of entries) {
-      if (!focusIds.has(e.hunk.id)) continue;
+      if (!focusIds.has(spanKey(e.hunk))) continue;
       const b = e.seamId ? seamBounds.get(e.seamId) : undefined;
       if (!b) continue;
-      if (e.hunk.id === b.firstId) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
-      if (e.hunk.id === b.lastId) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
+      if (spanKey(e.hunk) === b.firstKey) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
+      if (spanKey(e.hunk) === b.lastKey) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
     }
   }
 
@@ -479,7 +485,7 @@ class SeamLensProvider implements vscode.CodeLensProvider {
     const seenRw = new Set<number>();
     const lenses: vscode.CodeLens[] = [];
     for (const e of entries) {
-      if (focusIds && !focusIds.has(e.hunk.id)) continue;
+      if (focusIds && !focusIds.has(spanKey(e.hunk))) continue;
       const line = Math.max(0, e.hunk.start - 1);
       const r = new vscode.Range(line, 0, line, 0);
       // Uncertain-role marker (once per line): the role here is a maybe, not a fact.
@@ -512,10 +518,10 @@ class SeamLensProvider implements vscode.CodeLensProvider {
       if (!seenNav.has(line)) {
         seenNav.add(line);
         lenses.push(new vscode.CodeLens(r, {
-          title: "$(arrow-up)", tooltip: "Seam: previous hunk", command: "seam.prev", arguments: [e.hunk.id],
+          title: "$(arrow-up)", tooltip: "Seam: previous hunk", command: "seam.prev", arguments: [spanKey(e.hunk)],
         }));
         lenses.push(new vscode.CodeLens(r, {
-          title: "$(arrow-down)", tooltip: "Seam: next hunk", command: "seam.next", arguments: [e.hunk.id],
+          title: "$(arrow-down)", tooltip: "Seam: next hunk", command: "seam.next", arguments: [spanKey(e.hunk)],
         }));
       }
     }
