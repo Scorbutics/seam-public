@@ -284,9 +284,6 @@ def _hunk_line_span(h: Hunk) -> tuple[int, int]:
     return (start, start + max(count, 1) - 1)
 
 
-_MIN_SPLIT_BODY = 40  # only split links at least this many body lines (see _link_span_map)
-
-
 def _new_side_lines(h: Hunk) -> dict[int, int | None]:
     """Map each BODY line (1-based, the numbering segment_link_by_core uses) to its
     NEW-side file line; removed (-) lines -> None. Lets a span's body-line range be
@@ -314,12 +311,6 @@ def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
     out: dict[str, dict[str, tuple[int, int]]] = {}
     for h in hunks:
         if h.role != "link":
-            continue
-        # Only split a BIG link. A small multi-core hunk (e.g. an 11-line block that
-        # computes two related things) is honestly cohesive — splitting it into
-        # single-line spans strips context. Measured: gold-case over-splits were all
-        # <40 body lines; the real use case (a render block) is hundreds.
-        if len(h.text.splitlines()) - 1 < _MIN_SPLIT_BODY:
             continue
         wired = [c for c in h.wires if c in core_defs]
         if len(wired) < 2:
