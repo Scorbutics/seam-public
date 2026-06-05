@@ -125,6 +125,11 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     # only in the seam it wires (§B), instead of the whole block in every seam.
     span_map = _link_span_map(hunks)
     non_noise = [h for h in hunks if h.role not in ("noise", "test")]
+    # Links across ALL clusters — a precisely-located span may cross into another
+    # cluster's seam (a webhook render's AppHeader region belongs in the app-header
+    # seam even though they were clustered apart). Only LOCATED spans cross; a vague
+    # whole-hunk cross-cluster wire stays put.
+    all_links = [h for h in non_noise if h.role == "link"]
 
     # Preserve first-appearance order of groups.
     group_order: list[str] = []
@@ -166,6 +171,14 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             for sid in seam_ids:
                 core_hunks = [c for c in cores if (c.seam or "s0") == sid]
                 link_hunks = [l for l in links if sid in l.wires]
+                # Cross-cluster: pull in a link from ANOTHER cluster only when it has
+                # a PRECISELY-LOCATED span for this seam's core (the AppHeader region
+                # of a webhook render → the app-header seam). It renders as that span.
+                here = {l.id for l in link_hunks}
+                for l in all_links:
+                    if l.id not in here and sid in span_map.get(l.id, {}):
+                        link_hunks.append(l)
+                        here.add(l.id)
                 env_hunks = [e for e in envs if sid in e.wires]
                 label = next((h.seam_label for h in core_hunks if h.seam_label), "")
                 specs.append((sid, label, core_hunks + link_hunks + env_hunks,
