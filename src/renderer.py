@@ -121,6 +121,9 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     # are kept out of the seam decomposition (so they don't hub the wiring) and
     # surfaced separately, with the seams they cover marked tested.
     covered_seams = {w for h in hunks if h.role == "test" for w in h.wires}
+    # Span decomposition: split a big link into per-core sub-ranges so each shows
+    # only in the seam it wires (§B), instead of the whole block in every seam.
+    span_map = _link_span_map(hunks)
     non_noise = [h for h in hunks if h.role not in ("noise", "test")]
 
     # Preserve first-appearance order of groups.
@@ -191,7 +194,7 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
         seams: list[dict] = []
         cluster_kinds: dict[str, int] = {}
         for sid, label, seam_hunks, link_ids in specs:
-            blocks = _role_blocks(seam_hunks, f"{gid}-{sid}", diffs)
+            blocks = _role_blocks(seam_hunks, f"{gid}-{sid}", diffs, sid, span_map)
             s_has_core = any(b["role"] == "core" for b in blocks)
             s_has_link = any(b["role"] == "link" for b in blocks)
             verification = _verify_pair(s_has_core, s_has_link, coreless_cluster=coreless)
@@ -268,7 +271,53 @@ def _hunk_line_span(h: Hunk) -> tuple[int, int]:
     return (start, start + max(count, 1) - 1)
 
 
-def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> list[dict]:
+def _new_side_lines(h: Hunk) -> dict[int, int | None]:
+    """Map each BODY line (1-based, the numbering segment_link_by_core uses) to its
+    NEW-side file line; removed (-) lines -> None. Lets a span's body-line range be
+    converted to the editor line range the extension decorates."""
+    m = re.search(r"\+(\d+)", h.header_line())
+    cur = int(m.group(1)) if m else 1
+    out: dict[int, int | None] = {}
+    for i, raw in enumerate(h.text.splitlines()[1:], 1):
+        if raw.startswith("-"):
+            out[i] = None
+        else:
+            out[i] = cur
+            cur += 1
+    return out
+
+
+def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
+    """{link_id: {core_seam_id: (file_start, file_end)}} — for a big link that wires
+    SEVERAL cores, the new-side line range of the region wiring each core (§B span
+    decomposition). Only links where grounding locates >= 2 distinct cores are split;
+    a core reached by an alias/wrapper is absent (the link falls back to whole-hunk in
+    that seam). Deterministic; runs after classify, no LLM."""
+    from .symbol_edges import segment_link_by_core, _defs_refs
+    core_defs = {h.id: _defs_refs(h.text)[0] for h in hunks if h.role == "core"}
+    out: dict[str, dict[str, tuple[int, int]]] = {}
+    for h in hunks:
+        if h.role != "link":
+            continue
+        wired = [c for c in h.wires if c in core_defs]
+        if len(wired) < 2:
+            continue
+        seg = segment_link_by_core(h, {c: core_defs[c] for c in wired})
+        nmap = _new_side_lines(h)
+        spans: dict[str, tuple[int, int]] = {}
+        for cid, ranges in seg.items():
+            flines = [fl for (s, e) in ranges for ln in range(s, e + 1)
+                      if (fl := nmap.get(ln)) is not None]
+            if flines:
+                spans[cid] = (min(flines), max(flines))
+        if len(spans) >= 2:                 # only worth splitting if >=2 located
+            out[h.id] = spans
+    return out
+
+
+def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str],
+                 sid: str | None = None,
+                 span_map: dict[str, dict[str, tuple[int, int]]] | None = None) -> list[dict]:
     """Build a seam's blocks in (file, line) order — one block per hunk, each carrying
     its own role. This puts CLOSE core/link/environment together (a core and the
     same-file link/env that surround it sit adjacent, in code reading order) instead
@@ -289,7 +338,10 @@ def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str]) -> l
             for r in it["rationales"]:
                 if r not in whys:
                     whys.append(r)
-        start, end = _hunk_line_span(h)
+        # Span-level placement: when building a specific seam, a link split by
+        # grounding shows only the sub-range that wires THIS seam's core (§B).
+        span = (span_map or {}).get(h.id, {}).get(sid) if sid else None
+        start, end = span if span else _hunk_line_span(h)
         blocks.append({
             "role": h.role,
             "key": key,
