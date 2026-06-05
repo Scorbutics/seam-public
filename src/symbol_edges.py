@@ -1,96 +1,27 @@
-"""Deterministic symbol grounding for seam wiring — the FLOOR pass 2 builds on.
+"""Deterministic symbol-grounded signals — the FLOOR the LLM passes build on.
 
-Seam wiring is a grounding/tracing problem, not a reasoning one (measured: the LLM
-is high-precision but recall-bound, and "thinking" can't recover a reference it
-lost track of). So instead of asking the model to DISCOVER edges, we pre-compute
-candidate def->use edges from the diff text and let pass 2 CONFIRM/PRUNE them —
-converting a hallucination-prone generate task into a reliable validate task.
+These are DERIVED signals computed from the language primitives in `lang`
+(`_defs_refs`, `_diff_imports`, `_salient_symbols`, …). Seam wiring is a
+grounding/tracing problem, not a reasoning one (measured: the LLM is high-precision
+but recall-bound, and "thinking" can't recover a reference it lost track of). So we
+pre-compute candidate edges and let the model CONFIRM/PRUNE them — turning a
+hallucination-prone generate task into a reliable validate task.
 
-This is a cheap regex extractor over ADDED lines, restricted to the change's NEW
-vocabulary (symbols DEFINED somewhere in the diff). The new-vocab restriction is
-the key precision lever: it avoids the "every shared import is an edge" hairball
-(measured P~0.95 with it). It is a FLOOR, not a ceiling — informal couplings (wired
-by convention, not reference) are invisible here and stay the LLM's job. A tree-
-sitter/LSP backend can replace `_defs_refs` later for cross-language robustness
-(and to reach unchanged code for the link-only / isolated-core boundary cases).
+A FLOOR, not a ceiling: informal couplings (wired by convention, not by a literal
+symbol) are invisible here and stay the LLM's job. The language-specific extraction
+lives entirely in `lang` — swap that for tree-sitter/LSP without touching this file.
+
+  - candidate_wirings  — def<->use grounding for the classifier passes.
+  - external_refs / external_coupling — wiring OUTSIDE the diff (§I boundary).
+  - rewire_pairs       — the A->B rewire from a hunk's own -/+ lines (§I).
+  - segment_link_by_core / resolve_alias — split a big link by core (§B spans).
 """
 from __future__ import annotations
 
 import re
 
+from .lang import _defs_refs, _diff_imports, _module_root, _salient_symbols, _IDENT
 from .parser import Hunk
-
-_IDENT = re.compile(r"[A-Za-z_]\w{2,}")  # >=3 chars cuts noise (id, db, ok, ...)
-_DEF_PATTERNS = [
-    re.compile(r"\b(?:function|class|interface|type|enum)\s+([A-Za-z_]\w*)"),
-    re.compile(r"\b(?:const|let|var|val)\s+([A-Za-z_]\w*)"),
-    re.compile(r"\b(?:fun|def|object|module)\s+([A-Za-z_]\w*)"),
-    re.compile(r"\bexport\s+(?:default\s+)?(?:async\s+)?"
-               r"(?:function|class|const|interface|type|enum)\s+([A-Za-z_]\w*)"),
-    re.compile(r"\b([A-Za-z_]\w*)\s*(?::[^=\n]+)?=\s*(?:async\s*)?\([^)\n]*\)\s*"
-               r"(?::[^=\n]+)?=>"),  # arrow fn assignment
-    re.compile(r"(?i)\bcreate\s+table\s+(?:if\s+not\s+exists\s+)?[\"`']?([A-Za-z_]\w*)"),
-    re.compile(r"(?i)\balter\s+table\s+[\"`']?([A-Za-z_]\w*)"),
-]
-# Keywords / ubiquitous tokens that are never a meaningful new symbol.
-_STOP = {
-    "return", "const", "function", "import", "export", "from", "this", "true",
-    "false", "null", "void", "async", "await", "new", "class", "interface",
-    "type", "enum", "public", "private", "protected", "static", "the", "and",
-    "for", "not", "exists", "table", "create", "alter", "string", "number",
-    "boolean", "any", "value", "data", "props", "self", "def", "val", "var",
-}
-
-
-def _added(text: str) -> str:
-    return "\n".join(l[1:] for l in text.splitlines() if l.startswith("+"))
-
-
-def _defs_refs(text: str) -> tuple[set[str], set[str]]:
-    """(symbols DEFINED, symbols REFERENCED) on a hunk's added lines."""
-    body = _added(text)
-    defs: set[str] = set()
-    for pat in _DEF_PATTERNS:
-        defs.update(m for m in pat.findall(body) if m and m not in _STOP)
-    refs = {t for t in _IDENT.findall(body) if t not in _STOP}
-    return defs, refs
-
-
-# import { A, B as C } from "src";  /  import D from "src";  /  import * as E from "src"
-# DOTALL so a multi-line `{ ... }` named block (common in TS) is captured whole.
-_IMPORT_RE = re.compile(
-    r'import\s+(?:type\s+)?'
-    r'(?:([A-Za-z_$][\w$]*)\s*,?\s*)?'          # default binding
-    r'(?:\*\s*as\s*[A-Za-z_$][\w$]*\s*)?'       # namespace (binding ignored)
-    r'(?:\{([^}]*)\}\s*)?'                       # named block (may span lines)
-    r'from\s*["\']([^"\']+)["\']',
-    re.DOTALL,
-)
-
-
-def _module_root(source: str) -> str:
-    """Shorten a module path for display: '@coss/ui/components/toast' -> '@coss/ui',
-    'react-inlinesvg/provider' -> 'react-inlinesvg', './GeoContext' -> './GeoContext'."""
-    if source.startswith("."):
-        return source
-    parts = source.split("/")
-    return "/".join(parts[:2]) if source.startswith("@") else parts[0]
-
-
-def _diff_imports(hunks: list[Hunk]) -> dict[str, str]:
-    """{imported_symbol: source_module} over ADDED import lines across the whole diff."""
-    imp: dict[str, str] = {}
-    for h in hunks:
-        added = _added(h.text)
-        for m in _IMPORT_RE.finditer(added):
-            default, named, source = m.group(1), m.group(2), m.group(3)
-            if default:
-                imp.setdefault(default, source)
-            for part in (named or "").split(","):
-                name = part.strip().split(" as ")[-1].strip()
-                if name:
-                    imp.setdefault(name, source)
-    return imp
 
 
 def external_refs(hunks: list[Hunk]) -> dict[str, list[dict[str, str]]]:
@@ -119,28 +50,6 @@ def external_coupling(hunks: list[Hunk]) -> dict[str, list[str]]:
     from external_refs (the (symbol, source) pairs), reduced to unique module roots."""
     return {hid: sorted({_module_root(r["source"]) for r in rs})
             for hid, rs in external_refs(hunks).items()}
-
-
-# Salient "subject" of a line: the ROOT of a call/member expression (foo(...),
-# bar.baz(...) -> foo, bar — NOT the method `baz`) and JSX component tags (<Foo>).
-# The thing the line is ABOUT, not its arguments/props/methods.
-_CALL_ROOT = re.compile(r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?=[.(])")
-_JSX_TAG = re.compile(r"</?\s*([A-Z][\w$]*)")
-
-
-def _meaningful(s: str) -> bool:
-    """Keep component/function-ish names (PascalCase or camelCase: ToastProvider,
-    showToast, TIME_UNITS); drop keywords, lowercase locals, and short tokens
-    (return, if, item, option, e, t) that are noise in a rewire."""
-    return len(s) >= 3 and s not in _STOP and (s[0].isupper() or any(c.isupper() for c in s[1:]))
-
-
-def _salient_symbols(lines: list[str]) -> set[str]:
-    out: set[str] = set()
-    for ln in lines:
-        out.update(_CALL_ROOT.findall(ln))
-        out.update(_JSX_TAG.findall(ln))
-    return {s for s in out if _meaningful(s)}
 
 
 # A crisp rewire is a SMALL swap; beyond this it's a wholesale rewrite (dozens of

@@ -310,7 +310,8 @@ def _link_span_map(hunks: list[Hunk], repo: str | None = None) -> dict[str, dict
     alias/wrapper is absent (the hunk falls back to whole in that seam). Ambient env
     with no core symbols (CSS, config) locates nothing and is left whole.
     Deterministic; runs after classify, no LLM."""
-    from .symbol_edges import segment_link_by_core, _defs_refs, resolve_alias, _added
+    from .symbol_edges import segment_link_by_core, resolve_alias
+    from .lang import _defs_refs, _added
     core_defs = {h.id: _defs_refs(h.text)[0] for h in hunks if h.role == "core"}
     out: dict[str, dict[str, tuple[int, int]]] = {}
     for h in hunks:
