@@ -175,6 +175,42 @@ def rewire_pairs(hunks: list[Hunk]) -> dict[str, dict[str, list[str]]]:
     return out
 
 
+def _coalesce(lines: list[int], gap: int) -> list[tuple[int, int]]:
+    """Merge sorted line numbers into (start, end) ranges, bridging gaps <= `gap`
+    (a JSX block names its component only on a few lines but spans the rest)."""
+    out: list[tuple[int, int]] = []
+    for ln in lines:
+        if out and ln - out[-1][1] <= gap:
+            out[-1] = (out[-1][0], ln)
+        else:
+            out.append((ln, ln))
+    return out
+
+
+def segment_link_by_core(link: Hunk, core_defs: dict[str, set[str]],
+                         gap: int = 10) -> dict[str, list[tuple[int, int]]]:
+    """Locate, WITHIN a big link hunk, the line ranges that reference each core's
+    DEFINED symbols → {core_id: [(start,end), ...]} over the hunk's BODY line numbering
+    (1-based, the model's gutter). This is the FLOOR for span-level wiring: a big
+    multi-core link (one render touching several migrated components) decomposes so
+    each region wires the core it actually uses, instead of the whole block landing
+    in every seam.
+
+    A core used by its LITERAL name is located precisely. A core reached through an
+    ALIAS / local wrapper (the block uses a different name than the core defines —
+    `NewWebhookButton` for `CreateNewWebhookButton`, an informal coupling, §4) is NOT
+    located here: it is absent from the result and left to the resolver / Pass-C
+    hunk-level wiring. Grounding is the floor, not the ceiling."""
+    body = link.text.splitlines()[1:]  # drop the @@ header; body is 1-based
+    hits: dict[str, list[int]] = {}
+    for ln, raw in enumerate(body, 1):
+        toks = set(_IDENT.findall(raw))
+        for cid, defs in core_defs.items():
+            if toks & defs:
+                hits.setdefault(cid, []).append(ln)
+    return {cid: _coalesce(sorted(set(lns)), gap) for cid, lns in hits.items()}
+
+
 def candidate_wirings(hunks: list[Hunk]) -> dict[str, list[tuple[str, str]]]:
     """Per hunk, the OTHER hunks it shares a DISTINCTIVE NEW symbol with, plus that
     symbol: {hunk_id: [(other_hunk_id, symbol), ...]}. Symmetric def<->ref grounding

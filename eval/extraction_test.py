@@ -66,6 +66,22 @@ def main() -> int:
             fails += not ok
             print(f"  [{'ok ' if ok else 'FAIL'}] {c['id']:20} expect={exp} got={got}")
 
+    print("=== link span-segmentation by core (§B) ===")
+    for c in gold.get("segment_cases", []):
+        link = _H(c["id"], c["link_text"])
+        core_defs = {cid: set(syms) for cid, syms in c["core_defs"].items()}
+        seg = symbol_edges.segment_link_by_core(link, core_defs)
+        located = sorted(seg.keys())
+        exp = sorted(c["expect_located"])
+        # the first-located core (by earliest line) should be the expected one
+        first = min(seg, key=lambda cid: seg[cid][0][0]) if seg else None
+        ok = located == exp and first == c["expect_first_core"]
+        fails += not ok
+        ranges = {cid: rs for cid, rs in seg.items()}
+        print(f"  [{'ok ' if ok else 'FAIL'}] {c['id']:20} located={located} first={first}")
+        if not ok:
+            print(f"       expect located={exp} first={c['expect_first_core']}; ranges={ranges}")
+
     print(f"\n{'='*40}\n{fails} failure(s)" + (f", {pending} pending" if pending else ""))
     return 1 if fails else 0
 
