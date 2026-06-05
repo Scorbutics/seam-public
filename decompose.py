@@ -104,12 +104,13 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.emit_seams:
         # Native-rendering surface (VS Code extension): structured seam data, no HTML.
-        Path(args.emit_seams).write_text(json.dumps(renderer.emit_seams_json(hunks)),
+        # repo lets the renderer resolve local aliases against the actual files.
+        Path(args.emit_seams).write_text(json.dumps(renderer.emit_seams_json(hunks, repo=args.repo)),
                                          encoding="utf-8")
         print(f"Seams: {args.emit_seams}")
         return 0
 
-    out_path = renderer.render(hunks, args.out, source_label=Path(source_label).name)
+    out_path = renderer.render(hunks, args.out, source_label=Path(source_label).name, repo=args.repo)
     print(f"Report: {out_path}")
 
     if args.open:

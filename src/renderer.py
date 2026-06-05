@@ -111,7 +111,7 @@ def _file_items(hunks: list[Hunk]) -> list[dict]:
     return [by_file[f] for f in order]
 
 
-def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
+def _build_clusters(hunks: list[Hunk], repo: str | None = None) -> tuple[list[dict], dict[str, str]]:
     """Assemble intent clusters and the diff strings they reference.
 
     Returns (clusters, diffs) where each cluster has role blocks, and `diffs`
@@ -123,7 +123,7 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     covered_seams = {w for h in hunks if h.role == "test" for w in h.wires}
     # Span decomposition: split a big link into per-core sub-ranges so each shows
     # only in the seam it wires (§B), instead of the whole block in every seam.
-    span_map = _link_span_map(hunks)
+    span_map = _link_span_map(hunks, repo)
     non_noise = [h for h in hunks if h.role not in ("noise", "test")]
     # Link/env hunks across ALL clusters — a precisely-located span may cross into
     # another cluster's seam (a webhook render's AppHeader region belongs in the
@@ -301,7 +301,7 @@ def _new_side_lines(h: Hunk) -> dict[int, int | None]:
     return out
 
 
-def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
+def _link_span_map(hunks: list[Hunk], repo: str | None = None) -> dict[str, dict[str, tuple[int, int]]]:
     """{hunk_id: {core_seam_id: (file_start, file_end)}} — for a non-core hunk that
     wires SEVERAL cores, the new-side line range of the region wiring each core (§B
     span decomposition). Applies to LINK and ENVIRONMENT hunks (an import block wiring
@@ -310,7 +310,7 @@ def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
     alias/wrapper is absent (the hunk falls back to whole in that seam). Ambient env
     with no core symbols (CSS, config) locates nothing and is left whole.
     Deterministic; runs after classify, no LLM."""
-    from .symbol_edges import segment_link_by_core, _defs_refs
+    from .symbol_edges import segment_link_by_core, _defs_refs, resolve_alias, _added
     core_defs = {h.id: _defs_refs(h.text)[0] for h in hunks if h.role == "core"}
     out: dict[str, dict[str, tuple[int, int]]] = {}
     for h in hunks:
@@ -319,7 +319,24 @@ def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
         wired = [c for c in h.wires if c in core_defs]
         if len(wired) < 2:
             continue
-        seg = segment_link_by_core(h, {c: core_defs[c] for c in wired})
+        cd = {c: set(core_defs[c]) for c in wired}
+        seg = segment_link_by_core(h, cd)
+        # ALIAS resolution (filesystem resolver): a core wired but NOT located by
+        # literal symbol may be reached via a local wrapper (block uses
+        # `NewWebhookButton` for core `CreateNewWebhookButton`). Read the file and map
+        # the wrapper to the core, then re-locate. Best-effort; skipped without a repo.
+        unlocated = [c for c in wired if c not in seg]
+        if unlocated and repo:
+            try:
+                ftext = Path(repo, h.file_path).read_text(encoding="utf-8")
+                used = set(re.findall(r"<([A-Z]\w+)", _added(h.text)))
+                aliases = resolve_alias(used, {c: core_defs[c] for c in unlocated}, ftext)
+                if aliases:
+                    for c, names in aliases.items():
+                        cd[c] |= names
+                    seg = segment_link_by_core(h, cd)
+            except OSError:
+                pass
         nmap = _new_side_lines(h)
         spans: dict[str, tuple[int, int]] = {}
         for cid, ranges in seg.items():
@@ -541,7 +558,7 @@ def _hunk_location(h: Hunk) -> str:
     return f"{h.file_path}:{m.group(1)}" if m else h.file_path
 
 
-def emit_seams_json(hunks: list[Hunk]) -> dict:
+def emit_seams_json(hunks: list[Hunk], repo: str | None = None) -> dict:
     """Structured seam data for the VS Code extension (the native-rendering surface).
 
     The classification is the shared core; the extension consumes THIS instead of
@@ -551,7 +568,7 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     each hunk's file + new-side line range + role. Tests and noise are separate
     groups (skim posture)."""
     from .symbol_edges import external_coupling, external_refs, rewire_pairs
-    clusters, _ = _build_clusters(hunks)
+    clusters, _ = _build_clusters(hunks, repo)
     # Per-hunk self-consistency confidence (share of votes agreeing on the shown
     # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
     # roles near the ~0.8 ceiling read as honest "maybe core/link", not as fact.
@@ -610,9 +627,9 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     }
 
 
-def render(hunks: list[Hunk], out_path: str, source_label: str = "diff") -> str:
+def render(hunks: list[Hunk], out_path: str, source_label: str = "diff", repo: str | None = None) -> str:
     """Render the report to `out_path`; returns the absolute path written."""
-    clusters, diffs = _build_clusters(hunks)
+    clusters, diffs = _build_clusters(hunks, repo)
     hunk_loc = {h.id: _hunk_location(h) for h in hunks}
     graph = _build_graph(clusters, hunk_loc)
 

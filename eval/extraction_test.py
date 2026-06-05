@@ -82,6 +82,16 @@ def main() -> int:
         if not ok:
             print(f"       expect located={exp} first={c['expect_first_core']}; ranges={ranges}")
 
+    print("=== alias resolution (filesystem resolver) ===")
+    for c in gold.get("resolve_cases", []):
+        got = symbol_edges.resolve_alias(set(c["used"]),
+                                         {k: set(v) for k, v in c["cores"].items()}, c["file"])
+        got = {k: sorted(v) for k, v in got.items()}
+        exp = {k: sorted(v) for k, v in c["expect"].items()}
+        ok = got == exp
+        fails += not ok
+        print(f"  [{'ok ' if ok else 'FAIL'}] {c['id']:30} expect={exp} got={got}")
+
     print(f"\n{'='*40}\n{fails} failure(s)" + (f", {pending} pending" if pending else ""))
     return 1 if fails else 0
 

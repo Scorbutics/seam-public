@@ -162,5 +162,37 @@
       ],
       "expect_first_core": "h47"
     }
+  ],
+  "resolve_cases": [
+    {
+      "id": "genuine-wrapper",
+      "used": [
+        "NewWebhookButton"
+      ],
+      "cores": {
+        "h9": [
+          "CreateNewWebhookButton"
+        ]
+      },
+      "file": "const NewWebhookButton = () => <CreateNewWebhookButton isEmptyState={false} />;",
+      "expect": {
+        "h9": [
+          "NewWebhookButton"
+        ]
+      }
+    },
+    {
+      "id": "not-an-alias-different-component",
+      "used": [
+        "NewWebhookButton"
+      ],
+      "cores": {
+        "h9": [
+          "CreateNewWebhookButton"
+        ]
+      },
+      "file": "const NewWebhookButton = () => <Button onClick={() => open()}>x</Button>;",
+      "expect": {}
+    }
   ]
 }

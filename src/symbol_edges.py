@@ -175,6 +175,28 @@ def rewire_pairs(hunks: list[Hunk]) -> dict[str, dict[str, list[str]]]:
     return out
 
 
+def resolve_alias(used_symbols: set[str], candidate_cores: dict[str, set[str]],
+                  file_text: str) -> dict[str, set[str]]:
+    """Filesystem-resolver step (the §I 'go look outside the diff' move): map a local
+    WRAPPER/ALIAS a hunk uses to the core it wraps. The block renders `NewWebhookButton`
+    but the core defines `CreateNewWebhookButton` — a wrapper defined in the unchanged
+    part of the file. Reading the file, if a used PascalCase symbol X is DEFINED locally
+    and its definition references a candidate core's symbol, X is that core's alias.
+    {core_id: {alias_symbols}}. Pure: caller supplies the file text (the resolver
+    backend; a VsCodeResolver would answer the same question via go-to-definition)."""
+    lines = file_text.splitlines()
+    out: dict[str, set[str]] = {}
+    for x in used_symbols:
+        for i, ln in enumerate(lines):
+            if re.search(rf"\b(?:const|let|var|function)\s+{re.escape(x)}\b", ln):
+                block = "\n".join(lines[i:i + 8])  # the def + a few lines of body
+                for cid, csyms in candidate_cores.items():
+                    if any(re.search(rf"\b{re.escape(cs)}\b", block) for cs in csyms):
+                        out.setdefault(cid, set()).add(x)
+                break
+    return out
+
+
 def _coalesce(lines: list[int], gap: int) -> list[tuple[int, int]]:
     """Merge sorted line numbers into (start, end) ranges, bridging gaps <= `gap`
     (a JSX block names its component only on a few lines but spans the rest)."""
