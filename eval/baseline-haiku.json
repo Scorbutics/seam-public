@@ -1,6 +1,6 @@
 {
   "model": "claude-haiku-4-5",
-  "label": "v2-intent-reframe-9run",
+  "label": "passC-9run",
   "cases": {
     "everywhere-surface-events": {
       "stability": {
@@ -12,14 +12,14 @@
         "cores": {
           "min": 1,
           "max": 2,
-          "mean": 1.11,
+          "mean": 1.89,
           "stdev": 0.31
         },
         "seams": {
           "min": 1,
-          "max": 1,
-          "mean": 1,
-          "stdev": 0.0
+          "max": 2,
+          "mean": 1.89,
+          "stdev": 0.31
         },
         "clusters": {
           "min": 1,
@@ -29,24 +29,25 @@
         }
       },
       "health": {
-        "seams": 1,
-        "isolated_cores": 1,
+        "seams": 1.89,
+        "isolated_cores": 1.89,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
         "role_accuracy": 0.667,
         "cluster_f1": 1.0,
+        "wiring_f1": 0.389,
         "confusions": [
           {
             "gold": "link",
             "pred": "core",
-            "n": 1
+            "n": 8
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 8
+            "n": 1
           }
         ]
       },
@@ -60,24 +61,23 @@
     "litergss3-framedview": {
       "stability": {
         "runs": 9,
-        "role_agreement": 0.87,
+        "role_agreement": 0.926,
         "unstable_hunks": [
-          "h5",
           "h8",
-          "h10",
-          "h11"
+          "h11",
+          "h12"
         ],
         "cores": {
           "min": 4,
-          "max": 8,
-          "mean": 5.89,
-          "stdev": 1.37
+          "max": 5,
+          "mean": 4.22,
+          "stdev": 0.42
         },
         "seams": {
           "min": 4,
           "max": 5,
-          "mean": 4.11,
-          "stdev": 0.31
+          "mean": 4.22,
+          "stdev": 0.42
         },
         "clusters": {
           "min": 1,
@@ -87,29 +87,40 @@
         }
       },
       "health": {
-        "seams": 4.11,
-        "isolated_cores": 0.78,
+        "seams": 4.22,
+        "isolated_cores": 0.56,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.806,
+        "role_accuracy": 0.796,
         "cluster_f1": 1.0,
+        "wiring_f1": 0.372,
         "confusions": [
           {
             "gold": "core",
             "pred": "environment",
-            "n": 3
+            "n": 5
           },
           {
             "gold": "core",
             "pred": "link",
-            "n": 8
+            "n": 13
           },
           {
             "gold": "environment",
             "pred": "core",
-            "n": 10
+            "n": 2
+          },
+          {
+            "gold": "environment",
+            "pred": "link",
+            "n": 1
+          },
+          {
+            "gold": "link",
+            "pred": "environment",
+            "n": 1
           }
         ]
       },
@@ -123,26 +134,30 @@
     "private-app-boosters": {
       "stability": {
         "runs": 9,
-        "role_agreement": 0.917,
+        "role_agreement": 0.898,
         "unstable_hunks": [
+          "h1",
+          "h2",
           "h3",
-          "h8",
+          "h7",
           "h9",
           "h11",
           "h12",
+          "h18",
+          "h20",
           "h22"
         ],
         "cores": {
           "min": 3,
-          "max": 7,
-          "mean": 4.22,
-          "stdev": 1.23
+          "max": 6,
+          "mean": 4.89,
+          "stdev": 0.99
         },
         "seams": {
-          "min": 2,
+          "min": 3,
           "max": 6,
-          "mean": 3.67,
-          "stdev": 1.15
+          "mean": 4.89,
+          "stdev": 0.99
         },
         "clusters": {
           "min": 1,
@@ -152,14 +167,15 @@
         }
       },
       "health": {
-        "seams": 3.67,
-        "isolated_cores": 0.78,
-        "dangling_links": 0,
+        "seams": 4.89,
+        "isolated_cores": 1.22,
+        "dangling_links": 0.67,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.912,
+        "role_accuracy": 0.861,
         "cluster_f1": 1.0,
+        "wiring_f1": 0.454,
         "confusions": [
           {
             "gold": "core",
@@ -172,14 +188,24 @@
             "n": 3
           },
           {
+            "gold": "environment",
+            "pred": "core",
+            "n": 8
+          },
+          {
+            "gold": "environment",
+            "pred": "link",
+            "n": 1
+          },
+          {
             "gold": "link",
             "pred": "core",
-            "n": 6
+            "n": 4
           },
           {
             "gold": "link",
             "pred": "environment",
-            "n": 9
+            "n": 13
           }
         ]
       },
@@ -193,25 +219,21 @@
     "private-app-participation-toggle": {
       "stability": {
         "runs": 9,
-        "role_agreement": 0.833,
+        "role_agreement": 0.944,
         "unstable_hunks": [
-          "h2",
-          "h3",
-          "h4",
-          "h5",
-          "h6"
+          "h3"
         ],
         "cores": {
-          "min": 3,
-          "max": 5,
-          "mean": 3.67,
-          "stdev": 0.67
+          "min": 4,
+          "max": 4,
+          "mean": 4,
+          "stdev": 0.0
         },
         "seams": {
-          "min": 2,
-          "max": 3,
-          "mean": 2.67,
-          "stdev": 0.47
+          "min": 4,
+          "max": 4,
+          "mean": 4,
+          "stdev": 0.0
         },
         "clusters": {
           "min": 1,
@@ -221,34 +243,20 @@
         }
       },
       "health": {
-        "seams": 2.67,
-        "isolated_cores": 0.78,
+        "seams": 4,
+        "isolated_cores": 1.44,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.736,
+        "role_accuracy": 0.931,
         "cluster_f1": 1.0,
+        "wiring_f1": 0.609,
         "confusions": [
           {
-            "gold": "core",
-            "pred": "environment",
-            "n": 2
-          },
-          {
-            "gold": "core",
+            "gold": "environment",
             "pred": "link",
             "n": 5
-          },
-          {
-            "gold": "environment",
-            "pred": "core",
-            "n": 4
-          },
-          {
-            "gold": "environment",
-            "pred": "link",
-            "n": 8
           }
         ]
       },
@@ -262,25 +270,21 @@
     "psdk-starting-loader": {
       "stability": {
         "runs": 9,
-        "role_agreement": 0.852,
+        "role_agreement": 0.988,
         "unstable_hunks": [
-          "h2",
-          "h3",
-          "h5",
-          "h7",
           "h8"
         ],
         "cores": {
           "min": 3,
-          "max": 6,
-          "mean": 4.11,
-          "stdev": 0.87
+          "max": 4,
+          "mean": 3.11,
+          "stdev": 0.31
         },
         "seams": {
-          "min": 1,
-          "max": 5,
-          "mean": 2.56,
-          "stdev": 1.07
+          "min": 3,
+          "max": 4,
+          "mean": 3.11,
+          "stdev": 0.31
         },
         "clusters": {
           "min": 1,
@@ -290,34 +294,30 @@
         }
       },
       "health": {
-        "seams": 2.56,
-        "isolated_cores": 1.44,
-        "dangling_links": 0,
+        "seams": 3.11,
+        "isolated_cores": 1,
+        "dangling_links": 0.44,
         "orphans": 0
       },
       "accuracy": {
-        "role_accuracy": 0.778,
+        "role_accuracy": 0.654,
         "cluster_f1": 1.0,
+        "wiring_f1": 0.199,
         "confusions": [
           {
             "gold": "core",
             "pred": "link",
-            "n": 5
+            "n": 18
           },
           {
             "gold": "environment",
-            "pred": "core",
-            "n": 5
-          },
-          {
-            "gold": "link",
             "pred": "core",
             "n": 1
           },
           {
             "gold": "link",
-            "pred": "environment",
-            "n": 7
+            "pred": "core",
+            "n": 9
           }
         ]
       },
