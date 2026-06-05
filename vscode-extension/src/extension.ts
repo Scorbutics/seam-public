@@ -4,7 +4,7 @@ import * as path from "path";
 import * as fs from "fs";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
@@ -31,6 +31,11 @@ const UNCERTAIN_THRESHOLD = 0.6;
 const isUncertain = (h: SeamHunk): boolean =>
   h.confidence !== undefined && h.confidence < UNCERTAIN_THRESHOLD;
 const confPct = (h: SeamHunk): number => Math.round((h.confidence ?? 1) * 100);
+// An unwired hunk may couple to code OUTSIDE the diff (a symbol imported from a
+// module defined nowhere in the change) — surfaced as "→ @coss/ui" so the §I
+// boundary reads as "go look there", not as a blank/missing wiring.
+const extTag = (h: SeamHunk): string =>
+  h.external && h.external.length ? ` → ${h.external.slice(0, 2).join(", ")}` : "";
 // Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
 // hunk's boundary; the fill is lighter so code stays legible over it).
 const ROLE_BG_ALPHA = 0.19;      // line-background wash
@@ -556,13 +561,16 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     }
     const h = el.hunk;
     const unc = isUncertain(h);
+    const ext = extTag(h);
     const it = new vscode.TreeItem(
-      `${h.role}${unc ? "?" : ""}  ·  ${h.file.split("/").pop()}:${h.start}`,
+      `${h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
       vscode.TreeItemCollapsibleState.None);
     if (unc) it.description = `uncertain ${confPct(h)}%`;
-    it.tooltip = unc
-      ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe\n${h.file}:${h.start}-${h.end}`
-      : `${h.role} — ${h.file}:${h.start}-${h.end}`;
+    it.tooltip =
+      (unc ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe`
+           : h.role) +
+      ` — ${h.file}:${h.start}-${h.end}` +
+      (ext ? `\nwires outside the diff:${ext} (the §I boundary — go look there)` : "");
     it.iconPath = new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
     return it;

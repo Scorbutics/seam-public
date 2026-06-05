@@ -56,6 +56,65 @@ def _defs_refs(text: str) -> tuple[set[str], set[str]]:
     return defs, refs
 
 
+# import { A, B as C } from "src";  /  import D from "src";  /  import * as E from "src"
+# DOTALL so a multi-line `{ ... }` named block (common in TS) is captured whole.
+_IMPORT_RE = re.compile(
+    r'import\s+(?:type\s+)?'
+    r'(?:([A-Za-z_$][\w$]*)\s*,?\s*)?'          # default binding
+    r'(?:\*\s*as\s*[A-Za-z_$][\w$]*\s*)?'       # namespace (binding ignored)
+    r'(?:\{([^}]*)\}\s*)?'                       # named block (may span lines)
+    r'from\s*["\']([^"\']+)["\']',
+    re.DOTALL,
+)
+
+
+def _module_root(source: str) -> str:
+    """Shorten a module path for display: '@coss/ui/components/toast' -> '@coss/ui',
+    'react-inlinesvg/provider' -> 'react-inlinesvg', './GeoContext' -> './GeoContext'."""
+    if source.startswith("."):
+        return source
+    parts = source.split("/")
+    return "/".join(parts[:2]) if source.startswith("@") else parts[0]
+
+
+def _diff_imports(hunks: list[Hunk]) -> dict[str, str]:
+    """{imported_symbol: source_module} over ADDED import lines across the whole diff."""
+    imp: dict[str, str] = {}
+    for h in hunks:
+        added = _added(h.text)
+        for m in _IMPORT_RE.finditer(added):
+            default, named, source = m.group(1), m.group(2), m.group(3)
+            if default:
+                imp.setdefault(default, source)
+            for part in (named or "").split(","):
+                name = part.strip().split(" as ")[-1].strip()
+                if name:
+                    imp.setdefault(name, source)
+    return imp
+
+
+def external_coupling(hunks: list[Hunk]) -> dict[str, list[str]]:
+    """{hunk_id: external module roots it couples to}. A hunk couples EXTERNALLY when
+    it references an IMPORTED symbol that is NOT defined anywhere in the diff — i.e.
+    the thing it wires to lives OUTSIDE the change (the §I 'diff is not the codebase'
+    boundary). Lets an 'unwired link' read as '→ @coss/ui' instead of a blank, so a
+    migration's coupling to the system it targets is legible without reading that
+    system. Deterministic; no LLM."""
+    imp = _diff_imports(hunks)
+    new_vocab: set[str] = set().union(*(d for d, _ in (_defs_refs(h.text) for h in hunks))) \
+        if hunks else set()
+    out: dict[str, list[str]] = {}
+    for h in hunks:
+        _d, refs = _defs_refs(h.text)
+        srcs = {_module_root(imp[s]) for s in refs if s in imp and s not in new_vocab}
+        # Prefer workspace/local couplings (@scope, relative) — the migration TARGET
+        # — over ubiquitous runtime libs (react, next, ...): when a scoped/relative
+        # source is present, drop the bare-lib noise. Bare-only hunks keep theirs.
+        scoped = {s for s in srcs if s[0] in "@."}
+        out[h.id] = sorted(scoped) if scoped else sorted(srcs)
+    return out
+
+
 def candidate_wirings(hunks: list[Hunk]) -> dict[str, list[tuple[str, str]]]:
     """Per hunk, the OTHER hunks it shares a DISTINCTIVE NEW symbol with, plus that
     symbol: {hunk_id: [(other_hunk_id, symbol), ...]}. Symmetric def<->ref grounding

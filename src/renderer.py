@@ -481,16 +481,26 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     the report uses (cross-cluster merge, link-only, synthetic seams), but reduced to
     each hunk's file + new-side line range + role. Tests and noise are separate
     groups (skim posture)."""
+    from .symbol_edges import external_coupling
     clusters, _ = _build_clusters(hunks)
     # Per-hunk self-consistency confidence (share of votes agreeing on the shown
     # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
     # roles near the ~0.8 ceiling read as honest "maybe core/link", not as fact.
     conf = {h.id: round(h.role_confidence, 2) for h in hunks}
+    # External coupling: module(s) a hunk wires to that live OUTSIDE the diff (an
+    # imported symbol defined nowhere in the change). Surfaced ONLY for UNWIRED
+    # link/environment hunks, so an otherwise-blank "unwired link" reads as
+    # "→ @coss/ui" — the §I "diff is not the codebase" boundary made legible. A
+    # hunk already wired to an in-diff core doesn't need it (and would just be noise).
+    _ext_all = external_coupling(hunks)
+    ext = {h.id: _ext_all.get(h.id, []) for h in hunks
+           if h.role in ("link", "environment") and not h.wires and _ext_all.get(h.id)}
 
     def _hunk(b: dict) -> dict:
         return {"id": b["hid"], "file": b["file"], "start": b["start"],
                 "end": b["end"], "role": b["role"],
-                "confidence": conf.get(b["hid"], 1.0)}
+                "confidence": conf.get(b["hid"], 1.0),
+                "external": ext.get(b["hid"], [])}
 
     out_clusters = []
     for ci, cl in enumerate(clusters):
@@ -511,7 +521,8 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     def _plain(h: Hunk) -> dict:
         start, end = _hunk_line_span(h)
         return {"id": h.id, "file": h.file_path, "start": start, "end": end,
-                "role": h.role, "confidence": round(h.role_confidence, 2)}
+                "role": h.role, "confidence": round(h.role_confidence, 2),
+                "external": ext.get(h.id, [])}
 
     return {
         "clusters": out_clusters,
