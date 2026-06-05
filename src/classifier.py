@@ -8,6 +8,11 @@ Design choices that matter (see plan):
   - ONE pass over the WHOLE remaining diff, not per-hunk. The model's value here
     is triangulation (§3): core and link only reveal intent *together*. A hunk
     classified in isolation can't be reliably typed.
+  - TWO GRAINS OF INTENT (plan §D). This tool decomposes a diff into INTENT, at
+    two tiers: functional CLUSTERS carry the *product* intent ("what are we
+    building"); individual SEAMS carry the finer *technical* intent ("introduce
+    strategy pattern"). The two passes below own one grain each — keep them
+    distinct so the model doesn't collapse product intent into technical intent.
   - LABEL, do not evaluate. The prompt forbids any quality judgement; rationales
     are structuring notes, never verdicts.
 
@@ -153,12 +158,15 @@ def resolve_backend(claude_override: str | None = None) -> tuple[str, str]:
     )
 
 
-# Two INDEPENDENT LLM passes, each at its measured-best config, merged by id:
-#   Pass A — CLUSTER: thinking ON. Grouping is reasoning-heavy and the LLM does it
-#     holistically far better (cluster F1 ~1.0) than any reconstruction from local
-#     wiring (deterministic-from-wires measured 0.5–0.7 — rejected).
-#   Pass B — SEAM+ROLE: thinking OFF + sharp role defn. Roling is local pattern-
-#     matching, more accurate AND ~16x faster without thinking (measured).
+# Two INDEPENDENT LLM passes, each at its measured-best config, merged by id.
+# They also own the two GRAINS OF INTENT (plan §D): Pass A names PRODUCT intent,
+# Pass B names TECHNICAL intent.
+#   Pass A — CLUSTER (product intent): thinking ON. Grouping is reasoning-heavy and
+#     the LLM does it holistically far better (cluster F1 ~1.0) than any
+#     reconstruction from local wiring (deterministic-from-wires measured 0.5–0.7
+#     — rejected).
+#   Pass B — SEAM+ROLE (technical intent): thinking OFF + sharp role defn. Roling is
+#     local pattern-matching, more accurate AND ~16x faster without thinking (measured).
 # The passes don't depend on each other (roles were accurate WITHOUT cluster
 # context), so they could run in parallel. Wires still come from pass B for the
 # renderer's intra-cluster seam edges, but no longer carry the partition.
@@ -167,13 +175,17 @@ _PROMPT_CLUSTER = """\
 You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
 review, judge, score, or comment on quality.
 
-Your ONLY job in this pass: GROUP the hunks into INTENT CLUSTERS — coherent
-sub-changes, using the whole diff as context. A diff often contains several
-distinct intents; each becomes one group. Grouping is GRAMMAR-driven (what wires
-to what), NOT topic similarity: put a link in the SAME group as the core it wires
-in — the joint and the thing it joins belong together. Give each group a stable
-id ("g1", "g2", ...) and a short intent label (<= 8 words). One intent = one
-group, even if it spans several files.
+Your ONLY job in this pass: GROUP the hunks into FUNCTIONAL CLUSTERS — each one a
+distinct PRODUCT INTENT (the "what are we building" of a coherent sub-change),
+using the whole diff as context. A diff often bundles several distinct product
+intents; each becomes one cluster. This is the COARSER of two grains of intent:
+clusters carry PRODUCT intent here, while the finer TECHNICAL intent of each
+individual seam (e.g. "introduce strategy pattern") is named in a separate pass —
+do NOT reach for that finer grain here. Grouping is GRAMMAR-driven (what wires to
+what), NOT topic similarity: put a link in the SAME cluster as the core it wires
+in — the joint and the thing it joins belong together. Give each cluster a stable
+id ("g1", "g2", ...) and a short product-intent label (<= 8 words). One product
+intent = one cluster, even if it spans several files.
 
 PREFER THE FEWEST CLUSTERS that still separate genuinely independent intents. Be
 COARSE, not fine:
@@ -244,8 +256,8 @@ the seams and roles right.
      contains.
    - environment: ambient SUPPORT, not logic — new type/interface/field
      declarations, default-initializing a new field, imports/includes, globals,
-     PASSIVE config/data values (inputs consumed by an already-trusted algorithm),
-     shared utilities. Trust is impact, not behavior.
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
    - noise: formatting/indentation that slipped through — no logical effect.
 
    Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
