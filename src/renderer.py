@@ -125,11 +125,11 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
     # only in the seam it wires (§B), instead of the whole block in every seam.
     span_map = _link_span_map(hunks)
     non_noise = [h for h in hunks if h.role not in ("noise", "test")]
-    # Links across ALL clusters — a precisely-located span may cross into another
-    # cluster's seam (a webhook render's AppHeader region belongs in the app-header
-    # seam even though they were clustered apart). Only LOCATED spans cross; a vague
-    # whole-hunk cross-cluster wire stays put.
-    all_links = [h for h in non_noise if h.role == "link"]
+    # Link/env hunks across ALL clusters — a precisely-located span may cross into
+    # another cluster's seam (a webhook render's AppHeader region belongs in the
+    # app-header seam even though they were clustered apart). Only LOCATED spans
+    # cross; a vague whole-hunk cross-cluster wire stays put.
+    all_splittable = [h for h in non_noise if h.role in ("link", "environment")]
 
     # Preserve first-appearance order of groups.
     group_order: list[str] = []
@@ -171,15 +171,16 @@ def _build_clusters(hunks: list[Hunk]) -> tuple[list[dict], dict[str, str]]:
             for sid in seam_ids:
                 core_hunks = [c for c in cores if (c.seam or "s0") == sid]
                 link_hunks = [l for l in links if sid in l.wires]
-                # Cross-cluster: pull in a link from ANOTHER cluster only when it has
-                # a PRECISELY-LOCATED span for this seam's core (the AppHeader region
-                # of a webhook render → the app-header seam). It renders as that span.
-                here = {l.id for l in link_hunks}
-                for l in all_links:
-                    if l.id not in here and sid in span_map.get(l.id, {}):
-                        link_hunks.append(l)
-                        here.add(l.id)
                 env_hunks = [e for e in envs if sid in e.wires]
+                # Cross-cluster: pull in a link/env from ANOTHER cluster only when it
+                # has a PRECISELY-LOCATED span for this seam's core (the AppHeader
+                # region of a webhook render → the app-header seam). Renders as that
+                # span, in its own role's bucket.
+                here = {h.id for h in link_hunks + env_hunks}
+                for h2 in all_splittable:
+                    if h2.id not in here and sid in span_map.get(h2.id, {}):
+                        (link_hunks if h2.role == "link" else env_hunks).append(h2)
+                        here.add(h2.id)
                 label = next((h.seam_label for h in core_hunks if h.seam_label), "")
                 specs.append((sid, label, core_hunks + link_hunks + env_hunks,
                               [l.id for l in link_hunks]))
@@ -301,16 +302,19 @@ def _new_side_lines(h: Hunk) -> dict[int, int | None]:
 
 
 def _link_span_map(hunks: list[Hunk]) -> dict[str, dict[str, tuple[int, int]]]:
-    """{link_id: {core_seam_id: (file_start, file_end)}} — for a big link that wires
-    SEVERAL cores, the new-side line range of the region wiring each core (§B span
-    decomposition). Only links where grounding locates >= 2 distinct cores are split;
-    a core reached by an alias/wrapper is absent (the link falls back to whole-hunk in
-    that seam). Deterministic; runs after classify, no LLM."""
+    """{hunk_id: {core_seam_id: (file_start, file_end)}} — for a non-core hunk that
+    wires SEVERAL cores, the new-side line range of the region wiring each core (§B
+    span decomposition). Applies to LINK and ENVIRONMENT hunks (an import block wiring
+    3 cores splits into 3 per-core imports, whichever role the pass gave it). Only
+    hunks where grounding locates >= 2 distinct cores split; a core reached by an
+    alias/wrapper is absent (the hunk falls back to whole in that seam). Ambient env
+    with no core symbols (CSS, config) locates nothing and is left whole.
+    Deterministic; runs after classify, no LLM."""
     from .symbol_edges import segment_link_by_core, _defs_refs
     core_defs = {h.id: _defs_refs(h.text)[0] for h in hunks if h.role == "core"}
     out: dict[str, dict[str, tuple[int, int]]] = {}
     for h in hunks:
-        if h.role != "link":
+        if h.role not in ("link", "environment"):
             continue
         wired = [c for c in h.wires if c in core_defs]
         if len(wired) < 2:
