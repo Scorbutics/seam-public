@@ -21,7 +21,7 @@ sys.path.insert(0, str(_ROOT))
 
 from src import classifier_det, noise_filter, parser
 from src.facts import (ExternalFactsProvider, FACTS_SCHEMA_VERSION, FactsProvider,
-                       HunkFacts, RegexFactsProvider, facts_payload)
+                       HunkFacts, MergedFactsProvider, RegexFactsProvider, facts_payload)
 
 CASES = sorted((Path(__file__).resolve().parent / "cases").glob("*.patch"))
 
@@ -84,6 +84,23 @@ def main() -> int:
         full_ok = all(h.role for h in hs if h.role != "noise")
         print(f"  [{'ok ' if full_ok else 'FAIL'}] {name:30} partial payload + fallback")
         fails += not full_ok
+
+        # 5. MergedFactsProvider (the VS Code DocumentSymbols path): a partial override of
+        #    defines/enclosing changes ONLY those fields on the targeted hunk; all other
+        #    fields and all other hunks stay exactly the base's.
+        base_f = rp.facts(work)
+        target = work[0].id
+        other = work[1].id if len(work) > 1 else None
+        merge_payload = {"partial": True, "fields": ["defines", "enclosing"],
+                         "hunks": {target: {"defines": ["SentinelDef"], "enclosing": ["SentinelEnc"]}}}
+        mf = MergedFactsProvider(rp, merge_payload).facts(work)
+        merge_ok = (mf[target].defines == {"SentinelDef"}
+                    and mf[target].enclosing == {"SentinelEnc"}
+                    and mf[target].decisions == base_f[target].decisions      # untouched field
+                    and mf[target].references == base_f[target].references
+                    and (other is None or mf[other] == base_f[other]))        # untouched hunk
+        print(f"  [{'ok ' if merge_ok else 'FAIL'}] {name:30} merged partial override")
+        fails += not merge_ok
 
     print("\n" + "=" * 40)
     print(f"{fails} failure(s)")

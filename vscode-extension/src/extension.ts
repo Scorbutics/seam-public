@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { execFile } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { computeSymbolFacts } from "./facts";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
@@ -334,7 +335,39 @@ function buildIndex() {
   for (const h of model.noise) add({ hunk: h, seamId: "", seamLabel: "noise", intent: "" });
 }
 
-function runReview(range: string) {
+// Promisified execFile — reject carries the tool's stderr (the useful message).
+function execFileP(file: string, args: string[], cwd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve();
+    });
+  });
+}
+
+// Engine "ast" (deterministic + VS Code AST facts): ask Python for the hunk skeleton
+// (so facts are keyed by the SAME ids), compute defines/enclosing from the language
+// server, write the partial facts payload, and return its path (for `--facts`). Returns
+// undefined on any failure — the caller then runs deterministic with the regex base.
+async function buildAstFacts(py: string, tool: string, range: string): Promise<string | undefined> {
+  const skelPath = path.join(tool, `.seam-hunks-${Date.now()}.json`);
+  try {
+    await execFileP(py, [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
+                         "--emit-hunks", skelPath], tool);
+    const skel = JSON.parse(fs.readFileSync(skelPath, "utf-8")).hunks as
+      { id: string; file: string; start: number; end: number }[];
+    const payload = await computeSymbolFacts(repoRoot, skel);
+    const factsPath = path.join(tool, `.seam-facts-${Date.now()}.json`);
+    fs.writeFileSync(factsPath, JSON.stringify(payload), "utf-8");
+    return factsPath;
+  } catch {
+    return undefined;
+  } finally {
+    try { fs.unlinkSync(skelPath); } catch { /* ignore */ }
+  }
+}
+
+async function runReview(range: string) {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
@@ -350,29 +383,41 @@ function runReview(range: string) {
     vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
     return;
   }
-  const out = path.join(tool, `.seam-${Date.now()}.json`);
-  const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot, "--emit-seams", out];
+  // Engine: "llm" (default, 3-pass LLM) or "ast" (deterministic + VS Code AST facts).
+  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "llm";
 
-  vscode.window.withProgress(
+  await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…` },
-    () => new Promise<void>((resolve) => {
-      execFile(py, args, { cwd: tool, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
-        if (err) { vscode.window.showErrorMessage(`Seam failed: ${stderr || err.message}`); resolve(); return; }
-        let parsed: SeamModel;
-        try { parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel; }
-        catch (e) { vscode.window.showErrorMessage(`Seam: could not read output: ${e}`); resolve(); return; }
-        try { fs.unlinkSync(out); } catch { /* ignore */ }
+    async () => {
+      const out = path.join(tool, `.seam-${Date.now()}.json`);
+      let factsPath: string | undefined;
+      try {
+        const extra: string[] = [];
+        if (engine === "ast") {
+          extra.push("--classifier", "det");
+          factsPath = await buildAstFacts(py, tool, range);
+          if (factsPath) extra.push("--facts", factsPath);
+          else vscode.window.showWarningMessage(
+            "Seam: AST facts unavailable (no language server / parse) — using deterministic + regex.");
+        }
+        const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
+                      "--emit-seams", out, ...extra];
+        await execFileP(py, args, tool);
+        const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
-        // Persist per-workspace so it restores on the next window open without re-running.
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
-          `Seam: ${parsed.clusters.length} clusters, ${n} seams.  ` +
+          `Seam (${engine}): ${parsed.clusters.length} clusters, ${n} seams.  ` +
           `core=amber · link=blue · environment=gray · test=green · noise=faint`);
-        resolve();
-      });
-    }),
+      } catch (e) {
+        vscode.window.showErrorMessage(`Seam failed: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        try { fs.unlinkSync(out); } catch { /* ignore */ }
+        if (factsPath) { try { fs.unlinkSync(factsPath); } catch { /* ignore */ } }
+      }
+    },
   );
 }
 

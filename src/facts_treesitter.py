@@ -16,9 +16,7 @@ callers should use RegexFactsProvider. All tree-sitter specifics (including this
 quirk that node accessors are callables) are isolated to this module."""
 from __future__ import annotations
 
-import re
-
-from .facts import FactsProvider, FileSource, HunkFacts, RegexFactsProvider, facts_from_texts
+from .facts import FactsProvider, FileSource, HunkFacts, RegexFactsProvider, facts_for_hunk
 from .parser import Hunk
 
 # file extension -> tree-sitter grammar name (tree_sitter_language_pack)
@@ -72,33 +70,6 @@ def _ast_mask(content: str, lang: str) -> str | None:
     return b.decode("utf-8", "replace")
 
 
-_HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
-
-
-def _changed_newside(hunk: Hunk):
-    """(start, end_exclusive, added) over NEW-side line numbers: the span the hunk covers
-    and {lineno: added_line_text} for the '+' lines. None if the header is unparsable."""
-    lines = hunk.text.splitlines()
-    if not lines:
-        return None
-    m = _HUNK_HEADER.search(lines[0])
-    if not m:
-        return None
-    start = int(m.group(1))
-    count = int(m.group(2) or 1)
-    added: dict[int, str] = {}
-    ln = start
-    for raw in lines[1:]:
-        if raw.startswith("+") and not raw.startswith("+++"):
-            added[ln] = raw[1:]
-            ln += 1
-        elif raw.startswith("-") and not raw.startswith("---"):
-            pass  # removed line — no new-side number
-        else:
-            ln += 1  # context (or blank) — advances the new side
-    return start, start + count, added
-
-
 class TreeSitterFactsProvider(FactsProvider):
     """Full-file, AST-grounded provider. See module docstring."""
 
@@ -132,29 +103,5 @@ class TreeSitterFactsProvider(FactsProvider):
         masked = _ast_mask(content, lang)
         if masked is None:
             return None
-        cn = _changed_newside(h)
-        if cn is None:
-            return None
-        start, end, added = cn
-        clines = content.splitlines()
-        mlines = masked.splitlines()
-        if end - 1 > len(clines) or len(clines) != len(mlines):
-            return None  # span past EOF / mask desynced → don't trust it
-        # Alignment guard: the diff's added lines must really be in this file (else the
-        # working tree is on a different commit than the diff was cut from → fall back).
-        ok = tot = 0
-        for lineno, txt in added.items():
-            if 1 <= lineno <= len(clines):
-                tot += 1
-                ok += clines[lineno - 1].strip() == txt.strip()
-        if tot and ok / tot < self._min_alignment:
-            return None
-
-        def _build(lines: list[str]) -> str:
-            out = ["@@ -0,0 +%d,%d @@" % (start, max(0, end - start))]
-            for n in range(start, end):
-                if 1 <= n <= len(lines):
-                    out.append(("+" if n in added else " ") + lines[n - 1])
-            return "\n".join(out)
-
-        return facts_from_texts(_build(clines), _build(mlines), h.file_path, h.section_header)
+        # Shared slicing + alignment guard + assembly (the mask is tree-sitter's here).
+        return facts_for_hunk(h, content, masked, self._min_alignment)

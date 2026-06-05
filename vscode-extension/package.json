@@ -52,6 +52,16 @@
           "type": "string",
           "default": "",
           "description": "Python interpreter to run the pipeline. Defaults to <toolPath>/.venv/bin/python."
+        },
+        "seam.engine": {
+          "type": "string",
+          "enum": ["llm", "ast"],
+          "enumDescriptions": [
+            "3-pass LLM classifier (default).",
+            "Deterministic classifier fed AST facts (defines/enclosing) from the editor's language server; no LLM."
+          ],
+          "default": "llm",
+          "description": "How to decompose a diff: 'llm' (LLM passes) or 'ast' (deterministic + VS Code AST facts)."
         }
       }
     }

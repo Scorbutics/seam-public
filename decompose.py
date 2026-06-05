@@ -45,6 +45,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="syntax source for the 'det' classifier: 'regex' (default, fragment-based) "
                          "or 'treesitter' (full-file AST via the working tree; falls back to regex "
                          "per hunk when a file is unavailable/misaligned). Ignored if --facts is set")
+    ap.add_argument("--emit-hunks", metavar="JSON",
+                    help="parse only: emit the hunk skeleton (id, file, new-side start/end) so an "
+                         "external producer (the VS Code extension) can compute facts keyed by the "
+                         "SAME hunk ids; skips classification and rendering")
     ap.add_argument("--model", default="claude-haiku-4-5", help="model for the classify pass")
     ap.add_argument("--context-window", type=int, default=200_000,
                     help="model context window in tokens, for the fit warning (default: 200000)")
@@ -85,6 +89,21 @@ def main(argv: list[str] | None = None) -> int:
             print("error: no hunks found in diff", file=sys.stderr)
             return 1
 
+        if args.emit_hunks:
+            # Skeleton for an external facts producer: Python owns hunk-id assignment, so
+            # the extension keys its facts to the SAME ids. Parse only — no LLM, no render.
+            from src import facts as facts_mod
+            skel = []
+            for h in hunks:
+                cn = facts_mod.changed_newside(h)
+                start, end = (cn[0], max(cn[0], cn[1] - 1)) if cn else (0, 0)
+                skel.append({"id": h.id, "file": h.file_path, "start": start, "end": end})
+            Path(args.emit_hunks).write_text(
+                json.dumps({"version": facts_mod.FACTS_SCHEMA_VERSION, "hunks": skel}),
+                encoding="utf-8")
+            print(f"Hunks: {args.emit_hunks}")
+            return 0
+
         remaining = noise_filter.classify(hunks)
         noise_n = len(hunks) - len(remaining)
         if args.verbose:
@@ -97,10 +116,24 @@ def main(argv: list[str] | None = None) -> int:
             from src import facts as facts_mod
             if args.facts:
                 payload = json.loads(Path(args.facts).read_text(encoding="utf-8"))
-                extra["facts_provider"] = facts_mod.ExternalFactsProvider(payload)
-                if args.verbose:
-                    print(f"[decompose] external facts from {args.facts} "
-                          f"({len(payload.get('hunks', {}))} hunks; regex fallback for the rest)")
+                if payload.get("partial"):
+                    # The external source filled only some fields (VS Code DocumentSymbols
+                    # → defines/enclosing); the rest come from a base provider — tree-sitter
+                    # if available (best), else regex.
+                    base = facts_mod.RegexFactsProvider()
+                    from src import facts_treesitter as ts
+                    if ts.available():
+                        base = ts.TreeSitterFactsProvider(facts_mod.RepoFileSource(args.repo))
+                    extra["facts_provider"] = facts_mod.MergedFactsProvider(base, payload)
+                    if args.verbose:
+                        print(f"[decompose] merged facts from {args.facts} "
+                              f"(fields={payload.get('fields')}; base="
+                              f"{'treesitter' if ts.available() else 'regex'})")
+                else:
+                    extra["facts_provider"] = facts_mod.ExternalFactsProvider(payload)
+                    if args.verbose:
+                        print(f"[decompose] external facts from {args.facts} "
+                              f"({len(payload.get('hunks', {}))} hunks; regex fallback for the rest)")
             elif args.facts_engine == "treesitter":
                 from src import facts_treesitter as ts
                 if not ts.available():

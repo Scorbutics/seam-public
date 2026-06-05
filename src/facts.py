@@ -225,6 +225,68 @@ def extract(h: Hunk) -> HunkFacts:
     return facts_from_texts(h.text, _mask_code(h.text), h.file_path, h.section_header)
 
 
+# --------------------------------------------------------------------------- full-file slicing
+_HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
+
+
+def changed_newside(hunk: Hunk):
+    """(start, end_exclusive, {lineno: added_text}) over NEW-side line numbers — the span
+    the hunk covers and its added ('+') lines. None for a binary/contentless placeholder
+    (unparsable header). Shared by full-file producers and the --emit-hunks skeleton."""
+    lines = hunk.text.splitlines()
+    if not lines:
+        return None
+    m = _HUNK_HEADER.search(lines[0])
+    if not m:
+        return None
+    start, count = int(m.group(1)), int(m.group(2) or 1)
+    added: dict[int, str] = {}
+    ln = start
+    for raw in lines[1:]:
+        if raw.startswith("+") and not raw.startswith("+++"):
+            added[ln] = raw[1:]
+            ln += 1
+        elif raw.startswith("-") and not raw.startswith("---"):
+            pass  # removed — no new-side number
+        else:
+            ln += 1
+    return start, start + count, added
+
+
+def facts_for_hunk(hunk: Hunk, raw_content: str, masked_content: str,
+                   min_alignment: float = 0.8) -> HunkFacts | None:
+    """Full-file facts for one hunk: slice the post-image RAW file and its comment/string-
+    MASKED twin to the hunk's changed new-side lines, then run the shared assembly. The
+    mask source (tree-sitter / VS Code) is the caller's choice — assembly is identical, so
+    two sources agree iff their masks agree. Returns None (caller falls back) when the
+    header is unparsable, the mask is desynced, the span is past EOF, or the file does not
+    ALIGN with the diff (its added lines aren't present → wrong commit; never trust it)."""
+    cn = changed_newside(hunk)
+    if cn is None:
+        return None
+    start, end, added = cn
+    clines = raw_content.splitlines()
+    mlines = masked_content.splitlines()
+    if end - 1 > len(clines) or len(clines) != len(mlines):
+        return None
+    ok = tot = 0
+    for lineno, txt in added.items():
+        if 1 <= lineno <= len(clines):
+            tot += 1
+            ok += clines[lineno - 1].strip() == txt.strip()
+    if tot and ok / tot < min_alignment:
+        return None
+
+    def _build(lines: list[str]) -> str:
+        out = ["@@ -0,0 +%d,%d @@" % (start, max(0, end - start))]
+        for n in range(start, end):
+            if 1 <= n <= len(lines):
+                out.append(("+" if n in added else " ") + lines[n - 1])
+        return "\n".join(out)
+
+    return facts_from_texts(_build(clines), _build(mlines), hunk.file_path, hunk.section_header)
+
+
 # --------------------------------------------------------------------------- file source
 class FileSource(ABC):
     """Where a full-file (post-image) producer gets file content. Full-file context is
@@ -317,6 +379,41 @@ class ExternalFactsProvider(FactsProvider):
                 out[h.id] = HunkFacts.from_dict(d)
         if missing:
             out.update(self._fallback.facts(missing))
+        return out
+
+
+class MergedFactsProvider(FactsProvider):
+    """Overlays a PARTIAL external payload onto a base provider — the merge point for a
+    source that fills only SOME fields well. The VS Code DocumentSymbols producer
+    contributes accurate `defines`/`enclosing` (resolved by the language server) while
+    `decisions`/`calls`/etc. stay the base's (tree-sitter or regex). Only the fields the
+    source DECLARES (`payload["fields"]`) are overridden. Payload:
+    {"partial": true, "fields": [...], "hunks": {id: {field: value}}}."""
+
+    _SET_FIELDS = {"defines", "references", "calls", "enclosing", "implements"}
+    _BOOL_FIELDS = {"is_test", "is_sql", "imports_only", "type_decl_only"}
+
+    def __init__(self, base: FactsProvider, payload: dict | None):
+        self._base = base
+        self._fields = list((payload or {}).get("fields", []))
+        self._by_id: dict = (payload or {}).get("hunks", {})
+
+    def facts(self, hunks: list[Hunk]) -> dict[str, HunkFacts]:
+        out = self._base.facts(hunks)
+        for h in hunks:
+            ov = self._by_id.get(h.id)
+            hf = out.get(h.id)
+            if not ov or hf is None:
+                continue
+            for f in self._fields:
+                if f not in ov:
+                    continue
+                if f in self._SET_FIELDS:
+                    setattr(hf, f, set(ov[f]))
+                elif f == "decisions":
+                    hf.decisions = int(ov[f])
+                elif f in self._BOOL_FIELDS:
+                    setattr(hf, f, bool(ov[f]))
         return out
 
 
