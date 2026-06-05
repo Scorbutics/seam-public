@@ -1,0 +1,92 @@
+{
+  "_doc": "Deterministic extraction gold. PURE functions of diff text \u2014 assert exactly, no LLM/stability. external_cases use hunks that contain their OWN import (external coupling is diff-wide). rewire_cases are self-contained in the -/+ lines.",
+  "external_cases": [
+    {
+      "id": "providers-import",
+      "hunk": "h3",
+      "text": "@@ -3,6 +3,7 @@\n import { TrpcProvider } from \"app/_trpc/trpc-provider\";\n import { SessionProvider } from \"next-auth/react\";\n import CacheProvider from \"react-inlinesvg/provider\";\n+import { ToastProvider } from \"@coss/ui/components/toast\";\n \n import { WebPushProvider } from \"@calcom/web/modules/notifications/components/WebPushContext\";\n import { NotificationSoundHandler } from \"@calcom/web/components/notification-sound-handler\";\n",
+      "expect": [
+        "@coss/ui"
+      ]
+    },
+    {
+      "id": "dialog-import",
+      "hunk": "h24",
+      "text": "@@ -1,6 +1,16 @@\n import { APP_NAME } from \"@calcom/lib/constants\";\n import { useLocale } from \"@calcom/lib/hooks/useLocale\";\n-import { Dialog, ConfirmationDialogContent } from \"@calcom/ui/components/dialog\";\n+import {\n+  AlertDialog,\n+  AlertDialogClose,\n+  AlertDialogDescription,\n+  AlertDialogFooter,\n+  AlertDialogHeader,\n+  AlertDialogPopup,\n+  AlertDialogTitle,\n+} from \"@coss/ui/components/alert-dialog\";\n+import { Button } from \"@coss/ui/components/button\";\n+import { Spinner } from \"@coss/ui/components/spinner\";\n \n interface DeleteWebhookDialogProps {\n   open: boolean;\n",
+      "expect": [
+        "@coss/ui"
+      ]
+    },
+    {
+      "id": "remove-utils",
+      "hunk": "h28",
+      "text": "@@ -40,7 +30,6 @@ type WebhookProps = {\n \n export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {\n   const { t } = useLocale();\n-  const utils = trpc.useUtils();\n   const router = useRouter();\n   const { data: installedApps, isPending } = trpc.viewer.apps.integrations.useQuery(\n     { variant: \"other\", onlyInstalled: true },\n",
+      "expect": []
+    },
+    {
+      "id": "globals-css",
+      "hunk": "h49",
+      "text": "@@ -66,23 +66,23 @@\n :root {\n   --radius: 0.625rem;\n   --background: var(--color-white);\n-  --foreground: var(--color-zinc-800);\n+  --foreground: var(--color-neutral-800);\n   --card: var(--color-white);\n-  --card-foreground: var(--color-zinc-800);\n+  --card-foreground: var(--color-neutral-800);\n   --popover: var(--color-white);\n-  --popover-foreground: var(--color-zinc-800);\n-  --primary: var(--color-zinc-800);\n-  --primary-foreground: var(--color-zinc-50);\n+  --popover-foreground: var(--color-neutral-800);\n+  --primary: var(--color-neutral-800);\n+  --primary-foreground: var(--color-neutral-50);\n   --secondary: --alpha(var(--color-black) / 4%);\n-  --secondary-foreground: var(--color-zinc-800);\n+  --secondary-foreground: var(--color-neutral-800);\n   --muted: --alpha(var(--color-black) / 4%);\n   --muted-foreground: color-mix(\n     in srgb,\n-    var(--color-zinc-500) 90%,\n+    var(--color-neutral-500) 90%,\n     var(--color-black)\n   );\n   --accent: --alpha(var(--color-black) / 4%);\n-  --accent-foreground: var(--color-zinc-800);\n+  --accent-foreground: var(--color-neutral-800);\n   --destructive: var(--color-red-500);\n   --destructive-foreground: var(--color-red-700);\n   --info: var(--color-blue-500);\n",
+      "expect": []
+    }
+  ],
+  "rewire_cases": [
+    {
+      "id": "edit-toast",
+      "hunk": "h30",
+      "text": "@@ -124,7 +77,7 @@ export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {\n             platform: webhook.platform ?? undefined,\n           })\n         ) {\n-          showToast(t(\"webhook_subscriber_url_reserved\"), \"error\");\n+          toastManager.add({ title: t(\"webhook_subscriber_url_reserved\"), type: \"error\" });\n           return;\n         }\n \n",
+      "expect": {
+        "removed": [
+          "showToast"
+        ],
+        "added": [
+          "toastManager"
+        ]
+      }
+    },
+    {
+      "id": "new-toast",
+      "hunk": "h36",
+      "text": "@@ -42,13 +32,13 @@ export const NewWebhookView = ({ webhooks, installedApps }: Props) => {\n \n   const createWebhookMutation = trpc.viewer.webhook.create.useMutation({\n     async onSuccess() {\n-      showToast(t(\"webhook_created_successfully\"), \"success\");\n+      toastManager.add({ title: t(\"webhook_created_successfully\"), type: \"success\" });\n       await utils.viewer.webhook.list.invalidate();\n       revalidateWebhooksList();\n       router.push(\"/settings/developer/webhooks\");\n     },\n     onError(error) {\n-      showToast(`${error.message}`, \"error\");\n+      toastManager.add({ title: error.message, type: \"error\" });\n     },\n   });\n \n",
+      "expect": {
+        "removed": [
+          "showToast"
+        ],
+        "added": [
+          "toastManager"
+        ]
+      }
+    },
+    {
+      "id": "providers-swap",
+      "hunk": "h4",
+      "text": "@@ -24,11 +25,13 @@ export function Providers({ isEmbed, children, country }: ProvidersProps) {\n     <GeoProvider country={country}>\n       <SessionProvider>\n         <TrpcProvider>\n-          {!isEmbed && !isBookingPage && <NotificationSoundHandler />}\n-          {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}\n-          <CacheProvider>\n-            <WebPushProvider>{children}</WebPushProvider>\n-          </CacheProvider>\n+          <ToastProvider position=\"bottom-center\">\n+            {!isEmbed && !isBookingPage && <NotificationSoundHandler />}\n+            {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}\n+            <CacheProvider>\n+              <WebPushProvider>{children}</WebPushProvider>\n+            </CacheProvider>\n+          </ToastProvider>\n         </TrpcProvider>\n       </SessionProvider>\n     </GeoProvider>\n",
+      "expect": {
+        "removed": [
+          "CacheProvider"
+        ],
+        "added": [
+          "ToastProvider"
+        ]
+      }
+    },
+    {
+      "id": "remove-utils",
+      "hunk": "h28",
+      "text": "@@ -40,7 +30,6 @@ type WebhookProps = {\n \n export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {\n   const { t } = useLocale();\n-  const utils = trpc.useUtils();\n   const router = useRouter();\n   const { data: installedApps, isPending } = trpc.viewer.apps.integrations.useQuery(\n     { variant: \"other\", onlyInstalled: true },\n",
+      "expect": {
+        "removed": [],
+        "added": []
+      }
+    },
+    {
+      "id": "globals-css",
+      "hunk": "h49",
+      "text": "@@ -66,23 +66,23 @@\n :root {\n   --radius: 0.625rem;\n   --background: var(--color-white);\n-  --foreground: var(--color-zinc-800);\n+  --foreground: var(--color-neutral-800);\n   --card: var(--color-white);\n-  --card-foreground: var(--color-zinc-800);\n+  --card-foreground: var(--color-neutral-800);\n   --popover: var(--color-white);\n-  --popover-foreground: var(--color-zinc-800);\n-  --primary: var(--color-zinc-800);\n-  --primary-foreground: var(--color-zinc-50);\n+  --popover-foreground: var(--color-neutral-800);\n+  --primary: var(--color-neutral-800);\n+  --primary-foreground: var(--color-neutral-50);\n   --secondary: --alpha(var(--color-black) / 4%);\n-  --secondary-foreground: var(--color-zinc-800);\n+  --secondary-foreground: var(--color-neutral-800);\n   --muted: --alpha(var(--color-black) / 4%);\n   --muted-foreground: color-mix(\n     in srgb,\n-    var(--color-zinc-500) 90%,\n+    var(--color-neutral-500) 90%,\n     var(--color-black)\n   );\n   --accent: --alpha(var(--color-black) / 4%);\n-  --accent-foreground: var(--color-zinc-800);\n+  --accent-foreground: var(--color-neutral-800);\n   --destructive: var(--color-red-500);\n   --destructive-foreground: var(--color-red-700);\n   --info: var(--color-blue-500);\n",
+      "expect": {
+        "removed": [],
+        "added": []
+      }
+    }
+  ]
+}
