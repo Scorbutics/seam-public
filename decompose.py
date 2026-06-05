@@ -19,7 +19,7 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from src import classifier, diff_source, noise_filter, parser, renderer
+from src import classifier, classifier_det, diff_source, noise_filter, parser, renderer
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -35,6 +35,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dump-classified", metavar="JSON",
                     help="after classifying, also write the labeled hunks to JSON so the "
                          "report can later be regenerated with --from-classified (no LLM)")
+    ap.add_argument("--classifier", choices=("llm", "det"), default="llm",
+                    help="classification engine: 'llm' (3-pass LLM, default) or "
+                         "'det' (deterministic-first Layer-1 skeleton, no LLM) — for A/B comparison")
     ap.add_argument("--model", default="claude-haiku-4-5", help="model for the classify pass")
     ap.add_argument("--context-window", type=int, default=200_000,
                     help="model context window in tokens, for the fit warning (default: 200000)")
@@ -81,10 +84,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[decompose] {len(hunks)} hunks; {noise_n} pre-filtered as noise; "
                   f"{len(remaining)} sent to classifier")
 
+        engine = classifier_det if args.classifier == "det" else classifier
         try:
-            classifier.classify(remaining, model=args.model, claude_bin=args.claude_bin,
-                                context_window=args.context_window, verbose=args.verbose,
-                                debug=args.debug, debug_path=args.out)
+            engine.classify(remaining, model=args.model, claude_bin=args.claude_bin,
+                            context_window=args.context_window, verbose=args.verbose,
+                            debug=args.debug, debug_path=args.out)
         except classifier.ClassifierError as exc:
             print(f"error: classification failed: {exc}", file=sys.stderr)
             return 3

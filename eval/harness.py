@@ -56,19 +56,23 @@ def _cases(only: str | None) -> list[Path]:
 
 
 def generate(args) -> int:
-    from src import classifier, noise_filter, parser  # local import: LLM path only
+    from src import classifier, classifier_det, noise_filter, parser
+    engine = classifier_det if args.engine == "det" else classifier
+    # The deterministic engine is a pure function of the diff — N identical runs would
+    # waste effort and the stability spread is trivially perfect, so cap it at 1.
+    runs = 1 if args.engine == "det" else args.runs
     model_dir = RUNS_DIR / (args.label or args.model)
     for case in _cases(args.case):
         out_dir = model_dir / case.stem
         out_dir.mkdir(parents=True, exist_ok=True)
-        for i in range(1, args.runs + 1):
+        for i in range(1, runs + 1):
             dest = out_dir / f"run_{i}.json"
             if dest.exists() and not args.force:
                 print(f"[skip] {case.stem} run {i} (cached)")
                 continue
             hunks = parser.parse(case.read_text(encoding="utf-8"))
             remaining = noise_filter.classify(hunks)
-            classifier.classify(remaining, model=args.model)
+            engine.classify(remaining, model=args.model)
             dest.write_text(parser.hunks_to_json(hunks), encoding="utf-8")
             print(f"[ok]   {case.stem} run {i} -> {dest.relative_to(_ROOT)}")
     return 0
@@ -350,6 +354,9 @@ def main(argv=None) -> int:
 
     g = sub.add_parser("generate", help="run the classifier N times per case and cache the runs")
     g.add_argument("--runs", type=int, default=5)
+    g.add_argument("--engine", choices=("llm", "det"), default="llm",
+                   help="classification engine: 'llm' (default) or 'det' (deterministic, "
+                        "1 run). Use --label to keep its run-set separate, e.g. --label det")
     g.add_argument("--model", default="claude-haiku-4-5")
     g.add_argument("--label", help="run-set dir name (default: model). Use to keep "
                    "prompt/config variants from colliding, e.g. --label haiku-sharp-roles")
