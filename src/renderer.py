@@ -482,10 +482,15 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     each hunk's file + new-side line range + role. Tests and noise are separate
     groups (skim posture)."""
     clusters, _ = _build_clusters(hunks)
+    # Per-hunk self-consistency confidence (share of votes agreeing on the shown
+    # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
+    # roles near the ~0.8 ceiling read as honest "maybe core/link", not as fact.
+    conf = {h.id: round(h.role_confidence, 2) for h in hunks}
 
     def _hunk(b: dict) -> dict:
         return {"id": b["hid"], "file": b["file"], "start": b["start"],
-                "end": b["end"], "role": b["role"]}
+                "end": b["end"], "role": b["role"],
+                "confidence": conf.get(b["hid"], 1.0)}
 
     out_clusters = []
     for ci, cl in enumerate(clusters):
@@ -505,7 +510,8 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
 
     def _plain(h: Hunk) -> dict:
         start, end = _hunk_line_span(h)
-        return {"id": h.id, "file": h.file_path, "start": start, "end": end, "role": h.role}
+        return {"id": h.id, "file": h.file_path, "start": start, "end": end,
+                "role": h.role, "confidence": round(h.role_confidence, 2)}
 
     return {
         "clusters": out_clusters,

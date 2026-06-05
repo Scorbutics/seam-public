@@ -4,7 +4,7 @@ import * as path from "path";
 import * as fs from "fs";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
@@ -23,6 +23,14 @@ const ROLE_COLORS: Record<string, string> = {
   noise: "#c0c0c0",       // faint — skip
 };
 const ROLES = ["core", "link", "environment", "test", "noise"];
+// Roles top out around ~0.8 accuracy (the core/link frontier is genuinely blurry),
+// so we don't pretend they're certain: a hunk whose self-consistency role vote was
+// SPLIT (< this share agreeing) is surfaced as a "maybe", not a fact. Mirrors
+// UNCERTAIN_THRESHOLD in renderer.py. The tool structures; the human judges.
+const UNCERTAIN_THRESHOLD = 0.6;
+const isUncertain = (h: SeamHunk): boolean =>
+  h.confidence !== undefined && h.confidence < UNCERTAIN_THRESHOLD;
+const confPct = (h: SeamHunk): number => Math.round((h.confidence ?? 1) * 100);
 // Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
 // hunk's boundary; the fill is lighter so code stays legible over it).
 const ROLE_BG_ALPHA = 0.19;      // line-background wash
@@ -451,11 +459,21 @@ class SeamLensProvider implements vscode.CodeLensProvider {
     const entries = fileIndex.get(rel) ?? [];
     const seenLabel = new Set<string>();
     const seenNav = new Set<number>();
+    const seenUnc = new Set<number>();
     const lenses: vscode.CodeLens[] = [];
     for (const e of entries) {
       if (focusIds && !focusIds.has(e.hunk.id)) continue;
       const line = Math.max(0, e.hunk.start - 1);
       const r = new vscode.Range(line, 0, line, 0);
+      // Uncertain-role marker (once per line): the role here is a maybe, not a fact.
+      if (isUncertain(e.hunk) && !seenUnc.has(line)) {
+        seenUnc.add(line);
+        lenses.push(new vscode.CodeLens(r, {
+          title: `$(question) ${e.hunk.role}? uncertain`,
+          tooltip: `Role vote was split (confidence ${confPct(e.hunk)}%) — treat as a maybe`,
+          command: "seam.open", arguments: [e.hunk],
+        }));
+      }
       // The intent · seam label (one per seam membership), click → focus that seam.
       const lkey = `${line}:${e.seamId}`;
       if (!seenLabel.has(lkey)) {
@@ -537,10 +555,15 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return it;
     }
     const h = el.hunk;
-    const it = new vscode.TreeItem(`${h.role}  ·  ${h.file.split("/").pop()}:${h.start}`,
+    const unc = isUncertain(h);
+    const it = new vscode.TreeItem(
+      `${h.role}${unc ? "?" : ""}  ·  ${h.file.split("/").pop()}:${h.start}`,
       vscode.TreeItemCollapsibleState.None);
-    it.tooltip = `${h.role} — ${h.file}:${h.start}-${h.end}`;
-    it.iconPath = new vscode.ThemeIcon(ROLE_ICON[h.role] ?? "circle-small");
+    if (unc) it.description = `uncertain ${confPct(h)}%`;
+    it.tooltip = unc
+      ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe\n${h.file}:${h.start}-${h.end}`
+      : `${h.role} — ${h.file}:${h.start}-${h.end}`;
+    it.iconPath = new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
     return it;
   }
