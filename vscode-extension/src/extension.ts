@@ -4,7 +4,8 @@ import * as path from "path";
 import * as fs from "fs";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; }
+interface Rewire { removed: string[]; added: string[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; rewire?: Rewire | null; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
@@ -36,6 +37,11 @@ const confPct = (h: SeamHunk): number => Math.round((h.confidence ?? 1) * 100);
 // boundary reads as "go look there", not as a blank/missing wiring.
 const extTag = (h: SeamHunk): string =>
   h.external && h.external.length ? ` → ${h.external.slice(0, 2).join(", ")}` : "";
+// A crisp A->B rewire read from the hunk's own -/+ lines (showToast -> toastManager)
+// — the §I "re-routes A->B" signal. "" when the hunk isn't a focused swap.
+const rewireStr = (h: SeamHunk): string =>
+  h.rewire && h.rewire.removed.length && h.rewire.added.length
+    ? `${h.rewire.removed.join("/")} → ${h.rewire.added.join("/")}` : "";
 // Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
 // hunk's boundary; the fill is lighter so code stays legible over it).
 const ROLE_BG_ALPHA = 0.19;      // line-background wash
@@ -465,6 +471,7 @@ class SeamLensProvider implements vscode.CodeLensProvider {
     const seenLabel = new Set<string>();
     const seenNav = new Set<number>();
     const seenUnc = new Set<number>();
+    const seenRw = new Set<number>();
     const lenses: vscode.CodeLens[] = [];
     for (const e of entries) {
       if (focusIds && !focusIds.has(e.hunk.id)) continue;
@@ -476,6 +483,16 @@ class SeamLensProvider implements vscode.CodeLensProvider {
         lenses.push(new vscode.CodeLens(r, {
           title: `$(question) ${e.hunk.role}? uncertain`,
           tooltip: `Role vote was split (confidence ${confPct(e.hunk)}%) — treat as a maybe`,
+          command: "seam.open", arguments: [e.hunk],
+        }));
+      }
+      // A->B rewire marker (once per line): "re-routes showToast → toastManager".
+      const rw = rewireStr(e.hunk);
+      if (rw && !seenRw.has(line)) {
+        seenRw.add(line);
+        lenses.push(new vscode.CodeLens(r, {
+          title: `$(arrow-swap) ${rw}`,
+          tooltip: "Re-routes A → B (read from this hunk's removed/added lines)",
           command: "seam.open", arguments: [e.hunk],
         }));
       }
@@ -562,14 +579,17 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const h = el.hunk;
     const unc = isUncertain(h);
     const ext = extTag(h);
+    const rw = rewireStr(h);
     const it = new vscode.TreeItem(
       `${h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
       vscode.TreeItemCollapsibleState.None);
-    if (unc) it.description = `uncertain ${confPct(h)}%`;
+    const desc = [rw ? `↻ ${rw}` : "", unc ? `uncertain ${confPct(h)}%` : ""].filter(Boolean).join("  ·  ");
+    if (desc) it.description = desc;
     it.tooltip =
       (unc ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe`
            : h.role) +
       ` — ${h.file}:${h.start}-${h.end}` +
+      (rw ? `\nre-routes ${rw}` : "") +
       (ext ? `\nwires outside the diff:${ext} (the §I boundary — go look there)` : "");
     it.iconPath = new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };

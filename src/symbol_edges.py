@@ -115,6 +115,60 @@ def external_coupling(hunks: list[Hunk]) -> dict[str, list[str]]:
     return out
 
 
+# Salient "subject" of a line: the ROOT of a call/member expression (foo(...),
+# bar.baz(...) -> foo, bar — NOT the method `baz`) and JSX component tags (<Foo>).
+# The thing the line is ABOUT, not its arguments/props/methods.
+_CALL_ROOT = re.compile(r"(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?=[.(])")
+_JSX_TAG = re.compile(r"</?\s*([A-Z][\w$]*)")
+
+
+def _meaningful(s: str) -> bool:
+    """Keep component/function-ish names (PascalCase or camelCase: ToastProvider,
+    showToast, TIME_UNITS); drop keywords, lowercase locals, and short tokens
+    (return, if, item, option, e, t) that are noise in a rewire."""
+    return len(s) >= 3 and s not in _STOP and (s[0].isupper() or any(c.isupper() for c in s[1:]))
+
+
+def _salient_symbols(lines: list[str]) -> set[str]:
+    out: set[str] = set()
+    for ln in lines:
+        out.update(_CALL_ROOT.findall(ln))
+        out.update(_JSX_TAG.findall(ln))
+    return {s for s in out if _meaningful(s)}
+
+
+# A crisp rewire is a SMALL swap; beyond this it's a wholesale rewrite (dozens of
+# components swapped), which is not a useful "A->B" — the role + external coupling
+# already say "this was migrated". Suppress those rather than spew symbol lists.
+_REWIRE_MAX = 2
+
+
+def rewire_pairs(hunks: list[Hunk]) -> dict[str, dict[str, list[str]]]:
+    """Per hunk, the A->B REWIRE read straight from its own -/+ lines: meaningful
+    subjects (call/member roots, JSX tags) REMOVED vs ADDED, with unchanged ones
+    cancelled by set difference. {hunk_id: {"removed":[...], "added":[...]}}.
+
+    Reported only for a SMALL SWAP — both sides non-empty AND each <= _REWIRE_MAX
+    (something focused replaced something: `showToast` -> `toastManager`). A pure
+    add/delete, or a wholesale rewrite (many symbols), yields empty/empty; those are
+    conveyed by the role + external coupling. Layer 1: the §I 're-routes A->B'
+    signal, deterministic, no codebase resolution."""
+    out: dict[str, dict[str, list[str]]] = {}
+    for h in hunks:
+        rem_lines, add_lines = [], []
+        for ln in h.text.splitlines():
+            if ln.startswith("-") and not ln.startswith("---"):
+                rem_lines.append(ln[1:])
+            elif ln.startswith("+") and not ln.startswith("+++"):
+                add_lines.append(ln[1:])
+        rem_only = sorted(_salient_symbols(rem_lines) - _salient_symbols(add_lines))
+        add_only = sorted(_salient_symbols(add_lines) - _salient_symbols(rem_lines))
+        crisp = rem_only and add_only and len(rem_only) <= _REWIRE_MAX and len(add_only) <= _REWIRE_MAX
+        out[h.id] = {"removed": rem_only, "added": add_only} if crisp \
+            else {"removed": [], "added": []}
+    return out
+
+
 def candidate_wirings(hunks: list[Hunk]) -> dict[str, list[tuple[str, str]]]:
     """Per hunk, the OTHER hunks it shares a DISTINCTIVE NEW symbol with, plus that
     symbol: {hunk_id: [(other_hunk_id, symbol), ...]}. Symmetric def<->ref grounding

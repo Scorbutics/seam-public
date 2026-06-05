@@ -481,7 +481,7 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     the report uses (cross-cluster merge, link-only, synthetic seams), but reduced to
     each hunk's file + new-side line range + role. Tests and noise are separate
     groups (skim posture)."""
-    from .symbol_edges import external_coupling
+    from .symbol_edges import external_coupling, rewire_pairs
     clusters, _ = _build_clusters(hunks)
     # Per-hunk self-consistency confidence (share of votes agreeing on the shown
     # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
@@ -495,12 +495,17 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
     _ext_all = external_coupling(hunks)
     ext = {h.id: _ext_all.get(h.id, []) for h in hunks
            if h.role in ("link", "environment") and not h.wires and _ext_all.get(h.id)}
+    # A->B rewire (Layer 1): the §I "re-routes A->B" swap read from the hunk's own
+    # -/+ lines (showToast -> toastManager). Only the crisp swaps survive; omitted
+    # when absent so the contract stays lean.
+    rewire = {hid: r for hid, r in rewire_pairs(hunks).items() if r["removed"] and r["added"]}
 
     def _hunk(b: dict) -> dict:
         return {"id": b["hid"], "file": b["file"], "start": b["start"],
                 "end": b["end"], "role": b["role"],
                 "confidence": conf.get(b["hid"], 1.0),
-                "external": ext.get(b["hid"], [])}
+                "external": ext.get(b["hid"], []),
+                "rewire": rewire.get(b["hid"])}
 
     out_clusters = []
     for ci, cl in enumerate(clusters):
@@ -522,7 +527,7 @@ def emit_seams_json(hunks: list[Hunk]) -> dict:
         start, end = _hunk_line_span(h)
         return {"id": h.id, "file": h.file_path, "start": start, "end": end,
                 "role": h.role, "confidence": round(h.role_confidence, 2),
-                "external": ext.get(h.id, [])}
+                "external": ext.get(h.id, []), "rewire": rewire.get(h.id)}
 
     return {
         "clusters": out_clusters,
