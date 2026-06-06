@@ -299,12 +299,16 @@ python eval/harness.py score --save eval/baseline-haiku.json
 python eval/harness.py score --baseline eval/baseline-haiku.json   # gate: non-zero on regression
 ```
 
-It separates **stability** (run-to-run agreement) from **accuracy** (vs
-hand-labeled gold: role accuracy, permutation-invariant **cluster F1** *and*
-**wiring F1**) and reports **health** (seam count, spurious warnings, orphans) —
-the goal is "an acceptable representation," not per-hunk label-match. Read wiring F1
-*alongside* role accuracy: it's role-dominated. Cases are seeded from 4 real diffs
-across C / C++ / Kotlin+Ruby / TS+SQL.
+It separates **stability** (run-to-run agreement) from **accuracy** (vs hand-labeled
+gold: role accuracy, permutation-invariant **cluster F1**, and wiring as a
+**seam-granular, precision-weighted Fβ(0.5)** — a false coupling hurts a reader more
+than a missing one; the old edge-recall wiring F1 is kept for context, not gated). The
+gated **health** signal is **over-wiring** (the hairball); *isolated-cores / dangling-links
+/ orphans are informational postures, not errors* (often legitimate — external/existing
+links, self-contained refactors). Optional `eval/sentinels/<case>.json` lists must-have
+couplings (e.g. an informal cross-language edge) as an under-wiring guard. The goal is "an
+acceptable representation," not per-hunk label-match. Cases: 6 real diffs across C / C++ /
+Kotlin+Ruby / TS+SQL / TS-React (cal.com, the container-heavy case).
 
 The **deterministic** signals (external coupling, A→B rewire, span segmentation,
 alias resolution) are *pure functions of the diff*, so the stochastic harness is the

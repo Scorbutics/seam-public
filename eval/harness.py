@@ -13,9 +13,16 @@ makes reliability measurable:
         per-hunk role agreement, core/seam/cluster count spread. This alone
         catches "my prompt edit made the model flakier".
     * ACCURACY   (needs eval/gold/<case>.json): how close is the output to a
-        human-agreed decomposition? role accuracy + confusion, and a
-        PERMUTATION-INVARIANT clustering F1 (group ids g1/g2 are arbitrary, so we
-        compare PARTITIONS via same-cluster pairs, not label strings).
+        human-agreed decomposition? role accuracy + confusion; a PERMUTATION-INVARIANT
+        clustering F1 (group ids are arbitrary → compare PARTITIONS via same-cluster
+        pairs); and WIRING as a SEAM-GRANULAR, precision-weighted Fβ(0.5) — a false
+        coupling hurts a reader more than a missing one, and seam-granularity avoids the
+        seam→core expansion artifact. (The old edge-recall wiring_f1 is reported for
+        context but NOT gated.) Optional eval/sentinels/<case>.json = must-have couplings
+        (under-wiring guard for informal edges a symbol scan can't see).
+    * HEALTH     (gold-free): OVER-WIRING (over_wired / seams-per-hunk) is the gated
+        reading-failure signal (the hairball). isolated_cores / dangling_links / orphans
+        are INFORMATIONAL POSTURES, not errors (often legitimate) — never gated.
 
 Workflow:
     python eval/harness.py generate --runs 5 --model claude-haiku-4-5
@@ -43,6 +50,7 @@ sys.path.insert(0, str(_ROOT))
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 GOLD_DIR = Path(__file__).resolve().parent / "gold"
 RUNS_DIR = Path(__file__).resolve().parent / "_runs"
+SENTINELS_DIR = Path(__file__).resolve().parent / "sentinels"  # optional must-have couplings
 
 
 # ----------------------------------------------------------------------------- generate
@@ -102,23 +110,33 @@ def _counts(run: list[dict]) -> dict:
     return {"cores": len(cores), "seams": len(seams), "clusters": len(clusters)}
 
 
+# A non-core hunk wiring to MORE than this many distinct seams reads as a hairball —
+# the over-wiring failure (a container pulled into every seam). The ONE health signal
+# we gate on; the rest below are informational postures, not errors.
+OVER_WIRE_K = 4
+
+
 def _structure_health(run: list[dict]) -> dict:
-    """The 'is this an acceptable visualization' signals — what would make a
-    reviewer distrust the report, independent of per-hunk label nitpicks:
-      - seams: total core seams (watch for explosion)
-      - isolated_cores: core seams with NO link wiring them -> a lonely-core warning
-      - dangling_links: links wiring no present core -> a dangling-link warning
-      - orphans: non-noise hunks left ungrouped (no cluster) -> floating in the UI
-    A core<->link blur INSIDE a seam doesn't show up here (it renders adjacent
-    anyway); only structure-breaking errors do. Compared to gold, the gap here is
-    the 'spurious warning' rate that erodes trust."""
+    """Gold-free 'does this read cleanly' signals. The GATED one is over-wiring:
+
+      - over_wired / max_seams_per_hunk / mean_seams_per_hunk: how many seams a
+        non-core hunk lands in. A high count is the hairball that breaks reading
+        (the cal.com failure). This is the regression signal.
+
+    The rest are INFORMATIONAL POSTURES, NOT errors (do not gate on them) — they are
+    often legitimate: a dangling link can point at existing/external code, an isolated
+    core can be a self-contained refactor, an orphan can be a standalone change.
+      - seams / isolated_cores / dangling_links / orphans."""
     core_seams: dict[str, set] = {}
     links: dict[str, list] = {}
     orphans = 0
+    per_hunk: list[int] = []   # distinct seams each non-core hunk wires to (the hairball signal)
     for h in run:
         role = _effective_role(h)
         if role == "noise":
             continue
+        if role in ("link", "environment"):
+            per_hunk.append(len(set(h.get("wires") or [])))
         g = h.get("group", "")
         if not g:
             orphans += 1
@@ -138,8 +156,15 @@ def _structure_health(run: list[dict]) -> dict:
     for g, lst in links.items():
         cs = core_seams.get(g, set())
         dangling += sum(1 for role, ws in lst if role == "link" and not (ws & cs))
-    return {"seams": seams, "isolated_cores": isolated,
-            "dangling_links": dangling, "orphans": orphans}
+    return {
+        # gated:
+        "over_wired": sum(1 for n in per_hunk if n > OVER_WIRE_K),
+        "max_seams_per_hunk": max(per_hunk) if per_hunk else 0,
+        "mean_seams_per_hunk": round(statistics.mean(per_hunk), 2) if per_hunk else 0.0,
+        # informational postures (NOT errors, NOT gated):
+        "seams": seams, "isolated_cores": isolated,
+        "dangling_links": dangling, "orphans": orphans,
+    }
 
 
 def _load_runs(label: str, case: str) -> list[list[dict]]:
@@ -212,6 +237,72 @@ def _wiring_f1(runs: list[list[dict]], gold: list[dict]) -> float | None:
     return round(statistics.mean(f1s), 3) if f1s else None
 
 
+def _seam_of_core(hunks: list[dict]) -> dict[str, str]:
+    """{core_hunk_id: its seam id} from gold — lets us map a run's core-level wire onto
+    the GOLD seam that core belongs to, so seam-merged golds (s1={h10,h14}) compare fairly."""
+    return {h["id"]: h.get("seam") for h in hunks if h.get("role") == "core" and h.get("seam")}
+
+
+def _seam_membership(hunks: list[dict], seam_of_core: dict[str, str]) -> dict[str, set[str]]:
+    """{non_core_hunk_id: set of SEAM ids it wires to}. Each wire target is mapped through
+    `seam_of_core`: a gold wire is already a seam id (passes through); a run wire is a core
+    id → its gold seam. A run wire to a non-gold-core stays its own id → never matches a gold
+    seam → a precision miss (correct: it wired to something gold doesn't treat as a core)."""
+    out: dict[str, set[str]] = {}
+    for h in hunks:
+        if h.get("role") == "core":
+            continue
+        seams = {seam_of_core.get(w, w) for w in (h.get("wires") or [])}
+        if seams:
+            out[h["id"]] = seams
+    return out
+
+
+def _wiring_seam_metrics(runs: list[list[dict]], gold: list[dict], beta: float = 0.5) -> dict:
+    """SEAM-GRANULAR wiring precision / recall / Fβ (β<1 ⇒ precision-weighted).
+
+    Measures seam MEMBERSHIP (does a hunk land in the right seam[s]) not expanded edges, so
+    a seam-merged gold isn't double-counted. Precision is the signal that matters for a
+    reader (a false coupling clutters); Fβ=0.5 weights it 2× recall. Micro-averaged over the
+    common hunk universe per run, then meaned over runs."""
+    soc = _seam_of_core(gold)
+    gold_mem = _seam_membership(gold, soc)
+    ps, rs, fs = [], [], []
+    for run in runs:
+        common = {h["id"] for h in run} & {h["id"] for h in gold}
+        run_mem = _seam_membership(run, soc)
+        tp = fp = fn = 0
+        for hid in common:
+            g, p = gold_mem.get(hid, set()), run_mem.get(hid, set())
+            tp += len(g & p); fp += len(p - g); fn += len(g - p)
+        prec = tp / (tp + fp) if (tp + fp) else 1.0
+        rec = tp / (tp + fn) if (tp + fn) else 1.0
+        b2 = beta * beta
+        fs.append((1 + b2) * prec * rec / (b2 * prec + rec) if (b2 * prec + rec) else 0.0)
+        ps.append(prec); rs.append(rec)
+    if not ps:
+        return {}
+    return {"precision": round(statistics.mean(ps), 3),
+            "recall": round(statistics.mean(rs), 3),
+            "fbeta": round(statistics.mean(fs), 3)}
+
+
+def _sentinel_recall(runs: list[list[dict]], gold: list[dict],
+                     sentinels: list[list[str]] | None) -> float | None:
+    """Under-wiring guard: a small hand-picked list of must-have [hunk_id, seam_id] couplings
+    (e.g. an informal/cross-language edge a symbol scan can't see). Fraction present, meaned
+    over runs. Cheaper than full recall gold; catches catastrophic drops, not nitpicks."""
+    if not sentinels:
+        return None
+    soc = _seam_of_core(gold)
+    vals = []
+    for run in runs:
+        mem = _seam_membership(run, soc)
+        hit = sum(1 for hid, seam in sentinels if seam in mem.get(hid, set()))
+        vals.append(hit / len(sentinels))
+    return round(statistics.mean(vals), 3)
+
+
 # ----------------------------------------------------------------------------- score
 def _stability(runs: list[list[dict]]) -> dict:
     n = len(runs)
@@ -258,9 +349,15 @@ def _accuracy(runs: list[list[dict]], gold: list[dict]) -> dict:
             confusion[(gold_role[i], pred_role[i])] = confusion.get((gold_role[i], pred_role[i]), 0) + 1
         f1s.append(_pairwise_f1(pred_group, gold_group)["f1"])
     conf = [{"gold": g, "pred": p, "n": n} for (g, p), n in sorted(confusion.items()) if g != p]
+    sm = _wiring_seam_metrics(runs, gold)
     return {
         "role_accuracy": round(statistics.mean(accs), 3) if accs else None,
         "cluster_f1": round(statistics.mean(f1s), 3) if f1s else None,
+        # wiring: seam-granular precision-weighted Fβ is the headline; recall + the old
+        # edge-recall f1 are kept for context (f1 is no longer gated on).
+        "wiring_precision": sm.get("precision"),
+        "wiring_recall": sm.get("recall"),
+        "wiring_fbeta": sm.get("fbeta"),
         "wiring_f1": _wiring_f1(runs, gold),
         "confusions": conf,
     }
@@ -275,14 +372,21 @@ def score(args) -> int:
             print(f"[warn] no runs for {case.stem} (run `generate` first)")
             continue
         entry = {"stability": _stability(runs)}
-        # Visualization health: mean over runs, vs gold (the spurious-warning gap).
-        hkeys = ("seams", "isolated_cores", "dangling_links", "orphans")
+        # Health: over-wiring is the gated reading-failure signal; the rest are postures.
+        hkeys = ("over_wired", "max_seams_per_hunk", "mean_seams_per_hunk",
+                 "seams", "isolated_cores", "dangling_links", "orphans")
         hs = [_structure_health(r) for r in runs]
         entry["health"] = {k: round(statistics.mean(h[k] for h in hs), 2) for k in hkeys}
         gold_path = GOLD_DIR / f"{case.stem}.json"
         if gold_path.exists():
             gold = json.loads(gold_path.read_text())
             entry["accuracy"] = _accuracy(runs, gold)
+            # optional must-have couplings: eval/sentinels/<case>.json = [[hunk, seam], ...]
+            sent_path = SENTINELS_DIR / f"{case.stem}.json"
+            sentinels = json.loads(sent_path.read_text()) if sent_path.exists() else None
+            sr = _sentinel_recall(runs, gold, sentinels)
+            if sr is not None:
+                entry["accuracy"]["sentinel_recall"] = sr
             entry["health_gold"] = {k: _structure_health(gold)[k] for k in hkeys}
         report["cases"][case.stem] = entry
 
@@ -309,7 +413,12 @@ def _print_report(report: dict) -> None:
             print(f"  {k:<9} min={v['min']} max={v['max']} mean={v['mean']} stdev={v['stdev']}")
         if "accuracy" in e:
             a = e["accuracy"]
-            print(f"  role accuracy    {a['role_accuracy']}   cluster F1 {a['cluster_f1']}   wiring F1 {a.get('wiring_f1')}")
+            print(f"  role accuracy    {a['role_accuracy']}   cluster F1 {a['cluster_f1']}")
+            sr = a.get("sentinel_recall")
+            print(f"  wiring           Fβ(0.5) {a.get('wiring_fbeta')}  "
+                  f"precision {a.get('wiring_precision')}  recall {a.get('wiring_recall')}  "
+                  f"(edge-F1 {a.get('wiring_f1')}, not gated)"
+                  + (f"  sentinels {sr}" if sr is not None else ""))
             if a["confusions"]:
                 cs = "; ".join(f"{c['gold']}->{c['pred']}×{c['n']}" for c in a["confusions"])
                 print(f"  confusions       {cs}")
@@ -318,10 +427,11 @@ def _print_report(report: dict) -> None:
         if "health" in e:
             h = e["health"]
             hg = e.get("health_gold")
-            gtxt = (f"  (gold: seams={hg['seams']} iso={hg['isolated_cores']} "
-                    f"dangling={hg['dangling_links']} orphans={hg['orphans']})") if hg else ""
-            print(f"  health           seams={h['seams']} isolated_cores={h['isolated_cores']} "
-                  f"dangling_links={h['dangling_links']} orphans={h['orphans']}{gtxt}")
+            gtxt = f"  (gold over_wired={hg['over_wired']})" if hg else ""
+            print(f"  over-wiring      over_wired={h['over_wired']}  "
+                  f"max={h['max_seams_per_hunk']}  mean={h['mean_seams_per_hunk']} seams/hunk{gtxt}  [GATED]")
+            print(f"  postures (info)  seams={h['seams']} isolated_cores={h['isolated_cores']} "
+                  f"dangling_links={h['dangling_links']} orphans={h['orphans']}  (not errors)")
 
 
 def _gate(report: dict, baseline: dict, tol: float) -> int:
@@ -335,10 +445,18 @@ def _gate(report: dict, baseline: dict, tol: float) -> int:
         if cur_s["role_agreement"] < base_s["role_agreement"] - tol:
             regressed.append(f"{name}: role_agreement {base_s['role_agreement']:.3f} -> {cur_s['role_agreement']:.3f}")
         if "accuracy" in e and "accuracy" in b:
-            for key in ("role_accuracy", "cluster_f1", "wiring_f1"):
+            # Gate on accuracy that dropped: role, cluster, the precision-weighted seam Fβ,
+            # and the must-have sentinels. NOT edge-recall F1 (kept for context only).
+            for key in ("role_accuracy", "cluster_f1", "wiring_fbeta", "sentinel_recall"):
                 cur, base = e["accuracy"].get(key), b["accuracy"].get(key)
                 if cur is not None and base is not None and cur < base - tol:
                     regressed.append(f"{name}: {key} {base:.3f} -> {cur:.3f}")
+        # Over-wiring is the gated HEALTH signal — a regression is the count going UP.
+        # (isolated_cores / dangling_links / orphans are postures, NOT gated.)
+        if "health" in e and "health" in b:
+            cur_ow, base_ow = e["health"].get("over_wired"), b["health"].get("over_wired")
+            if cur_ow is not None and base_ow is not None and cur_ow > base_ow + max(1, tol * 10):
+                regressed.append(f"{name}: over_wired {base_ow} -> {cur_ow} (more hairball)")
     if regressed:
         print(f"\n❌ REGRESSION (tol={tol}):")
         for r in regressed:
