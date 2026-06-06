@@ -397,10 +397,13 @@ async function runReview(range: string) {
         if (engine === "llm") {
           extra.push("--classifier", "llm");
         } else {
-          // hybrid (default) or det: deterministic roles + wiring; cluster = LLM for
-          // hybrid, deterministic for det. Feed the editor's AST facts to the det passes
-          // (missing facts → regex base, so no warning needed).
-          extra.push("--cluster", engine === "det" ? "det" : "llm", "--roles", "det", "--wiring", "det");
+          // hybrid (default) or det: deterministic roles; cluster = LLM for hybrid, det for
+          // det. Wiring is 'hybrid' (det + LLM prune of over-wired containers) for the hybrid
+          // engine, 'det' for the offline engine. Feed the editor's AST facts to the det
+          // passes (missing facts → regex base, so no warning needed).
+          const det = engine === "det";
+          extra.push("--cluster", det ? "det" : "llm", "--roles", "det",
+                     "--wiring", det ? "det" : "hybrid");
           factsPath = await buildAstFacts(py, tool, range);
           if (factsPath) extra.push("--facts", factsPath);
         }

@@ -1,17 +1,23 @@
-"""Per-pass classifier orchestrator — mix LLM and deterministic engines, one toggle each.
+"""Per-pass classifier orchestrator — mix engines, one toggle each.
 
-The three passes are independent levers:
-  - cluster  (product-intent grouping)  — default **llm** (the only reliable way; the
-             deterministic connected-components grouping loses badly, ~0.68 vs ~0.98)
-  - roles    (core/link/environment/test) — default **det** (beats the LLM, ~0.77 vs ~0.55)
-  - wiring   (which core a hunk wires to)  — default **det** (beats the LLM, F1 ~0.63 vs ~0.24)
+Each pass independently picks an engine — **det**, **llm**, or **hybrid** (deterministic
+first, LLM reconciliation on the residual only):
+  - cluster (product-intent grouping):
+      det = connected components + structural labels;  llm = LLM grouping + prose labels;
+      hybrid = deterministic grouping + LLM prose labels.
+  - roles (core/link/environment/test):
+      det (beats the LLM, ~0.77 vs ~0.55);  llm;  hybrid = det + LLM re-judges only the
+      UNCERTAIN (low-confidence) hunks.
+  - wiring (which core a hunk wires to):
+      det (subject anchoring, F1 ~0.63 vs ~0.24);  llm;  hybrid = det + det-reconcile +
+      LLM prune of the OVER-WIRED residual (container hunks).
 
-So the DEFAULT is a HYBRID: LLM clusters + deterministic roles + deterministic wiring —
-each pass on the engine the eval showed is better. Any pass can be flipped independently.
+DEFAULT: cluster=llm, roles=det, wiring=hybrid — LLM where it's the only reliable engine
+(grouping), deterministic where it wins (roles), and deterministic-with-LLM-cleanup where
+the deterministic tail over-wires (containers). On a focused diff the hybrid residual is
+empty, so it costs nothing beyond the deterministic pass.
 
-Passes run in DEPENDENCY ORDER — roles, then wiring (reads roles), then clusters — so an
-engine swap on one pass never breaks another: the deterministic wiring reads whatever set
-the roles, the deterministic clusters read whatever set the wiring.
+Passes run in DEPENDENCY ORDER — roles, then wiring (reads roles), then clusters.
 """
 from __future__ import annotations
 
@@ -19,8 +25,8 @@ from . import classifier, classifier_det
 from .facts import FactsProvider, RegexFactsProvider
 from .parser import Hunk
 
-ENGINES = ("llm", "det")
-DEFAULTS = {"cluster": "llm", "roles": "det", "wiring": "det"}
+ENGINES = ("llm", "det", "hybrid")
+DEFAULTS = {"cluster": "llm", "roles": "det", "wiring": "hybrid"}
 
 
 def classify(
@@ -51,25 +57,32 @@ def classify(
         return
 
     facts = None
-    if "det" in (cluster, roles, wiring):
+    if any(p in ("det", "hybrid") for p in (cluster, roles, wiring)):
         facts = (facts_provider or RegexFactsProvider()).facts(work)
     llm = dict(model=model, claude_bin=claude_bin, verbose=verbose, debug=debug, debug_path=debug_path)
 
     # ROLES
-    if roles == "det":
-        classifier_det.assign_roles(work, facts)
-    else:
+    if roles == "llm":
         classifier.assign_roles(work, role_votes=role_votes, **llm)
+    else:
+        classifier_det.assign_roles(work, facts)              # det base
+        if roles == "hybrid":
+            classifier.reconcile_roles_llm(work, **llm)        # LLM re-judges the uncertain
     # WIRING (reads roles)
-    if wiring == "det":
-        classifier_det.assign_wiring(work, facts)
-    else:
+    if wiring == "llm":
         classifier.assign_wiring(work, **llm)
-    # CLUSTERS (reads wiring for the deterministic engine; independent for the LLM)
-    if cluster == "det":
-        classifier_det.assign_clusters(work, facts)
     else:
+        classifier_det.assign_wiring(work, facts)             # candidates (recall)
+        residual = classifier_det.reconcile_wiring(work, facts)   # tier 2: deterministic prune (det + hybrid)
+        if wiring == "hybrid" and residual:                   # tier 3: LLM prunes the ambiguous
+            classifier.reconcile_wiring_llm(work, targets=residual, **llm)  # residual only
+    # CLUSTERS (reads wiring for the deterministic engine; independent for the LLM)
+    if cluster == "llm":
         classifier.assign_clusters(work, **llm)
+    else:
+        classifier_det.assign_clusters(work, facts)           # det grouping + structural labels
+        if cluster == "hybrid":
+            classifier.label_clusters_llm(work, **llm)         # LLM prose labels over det groups
 
     if verbose:
         counts: dict[str, int] = {}

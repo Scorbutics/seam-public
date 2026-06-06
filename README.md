@@ -34,22 +34,27 @@ and a **deterministic renderer**. There are **two interchangeable classifiers** 
 interface — they fill the same `Hunk` fields, so the renderer, HTML report, and VS Code
 surface consume either unchanged.
 
-### Three passes, two engines each — the hybrid default
+### Three passes, three engines each — the hybrid default
 
-Classification is **three passes**, and each runs on the **deterministic** engine or the
-**LLM**, set independently (`--cluster`, `--roles`, `--wiring`). The **default is a hybrid** —
-each pass on whichever engine the eval showed is better:
+Classification is **three passes**, and each runs on one of three engines — **det**, **llm**,
+or **hybrid** (deterministic first, LLM reconciliation on the *residual* only) — set
+independently (`--cluster`, `--roles`, `--wiring`):
 
-| pass | **default** | deterministic | LLM |
-|---|---|---|---|
-| **cluster** (product-intent grouping) | **llm** | connected components, F1 ~0.68 | product intent — **better, F1 ~0.98** |
-| **roles** (core/link/environment/test) | **det** | structure + change-magnitude — **better, ~0.77** | judgment + voting, ~0.55 |
-| **wiring** (which core a hunk wires) | **det** | subject anchoring — **better, F1 ~0.63** | role-dominated, F1 ~0.24 |
+| pass | **default** | det | llm | hybrid |
+|---|---|---|---|---|
+| **cluster** (grouping) | **llm** | components + structural labels (F1 ~0.68) | grouping + prose labels (**F1 ~0.98**) | det grouping + LLM prose labels |
+| **roles** (core/link/env/test) | **det** | structure + magnitude (**~0.77**) | judgment + voting (~0.55) | det + LLM re-judges only the *uncertain* |
+| **wiring** (which core a hunk wires) | **hybrid** | subject anchoring (F1 ~0.63 vs ~0.24) | role-dominated | det + reconcile + **LLM prunes over-wired containers** |
 
-*(accuracy on the 4 shared gold cases.)* So by default **clustering uses the LLM** — the only
-reliable way to get product-intent prose ("add currency to checkout") — while **roles and
-wiring are deterministic** (better *and* instant, free, reproducible). Presets:
-`--classifier det` (**fully offline**, no LLM — structural cluster labels instead of prose) and
+*(accuracy on the 4 shared gold cases.)* The **default** is `cluster=llm, roles=det,
+wiring=hybrid`: the LLM where it's the only reliable engine (grouping), deterministic where it
+wins (roles), and **deterministic-with-LLM-cleanup** where the deterministic tail over-wires
+(a big container that renders many shared components). The hybrid residual is **empty on a
+focused diff**, so it costs nothing beyond the deterministic pass there — the LLM is spent
+only on the genuinely-ambiguous over-wired hunks of a tangled diff (and never on legitimate
+hubs like a header/barrel, which are detected and left alone).
+
+Presets: `--classifier det` (**fully offline**, no LLM — structural cluster labels) and
 `--classifier llm` (all LLM); a per-pass flag overrides the preset. All combinations share the
 deterministic noise filter, symbol grounding, renderer, and VS Code surface.
 
@@ -202,8 +207,8 @@ python decompose.py --file change.patch --classifier llm --open
 python decompose.py --file change.patch --classifier det --wiring llm --open
 ```
 
-Options: per-pass `--cluster/--roles/--wiring llm|det` (defaults llm/det/det),
-`--classifier det|llm` (preset for all three), `--facts-engine regex|treesitter`,
+Options: per-pass `--cluster/--roles/--wiring llm|det|hybrid` (defaults llm/det/hybrid),
+`--classifier det|llm|hybrid` (preset for all three), `--facts-engine regex|treesitter`,
 `--facts JSON` (external AST facts), `--out report.html`, `--model claude-haiku-4-5`,
 `--claude-bin PATH`, `-v/--verbose`, `--debug`.
 

@@ -39,16 +39,29 @@ defines-logic core) ~1.0; an ambiguous fallback ~0.5 so it surfaces as "uncertai
 """
 from __future__ import annotations
 
+import re
 import sys
 
 from . import ROLES
 from .facts import FactsProvider, HunkFacts, RegexFactsProvider
-from .lang import _STOP
+from .lang import _diff_imports, _STOP
 from .parser import Hunk
 from .symbol_edges import candidate_wirings
 
 # A non-referenced hunk needs this many decision lines to read as core on magnitude alone.
 _LOGIC_CORE_THRESHOLD = 2
+
+# A symbol IMPORTED from outside the diff (never defined in it) and used in at least this
+# many hunks is shared chrome (a UI primitive / hook like Button, Card, useLocale), NOT a
+# seam subject — anchoring on it produces a wiring hairball (measured on cal.com: every
+# hunk rendering <Button> wired to every core that mentions Button). A LOW-frequency
+# external symbol is kept: it can be the very thing a small change wires in (a new Switch).
+_AMBIENT_EXTERNAL_MIN = 3
+
+# A non-core hunk wiring to MORE than this many cores is over-wired (the container
+# symptom) — only such hunks are reconciled (deterministic tier 2, then the LLM tier).
+# Gold hunks never exceed this, so reconciliation can't touch focused changes.
+_RECONCILE_GATE = 4
 
 # Confidence == heuristic margin. Decisive calls high; fallbacks low (→ "uncertain").
 _CONF_TEST = 1.0
@@ -89,23 +102,34 @@ def _mentions(f: HunkFacts) -> set[str]:
             | {s for s in f.enclosing if _subject_ok(s)})
 
 
-def _subject_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
-                    cores: set[str]) -> dict[str, list[str]]:
-    """Role-grounded wiring: a non-core hunk wires to every core whose DISTINCTIVE
-    subject it mentions. {hunk_id: [core_id, ...]}.
+def _anchors(work: list[Hunk], facts: dict[str, HunkFacts],
+             cores: set[str]) -> dict[str, set[str]]:
+    """Per core, the DISTINCTIVE subject symbols a hunk may wire to it by mentioning.
 
-    Distinctiveness is computed over the SUBJECT vocabulary across the whole diff: a
-    symbol that is the subject of too many hunks is ambient (a shared util/base type)
-    and dropped, so we don't wire a hairball. Because we only ever wire to CORES anchored
-    on what they are ABOUT, good roles translate directly into good wiring (measured:
-    mean wiring F1 0.17 -> 0.63)."""
+    Distinctiveness is over the SUBJECT vocabulary across the whole diff: a symbol that is
+    the subject of too many hunks is ambient (a shared util/base type) and dropped. We also
+    drop shared imported CHROME — symbols imported into the diff but defined NOWHERE in it,
+    used across many hunks (Button, useLocale): they pass the frequency cut yet aren't what
+    any seam is ABOUT (keeps LOW-frequency externals — a feature the change wires in)."""
     subj = {h.id: _subjects(facts[h.id]) for h in work}
     freq: dict[str, int] = {}
     for ss in subj.values():
         for s in ss:
             freq[s] = freq.get(s, 0) + 1
     cut = max(5, len(work) // 3)
-    anchors = {cid: {s for s in subj[cid] if freq[s] <= cut} for cid in cores}
+    new_vocab: set[str] = set().union(*(facts[h.id].defines for h in work)) if work else set()
+    external = set(_diff_imports(work)) - new_vocab
+    ambient_external = {s for s in external if freq.get(s, 0) >= _AMBIENT_EXTERNAL_MIN}
+    return {cid: {s for s in subj[cid] if freq[s] <= cut and s not in ambient_external}
+            for cid in cores}
+
+
+def _subject_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
+                    cores: set[str]) -> dict[str, list[str]]:
+    """Role-grounded wiring: a non-core hunk wires to every core whose DISTINCTIVE subject
+    it mentions (measured: mean wiring F1 0.17 -> 0.63). High recall; the reconcile pass
+    trims the precision tail on over-wired container hunks."""
+    anchors = _anchors(work, facts, cores)
     out: dict[str, list[str]] = {}
     for h in work:
         if h.id in cores:
@@ -116,15 +140,58 @@ def _subject_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
     return out
 
 
+def reconcile_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
+                     gate: int = _RECONCILE_GATE) -> list[Hunk]:
+    """Deterministic reconcile (tier 2): on an OVER-WIRED hunk (> `gate` cores — the
+    container symptom), keep only edges where the hunk mentions a symbol the core actually
+    OWNS (in its `defines`), dropping edges that go only through a rendered/shared component.
+
+    Gated to over-wired hunks because the owns-signal is too noisy to prune authoritatively
+    in general (measured: ungated it regresses gold; gated to >4 cores it's a free win — gold
+    hunks never wire to that many).
+
+    A hunk with NO owned edge is a legitimate HUB (a header/barrel that declares many cores,
+    e.g. `FramedView.h` wiring all its impls) — its edges aren't through a shared *rendered*
+    component, so we neither prune it NOR escalate it (the LLM mangles such hubs). Only a
+    hunk that HAD owned edges but is STILL over-wired after pruning is genuinely ambiguous —
+    those, and only those, are returned as the residual for the LLM tier."""
+    cores = {h.id for h in work if h.role == "core"}
+    anchors = _anchors(work, facts, cores)
+    residual: list[Hunk] = []
+    for h in work:
+        if h.role == "core" or len(h.wires) <= gate:
+            continue
+        m = _mentions(facts[h.id])
+        owned = [c for c in h.wires if (anchors.get(c, set()) & m) & facts[c].defines]
+        if not owned:
+            continue  # legitimate hub — don't prune, don't escalate
+        h.wires = sorted(owned)
+        if len(h.wires) > gate:
+            residual.append(h)
+    return residual
+
+
+_SECTION_DEF = re.compile(
+    r"\b(?:function|class|interface|enum|const|let|var|val|def|fun)\s+([A-Za-z_]\w*)")
+
+
 def _primary_symbol(f: HunkFacts, h: Hunk, distinctive: set[str]) -> str:
-    """A short label for a core's seam / a cluster's intent: prefer a distinctive symbol
-    it defines, else any def, else the section header, else the file stem."""
+    """A short label for a core's seam / a cluster's intent — the thing it IDENTIFIES as.
+
+    A core that MODIFIES a component should be named after that component (the enclosing
+    `@@` definition, e.g. `EventWebhooksTab`), not after a destructured local it happens to
+    define (`readOnly`). So: prefer a distinctive define, but if the best define is a
+    lowercase local and the section header names a Component/Type, use that instead."""
+    m = _SECTION_DEF.search(h.section_header or "")
+    enclosing_def = m.group(1) if m else ""
     pref = sorted(f.defines & distinctive) or sorted(f.defines)
-    if pref:
-        return pref[0]
-    if h.section_header:
-        parts = h.section_header.split("(")[0].strip().split()
-        return parts[-1] if parts else h.section_header
+    best = pref[0] if pref else ""
+    if enclosing_def and (not best or (best[:1].islower() and enclosing_def[:1].isupper())):
+        return enclosing_def
+    if best:
+        return best
+    if enclosing_def:
+        return enclosing_def
     stem = (h.file_path or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
     return stem or h.id
 
@@ -285,6 +352,7 @@ def classify(
     facts = (facts_provider or RegexFactsProvider()).facts(work)
     assign_roles(work, facts)
     assign_wiring(work, facts)
+    reconcile_wiring(work, facts)   # deterministic over-wiring cleanup (hubs protected; gold-safe)
     assign_clusters(work, facts)
     if verbose:
         counts: dict[str, int] = {}

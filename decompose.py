@@ -35,18 +35,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dump-classified", metavar="JSON",
                     help="after classifying, also write the labeled hunks to JSON so the "
                          "report can later be regenerated with --from-classified (no LLM)")
-    # Per-pass engine levers. DEFAULT is the hybrid: LLM clusters (the only reliable way
-    # to get product-intent grouping) + deterministic roles + deterministic wiring (both
-    # beat the LLM, instant & reproducible). Each pass flips independently.
-    ap.add_argument("--cluster", choices=("llm", "det"),
-                    help="engine for the CLUSTER pass (product-intent grouping). Default: llm")
-    ap.add_argument("--roles", choices=("llm", "det"),
-                    help="engine for the ROLES pass (core/link/environment/test). Default: det")
-    ap.add_argument("--wiring", choices=("llm", "det"),
-                    help="engine for the WIRING pass (which core a hunk wires). Default: det")
-    ap.add_argument("--classifier", choices=("llm", "det"),
+    # Per-pass engine levers — each is llm | det | hybrid (deterministic + LLM reconcile on
+    # the residual). DEFAULT: cluster=llm (only reliable grouping), roles=det (beats LLM),
+    # wiring=hybrid (det + LLM prune of over-wired container hunks; no-op/free on focused diffs).
+    ap.add_argument("--cluster", choices=("llm", "det", "hybrid"),
+                    help="CLUSTER engine (product-intent grouping): llm | det | hybrid "
+                         "(det grouping + LLM labels). Default: llm")
+    ap.add_argument("--roles", choices=("llm", "det", "hybrid"),
+                    help="ROLES engine: llm | det | hybrid (det + LLM re-judges uncertain). Default: det")
+    ap.add_argument("--wiring", choices=("llm", "det", "hybrid"),
+                    help="WIRING engine: llm | det | hybrid (det + reconcile + LLM prune). Default: hybrid")
+    ap.add_argument("--classifier", choices=("llm", "det", "hybrid"),
                     help="preset that sets ALL THREE passes to one engine (a per-pass flag "
-                         "overrides it). Omit for the hybrid default (cluster=llm, roles/wiring=det)")
+                         "overrides it). Omit for the default (cluster=llm, roles=det, wiring=hybrid); "
+                         "use 'det' for fully offline (no LLM)")
     ap.add_argument("--facts", metavar="JSON",
                     help="external HunkFacts payload (e.g. AST facts the VS Code extension "
                          "computed) to drive the 'det' classifier; missing hunks fall back to regex")

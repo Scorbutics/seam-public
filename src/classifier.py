@@ -917,6 +917,140 @@ def assign_wiring(hunks: list[Hunk], *, model: str = "claude-haiku-4-5",
     _run_wire_pass(hunks, kind, binary, model, verbose=verbose, debug=debug, debug_path=debug_path)
 
 
+_RECONCILE_SNIPPET_LINES = 24
+
+
+def _reconcile_snippet(h: Hunk) -> str:
+    body = [ln for ln in h.text.splitlines()[1:]][:_RECONCILE_SNIPPET_LINES]
+    return "\n".join(body)
+
+
+def _build_reconcile_prompt(targets: list[Hunk], cores: dict[str, Hunk]) -> str:
+    """Closed-candidate prune prompt (brief Layer-2): for each over-wired EDIT, which of
+    ITS candidate cores does it ACTUALLY depend on, vs merely co-render a shared component."""
+    blocks = []
+    for h in targets:
+        cands = ", ".join(f'{c}="{cores[c].seam_label or c}"' for c in h.wires if c in cores)
+        blocks.append(f"EDIT {h.id}  [{h.file_path}]  role={h.role}\n"
+                      f"{_reconcile_snippet(h)}\n"
+                      f"candidates: {cands}")
+    body = "\n---\n".join(blocks)
+    return (
+        "Some dependency edges in a diff were drawn too broadly. Each EDIT below was linked "
+        "to several CANDIDATE targets, but some links are SPURIOUS: the edit merely RENDERS "
+        "or IMPORTS a shared component/util that the target also uses — it does not actually "
+        "depend on, call, or modify that target.\n\n"
+        "For each EDIT, return the subset of candidate ids it ACTUALLY depends on. Keep a "
+        "candidate only if the edit calls it, is configured/typed by it, or modifies it; "
+        "drop candidates it merely co-renders a shared component with. Returning all, some, "
+        "or none is valid — do not invent edges outside the candidate list.\n\n"
+        f"{body}\n\n"
+        'Output ONLY a JSON array, one object per EDIT: '
+        '[{"id":"h6","wires":["h12"]}, ...]'
+    )
+
+
+def reconcile_wiring_llm(work: list[Hunk], *, targets: list[Hunk] | None = None,
+                         gate: int = 4, model: str = "claude-haiku-4-5",
+                         claude_bin: str | None = None, verbose: bool = False,
+                         debug: bool = False, debug_path: str | None = None, **_ignore) -> None:
+    """LLM reconcile (tier 3): prune the candidate edges of the genuinely-ambiguous residual
+    (hunks the deterministic reconcile pruned but left over-wired) to the real couplings. A
+    VALIDATE task on a CLOSED candidate set (where the LLM is reliable), not generation.
+    Conservative: only prunes to a non-empty confirmed subset; never strands a hunk. `targets`
+    should be the residual from `classifier_det.reconcile_wiring` (legitimate hubs excluded);
+    falls back to a count gate only if not supplied."""
+    cores = {h.id: h for h in work if h.role == "core"}
+    if targets is None:
+        targets = [h for h in work if h.role != "core" and len(h.wires) > gate]
+    if not targets:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    prompt = _build_reconcile_prompt(targets, cores)
+    labels = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    pruned = 0
+    for h in targets:
+        item = labels.get(h.id) or {}
+        raw = item.get("wires")
+        if not isinstance(raw, list):
+            continue
+        confirmed = sorted({c for c in raw if c in h.wires and c in cores})
+        if confirmed and len(confirmed) < len(h.wires):
+            h.wires = confirmed
+            pruned += 1
+    if verbose:
+        print(f"[reconcile] LLM pruned {pruned}/{len(targets)} over-wired hunks", file=sys.stderr)
+
+
+def reconcile_roles_llm(work: list[Hunk], *, conf_threshold: float = 0.6,
+                        model: str = "claude-haiku-4-5", claude_bin: str | None = None,
+                        verbose: bool = False, debug: bool = False,
+                        debug_path: str | None = None, **_ignore) -> None:
+    """LLM reconcile for ROLES (the hybrid residual): re-judge only the hunks the
+    deterministic pass was UNCERTAIN about (low role_confidence). Bounded to the genuinely
+    ambiguous core/link/environment calls — the brief's core-vs-environment escalation."""
+    targets = [h for h in work if (h.role_confidence or 1.0) < conf_threshold]
+    if not targets:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    blocks = "\n---\n".join(f"EDIT {h.id} [{h.file_path}] deterministic_guess={h.role}\n"
+                            f"{_reconcile_snippet(h)}" for h in targets)
+    prompt = (
+        "These diff hunks were role-classified with LOW confidence. For each, pick the one "
+        "best role:\n"
+        "  core = the new decision/logic/rule the change is ABOUT (verify by reading it);\n"
+        "  link = wires/connects the new thing in (call sites, params, adapters) — routes, "
+        "doesn't decide;\n"
+        "  environment = ambient support touched in passing (types, imports, config, data);\n"
+        "  test = verifies the change;  noise = formatting/rename, no logical effect.\n\n"
+        f"{blocks}\n\n"
+        'Output ONLY a JSON array: [{"id":"h12","role":"link"}, ...]'
+    )
+    labels = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile-roles",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    changed = 0
+    for h in targets:
+        r = str((labels.get(h.id) or {}).get("role", "")).strip().lower()
+        if r in ROLES and r != h.role:
+            h.role = r
+            changed += 1
+    if verbose:
+        print(f"[reconcile] LLM re-judged {changed}/{len(targets)} uncertain roles", file=sys.stderr)
+
+
+def label_clusters_llm(work: list[Hunk], *, model: str = "claude-haiku-4-5",
+                       claude_bin: str | None = None, verbose: bool = False,
+                       debug: bool = False, debug_path: str | None = None, **_ignore) -> None:
+    """LLM reconcile for CLUSTERS (the hybrid): keep the deterministic GROUPING (stable,
+    free) but replace its structural labels with product-intent PROSE — the LLM's strength,
+    applied to groups it doesn't have to discover. Cheaper than full LLM clustering."""
+    groups: dict[str, list[Hunk]] = {}
+    for h in work:
+        if h.group:
+            groups.setdefault(h.group, []).append(h)
+    if not groups:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    blocks = []
+    for g, hs in groups.items():
+        sig = ", ".join(sorted({(h.seam_label or h.file_path.rsplit("/", 1)[-1]) for h in hs}))[:300]
+        blocks.append(f"GROUP {g}: {sig}")
+    prompt = (
+        "Each GROUP is a set of related diff hunks (shown by their key symbols/files). Give "
+        "each a SHORT product-intent label — what the user-facing change is, e.g. "
+        '"add currency to checkout", "migrate webhooks to v2". Keep it under ~6 words.\n\n'
+        + "\n".join(blocks) +
+        '\n\nOutput ONLY a JSON array: [{"id":"g1","intent":"…"}, ...]'
+    )
+    labels = _run_pass(kind, binary, prompt, model, thinking=CLUSTER_THINKING, tag="label-clusters",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    for h in work:
+        it = str((labels.get(h.group) or {}).get("intent", "")).strip()
+        if it:
+            h.intent = it
+
+
 def classify(
     hunks: list[Hunk],
     *,
