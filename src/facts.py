@@ -66,6 +66,50 @@ _TEST_MARKER = re.compile(
 # Java/TS/C#/PHP keyword; Go (structural), Rust (`impl..for`), C++ (`: public`) say
 # it differently, so this stays empty there (a non-vote, not a wrong vote).
 _IMPLEMENTS = re.compile(r"\bimplements\s+([A-Z]\w*)")
+# A module directive (`"use client"` / `'use strict'`) — ambient header, no logic.
+_DIRECTIVE = re.compile(r"""^\s*["'](?:use [a-z]+)["'];?\s*$""")
+
+
+def _is_ambient_line(stripped: str) -> bool:
+    """One BODY line (marker already removed) that carries NO behavioral logic — a
+    blank, a comment, a module directive, an import/re-export, or a pure type/interface
+    declaration. The leading run of these is the 'environment header' a fused hunk opens
+    with before its real logic (the §SPANS import-peel rule, applied deterministically)."""
+    s = stripped.strip()
+    if not s or s.startswith(("//", "#", "/*", "*", "*/")):
+        return True
+    if _DIRECTIVE.match(s) or _IMPORT_LINE.search(s):
+        return True
+    return bool(_TYPE_DECL.search(s)) and not _CODE_DEF.search(s) and not _LOGIC.search(s)
+
+
+def leading_ambient_lines(hunk: Hunk) -> int:
+    """Count of leading BODY lines (1-based body index, the span/gutter numbering) that
+    are an AMBIENT header — imports / directives / blanks / pure type-decls — stopping at
+    the first line of real code (a def, a value, JSX, logic). This is the deterministic
+    twin of the LLM prompt's 'do NOT let leading imports decide a hunk's role': it lets
+    the renderer peel a fused hunk's import block into its own `environment` span while
+    the LOGIC below keeps its role.
+
+    Returns 0 when there is no peelable header (k == 0), when the WHOLE body is ambient
+    (handled already by the flat `imports_only`/`type_decl_only` env role — nothing to
+    split), or when the header is only blanks/comments (no import/directive/type-decl —
+    not worth a span). Operates on body lines INCLUDING context/removed; removed lines
+    map to None new-side and drop out when the span is converted to a file range."""
+    body = hunk.text.splitlines()[1:]  # drop the @@ header; body is 1-based
+    k = 0
+    saw_anchor = False  # a real import/directive/type-decl, not just blank/comment
+    for raw in body:
+        stripped = raw[1:] if raw[:1] in "+- " else raw
+        if not _is_ambient_line(stripped):
+            break
+        k += 1
+        s = stripped.strip()
+        if s and not s.startswith(("//", "#", "/*", "*", "*/")):
+            saw_anchor = True
+    if not saw_anchor or k == 0 or k >= len(body):
+        return 0
+    return k
 
 
 @dataclass

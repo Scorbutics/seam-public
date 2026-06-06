@@ -184,9 +184,27 @@ def _primary_symbol(f: HunkFacts, h: Hunk, distinctive: set[str]) -> str:
     lowercase local and the section header names a Component/Type, use that instead."""
     m = _SECTION_DEF.search(h.section_header or "")
     enclosing_def = m.group(1) if m else ""
+    # File-top hunk (no @@ header): the enclosing component's signature is a CONTEXT line
+    # in the body (the hunk edits its body; the regex producer only adds-line defs miss it).
+    # Recover it — the first Component/fn-cased name declared in the hunk — so the seam is
+    # named after the component, not an added constant. (A tree-sitter producer resolves
+    # this enclosing directly; this is the regex path's degraded equivalent.)
+    if not enclosing_def:
+        enclosing_def = next((n for n in _SECTION_DEF.findall(h.text)
+                              if n[:1].isupper() and not n.isupper()), "")
     pref = sorted(f.defines & distinctive) or sorted(f.defines)
-    best = pref[0] if pref else ""
-    if enclosing_def and (not best or (best[:1].islower() and enclosing_def[:1].isupper())):
+    # A SCREAMING_CASE constant (`MAX_BADGES_TWO_ROWS`) is passive config, rarely the
+    # seam subject — pick a Component/fn define (`WebhookListItem`) over it when both
+    # exist (the file-top case, where there is no enclosing @@ header to fall back to).
+    best = (next((s for s in pref if not s.isupper()), pref[0]) if pref else "")
+    # The enclosing @@ scope names what the hunk MODIFIES — a strong 'aboutness' signal.
+    # Prefer it over the best define when that define is a poor subject: a lowercase
+    # local (`readOnly`) OR a SCREAMING_CASE constant (`MAX_BADGES_TWO_ROWS` — passive
+    # config, rarely the seam subject), as long as the enclosing names a Component/fn.
+    enc_is_component = bool(enclosing_def) and enclosing_def[:1].isupper() and not enclosing_def.isupper()
+    if enclosing_def and (not best
+                          or (best[:1].islower() and enclosing_def[:1].isupper())
+                          or (best.isupper() and enc_is_component)):
         return enclosing_def
     if best:
         return best
