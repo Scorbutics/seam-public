@@ -269,6 +269,23 @@ def extract(h: Hunk) -> HunkFacts:
     return facts_from_texts(h.text, _mask_code(h.text), h.file_path, h.section_header)
 
 
+def new_side_lines(hunk: Hunk) -> dict[int, int | None]:
+    """Map each BODY line (1-based, the numbering segment_link_by_core / span ranges use)
+    to its NEW-side file line; removed (-) lines → None. Converts a body-line span range
+    to the editor line range to decorate. Hunk-level (derived from the @@ header + markers),
+    so the engine can compute placement file ranges without reading the file."""
+    m = re.search(r"\+(\d+)", hunk.text.splitlines()[0] if hunk.text else "")
+    cur = int(m.group(1)) if m else 1
+    out: dict[int, int | None] = {}
+    for i, raw in enumerate(hunk.text.splitlines()[1:], 1):
+        if raw.startswith("-"):
+            out[i] = None
+        else:
+            out[i] = cur
+            cur += 1
+    return out
+
+
 # --------------------------------------------------------------------------- full-file slicing
 _HUNK_HEADER = re.compile(r"@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 

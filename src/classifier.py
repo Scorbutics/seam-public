@@ -932,17 +932,26 @@ def _core_snippet(h: Hunk) -> str:
     return "\n".join(h.text.splitlines()[1:][:_CORE_SNIPPET_LINES])
 
 
-def _build_reconcile_prompt(cores: dict[str, Hunk], targets: list[Hunk]) -> str:
+def _build_reconcile_prompt(cores: dict[str, Hunk], targets: list[Hunk],
+                            hints: dict[str, list[str]]) -> str:
     core_blocks = "\n---\n".join(
         f"CORE {cid}  [{h.file_path.rsplit('/', 1)[-1]}]\n{_core_snippet(h)}"
         for cid, h in cores.items())
-    edit_blocks = "\n---\n".join(
-        f"EDIT {h.id}  [{h.file_path.rsplit('/', 1)[-1]}]  role={h.role}\n{_reconcile_snippet(h)}"
-        for h in targets)
+
+    def _edit_block(h: Hunk) -> str:
+        hint = ", ".join(f'{c}="{cores[c].seam_label or c}"'
+                         for c in hints.get(h.id, []) if c in cores) or "(none found)"
+        return (f"EDIT {h.id}  [{h.file_path.rsplit('/', 1)[-1]}]  role={h.role}\n"
+                f"{_reconcile_snippet(h)}\n  symbols suggest: {hint}")
+
+    edit_blocks = "\n---\n".join(_edit_block(h) for h in targets)
     task2 = (
-        "TASK 2 — for each EDIT, which CORES does it ACTUALLY depend on — calls, modifies, is "
-        "configured/typed by, or routes to — BY MEANING? Exclude cores it merely co-renders a "
-        "shared component with. One, several, or NONE; choose only from the CORE ids.\n\n"
+        "TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY "
+        "depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The "
+        "'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the "
+        "ones that are real couplings, DROP any it merely co-renders/co-imports a shared "
+        "component with, and ADD any real coupling the scan missed. One, several, or NONE; "
+        "choose only from the CORE ids.\n\n"
         if targets else "")
     return (
         "A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.\n\n"
@@ -957,19 +966,21 @@ def _build_reconcile_prompt(cores: dict[str, Hunk], targets: list[Hunk]) -> str:
 
 
 def reconcile_llm(cores: dict[str, Hunk], targets: list[Hunk], *,
+                  hints: dict[str, list[str]] | None = None,
                   model: str = "claude-haiku-4-5", claude_bin: str | None = None,
                   verbose: bool = False, debug: bool = False,
                   debug_path: str | None = None, **_ignore):
-    """The hybrid-wiring reconciliation, in ONE LLM call (the inverted design: LLM first,
-    determinism confronts). It (1) NAMES each core with a technical-intent label — replacing
-    the symbol-derived seam label — and (2) DRAWS each over-wired EDIT's true dependency line
-    BY MEANING (choosing from all cores). Returns (labels, drawn): {core_id: label},
-    {edit_id: [core_id, ...]}. Pure — the engine applies labels and confronts the draw against
-    the deterministic (symbol) wiring."""
+    """The hybrid wiring, LLM-FIRST (the inverted design): in ONE call the LLM (1) NAMES each
+    core with a technical-intent label and (2) DRAWS each EDIT's true dependency line BY MEANING,
+    with the deterministic symbol candidates given as a HINT (not the authority). Returns
+    (labels, drawn): {core_id: label}, {edit_id: [core_id, ...]}. Pure — the engine applies the
+    labels and GROUNDS the draw against the deterministic (symbol) wiring (re-adds owned-symbol
+    edges the LLM missed). `drawn` omits a hunk only when the LLM gave no list for it (→ keep the
+    deterministic wires); an explicit empty list means 'depends on none'."""
     if not cores:
         return {}, {}
     kind, binary = resolve_backend(claude_bin)
-    prompt = _build_reconcile_prompt(cores, targets)
+    prompt = _build_reconcile_prompt(cores, targets, hints or {})
     out = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile",
                     verbose=verbose, debug=debug, debug_path=debug_path)
     labels = {cid: str(o.get("label", "")).strip()
@@ -977,7 +988,8 @@ def reconcile_llm(cores: dict[str, Hunk], targets: list[Hunk], *,
     drawn = {h.id: [c for c in (out.get(h.id) or {}).get("wires", []) if c in cores]
              for h in targets if isinstance((out.get(h.id) or {}).get("wires"), list)}
     if verbose:
-        print(f"[reconcile] LLM named {len(labels)} seams, drew {len(drawn)} edits", file=sys.stderr)
+        print(f"[reconcile] LLM named {len(labels)} seams, drew {len(drawn)}/{len(targets)} edits",
+              file=sys.stderr)
     return labels, drawn
 
 

@@ -140,6 +140,41 @@ def test_phase2_leaf_cores_have_no_outward_placement():
     assert "h1" not in core_out and "h2" not in core_out
 
 
+def test_engine_writes_core_sibling_placements_to_data_model():
+    # The OVERLAP is engine state now: classify must write `placements` onto the core,
+    # one `link` placement per sibling seam — readable WITHOUT the renderer.
+    child, form, parent = _siblings()
+    hunks = [child, form, parent]
+    classifier_det.classify(hunks)
+    p = next(h for h in hunks if h.id == "h3")
+    sibling = {(pl.seam, pl.role) for pl in p.placements if pl.seam}
+    assert sibling == {("h1", "link"), ("h2", "link")}, p.placements
+    # leaf cores reference nothing outward → no seam-targeted placements
+    assert not any(pl.seam for pl in next(h for h in hunks if h.id == "h1").placements)
+
+
+def test_engine_writes_header_peel_placement():
+    # A fused hunk (imports then logic) gets a header-peel placement: seam=="" (own
+    # placement), role=="environment", over the leading import block.
+    hunks = parser.parse(_E2E_DIFF)
+    classifier_det.classify(noise_filter.classify(hunks))
+    parent = next(h for h in hunks if h.file_path == "parent.tsx")
+    peels = [pl for pl in parent.placements if not pl.seam]
+    assert len(peels) == 1 and peels[0].role == "environment", parent.placements
+    assert peels[0].start <= peels[0].end
+
+
+def test_placements_survive_json_roundtrip():
+    # Placements are part of the classified state, so --dump-classified / --from-classified
+    # must preserve them (otherwise the renderer would silently lose the overlap on reload).
+    hunks = parser.parse(_E2E_DIFF)
+    classifier_det.classify(noise_filter.classify(hunks))
+    reloaded = parser.hunks_from_json(parser.hunks_to_json(hunks))
+    before = {h.id: [(p.seam, p.role, p.start, p.end) for p in h.placements] for h in hunks}
+    after = {h.id: [(p.seam, p.role, p.start, p.end) for p in h.placements] for h in reloaded}
+    assert before == after
+
+
 def test_phase2_ambient_namesake_is_not_a_sibling_anchor():
     # Two cores both DEFINE `Helper` → def_freq>1 → ambient → a body mentioning Helper
     # must NOT wire either (else every namesake hairballs).

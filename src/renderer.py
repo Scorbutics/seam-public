@@ -125,7 +125,8 @@ def _build_clusters(hunks: list[Hunk], repo: str | None = None) -> tuple[list[di
     # only in the seam it wires (§B), instead of the whole block in every seam.
     # `core_span_map` is the OVERLAP case: a core that references sibling cores is also
     # placed (as a link sub-range) into each sibling's seam — its meaning is seam-dependent.
-    span_map, core_span_map = _span_map(hunks, repo)
+    # Both are READ from the engine's placements (classifier_det.assign_spans), not computed.
+    span_map, core_span_map = _span_map(hunks)
     non_noise = [h for h in hunks if h.role not in ("noise", "test")]
     # Link/env hunks across ALL clusters — a precisely-located span may cross into
     # another cluster's seam (a webhook render's AppHeader region belongs in the
@@ -303,108 +304,27 @@ def _hunk_line_span(h: Hunk) -> tuple[int, int]:
     return (start, start + max(count, 1) - 1)
 
 
-def _new_side_lines(h: Hunk) -> dict[int, int | None]:
-    """Map each BODY line (1-based, the numbering segment_link_by_core uses) to its
-    NEW-side file line; removed (-) lines -> None. Lets a span's body-line range be
-    converted to the editor line range the extension decorates."""
-    m = re.search(r"\+(\d+)", h.header_line())
-    cur = int(m.group(1)) if m else 1
-    out: dict[int, int | None] = {}
-    for i, raw in enumerate(h.text.splitlines()[1:], 1):
-        if raw.startswith("-"):
-            out[i] = None
-        else:
-            out[i] = cur
-            cur += 1
-    return out
-
-
-def _span_map(hunks: list[Hunk], repo: str | None = None) -> tuple[
+def _span_map(hunks: list[Hunk]) -> tuple[
         dict[str, dict[str, tuple[int, int]]], dict[str, dict[str, tuple[int, int]]]]:
-    """Per-hunk, per-seam sub-range placement (§B span decomposition). Returns
-    (link_spans, core_spans), both {hunk_id: {core_seam_id: (file_start, file_end)}}:
+    """READ the engine-computed `placements` (classifier_det.assign_spans) into the two
+    per-(hunk,seam) maps the seam assembly consumes — pure presentation, no computation:
 
-      - link_spans — a non-core hunk (LINK/ENVIRONMENT) that wires SEVERAL cores splits
-        into the per-core region wiring each (an import block wiring 3 cores → 3 per-core
-        imports). Only hunks where grounding locates >= 2 distinct cores split.
-      - core_spans — a CORE hunk that REFERENCES other cores' distinctive symbols (the
-        big container rendering sibling components: EventWebhooksTab → WebhookVersionCTA,
-        WebhookForm, …). Each referenced region is placed as a LINK sub-range in that
-        SIBLING's seam, while the core stays whole/core in its OWN seam. This is the
-        OVERLAP case: the meaning of a region is seam-dependent (core here, link there),
-        so it is NOT a partition and does NOT change the hunk's flat role. >= 1 located
-        sibling is enough (a single coupling is worth showing).
+      - link_spans — a non-core hunk (LINK/ENVIRONMENT) split into the per-core region
+        wiring each core it touches.
+      - core_spans — a CORE placed as a LINK sub-range into a SIBLING core's seam (the
+        OVERLAP: meaning is seam-dependent — core in its own seam, link in the sibling's).
 
-    A core reached via an alias/wrapper is absent (falls back to whole in that seam);
-    ambient env with no core symbols (CSS, config) locates nothing and is left whole.
-    Deterministic; runs after classify, no LLM."""
-    from collections import Counter
-    from .symbol_edges import segment_link_by_core, resolve_alias
-    from .lang import _defs_refs, _added
-    core_defs = {h.id: _defs_refs(h.text)[0] for h in hunks if h.role == "core"}
-    seam_of = {h.id: (h.seam or h.id) for h in hunks if h.role == "core"}
-    # A core-def symbol owned by exactly ONE core is a clean sibling anchor; one defined
-    # by several cores is ambient (a namesake) — drop it so a body doesn't wire every core.
-    def_freq = Counter(s for defs in core_defs.values() for s in defs)
-    out: dict[str, dict[str, tuple[int, int]]] = {}
-    core_out: dict[str, dict[str, tuple[int, int]]] = {}
-
-    def _locate(h: Hunk, targets: dict[str, set[str]]) -> dict[str, tuple[int, int]]:
-        seg = segment_link_by_core(h, targets)
-        nmap = _new_side_lines(h)
-        spans: dict[str, tuple[int, int]] = {}
-        for cid, ranges in seg.items():
-            flines = [fl for (s, e) in ranges for ln in range(s, e + 1)
-                      if (fl := nmap.get(ln)) is not None]
-            if flines:
-                spans[seam_of.get(cid, cid)] = (min(flines), max(flines))
-        return spans
-
+    Both are {hunk_id: {seam_id: (file_start, file_end)}}. The leading-ambient header peel
+    (a placement with seam=="") is read separately by `_role_blocks`."""
+    link_spans: dict[str, dict[str, tuple[int, int]]] = {}
+    core_spans: dict[str, dict[str, tuple[int, int]]] = {}
     for h in hunks:
-        if h.role == "core":
-            own = h.seam or h.id
-            sib = {cid: {s for s in d if def_freq[s] <= 1}
-                   for cid, d in core_defs.items()
-                   if cid != h.id and seam_of.get(cid) != own}
-            sib = {cid: d for cid, d in sib.items() if d}
-            spans = _locate(h, sib) if sib else {}
-            spans.pop(own, None)  # never place a core into its own seam as a link
-            if spans:
-                core_out[h.id] = spans
-            continue
-        if h.role not in ("link", "environment"):
-            continue
-        wired = [c for c in h.wires if c in core_defs]
-        if len(wired) < 2:
-            continue
-        cd = {c: set(core_defs[c]) for c in wired}
-        seg = segment_link_by_core(h, cd)
-        # ALIAS resolution (filesystem resolver): a core wired but NOT located by
-        # literal symbol may be reached via a local wrapper (block uses
-        # `NewWebhookButton` for core `CreateNewWebhookButton`). Read the file and map
-        # the wrapper to the core, then re-locate. Best-effort; skipped without a repo.
-        unlocated = [c for c in wired if c not in seg]
-        if unlocated and repo:
-            try:
-                ftext = Path(repo, h.file_path).read_text(encoding="utf-8")
-                used = set(re.findall(r"<([A-Z]\w+)", _added(h.text)))
-                aliases = resolve_alias(used, {c: core_defs[c] for c in unlocated}, ftext)
-                if aliases:
-                    for c, names in aliases.items():
-                        cd[c] |= names
-                    seg = segment_link_by_core(h, cd)
-            except OSError:
-                pass
-        nmap = _new_side_lines(h)
-        spans = {}
-        for cid, ranges in seg.items():
-            flines = [fl for (s, e) in ranges for ln in range(s, e + 1)
-                      if (fl := nmap.get(ln)) is not None]
-            if flines:
-                spans[seam_of.get(cid, cid)] = (min(flines), max(flines))
-        if len(spans) >= 2:                 # only worth splitting if >=2 located
-            out[h.id] = spans
-    return out, core_out
+        for p in h.placements:
+            if not p.seam:
+                continue  # the header peel — handled in _role_blocks
+            dst = core_spans if h.role == "core" else link_spans
+            dst.setdefault(h.id, {})[p.seam] = (p.start, p.end)
+    return link_spans, core_spans
 
 
 def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str],
@@ -423,9 +343,9 @@ def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str],
     `role_for` overrides a hunk's rendered role for THIS seam (a core placed in a sibling
     seam renders as a `link`). `core_span_map` supplies the sub-range for such a placed
     core. When a hunk is placed WHOLE (no sub-range) and opens with an import/declaration
-    header, that header is peeled into its own `environment` block (the §SPANS import-peel,
-    deterministic) so the leading imports don't read as part of the logic below."""
-    from .facts import leading_ambient_lines
+    header, that header is peeled into its own `environment` block (the §SPANS import-peel)
+    — read from the engine's `placements` (seam=="") so the leading imports don't read as
+    part of the logic below."""
     role_for = role_for or {}
     ordered = sorted(hunks, key=lambda h: (h.file_path, _hunk_start_line(h)))
     blocks: list[dict] = []
@@ -461,18 +381,15 @@ def _role_blocks(hunks: list[Hunk], key_prefix: str, diffs: dict[str, str],
             blocks.append(_block(eff_role, span[0], span[1], key))
             continue
 
-        # Import-peel (§SPANS): a whole-placed hunk that opens with an import/decl header
-        # splits into an `environment` block (the header) + its real role (the logic).
-        k = leading_ambient_lines(h) if eff_role in ("core", "link") else 0
+        # Import-peel (§SPANS): a whole-placed hunk whose engine `placements` carry a header
+        # peel (seam=="") splits into an `environment` block (the header) + its real role
+        # (the logic below it, from the header's end to the hunk's end).
         full_start, full_end = _hunk_line_span(h)
-        if k:
-            nmap = _new_side_lines(h)
-            head = [fl for i in range(1, k + 1) if (fl := nmap.get(i)) is not None]
-            rest = [fl for i in range(k + 1, len(h.text.splitlines())) if (fl := nmap.get(i)) is not None]
-            if head and rest:
-                blocks.append(_block("environment", min(head), max(head), f"{key}-env"))
-                blocks.append(_block(eff_role, min(rest), max(rest), key))
-                continue
+        peel = next((p for p in h.placements if not p.seam), None)
+        if peel and eff_role in ("core", "link") and peel.end < full_end:
+            blocks.append(_block("environment", peel.start, peel.end, f"{key}-env"))
+            blocks.append(_block(eff_role, peel.end + 1, full_end, key))
+            continue
         blocks.append(_block(eff_role, full_start, full_end, key))
     return blocks
 

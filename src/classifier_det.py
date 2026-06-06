@@ -41,12 +41,14 @@ from __future__ import annotations
 
 import re
 import sys
+from collections import Counter
+from pathlib import Path
 
 from . import ROLES
-from .facts import FactsProvider, HunkFacts, RegexFactsProvider
-from .lang import _diff_imports, _STOP
-from .parser import Hunk
-from .symbol_edges import candidate_wirings
+from .facts import FactsProvider, HunkFacts, RegexFactsProvider, leading_ambient_lines, new_side_lines
+from .lang import _added, _defs_refs, _diff_imports, _STOP
+from .parser import Hunk, Placement
+from .symbol_edges import candidate_wirings, resolve_alias, segment_link_by_core
 
 # A non-referenced hunk needs this many decision lines to read as core on magnitude alone.
 _LOGIC_CORE_THRESHOLD = 2
@@ -348,6 +350,84 @@ def assign_clusters(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
             h.intent = intent
 
 
+# --------------------------------------------------------------------------- spans / overlap
+def _locate(h: Hunk, targets: dict[str, set[str]], nmap: dict[str, int | None],
+            seam_of: dict[str, str]) -> dict[str, tuple[int, int]]:
+    """Find, per target core, the NEW-side line range of the region in `h`'s body that
+    references that core's symbols → {seam_id: (file_start, file_end)}. The grounding
+    floor (segment_link_by_core, body lines) converted to file lines via `nmap`."""
+    seg = segment_link_by_core(h, targets)
+    spans: dict[str, tuple[int, int]] = {}
+    for cid, ranges in seg.items():
+        flines = [fl for (s, e) in ranges for ln in range(s, e + 1)
+                  if (fl := nmap.get(ln)) is not None]
+        if flines:
+            spans[seam_of.get(cid, cid)] = (min(flines), max(flines))
+    return spans
+
+
+def assign_spans(work: list[Hunk], repo: str | None = None) -> None:
+    """SPANS / OVERLAP pass (reads roles + wiring): fill `h.placements` — the per-seam
+    sub-range attachments + the leading-ambient header peel — so the renderer presents the
+    overlap without recomputing it. Deterministic, engine-agnostic (works off the diff text
+    and the flat roles whatever set them), and ADDITIVE (never touches role/seam/wires).
+
+      - PEEL (Phase 1): a fused core/link that opens with an import/decl header gets an
+        `environment` placement (seam="") over that header.
+      - CORE→SIBLING (Phase 2, the OVERLAP): a core whose body references OTHER cores'
+        DISTINCTIVE symbols is placed as a `link` sub-range into each sibling's seam, while
+        it stays whole/core in its own seam — meaning is seam-dependent.
+      - LINK SPLIT: a link/env wiring SEVERAL cores splits into the per-core region wiring
+        each (only when >= 2 are located); a core reached via an alias/wrapper is resolved
+        against the working-tree file when `repo` is given (best-effort).
+    """
+    core_defs = {h.id: _defs_refs(h.text)[0] for h in work if h.role == "core"}
+    seam_of = {h.id: (h.seam or h.id) for h in work if h.role == "core"}
+    def_freq = Counter(s for defs in core_defs.values() for s in defs)
+    for h in work:
+        h.placements = []
+        nmap = new_side_lines(h)
+        if h.role in ("core", "link"):
+            k = leading_ambient_lines(h)
+            if k:
+                head = [fl for i in range(1, k + 1) if (fl := nmap.get(i)) is not None]
+                rest = [fl for i in range(k + 1, len(h.text.splitlines()))
+                        if (fl := nmap.get(i)) is not None]
+                if head and rest:
+                    h.placements.append(Placement(seam="", role="environment",
+                                                  start=min(head), end=max(head)))
+        if h.role == "core":
+            own = h.seam or h.id
+            sib = {cid: {s for s in d if def_freq[s] <= 1}
+                   for cid, d in core_defs.items()
+                   if cid != h.id and seam_of.get(cid) != own}
+            sib = {cid: d for cid, d in sib.items() if d}
+            spans = _locate(h, sib, nmap, seam_of) if sib else {}
+            spans.pop(own, None)
+            for seam, (s, e) in spans.items():
+                h.placements.append(Placement(seam=seam, role="link", start=s, end=e))
+        elif h.role in ("link", "environment"):
+            wired = [c for c in h.wires if c in core_defs]
+            if len(wired) >= 2:
+                cd = {c: set(core_defs[c]) for c in wired}
+                seg = segment_link_by_core(h, cd)
+                unlocated = [c for c in wired if c not in seg]
+                if unlocated and repo:
+                    try:
+                        ftext = Path(repo, h.file_path).read_text(encoding="utf-8")
+                        used = set(re.findall(r"<([A-Z]\w+)", _added(h.text)))
+                        aliases = resolve_alias(used, {c: core_defs[c] for c in unlocated}, ftext)
+                        if aliases:
+                            for c, names in aliases.items():
+                                cd[c] |= names
+                    except OSError:
+                        pass
+                spans = _locate(h, cd, nmap, seam_of)
+                if len(spans) >= 2:                 # only worth splitting if >= 2 located
+                    for seam, (s, e) in spans.items():
+                        h.placements.append(Placement(seam=seam, role=h.role, start=s, end=e))
+
+
 # --------------------------------------------------------------------------- main
 def classify(
     hunks: list[Hunk],
@@ -372,6 +452,7 @@ def classify(
     assign_wiring(work, facts)
     reconcile_wiring(work, facts)   # deterministic over-wiring cleanup (hubs protected; gold-safe)
     assign_clusters(work, facts)
+    assign_spans(work)              # per-seam overlap placements + header peel (presentation IR)
     if verbose:
         counts: dict[str, int] = {}
         for h in work:

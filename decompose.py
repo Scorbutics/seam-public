@@ -85,6 +85,11 @@ def main(argv: list[str] | None = None) -> int:
         if not hunks:
             print("error: no hunks in classified file", file=sys.stderr)
             return 1
+        # Back-compat: dumps written before `placements` existed carry none. They're a pure
+        # function of the diff text + flat roles, so reconstruct them (deterministic, no LLM)
+        # rather than silently dropping the overlap on re-render.
+        if not any(h.placements for h in hunks):
+            classifier_det.assign_spans([h for h in hunks if h.role != "noise"], repo=args.repo)
         if args.verbose:
             print(f"[decompose] loaded {len(hunks)} pre-classified hunks; skipping classifier")
         source_label = args.from_classified
@@ -165,7 +170,8 @@ def main(argv: list[str] | None = None) -> int:
             engine_mod.classify(remaining, cluster=cluster, roles=roles, wiring=wiring,
                                 facts_provider=facts_provider, model=args.model,
                                 claude_bin=args.claude_bin, context_window=args.context_window,
-                                verbose=args.verbose, debug=args.debug, debug_path=args.out)
+                                verbose=args.verbose, debug=args.debug, debug_path=args.out,
+                                repo=args.repo)
         except classifier.ClassifierError as exc:
             print(f"error: classification failed: {exc}", file=sys.stderr)
             return 3

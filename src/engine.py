@@ -45,6 +45,7 @@ def classify(
     verbose: bool = False,
     debug: bool = False,
     debug_path: str | None = None,
+    repo: str | None = None,
 ) -> None:
     """Run each pass on its selected engine, in dependency order, mutating `hunks`."""
     # All-LLM → the optimized concurrent path (cluster ∥ roles, then wiring).
@@ -52,6 +53,8 @@ def classify(
         classifier.classify(hunks, model=model, claude_bin=claude_bin,
                             context_window=context_window, role_votes=role_votes,
                             verbose=verbose, debug=debug, debug_path=debug_path)
+        # Overlap placements are engine-agnostic (additive; never touch role/seam/wires).
+        classifier_det.assign_spans([h for h in hunks if h.role != "noise"], repo=repo)
         return
 
     work = [h for h in hunks if h.role != "noise"]
@@ -74,30 +77,30 @@ def classify(
     if wiring == "llm":
         classifier.assign_wiring(work, **llm)
     else:
-        classifier_det.assign_wiring(work, facts)             # candidates (recall)
-        classifier_det.reconcile_wiring(work, facts)          # tier 2: deterministic owned-prune (det + hybrid)
-        if wiring == "hybrid":
-            # INVERTED reconcile (LLM first, determinism confronts), in one call:
-            #  (1) the LLM NAMES every seam (technical intent) — replacing symbol labels;
-            #  (2) for each OVER-WIRED hunk it DRAWS the true dependency line by meaning;
-            # then determinism CONFRONTS the draw: keep the LLM's line + re-add any OWNED-symbol
-            # edge it missed (recall guard); abstain → keep the deterministic wires.
+        classifier_det.assign_wiring(work, facts)             # symbol candidates (the hint + grounding)
+        if wiring == "det":
+            classifier_det.reconcile_wiring(work, facts)      # deterministic owned-prune
+        else:  # hybrid — LLM-FIRST: the LLM draws the line, determinism grounds it.
+            #  (1) the LLM NAMES every seam (technical intent), and
+            #  (2) DRAWS each non-core hunk's dependency line BY MEANING, given the deterministic
+            #      symbol candidates only as a HINT; then determinism GROUNDS the draw — keep the
+            #      LLM's line and re-add any OWNED-symbol edge it missed. No LLM list for a hunk
+            #      → keep the deterministic candidates (don't strand).
             cores = {h.id: h for h in work if h.role == "core"}
-            targets = [h for h in work if h.role != "core"
-                       and len(h.wires) > classifier_det._RECONCILE_GATE]
+            targets = [h for h in work if h.role != "core"]
             if cores:
-                labels, drawn = classifier.reconcile_llm(cores, targets, **llm)
+                hints = {h.id: list(h.wires) for h in targets}
+                labels, drawn = classifier.reconcile_llm(cores, targets, hints=hints, **llm)
                 for cid, lab in labels.items():
                     cores[cid].seam_label = lab                # LLM-named seam (technical intent)
-                if targets:
-                    anchors = classifier_det._anchors(work, facts, set(cores))
-                    for h in targets:
-                        line = drawn.get(h.id)
-                        if not line:
-                            continue                           # abstained → keep deterministic wires
-                        m = classifier_det._mentions(facts[h.id])
-                        owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
-                        h.wires = sorted(set(line) | owned)    # LLM line + det owned (confront)
+                anchors = classifier_det._anchors(work, facts, set(cores))
+                for h in targets:
+                    line = drawn.get(h.id)
+                    if line is None:
+                        continue                               # LLM gave no list → keep det candidates
+                    m = classifier_det._mentions(facts[h.id])
+                    owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
+                    h.wires = sorted(set(line) | owned)        # LLM line (primary) + det owned (grounding)
     # CLUSTERS (reads wiring for the deterministic engine; independent for the LLM)
     if cluster == "llm":
         classifier.assign_clusters(work, **llm)
@@ -105,6 +108,10 @@ def classify(
         classifier_det.assign_clusters(work, facts)           # det grouping + structural labels
         if cluster == "hybrid":
             classifier.label_clusters_llm(work, **llm)         # LLM prose labels over det groups
+
+    # SPANS / OVERLAP (reads roles + wiring) — per-seam sub-range placements + header peel.
+    # Engine-agnostic and additive, so it's part of the classified state for every combo.
+    classifier_det.assign_spans(work, repo=repo)
 
     if verbose:
         counts: dict[str, int] = {}

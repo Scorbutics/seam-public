@@ -37,6 +37,29 @@ class Span:
 
 
 @dataclass
+class Placement:
+    """One rendered sub-region of a hunk: this hunk participates in seam `seam` with role
+    `role` over the NEW-SIDE line range [start, end] (a sub-range of the hunk, overlap
+    allowed). Computed by the engine (classifier_det.assign_spans) — the OVERLAP model:
+    a hunk's meaning is SEAM-DEPENDENT, so the same lines can be `core` in their home seam
+    AND `link` in a sibling's (a container rendering a sibling component). This is a part
+    of the classified state (dumped/emitted), so the renderer only READS it.
+
+    Two kinds:
+      - seam != ""  → an attachment into THAT seam (a link/env split per wired core, or a
+        core placed as a `link` sub-range into a sibling core's seam). `role` is the role
+        played IN that seam.
+      - seam == ""  → the leading-ambient HEADER peel of the hunk's OWN placement (role is
+        always "environment"): the import/decl block that opens a fused hunk, split off so
+        it doesn't read as part of the logic below. [start, end] is the header's range.
+    """
+    seam: str
+    role: str
+    start: int = 0           # new-side file line (inclusive)
+    end: int = 0             # new-side file line (inclusive)
+
+
+@dataclass
 class Hunk:
     id: str
     file_path: str           # display path (target, or source for deletions)
@@ -67,6 +90,11 @@ class Hunk:
     # and `spans` carries the truth; the flat fields above are kept in sync as a
     # summary (role = the core span's role if any, seam from the core span, wires
     # = union over spans) so existing role-keyed code keeps working.
+    placements: list[Placement] = field(default_factory=list)
+    # The OVERLAP / span-decomposition (engine-computed; see classifier_det.assign_spans).
+    # Per-seam sub-range attachments + the leading-ambient header peel — the renderer reads
+    # these to split a hunk across seams (a core also wiring its siblings) instead of
+    # recomputing. ADDITIVE to the flat fields, so the role/wiring golds are unaffected.
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""
@@ -87,6 +115,7 @@ def hunks_to_json(hunks: list[Hunk]) -> str:
 
 
 _SPAN_FIELDS = {f.name for f in fields(Span)}
+_PLACEMENT_FIELDS = {f.name for f in fields(Placement)}
 
 
 def hunks_from_json(text: str) -> list[Hunk]:
@@ -97,6 +126,8 @@ def hunks_from_json(text: str) -> list[Hunk]:
         kw = {k: v for k, v in d.items() if k in _HUNK_FIELDS}
         kw["spans"] = [Span(**{k: v for k, v in s.items() if k in _SPAN_FIELDS})
                        for s in d.get("spans", []) if isinstance(s, dict)]
+        kw["placements"] = [Placement(**{k: v for k, v in p.items() if k in _PLACEMENT_FIELDS})
+                            for p in d.get("placements", []) if isinstance(p, dict)]
         hunks.append(Hunk(**kw))
     return hunks
 
