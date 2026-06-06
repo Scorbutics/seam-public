@@ -182,17 +182,24 @@ diff --git a/cta.tsx b/cta.tsx
 
 
 @pytest.fixture()
-def e2e_placements():
-    """Run the real pipeline and return {hunk_id: [(seam_id, role), ...]} from emit."""
+def e2e_emit():
+    """Run the real pipeline and return the emit_seams_json payload + a path→id map."""
     hunks = parser.parse(_E2E_DIFF)
     classifier_det.classify(noise_filter.classify(hunks))
     emit = renderer.emit_seams_json(hunks)
+    ids = {h.file_path: h.id for h in hunks}
+    return emit, ids
+
+
+@pytest.fixture()
+def e2e_placements(e2e_emit):
+    """{hunk_id: [(seam_id, role), ...]} — every placement of every hunk."""
+    emit, ids = e2e_emit
     places: dict[str, list[tuple[str, str]]] = {}
     for c in emit["clusters"]:
         for s in c["seams"]:
             for h in s["hunks"]:
                 places.setdefault(h["id"], []).append((s["id"], h["role"]))
-    ids = {h.file_path: h.id for h in hunks}
     return places, ids
 
 
@@ -220,3 +227,22 @@ def test_e2e_sibling_seam_not_isolated(e2e_placements):
     # The CTA core is no longer an isolated core — its seam now holds a core and a link.
     seam_roles = {r for _, r in places.get(cta, [])} | _roles_in(places, parent, cta)
     assert {"core", "link"} <= seam_roles
+
+
+def test_e2e_overlap_ranges_intersect_for_gutter_split(e2e_emit):
+    """The VS Code gutter draws a SPLIT bar where one hunk's lines carry >1 role. That
+    only works if the emit places the SAME hunk with overlapping (file-line) ranges under
+    different roles. Pin that contract: the container's core range must intersect its
+    link range, so the extension's per-line role-set is {core, link} on the shared lines."""
+    emit, ids = e2e_emit
+    parent = ids["parent.tsx"]
+    ranges_by_role: dict[str, list[tuple[int, int]]] = {}
+    for c in emit["clusters"]:
+        for s in c["seams"]:
+            for h in s["hunks"]:
+                if h["id"] == parent:
+                    ranges_by_role.setdefault(h["role"], []).append((h["start"], h["end"]))
+    assert "core" in ranges_by_role and "link" in ranges_by_role, ranges_by_role
+    core_r = ranges_by_role["core"][0]
+    overlaps = any(not (lr[1] < core_r[0] or lr[0] > core_r[1]) for lr in ranges_by_role["link"])
+    assert overlaps, f"core {core_r} must intersect a link range {ranges_by_role['link']}"

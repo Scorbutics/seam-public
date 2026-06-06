@@ -72,6 +72,13 @@ let decoFill: Record<string, TDeco> = {};
 let decoBorder: Record<string, {
   top: TDeco; mid: TDeco; bottom: TDeco; single: TDeco; seamTop: TDeco; seamBottom: TDeco;
 }> = {};
+// GUTTER bar, separate from the fill so it can represent OVERLAP. A line's meaning is
+// SEAM-DEPENDENT: the same lines can be `core` in their home seam AND `link` in a sibling
+// seam (a container rendering a sibling component). In show-all (no focused seam) such a
+// line carries >1 role, so its bar is SPLIT — one stripe per role — instead of an arbitrary
+// single colour winning. Keyed by the sorted role-combo ("core" or "core|link"), built
+// lazily; `gutterKeys` tracks them all so a re-paint can clear the stale ones first.
+let decoGutter: Map<string, TDeco> = new Map();
 let lensProvider: SeamLensProvider;
 let gutterDir = "";
 let treeProvider: SeamTreeProvider;
@@ -265,22 +272,44 @@ function allDecos(role: string): TDeco[] {
 export function deactivate() {
   // Dispose decoration types only — do NOT wipe the persisted run (that's the cache).
   for (const role of ROLES) allDecos(role).forEach((d) => d.dispose());
+  for (const d of decoGutter.values()) d.dispose();
+  decoGutter.clear();
 }
 
-// FILL: background wash + gutter bar (SVG) + scrollbar mark, on every line of the hunk.
-function makeFillDecoration(color: string, key: string): TDeco {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6" height="18">` +
-              `<rect x="1.5" width="3" height="18" rx="1" fill="${color}"/></svg>`;
-  const file = path.join(gutterDir, `bar-${key}.svg`);
-  fs.writeFileSync(file, svg, "utf-8");
+// FILL: background wash + scrollbar mark on every line of the hunk. The gutter BAR is a
+// separate decoration (see gutterFor) so an overlapping line can show a split bar.
+function makeFillDecoration(color: string, _key: string): TDeco {
   return vscode.window.createTextEditorDecorationType({
-    gutterIconPath: vscode.Uri.file(file),
-    gutterIconSize: "contain",
     overviewRulerColor: color,
     overviewRulerLane: vscode.OverviewRulerLane.Left,
     backgroundColor: hexToRgba(color, ROLE_BG_ALPHA),
     isWholeLine: true,
   });
+}
+
+// GUTTER bar for a set of roles. One role → a solid bar; several (an OVERLAP) → vertical
+// stripes, one per role, left→right in ROLES order (core amber, link blue, …) so the eye
+// reads "core that also links" directly off the gutter. Cached by combo key.
+function gutterFor(roles: string[]): TDeco {
+  const ordered = ROLES.filter((r) => roles.includes(r));
+  const key = ordered.join("|") || "noise";
+  const hit = decoGutter.get(key);
+  if (hit) return hit;
+  const n = Math.max(1, ordered.length);
+  const stripes = (ordered.length ? ordered : ["noise"]).map((r, i) => {
+    const w = 3 / n;
+    return `<rect x="${1.5 + i * w}" width="${w}" height="18" fill="${ROLE_COLORS[r] ?? "#c0c0c0"}"/>`;
+  }).join("");
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6" height="18">${stripes}</svg>`;
+  const file = path.join(gutterDir, `bar-${key.replace(/\|/g, "_")}.svg`);
+  fs.writeFileSync(file, svg, "utf-8");
+  const deco = vscode.window.createTextEditorDecorationType({
+    gutterIconPath: vscode.Uri.file(file),
+    gutterIconSize: "contain",
+    isWholeLine: true,
+  });
+  decoGutter.set(key, deco);
+  return deco;
 }
 
 // BORDER: only the requested sides (CSS "top right bottom left"), so applying
@@ -460,12 +489,16 @@ function applyDecorations(editor: vscode.TextEditor) {
   const single: Record<string, vscode.Range[]> = {};
   for (const role of ROLES) { fill[role] = []; top[role] = []; mid[role] = []; bottom[role] = []; single[role] = []; }
   const line = (n: number) => new vscode.Range(n, 0, n, 0);
+  // Per editor line, the SET of roles covering it (across overlapping seam placements of
+  // the same hunk) — drives the gutter bar (split where >1 role) so overlap is visible.
+  const lineRoles: Map<number, Set<string>> = new Map();
   for (const { hunk: h } of entries) {
     if (focusIds && !focusIds.has(spanKey(h))) continue;   // focus: hide other seams/spans
     const role = ROLES.includes(h.role) ? h.role : "noise";
     const s = Math.max(0, h.start - 1);
     const e = Math.max(s, h.end - 1);
-    fill[role].push(new vscode.Range(s, 0, e, 0));    // wash + gutter on every line
+    fill[role].push(new vscode.Range(s, 0, e, 0));    // wash on every line
+    for (let n = s; n <= e; n++) (lineRoles.get(n) ?? lineRoles.set(n, new Set()).get(n)!).add(role);
     if (e === s) {
       single[role].push(line(s));                     // one-line hunk: full box
     } else {
@@ -474,6 +507,15 @@ function applyDecorations(editor: vscode.TextEditor) {
       if (e > s + 1) mid[role].push(new vscode.Range(s + 1, 0, e - 1, 0));
     }
   }
+  // GUTTER bars by role-combo: a line with one role gets a solid bar; an overlap line
+  // gets a split bar. Clear every previously-painted combo first so stale bars vanish.
+  const byCombo: Map<string, vscode.Range[]> = new Map();
+  for (const [n, roles] of lineRoles) {
+    const key = ROLES.filter((r) => roles.has(r)).join("|") || "noise";
+    (byCombo.get(key) ?? byCombo.set(key, []).get(key)!).push(line(n));
+  }
+  for (const deco of decoGutter.values()) editor.setDecorations(deco, []);
+  for (const [key, ranges] of byCombo) editor.setDecorations(gutterFor(key.split("|")), ranges);
   // SEAM boundaries (CROSS-FILE): the thick top sits on the seam's GLOBAL first
   // hunk and the thick bottom on its GLOBAL last hunk (seam-canonical order, same as
   // the tree) — so a file only shows the bracket edge if it contains that boundary
@@ -511,8 +553,10 @@ function clearAll() {
   model = undefined;
   fileIndex = new Map();
   resolveCache.clear();
-  for (const editor of vscode.window.visibleTextEditors)
+  for (const editor of vscode.window.visibleTextEditors) {
     for (const role of ROLES) allDecos(role).forEach((d) => editor.setDecorations(d, []));
+    for (const d of decoGutter.values()) editor.setDecorations(d, []);
+  }
   treeProvider?.refresh();
   lensProvider?.refresh();
   if (treeView) treeView.message = undefined;
