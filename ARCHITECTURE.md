@@ -55,7 +55,7 @@ Stages (`decompose.py` is the CLI entry):
   - `placements` — the engine-computed **overlap** model (§5)
 - **`Placement`** — one rendered sub-range of a hunk: `(seam, role, start, end)` over new-side file lines. `seam != ""` = an attachment into that seam (a link split per core, or a core placed as `link` into a sibling); `seam == ""` = the leading-ambient **header peel**. *The renderer only reads these.*
 - **`HunkFacts`** — the universal IR the deterministic passes reason over (§4): `defines`, `references`, `calls`, `enclosing`, `decisions` (logic magnitude), `implements`, `is_test`, `is_sql`, `imports_only`, `type_decl_only`.
-- A **seam** = one core + the hunks wiring it (seam id == core hunk id). A **cluster** = a product-intent group of seams.
+- A **seam** = one **technical intent** (one *or more* cores) + the hunks wiring it. Seam id = a representative core's id; several cores can share it. A **cluster** = a product-intent group of seams (seam ⊂ cluster). Cores are grouped into seams by `classifier_det.merge_seams` (deterministic floor: same file + enclosing component) and, in the hybrid path, `apply_seam_groups` (union of that floor with the LLM's intent grouping + shared label); the merge runs **after** clustering and unifies a seam's cores into one cluster.
 
 ---
 

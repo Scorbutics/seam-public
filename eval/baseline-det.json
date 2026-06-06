@@ -14,15 +14,15 @@
           "stdev": 0.0
         },
         "seams": {
-          "min": 18,
-          "max": 18,
-          "mean": 18,
+          "min": 16,
+          "max": 16,
+          "mean": 16,
           "stdev": 0.0
         },
         "clusters": {
-          "min": 17,
-          "max": 17,
-          "mean": 17,
+          "min": 16,
+          "max": 16,
+          "mean": 16,
           "stdev": 0.0
         }
       },
@@ -30,18 +30,18 @@
         "over_wired": 1,
         "max_seams_per_hunk": 5,
         "mean_seams_per_hunk": 1.64,
-        "seams": 18,
-        "isolated_cores": 10,
+        "seams": 16,
+        "isolated_cores": 8,
         "dangling_links": 0,
         "orphans": 0
       },
       "accuracy": {
         "role_accuracy": 0.981,
-        "cluster_f1": 0.692,
-        "wiring_precision": 0.458,
-        "wiring_recall": 0.562,
-        "wiring_fbeta": 0.475,
-        "wiring_f1": 0.505,
+        "cluster_f1": 0.669,
+        "wiring_precision": 0.424,
+        "wiring_recall": 0.521,
+        "wiring_fbeta": 0.44,
+        "wiring_f1": 0.47,
         "confusions": [
           {
             "gold": "environment",
@@ -194,9 +194,9 @@
           "stdev": 0.0
         },
         "seams": {
-          "min": 4,
-          "max": 4,
-          "mean": 4,
+          "min": 3,
+          "max": 3,
+          "mean": 3,
           "stdev": 0.0
         },
         "clusters": {
@@ -208,9 +208,9 @@
       },
       "health": {
         "over_wired": 0,
-        "max_seams_per_hunk": 4,
-        "mean_seams_per_hunk": 1.21,
-        "seams": 4,
+        "max_seams_per_hunk": 3,
+        "mean_seams_per_hunk": 0.89,
+        "seams": 3,
         "isolated_cores": 0,
         "dangling_links": 6,
         "orphans": 0
@@ -218,10 +218,10 @@
       "accuracy": {
         "role_accuracy": 0.792,
         "cluster_f1": 0.551,
-        "wiring_precision": 0.524,
+        "wiring_precision": 0.786,
         "wiring_recall": 0.367,
-        "wiring_fbeta": 0.482,
-        "wiring_f1": 0.424,
+        "wiring_fbeta": 0.64,
+        "wiring_f1": 0.418,
         "confusions": [
           {
             "gold": "core",
@@ -262,9 +262,9 @@
           "stdev": 0.0
         },
         "seams": {
-          "min": 4,
-          "max": 4,
-          "mean": 4,
+          "min": 3,
+          "max": 3,
+          "mean": 3,
           "stdev": 0.0
         },
         "clusters": {
@@ -277,9 +277,9 @@
       "health": {
         "over_wired": 0,
         "max_seams_per_hunk": 3,
-        "mean_seams_per_hunk": 2,
-        "seams": 4,
-        "isolated_cores": 1,
+        "mean_seams_per_hunk": 1.75,
+        "seams": 3,
+        "isolated_cores": 0,
         "dangling_links": 0,
         "orphans": 0
       },
@@ -289,7 +289,7 @@
         "wiring_precision": 0.8,
         "wiring_recall": 1.0,
         "wiring_fbeta": 0.833,
-        "wiring_f1": 0.75,
+        "wiring_f1": 0.778,
         "confusions": []
       },
       "health_gold": {
@@ -314,9 +314,9 @@
           "stdev": 0.0
         },
         "seams": {
-          "min": 4,
-          "max": 4,
-          "mean": 4,
+          "min": 2,
+          "max": 2,
+          "mean": 2,
           "stdev": 0.0
         },
         "clusters": {
@@ -328,9 +328,9 @@
       },
       "health": {
         "over_wired": 0,
-        "max_seams_per_hunk": 4,
-        "mean_seams_per_hunk": 2.6,
-        "seams": 4,
+        "max_seams_per_hunk": 2,
+        "mean_seams_per_hunk": 1.2,
+        "seams": 2,
         "isolated_cores": 1,
         "dangling_links": 0,
         "orphans": 0
@@ -341,7 +341,7 @@
         "wiring_precision": 0.833,
         "wiring_recall": 0.714,
         "wiring_fbeta": 0.806,
-        "wiring_f1": 0.8,
+        "wiring_f1": 0.839,
         "confusions": [
           {
             "gold": "link",

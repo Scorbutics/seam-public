@@ -955,12 +955,16 @@ def _build_reconcile_prompt(cores: dict[str, Hunk], targets: list[Hunk],
         if targets else "")
     return (
         "A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.\n\n"
-        "TASK 1 — give each CORE a short TECHNICAL-INTENT label (3–6 words: what this unit DOES, "
-        'e.g. "webhook form skeleton", "validate signature") — NOT a symbol name.\n\n'
+        "TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical "
+        "intent and may hold SEVERAL cores: cores that are the same logical change/feature "
+        "(several hunks of one component, or a component + its skeleton/header) share one "
+        '`seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what '
+        'the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct '
+        "intents get distinct seam keys; don't over-merge unrelated cores.\n\n"
         f"{task2}"
         f"CORES:\n{core_blocks}\n\n"
         + (f"EDITS:\n{edit_blocks}\n\n" if targets else "")
-        + 'Output ONLY a JSON array. Per CORE: {"id":"h8","label":"…"}.'
+        + 'Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}.'
         + (' Per EDIT: {"id":"h6","wires":["h8", …]}.' if targets else "")
     )
 
@@ -970,27 +974,32 @@ def reconcile_llm(cores: dict[str, Hunk], targets: list[Hunk], *,
                   model: str = "claude-haiku-4-5", claude_bin: str | None = None,
                   verbose: bool = False, debug: bool = False,
                   debug_path: str | None = None, **_ignore):
-    """The hybrid wiring, LLM-FIRST (the inverted design): in ONE call the LLM (1) NAMES each
-    core with a technical-intent label and (2) DRAWS each EDIT's true dependency line BY MEANING,
-    with the deterministic symbol candidates given as a HINT (not the authority). Returns
-    (labels, drawn): {core_id: label}, {edit_id: [core_id, ...]}. Pure — the engine applies the
-    labels and GROUNDS the draw against the deterministic (symbol) wiring (re-adds owned-symbol
-    edges the LLM missed). `drawn` omits a hunk only when the LLM gave no list for it (→ keep the
-    deterministic wires); an explicit empty list means 'depends on none'."""
+    """The hybrid wiring, LLM-FIRST (the inverted design): in ONE call the LLM (1) GROUPS cores
+    into technical-intent SEAMS (≥1 core each) and labels them, and (2) DRAWS each EDIT's true
+    dependency line BY MEANING, with the deterministic symbol candidates given as a HINT (not the
+    authority). Returns (labels, groups, drawn): {core_id: label}, {core_id: seam_key}, {edit_id:
+    [core_id, ...]}. Pure — the engine applies the grouping/labels and GROUNDS the draw against
+    the deterministic (symbol) wiring (re-adds owned-symbol edges the LLM missed). `drawn` omits a
+    hunk only when the LLM gave no list (→ keep det wires); an explicit empty list = 'depends on
+    none'."""
     if not cores:
-        return {}, {}
+        return {}, {}, {}
     kind, binary = resolve_backend(claude_bin)
     prompt = _build_reconcile_prompt(cores, targets, hints or {})
     out = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile",
                     verbose=verbose, debug=debug, debug_path=debug_path)
     labels = {cid: str(o.get("label", "")).strip()
               for cid, o in out.items() if cid in cores and str(o.get("label", "")).strip()}
+    # seam grouping: cores sharing a `seam` key are one technical-intent seam (≥1 core)
+    groups = {cid: str(o.get("seam", "")).strip()
+              for cid, o in out.items() if cid in cores and str(o.get("seam", "")).strip()}
     drawn = {h.id: [c for c in (out.get(h.id) or {}).get("wires", []) if c in cores]
              for h in targets if isinstance((out.get(h.id) or {}).get("wires"), list)}
     if verbose:
-        print(f"[reconcile] LLM named {len(labels)} seams, drew {len(drawn)}/{len(targets)} edits",
-              file=sys.stderr)
-    return labels, drawn
+        n_seams = len(set(groups.values())) if groups else len(labels)
+        print(f"[reconcile] LLM → {n_seams} seams over {len(cores)} cores, "
+              f"drew {len(drawn)}/{len(targets)} edits", file=sys.stderr)
+    return labels, groups, drawn
 
 
 def reconcile_roles_llm(work: list[Hunk], *, conf_threshold: float = 0.6,

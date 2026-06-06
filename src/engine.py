@@ -73,26 +73,28 @@ def classify(
         classifier_det.assign_roles(work, facts)              # det base
         if roles == "hybrid":
             classifier.reconcile_roles_llm(work, **llm)        # LLM re-judges the uncertain
-    # WIRING (reads roles)
+    # WIRING (reads roles). Seam MERGING is deferred until AFTER clustering: clusters are
+    # connected components over the FULL core-level wires, and merging collapses wires onto a
+    # representative (which would fragment the cluster graph). So wiring sets core-level wires
+    # here; `_seam_merge` (a thunk) is applied post-cluster.
+    _seam_merge = None
     if wiring == "llm":
         classifier.assign_wiring(work, **llm)
     else:
         classifier_det.assign_wiring(work, facts)             # symbol candidates (the hint + grounding)
         if wiring == "det":
             classifier_det.reconcile_wiring(work, facts)      # deterministic owned-prune
+            _seam_merge = lambda: classifier_det.merge_seams(work)   # same-component cores → seam
         else:  # hybrid — LLM-FIRST: the LLM draws the line, determinism grounds it.
-            #  (1) the LLM NAMES every seam (technical intent), and
-            #  (2) DRAWS each non-core hunk's dependency line BY MEANING, given the deterministic
-            #      symbol candidates only as a HINT; then determinism GROUNDS the draw — keep the
-            #      LLM's line and re-add any OWNED-symbol edge it missed. No LLM list for a hunk
-            #      → keep the deterministic candidates (don't strand).
+            #  (1) the LLM GROUPS cores into technical-intent SEAMS (≥1 core each) + names them,
+            #  (2) DRAWS each non-core hunk's dependency line BY MEANING, with the deterministic
+            #      symbol candidates as a HINT; determinism GROUNDS the draw (re-adds owned-symbol
+            #      edges it missed). No LLM list for a hunk → keep the deterministic candidates.
             cores = {h.id: h for h in work if h.role == "core"}
             targets = [h for h in work if h.role != "core"]
             if cores:
                 hints = {h.id: list(h.wires) for h in targets}
-                labels, drawn = classifier.reconcile_llm(cores, targets, hints=hints, **llm)
-                for cid, lab in labels.items():
-                    cores[cid].seam_label = lab                # LLM-named seam (technical intent)
+                labels, groups, drawn = classifier.reconcile_llm(cores, targets, hints=hints, **llm)
                 anchors = classifier_det._anchors(work, facts, set(cores))
                 for h in targets:
                     line = drawn.get(h.id)
@@ -101,13 +103,19 @@ def classify(
                     m = classifier_det._mentions(facts[h.id])
                     owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
                     h.wires = sorted(set(line) | owned)        # LLM line (primary) + det owned (grounding)
-    # CLUSTERS (reads wiring for the deterministic engine; independent for the LLM)
+                # Defer the LLM's intent-grouping merge until after clustering (see above).
+                _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups)
+    # CLUSTERS (reads the FULL wiring graph for the deterministic engine; independent for the LLM)
     if cluster == "llm":
         classifier.assign_clusters(work, **llm)
     else:
         classifier_det.assign_clusters(work, facts)           # det grouping + structural labels
         if cluster == "hybrid":
             classifier.label_clusters_llm(work, **llm)         # LLM prose labels over det groups
+
+    # SEAM MERGE (after clustering): collapse same-intent cores into multi-core seams.
+    if _seam_merge is not None:
+        _seam_merge()
 
     # SPANS / OVERLAP (reads roles + wiring) — per-seam sub-range placements + header peel.
     # Engine-agnostic and additive, so it's part of the classified state for every combo.

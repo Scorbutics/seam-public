@@ -26,7 +26,8 @@ What it does (deterministic, zero LLM):
                        proxy for "aboutness", brief §core/env).
   - WIRING: a non-core hunk wires to every core whose DISTINCTIVE subject it mentions
     (a core's subject = its defs + the modified enclosing symbol + its call subjects).
-    A seam IS one core + the hunks wiring it (seam id == core hunk id).
+    A seam IS one TECHNICAL INTENT (one or more cores, merged by `merge_seams`) + the hunks
+    wiring it; seam id = a representative core's id.
   - CLUSTERING by connected components over the wiring graph (links merge the cores
     they bridge). Intent is a STRUCTURAL label (the core's primary symbol) — product
     intent has no deterministic oracle and is left to the LLM cluster pass.
@@ -324,6 +325,101 @@ def assign_wiring(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
         h.spans = []
 
 
+def merge_seams(work: list[Hunk]) -> None:
+    """Group cores of the SAME technical intent into ONE seam (a seam = an intent, and may
+    hold SEVERAL cores), then re-point non-core wires to the seam. Deterministic floor:
+    cores in the same file editing the same enclosing component merge — e.g. three hunks of
+    one `WebhookForm` component become one seam instead of three. The renderer already groups
+    cores by `seam` id (renderer.py); the engine just wasn't producing multi-core seams.
+    Richer cross-file intent grouping is the LLM's job (the hybrid path). Idempotent; keeps
+    the representative core's existing label (so an LLM-named seam keeps its name)."""
+    cores = [h for h in work if h.role == "core"]
+    groups: dict[tuple, list[Hunk]] = {}
+    for c in cores:
+        m = _SECTION_DEF.search(c.section_header or "")
+        enc = m.group(1) if m else ""
+        gkey = (c.file_path, enc) if enc else (c.file_path, c.id)  # no enclosing → its own seam
+        groups.setdefault(gkey, []).append(c)
+    remap: dict[str, str] = {}
+    for (_file, enc), members in groups.items():
+        members.sort(key=lambda c: int(c.id[1:]) if c.id[1:].isdigit() else 0)
+        rep = members[0]
+        label = rep.seam_label or enc or rep.id
+        for c in members:
+            c.seam = rep.id
+            c.seam_label = label
+            c.group = rep.group          # a seam ⊂ one cluster: keep merged cores together
+            remap[c.id] = rep.id
+    for h in work:
+        if h.role != "core" and h.wires:
+            h.wires = sorted({remap.get(w, w) for w in h.wires})
+
+
+def _enclosing(c: Hunk) -> str:
+    m = _SECTION_DEF.search(c.section_header or "")
+    return m.group(1) if m else ""
+
+
+def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
+                      groups: dict[str, str]) -> None:
+    """Merge cores into technical-intent seams for the hybrid path — the UNION of two signals
+    so neither can over- or under-merge alone:
+      - deterministic FLOOR: same file + same enclosing component (the LLM tends to under-merge
+        — it split one component's hunks into sub-intents on cal.com);
+      - LLM grouping: cores the model put under the same `seam` key OR gave the same `label`
+        (can merge ACROSS files by intent — e.g. a component + its skeleton — which the floor
+        can't). Label is included because the model is more consistent on the label than the
+        key (it sometimes gives identical labels under different keys).
+    Cores connected by any signal land in one seam; wires re-point to the representative.
+    Labels prefer the LLM's (`labels`), else the enclosing component."""
+    cores = [h for h in work if h.role == "core"]
+    parent = {c.id: c.id for c in cores}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    def union(a, b):
+        parent[find(a)] = find(b)
+
+    # floor: same (file, enclosing component)
+    comp: dict[tuple, list[str]] = {}
+    for c in cores:
+        enc = _enclosing(c)
+        if enc:
+            comp.setdefault((c.file_path, enc), []).append(c.id)
+    # LLM: same seam key OR same (normalised) label
+    bykey: dict[str, list[str]] = {}
+    for c in cores:
+        if groups.get(c.id):
+            bykey.setdefault("k:" + groups[c.id], []).append(c.id)
+        lab = (labels.get(c.id) or "").strip().lower()
+        if lab:
+            bykey.setdefault("l:" + lab, []).append(c.id)
+    for ids in (*comp.values(), *bykey.values()):
+        for x in ids[1:]:
+            union(ids[0], x)
+
+    remap: dict[str, str] = {}
+    seam_members: dict[str, list[Hunk]] = {}
+    for c in cores:
+        seam_members.setdefault(find(c.id), []).append(c)
+    for root, members in seam_members.items():
+        members.sort(key=lambda c: int(c.id[1:]) if c.id[1:].isdigit() else 0)
+        rep = members[0]
+        label = labels.get(rep.id) or _enclosing(rep) or rep.seam_label or rep.id
+        for c in members:
+            c.seam = rep.id
+            c.seam_label = label
+            c.group = rep.group          # a seam ⊂ one cluster: keep merged cores together
+            remap[c.id] = rep.id
+    for h in work:
+        if h.role != "core" and h.wires:
+            h.wires = sorted({remap.get(w, w) for w in h.wires})
+
+
 def assign_clusters(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
     """CLUSTERING pass (reads wiring): connected components over the wiring graph; `intent`
     is a STRUCTURAL label (the cluster's core symbol). Product-intent prose is the LLM's
@@ -451,7 +547,8 @@ def classify(
     assign_roles(work, facts)
     assign_wiring(work, facts)
     reconcile_wiring(work, facts)   # deterministic over-wiring cleanup (hubs protected; gold-safe)
-    assign_clusters(work, facts)
+    assign_clusters(work, facts)    # cluster on the FULL wiring graph BEFORE merging seams
+    merge_seams(work)               # then group same-intent cores into multi-core seams
     assign_spans(work)              # per-seam overlap placements + header peel (presentation IR)
     if verbose:
         counts: dict[str, int] = {}
