@@ -44,15 +44,16 @@ independently (`--cluster`, `--roles`, `--wiring`):
 |---|---|---|---|---|
 | **cluster** (grouping) | **llm** | components + structural labels (F1 ~0.68) | grouping + prose labels (**F1 ~0.98**) | det grouping + LLM prose labels |
 | **roles** (core/link/env/test) | **det** | structure + magnitude (**~0.77**) | judgment + voting (~0.55) | det + LLM re-judges only the *uncertain* |
-| **wiring** (which core a hunk wires) | **hybrid** | subject anchoring (F1 ~0.63 vs ~0.24) | role-dominated | det + reconcile + **LLM prunes over-wired containers** |
+| **wiring** (which core a hunk wires) | **hybrid** | subject anchoring (F1 ~0.63 vs ~0.24) | role-dominated | det + reconcile, then **LLM names the seams & redraws over-wired containers by meaning; determinism confronts** |
 
 *(accuracy on the 4 shared gold cases.)* The **default** is `cluster=llm, roles=det,
 wiring=hybrid`: the LLM where it's the only reliable engine (grouping), deterministic where it
 wins (roles), and **deterministic-with-LLM-cleanup** where the deterministic tail over-wires
-(a big container that renders many shared components). The hybrid residual is **empty on a
-focused diff**, so it costs nothing beyond the deterministic pass there — the LLM is spent
-only on the genuinely-ambiguous over-wired hunks of a tangled diff (and never on legitimate
-hubs like a header/barrel, which are detected and left alone).
+(a big container that renders many shared components). The **inverted** reconcile (the LLM
+draws the line by *meaning*, then the deterministic symbol wiring *confronts* it — keeping the
+LLM's edges and re-adding any owned-symbol edge it missed) also **names every seam** with a
+technical-intent label (e.g. `render managed event type alert`) instead of a symbol (`readOnly`).
+On a focused diff there is nothing over-wired to redraw, so the LLM only names the seams.
 
 Presets: `--classifier det` (**fully offline**, no LLM — structural cluster labels) and
 `--classifier llm` (all LLM); a per-pass flag overrides the preset. All combinations share the

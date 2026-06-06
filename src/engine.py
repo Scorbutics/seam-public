@@ -9,8 +9,10 @@ first, LLM reconciliation on the residual only):
       det (beats the LLM, ~0.77 vs ~0.55);  llm;  hybrid = det + LLM re-judges only the
       UNCERTAIN (low-confidence) hunks.
   - wiring (which core a hunk wires to):
-      det (subject anchoring, F1 ~0.63 vs ~0.24);  llm;  hybrid = det + det-reconcile +
-      LLM prune of the OVER-WIRED residual (container hunks).
+      det (subject anchoring, F1 ~0.63 vs ~0.24);  llm;  hybrid = det + det-reconcile, then
+      the INVERTED reconcile — the LLM NAMES the seams (technical intent) and DRAWS each
+      over-wired hunk's line by MEANING, and determinism CONFRONTS the draw (keeps it + re-adds
+      owned-symbol edges it missed). LLM-first, determinism-checks — the opposite of pruning.
 
 DEFAULT: cluster=llm, roles=det, wiring=hybrid — LLM where it's the only reliable engine
 (grouping), deterministic where it wins (roles), and deterministic-with-LLM-cleanup where
@@ -73,9 +75,29 @@ def classify(
         classifier.assign_wiring(work, **llm)
     else:
         classifier_det.assign_wiring(work, facts)             # candidates (recall)
-        residual = classifier_det.reconcile_wiring(work, facts)   # tier 2: deterministic prune (det + hybrid)
-        if wiring == "hybrid" and residual:                   # tier 3: LLM prunes the ambiguous
-            classifier.reconcile_wiring_llm(work, targets=residual, **llm)  # residual only
+        classifier_det.reconcile_wiring(work, facts)          # tier 2: deterministic owned-prune (det + hybrid)
+        if wiring == "hybrid":
+            # INVERTED reconcile (LLM first, determinism confronts), in one call:
+            #  (1) the LLM NAMES every seam (technical intent) — replacing symbol labels;
+            #  (2) for each OVER-WIRED hunk it DRAWS the true dependency line by meaning;
+            # then determinism CONFRONTS the draw: keep the LLM's line + re-add any OWNED-symbol
+            # edge it missed (recall guard); abstain → keep the deterministic wires.
+            cores = {h.id: h for h in work if h.role == "core"}
+            targets = [h for h in work if h.role != "core"
+                       and len(h.wires) > classifier_det._RECONCILE_GATE]
+            if cores:
+                labels, drawn = classifier.reconcile_llm(cores, targets, **llm)
+                for cid, lab in labels.items():
+                    cores[cid].seam_label = lab                # LLM-named seam (technical intent)
+                if targets:
+                    anchors = classifier_det._anchors(work, facts, set(cores))
+                    for h in targets:
+                        line = drawn.get(h.id)
+                        if not line:
+                            continue                           # abstained → keep deterministic wires
+                        m = classifier_det._mentions(facts[h.id])
+                        owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
+                        h.wires = sorted(set(line) | owned)    # LLM line + det owned (confront)
     # CLUSTERS (reads wiring for the deterministic engine; independent for the LLM)
     if cluster == "llm":
         classifier.assign_clusters(work, **llm)

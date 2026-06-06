@@ -925,62 +925,60 @@ def _reconcile_snippet(h: Hunk) -> str:
     return "\n".join(body)
 
 
-def _build_reconcile_prompt(targets: list[Hunk], cores: dict[str, Hunk]) -> str:
-    """Closed-candidate prune prompt (brief Layer-2): for each over-wired EDIT, which of
-    ITS candidate cores does it ACTUALLY depend on, vs merely co-render a shared component."""
-    blocks = []
-    for h in targets:
-        cands = ", ".join(f'{c}="{cores[c].seam_label or c}"' for c in h.wires if c in cores)
-        blocks.append(f"EDIT {h.id}  [{h.file_path}]  role={h.role}\n"
-                      f"{_reconcile_snippet(h)}\n"
-                      f"candidates: {cands}")
-    body = "\n---\n".join(blocks)
+_CORE_SNIPPET_LINES = 14
+
+
+def _core_snippet(h: Hunk) -> str:
+    return "\n".join(h.text.splitlines()[1:][:_CORE_SNIPPET_LINES])
+
+
+def _build_reconcile_prompt(cores: dict[str, Hunk], targets: list[Hunk]) -> str:
+    core_blocks = "\n---\n".join(
+        f"CORE {cid}  [{h.file_path.rsplit('/', 1)[-1]}]\n{_core_snippet(h)}"
+        for cid, h in cores.items())
+    edit_blocks = "\n---\n".join(
+        f"EDIT {h.id}  [{h.file_path.rsplit('/', 1)[-1]}]  role={h.role}\n{_reconcile_snippet(h)}"
+        for h in targets)
+    task2 = (
+        "TASK 2 — for each EDIT, which CORES does it ACTUALLY depend on — calls, modifies, is "
+        "configured/typed by, or routes to — BY MEANING? Exclude cores it merely co-renders a "
+        "shared component with. One, several, or NONE; choose only from the CORE ids.\n\n"
+        if targets else "")
     return (
-        "Some dependency edges in a diff were drawn too broadly. Each EDIT below was linked "
-        "to several CANDIDATE targets, but some links are SPURIOUS: the edit merely RENDERS "
-        "or IMPORTS a shared component/util that the target also uses — it does not actually "
-        "depend on, call, or modify that target.\n\n"
-        "For each EDIT, return the subset of candidate ids it ACTUALLY depends on. Keep a "
-        "candidate only if the edit calls it, is configured/typed by it, or modifies it; "
-        "drop candidates it merely co-renders a shared component with. Returning all, some, "
-        "or none is valid — do not invent edges outside the candidate list.\n\n"
-        f"{body}\n\n"
-        'Output ONLY a JSON array, one object per EDIT: '
-        '[{"id":"h6","wires":["h12"]}, ...]'
+        "A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.\n\n"
+        "TASK 1 — give each CORE a short TECHNICAL-INTENT label (3–6 words: what this unit DOES, "
+        'e.g. "webhook form skeleton", "validate signature") — NOT a symbol name.\n\n'
+        f"{task2}"
+        f"CORES:\n{core_blocks}\n\n"
+        + (f"EDITS:\n{edit_blocks}\n\n" if targets else "")
+        + 'Output ONLY a JSON array. Per CORE: {"id":"h8","label":"…"}.'
+        + (' Per EDIT: {"id":"h6","wires":["h8", …]}.' if targets else "")
     )
 
 
-def reconcile_wiring_llm(work: list[Hunk], *, targets: list[Hunk] | None = None,
-                         gate: int = 4, model: str = "claude-haiku-4-5",
-                         claude_bin: str | None = None, verbose: bool = False,
-                         debug: bool = False, debug_path: str | None = None, **_ignore) -> None:
-    """LLM reconcile (tier 3): prune the candidate edges of the genuinely-ambiguous residual
-    (hunks the deterministic reconcile pruned but left over-wired) to the real couplings. A
-    VALIDATE task on a CLOSED candidate set (where the LLM is reliable), not generation.
-    Conservative: only prunes to a non-empty confirmed subset; never strands a hunk. `targets`
-    should be the residual from `classifier_det.reconcile_wiring` (legitimate hubs excluded);
-    falls back to a count gate only if not supplied."""
-    cores = {h.id: h for h in work if h.role == "core"}
-    if targets is None:
-        targets = [h for h in work if h.role != "core" and len(h.wires) > gate]
-    if not targets:
-        return
+def reconcile_llm(cores: dict[str, Hunk], targets: list[Hunk], *,
+                  model: str = "claude-haiku-4-5", claude_bin: str | None = None,
+                  verbose: bool = False, debug: bool = False,
+                  debug_path: str | None = None, **_ignore):
+    """The hybrid-wiring reconciliation, in ONE LLM call (the inverted design: LLM first,
+    determinism confronts). It (1) NAMES each core with a technical-intent label — replacing
+    the symbol-derived seam label — and (2) DRAWS each over-wired EDIT's true dependency line
+    BY MEANING (choosing from all cores). Returns (labels, drawn): {core_id: label},
+    {edit_id: [core_id, ...]}. Pure — the engine applies labels and confronts the draw against
+    the deterministic (symbol) wiring."""
+    if not cores:
+        return {}, {}
     kind, binary = resolve_backend(claude_bin)
-    prompt = _build_reconcile_prompt(targets, cores)
-    labels = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile",
-                       verbose=verbose, debug=debug, debug_path=debug_path)
-    pruned = 0
-    for h in targets:
-        item = labels.get(h.id) or {}
-        raw = item.get("wires")
-        if not isinstance(raw, list):
-            continue
-        confirmed = sorted({c for c in raw if c in h.wires and c in cores})
-        if confirmed and len(confirmed) < len(h.wires):
-            h.wires = confirmed
-            pruned += 1
+    prompt = _build_reconcile_prompt(cores, targets)
+    out = _run_pass(kind, binary, prompt, model, thinking=0, tag="reconcile",
+                    verbose=verbose, debug=debug, debug_path=debug_path)
+    labels = {cid: str(o.get("label", "")).strip()
+              for cid, o in out.items() if cid in cores and str(o.get("label", "")).strip()}
+    drawn = {h.id: [c for c in (out.get(h.id) or {}).get("wires", []) if c in cores]
+             for h in targets if isinstance((out.get(h.id) or {}).get("wires"), list)}
     if verbose:
-        print(f"[reconcile] LLM pruned {pruned}/{len(targets)} over-wired hunks", file=sys.stderr)
+        print(f"[reconcile] LLM named {len(labels)} seams, drew {len(drawn)} edits", file=sys.stderr)
+    return labels, drawn
 
 
 def reconcile_roles_llm(work: list[Hunk], *, conf_threshold: float = 0.6,
