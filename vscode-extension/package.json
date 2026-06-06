@@ -55,13 +55,14 @@
         },
         "seam.engine": {
           "type": "string",
-          "enum": ["llm", "ast"],
+          "enum": ["hybrid", "det", "llm"],
           "enumDescriptions": [
-            "3-pass LLM classifier (default).",
-            "Deterministic classifier fed AST facts (defines/enclosing) from the editor's language server; no LLM."
+            "Default. LLM clustering (product intent) + deterministic roles & wiring, fed AST facts (defines/enclosing) from the editor's language server.",
+            "Fully deterministic, offline — no LLM at all (structural cluster labels instead of product-intent prose).",
+            "All passes by the LLM."
           ],
-          "default": "llm",
-          "description": "How to decompose a diff: 'llm' (LLM passes) or 'ast' (deterministic + VS Code AST facts)."
+          "default": "hybrid",
+          "description": "How to decompose a diff: 'hybrid' (LLM clusters + deterministic roles/wiring — best; needs a CLI for clustering), 'det' (fully offline, no LLM), or 'llm' (all LLM)."
         }
       }
     }

@@ -816,6 +816,107 @@ def _aggregate_role_votes(runs: list[dict[str, dict]], hunk_ids: list[str], *,
     return medoid, confidence
 
 
+# --------------------------------------------------------------------------- standalone passes
+# Each LLM pass as an independent entry point so the per-pass orchestrator (src/engine) can
+# mix LLM and deterministic engines. `classify` below keeps the optimized concurrent
+# all-LLM path; these reuse the same helpers and write the same Hunk fields.
+
+def assign_clusters(hunks: list[Hunk], *, model: str = "claude-haiku-4-5",
+                    claude_bin: str | None = None, verbose: bool = False,
+                    debug: bool = False, debug_path: str | None = None, **_ignore) -> None:
+    """LLM Pass A (cluster) only: fill group/intent (product intent — the LLM's strength)."""
+    if not hunks:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    labels = _run_pass(kind, binary, _build_cluster_prompt(hunks), model,
+                       thinking=CLUSTER_THINKING, tag="cluster",
+                       verbose=verbose, debug=debug, debug_path=debug_path)
+    group_intent: dict[str, str] = {}
+    groups: dict[str, tuple[str, str]] = {}
+    for hid, item in labels.items():
+        g = str(item.get("group", "")).strip()
+        it = str(item.get("intent", "")).strip()
+        groups[hid] = (g, it)
+        if g and it and g not in group_intent:
+            group_intent[g] = it
+    for h in hunks:
+        g, it = groups.get(h.id, ("", ""))
+        h.group = g
+        h.intent = it or group_intent.get(g, "")
+
+
+def assign_roles(hunks: list[Hunk], *, model: str = "claude-haiku-4-5",
+                 claude_bin: str | None = None, role_votes: int = ROLE_VOTES,
+                 verbose: bool = False, debug: bool = False, debug_path: str | None = None,
+                 **_ignore) -> None:
+    """LLM Pass B (role + span) only: fill role / seam / seam_label / wires / spans /
+    role_confidence via self-consistency voting (same logic as `classify`)."""
+    if not hunks:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    role_prompt = _build_prompt(hunks)
+    n_votes = max(1, role_votes)
+    hunk_ids = [h.id for h in hunks]
+    with ThreadPoolExecutor(max_workers=n_votes) as ex:
+        futs = [ex.submit(_run_pass, kind, binary, role_prompt, model, thinking=ROLE_THINKING,
+                          tag=("role" if n_votes <= 1 else f"role.v{i + 1}"),
+                          verbose=verbose, debug=debug, debug_path=debug_path)
+                for i in range(n_votes)]
+        role_runs = [f.result() for f in futs]
+    labels, role_conf = _aggregate_role_votes(role_runs, hunk_ids, verbose=verbose, debug=debug)
+    seam_label: dict[str, str] = {}
+    for hid, item in labels.items():
+        objs = item.get("spans") if isinstance(item.get("spans"), list) else None
+        for src in (objs or [item]):
+            if not isinstance(src, dict):
+                continue
+            if str(src.get("role", "")).strip().lower() != "core":
+                continue
+            sl = str(src.get("seam_label", "")).strip()
+            if sl and hid not in seam_label:
+                seam_label[hid] = sl
+    for h in hunks:
+        h.role_confidence = role_conf.get(h.id, 1.0)
+        item = labels.get(h.id) or {}
+        spans = _parse_spans(item)
+        if len(spans) >= 2:
+            h.spans = spans
+            _sync_flat_from_spans(h, seam_label)
+            continue
+        if len(spans) == 1 and str(item.get("role", "")).strip().lower() not in ROLES:
+            s = spans[0]
+            item = {**item, "role": s.role, "seam": s.seam, "seam_label": s.seam_label,
+                    "wires": s.wires, "rationale": s.rationale}
+        role = str(item.get("role", "")).strip().lower()
+        if role in ROLES:
+            h.role = role
+            h.rationale = str(item.get("rationale", "")).strip()
+            if role == "core":
+                h.seam = h.id
+                h.seam_label = (str(item.get("seam_label", "")).strip()
+                                or seam_label.get(h.id, ""))
+                h.wires = []
+            else:
+                raw = item.get("wires", [])
+                h.wires = [str(x).strip() for x in raw if str(x).strip()] if isinstance(raw, list) else []
+                h.seam = ""
+                h.seam_label = ""
+        else:
+            h.role = "core"
+            h.seam = h.id
+            h.rationale = "unclassified — defaulted to core for review"
+
+
+def assign_wiring(hunks: list[Hunk], *, model: str = "claude-haiku-4-5",
+                  claude_bin: str | None = None, verbose: bool = False,
+                  debug: bool = False, debug_path: str | None = None, **_ignore) -> None:
+    """LLM Pass C (wiring) only — needs roles already set; overwrites non-core wires."""
+    if not hunks:
+        return
+    kind, binary = resolve_backend(claude_bin)
+    _run_wire_pass(hunks, kind, binary, model, verbose=verbose, debug=debug, debug_path=debug_path)
+
+
 def classify(
     hunks: list[Hunk],
     *,

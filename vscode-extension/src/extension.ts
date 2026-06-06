@@ -383,8 +383,9 @@ async function runReview(range: string) {
     vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
     return;
   }
-  // Engine: "llm" (default, 3-pass LLM) or "ast" (deterministic + VS Code AST facts).
-  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "llm";
+  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
+  // facts), "det" (fully deterministic, offline), or "llm" (all LLM).
+  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…` },
@@ -393,12 +394,15 @@ async function runReview(range: string) {
       let factsPath: string | undefined;
       try {
         const extra: string[] = [];
-        if (engine === "ast") {
-          extra.push("--classifier", "det");
+        if (engine === "llm") {
+          extra.push("--classifier", "llm");
+        } else {
+          // hybrid (default) or det: deterministic roles + wiring; cluster = LLM for
+          // hybrid, deterministic for det. Feed the editor's AST facts to the det passes
+          // (missing facts → regex base, so no warning needed).
+          extra.push("--cluster", engine === "det" ? "det" : "llm", "--roles", "det", "--wiring", "det");
           factsPath = await buildAstFacts(py, tool, range);
           if (factsPath) extra.push("--facts", factsPath);
-          else vscode.window.showWarningMessage(
-            "Seam: AST facts unavailable (no language server / parse) — using deterministic + regex.");
         }
         const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
                       "--emit-seams", out, ...extra];

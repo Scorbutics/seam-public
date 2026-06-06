@@ -146,6 +146,123 @@ class _DSU:
             self.parent[rb] = ra
 
 
+# --------------------------------------------------------------------------- passes
+# The three passes are independent entry points so a per-pass orchestrator (src/engine)
+# can mix deterministic and LLM engines: each reads the accumulated state on the hunks
+# (wiring reads roles; clustering reads wiring) regardless of which engine set it.
+
+def _distinctive(work: list[Hunk]) -> set[str]:
+    """Symbols the def↔use grounding actually wires on (post ambient-filter) — used to
+    prefer a meaningful seam/intent label."""
+    return {sym for edges in candidate_wirings(work).values() for _, sym in edges}
+
+
+def assign_roles(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
+    """ROLES pass: fill role / role_confidence / rationale from the facts IR."""
+    cand = candidate_wirings(work)
+    dr = {h.id: (facts[h.id].defines, facts[h.id].references) for h in work}
+    pure_refs = {hid: (refs - defs) for hid, (defs, refs) in dr.items()}
+    # Direction of each grounded edge: who DEFINES vs who only USES. `referenced` = hunks
+    # that define a distinctive symbol another uses (core anchors); `targets[h]` = the
+    # definer hunks h depends on.
+    referenced: set[str] = set()
+    targets: dict[str, set[str]] = {h.id: set() for h in work}
+    for hid, edges in cand.items():
+        hdefs = dr[hid][0]
+        for other, sym in edges:
+            if sym in hdefs and sym in pure_refs.get(other, ()):
+                referenced.add(hid)
+                targets[other].add(hid)
+
+    for h in work:
+        f = facts[h.id]
+        if f.is_test:
+            h.role, h.role_confidence = "test", _CONF_TEST
+            h.rationale = "test — verifies the change (path/framework markers)"
+        elif f.is_sql:
+            h.role, h.role_confidence = "environment", _CONF_ENV_SQL
+            h.rationale = "environment — SQL schema/data migration (trust delegated)"
+        elif f.imports_only or f.type_decl_only:
+            h.role = "environment"
+            h.role_confidence = _CONF_ENV_IMPORT if f.imports_only else _CONF_ENV_DECL
+            h.rationale = ("environment — imports wiring the change in" if f.imports_only
+                           else "environment — type/declaration only, no logic")
+        elif f.implements:
+            # adapter implementing an interface — connects, does not decide. Before the
+            # magnitude test so a big repository impl isn't mistaken for core.
+            h.role, h.role_confidence = "link", _CONF_ADAPTER
+            h.rationale = "link — adapter implementing an interface (connects, not decides)"
+        else:
+            defines_ref = h.id in referenced
+            logic = f.decisions
+            uses = bool(targets[h.id])
+            if defines_ref and logic >= 1:
+                h.role, h.role_confidence = "core", _CONF_CORE_DEF_LOGIC
+                h.rationale = "core — defines logic other hunks depend on"
+            elif logic >= _LOGIC_CORE_THRESHOLD:
+                h.role, h.role_confidence = "core", _CONF_CORE_LOGIC
+                h.rationale = "core — substantial new behavioral logic"
+            elif defines_ref:
+                # Defines a distinctive symbol others depend on → it is the subject. NOT
+                # demoted to environment on logic==0 (a logic-less React component/table
+                # can still be a core); that call is left to Layer 2.
+                h.role, h.role_confidence = "core", _CONF_CORE_DEF
+                h.rationale = "core — defines a symbol other hunks depend on"
+            elif uses:
+                h.role, h.role_confidence = "link", _CONF_LINK
+                h.rationale = "link — references a core's symbol (wires it in)"
+            elif logic >= 1:
+                h.role, h.role_confidence = "core", _CONF_FALLBACK
+                h.rationale = "core — some new logic, no clear wiring (uncertain)"
+            else:
+                h.role, h.role_confidence = "environment", _CONF_FALLBACK
+                h.rationale = "environment — no logic or wiring detected (uncertain)"
+
+
+def assign_wiring(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
+    """WIRING pass (reads roles): a seam IS its core hunk (seam id == core id); non-cores
+    wire to every core whose distinctive SUBJECT they mention. Works whatever set roles."""
+    distinctive = _distinctive(work)
+    cores = {h.id for h in work if h.role == "core"}
+    wires_map = _subject_wiring(work, facts, cores)
+    for h in work:
+        if h.role == "core":
+            h.seam = h.id
+            h.seam_label = _primary_symbol(facts[h.id], h, distinctive)
+            h.wires = []
+        else:
+            h.wires = wires_map[h.id]
+            h.seam = ""
+            h.seam_label = ""
+        h.spans = []
+
+
+def assign_clusters(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
+    """CLUSTERING pass (reads wiring): connected components over the wiring graph; `intent`
+    is a STRUCTURAL label (the cluster's core symbol). Product-intent prose is the LLM's
+    job — prefer the LLM cluster pass; this is the offline fallback."""
+    distinctive = _distinctive(work)
+    dsu = _DSU([h.id for h in work])
+    for h in work:
+        for t in h.wires:                       # non-core → its cores; merges shared cores
+            if t in dsu.parent:
+                dsu.union(h.id, t)
+    root_to_group: dict[str, str] = {}
+    members: dict[str, list[Hunk]] = {}
+    for h in work:
+        r = dsu.find(h.id)
+        g = root_to_group.setdefault(r, f"g{len(root_to_group) + 1}")
+        h.group = g
+        members.setdefault(g, []).append(h)
+    for g, hs in members.items():
+        cs = [h for h in hs if h.role == "core"]
+        rep = max(cs, key=lambda h: facts[h.id].decisions) if cs else hs[0]
+        intent = _primary_symbol(facts[rep.id], rep, distinctive) if cs else (
+            rep.section_header or (rep.file_path or "").rsplit("/", 1)[-1] or rep.id)
+        for h in hs:
+            h.intent = intent
+
+
 # --------------------------------------------------------------------------- main
 def classify(
     hunks: list[Hunk],
@@ -159,133 +276,22 @@ def classify(
     debug: bool = False,
     debug_path: str | None = None,
 ) -> None:
-    """Fill role/group/intent/seam/wires on each hunk in place — deterministically.
-
-    `facts_provider` is the syntax-source strategy (regex by default; swap in the VS Code
-    AST or tree-sitter provider with no other change). Drop-in for `classifier.classify`:
-    the LLM-only kwargs (model, claude_bin, …) are accepted and ignored. `hunks` should
-    already exclude deterministic noise; any hunk already roled "noise" is left untouched.
-    """
+    """Fully deterministic decomposition (roles + wiring + clusters), in place. A drop-in
+    for `classifier.classify`; LLM-only kwargs are accepted and ignored. For a hybrid
+    (LLM clusters + deterministic roles/wiring) use `src/engine.classify`."""
     work = [h for h in hunks if h.role != "noise"]
     if not work:
         return
-
     facts = (facts_provider or RegexFactsProvider()).facts(work)
-    cand = candidate_wirings(work)
-
-    # Distinctive new vocabulary == the symbols candidate_wirings actually wires on
-    # (post ambient-filter): a symbol that appears as a wiring edge is distinctive.
-    distinctive: set[str] = {sym for edges in cand.values() for _, sym in edges}
-
-    # Direction of each grounded edge: who DEFINES the symbol vs who only USES it.
-    # `referenced` = hunks that define a distinctive symbol another hunk uses (core
-    # anchors). `targets[h]` = the definer hunks h depends on (its wiring candidates).
-    dr = {h.id: (facts[h.id].defines, facts[h.id].references) for h in work}
-    pure_refs = {hid: (refs - defs) for hid, (defs, refs) in dr.items()}
-    referenced: set[str] = set()
-    targets: dict[str, set[str]] = {h.id: set() for h in work}
-    for hid, edges in cand.items():
-        hdefs = dr[hid][0]
-        for other, sym in edges:
-            if sym in hdefs and sym in pure_refs.get(other, ()):  # hid defines, other uses
-                referenced.add(hid)
-                targets[other].add(hid)
-
-    # --- roles --------------------------------------------------------------
-    rationale: dict[str, str] = {}
-    for h in work:
-        f = facts[h.id]
-        if f.is_test:
-            h.role, h.role_confidence = "test", _CONF_TEST
-            rationale[h.id] = "test — verifies the change (path/framework markers)"
-        elif f.is_sql:
-            h.role, h.role_confidence = "environment", _CONF_ENV_SQL
-            rationale[h.id] = "environment — SQL schema/data migration (trust delegated)"
-        elif f.imports_only or f.type_decl_only:
-            h.role = "environment"
-            h.role_confidence = _CONF_ENV_IMPORT if f.imports_only else _CONF_ENV_DECL
-            rationale[h.id] = ("environment — imports wiring the change in" if f.imports_only
-                               else "environment — type/declaration only, no logic")
-        elif f.implements:
-            # adapter implementing an interface — connects a contract to a backend, does
-            # not decide. Caught BEFORE the magnitude test so a big repository impl isn't
-            # mistaken for core (the private-app-boosters failure mode).
-            h.role, h.role_confidence = "link", _CONF_ADAPTER
-            rationale[h.id] = "link — adapter implementing an interface (connects, not decides)"
-        else:
-            defines_ref = h.id in referenced
-            logic = f.decisions
-            uses = bool(targets[h.id])
-            if defines_ref and logic >= 1:
-                h.role, h.role_confidence = "core", _CONF_CORE_DEF_LOGIC
-                rationale[h.id] = "core — defines logic other hunks depend on"
-            elif logic >= _LOGIC_CORE_THRESHOLD:
-                h.role, h.role_confidence = "core", _CONF_CORE_LOGIC
-                rationale[h.id] = "core — substantial new behavioral logic"
-            elif defines_ref:
-                # Defines a distinctive symbol others depend on → it is the subject they
-                # wire to. We do NOT demote the logic==0 case to environment — a logic-less
-                # definition can still be a core (a React component / table that IS the
-                # feature). That call is left to Layer 2.
-                h.role, h.role_confidence = "core", _CONF_CORE_DEF
-                rationale[h.id] = "core — defines a symbol other hunks depend on"
-            elif uses:
-                h.role, h.role_confidence = "link", _CONF_LINK
-                rationale[h.id] = "link — references a core's symbol (wires it in)"
-            elif logic >= 1:
-                h.role, h.role_confidence = "core", _CONF_FALLBACK
-                rationale[h.id] = "core — some new logic, no clear wiring (uncertain)"
-            else:
-                h.role, h.role_confidence = "environment", _CONF_FALLBACK
-                rationale[h.id] = "environment — no logic or wiring detected (uncertain)"
-
-    cores = {h.id for h in work if h.role == "core"}
-
-    # --- wiring (seams) -----------------------------------------------------
-    # A seam IS its core hunk (seam id == core hunk id). Non-cores wire to every core
-    # whose distinctive SUBJECT they mention; cores anchor and do not wire.
-    wires_map = _subject_wiring(work, facts, cores)
-    for h in work:
-        if h.role == "core":
-            h.seam = h.id
-            h.seam_label = _primary_symbol(facts[h.id], h, distinctive)
-            h.wires = []
-        else:
-            h.wires = wires_map[h.id]
-            h.seam = ""
-            h.seam_label = ""
-        h.rationale = rationale.get(h.id, "")
-        h.spans = []
-
-    # --- clustering (connected components over the wiring graph) -------------
-    # Same subject-anchored edges drive grouping: a hunk lives with the core(s) it
-    # wires, and a hunk wiring several cores merges their clusters.
-    dsu = _DSU([h.id for h in work])
-    for h in work:
-        for t in wires_map.get(h.id, ()):
-            dsu.union(h.id, t)
-    # group ids assigned in first-seen order for stability
-    root_to_group: dict[str, str] = {}
-    members: dict[str, list[Hunk]] = {}
-    for h in work:
-        r = dsu.find(h.id)
-        g = root_to_group.setdefault(r, f"g{len(root_to_group) + 1}")
-        h.group = g
-        members.setdefault(g, []).append(h)
-
-    # --- intent label per cluster (structural, not product-level) -----------
-    for g, hs in members.items():
-        cs = [h for h in hs if h.role == "core"]
-        rep = max(cs, key=lambda h: facts[h.id].decisions) if cs else hs[0]
-        intent = _primary_symbol(facts[rep.id], rep, distinctive) if cs else (
-            rep.section_header or (rep.file_path or "").rsplit("/", 1)[-1] or rep.id)
-        for h in hs:
-            h.intent = intent
-
+    assign_roles(work, facts)
+    assign_wiring(work, facts)
+    assign_clusters(work, facts)
     if verbose:
         counts: dict[str, int] = {}
         for h in work:
             counts[h.role] = counts.get(h.role, 0) + 1
         summary = " ".join(f"{r}={counts.get(r, 0)}" for r in ROLES if counts.get(r))
+        n_clusters = len({h.group for h in work if h.group})
+        n_cores = sum(1 for h in work if h.role == "core")
         print(f"[classifier_det] {len(work)} hunks (deterministic, no LLM): {summary}; "
-              f"{len(members)} clusters, {len(cores)} seams", file=sys.stderr)
+              f"{n_clusters} clusters, {n_cores} seams", file=sys.stderr)

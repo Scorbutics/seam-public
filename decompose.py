@@ -35,9 +35,18 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--dump-classified", metavar="JSON",
                     help="after classifying, also write the labeled hunks to JSON so the "
                          "report can later be regenerated with --from-classified (no LLM)")
-    ap.add_argument("--classifier", choices=("llm", "det"), default="llm",
-                    help="classification engine: 'llm' (3-pass LLM, default) or "
-                         "'det' (deterministic-first Layer-1 skeleton, no LLM) — for A/B comparison")
+    # Per-pass engine levers. DEFAULT is the hybrid: LLM clusters (the only reliable way
+    # to get product-intent grouping) + deterministic roles + deterministic wiring (both
+    # beat the LLM, instant & reproducible). Each pass flips independently.
+    ap.add_argument("--cluster", choices=("llm", "det"),
+                    help="engine for the CLUSTER pass (product-intent grouping). Default: llm")
+    ap.add_argument("--roles", choices=("llm", "det"),
+                    help="engine for the ROLES pass (core/link/environment/test). Default: det")
+    ap.add_argument("--wiring", choices=("llm", "det"),
+                    help="engine for the WIRING pass (which core a hunk wires). Default: det")
+    ap.add_argument("--classifier", choices=("llm", "det"),
+                    help="preset that sets ALL THREE passes to one engine (a per-pass flag "
+                         "overrides it). Omit for the hybrid default (cluster=llm, roles/wiring=det)")
     ap.add_argument("--facts", metavar="JSON",
                     help="external HunkFacts payload (e.g. AST facts the VS Code extension "
                          "computed) to drive the 'det' classifier; missing hunks fall back to regex")
@@ -110,27 +119,32 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[decompose] {len(hunks)} hunks; {noise_n} pre-filtered as noise; "
                   f"{len(remaining)} sent to classifier")
 
-        engine = classifier_det if args.classifier == "det" else classifier
-        extra = {}
-        if engine is classifier_det:
-            from src import facts as facts_mod
+        # Resolve per-pass engines: a per-pass flag wins; else the --classifier preset;
+        # else the hybrid default (cluster=llm, roles=det, wiring=det).
+        from src import engine as engine_mod, facts as facts_mod
+        cluster = args.cluster or args.classifier or engine_mod.DEFAULTS["cluster"]
+        roles = args.roles or args.classifier or engine_mod.DEFAULTS["roles"]
+        wiring = args.wiring or args.classifier or engine_mod.DEFAULTS["wiring"]
+
+        # A facts provider feeds the DETERMINISTIC passes (roles/wiring/cluster) only.
+        facts_provider = None
+        if "det" in (cluster, roles, wiring):
             if args.facts:
                 payload = json.loads(Path(args.facts).read_text(encoding="utf-8"))
                 if payload.get("partial"):
-                    # The external source filled only some fields (VS Code DocumentSymbols
-                    # → defines/enclosing); the rest come from a base provider — tree-sitter
-                    # if available (best), else regex.
+                    # External source filled only some fields (VS Code DocumentSymbols →
+                    # defines/enclosing); the rest from a base — tree-sitter if available.
                     base = facts_mod.RegexFactsProvider()
                     from src import facts_treesitter as ts
                     if ts.available():
                         base = ts.TreeSitterFactsProvider(facts_mod.RepoFileSource(args.repo))
-                    extra["facts_provider"] = facts_mod.MergedFactsProvider(base, payload)
+                    facts_provider = facts_mod.MergedFactsProvider(base, payload)
                     if args.verbose:
                         print(f"[decompose] merged facts from {args.facts} "
                               f"(fields={payload.get('fields')}; base="
                               f"{'treesitter' if ts.available() else 'regex'})")
                 else:
-                    extra["facts_provider"] = facts_mod.ExternalFactsProvider(payload)
+                    facts_provider = facts_mod.ExternalFactsProvider(payload)
                     if args.verbose:
                         print(f"[decompose] external facts from {args.facts} "
                               f"({len(payload.get('hunks', {}))} hunks; regex fallback for the rest)")
@@ -140,15 +154,16 @@ def main(argv: list[str] | None = None) -> int:
                     print("warning: tree-sitter not installed; falling back to regex facts "
                           "(pip install tree_sitter tree-sitter-language-pack)", file=sys.stderr)
                 else:
-                    extra["facts_provider"] = ts.TreeSitterFactsProvider(
-                        facts_mod.RepoFileSource(args.repo))
+                    facts_provider = ts.TreeSitterFactsProvider(facts_mod.RepoFileSource(args.repo))
                     if args.verbose:
                         print(f"[decompose] tree-sitter facts (full file, repo={args.repo}); "
                               f"regex fallback per unavailable/misaligned hunk")
+
         try:
-            engine.classify(remaining, model=args.model, claude_bin=args.claude_bin,
-                            context_window=args.context_window, verbose=args.verbose,
-                            debug=args.debug, debug_path=args.out, **extra)
+            engine_mod.classify(remaining, cluster=cluster, roles=roles, wiring=wiring,
+                                facts_provider=facts_provider, model=args.model,
+                                claude_bin=args.claude_bin, context_window=args.context_window,
+                                verbose=args.verbose, debug=args.debug, debug_path=args.out)
         except classifier.ClassifierError as exc:
             print(f"error: classification failed: {exc}", file=sys.stderr)
             return 3

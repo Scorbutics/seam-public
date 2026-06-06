@@ -29,14 +29,57 @@ earned a role).
 
 ## How it works
 
-A diff flows through a **deterministic shell**, an **LLM brain** in the middle, and
-a **deterministic renderer**. The load-bearing split, measured: *grouping and roling
-are LLM judgment; **wiring is grounding/tracing*** (which symbol defined here is
-referenced there) — so wiring leans on deterministic symbol analysis, not free
-reasoning. "Floor, not ceiling": the symbol layer is a high-precision floor the LLM
+A diff flows through a **deterministic shell** (parse + noise filter), a **classifier**,
+and a **deterministic renderer**. There are **two interchangeable classifiers** behind one
+interface — they fill the same `Hunk` fields, so the renderer, HTML report, and VS Code
+surface consume either unchanged.
+
+### Three passes, two engines each — the hybrid default
+
+Classification is **three passes**, and each runs on the **deterministic** engine or the
+**LLM**, set independently (`--cluster`, `--roles`, `--wiring`). The **default is a hybrid** —
+each pass on whichever engine the eval showed is better:
+
+| pass | **default** | deterministic | LLM |
+|---|---|---|---|
+| **cluster** (product-intent grouping) | **llm** | connected components, F1 ~0.68 | product intent — **better, F1 ~0.98** |
+| **roles** (core/link/environment/test) | **det** | structure + change-magnitude — **better, ~0.77** | judgment + voting, ~0.55 |
+| **wiring** (which core a hunk wires) | **det** | subject anchoring — **better, F1 ~0.63** | role-dominated, F1 ~0.24 |
+
+*(accuracy on the 4 shared gold cases.)* So by default **clustering uses the LLM** — the only
+reliable way to get product-intent prose ("add currency to checkout") — while **roles and
+wiring are deterministic** (better *and* instant, free, reproducible). Presets:
+`--classifier det` (**fully offline**, no LLM — structural cluster labels instead of prose) and
+`--classifier llm` (all LLM); a per-pass flag overrides the preset. All combinations share the
+deterministic noise filter, symbol grounding, renderer, and VS Code surface.
+
+#### Deterministic passes — a pure function of the diff, zero LLM
+
+- **roles** — `test` / `environment` / `noise` from structure (paths, imports, type and
+  `.sql` declarations, `implements` = adapter); **core vs link** from a change-magnitude
+  proxy (decision-logic density) plus symbol def↔use *direction* — a hunk that **defines**
+  a distinctive symbol others use is the subject (**core**); a small edit that **references**
+  one is wiring (**link**).
+- **wiring** — a non-core hunk wires to every core whose distinctive **subject** it mentions
+  (a core's subject = its defs + the modified enclosing symbol + its call subjects). This
+  drops the new-vocab-only limit, so wiring reaches cores that *modify* existing symbols
+  (the lift from F1 ~0.13 → ~0.63).
+- **clustering** — connected components over the wiring graph; `intent` is a structural label
+  (the cluster's core symbol). Product-intent prose is the LLM's strength, not claimed here.
+- **facts** — roles/wiring read a universal **`HunkFacts`** IR from a **pluggable producer**:
+  `regex` (default, fragment-based), **tree-sitter** (`--facts-engine treesitter`: full-file
+  AST via the working tree, falls back per misaligned hunk), or an **external** producer —
+  the VS Code extension's language-server AST facts, fed via `--facts`. Comments and strings
+  are masked so keywords inside them don't masquerade as logic.
+
+#### LLM passes (`--cluster/--roles/--wiring llm`, or `--classifier llm` for all three)
+
+The load-bearing split, measured: *grouping is LLM judgment; **wiring is grounding/tracing***
+(which symbol defined here is referenced there) — so even here wiring leans on deterministic
+symbol analysis. "Floor, not ceiling": the symbol layer is a high-precision floor the LLM
 builds on; informal couplings stay the LLM's job.
 
-### Pipeline
+### Pipeline (LLM classifier)
 
 1. **diff_source** — load a unified diff from a file or `git diff <range>` (`--repo`).
 2. **parser** (`unidiff`) — split into hunks with stable ids (`h1`, `h2`, …).
@@ -114,6 +157,10 @@ judges.
 - **Deterministic signals** (`external`, `rewire`, span segmentation, alias
   resolution) → `eval/extraction_test.py`: **exact** assertions on hand-labeled
   real hunks (the right tool — these are pure functions of the diff).
+- **Facts producers & boundary** (the `HunkFacts` IR; regex / tree-sitter / external
+  providers) → `eval/facts_provider_test.py` + `eval/treesitter_test.py`: exact
+  round-trip, fallback, and **equivalence** assertions — two producers are correct iff
+  they emit equal `HunkFacts` (the contract that pins tree-sitter ≡ the VS Code AST).
 
 ## Install
 
@@ -122,25 +169,43 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-You need a subscription-backed LLM CLI (no API key). The classifier prefers the
-Claude Code `claude` CLI (auto-detected from PATH, `$CLAUDE_BIN`, or the VSCode
-extension; override with `--claude-bin`). If `claude` is not found, it **falls
-back to the GitHub `copilot` CLI** (auto-detected from PATH or `$COPILOT_BIN`),
-using your Copilot subscription model — set `$COPILOT_MODEL` to pick a specific
-one. Order: `--claude-bin` → `claude` → `copilot`.
+The **default (hybrid) uses the LLM for clustering**, so it needs a subscription-backed LLM
+CLI (no API key) — prefers the Claude Code `claude` CLI (auto-detected from PATH,
+`$CLAUDE_BIN`, or the VSCode extension; override with `--claude-bin`); falls back to the
+GitHub `copilot` CLI (PATH or `$COPILOT_BIN`, `$COPILOT_MODEL` to pick a model). Order:
+`--claude-bin` → `claude` → `copilot`. Roles and wiring are deterministic and need nothing.
+
+For a **fully offline** run with no LLM at all, use `--classifier det` (clusters become
+structural labels instead of product-intent prose).
+
+Optional: **tree-sitter facts** (`--facts-engine treesitter`) for full-file AST facts on the
+deterministic passes — `pip install tree_sitter tree-sitter-language-pack`; falls back to
+regex facts if absent.
 
 ## Usage
 
 ```bash
-# from a patch file
+# default = HYBRID: LLM clusters + deterministic roles/wiring (needs a CLI for clustering)
 python decompose.py --file change.patch --open
-
-# from a git range in a repo
 python decompose.py --git main..HEAD --repo /path/to/repo --open
+
+# fully offline — no LLM at all (structural cluster labels)
+python decompose.py --file change.patch --classifier det --open
+
+# deterministic passes with full-file AST facts (needs the tree-sitter extra)
+python decompose.py --git main..HEAD --repo . --facts-engine treesitter --open
+
+# all LLM
+python decompose.py --file change.patch --classifier llm --open
+
+# mix per pass (here: deterministic everything except keep LLM wiring)
+python decompose.py --file change.patch --classifier det --wiring llm --open
 ```
 
-Options: `--out report.html`, `--model claude-haiku-4-5`, `--claude-bin PATH`,
-`-v/--verbose`, `--debug`.
+Options: per-pass `--cluster/--roles/--wiring llm|det` (defaults llm/det/det),
+`--classifier det|llm` (preset for all three), `--facts-engine regex|treesitter`,
+`--facts JSON` (external AST facts), `--out report.html`, `--model claude-haiku-4-5`,
+`--claude-bin PATH`, `-v/--verbose`, `--debug`.
 
 ### Re-rendering without the LLM (intermediate state)
 
@@ -183,7 +248,12 @@ inspect; each CLI's own progress logs (if any) show up on its stderr, which
 
 ### Speed & cost
 
-Roughly **~90s / diff** = 1 cluster pass (thinking ON — the slow part) + 5 role
+The deterministic **roles and wiring are instant and free** (pure functions of the diff).
+So the **default hybrid** costs only its one LLM pass — the cluster pass (thinking ON), the
+old wall-clock floor — and skips the role votes + wiring pass entirely. `--classifier det`
+is fully instant/free; `--classifier llm` is the full figure below.
+
+Roughly **~90s / diff** (all-LLM) = 1 cluster pass (thinking ON — the slow part) + 5 role
 votes (thinking OFF, ~10s each) + deterministic post-processing. `claude -p`
 defaults thinking ON, which on a labeling task burns ~15–22K output tokens
 (~160s) for a ~550-token answer — so the role pass forces `MAX_THINKING_TOKENS=0`
@@ -209,13 +279,16 @@ This is a pre-registered experiment, not a product. Before you open the report:
 
 ## Reliability harness (`eval/`)
 
-The classifier is an LLM and **not deterministic** (the CLI exposes no
-temperature). `eval/harness.py` makes reliability measurable so a prompt/model
-change can't silently make it worse:
+The **LLM** classifier is **not deterministic** (the CLI exposes no temperature).
+`eval/harness.py` makes reliability measurable so a prompt/model change can't silently
+make it worse. It scores either engine via `--engine` (the deterministic one is run once
+— its stability is trivially perfect, so the signal is pure accuracy):
 
 ```bash
-python eval/harness.py generate --runs 5   # run each eval/cases/*.patch N times (cached)
-python eval/harness.py score                # stability (no gold) + accuracy (vs eval/gold/)
+python eval/harness.py generate --engine det --label det   # deterministic (1 run, no LLM)
+python eval/harness.py generate --runs 5                    # LLM: each case N times (cached)
+python eval/harness.py score --label det                    # accuracy vs eval/gold/
+python eval/harness.py score                                # LLM: stability + accuracy
 python eval/harness.py score --save eval/baseline-haiku.json
 python eval/harness.py score --baseline eval/baseline-haiku.json   # gate: non-zero on regression
 ```
