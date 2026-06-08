@@ -47,6 +47,7 @@ from pathlib import Path
 
 from . import ROLES
 from .facts import FactsProvider, HunkFacts, RegexFactsProvider, leading_ambient_lines, new_side_lines
+from .graph_ir import connected_components
 from .lang import _added, _defs_refs, _diff_imports, _STOP
 from .parser import Hunk, Placement
 from .symbol_edges import candidate_wirings, resolve_alias, segment_link_by_core
@@ -215,23 +216,6 @@ def _primary_symbol(f: HunkFacts, h: Hunk, distinctive: set[str]) -> str:
         return enclosing_def
     stem = (h.file_path or "").rsplit("/", 1)[-1].rsplit(".", 1)[0]
     return stem or h.id
-
-
-# --------------------------------------------------------------------------- union-find
-class _DSU:
-    def __init__(self, ids: list[str]):
-        self.parent = {i: i for i in ids}
-
-    def find(self, x: str) -> str:
-        while self.parent[x] != x:
-            self.parent[x] = self.parent[self.parent[x]]
-            x = self.parent[x]
-        return x
-
-    def union(self, a: str, b: str) -> None:
-        ra, rb = self.find(a), self.find(b)
-        if ra != rb:
-            self.parent[rb] = ra
 
 
 # --------------------------------------------------------------------------- passes
@@ -423,20 +407,18 @@ def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
 def assign_clusters(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
     """CLUSTERING pass (reads wiring): connected components over the wiring graph; `intent`
     is a STRUCTURAL label (the cluster's core symbol). Product-intent prose is the LLM's
-    job — prefer the LLM cluster pass; this is the offline fallback."""
+    job — prefer the LLM cluster pass; this is the offline fallback.
+
+    The PARTITION itself is the mode-agnostic Layer-4 op shared with codebase-mode
+    (`graph_ir.connected_components`); only the structural `intent` LABELLING below is
+    diff-specific and stays here (assignment forks by mode — plan §1.1)."""
     distinctive = _distinctive(work)
-    dsu = _DSU([h.id for h in work])
-    for h in work:
-        for t in h.wires:                       # non-core → its cores; merges shared cores
-            if t in dsu.parent:
-                dsu.union(h.id, t)
-    root_to_group: dict[str, str] = {}
+    edges = [(h.id, t) for h in work for t in h.wires]   # non-core → its cores; merges shared cores
+    groups = connected_components([h.id for h in work], edges)
     members: dict[str, list[Hunk]] = {}
     for h in work:
-        r = dsu.find(h.id)
-        g = root_to_group.setdefault(r, f"g{len(root_to_group) + 1}")
-        h.group = g
-        members.setdefault(g, []).append(h)
+        h.group = groups[h.id]
+        members.setdefault(h.group, []).append(h)
     for g, hs in members.items():
         cs = [h for h in hs if h.role == "core"]
         rep = max(cs, key=lambda h: facts[h.id].decisions) if cs else hs[0]
