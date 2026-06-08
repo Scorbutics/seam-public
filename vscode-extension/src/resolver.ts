@@ -39,6 +39,7 @@ export interface SymbolResolver {
   outgoingCalls(item: vscode.CallHierarchyItem): Promise<ResolverResult<vscode.CallHierarchyOutgoingCall[]>>;
   incomingCalls(item: vscode.CallHierarchyItem): Promise<ResolverResult<vscode.CallHierarchyIncomingCall[]>>;
   getDefinition(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<(vscode.Location | vscode.LocationLink)[]>>;
+  references(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<vscode.Location[]>>;
   // Probe (plan §4) — fire a known-shape query at the anchor and classify the server's
   // real quality, never assume it from a static per-language table.
   resolutionQuality(uri: vscode.Uri, pos: vscode.Position): Promise<ResolutionQuality>;
@@ -104,16 +105,25 @@ export class VSCodeSymbolResolver implements SymbolResolver {
     }
   }
 
+  async references(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<vscode.Location[]>> {
+    try {
+      const res = await vscode.commands.executeCommand<vscode.Location[]>(
+        "vscode.executeReferenceProvider", uri, pos);
+      if (!res) return unknown("no_reference_provider");
+      return resolved(res);
+    } catch {
+      return unknown("reference_provider_threw");
+    }
+  }
+
   async resolutionQuality(uri: vscode.Uri, pos: vscode.Position): Promise<ResolutionQuality> {
-    // Probe, don't assume (plan §4). Symbols present + a precise call graph at the anchor
-    // ⇒ FULL. Symbols but no call hierarchy ⇒ HEURISTIC (we can see structure, not edges).
-    // Nothing ⇒ NONE. (PARTIAL is detected later, per-query, when some calls go UNKNOWN.)
+    // Probe, don't assume (plan §4). The usage map rests on find-references (the ground truth
+    // of links, plan §4): symbols present + references resolve ⇒ FULL; symbols but the
+    // reference provider can't answer ⇒ HEURISTIC; nothing ⇒ NONE.
     const docs = await this.documentSymbols(uri);
     if (docs.kind === "unknown") return "NONE";
-    const ch = await this.prepareCallHierarchy(uri, pos);
-    if (ch.kind === "unknown" || !ch.value.length) return "HEURISTIC";
-    const out = await this.outgoingCalls(ch.value[0]);
-    return out.kind === "resolved" ? "FULL" : "HEURISTIC";
+    const refs = await this.references(uri, pos);
+    return refs.kind === "resolved" ? "FULL" : "HEURISTIC";
   }
 }
 
@@ -166,38 +176,6 @@ const TEST_PATH = /(\.(test|spec)\.[a-z]+$)|((^|\/)(tests?|__tests__|spec)\/)/i;
 
 interface FlatSym { name: string; kind: vscode.SymbolKind; sel: vscode.Range; range: vscode.Range; }
 
-// A definition result is either a Location or a LocationLink — normalise to {uri, range}.
-function locTarget(l: vscode.Location | vscode.LocationLink): { uri: vscode.Uri; range: vscode.Range } {
-  return "targetUri" in l ? { uri: l.targetUri, range: l.targetRange } : { uri: l.uri, range: l.range };
-}
-
-// The local names an `import` binds + where each appears (for the definition provider). This
-// is how we recover a component's wiring that the call graph misses: JSX elements, hooks and
-// utils are all IMPORTED, so the imports the anchor body uses ARE its links. Type-only imports
-// are skipped (no runtime wiring). Multiline `{ … }` blocks are handled.
-interface ImportBinding { local: string; pos: vscode.Position; }
-function parseImportBindings(text: string, doc: vscode.TextDocument): ImportBinding[] {
-  const out: ImportBinding[] = [];
-  const re = /import\s+(?:type\s+)?(?:\{([^}]*)\}|(\w+)|\*\s+as\s+(\w+))\s+from\s+['"][^'"]+['"]/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text)) !== null) {
-    const seg = m[0];
-    if (/^import\s+type\b/.test(seg)) continue;                 // whole type-only import
-    const add = (local: string) => {
-      if (!/^[A-Za-z_$][\w$]*$/.test(local)) return;
-      out.push({ local, pos: doc.positionAt(m!.index + seg.indexOf(local)) });
-    };
-    if (m[1]) {
-      for (const part of m[1].split(",")) {
-        const raw = part.trim();
-        if (!raw || raw.startsWith("type ")) continue;          // per-binding `type Foo`
-        add(raw.split(/\s+as\s+/).pop()!.trim());               // `a as b` → b
-      }
-    } else if (m[2]) add(m[2]);
-    else if (m[3]) add(m[3]);
-  }
-  return out;
-}
 
 function flatten(syms: vscode.DocumentSymbol[], out: FlatSym[]): void {
   for (const s of syms) {
@@ -266,11 +244,6 @@ export async function buildResolvedGraph(
     });
     return id;
   }
-  // Node from a CallHierarchyItem (a callee/caller), resolving its enclosing container.
-  async function nodeFromItem(item: vscode.CallHierarchyItem): Promise<string> {
-    const enc = await enclosingOf(item.uri, item.selectionRange);
-    return ensureNode(item.uri, item.name, item.kind, item.selectionRange, item.range, enc);
-  }
   function addEdge(from: string, to: string, kind: string, prov: string): void {
     if (from === to) return;
     const k = `${from}->${to}:${kind}`;
@@ -305,104 +278,67 @@ export async function buildResolvedGraph(
   const anchorId = ensureNode(anchorUri, anchorSym.name, anchorSym.kind, anchorSym.sel, anchorSym.range, anchorEnc);
 
   // The CORE sub-units, relative to the anchor:
-  //   - a CLASS decomposes into its METHODS (each a core);
-  //   - a function / component is ONE core (its inner `const`s are its BODY, not sub-cores —
-  //     promoting them all to core was the "wall of amber" bug). Its value is in what it
-  //     wires OUT to, surfaced as links below.
+  //   - a CLASS decomposes into its METHODS (each a core, so we find who uses each method);
+  //   - a function / component is ONE core. Either way the anchor itself is always seeded, so
+  //     we find who uses the class/component as a whole.
   const isClassLike = CONTAINER_KINDS.has(anchorSym.kind);
   const members = isClassLike
     ? flatAnchor.filter((s) => s !== anchorSym && anchorSym.range.contains(s.range) && METHOD_KINDS.has(s.kind))
     : [];
-  const seeds: { id: string; uri: vscode.Uri; sel: vscode.Range }[] = [];
-  if (members.length) {
-    for (const m of members) {
-      const id = ensureNode(anchorUri, m.name, m.kind, m.sel, m.range, anchorSym.name);
-      seeds.push({ id, uri: anchorUri, sel: m.sel });
-    }
-  } else {
-    seeds.push({ id: anchorId, uri: anchorUri, sel: anchorSym.sel });   // a function / single-unit anchor
+  const coreIds = new Set<string>([anchorId]);
+  const seeds: { id: string; uri: vscode.Uri; sel: vscode.Range }[] = [{ id: anchorId, uri: anchorUri, sel: anchorSym.sel }];
+  for (const m of members) {
+    const id = ensureNode(anchorUri, m.name, m.kind, m.sel, m.range, anchorSym.name);
+    coreIds.add(id);
+    seeds.push({ id, uri: anchorUri, sel: m.sel });
   }
 
-  // ---- bounded BFS over the resolved CALL GRAPH (outgoing from the anchor's members) ----
-  type Frontier = { id: string; uri: vscode.Uri; sel: vscode.Range; depth: number };
-  const queue: Frontier[] = seeds.map((s) => ({ ...s, depth: 0 }));
+  // The innermost named symbol enclosing a reference site — the DEPENDENT that USES the
+  // anchor (the consumer). This is the link.
+  async function consumerAt(uri: vscode.Uri, at: vscode.Range): Promise<FlatSym | undefined> {
+    const flat = await flatSyms(uri);
+    if (!flat) return undefined;
+    let best: FlatSym | undefined;
+    for (const s of flat) {
+      if (s.range.contains(at.start) && (!best || best.range.contains(s.range))) best = s;
+    }
+    return best;
+  }
+
+  // ---- bounded BFS over the USAGE graph: where the anchor is USED, not what it uses ----
+  // (plan §4: find-references is the ground truth of links). From each core we find its
+  // reference sites; the symbol enclosing each site, in ANOTHER file, is a consumer = a link.
+  // Then we walk outward (who uses the consumers) to `maxDepth` — the blast radius.
+  type Frontier = { id: string; uri: vscode.Uri; pos: vscode.Position; depth: number };
+  const queue: Frontier[] = seeds.map((s) => ({ id: s.id, uri: s.uri, pos: s.sel.start, depth: 0 }));
   const expanded = new Set<string>();
   let truncated = false;
 
   while (queue.length) {
     const cur = queue.shift()!;
     if (cur.depth >= maxDepth) continue;
-    const ek = `${cur.uri.fsPath}#${cur.sel.start.line}`;
-    if (expanded.has(ek)) continue;
-    expanded.add(ek);
+    if (expanded.has(cur.id)) continue;
+    expanded.add(cur.id);
     if (nodes.size >= maxNodes) { truncated = true; break; }
 
-    const ch = await resolver.prepareCallHierarchy(cur.uri, cur.sel.start);
-    if (ch.kind === "unknown") { unresolved.push({ node: cur.id, query: "prepareCallHierarchy", reason: ch.reason }); continue; }
-    if (!ch.value.length) continue;
-    const item = ch.value[0];
-
-    const out = await resolver.outgoingCalls(item);
-    if (out.kind === "unknown") {
-      unresolved.push({ node: cur.id, query: "outgoingCalls", reason: out.reason });
-    } else {
-      for (const call of out.value) {
-        // Skip a callee DEFINED INSIDE the anchor (an internal local of the body) — it is
-        // not a boundary crossing, so it is not a node. A call to an existing node (a sibling
-        // class method) is kept: that is a real core→core edge (cohesion). Cross-boundary
-        // callees ARE added — they are the links the anchor wires out to.
-        const internal = call.to.uri.fsPath === anchorUri.fsPath
-          && anchorSym.range.contains(call.to.range)
-          && !idByKey.has(keyOf(call.to.uri, call.to.selectionRange));
-        if (internal) continue;
-        const toId = await nodeFromItem(call.to);
-        addEdge(cur.id, toId, "call", edgeProv);
-        queue.push({ id: toId, uri: call.to.uri, sel: call.to.selectionRange, depth: cur.depth + 1 });
-      }
+    const refs = await resolver.references(cur.uri, cur.pos);
+    if (refs.kind === "unknown") {
+      unresolved.push({ node: cur.id, query: "references", reason: refs.reason });
+      continue;
     }
-    // incoming callers of the anchor's OWN members (depth 0) = the system wiring INTO the
-    // anchor (links). Bounded to depth 0 so we don't fan the whole reverse graph in.
-    if (cur.depth === 0) {
-      const inc = await resolver.incomingCalls(item);
-      if (inc.kind === "unknown") {
-        unresolved.push({ node: cur.id, query: "incomingCalls", reason: inc.reason });
-      } else {
-        for (const call of inc.value) {
-          const fromId = await nodeFromItem(call.from);
-          addEdge(fromId, cur.id, "call", edgeProv);
-        }
-      }
+    for (const loc of refs.value) {
+      // A reference in the anchor's OWN file is internal (the declaration, or a sibling using
+      // it) — the usage map is about consumers ELSEWHERE in the system.
+      if (cur.depth === 0 && loc.uri.fsPath === anchorUri.fsPath) continue;
+      const consumer = await consumerAt(loc.uri, loc.range);
+      if (!consumer) continue;                              // a usage not inside a named symbol
+      const enc = await enclosingOf(loc.uri, consumer.sel);
+      const cid = ensureNode(loc.uri, consumer.name, consumer.kind, consumer.sel, consumer.range, enc);
+      if (cid === cur.id || coreIds.has(cid)) continue;     // self-reference / the anchor itself
+      addEdge(cid, cur.id, "reference", edgeProv);          // consumer USES cur (the dependency edge)
+      queue.push({ id: cid, uri: loc.uri, pos: consumer.sel.start, depth: cur.depth + 1 });
     }
   }
-
-  // AUGMENTATION — import-definition links. A component's wiring is mostly JSX + hooks,
-  // which the call graph does NOT see (call hierarchy ignores JSX). So resolve the IMPORTED
-  // symbols the anchor body actually uses, via the definition provider: those are the links
-  // it wires out to. Robust exactly where call hierarchy is blind (React). Best-effort —
-  // a failure to resolve becomes an `unresolved[]` entry, never a fabricated edge.
-  try {
-    const doc = await vscode.workspace.openTextDocument(anchorUri);
-    const text = doc.getText();
-    const body = text.slice(doc.offsetAt(anchorSym.range.start), doc.offsetAt(anchorSym.range.end));
-    for (const b of parseImportBindings(text, doc)) {
-      if (nodes.size >= maxNodes) { truncated = true; break; }
-      if (!new RegExp(`\\b${b.local}\\b`).test(body)) continue;        // not used by the anchor
-      const def = await resolver.getDefinition(anchorUri, b.pos);
-      if (def.kind === "unknown" || !def.value.length) {
-        // the LS couldn't resolve this import (the broken-monorepo signature) — record it as
-        // UNKNOWN so the blind-spot map shows WHY a link is missing, never silently dropped.
-        unresolved.push({ node: anchorId, query: `definition(${b.local})`,
-                          reason: def.kind === "unknown" ? def.reason : "no_definition" });
-        continue;
-      }
-      const { uri, range } = locTarget(def.value[0]);
-      if (uri.fsPath === anchorUri.fsPath && anchorSym.range.contains(range)) continue;  // internal
-      if (uri.fsPath.includes("/node_modules/")) continue;             // framework lib, not first-party wiring
-      const enc = await enclosingOf(uri, range);
-      const id = ensureNode(uri, b.local, vscode.SymbolKind.Variable, range, range, enc);
-      addEdge(anchorId, id, "import", edgeProv);
-    }
-  } catch { /* augmentation is best-effort; the call-graph result still stands */ }
 
   return {
     version: 1,
