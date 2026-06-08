@@ -159,6 +159,53 @@ def test_subcores_split_component_by_behaviour(tmp_path):
             assert 0 <= lo <= hi <= last
 
 
+# --------------------------------------------------------------------------- per-language substrate (F1)
+_CPP_FN = """int process(int count, void (*callback)(int), const char* label) {
+  for (int i = 0; i < count; i++) {
+    callback(i);
+  }
+  log(label);
+  return count;
+}
+"""
+_JAVA_FN = """class Svc {
+  public int run(int count, String label) {
+    System.out.println(label);
+    return count;
+  }
+}
+"""
+
+
+@_requires_ts
+def test_contract_cpp_params_and_callback_link():
+    """C++ params extracted via the node-kind registry (param list under function_declarator, body
+    is compound_statement) — and an INVOKED function-pointer param reads as a callback LINK."""
+    last = _CPP_FN.rstrip().count("\n")
+    m = {x.name: x for x in atoms_mod.extract_contract(_CPP_FN, "cpp", 0, last)}
+    assert "callback" in m and m["callback"].invoked is True        # fn-pointer param, called → link
+    assert "count" in m and m["count"].invoked is False             # data
+    assert "label" in m and m["label"].invoked is False
+
+
+@_requires_ts
+def test_atoms_cpp_finds_nested_lambda():
+    """B atoms are language-parametric too: a C++ nested lambda is a behavioural unit (where a
+    classic function has one). Confirms _FUNCLIKE/_BODY cover C++ (compound_statement body)."""
+    src = "void run() {\n  auto cb = [](int x){ return x + 1; };\n  apply(cb);\n}\n"
+    atoms = atoms_mod.extract_atoms(src, "cpp", 0, src.rstrip().count("\n"))
+    assert len(atoms) >= 1
+
+
+@_requires_ts
+def test_contract_java_params_extracted():
+    """Java params extracted via the registry (formal_parameter), confirming the substrate is
+    language-parametric, not TSX-only."""
+    last = _JAVA_FN.rstrip().count("\n")
+    names = {x.name for x in atoms_mod.extract_contract(_JAVA_FN, "java", 0, last)}
+    assert "count" in names and "label" in names
+
+
 # --------------------------------------------------------------------------- Model A (contract)
 _DELETE_DIALOG_TSX = """export function DeleteDialog({
   isManagedEvent,
@@ -258,17 +305,20 @@ def test_no_subcores_for_class_anchor(tmp_path):
 
 
 # --------------------------------------------------------------------------- seam grain (Layer 4)
+def _seam_edge_set(model):
+    return {tuple(sorted((e["from"], e["to"]))) for e in model["seamEdges"]}
+
+
 def test_cohesion_merges_cores_sharing_a_collaborator(g):
     """charge + refund both call the gateway (non-ambient) → ONE intent-seam; the DI-wired
-    validate, with no resolved collaborator, stays its OWN seam (and is isolated-core)."""
+    validate stays its OWN seam. The gateway (a different file) is a PLACE seam, WIRED to the
+    merged seam via a resolved seam-to-seam edge (S1)."""
     model = codebase.decompose(g)
     seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
-    assert seam_of["n2"] == seam_of["n3"]          # cohesive cores fused
-    assert seam_of["n4"] == seam_of["n2"]          # the gateway sits in the merged seam
-    n4_seams = {s["id"] for cl in model["clusters"] for s in cl["seams"]
-                if any(h["id"] == "n4" for h in s["hunks"])}
-    assert n4_seams == {seam_of["n2"]}             # appears once (not duplicated)
-    assert seam_of["n8"] != seam_of["n2"]          # validate stays its own seam
+    assert seam_of["n2"] == seam_of["n3"]              # cohesive cores fused
+    assert seam_of["n8"] != seam_of["n2"]              # validate stays its own seam
+    assert seam_of["n4"].startswith("place:")          # cross-file gateway → a place seam
+    assert tuple(sorted((seam_of["n2"], seam_of["n4"]))) in _seam_edge_set(model)   # wired
 
 
 # --------------------------------------------------------------------------- Layer 2 (blind spots)
@@ -335,6 +385,27 @@ def test_ambient_collaborator_keeps_cores_separate_many_to_many():
     model = codebase.decompose(g)
     seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
     assert len({seam_of["m1"], seam_of["m2"], seam_of["m3"]}) == 3   # NOT fused
-    u_seams = {s["id"] for cl in model["clusters"] for s in cl["seams"]
-               if any(h["id"] == "u" for h in s["hunks"])}
-    assert u_seams == {seam_of["m1"], seam_of["m2"], seam_of["m3"]}  # attaches to each
+    assert seam_of["u"].startswith("place:")                          # cross-file util → a place seam
+    edges = _seam_edge_set(model)
+    for mi in ("m1", "m2", "m3"):                                     # wired to each (many-to-many)
+        assert tuple(sorted((seam_of[mi], seam_of["u"]))) in edges
+
+
+def test_seam_graph_wires_consumer_to_anchor():
+    """S1: a consumer in another file is its OWN place seam, wired to the anchor's seam by a
+    resolved seam-to-seam edge — the multi-seam graph, deterministic."""
+    g = graph_ir.from_resolved_graph({
+        "version": 1,
+        "anchor": {"id": "a", "symbol": "Widget", "file": "ui/Widget.tsx", "range": [0, 20]},
+        "language": "typescriptreact", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [
+            {"id": "a", "symbol": "Widget", "kind": "function", "file": "ui/Widget.tsx", "range": [0, 20], "enclosing": "", "complexity": 20},
+            {"id": "c", "symbol": "Page", "kind": "function", "file": "pages/Home.tsx", "range": [0, 40], "enclosing": "", "complexity": 40},
+        ],
+        "edges": [{"from": "c", "to": "a", "kind": "reference", "provenance": "RESOLVED_FULL"}],
+        "blindspots": [], "unresolved": [],
+    })
+    model = codebase.decompose(g)
+    seam_ids = {s["id"] for cl in model["clusters"] for s in cl["seams"]}
+    assert "a" in seam_ids and "place:pages/Home.tsx" in seam_ids
+    assert tuple(sorted(("a", "place:pages/Home.tsx"))) in _seam_edge_set(model)

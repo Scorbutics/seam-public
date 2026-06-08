@@ -27,10 +27,11 @@ interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[
 interface SuggestedCandidate { symbol: string; provenance: string; }
 interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: SuggestedCandidate[]; }
 interface Unresolved { node: string; query: string; reason: string; }
+interface SeamEdge { from: string; to: string; provenance: string; }   // resolved seam-to-seam wiring (S1)
 interface SeamModel {
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
-  complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[];
+  complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[]; seamEdges?: SeamEdge[];
 }
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
@@ -83,6 +84,9 @@ type TDeco = vscode.TextEditorDecorationType;
 let model: SeamModel | undefined;
 let repoRoot = "";
 let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file → its hunk occurrences
+// Seam graph (S1): seam id → label, and seam id → its wired neighbours (resolved seam-to-seam).
+let seamLabel: Map<string, string> = new Map();
+let seamNeighbors: Map<string, { id: string; provenance: string }[]> = new Map();
 let seamBounds: Map<string, { firstKey: string; lastKey: string }> = new Map();  // seam → its global first/last span occurrence
 // Per role: a FILL (bg + gutter + ruler, all lines) and four position-specific
 // BORDER types so the outline is drawn only around the hunk's perimeter (top edge
@@ -227,7 +231,8 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   // (a sub-core paints its own overlay via its command instead).
   if (sel && (sel.kind === "extTarget" || sel.kind === "shadows" || sel.kind === "blindspot"
               || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore"
-              || sel.kind === "contract" || sel.kind === "feed" || sel.kind === "feedDef")) return;
+              || sel.kind === "contract" || sel.kind === "feed" || sel.kind === "feedDef"
+              || sel.kind === "seamLink")) return;
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
@@ -398,7 +403,14 @@ async function reviewCommit() {
 function buildIndex() {
   fileIndex = new Map();
   seamBounds = new Map();
+  seamLabel = new Map();
+  seamNeighbors = new Map();
   if (!model) return;
+  for (const cl of model.clusters) for (const s of cl.seams) seamLabel.set(s.id, s.label);
+  for (const e of model.seamEdges ?? []) {
+    (seamNeighbors.get(e.from) ?? seamNeighbors.set(e.from, []).get(e.from)!).push({ id: e.to, provenance: e.provenance });
+    (seamNeighbors.get(e.to) ?? seamNeighbors.set(e.to, []).get(e.to)!).push({ id: e.from, provenance: e.provenance });
+  }
   const add = (e: IndexEntry) => {
     const list = fileIndex.get(e.hunk.file) ?? [];
     list.push(e);
@@ -912,7 +924,9 @@ type Node =
   // Model A: a contract member (prop/param) under a core hunk, and (A2) its feeders.
   | { kind: "contract"; hunk: SeamHunk; member: ContractMember }
   | { kind: "feed"; feed: ContractFeed; prop: string }
-  | { kind: "feedDef"; uri: vscode.Uri; line: number; value: string };   // A3: where a fed value is defined
+  | { kind: "feedDef"; uri: vscode.Uri; line: number; value: string }   // A3: where a fed value is defined
+  // S1: a resolved seam-to-seam wiring under a seam (the seam graph).
+  | { kind: "seamLink"; toId: string; provenance: string };
 
 // A3: lazy cache of "where does this fed value come from" (one more hop up the chain).
 const feedDefCache = new Map<string, Promise<{ uri: vscode.Uri; line: number }[]>>();
@@ -976,8 +990,13 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     }
     if (el.kind === "cluster")
       return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
-    if (el.kind === "seam")
-      return el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
+    if (el.kind === "seam") {
+      // the seam's resolved wiring (other seams it connects to) shows first, then its hunks.
+      const links: Node[] = (seamNeighbors.get(el.seam.id) ?? [])
+        .map((n) => ({ kind: "seamLink", toId: n.id, provenance: n.provenance } as Node));
+      const hunks: Node[] = el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
+      return [...links, ...hunks];
+    }
     if (el.kind === "hunk") {
       // A core expands to its drill-downs: the CONTRACT members (Model A) and any proposed
       // behavioural sub-cores (Model B) — both are finer altitudes of the one core.
@@ -1008,9 +1027,18 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     }
     if (el.kind === "seam") {
       const it = new vscode.TreeItem(el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
-      it.description = [el.seam.linkOnly ? "link-only" : "", el.seam.uncertain ? "uncertain" : ""]
-        .filter(Boolean).join(" · ");
+      const wired = seamNeighbors.get(el.seam.id)?.length ?? 0;
+      it.description = [el.seam.linkOnly ? "link-only" : "", el.seam.uncertain ? "uncertain" : "",
+                        wired ? `↔ ${wired}` : ""].filter(Boolean).join(" · ");
       it.iconPath = new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
+      return it;
+    }
+    if (el.kind === "seamLink") {
+      const it = new vscode.TreeItem(`↔ ${seamLabel.get(el.toId) ?? el.toId}`, vscode.TreeItemCollapsibleState.None);
+      it.description = "wires to";
+      it.iconPath = new vscode.ThemeIcon("arrow-both");
+      it.tooltip = `Resolved seam-to-seam wiring → ${seamLabel.get(el.toId) ?? el.toId} (${el.provenance}). Click to focus it.`;
+      it.command = { command: "seam.focusSeamById", title: "Focus wired seam", arguments: [el.toId] };
       return it;
     }
     if (el.kind === "shadows") {

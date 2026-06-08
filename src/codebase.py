@@ -403,6 +403,20 @@ def emit_seams(g: Graph, health: dict) -> dict:
     seam_warnings = health.get("seam_warnings", {})
     node_warnings = health.get("node_warnings", {})
     by_file_line = lambda n: (n.file, n.start)
+    anchor_file = g.nodes[g.anchor].file if g.anchor in g.nodes else ""
+
+    # SEAM GRAPH (S1): a seam is a "place + intent". The anchor's own file decomposes into its
+    # cohesion core-seams (A/B detail rides here); every OTHER file in the neighbourhood is a
+    # PLACE seam (a consumer site). The id of the seam a node belongs to, for wiring:
+    def place_id(n: graph_ir.Node) -> str:
+        return f"place:{n.file}"
+
+    def seam_id_of(n: graph_ir.Node) -> str | None:
+        if n.role == "core":
+            return n.seam or n.id                       # an anchor cohesion seam
+        if n.role == "test" or n.file == anchor_file:
+            return None                                 # tests / within-anchor attachments aren't seams
+        return place_id(n)                              # a cross-file consumer → its place seam
 
     # every non-test node belongs to a cluster (a core-less cluster is a legitimate
     # link-only/rewire view); tests are surfaced separately (skim posture).
@@ -414,7 +428,6 @@ def emit_seams(g: Graph, health: dict) -> dict:
     clusters = []
     for ci, (gid, nodes) in enumerate(sorted(by_cluster.items())):
         cores = [n for n in nodes if n.role == "core"]
-        # group cores into SEAMS by the seam id `assign_seams` set (cohesion).
         seam_groups: dict[str, list[graph_ir.Node]] = {}
         for c in cores:
             seam_groups.setdefault(c.seam or c.id, []).append(c)
@@ -423,10 +436,11 @@ def emit_seams(g: Graph, health: dict) -> dict:
         for seam_id, gc in sorted(seam_groups.items()):
             gc.sort(key=by_file_line)
             core_ids = {c.id for c in gc}
-            # non-core neighbours of ANY core in the seam (within this cluster), deduped.
-            # A collaborator shared with cores in ANOTHER seam attaches to both (many-to-many).
+            # attach only SAME-FILE non-core neighbours (within-anchor links). Cross-file
+            # consumers are their OWN place seams, wired via seamEdges — not buried here.
             att = sorted({nid for c in gc for nid in adj.get(c.id, set())
-                          if g.nodes[nid].role in ("link", "environment") and g.nodes[nid].group == gid},
+                          if g.nodes[nid].role in ("link", "environment")
+                          and g.nodes[nid].group == gid and g.nodes[nid].file == anchor_file},
                          key=lambda x: by_file_line(g.nodes[x]))
             attached.update(att)
             hunks = [_seam_hunk(c, "RESOLVED_FULL") for c in gc]
@@ -439,12 +453,24 @@ def emit_seams(g: Graph, health: dict) -> dict:
             seams.append({"id": seam_id, "label": gc[0].seam_label or seam_id,
                           "linkOnly": False, "uncertain": any(c.role_confidence < 0.6 for c in gc),
                           "warnings": warns, "hunks": hunks})
-        # ambient ripple: reached nodes wired to no core in this cluster (depth-2 env, dangling
-        # links). Surfaced as ONE neutral seam so nothing resolved is silently dropped.
-        leftover = sorted((n for n in nodes if n.role != "core" and n.id not in attached),
-                          key=lambda n: (n.file, n.start))
+        # PLACE seams: cross-file consumer nodes grouped by file — each a place that wires in.
+        places: dict[str, list[graph_ir.Node]] = {}
+        for n in nodes:
+            if n.role in ("link", "environment") and n.file != anchor_file:
+                places.setdefault(n.file, []).append(n)
+        for pf, pnodes in sorted(places.items()):
+            pnodes.sort(key=by_file_line)
+            warns = []
+            for n in pnodes:
+                warns += [w for w in node_warnings.get(n.id, []) if w not in warns]
+            seams.append({"id": place_id(pnodes[0]), "label": pf.rsplit("/", 1)[-1],
+                          "linkOnly": True, "uncertain": False, "warnings": warns,
+                          "hunks": [_seam_hunk(n, "RESOLVED_FULL") for n in pnodes]})
+        # ambient ripple: SAME-FILE non-core nodes wired to no core (kept so nothing is dropped).
+        leftover = sorted((n for n in nodes if n.role in ("link", "environment")
+                           and n.file == anchor_file and n.id not in attached), key=by_file_line)
         if leftover:
-            warns: list[str] = []
+            warns = []
             for n in leftover:
                 warns += [w for w in node_warnings.get(n.id, []) if w not in warns]
             seams.append({"id": f"{gid}-ambient", "label": "ambient ripple",
@@ -452,6 +478,23 @@ def emit_seams(g: Graph, health: dict) -> dict:
                           "hunks": [_seam_hunk(n, "RESOLVED_FULL") for n in leftover]})
         clusters.append({"id": gid, "intent": (cores[0].intent if cores else nodes[0].intent),
                          "colorIndex": ci, "seams": seams})
+
+    # SEAM-TO-SEAM WIRING (S1): resolved edges crossing a seam boundary, deduped + undirected.
+    # RESOLVED only — a suggested implicit edge (S2) would go in a separate overlay, never here.
+    seam_edges = []
+    seen: set[tuple[str, str]] = set()
+    for e in g.resolved_edges():
+        u, v = g.nodes.get(e.src), g.nodes.get(e.dst)
+        if u is None or v is None:
+            continue
+        su, sv = seam_id_of(u), seam_id_of(v)
+        if not su or not sv or su == sv:
+            continue
+        key = (su, sv) if su < sv else (sv, su)
+        if key in seen:
+            continue
+        seen.add(key)
+        seam_edges.append({"from": su, "to": sv, "provenance": e.provenance.value})
 
     tests = [_seam_hunk(n, "RESOLVED_FULL") for n in g.nodes.values() if n.role == "test"]
     return {
@@ -464,6 +507,7 @@ def emit_seams(g: Graph, health: dict) -> dict:
         "resolutionQuality": g.resolution_quality,
         "language": g.language,
         "complete": g.complete,
+        "seamEdges": seam_edges,
         "blindspots": [{"node": b.node, "mechanism": b.mechanism, "evidence": b.evidence,
                         "candidates": [{"symbol": c.dst, "provenance": c.provenance.value}
                                        for c in b.candidates]} for b in g.blindspots],

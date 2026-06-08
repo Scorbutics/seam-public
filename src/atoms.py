@@ -19,10 +19,48 @@ from dataclasses import dataclass, field
 
 from .facts_treesitter import _LANG_BY_EXT, _parser, available
 
-_FUNCLIKE = ("arrow_function", "function_definition", "function_declaration",
-             "function_expression", "method_definition", "method_declaration",
-             "function_item", "lambda")
-_BODYISH = ("block", "body")
+# ---------------------------------------------------------------------------------------------
+# PER-GRAMMAR NODE-KIND REGISTRY (F1). The extractors reason over CONCEPTS, never literal TSX
+# kinds, so the substrate is language-parametric (no React/TS assumptions). Each set is the UNION
+# of the kinds every supported grammar uses for that concept — kinds rarely collide across
+# grammars, so a union needs no per-language dispatch while still covering each. Unknown grammar /
+# missing concept → the set just doesn't match → empty extraction → graceful degradation.
+# Probed real (tree-sitter): TS/TSX, C/C++ (litergss3), + Java/Python/Rust/Go/Ruby from grammar docs.
+_FUNCLIKE = {
+    # TS/JS:                      C/C++:                  Java:                  Python/Rust/Ruby:
+    "arrow_function", "function_declaration", "function_expression", "method_definition",
+    "generator_function_declaration", "function_signature",
+    "function_definition", "lambda_expression",                       # C/C++ (+ Java lambda)
+    "method_declaration", "constructor_declaration",                  # Java
+    "function_item", "closure_expression",                            # Rust
+    "lambda", "function",                                             # Python / generic
+    "method",                                                         # Ruby/generic
+}
+_BODY = {
+    "statement_block",                 # TS/JS
+    "compound_statement",              # C/C++  (the kind the old block/body check MISSED)
+    "block", "constructor_body",       # Java / generic
+    "function_body", "do_block",       # Ruby / generic
+}
+_PARAM_LIST = {
+    "formal_parameters",               # TS/JS, Java
+    "parameter_list",                  # C/C++
+    "parameters",                      # Python / Rust
+    "method_parameters",               # generic
+}
+_PARAM_NODE = {
+    "required_parameter", "optional_parameter", "rest_pattern",       # TS/JS
+    "parameter_declaration", "optional_parameter_declaration",        # C/C++
+    "formal_parameter", "spread_parameter", "receiver_parameter",     # Java
+    "typed_parameter", "default_parameter", "typed_default_parameter",# Python
+    "parameter",                                                      # Rust / generic
+}
+_CALL = {
+    "call_expression",                 # TS/JS, C/C++, Rust
+    "method_invocation",               # Java
+    "call",                            # Python / Ruby
+    "invocation_expression",           # C#
+}
 
 
 @dataclass
@@ -79,7 +117,7 @@ class _Ctx:
 def _anchor_func(ctx: _Ctx, start_line: int):
     """The function-like node whose start best aligns with the anchor's start line (robust to a
     slightly off end). None if nothing aligns within a few lines (→ no decomposition)."""
-    funcs = ctx.collect(ctx.root, lambda k: any(f in k for f in _FUNCLIKE))
+    funcs = ctx.collect(ctx.root, lambda k: k in _FUNCLIKE)
     if not funcs:
         return None
     af = min(funcs, key=lambda n: (abs(ctx.span(n)[0] - start_line), -(ctx.span(n)[1] - ctx.span(n)[0])))
@@ -87,10 +125,41 @@ def _anchor_func(ctx: _Ctx, start_line: int):
 
 
 def _body_of(ctx: _Ctx, func):
+    """The function's body block. A direct child for most grammars (TS `statement_block`, C++
+    `compound_statement`); falls back to the func node itself for concise bodies."""
     for c in ctx.children(func):
-        if any(b in c.kind() for b in _BODYISH):
+        if c.kind() in _BODY:
             return c
     return func
+
+
+def _param_list(ctx: _Ctx, func):
+    """The function's OWN parameter list. Robust to grammar structure: in TS it's a direct child
+    (`formal_parameters`); in C/C++ it sits under `function_declarator`. BFS from the function,
+    NOT descending into the body or a nested function, so we never grab an inner call/lambda's
+    params."""
+    queue = list(ctx.children(func))
+    while queue:
+        c = queue.pop(0)
+        k = c.kind()
+        if k in _PARAM_LIST:
+            return c
+        if k in _BODY or k in _FUNCLIKE:
+            continue                                      # don't descend into body / nested fn
+        queue.extend(ctx.children(c))
+    return None
+
+
+def _param_names(ctx: _Ctx, param_node) -> list[str]:
+    """The binding name(s) of one parameter. A destructured object param (TS `{a, b}`) yields its
+    field names; otherwise the parameter's name identifier (the last plain `identifier` in source
+    order — after the type, before nothing, for `Type name` / `name`)."""
+    fields = ctx.collect(param_node, lambda k: "shorthand_property_identifier_pattern" in k)
+    if fields:
+        return [ctx.text(f) for f in fields]
+    ids = sorted((c for c in ctx.collect(param_node, lambda k: k == "identifier")),
+                 key=lambda n: n.start_byte())
+    return [ctx.text(ids[-1])] if ids else []
 
 
 def _merge_lines(lines: list[int]) -> list:
@@ -120,7 +189,7 @@ def extract_atoms(content: str, lang: str, start_line: int, end_line: int) -> li
 
     def walk(n) -> None:
         for c in ctx.children(n):
-            if any(f in c.kind() for f in _FUNCLIKE):
+            if c.kind() in _FUNCLIKE:
                 funcs.append(c)
             else:
                 walk(c)
@@ -140,9 +209,13 @@ def extract_atoms(content: str, lang: str, start_line: int, end_line: int) -> li
 def extract_contract(content: str, lang: str, start_line: int, end_line: int) -> list[ContractMember]:
     """The anchor's contract members (parameters / destructured props) used in its body, each
     flagged `invoked` (called → a behavioural link) and with its internal-use line ranges.
+    Language-parametric via the node-kind registry — works for a TS component's destructured props
+    AND a C++/Java/C function's parameters (the param list may sit under a declarator, not as a
+    direct child).
 
-    Handles the two common shapes: destructured in the signature `({a, b}: T)` and destructured
-    in the body `const { a, b } = props`. Renamed/nested patterns are best-effort (skipped).
+    Handles: destructured in the signature `({a, b}: T)`, destructured in the body
+    `const { a, b } = props`, and plain typed params `Type name` (C/C++/Java). Renamed/nested
+    destructures and default values are best-effort.
     """
     if not available():
         return []
@@ -155,21 +228,19 @@ def extract_contract(content: str, lang: str, start_line: int, end_line: int) ->
         return []
     body = _body_of(ctx, func)
 
-    params = next((c for c in ctx.children(func) if "parameter" in c.kind()), None)
-    sig_fields: set[str] = set()
-    plain_params: set[str] = set()
-    if params is not None:
-        for f in ctx.collect(params, lambda k: "shorthand_property_identifier_pattern" in k):
-            sig_fields.add(ctx.text(f))
-        # a bare identifier parameter (e.g. `props`) — a possible destructure source
-        for p in ctx.children(params):
-            ids = [c for c in ctx.children(p) if c.kind() == "identifier"]
-            if p.kind() == "identifier":
-                plain_params.add(ctx.text(p))
-            elif ids and not ctx.collect(p, lambda k: "pattern" in k):
-                plain_params.add(ctx.text(ids[0]))
+    plist = _param_list(ctx, func)
+    sig_fields: set[str] = set()        # destructured props (TS `{a,b}`)
+    plain_params: set[str] = set()      # named params (C++/Java/TS `props`) + destructure sources
+    if plist is not None:
+        for p in ctx.children(plist):
+            if p.kind() not in _PARAM_NODE and p.kind() != "identifier":
+                continue                                   # punctuation / commas
+            if ctx.collect(p, lambda k: "object_pattern" in k):
+                sig_fields.update(_param_names(ctx, p))     # destructured → field names
+            else:
+                plain_params.update(_param_names(ctx, p))   # named parameter
 
-    # body destructure: `const { a, b } = <plainParam>`
+    # body destructure (TS only — fires only where object_pattern exists): `const {a,b} = props`
     body_fields: set[str] = set()
     sources: set[str] = set()
     for d in ctx.collect(body, lambda k: k == "variable_declarator"):
@@ -187,8 +258,8 @@ def extract_contract(content: str, lang: str, start_line: int, end_line: int) ->
         return []
 
     idents = ctx.collect(body, lambda k: "identifier" in k)
-    called = {ctx.text(ctx.children(c)[0]) for c in ctx.collect(body, lambda k: k == "call_expression")
-              if ctx.children(c) and ctx.children(c)[0].kind() == "identifier"}
+    called = {ctx.text(ctx.children(c)[0]) for c in ctx.collect(body, lambda k: k in _CALL)
+              if ctx.children(c) and "identifier" in ctx.children(c)[0].kind()}
 
     members: list[ContractMember] = []
     for name in sorted(contract):
