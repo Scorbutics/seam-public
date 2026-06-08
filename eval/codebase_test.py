@@ -101,8 +101,44 @@ def test_emit_drops_no_reached_node(g):
     assert "isolated-core" in n8_seam["warnings"]
 
 
-def test_link_appears_in_multiple_seams(g):
+# --------------------------------------------------------------------------- seam grain (Layer 4)
+def test_cohesion_merges_cores_sharing_a_collaborator(g):
+    """charge + refund both call the gateway (non-ambient) → ONE intent-seam; the DI-wired
+    validate, with no resolved collaborator, stays its OWN seam (and is isolated-core)."""
     model = codebase.decompose(g)
-    seams_with_n4 = [s["id"] for cl in model["clusters"] for s in cl["seams"]
-                     if any(h["id"] == "n4" for h in s["hunks"])]
-    assert set(seams_with_n4) == {"n2", "n3"}   # many-to-many: the gateway wires both
+    seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
+    assert seam_of["n2"] == seam_of["n3"]          # cohesive cores fused
+    assert seam_of["n4"] == seam_of["n2"]          # the gateway sits in the merged seam
+    n4_seams = {s["id"] for cl in model["clusters"] for s in cl["seams"]
+                if any(h["id"] == "n4" for h in s["hunks"])}
+    assert n4_seams == {seam_of["n2"]}             # appears once (not duplicated)
+    assert seam_of["n8"] != seam_of["n2"]          # validate stays its own seam
+
+
+def test_ambient_collaborator_keeps_cores_separate_many_to_many():
+    """A collaborator shared by MORE than half the cores is ambient → it does NOT fuse them;
+    it attaches to EACH seam (the legitimate many-to-many), avoiding the hairball fusion."""
+    data = {
+        "version": 1, "anchor": {"id": "a", "symbol": "Svc", "file": "s.ts", "range": [1, 40]},
+        "language": "typescript", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [
+            {"id": "a", "symbol": "Svc", "kind": "class", "file": "s.ts", "range": [1, 40], "enclosing": "", "complexity": 40},
+            {"id": "m1", "symbol": "m1", "kind": "method", "file": "s.ts", "range": [5, 10], "enclosing": "Svc", "complexity": 6},
+            {"id": "m2", "symbol": "m2", "kind": "method", "file": "s.ts", "range": [12, 18], "enclosing": "Svc", "complexity": 7},
+            {"id": "m3", "symbol": "m3", "kind": "method", "file": "s.ts", "range": [20, 26], "enclosing": "Svc", "complexity": 7},
+            {"id": "u", "symbol": "log", "kind": "function", "file": "u.ts", "range": [1, 5], "enclosing": "", "complexity": 5},
+        ],
+        "edges": [
+            {"from": "m1", "to": "u", "kind": "call", "provenance": "RESOLVED_FULL"},
+            {"from": "m2", "to": "u", "kind": "call", "provenance": "RESOLVED_FULL"},
+            {"from": "m3", "to": "u", "kind": "call", "provenance": "RESOLVED_FULL"},
+        ],
+        "blindspots": [], "unresolved": [],
+    }
+    g = graph_ir.from_resolved_graph(data)
+    model = codebase.decompose(g)
+    seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
+    assert len({seam_of["m1"], seam_of["m2"], seam_of["m3"]}) == 3   # NOT fused
+    u_seams = {s["id"] for cl in model["clusters"] for s in cl["seams"]
+               if any(h["id"] == "u" for h in s["hunks"])}
+    assert u_seams == {seam_of["m1"], seam_of["m2"], seam_of["m3"]}  # attaches to each

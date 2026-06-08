@@ -71,10 +71,10 @@ def _containment_edges(g: Graph) -> list[tuple[str, str]]:
 
 
 def assign_clusters(g: Graph) -> None:
-    """Layer 4 (v0 floor): connectivity partition over the resolved graph (call edges +
-    containment) + one seam per core. A core anchors a seam (`seam` id = node id); the
-    cluster `intent` is the anchor symbol for the anchor's own cluster, else the
-    highest-complexity core's symbol."""
+    """Layer 4 (clusters): connectivity partition over the resolved graph (call edges +
+    containment). The cluster `intent` is the anchor symbol for the anchor's own cluster,
+    else the highest-complexity core's symbol. Seam grain WITHIN a cluster is decided by
+    `assign_seams` (cohesion), not here."""
     order = g.order()
     edges = [(e.src, e.dst) for e in g.resolved_edges()] + _containment_edges(g)
     groups = connected_components(order, edges)
@@ -83,10 +83,6 @@ def assign_clusters(g: Graph) -> None:
     for nid in order:
         g.nodes[nid].group = groups[nid]
         members.setdefault(groups[nid], []).append(nid)
-
-    for n in g.nodes.values():
-        if n.role == "core":
-            n.seam, n.seam_label = n.id, n.label
 
     anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else ""
     for gid, ids in members.items():
@@ -101,11 +97,69 @@ def assign_clusters(g: Graph) -> None:
             g.nodes[i].intent = intent
 
 
+def assign_seams(g: Graph) -> None:
+    """Layer 4 (seam grain): group each cluster's cores into intent SEAMS by COHESION,
+    cutting where cohesion DROPS — the boundary algorithm the brief puts at the heart of
+    seam quality (not the LLM).
+
+    Two cores are cohesive when they call each other OR share a NON-AMBIENT collaborator
+    (a link/environment node both touch). 'Ambient' = a collaborator touched by more than
+    half the cluster's cores — a shared base type / util that is NOT what any one seam is
+    about (the cal.com `<Button>` hairball lesson, carried over from the diff engine). The
+    connected components of that cohesion graph are the seams:
+      - tightly-coupled methods (charge + refund both using the gateway) → ONE seam;
+      - a method off on its own (a DI-wired `validate` with no resolved collaborator) → its
+        OWN singleton seam, which then surfaces honestly as an isolated-core.
+    A core sharing only an AMBIENT collaborator stays a separate seam, so that collaborator
+    attaches to BOTH seams (the legitimate many-to-many) instead of fusing them.
+
+    NB (epistemic status): distance-to-anchor WEIGHTING and the collapse/surface ALTITUDE
+    rule (plan §3 Layer 4) are the FLAGGED refinements — not built here. This cohesion floor
+    is deterministic and offline-tested; the altitude question is for the manual-validation
+    protocol (§5).
+    """
+    adj = undirected_adjacency(g.resolved_edges())
+    cores_by_cluster: dict[str, list[str]] = {}
+    for n in g.nodes.values():
+        if n.role == "core":
+            cores_by_cluster.setdefault(n.group, []).append(n.id)
+
+    anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else ""
+    for cluster_cores in cores_by_cluster.values():
+        core_set = set(cluster_cores)
+        cut = max(2, len(cluster_cores) // 2)        # ambient if touched by MORE than this
+        # which cores touch each non-core collaborator (the cohesion carrier)
+        by_collab: dict[str, list[str]] = {}
+        cohesion: list[tuple[str, str]] = []
+        for c in cluster_cores:
+            for nb in adj.get(c, set()):
+                if nb in core_set:
+                    cohesion.append((c, nb))         # direct core→core call
+                else:
+                    by_collab.setdefault(nb, []).append(c)
+        for cs in by_collab.values():
+            if len(cs) <= cut:                       # non-ambient shared collaborator
+                cohesion += [(cs[0], x) for x in cs[1:]]
+        seam_of = connected_components(cluster_cores, cohesion)
+        # representative per seam group + label (anchor symbol wins; else top complexity)
+        members: dict[str, list[str]] = {}
+        for cid in cluster_cores:
+            members.setdefault(seam_of[cid], []).append(cid)
+        for ids in members.values():
+            rep = (g.anchor if g.anchor in ids else
+                   max(ids, key=lambda i: g.nodes[i].complexity))
+            label = anchor_sym if g.anchor in ids else g.nodes[rep].label
+            for cid in ids:
+                g.nodes[cid].seam = g.nodes[rep].id
+                g.nodes[cid].seam_label = label
+
+
 def decompose(g: Graph) -> dict:
-    """Run the codebase layers in order (roles → clusters → well-formedness) and return the
-    SeamModel the extension renders. `g` is mutated with the assignment."""
+    """Run the codebase layers in order (roles → clusters → seams → well-formedness) and
+    return the SeamModel the extension renders. `g` is mutated with the assignment."""
     assign_roles(g)
     assign_clusters(g)
+    assign_seams(g)
     health = wellformedness(g)
     return emit_seams(g, health)
 
@@ -132,11 +186,16 @@ def emit_seams(g: Graph, health: dict) -> dict:
     adj = undirected_adjacency(g.resolved_edges())
     edge_prov = {(e.src, e.dst): e.provenance.value for e in g.resolved_edges()}
 
-    def prov_of(a: str, b: str) -> str:
-        return edge_prov.get((a, b)) or edge_prov.get((b, a)) or "RESOLVED_FULL"
+    def prov_to_group(nid: str, core_ids: set[str]) -> str:
+        for c in core_ids:
+            p = edge_prov.get((nid, c)) or edge_prov.get((c, nid))
+            if p:
+                return p
+        return "RESOLVED_FULL"
 
     seam_warnings = health.get("seam_warnings", {})
     node_warnings = health.get("node_warnings", {})
+    by_file_line = lambda n: (n.file, n.start)
 
     # every non-test node belongs to a cluster (a core-less cluster is a legitimate
     # link-only/rewire view); tests are surfaced separately (skim posture).
@@ -147,21 +206,31 @@ def emit_seams(g: Graph, health: dict) -> dict:
 
     clusters = []
     for ci, (gid, nodes) in enumerate(sorted(by_cluster.items())):
-        cores = sorted((n for n in nodes if n.role == "core"), key=lambda c: c.id)
+        cores = [n for n in nodes if n.role == "core"]
+        # group cores into SEAMS by the seam id `assign_seams` set (cohesion).
+        seam_groups: dict[str, list[graph_ir.Node]] = {}
+        for c in cores:
+            seam_groups.setdefault(c.seam or c.id, []).append(c)
         attached: set[str] = set()
         seams = []
-        for c in cores:
-            att = sorted((nid for nid in adj.get(c.id, set())
-                          if g.nodes[nid].role in ("link", "environment") and g.nodes[nid].group == gid),
-                         key=lambda x: (g.nodes[x].file, g.nodes[x].start))
+        for seam_id, gc in sorted(seam_groups.items()):
+            gc.sort(key=by_file_line)
+            core_ids = {c.id for c in gc}
+            # non-core neighbours of ANY core in the seam (within this cluster), deduped.
+            # A collaborator shared with cores in ANOTHER seam attaches to both (many-to-many).
+            att = sorted({nid for c in gc for nid in adj.get(c.id, set())
+                          if g.nodes[nid].role in ("link", "environment") and g.nodes[nid].group == gid},
+                         key=lambda x: by_file_line(g.nodes[x]))
             attached.update(att)
-            hunks = [_seam_hunk(c, "RESOLVED_FULL")]
-            hunks += [_seam_hunk(g.nodes[nid], prov_of(c.id, nid)) for nid in att]
-            warns = list(seam_warnings.get(c.id, []))
+            hunks = [_seam_hunk(c, "RESOLVED_FULL") for c in gc]
+            hunks += [_seam_hunk(g.nodes[nid], prov_to_group(nid, core_ids)) for nid in att]
+            warns: list[str] = []
+            for c in gc:
+                warns += [w for w in seam_warnings.get(c.id, []) if w not in warns]
             for nid in att:
                 warns += [w for w in node_warnings.get(nid, []) if w not in warns]
-            seams.append({"id": c.id, "label": c.seam_label or c.id,
-                          "linkOnly": False, "uncertain": c.role_confidence < 0.6,
+            seams.append({"id": seam_id, "label": gc[0].seam_label or seam_id,
+                          "linkOnly": False, "uncertain": any(c.role_confidence < 0.6 for c in gc),
                           "warnings": warns, "hunks": hunks})
         # ambient ripple: reached nodes wired to no core in this cluster (depth-2 env, dangling
         # links). Surfaced as ONE neutral seam so nothing resolved is silently dropped.
