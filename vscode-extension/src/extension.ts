@@ -3,6 +3,7 @@ import { execFile } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
+import { VSCodeSymbolResolver, buildResolvedGraph } from "./resolver";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
@@ -10,7 +11,14 @@ interface ExternalRef { symbol: string; source: string; }
 interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
-interface SeamModel { clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[]; }
+// Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
+// omits them, so all are optional). `resolutionQuality` drives the honesty banner, and
+// `unresolved`/`blindspots` are the UNKNOWN / statically-opaque overlays (plan §1/§2).
+interface SeamModel {
+  clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
+  mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
+  complete?: boolean; unresolved?: unknown[]; blindspots?: unknown[];
+}
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
 interface IndexEntry { hunk: SeamHunk; seamId: string; seamLabel: string; intent: string; }
@@ -131,6 +139,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.languages.registerCodeLensProvider([{ scheme: "file" }, { scheme: "git" }], lensProvider),
     vscode.commands.registerCommand("seam.review", () => runReview("HEAD")),
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
+    vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -452,6 +461,73 @@ async function runReview(range: string) {
       } finally {
         try { fs.unlinkSync(out); } catch { /* ignore */ }
         if (factsPath) { try { fs.unlinkSync(factsPath); } catch { /* ignore */ } }
+      }
+    },
+  );
+}
+
+// CODEBASE MODE (plan §3): decompose from an ANCHOR (the class/method under the cursor)
+// instead of a diff. The VSCode SymbolResolver builds an anchor-bounded ResolvedGraph
+// (Layer 1), Python decomposes it (`decompose.py --graph`, layers 3-6), and the SAME
+// native renderer paints the result. The resolver output is the abstraction boundary —
+// the engine never sees `vscode` (constraint §4).
+async function analyzeCodebase() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("Seam: open a file and put the cursor on a class or method first.");
+    return;
+  }
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
+  repoRoot = folder.uri.fsPath;
+  const tool = toolPath();
+  if (!fs.existsSync(path.join(tool, "decompose.py"))) {
+    vscode.window.showErrorMessage(
+      `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" (Settings → Seam).`);
+    return;
+  }
+  const py = pythonPath(tool);
+  if (!fs.existsSync(py)) {
+    vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
+    return;
+  }
+  const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
+  const anchorUri = editor.document.uri;
+  const anchorPos = editor.selection.active;
+
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: "Seam: analysing codebase from anchor…" },
+    async () => {
+      const graphPath = path.join(tool, `.seam-graph-${Date.now()}.json`);
+      const out = path.join(tool, `.seam-${Date.now()}.json`);
+      try {
+        const graph = await buildResolvedGraph(new VSCodeSymbolResolver(), anchorUri, anchorPos,
+                                               repoRoot, { maxDepth: depth });
+        if (!graph.nodes.length || !graph.anchor.id) {
+          vscode.window.showErrorMessage(
+            "Seam: couldn't resolve a symbol here. Put the cursor on a class/method name and wait " +
+            "for the language server to finish indexing (resolution: " + graph.resolutionQuality + ").");
+          return;
+        }
+        fs.writeFileSync(graphPath, JSON.stringify(graph), "utf-8");
+        await execFileP(py, [path.join(tool, "decompose.py"), "--graph", graphPath,
+                             "--emit-seams", out], tool);
+        const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        const ts = Date.now();
+        const range = `anchor ${graph.anchor.symbol}`;
+        activateModel(parsed, repoRoot, range, ts);
+        extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
+        const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+        const gaps = (graph.unresolved.length || graph.blindspots.length)
+          ? `  ·  ${graph.unresolved.length} unknown, ${graph.blindspots.length} blind spot(s)` : "";
+        vscode.window.showInformationMessage(
+          `Seam (codebase): ${graph.anchor.symbol} — ${parsed.clusters.length} clusters, ${n} seams.  ` +
+          `resolution ${graph.resolutionQuality}${gaps}`);
+      } catch (e) {
+        vscode.window.showErrorMessage(`Seam codebase analysis failed: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        try { fs.unlinkSync(graphPath); } catch { /* ignore */ }
+        try { fs.unlinkSync(out); } catch { /* ignore */ }
       }
     },
   );
