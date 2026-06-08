@@ -94,7 +94,11 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         # --repo enables the Layer-2 scan for statically-opaque couplings (dynamic imports
         # that load the anchor by string path — invisible to the reference resolver).
-        model = codebase.decompose(g, repo=args.repo)
+        # --classifier llm|hybrid lets the LLM refine the intent partition (a PROPOSED partition,
+        # seeded by the deterministic floor); det = floor only.
+        use_llm = args.classifier in ("llm", "hybrid")
+        model = codebase.decompose(g, repo=args.repo, use_llm=use_llm,
+                                   model=args.model, claude_bin=args.claude_bin)
         counts: dict[str, int] = {}
         for n in g.nodes.values():
             counts[n.role] = counts.get(n.role, 0) + 1

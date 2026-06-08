@@ -304,6 +304,70 @@ def test_no_subcores_for_class_anchor(tmp_path):
                for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"])
 
 
+# --------------------------------------------------------------------------- F4: LLM refine
+def _svc_graph():
+    """Anchor Svc (class) with methods m1,m2,m3; c1 uses m1+m2, c2 uses m3. Floor co-occurrence →
+    {m1,m2},{m3}."""
+    return graph_ir.from_resolved_graph({
+        "version": 1, "anchor": {"id": "a", "symbol": "Svc", "file": "svc.ts", "range": [0, 40]},
+        "language": "typescript", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [
+            {"id": "a", "symbol": "Svc", "kind": "class", "file": "svc.ts", "range": [0, 40], "enclosing": "", "complexity": 40},
+            {"id": "m1", "symbol": "m1", "kind": "method", "file": "svc.ts", "range": [2, 8], "enclosing": "Svc", "complexity": 6},
+            {"id": "m2", "symbol": "m2", "kind": "method", "file": "svc.ts", "range": [10, 16], "enclosing": "Svc", "complexity": 7},
+            {"id": "m3", "symbol": "m3", "kind": "method", "file": "svc.ts", "range": [18, 24], "enclosing": "Svc", "complexity": 9},
+            {"id": "c1", "symbol": "C1", "kind": "function", "file": "x/C1.ts", "range": [0, 5], "enclosing": "", "complexity": 5},
+            {"id": "c2", "symbol": "C2", "kind": "function", "file": "y/C2.ts", "range": [0, 5], "enclosing": "", "complexity": 5},
+        ],
+        "edges": [
+            {"from": "c1", "to": "m1", "kind": "call", "provenance": "RESOLVED_FULL"},
+            {"from": "c1", "to": "m2", "kind": "call", "provenance": "RESOLVED_FULL"},
+            {"from": "c2", "to": "m3", "kind": "call", "provenance": "RESOLVED_FULL"},
+        ],
+        "blindspots": [], "unresolved": [],
+    })
+
+
+def test_llm_refine_overrides_floor_grouping(monkeypatch):
+    """The LLM REFINES the floor: here it regroups (m1 alone; m2+m3 together) and names — a
+    PROPOSED partition over the verified carriers, marked proposedBy=llm."""
+    monkeypatch.setattr(codebase.llm, "run_pass",
+                        lambda *a, **k: {"m1": {"seam": "S1", "label": "alpha"},
+                                         "m2": {"seam": "S2", "label": "beta"},
+                                         "m3": {"seam": "S2"}})
+    model = codebase.decompose(_svc_graph(), use_llm=True)
+    sm = _seams_of(model)
+    assert sm["m2"] == sm["m3"] and sm["m1"] != sm["m2"]    # LLM's grouping, not the floor's
+    seams = {s["id"]: s for cl in model["clusters"] for s in cl["seams"]}
+    assert all(s["proposedBy"] == "llm" for s in seams.values())
+    labels = {s["label"] for s in seams.values()}
+    assert "alpha" in labels and "beta" in labels
+
+
+def test_llm_refine_falls_back_to_floor_on_error(monkeypatch):
+    """No LLM (or a failure) → the deterministic floor stands; never a crash, never empty."""
+    def boom(*a, **k):
+        raise codebase.llm.LLMError("no backend")
+    monkeypatch.setattr(codebase.llm, "run_pass", boom)
+    model = codebase.decompose(_svc_graph(), use_llm=True)
+    sm = _seams_of(model)
+    assert sm["m1"] == sm["m2"] and sm["m3"] != sm["m1"]    # the FLOOR co-occurrence grouping
+    assert all(s["proposedBy"] == "floor" for cl in model["clusters"] for s in cl["seams"])
+
+
+def test_llm_refine_cannot_invent_carriers(monkeypatch):
+    """An id the LLM returns that is NOT a real member is dropped — the partition groups verified
+    carriers only; it can mis-frame but never fabricate a node."""
+    monkeypatch.setattr(codebase.llm, "run_pass",
+                        lambda *a, **k: {"m1": {"seam": "S1"}, "m2": {"seam": "S1"},
+                                         "m3": {"seam": "S2"}, "ghost": {"seam": "S9", "label": "junk"}})
+    model = codebase.decompose(_svc_graph(), use_llm=True)
+    ids = {h["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
+    assert "ghost" not in ids
+    labels = {s["label"] for cl in model["clusters"] for s in cl["seams"]}
+    assert "junk" not in labels
+
+
 # --------------------------------------------------------------------------- seam grain (Layer 4)
 def _seams_of(model):
     """{node_id: frozenset(seam ids it appears in)} — a node may be in several seams (many-to-many)."""

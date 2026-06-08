@@ -34,6 +34,7 @@ from pathlib import Path
 
 from . import atoms as atoms_mod
 from . import graph_ir
+from . import llm
 from .graph_ir import (BlindSpot, Edge, Graph, Provenance, connected_components,
                        undirected_adjacency, wellformedness)
 
@@ -121,8 +122,25 @@ def _area(path: str) -> str:
     return "/".join(parts[:-1]) or path
 
 
-def _mk_seam(sid: str, label: str, node_ids: list[str], link_only: bool) -> dict:
-    return {"id": sid, "label": label or sid, "linkOnly": link_only, "node_ids": list(node_ids)}
+def _mk_seam(sid: str, label: str, node_ids: list[str], link_only: bool,
+             proposed_by: str = "floor") -> dict:
+    return {"id": sid, "label": label or sid, "linkOnly": link_only,
+            "node_ids": list(node_ids), "proposedBy": proposed_by}
+
+
+def _sweep_leftovers(g: Graph, seams: list[dict], adj: dict) -> list[dict]:
+    """Place any reached link/env node not yet in a seam into an adjacent seam (else the first) —
+    so nothing resolved is silently dropped. Dedups node_ids preserving order."""
+    placed = {nid for s in seams for nid in s["node_ids"]}
+    for n in g.nodes.values():
+        if n.role in ("link", "environment") and n.id not in placed:
+            host = next((s for s in seams if adj.get(n.id, set()) & set(s["node_ids"])),
+                        seams[0] if seams else None)
+            if host is not None:
+                host["node_ids"].append(n.id)
+    for s in seams:
+        s["node_ids"] = list(dict.fromkeys(s["node_ids"]))
+    return seams
 
 
 def assign_intent_seams(g: Graph) -> list[dict]:
@@ -190,16 +208,91 @@ def assign_intent_seams(g: Graph) -> list[dict]:
         for area, cons in by_area.items():
             seams.append(_mk_seam(f"{anchor}@{area}", f"{anchor_sym} · {area}", [anchor, *cons], link_only=False))
 
-    # sweep reached env / unplaced links into an adjacent seam (else the first) — drop nothing.
-    placed = {nid for s in seams for nid in s["node_ids"]}
-    for n in g.nodes.values():
-        if n.role in ("link", "environment") and n.id not in placed:
-            host = next((s for s in seams if adj.get(n.id, set()) & set(s["node_ids"])), seams[0] if seams else None)
-            if host is not None:
-                host["node_ids"].append(n.id)
-    for s in seams:
-        s["node_ids"] = list(dict.fromkeys(s["node_ids"]))
-    return seams
+    return _sweep_leftovers(g, seams, adj)      # place reached env, drop nothing
+
+
+# --------------------------------------------------------------------------- F4: LLM refine
+def _build_refine_prompt(g: Graph, members: list, floor_of: dict, uses: dict) -> str:
+    """Prompt the LLM to refine the FLOOR partition into named technical intents. It is given the
+    carriers (members), the deterministic floor grouping as a STARTING POINT, and which consumers
+    use which carriers (the co-occurrence evidence). It regroups + names — it MUST only use the
+    given carrier ids."""
+    anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else g.anchor
+    lines = [
+        f"A code symbol `{anchor_sym}` has these MEMBERS (carriers). Group them into technical-intent",
+        "SEAMS (one or more members that serve the same purpose) and NAME each intent (3-6 words).",
+        "A deterministic FLOOR grouping is given as a starting point — keep it unless the big picture",
+        "says merge or split. Use ONLY the member ids listed; invent nothing.",
+        "",
+        "MEMBERS (id [floor-group]: symbol):",
+    ]
+    for m in members:
+        lines.append(f"  {m.id} [{floor_of.get(m.id, '?')}]: {m.label}")
+    lines.append("\nCONSUMERS (who uses which members — members used together suggest one intent):")
+    for cid, used in uses.items():
+        if used:
+            lines.append(f"  {g.nodes[cid].label} → {', '.join(used)}")
+    lines.append('\nOutput ONLY a JSON array, one object per MEMBER:')
+    lines.append('[{"id":"<member id>","seam":"S1","label":"<intent name>"}]')
+    return "\n".join(lines)
+
+
+def refine_seams_llm(g: Graph, floor_seams: list[dict], *, model: str = "claude-haiku-4-5",
+                     claude_bin: str | None = None, verbose: bool = False) -> list[dict]:
+    """F4: the LLM refines the FLOOR partition into named technical-intent seams — a PROPOSED
+    partition over the VERIFIED carriers. It regroups + names the given member ids; it CANNOT
+    invent a carrier (unknown ids are dropped) or an edge (it never touches the resolved graph).
+    Seeded by the floor for stability. Falls back to the floor on any failure (no LLM / parse)."""
+    anchor = g.anchor
+    anchor_node = g.nodes.get(anchor)
+    if anchor_node is None:
+        return floor_seams
+    members = [n for n in g.nodes.values()
+               if n.role == "core" and n.id != anchor and n.enclosing == anchor_node.label]
+    if len(members) < 2:
+        return floor_seams                          # single core / area-fallback — nothing to refine
+    consumers = [n for n in g.nodes.values() if n.role == "link"]
+    adj = undirected_adjacency(g.resolved_edges())
+    cset = {m.id for m in members}
+    uses = {c.id: sorted(cset & adj.get(c.id, set())) for c in consumers}
+    floor_of: dict[str, str] = {}
+    for s in floor_seams:
+        for nid in s["node_ids"]:
+            if nid in cset:
+                floor_of[nid] = s["id"]
+
+    try:
+        out = llm.run_pass(_build_refine_prompt(g, members, floor_of, uses),
+                           model=model, claude_bin=claude_bin, tag="seam-refine", verbose=verbose)
+    except llm.LLMError:
+        return floor_seams                          # degrade to the floor (still a valid proposal)
+
+    grouping: dict[str, str] = {}
+    labels: dict[str, str] = {}
+    for cid, obj in out.items():
+        if cid in cset and isinstance(obj, dict):   # ONLY known carriers — cannot invent
+            sk = str(obj.get("seam", "")).strip()
+            if sk:
+                grouping[cid] = sk
+                lab = str(obj.get("label", "")).strip()
+                if lab:
+                    labels.setdefault(sk, lab)
+    if not grouping:
+        return floor_seams
+    for m in members:                               # carriers the LLM didn't place → keep floor group
+        grouping.setdefault(m.id, floor_of.get(m.id, m.id))
+
+    by_seam: dict[str, list[str]] = {}
+    for cid, sk in grouping.items():
+        by_seam.setdefault(sk, []).append(cid)
+    seams: list[dict] = []
+    for sk, cids in by_seam.items():
+        cs = set(cids)
+        cons = [c.id for c in consumers if cs & set(uses[c.id])]
+        rep = max((g.nodes[c] for c in cids), key=lambda n: n.complexity)
+        seams.append(_mk_seam(rep.id, labels.get(sk) or rep.label, [anchor, *sorted(cids), *cons],
+                              link_only=False, proposed_by="llm"))
+    return _sweep_leftovers(g, seams, adj)
 
 
 # --------------------------------------------------------------------------- Layer 2: blind spots
@@ -389,11 +482,12 @@ def detect_consumer_feeds(g: Graph, repo: str) -> None:
                 member.setdefault("feeds", []).append(feed)
 
 
-def decompose(g: Graph, repo: str | None = None) -> dict:
-    """Run the codebase layers in order (roles → clusters → seams → Layer-2 blind spots →
-    Model-B sub-cores → Model-A contract → well-formedness) and return the SeamModel. `g` is
-    mutated. When `repo` is given, scan for statically-opaque couplings (dynamic imports), propose
-    a behavioural sub-core decomposition, and decompose the anchor's contract into prop-links."""
+def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False,
+              model: str = "claude-haiku-4-5", claude_bin: str | None = None) -> dict:
+    """Run the codebase layers (roles → clusters → blind spots/sub-cores/contract → intent FLOOR
+    → optional LLM refine → well-formedness) and return the SeamModel. `g` is mutated. `repo`
+    enables the Layer-2 scan + A/B substrate. `use_llm` lets the LLM refine the floor partition
+    (a PROPOSED partition, seeded by the floor; degrades to the floor if no LLM)."""
     assign_roles(g)
     assign_clusters(g)
     if repo:
@@ -402,6 +496,8 @@ def decompose(g: Graph, repo: str | None = None) -> dict:
         detect_contract(g, repo)
         detect_consumer_feeds(g, repo)          # A2: complete each prop thread with its feeders
     seams = assign_intent_seams(g)              # F2: the deterministic intent floor (proposed)
+    if use_llm:                                 # F4: the LLM refines/names the partition (proposed)
+        seams = refine_seams_llm(g, seams, model=model, claude_bin=claude_bin)
     health = wellformedness(g)
     return emit_seams(g, health, seams)
 
@@ -452,7 +548,8 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
                 if w not in warns:
                     warns.append(w)
         out_seams.append({"id": s["id"], "label": s["label"], "linkOnly": s["linkOnly"],
-                          "uncertain": False, "warnings": warns, "hunks": hunks})
+                          "uncertain": False, "warnings": warns, "hunks": hunks,
+                          "proposedBy": s.get("proposedBy", "floor")})
 
     clusters = [{"id": "g1", "intent": anchor_sym or g.anchor, "colorIndex": 0, "seams": out_seams}]
     tests = [_seam_hunk(n, "RESOLVED_FULL") for n in g.nodes.values() if n.role == "test"]
