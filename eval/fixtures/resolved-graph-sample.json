@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "anchor": { "id": "n1", "symbol": "PaymentService", "file": "src/payment.ts", "range": [1, 80] },
+  "language": "typescript",
+  "resolutionQuality": "FULL",
+  "depth": 2,
+  "complete": true,
+  "nodes": [
+    { "id": "n1", "symbol": "PaymentService", "kind": "class",    "file": "src/payment.ts", "range": [1, 80],  "enclosing": "",               "complexity": 5 },
+    { "id": "n2", "symbol": "charge",         "kind": "method",   "file": "src/payment.ts", "range": [10, 30], "enclosing": "PaymentService", "complexity": 7 },
+    { "id": "n3", "symbol": "refund",         "kind": "method",   "file": "src/payment.ts", "range": [32, 50], "enclosing": "PaymentService", "complexity": 4 },
+    { "id": "n8", "symbol": "validate",       "kind": "method",   "file": "src/payment.ts", "range": [52, 70], "enclosing": "PaymentService", "complexity": 3 },
+    { "id": "n4", "symbol": "StripeGateway",  "kind": "class",    "file": "src/stripe.ts",  "range": [1, 40],  "enclosing": "",               "complexity": 6 },
+    { "id": "n6", "symbol": "formatAmount",   "kind": "function", "file": "src/money.ts",   "range": [1, 12],  "enclosing": "",               "complexity": 2 },
+    { "id": "n7", "symbol": "PaymentService.spec", "kind": "test", "file": "src/payment.test.ts", "range": [1, 60], "enclosing": "",          "complexity": 4 }
+  ],
+  "edges": [
+    { "from": "n2", "to": "n4", "kind": "call", "provenance": "RESOLVED_FULL" },
+    { "from": "n3", "to": "n4", "kind": "call", "provenance": "RESOLVED_FULL" },
+    { "from": "n4", "to": "n6", "kind": "call", "provenance": "RESOLVED_FULL" },
+    { "from": "n7", "to": "n1", "kind": "call", "provenance": "RESOLVED_FULL" }
+  ],
+  "blindspots": [
+    { "node": "n8", "mechanism": "DI", "evidence": "@Inject() gateway: PaymentGateway",
+      "candidates": [ { "symbol": "StripeGateway", "provenance": "SUGGESTED" } ] }
+  ],
+  "unresolved": [
+    { "node": "n8", "query": "getReferences", "reason": "di_dispatch" }
+  ]
+}

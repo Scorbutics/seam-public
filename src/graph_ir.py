@@ -67,6 +67,7 @@ class Node:
     start: int = 0                  # file line, inclusive (0 = unknown)
     end: int = 0
     kind: str = ""                  # symbol kind (codebase) / change_type (diff)
+    enclosing: str = ""             # the symbol this node lives inside (its class/scope)
     complexity: int = 0             # "aboutness" magnitude — decisions (diff) / nesting (codebase)
     # filled by the (mode-specific) assignment passes:
     role: str = ""                  # core | link | environment | test | noise | ""
@@ -220,3 +221,123 @@ def from_hunks(hunks, provenance: Provenance = Provenance.HEUR) -> Graph:
         for prev, cur in zip(ids, ids[1:]):
             g.edges.append(Edge(src=prev, dst=cur, kind="seam", provenance=provenance))
     return g
+
+
+# --------------------------------------------------------------------------- codebase front (adapter)
+def _provenance_for_quality(quality: str) -> Provenance:
+    """Default edge provenance when the resolver didn't stamp one, derived from the probed
+    language quality (plan §4). FULL → RESOLVED_FULL; PARTIAL → RESOLVED_PARTIAL. A graph
+    whose quality is HEURISTIC/NONE must NOT mint resolved edges — callers stamp those
+    explicitly; here we conservatively downgrade to RESOLVED_PARTIAL so completeness is
+    never over-claimed (constraint §7.2)."""
+    return Provenance.RESOLVED_FULL if quality.upper() == "FULL" else Provenance.RESOLVED_PARTIAL
+
+
+def from_resolved_graph(data: dict) -> Graph:
+    """Ingest the `ResolvedGraph` JSON the `SymbolResolver` front emits (plan §2.1) — the
+    codebase-mode FRONT. This is the ONLY place the resolver contract is parsed; nothing
+    here knows it came from VSCode (constraint §4 — the API never leaks past the JSON).
+
+    Edges in `edges[]` are RESOLVED (they bear the completeness promise). `blindspots`
+    (SUGGESTED candidates) and `unresolved` (UNKNOWN ≠ []) are carried into their OWN
+    fields, never into `edges` — the §1 invariant materialized at ingestion.
+    """
+    g = Graph()
+    g.language = data.get("language", "")
+    g.resolution_quality = data.get("resolutionQuality", "")
+    g.depth = int(data.get("depth", 0) or 0)
+    g.complete = bool(data.get("complete", True))
+    default_prov = _provenance_for_quality(g.resolution_quality)
+
+    for nd in data.get("nodes", []):
+        rng = nd.get("range") or [0, 0]
+        g.nodes[nd["id"]] = Node(
+            id=nd["id"], label=nd.get("symbol", nd["id"]), file=nd.get("file", ""),
+            start=int(rng[0]) if rng else 0, end=int(rng[1]) if len(rng) > 1 else 0,
+            kind=nd.get("kind", ""), enclosing=nd.get("enclosing", ""),
+            complexity=int(nd.get("complexity", 0) or 0),
+        )
+    present = set(g.nodes)
+    for ed in data.get("edges", []):
+        src, dst = ed.get("from"), ed.get("to")
+        if src not in present or dst not in present:
+            continue                 # an endpoint outside the resolved neighborhood
+        prov = Provenance(ed["provenance"]) if ed.get("provenance") else default_prov
+        g.edges.append(Edge(src=src, dst=dst, kind=ed.get("kind", "call"), provenance=prov))
+
+    # anchor: the node BFS started from. The contract carries its id; fall back to matching
+    # symbol+file so a resolver that omits the id still resolves it.
+    a = data.get("anchor") or {}
+    g.anchor = a.get("id", "")
+    if g.anchor not in present and a.get("symbol"):
+        g.anchor = next((n.id for n in g.nodes.values()
+                         if n.label == a["symbol"] and (not a.get("file") or n.file == a["file"])), "")
+
+    for bs in data.get("blindspots", []):
+        cands = [Edge(src=bs["node"], dst=c.get("symbol", ""), kind="blindspot",
+                      provenance=Provenance.SUGGESTED) for c in bs.get("candidates", [])]
+        g.blindspots.append(BlindSpot(node=bs["node"], mechanism=bs.get("mechanism", ""),
+                                      evidence=bs.get("evidence", ""), candidates=cands))
+    g.unresolved = list(data.get("unresolved", []))
+    return g
+
+
+# --------------------------------------------------------------------------- Layer 6: well-formedness
+def undirected_adjacency(edges: list[Edge]) -> dict[str, set[str]]:
+    """Symmetric adjacency over the given edges — the substrate for role BFS and
+    well-formedness. Callers pass `g.resolved_edges()` when completeness matters."""
+    adj: dict[str, set[str]] = {}
+    for e in edges:
+        adj.setdefault(e.src, set()).add(e.dst)
+        adj.setdefault(e.dst, set()).add(e.src)
+    return adj
+
+
+def wellformedness(g: Graph) -> dict:
+    """Layer 6 — the blind-spot map, the differentiator (plan §3/§6). Computed over the
+    RESOLVED edges ONLY, so the formal part is complete-by-construction:
+
+      - isolated-core : a core no link reaches → the anchor touches it but the wiring is
+        unseen (a TRUE shadow, or a missed edge — §5 audits which).
+      - dangling-link : a link reaching no core → wires to something outside this view.
+      - link-only     : links but no core at all (a pure rewire view).
+
+    These are POSTURES, not errors (a dangling link can legitimately point outside the
+    anchor's neighborhood). `assert_resolved_only` guards `g.edges` itself: in codebase mode
+    that list is contractually resolved-only, so a non-resolved edge slipping into the
+    resolved adjacency would make the map lie with confidence (plan §1) — it RAISES. (A
+    diff-mode graph, whose edges are HEUR, correctly cannot be passed here: it makes no
+    completeness promise, so it must not use the completeness-bearing op — §2.)
+    """
+    assert_resolved_only(g.edges)                       # the spine, on the real adjacency
+    adj = undirected_adjacency(g.edges)
+    cores = {n.id for n in g.nodes.values() if n.role == "core"}
+    links = {n.id for n in g.nodes.values() if n.role == "link"}
+    # A CONTAINER core (a node whose symbol encloses other cores — e.g. the anchor class
+    # holding its methods) is wired THROUGH its members, so it is never isolated on its own.
+    # Only leaf behavior units are judged — that is where a true shadow (a DI-wired method)
+    # shows up, not on the class declaration.
+    container_labels = {g.nodes[c].enclosing for c in cores if g.nodes[c].enclosing}
+    seam_warnings: dict[str, list[str]] = {}
+    for c in cores:
+        if g.nodes[c].label and g.nodes[c].label in container_labels:
+            continue
+        if not (adj.get(c, set()) & links):
+            seam_warnings.setdefault(c, []).append("isolated-core")
+    node_warnings: dict[str, list[str]] = {}
+    for ln in links:
+        if not (adj.get(ln, set()) & cores):
+            node_warnings.setdefault(ln, []).append("dangling-link")
+    return {
+        "postures": {
+            "cores": len(cores), "links": len(links),
+            "environment": sum(1 for n in g.nodes.values() if n.role == "environment"),
+            "isolated_cores": sum("isolated-core" in w for w in seam_warnings.values()),
+            "dangling_links": sum("dangling-link" in w for w in node_warnings.values()),
+            "link_only": bool(links and not cores),
+            "unresolved": len(g.unresolved),     # UNKNOWN count — honest gaps, not "no link"
+            "blindspots": len(g.blindspots),     # statically-opaque mechanisms (SUGGESTED)
+        },
+        "seam_warnings": seam_warnings,
+        "node_warnings": node_warnings,
+    }

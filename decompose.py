@@ -30,6 +30,10 @@ def main(argv: list[str] | None = None) -> int:
     source.add_argument("--from-classified", metavar="JSON",
                         help="render straight from a dumped classified-hunks JSON "
                              "(the post-classify intermediate state) — skips the LLM pass")
+    source.add_argument("--graph", metavar="JSON",
+                        help="CODEBASE MODE: decompose a ResolvedGraph JSON (the SymbolResolver "
+                             "front's output — anchor + resolved nodes/edges) instead of a diff. "
+                             "Use with --emit-seams. No LLM, no diff parsing.")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -73,6 +77,35 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the model's raw reply + backend diagnostics to stderr, "
                          "and dump <out>.prompt.txt / <out>.reply.txt")
     args = ap.parse_args(argv)
+
+    if args.graph:
+        # CODEBASE MODE — decompose the resolver's ResolvedGraph (plan §3). Entirely
+        # downstream of the SymbolResolver: the VSCode API never reaches here, only its
+        # JSON contract (constraint §4). No diff, no LLM.
+        from src import codebase, graph_ir
+        try:
+            data = json.loads(Path(args.graph).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            print(f"error: could not load resolved graph: {exc}", file=sys.stderr)
+            return 2
+        g = graph_ir.from_resolved_graph(data)
+        if not g.nodes:
+            print("error: resolved graph has no nodes", file=sys.stderr)
+            return 1
+        model = codebase.decompose(g)
+        counts: dict[str, int] = {}
+        for n in g.nodes.values():
+            counts[n.role] = counts.get(n.role, 0) + 1
+        summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test"))
+        print(f"Decomposed anchor {g.anchor!r} ({len(g.nodes)} symbols, "
+              f"resolution={g.resolution_quality or '?'}):  {summary}")
+        if g.unresolved:
+            print(f"  {len(g.unresolved)} unresolved (UNKNOWN, not 'no link'); "
+                  f"{len(g.blindspots)} blind spot(s)")
+        if args.emit_seams:
+            Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
+            print(f"Seams: {args.emit_seams}")
+        return 0
 
     if args.from_classified:
         # Reuse a previous classify pass — no diff parsing, no LLM. Lets the
