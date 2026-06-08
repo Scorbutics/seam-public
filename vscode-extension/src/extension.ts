@@ -8,7 +8,11 @@ import { VSCodeSymbolResolver, buildResolvedGraph } from "./resolver";
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
 interface ExternalRef { symbol: string; source: string; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; }
+// Model B: a PROPOSED behavioural partition of a core. The `ranges` are RESOLVED (real code
+// regions); the grouping is a *proposal* — rendered with a deliberately distinct affordance so
+// it never reads as verified structure (R-B3).
+interface SubCore { id: string; label: string; ranges: [number, number][]; reads: string[]; proposed: boolean; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -92,6 +96,11 @@ let decoBorder: Record<string, {
 // single colour winning. Keyed by the sorted role-combo ("core" or "core|link"), built
 // lazily; `gutterKeys` tracks them all so a re-paint can clear the stale ones first.
 let decoGutter: Map<string, TDeco> = new Map();
+// Model B: the PROPOSED sub-core overlay — deliberately DISTINCT from the solid role fills
+// (a dashed violet outline), so a proposed grouping reads as a proposal, never as verified
+// structure (R-B3). Painted only for the sub-core the user selects (opt-in), never in show-all.
+let decoProposed: TDeco;
+let activeProposed: { filePath: string; ranges: vscode.Range[] } | null = null;
 let lensProvider: SeamLensProvider;
 let gutterDir = "";
 let treeProvider: SeamTreeProvider;
@@ -136,6 +145,14 @@ function activateInner(context: vscode.ExtensionContext) {
     };
   }
 
+  decoProposed = vscode.window.createTextEditorDecorationType({
+    border: "1px dashed rgba(163,113,247,0.9)",       // violet, dashed — "a proposal", not a fact
+    backgroundColor: "rgba(163,113,247,0.10)",
+    isWholeLine: true,
+    overviewRulerColor: "rgba(163,113,247,0.85)",
+    overviewRulerLane: vscode.OverviewRulerLane.Center,
+  });
+
   treeProvider = new SeamTreeProvider();
   treeView = vscode.window.createTreeView("seam.tree", { treeDataProvider: treeProvider });
   lensProvider = new SeamLensProvider();
@@ -151,6 +168,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.prev", (fromId?: string) => navStep(-1, fromId)),
     vscode.commands.registerCommand("seam.open", openHunk),
     vscode.commands.registerCommand("seam.goToDef", goToDef),
+    vscode.commands.registerCommand("seam.openSubcore", openSubcore),
     vscode.commands.registerCommand("seam.focusSeamById", focusSeamById),
     treeView.onDidChangeSelection(onSelect),
     vscode.window.onDidChangeVisibleTextEditors(applyToVisible),
@@ -198,9 +216,10 @@ function focusSeamById(seamId: string) {
 // Selecting a node FOCUSES it (seam or hunk → that seam; cluster → all its seams).
 function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   const sel = e.selection[0];
-  // resolved targets and the blind-spot overlay don't drive seam focus.
+  // resolved targets, the blind-spot overlay, and proposed sub-cores don't drive seam focus
+  // (a sub-core paints its own overlay via its command instead).
   if (sel && (sel.kind === "extTarget" || sel.kind === "shadows" || sel.kind === "blindspot"
-              || sel.kind === "candidate" || sel.kind === "unknown")) return;
+              || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore")) return;
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
@@ -215,6 +234,7 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
 function showAll() {
   focusIds = null;
   focusLabel = "";
+  clearProposed();           // show-all is the verified view; drop the opt-in proposed overlay
   rerender();
 }
 
@@ -299,6 +319,7 @@ export function deactivate() {
   for (const role of ROLES) allDecos(role).forEach((d) => d.dispose());
   for (const d of decoGutter.values()) d.dispose();
   decoGutter.clear();
+  decoProposed?.dispose();
 }
 
 // FILL: background wash + scrollbar mark on every line of the hunk. The gutter BAR is a
@@ -639,6 +660,9 @@ function applyDecorations(editor: vscode.TextEditor) {
     editor.setDecorations(decoBorder[role].seamTop, seamTop[role]);
     editor.setDecorations(decoBorder[role].seamBottom, seamBottom[role]);
   }
+  // re-apply the selected proposed sub-core overlay (so it survives repaints / editor switches).
+  editor.setDecorations(decoProposed,
+    activeProposed && editor.document.uri.fsPath === activeProposed.filePath ? activeProposed.ranges : []);
 }
 
 function applyToVisible(editors: readonly vscode.TextEditor[]) { editors.forEach(applyDecorations); }
@@ -651,6 +675,7 @@ function clearAll() {
     for (const role of ROLES) allDecos(role).forEach((d) => editor.setDecorations(d, []));
     for (const d of decoGutter.values()) editor.setDecorations(d, []);
   }
+  clearProposed();
   treeProvider?.refresh();
   lensProvider?.refresh();
   if (treeView) treeView.message = undefined;
@@ -735,6 +760,24 @@ async function openHunk(hunk: SeamHunk) {
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
     editor.selection = new vscode.Selection(range.start, range.start);
   }
+}
+
+// Model B: reveal a PROPOSED sub-core — open the file (plain, no diff editor: codebase mode is
+// not a change) and paint its ranges with the distinct dashed overlay. Opt-in (only the selected
+// sub-core is painted), so the default view stays the verified structure (R-B3).
+async function openSubcore(hunk: SeamHunk, sub: SubCore) {
+  if (!repoRoot) return;
+  const uri = vscode.Uri.file(path.join(repoRoot, hunk.file));
+  const editor = await vscode.window.showTextDocument(uri, { preview: true });
+  const ranges = sub.ranges.map(([a, b]) => new vscode.Range(a, 0, b, 0));
+  activeProposed = { filePath: uri.fsPath, ranges };
+  editor.setDecorations(decoProposed, ranges);
+  if (ranges.length) editor.revealRange(ranges[0], vscode.TextEditorRevealType.InCenter);
+}
+
+function clearProposed() {
+  activeProposed = null;
+  for (const ed of vscode.window.visibleTextEditors) ed.setDecorations(decoProposed, []);
 }
 
 // --- Layer 2: resolve an external coupling to WHERE it lives + its signature -----
@@ -829,7 +872,9 @@ type Node =
   | { kind: "shadows" }
   | { kind: "blindspot"; bs: BlindSpot }
   | { kind: "candidate"; cand: SuggestedCandidate }
-  | { kind: "unknown"; ur: Unresolved };
+  | { kind: "unknown"; ur: Unresolved }
+  // Model B: a proposed behavioural sub-core under a core hunk.
+  | { kind: "subcore"; hunk: SeamHunk; sub: SubCore };
 
 // Find a rendered hunk by node id (for navigating to a blind spot's location).
 function findHunkById(id: string): SeamHunk | undefined {
@@ -870,6 +915,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     if (el.kind === "seam")
       return el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
     if (el.kind === "hunk") {
+      // Model B: a core's proposed behavioural sub-cores expand under it.
+      if (el.hunk.subcores?.length)
+        return el.hunk.subcores.map((sub) => ({ kind: "subcore", hunk: el.hunk, sub } as Node));
       // Lazy Layer 2: resolve the hunk's external couplings only when it's expanded.
       const refs = el.hunk.externalRefs ?? [];
       if (!refs.length) return [];
@@ -938,6 +986,17 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       if (h) it.command = { command: "seam.open", title: "Open", arguments: [h] };
       return it;
     }
+    if (el.kind === "subcore") {
+      const s = el.sub;
+      const lines = s.ranges.map(([a, b]) => a === b ? `${a + 1}` : `${a + 1}-${b + 1}`).join(", ");
+      const it = new vscode.TreeItem(s.label, vscode.TreeItemCollapsibleState.None);
+      it.description = `proposed · ${lines}`;
+      it.iconPath = new vscode.ThemeIcon("lightbulb");   // distinct from role icons — a suggestion
+      it.tooltip = `PROPOSED behaviour grouping (not a verified boundary): ${s.reads.join(", ")}\n` +
+        "The lines are real; the grouping is a suggested reading of them — it can't fabricate a coupling.";
+      it.command = { command: "seam.openSubcore", title: "Reveal proposed sub-core", arguments: [el.hunk, s] };
+      return it;
+    }
     if (el.kind === "extTarget") {
       const t = el.target;
       const it = new vscode.TreeItem(`↳ ${t.symbol}`, vscode.TreeItemCollapsibleState.None);
@@ -953,11 +1012,13 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const unc = isUncertain(h);
     const ext = extTag(h);
     const rw = rewireStr(h);
+    const expandable = (h.externalRefs && h.externalRefs.length) || (h.subcores && h.subcores.length);
     const it = new vscode.TreeItem(
       `${h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
-      (h.externalRefs && h.externalRefs.length)
-        ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-    const desc = [rw ? `↻ ${rw}` : "", unc ? `uncertain ${confPct(h)}%` : ""].filter(Boolean).join("  ·  ");
+      expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+    const nsub = h.subcores?.length ?? 0;
+    const desc = [rw ? `↻ ${rw}` : "", unc ? `uncertain ${confPct(h)}%` : "",
+                  nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");
     if (desc) it.description = desc;
     it.tooltip =
       (unc ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe`
