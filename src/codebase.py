@@ -104,61 +104,102 @@ def assign_clusters(g: Graph) -> None:
             g.nodes[i].intent = intent
 
 
-def assign_seams(g: Graph) -> None:
-    """Layer 4 (seam grain): group each cluster's cores into intent SEAMS by COHESION,
-    cutting where cohesion DROPS — the boundary algorithm the brief puts at the heart of
-    seam quality (not the LLM).
+_AREA_MARKERS = ("modules", "features", "packages", "src", "apps", "app", "lib")
 
-    Two cores are cohesive when they call each other OR share a NON-AMBIENT collaborator
-    (a link/environment node both touch). 'Ambient' = a collaborator touched by more than
-    half the cluster's cores — a shared base type / util that is NOT what any one seam is
-    about (the cal.com `<Button>` hairball lesson, carried over from the diff engine). The
-    connected components of that cohesion graph are the seams:
-      - tightly-coupled methods (charge + refund both using the gateway) → ONE seam;
-      - a method off on its own (a DI-wired `validate` with no resolved collaborator) → its
-        OWN singleton seam, which then surfaces honestly as an isolated-core.
-    A core sharing only an AMBIENT collaborator stays a separate seam, so that collaborator
-    attaches to BOTH seams (the legitimate many-to-many) instead of fusing them.
 
-    NB (epistemic status): distance-to-anchor WEIGHTING and the collapse/surface ALTITUDE
-    rule (plan §3 Layer 4) are the FLAGGED refinements — not built here. This cohesion floor
-    is deterministic and offline-tested; the altitude question is for the manual-validation
-    protocol (§5).
+def _area(path: str) -> str:
+    """A coarse 'where in the system' label for a consumer file — the feature segment after a
+    layout marker (e.g. `…/modules/billing/…` → `billing`), else the directory. The intent
+    signal for single-member cores (calibration §11.2). Deliberately coarse + tunable; it leans
+    on a tidy layout (cal.com modules, kernel subsystems) and degrades gracefully on flat repos."""
+    parts = [p for p in path.split("/") if p]
+    for marker in _AREA_MARKERS:
+        if marker in parts:
+            seg = parts[parts.index(marker) + 1: parts.index(marker) + 3]
+            if seg:
+                return "/".join(seg)
+    return "/".join(parts[:-1]) or path
+
+
+def _mk_seam(sid: str, label: str, node_ids: list[str], link_only: bool) -> dict:
+    return {"id": sid, "label": label or sid, "linkOnly": link_only, "node_ids": list(node_ids)}
+
+
+def assign_intent_seams(g: Graph) -> list[dict]:
+    """F2 — the deterministic intent FLOOR (a PROPOSED partition; the LLM refines it later).
+
+    Carriers = the anchor's MEMBER cores (a class's methods / a module's functions); a single
+    flat core (a component) is its own carrier. Partition by CO-OCCURRENCE: members USED TOGETHER
+    by the same consumer share a seam (calibration §11.1, e.g. {DEFAULT_SCHEDULE,
+    getAvailabilityFromSchedule}). Consumers attach to the seam(s) they use; the anchor CORE
+    attaches to EACH (⇒ many-to-many for free). When there's only ONE carrier (member-usage can't
+    separate, §11.2 useHasPaidPlan), fall back to clustering consumers by module-AREA. Reached env
+    is swept into an adjacent seam so nothing resolved is dropped.
+
+    Returns a list of seam dicts (`node_ids` may overlap — the many-to-many). NOT a partition of
+    nodes; a reading over them. Deterministic ≠ resolved: this is a proposal, not a fact.
     """
+    anchor = g.anchor
+    anchor_node = g.nodes.get(anchor)
+    if anchor_node is None:
+        return []
+    anchor_sym = anchor_node.label
     adj = undirected_adjacency(g.resolved_edges())
-    cores_by_cluster: dict[str, list[str]] = {}
-    for n in g.nodes.values():
-        if n.role == "core":
-            cores_by_cluster.setdefault(n.group, []).append(n.id)
+    members = [n for n in g.nodes.values()
+               if n.role == "core" and n.id != anchor and n.enclosing == anchor_sym]
+    consumers = [n for n in g.nodes.values() if n.role == "link"]
 
-    anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else ""
-    for cluster_cores in cores_by_cluster.values():
-        core_set = set(cluster_cores)
-        cut = max(2, len(cluster_cores) // 2)        # ambient if touched by MORE than this
-        # which cores touch each non-core collaborator (the cohesion carrier)
-        by_collab: dict[str, list[str]] = {}
-        cohesion: list[tuple[str, str]] = []
-        for c in cluster_cores:
-            for nb in adj.get(c, set()):
-                if nb in core_set:
-                    cohesion.append((c, nb))         # direct core→core call
-                else:
-                    by_collab.setdefault(nb, []).append(c)
-        for cs in by_collab.values():
-            if len(cs) <= cut:                       # non-ambient shared collaborator
-                cohesion += [(cs[0], x) for x in cs[1:]]
-        seam_of = connected_components(cluster_cores, cohesion)
-        # representative per seam group + label (anchor symbol wins; else top complexity)
-        members: dict[str, list[str]] = {}
-        for cid in cluster_cores:
-            members.setdefault(seam_of[cid], []).append(cid)
-        for ids in members.values():
-            rep = (g.anchor if g.anchor in ids else
-                   max(ids, key=lambda i: g.nodes[i].complexity))
-            label = anchor_sym if g.anchor in ids else g.nodes[rep].label
-            for cid in ids:
-                g.nodes[cid].seam = g.nodes[rep].id
-                g.nodes[cid].seam_label = label
+    carriers = members if members else [anchor_node]
+    cset = {c.id for c in carriers}
+    uses: dict[str, set[str]] = {}                      # consumer → carriers it uses
+    for con in consumers:
+        used = {cid for cid in cset if cid in adj.get(con.id, set())}
+        if not used and anchor in adj.get(con.id, set()):
+            used = {anchor}                            # used the anchor as a whole
+        uses[con.id] = used
+
+    seams: list[dict] = []
+    if len(carriers) > 1 and any(uses.values()):
+        # multi-member: co-occurrence of carriers used together by the same consumer. A consumer
+        # that touches MOST carriers is AMBIENT (a broad user / shared util, not an intent signal)
+        # — it must not fuse them (the cal.com hairball lesson, at the carrier level); it still
+        # ATTACHES below to every seam it uses (many-to-many).
+        cut = max(2, len(carriers) // 2)
+        cooc: list[tuple[str, str]] = []
+        for used in uses.values():
+            u = sorted(used & cset)
+            if len(u) > cut:
+                continue                           # ambient consumer → no co-occurrence edge
+            cooc += [(u[0], x) for x in u[1:]]
+        cluster_of = connected_components([c.id for c in carriers], cooc)
+        by_cluster: dict[str, list[str]] = {}
+        for cid in cset:
+            by_cluster.setdefault(cluster_of[cid], []).append(cid)
+        for cids in by_cluster.values():
+            cs = set(cids)
+            cons = [cid for cid, u in uses.items() if u & cs]
+            rep = max((g.nodes[c] for c in cids), key=lambda n: n.complexity)
+            seams.append(_mk_seam(rep.id, rep.label, [anchor, *sorted(cids), *cons], link_only=False))
+    else:
+        # single-member: the anchor IS the carrier — split consumers by module-area
+        by_area: dict[str, list[str]] = {}
+        for con in consumers:
+            by_area.setdefault(_area(con.file), []).append(con.id)
+        if not by_area:
+            seams.append(_mk_seam(anchor, anchor_sym, [anchor], link_only=False))
+        for area, cons in by_area.items():
+            seams.append(_mk_seam(f"{anchor}@{area}", f"{anchor_sym} · {area}", [anchor, *cons], link_only=False))
+
+    # sweep reached env / unplaced links into an adjacent seam (else the first) — drop nothing.
+    placed = {nid for s in seams for nid in s["node_ids"]}
+    for n in g.nodes.values():
+        if n.role in ("link", "environment") and n.id not in placed:
+            host = next((s for s in seams if adj.get(n.id, set()) & set(s["node_ids"])), seams[0] if seams else None)
+            if host is not None:
+                host["node_ids"].append(n.id)
+    for s in seams:
+        s["node_ids"] = list(dict.fromkeys(s["node_ids"]))
+    return seams
 
 
 # --------------------------------------------------------------------------- Layer 2: blind spots
@@ -355,14 +396,14 @@ def decompose(g: Graph, repo: str | None = None) -> dict:
     a behavioural sub-core decomposition, and decompose the anchor's contract into prop-links."""
     assign_roles(g)
     assign_clusters(g)
-    assign_seams(g)
     if repo:
         detect_dynamic_import_blindspots(g, repo)
         detect_subcores(g, repo)
         detect_contract(g, repo)
         detect_consumer_feeds(g, repo)          # A2: complete each prop thread with its feeders
+    seams = assign_intent_seams(g)              # F2: the deterministic intent floor (proposed)
     health = wellformedness(g)
-    return emit_seams(g, health)
+    return emit_seams(g, health, seams)
 
 
 # --------------------------------------------------------------------------- emit (SeamModel)
@@ -382,120 +423,38 @@ def _seam_hunk(n: graph_ir.Node, provenance: str) -> dict:
     return out
 
 
-def emit_seams(g: Graph, health: dict) -> dict:
-    """Assemble the SeamModel (clusters → seams → hunks) from the decomposed graph.
-
-    A seam = a core + the links/environment nodes directly wired to it (many-to-many: a
-    link adjacent to two cores appears in both seams, like diff-mode). Warnings come from
-    Layer 6. `tests` and the honest-gap overlays (`unresolved`, `blindspots`) are surfaced
-    top-level; `resolutionQuality` rides along so the extension can show the honesty banner.
-    """
-    adj = undirected_adjacency(g.resolved_edges())
+def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
+    """Assemble the SeamModel from the F2 intent-seam list. Each intent-seam renders as a SeamModel
+    seam (under one cluster — product-intent grouping is the LLM's later job); a node may appear in
+    several seams (the many-to-many — e.g. the anchor core in each intent it serves). Warnings come
+    from Layer 6; tests + honest-gap overlays are top-level; `resolutionQuality` rides along."""
     edge_prov = {(e.src, e.dst): e.provenance.value for e in g.resolved_edges()}
+    seam_warnings = health.get("seam_warnings", {})
+    node_warnings = health.get("node_warnings", {})
+    anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else ""
 
-    def prov_to_group(nid: str, core_ids: set[str]) -> str:
-        for c in core_ids:
-            p = edge_prov.get((nid, c)) or edge_prov.get((c, nid))
+    def prov_of(nid: str, others: set[str]) -> str:
+        for o in others:
+            p = edge_prov.get((nid, o)) or edge_prov.get((o, nid))
             if p:
                 return p
         return "RESOLVED_FULL"
 
-    seam_warnings = health.get("seam_warnings", {})
-    node_warnings = health.get("node_warnings", {})
-    by_file_line = lambda n: (n.file, n.start)
-    anchor_file = g.nodes[g.anchor].file if g.anchor in g.nodes else ""
+    out_seams = []
+    for s in seams:
+        ids = sorted(s["node_ids"], key=lambda i: (g.nodes[i].file, g.nodes[i].start))
+        idset = set(ids)
+        hunks = [_seam_hunk(g.nodes[i], "RESOLVED_FULL" if g.nodes[i].role == "core"
+                            else prov_of(i, idset)) for i in ids]
+        warns: list[str] = []
+        for i in ids:
+            for w in seam_warnings.get(i, []) + node_warnings.get(i, []):
+                if w not in warns:
+                    warns.append(w)
+        out_seams.append({"id": s["id"], "label": s["label"], "linkOnly": s["linkOnly"],
+                          "uncertain": False, "warnings": warns, "hunks": hunks})
 
-    # SEAM GRAPH (S1): a seam is a "place + intent". The anchor's own file decomposes into its
-    # cohesion core-seams (A/B detail rides here); every OTHER file in the neighbourhood is a
-    # PLACE seam (a consumer site). The id of the seam a node belongs to, for wiring:
-    def place_id(n: graph_ir.Node) -> str:
-        return f"place:{n.file}"
-
-    def seam_id_of(n: graph_ir.Node) -> str | None:
-        if n.role == "core":
-            return n.seam or n.id                       # an anchor cohesion seam
-        if n.role == "test" or n.file == anchor_file:
-            return None                                 # tests / within-anchor attachments aren't seams
-        return place_id(n)                              # a cross-file consumer → its place seam
-
-    # every non-test node belongs to a cluster (a core-less cluster is a legitimate
-    # link-only/rewire view); tests are surfaced separately (skim posture).
-    by_cluster: dict[str, list[graph_ir.Node]] = {}
-    for n in g.nodes.values():
-        if n.role != "test":
-            by_cluster.setdefault(n.group, []).append(n)
-
-    clusters = []
-    for ci, (gid, nodes) in enumerate(sorted(by_cluster.items())):
-        cores = [n for n in nodes if n.role == "core"]
-        seam_groups: dict[str, list[graph_ir.Node]] = {}
-        for c in cores:
-            seam_groups.setdefault(c.seam or c.id, []).append(c)
-        attached: set[str] = set()
-        seams = []
-        for seam_id, gc in sorted(seam_groups.items()):
-            gc.sort(key=by_file_line)
-            core_ids = {c.id for c in gc}
-            # attach only SAME-FILE non-core neighbours (within-anchor links). Cross-file
-            # consumers are their OWN place seams, wired via seamEdges — not buried here.
-            att = sorted({nid for c in gc for nid in adj.get(c.id, set())
-                          if g.nodes[nid].role in ("link", "environment")
-                          and g.nodes[nid].group == gid and g.nodes[nid].file == anchor_file},
-                         key=lambda x: by_file_line(g.nodes[x]))
-            attached.update(att)
-            hunks = [_seam_hunk(c, "RESOLVED_FULL") for c in gc]
-            hunks += [_seam_hunk(g.nodes[nid], prov_to_group(nid, core_ids)) for nid in att]
-            warns: list[str] = []
-            for c in gc:
-                warns += [w for w in seam_warnings.get(c.id, []) if w not in warns]
-            for nid in att:
-                warns += [w for w in node_warnings.get(nid, []) if w not in warns]
-            seams.append({"id": seam_id, "label": gc[0].seam_label or seam_id,
-                          "linkOnly": False, "uncertain": any(c.role_confidence < 0.6 for c in gc),
-                          "warnings": warns, "hunks": hunks})
-        # PLACE seams: cross-file consumer nodes grouped by file — each a place that wires in.
-        places: dict[str, list[graph_ir.Node]] = {}
-        for n in nodes:
-            if n.role in ("link", "environment") and n.file != anchor_file:
-                places.setdefault(n.file, []).append(n)
-        for pf, pnodes in sorted(places.items()):
-            pnodes.sort(key=by_file_line)
-            warns = []
-            for n in pnodes:
-                warns += [w for w in node_warnings.get(n.id, []) if w not in warns]
-            seams.append({"id": place_id(pnodes[0]), "label": pf.rsplit("/", 1)[-1],
-                          "linkOnly": True, "uncertain": False, "warnings": warns,
-                          "hunks": [_seam_hunk(n, "RESOLVED_FULL") for n in pnodes]})
-        # ambient ripple: SAME-FILE non-core nodes wired to no core (kept so nothing is dropped).
-        leftover = sorted((n for n in nodes if n.role in ("link", "environment")
-                           and n.file == anchor_file and n.id not in attached), key=by_file_line)
-        if leftover:
-            warns = []
-            for n in leftover:
-                warns += [w for w in node_warnings.get(n.id, []) if w not in warns]
-            seams.append({"id": f"{gid}-ambient", "label": "ambient ripple",
-                          "linkOnly": not cores, "uncertain": False, "warnings": warns,
-                          "hunks": [_seam_hunk(n, "RESOLVED_FULL") for n in leftover]})
-        clusters.append({"id": gid, "intent": (cores[0].intent if cores else nodes[0].intent),
-                         "colorIndex": ci, "seams": seams})
-
-    # SEAM-TO-SEAM WIRING (S1): resolved edges crossing a seam boundary, deduped + undirected.
-    # RESOLVED only — a suggested implicit edge (S2) would go in a separate overlay, never here.
-    seam_edges = []
-    seen: set[tuple[str, str]] = set()
-    for e in g.resolved_edges():
-        u, v = g.nodes.get(e.src), g.nodes.get(e.dst)
-        if u is None or v is None:
-            continue
-        su, sv = seam_id_of(u), seam_id_of(v)
-        if not su or not sv or su == sv:
-            continue
-        key = (su, sv) if su < sv else (sv, su)
-        if key in seen:
-            continue
-        seen.add(key)
-        seam_edges.append({"from": su, "to": sv, "provenance": e.provenance.value})
-
+    clusters = [{"id": "g1", "intent": anchor_sym or g.anchor, "colorIndex": 0, "seams": out_seams}]
     tests = [_seam_hunk(n, "RESOLVED_FULL") for n in g.nodes.values() if n.role == "test"]
     return {
         "clusters": clusters,
@@ -507,7 +466,9 @@ def emit_seams(g: Graph, health: dict) -> dict:
         "resolutionQuality": g.resolution_quality,
         "language": g.language,
         "complete": g.complete,
-        "seamEdges": seam_edges,
+        # seam-to-seam wiring is reserved for between genuinely distinct intents (S2/S3); the
+        # floor's many-to-many is carried by shared nodes (the core appearing in several seams).
+        "seamEdges": [],
         "blindspots": [{"node": b.node, "mechanism": b.mechanism, "evidence": b.evidence,
                         "candidates": [{"symbol": c.dst, "provenance": c.provenance.value}
                                        for c in b.candidates]} for b in g.blindspots],

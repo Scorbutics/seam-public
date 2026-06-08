@@ -305,20 +305,27 @@ def test_no_subcores_for_class_anchor(tmp_path):
 
 
 # --------------------------------------------------------------------------- seam grain (Layer 4)
-def _seam_edge_set(model):
-    return {tuple(sorted((e["from"], e["to"]))) for e in model["seamEdges"]}
+def _seams_of(model):
+    """{node_id: frozenset(seam ids it appears in)} — a node may be in several seams (many-to-many)."""
+    out: dict = {}
+    for cl in model["clusters"]:
+        for s in cl["seams"]:
+            for h in s["hunks"]:
+                out.setdefault(h["id"], set()).add(s["id"])
+    return {k: frozenset(v) for k, v in out.items()}
 
 
-def test_cohesion_merges_cores_sharing_a_collaborator(g):
-    """charge + refund both call the gateway (non-ambient) → ONE intent-seam; the DI-wired
-    validate stays its OWN seam. The gateway (a different file) is a PLACE seam, WIRED to the
-    merged seam via a resolved seam-to-seam edge (S1)."""
+def test_floor_cooccurrence_groups_carriers_shared_core_many_to_many(g):
+    """F2 floor: charge + refund co-occur via the gateway consumer → ONE intent-seam; validate
+    (used by no one) stays its OWN seam; the anchor CLASS appears in BOTH (many-to-many)."""
     model = codebase.decompose(g)
-    seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
-    assert seam_of["n2"] == seam_of["n3"]              # cohesive cores fused
-    assert seam_of["n8"] != seam_of["n2"]              # validate stays its own seam
-    assert seam_of["n4"].startswith("place:")          # cross-file gateway → a place seam
-    assert tuple(sorted((seam_of["n2"], seam_of["n4"]))) in _seam_edge_set(model)   # wired
+    sm = _seams_of(model)
+    assert sm["n2"] == sm["n3"]                        # charge + refund co-occur → same seam
+    assert sm["n8"] != sm["n2"]                        # validate → its own seam
+    assert len(sm["n1"]) >= 2                          # the anchor core is shared across seams
+    n8_seam = next(s for cl in model["clusters"] for s in cl["seams"]
+                   if "n8" in {h["id"] for h in s["hunks"]})
+    assert "isolated-core" in n8_seam["warnings"]      # validate seam = honest isolated-core
 
 
 # --------------------------------------------------------------------------- Layer 2 (blind spots)
@@ -383,17 +390,14 @@ def test_ambient_collaborator_keeps_cores_separate_many_to_many():
     }
     g = graph_ir.from_resolved_graph(data)
     model = codebase.decompose(g)
-    seam_of = {h["id"]: s["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
-    assert len({seam_of["m1"], seam_of["m2"], seam_of["m3"]}) == 3   # NOT fused
-    assert seam_of["u"].startswith("place:")                          # cross-file util → a place seam
-    edges = _seam_edge_set(model)
-    for mi in ("m1", "m2", "m3"):                                     # wired to each (many-to-many)
-        assert tuple(sorted((seam_of[mi], seam_of["u"]))) in edges
+    sm = _seams_of(model)
+    assert len({sm["m1"], sm["m2"], sm["m3"]}) == 3        # ambient util does NOT fuse them
+    assert sm["u"] == sm["m1"] | sm["m2"] | sm["m3"]       # u attaches to each (many-to-many)
 
 
-def test_seam_graph_wires_consumer_to_anchor():
-    """S1: a consumer in another file is its OWN place seam, wired to the anchor's seam by a
-    resolved seam-to-seam edge — the multi-seam graph, deterministic."""
+def test_floor_single_core_is_one_seam():
+    """F2 floor: a single-core anchor + its consumer = ONE intent-seam (no file fragmentation —
+    the bug Brice caught). seam-to-seam wiring is deferred to the LLM intent-split."""
     g = graph_ir.from_resolved_graph({
         "version": 1,
         "anchor": {"id": "a", "symbol": "Widget", "file": "ui/Widget.tsx", "range": [0, 20]},
@@ -406,6 +410,6 @@ def test_seam_graph_wires_consumer_to_anchor():
         "blindspots": [], "unresolved": [],
     })
     model = codebase.decompose(g)
-    seam_ids = {s["id"] for cl in model["clusters"] for s in cl["seams"]}
-    assert "a" in seam_ids and "place:pages/Home.tsx" in seam_ids
-    assert tuple(sorted(("a", "place:pages/Home.tsx"))) in _seam_edge_set(model)
+    sm = _seams_of(model)
+    assert len(sm["a"]) == 1 and sm["a"] == sm["c"]        # anchor + consumer → one seam
+    assert model["seamEdges"] == []                        # floor defers seam-to-seam wiring

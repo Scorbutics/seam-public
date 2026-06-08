@@ -60,9 +60,16 @@ def _pairwise_f1(pred: dict[str, str], gold: dict[str, str]) -> dict:
 def score(graph_path: str, gold_path: str) -> dict:
     """Decompose the ResolvedGraph and score it against the gold. Pure — returns a dict."""
     g = graph_ir.from_resolved_graph(json.loads(Path(graph_path).read_text(encoding="utf-8")))
-    codebase.decompose(g)                       # mutates g with roles/clusters/seams
+    model = codebase.decompose(g)               # F2 intent-seams (a node may be in several)
     health = graph_ir.wellformedness(g)
     gold = json.loads(Path(gold_path).read_text(encoding="utf-8"))
+
+    # node → the seam id(s) it appears in (from the emitted model; many-to-many possible).
+    membership: dict[str, set[str]] = {}
+    for cl in model["clusters"]:
+        for s in cl["seams"]:
+            for h in s["hunks"]:
+                membership.setdefault(h["id"], set()).add(s["id"])
 
     # ---- roles ----
     gold_roles: dict[str, str] = gold.get("roles", {})
@@ -75,10 +82,13 @@ def score(graph_path: str, gold_path: str) -> dict:
     role_divergences = [{"node": i, "gold": gold_roles[i], "pred": pred_roles[i]}
                         for i in role_ids if gold_roles[i] != pred_roles[i]]
 
-    # ---- seam partition (cores only) ----
-    gold_seams: dict[str, str] = gold.get("seams", {})
-    pred_seams = {nid: g.nodes[nid].seam for nid in gold_seams
-                  if nid in g.nodes and g.nodes[nid].role == "core"}
+    # ---- seam partition (carrier cores, EXCLUDING the anchor) ----
+    # F2 makes the partition many-to-many, but only the ANCHOR core is shared across seams (by
+    # construction — it serves every intent); the carrier cores (members) each land in one seam.
+    # So we score the CARRIER grouping: exclude the anchor, take each core's (single) seam id.
+    gold_seams: dict[str, str] = {n: s for n, s in gold.get("seams", {}).items() if n != g.anchor}
+    pred_seams = {nid: sorted(membership[nid])[0] for nid in gold_seams
+                  if nid in membership and g.nodes.get(nid) and g.nodes[nid].role == "core"}
     seam_f1 = _pairwise_f1(pred_seams, gold_seams) if gold_seams else None
     # the Cause A/B work-list: core PAIRS the engine and gold disagree on grouping for.
     cause_pairs = []
