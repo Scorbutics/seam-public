@@ -76,6 +76,12 @@ class Node:
     intent: str = ""                # cluster label
     seam: str = ""                  # for a core: the seam id it anchors
     seam_label: str = ""
+    # Model B: a PROPOSED partition of this core into behavioural sub-cores (codebase mode).
+    # The atoms/ranges inside are RESOLVED (real code regions); the GROUPING is a proposal —
+    # a suggested reading over verified atoms, which can mis-frame but cannot fabricate a
+    # coupling. Empty unless the codebase Layer-B pass ran. Each item:
+    #   {id, label, ranges: [[start,end],…], reads: [name,…], proposed: true}
+    subcores: list = field(default_factory=list)
 
 
 @dataclass

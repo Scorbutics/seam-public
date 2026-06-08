@@ -29,8 +29,10 @@ from __future__ import annotations
 
 import os
 import re
+from collections import Counter
 from pathlib import Path
 
+from . import atoms as atoms_mod
 from . import graph_ir
 from .graph_ir import (BlindSpot, Edge, Graph, Provenance, connected_components,
                        undirected_adjacency, wellformedness)
@@ -224,15 +226,76 @@ def detect_dynamic_import_blindspots(g: Graph, repo: str) -> None:
             candidates=candidates))
 
 
+# --------------------------------------------------------------------------- Model B: sub-cores
+def detect_subcores(g: Graph, repo: str) -> None:
+    """Model B (plan `seam-B-…`): propose a behavioural decomposition of the ANCHOR core into
+    sub-cores, when the anchor is a function/component (not a class — a class is already
+    decomposed into method cores). The atoms (boundaries) are RESOLVED; the GROUPING is PROPOSED.
+
+    Atoms = the anchor's nested function-like units (handlers/callbacks). They group by COHESION
+    over shared NON-AMBIENT identifiers (the same ambient filter as seams: a name in > half the
+    atoms is shared glue — `setIsOpen`, `router` — and does NOT fuse; a distinctive shared name
+    does). The grouping is a SUGGESTED partition: it can mis-frame, never fabricate a coupling.
+    Collapses to the single core (no split) on < 2 atoms or a single cohesion group.
+    """
+    if not g.anchor or g.anchor not in g.nodes:
+        return
+    node = g.nodes[g.anchor]
+    anchor_sym = node.label
+    # a CLASS is already decomposed into method cores — don't also sub-core it.
+    if any(n.enclosing == anchor_sym for n in g.nodes.values() if n.id != g.anchor):
+        return
+    lang = atoms_mod.lang_for(node.file)
+    if not lang:
+        return
+    try:
+        content = Path(os.path.join(repo, node.file)).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+    atoms = atoms_mod.extract_atoms(content, lang, node.start, node.end)
+    if len(atoms) < 2:
+        return                                              # nothing to decompose → core stays whole (A)
+
+    # cohesion grouping over the atoms (same ambient discipline as assign_seams)
+    cut = max(1, len(atoms) // 2)
+    freq = Counter(name for a in atoms for name in a.names)  # # atoms each name appears in
+    ambient = {name for name, c in freq.items() if c > cut}
+    ids = [f"{g.anchor}.b{i}" for i in range(len(atoms))]
+    by_name: dict[str, list[str]] = {}
+    edges: list[tuple[str, str]] = []
+    for i, a in enumerate(atoms):
+        for name in a.names:
+            if name not in ambient:
+                by_name.setdefault(name, []).append(ids[i])
+    for members in by_name.values():
+        edges += [(members[0], x) for x in members[1:]]
+    groups = connected_components(ids, edges)
+    if len(set(groups.values())) < 2:
+        return                                              # uniform cohesion → one behaviour → A
+
+    by_group: dict[str, list[int]] = {}
+    for i in range(len(atoms)):
+        by_group.setdefault(groups[ids[i]], []).append(i)
+    subcores = []
+    for gid, idxs in sorted(by_group.items()):
+        ranges = [[atoms[i].start, atoms[i].end] for i in idxs]
+        reads = sorted({n for i in idxs for n in atoms[i].names if n not in ambient})
+        subcores.append({"id": gid, "label": reads[0] if reads else gid,
+                         "ranges": ranges, "reads": reads, "proposed": True})
+    node.subcores = subcores
+
+
 def decompose(g: Graph, repo: str | None = None) -> dict:
     """Run the codebase layers in order (roles → clusters → seams → Layer-2 blind spots →
-    well-formedness) and return the SeamModel the extension renders. `g` is mutated. When
-    `repo` is given, scan it for statically-opaque couplings (dynamic imports) to the anchor."""
+    Model-B sub-cores → well-formedness) and return the SeamModel the extension renders. `g` is
+    mutated. When `repo` is given, scan it for statically-opaque couplings (dynamic imports) and
+    propose a behavioural sub-core decomposition of the anchor."""
     assign_roles(g)
     assign_clusters(g)
     assign_seams(g)
     if repo:
         detect_dynamic_import_blindspots(g, repo)
+        detect_subcores(g, repo)
     health = wellformedness(g)
     return emit_seams(g, health)
 
@@ -241,11 +304,15 @@ def decompose(g: Graph, repo: str | None = None) -> dict:
 def _seam_hunk(n: graph_ir.Node, provenance: str) -> dict:
     """A node rendered as a SeamHunk (the extension's per-line decoration unit). Mirrors the
     diff `emit_seams_json` shape so the native renderer is unchanged; `provenance` is the
-    new per-edge-honesty field (diff-mode hunks are implicitly HEUR)."""
-    return {"id": n.id, "file": n.file, "start": n.start, "end": n.end,
-            "role": n.role, "confidence": round(n.role_confidence, 2),
-            "label": n.label, "provenance": provenance,
-            "external": [], "externalRefs": [], "rewire": None}
+    new per-edge-honesty field (diff-mode hunks are implicitly HEUR). A core may also carry
+    `subcores` — a PROPOSED behavioural partition (Model B), additive and clearly flagged."""
+    out = {"id": n.id, "file": n.file, "start": n.start, "end": n.end,
+           "role": n.role, "confidence": round(n.role_confidence, 2),
+           "label": n.label, "provenance": provenance,
+           "external": [], "externalRefs": [], "rewire": None}
+    if n.subcores:
+        out["subcores"] = n.subcores
+    return out
 
 
 def emit_seams(g: Graph, health: dict) -> dict:

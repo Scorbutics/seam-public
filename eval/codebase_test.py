@@ -27,8 +27,25 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
+from src import atoms as atoms_mod  # noqa: E402
 from src import codebase, graph_ir  # noqa: E402
 from src.graph_ir import Provenance, assert_resolved_only  # noqa: E402
+
+# A component shaped like cal.com's AssignmentWarningDialog: one core, two handlers that split
+# on distinctive props (id vs pendingRoute/leaveWithoutAssigningHosts), sharing ambient glue.
+_COMPONENT_TSX = """export const AssignmentWarningDialog = (props: P) => {
+  const { t } = useLocale();
+  const { isOpen, setIsOpen, pendingRoute, leaveWithoutAssigningHosts, id } = props;
+  const router = useRouter();
+  return (
+    <Dialog open={isOpen}>
+      <Button onClick={(e) => { e.preventDefault(); setIsOpen(false); router.replace(`/x/${id}?t=team`); }}>go</Button>
+      <Button onClick={(e) => { e.preventDefault(); setIsOpen(false); leaveWithoutAssigningHosts.current = true; router.replace(pendingRoute); }}>leave</Button>
+    </Dialog>
+  );
+};
+"""
+_requires_ts = pytest.mark.skipif(not atoms_mod.available(), reason="tree-sitter not installed")
 
 FIXTURE = Path(__file__).resolve().parent / "fixtures" / "resolved-graph-sample.json"
 
@@ -99,6 +116,63 @@ def test_emit_drops_no_reached_node(g):
     # the isolated-core warning rides on n8's seam.
     n8_seam = next(s for cl in model["clusters"] for s in cl["seams"] if s["id"] == "n8")
     assert "isolated-core" in n8_seam["warnings"]
+
+
+# --------------------------------------------------------------------------- Model B (sub-cores)
+@_requires_ts
+def test_extract_atoms_finds_nested_handlers():
+    last = _COMPONENT_TSX.rstrip().count("\n")
+    atoms = atoms_mod.extract_atoms(_COMPONENT_TSX, "tsx", 0, last)
+    assert len(atoms) == 2                                  # the two onClick handlers
+    names = [a.names for a in atoms]
+    assert any("id" in n for n in names)
+    assert any("pendingRoute" in n and "leaveWithoutAssigningHosts" in n for n in names)
+
+
+@_requires_ts
+def test_subcores_split_component_by_behaviour(tmp_path):
+    """The verified atoms (handler ranges) are RESOLVED; the PROPOSED grouping splits them into
+    two behavioural sub-cores on their distinctive props, sharing the ambient setIsOpen/router."""
+    last = _COMPONENT_TSX.rstrip().count("\n")
+    (tmp_path / "AssignmentWarningDialog.tsx").write_text(_COMPONENT_TSX, encoding="utf-8")
+    g = graph_ir.from_resolved_graph({
+        "version": 1,
+        "anchor": {"id": "a", "symbol": "AssignmentWarningDialog",
+                   "file": "AssignmentWarningDialog.tsx", "range": [0, last]},
+        "language": "typescriptreact", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [{"id": "a", "symbol": "AssignmentWarningDialog", "kind": "function",
+                   "file": "AssignmentWarningDialog.tsx", "range": [0, last], "enclosing": "", "complexity": last}],
+        "edges": [], "blindspots": [], "unresolved": [],
+    })
+    model = codebase.decompose(g, repo=str(tmp_path))
+    core = model["clusters"][0]["seams"][0]["hunks"][0]
+    assert core["id"] == "a"
+    subs = core["subcores"]
+    assert len(subs) == 2
+    assert all(s["proposed"] for s in subs)                # the partition is flagged PROPOSED
+    reads = [set(s["reads"]) for s in subs]
+    assert any("id" in r and "pendingRoute" not in r for r in reads)
+    assert any("pendingRoute" in r and "leaveWithoutAssigningHosts" in r for r in reads)
+    # the boundaries are real code regions (RESOLVED), within the anchor.
+    for s in subs:
+        for lo, hi in s["ranges"]:
+            assert 0 <= lo <= hi <= last
+
+
+def test_subcores_inert_without_repo():
+    # no repo to read source → no proposed partition (contract stays lean; B degrades to A).
+    g = graph_ir.from_resolved_graph(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    model = codebase.decompose(g)
+    assert all("subcores" not in h
+               for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"])
+
+
+def test_no_subcores_for_class_anchor(tmp_path):
+    # a class is already decomposed into method cores — it must NOT also be sub-cored.
+    g = graph_ir.from_resolved_graph(json.loads(FIXTURE.read_text(encoding="utf-8")))  # PaymentService class
+    model = codebase.decompose(g, repo=str(tmp_path))
+    assert all("subcores" not in h
+               for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"])
 
 
 # --------------------------------------------------------------------------- seam grain (Layer 4)
