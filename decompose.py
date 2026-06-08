@@ -92,7 +92,9 @@ def main(argv: list[str] | None = None) -> int:
         if not g.nodes:
             print("error: resolved graph has no nodes", file=sys.stderr)
             return 1
-        model = codebase.decompose(g)
+        # --repo enables the Layer-2 scan for statically-opaque couplings (dynamic imports
+        # that load the anchor by string path — invisible to the reference resolver).
+        model = codebase.decompose(g, repo=args.repo)
         counts: dict[str, int] = {}
         for n in g.nodes.values():
             counts[n.role] = counts.get(n.role, 0) + 1

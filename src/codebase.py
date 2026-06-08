@@ -27,8 +27,13 @@ is what lets the manual-validation protocol (§5) and the wow test (§6) run fir
 """
 from __future__ import annotations
 
+import os
+import re
+from pathlib import Path
+
 from . import graph_ir
-from .graph_ir import Graph, connected_components, undirected_adjacency, wellformedness
+from .graph_ir import (BlindSpot, Edge, Graph, Provenance, connected_components,
+                       undirected_adjacency, wellformedness)
 
 # Role confidence == how structural the call is. Core/test are structural facts; link is a
 # resolved adjacency to a core; environment is the residual (lowest, surfaces as soft).
@@ -154,12 +159,80 @@ def assign_seams(g: Graph) -> None:
                 g.nodes[cid].seam_label = label
 
 
-def decompose(g: Graph) -> dict:
-    """Run the codebase layers in order (roles → clusters → seams → well-formedness) and
-    return the SeamModel the extension renders. `g` is mutated with the assignment."""
+# --------------------------------------------------------------------------- Layer 2: blind spots
+_DYNAMIC_IMPORT_RE = re.compile(r"""import\(\s*['"]([^'"]+)['"]\s*\)""")
+_SCAN_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+_SKIP_DIRS = frozenset({"node_modules", ".git", "dist", "build", ".next", "out",
+                        ".turbo", "coverage", ".cache", "vendor"})
+_BLINDSPOT_CAP = 50
+
+
+def detect_dynamic_import_blindspots(g: Graph, repo: str) -> None:
+    """Layer 2 (presence detection, plan §2): find consumers that load the anchor via a
+    STRING-PATH dynamic import — `dynamic(() => import("…/Anchor"))`, `await import("…/Anchor")`.
+
+    The symbol reference provider CANNOT see these: a module path is not a symbol reference,
+    so find-references reports the anchor as used-nowhere — a FALSE isolated-core, the
+    'map that lies with confidence' failure. We detect the MECHANISM deterministically (a
+    text scan, DÉT) and surface each site as a SUGGESTED coupling in the blind-spot overlay —
+    NEVER a resolved edge (invariant §1). High-recall by basename, hence unverified/SUGGESTED
+    (a path match can hit a namesake or a comment).
+
+    Lives in Python (not the TS resolver) so it is offline-testable and also works headless via
+    `decompose.py --graph --repo`; it could move into the resolver front later.
+    """
+    if not g.anchor or g.anchor not in g.nodes or not repo:
+        return
+    anchor_file = g.nodes[g.anchor].file
+    stem = Path(anchor_file).name.rsplit(".", 1)[0] if anchor_file else ""
+    if not stem:
+        return
+    anchor_abs = os.path.normpath(os.path.join(repo, anchor_file))
+    candidates: list[Edge] = []
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            if not fn.endswith(_SCAN_EXT):
+                continue
+            fpath = os.path.join(root, fn)
+            if os.path.normpath(fpath) == anchor_abs:
+                continue                                  # the anchor's own file
+            try:
+                text = Path(fpath).read_text(encoding="utf-8", errors="ignore")
+            except OSError:
+                continue
+            if "import(" not in text or stem not in text:
+                continue                                  # fast reject before the regex
+            for i, line in enumerate(text.splitlines(), 1):
+                if "import(" not in line:
+                    continue
+                for m in _DYNAMIC_IMPORT_RE.finditer(line):
+                    path = m.group(1)
+                    if path.rsplit("/", 1)[-1].rsplit(".", 1)[0] == stem:
+                        rel = os.path.relpath(fpath, repo)
+                        candidates.append(Edge(src=g.anchor, dst=f"{rel}:{i}",
+                                               kind="dynamic-import", provenance=Provenance.SUGGESTED))
+            if len(candidates) >= _BLINDSPOT_CAP:
+                break
+        if len(candidates) >= _BLINDSPOT_CAP:
+            break
+    if candidates:
+        g.blindspots.append(BlindSpot(
+            node=g.anchor, mechanism="dynamic-import",
+            evidence=(f"loaded via dynamic import in {len(candidates)} place(s) — a string-path "
+                      "load the reference resolver can't see"),
+            candidates=candidates))
+
+
+def decompose(g: Graph, repo: str | None = None) -> dict:
+    """Run the codebase layers in order (roles → clusters → seams → Layer-2 blind spots →
+    well-formedness) and return the SeamModel the extension renders. `g` is mutated. When
+    `repo` is given, scan it for statically-opaque couplings (dynamic imports) to the anchor."""
     assign_roles(g)
     assign_clusters(g)
     assign_seams(g)
+    if repo:
+        detect_dynamic_import_blindspots(g, repo)
     health = wellformedness(g)
     return emit_seams(g, health)
 

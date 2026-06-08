@@ -115,6 +115,46 @@ def test_cohesion_merges_cores_sharing_a_collaborator(g):
     assert seam_of["n8"] != seam_of["n2"]          # validate stays its own seam
 
 
+# --------------------------------------------------------------------------- Layer 2 (blind spots)
+def test_dynamic_import_surfaced_as_suggested_blindspot(tmp_path):
+    """A consumer that loads the anchor via a string-path dynamic import is INVISIBLE to the
+    reference resolver (a false isolated-core). Layer 2 detects the mechanism and surfaces it
+    as a SUGGESTED blind spot — never a resolved edge (invariant §1)."""
+    (tmp_path / "dialogs").mkdir()
+    (tmp_path / "dialogs" / "AssignmentWarningDialog.tsx").write_text(
+        "export const AssignmentWarningDialog = () => null;\n", encoding="utf-8")
+    (tmp_path / "EventTypeWebWrapper.tsx").write_text(
+        'const AssignmentWarningDialog = dynamic(() => import("./dialogs/AssignmentWarningDialog"));\n',
+        encoding="utf-8")
+    # the resolved graph: anchor only, NO links (find-references saw nothing — the dynamic
+    # load is opaque). This is the dangerous "used nowhere" shape we must qualify.
+    data = {
+        "version": 1,
+        "anchor": {"id": "a", "symbol": "AssignmentWarningDialog",
+                   "file": "dialogs/AssignmentWarningDialog.tsx", "range": [1, 1]},
+        "language": "typescriptreact", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [{"id": "a", "symbol": "AssignmentWarningDialog", "kind": "function",
+                   "file": "dialogs/AssignmentWarningDialog.tsx", "range": [1, 1], "enclosing": "", "complexity": 1}],
+        "edges": [], "blindspots": [], "unresolved": [],
+    }
+    g = graph_ir.from_resolved_graph(data)
+    model = codebase.decompose(g, repo=str(tmp_path))
+
+    assert g.edges == []                                   # NO resolved edge minted
+    bs = model["blindspots"]
+    assert len(bs) == 1 and bs[0]["mechanism"] == "dynamic-import" and bs[0]["node"] == "a"
+    assert all(c["provenance"] == "SUGGESTED" for c in bs[0]["candidates"])
+    assert any("EventTypeWebWrapper.tsx" in c["symbol"] for c in bs[0]["candidates"])
+
+
+def test_no_blindspot_without_repo():
+    # without a repo to scan, no fabricated blind spots (the contract stays lean).
+    g = graph_ir.from_resolved_graph(json.loads(FIXTURE.read_text(encoding="utf-8")))
+    model = codebase.decompose(g)                          # no repo
+    assert model["blindspots"][0]["mechanism"] == "DI"     # only the one already in the fixture
+    assert len(model["blindspots"]) == 1
+
+
 def test_ambient_collaborator_keeps_cores_separate_many_to_many():
     """A collaborator shared by MORE than half the cores is ambient → it does NOT fuse them;
     it attaches to EACH seam (the legitimate many-to-many), avoiding the hairball fusion."""

@@ -526,8 +526,10 @@ async function analyzeCodebase() {
           return;
         }
         fs.writeFileSync(graphPath, JSON.stringify(graph), "utf-8");
+        // --repo lets Python run the Layer-2 scan (dynamic-import couplings to the anchor the
+        // reference resolver can't see) and surface them as SUGGESTED blind spots.
         await execFileP(py, [path.join(tool, "decompose.py"), "--graph", graphPath,
-                             "--emit-seams", out], tool);
+                             "--repo", repoRoot, "--emit-seams", out], tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         const range = `anchor ${graph.anchor.symbol}`;
