@@ -14,10 +14,15 @@ interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
 // omits them, so all are optional). `resolutionQuality` drives the honesty banner, and
 // `unresolved`/`blindspots` are the UNKNOWN / statically-opaque overlays (plan §1/§2).
+// Codebase mode's honest-gap overlays (plan §1/§2). A SUGGESTED candidate is NEVER a
+// resolved edge — it's an unverified guess for a statically-opaque mechanism.
+interface SuggestedCandidate { symbol: string; provenance: string; }
+interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: SuggestedCandidate[]; }
+interface Unresolved { node: string; query: string; reason: string; }
 interface SeamModel {
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
-  complete?: boolean; unresolved?: unknown[]; blindspots?: unknown[];
+  complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[];
 }
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
@@ -193,7 +198,9 @@ function focusSeamById(seamId: string) {
 // Selecting a node FOCUSES it (seam or hunk → that seam; cluster → all its seams).
 function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   const sel = e.selection[0];
-  if (sel && sel.kind === "extTarget") return;   // a resolved target: don't change focus
+  // resolved targets and the blind-spot overlay don't drive seam focus.
+  if (sel && (sel.kind === "extTarget" || sel.kind === "shadows" || sel.kind === "blindspot"
+              || sel.kind === "candidate" || sel.kind === "unknown")) return;
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
@@ -255,7 +262,16 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   resolveCache.clear();       // a new run invalidates resolved external targets
   focusIds = null;            // a fresh/restored run starts showing all seams
   focusLabel = "";
-  lastRunBanner = `last run: ${range} · ${new Date(ts).toLocaleString()}`;
+  // Codebase mode leads with the HONESTY FRONTIER (plan §4): the probed resolution quality
+  // and the size of the blind-spot map sit in the persistent banner, not just a toast.
+  if (m.mode === "codebase") {
+    const nu = m.unresolved?.length ?? 0, nb = m.blindspots?.length ?? 0;
+    const gaps = (nu || nb) ? ` · ${nu} unknown, ${nb} blind spot(s)` : " · no blind spots in view";
+    const incomplete = m.complete === false ? " · depth-truncated" : "";
+    lastRunBanner = `${range} · resolution ${m.resolutionQuality ?? "?"}${gaps}${incomplete}`;
+  } else {
+    lastRunBanner = `last run: ${range} · ${new Date(ts).toLocaleString()}`;
+  }
   buildIndex();
   treeProvider.refresh();
   vscode.commands.executeCommand("setContext", "seam.active", true);  // enable nav keys
@@ -805,7 +821,22 @@ type Node =
   | { kind: "cluster"; cluster: Cluster }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
-  | { kind: "extTarget"; target: ExternalTarget };
+  | { kind: "extTarget"; target: ExternalTarget }
+  // codebase-mode blind-spot map (the differentiator): the statically-opaque mechanisms
+  // and the UNKNOWN queries, surfaced separately from the resolved seams (plan §1/§6).
+  | { kind: "shadows" }
+  | { kind: "blindspot"; bs: BlindSpot }
+  | { kind: "candidate"; cand: SuggestedCandidate }
+  | { kind: "unknown"; ur: Unresolved };
+
+// Find a rendered hunk by node id (for navigating to a blind spot's location).
+function findHunkById(id: string): SeamHunk | undefined {
+  if (!model) return undefined;
+  for (const cl of model.clusters) for (const s of cl.seams) for (const h of s.hunks) if (h.id === id) return h;
+  return model.tests.find((h) => h.id === id);
+}
+const hasShadows = (m: SeamModel): boolean =>
+  m.mode === "codebase" && !!((m.blindspots?.length ?? 0) + (m.unresolved?.length ?? 0));
 
 const ROLE_ICON: Record<string, string> = {
   core: "symbol-method", link: "link", environment: "symbol-field",
@@ -819,7 +850,19 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
 
   getChildren(el?: Node): Node[] | Promise<Node[]> {
     if (!model) return [];
-    if (!el) return model.clusters.map((cluster) => ({ kind: "cluster", cluster }));
+    if (!el) {
+      const roots: Node[] = model.clusters.map((cluster) => ({ kind: "cluster", cluster }));
+      // The blind-spot map sits at the TOP LEVEL, beside the seams, so "where I'm blind"
+      // is as visible as "what I resolved" (the differentiator — never buried).
+      if (hasShadows(model)) roots.push({ kind: "shadows" });
+      return roots;
+    }
+    if (el.kind === "shadows") {
+      const out: Node[] = (model.blindspots ?? []).map((bs) => ({ kind: "blindspot", bs } as Node));
+      return out.concat((model.unresolved ?? []).map((ur) => ({ kind: "unknown", ur } as Node)));
+    }
+    if (el.kind === "blindspot")
+      return el.bs.candidates.map((cand) => ({ kind: "candidate", cand } as Node));
     if (el.kind === "cluster")
       return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     if (el.kind === "seam")
@@ -851,6 +894,46 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.description = [el.seam.linkOnly ? "link-only" : "", el.seam.uncertain ? "uncertain" : ""]
         .filter(Boolean).join(" · ");
       it.iconPath = new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
+      return it;
+    }
+    if (el.kind === "shadows") {
+      const nb = model?.blindspots?.length ?? 0, nu = model?.unresolved?.length ?? 0;
+      const it = new vscode.TreeItem("Blind spots & unknowns", vscode.TreeItemCollapsibleState.Expanded);
+      it.description = [nb ? `${nb} opaque` : "", nu ? `${nu} unknown` : ""].filter(Boolean).join(" · ");
+      it.iconPath = new vscode.ThemeIcon("eye-closed");
+      it.tooltip = "Where this view is, by construction, blind: statically-opaque wiring " +
+        "(DI/reflection/events) and queries the resolver could not answer. UNKNOWN ≠ no link.";
+      return it;
+    }
+    if (el.kind === "blindspot") {
+      const b = el.bs;
+      const it = new vscode.TreeItem(`${b.mechanism} @ ${b.node}`,
+        b.candidates.length ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      it.description = b.evidence;
+      it.iconPath = new vscode.ThemeIcon("warning");
+      it.tooltip = `Statically-opaque ${b.mechanism}: ${b.evidence}\n` +
+        "The resolver sees the mechanism but not where it routes — candidates below are SUGGESTED, not resolved.";
+      const h = findHunkById(b.node);
+      if (h) it.command = { command: "seam.open", title: "Open", arguments: [h] };
+      return it;
+    }
+    if (el.kind === "candidate") {
+      const it = new vscode.TreeItem(`↳ ${el.cand.symbol}`, vscode.TreeItemCollapsibleState.None);
+      it.description = "SUGGESTED — unverified";
+      it.iconPath = new vscode.ThemeIcon("lightbulb");
+      it.tooltip = `${el.cand.symbol} is a GUESSED target (${el.cand.provenance}). It is NEVER counted ` +
+        "as a resolved link — the completeness promise holds only on the resolved graph.";
+      return it;
+    }
+    if (el.kind === "unknown") {
+      const u = el.ur;
+      const it = new vscode.TreeItem(`? ${u.node || u.query}`, vscode.TreeItemCollapsibleState.None);
+      it.description = `${u.query}: ${u.reason}`;
+      it.iconPath = new vscode.ThemeIcon("question");
+      it.tooltip = `The resolver could not answer ${u.query} here (${u.reason}). This is UNKNOWN — ` +
+        "explicitly NOT 'no link' (which would fake an isolated-core).";
+      const h = findHunkById(u.node);
+      if (h) it.command = { command: "seam.open", title: "Open", arguments: [h] };
       return it;
     }
     if (el.kind === "extTarget") {

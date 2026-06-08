@@ -1,0 +1,13 @@
+{
+  "_note": "Hand decomposition of the PaymentService anchor (plan §5 pre-registered gold). charge+refund are one payment-processing intent (both route through the gateway); validate is its own seam (DI-wired, no resolved collaborator) and an honest isolated-core; the class shell is its own seam.",
+  "roles": {
+    "n1": "core", "n2": "core", "n3": "core", "n8": "core",
+    "n4": "link", "n6": "environment", "n7": "test"
+  },
+  "seams": {
+    "n1": "s_class", "n2": "s_payment", "n3": "s_payment", "n8": "s_validate"
+  },
+  "warnings": {
+    "n8": ["isolated-core"]
+  }
+}

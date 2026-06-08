@@ -38,6 +38,7 @@ export interface SymbolResolver {
   prepareCallHierarchy(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<vscode.CallHierarchyItem[]>>;
   outgoingCalls(item: vscode.CallHierarchyItem): Promise<ResolverResult<vscode.CallHierarchyOutgoingCall[]>>;
   incomingCalls(item: vscode.CallHierarchyItem): Promise<ResolverResult<vscode.CallHierarchyIncomingCall[]>>;
+  getDefinition(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<(vscode.Location | vscode.LocationLink)[]>>;
   // Probe (plan §4) — fire a known-shape query at the anchor and classify the server's
   // real quality, never assume it from a static per-language table.
   resolutionQuality(uri: vscode.Uri, pos: vscode.Position): Promise<ResolutionQuality>;
@@ -89,6 +90,17 @@ export class VSCodeSymbolResolver implements SymbolResolver {
       return res ? resolved(res) : unknown("no_incoming_calls");
     } catch {
       return unknown("incoming_calls_threw");
+    }
+  }
+
+  async getDefinition(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<(vscode.Location | vscode.LocationLink)[]>> {
+    try {
+      const res = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+        "vscode.executeDefinitionProvider", uri, pos);
+      if (!res) return unknown("no_definition_provider");
+      return resolved(res);
+    } catch {
+      return unknown("definition_threw");
     }
   }
 
@@ -145,9 +157,47 @@ const CONTAINER_KINDS = new Set<vscode.SymbolKind>([
   vscode.SymbolKind.Class, vscode.SymbolKind.Interface, vscode.SymbolKind.Struct,
   vscode.SymbolKind.Namespace, vscode.SymbolKind.Enum,
 ]);
+// A class's CORE sub-units (each becomes a core). Data fields/properties are deliberately
+// excluded — they are state, not behaviour, so they don't anchor a seam.
+const METHOD_KINDS = new Set<vscode.SymbolKind>([
+  vscode.SymbolKind.Method, vscode.SymbolKind.Constructor,
+]);
 const TEST_PATH = /(\.(test|spec)\.[a-z]+$)|((^|\/)(tests?|__tests__|spec)\/)/i;
 
 interface FlatSym { name: string; kind: vscode.SymbolKind; sel: vscode.Range; range: vscode.Range; }
+
+// A definition result is either a Location or a LocationLink — normalise to {uri, range}.
+function locTarget(l: vscode.Location | vscode.LocationLink): { uri: vscode.Uri; range: vscode.Range } {
+  return "targetUri" in l ? { uri: l.targetUri, range: l.targetRange } : { uri: l.uri, range: l.range };
+}
+
+// The local names an `import` binds + where each appears (for the definition provider). This
+// is how we recover a component's wiring that the call graph misses: JSX elements, hooks and
+// utils are all IMPORTED, so the imports the anchor body uses ARE its links. Type-only imports
+// are skipped (no runtime wiring). Multiline `{ … }` blocks are handled.
+interface ImportBinding { local: string; pos: vscode.Position; }
+function parseImportBindings(text: string, doc: vscode.TextDocument): ImportBinding[] {
+  const out: ImportBinding[] = [];
+  const re = /import\s+(?:type\s+)?(?:\{([^}]*)\}|(\w+)|\*\s+as\s+(\w+))\s+from\s+['"][^'"]+['"]/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    const seg = m[0];
+    if (/^import\s+type\b/.test(seg)) continue;                 // whole type-only import
+    const add = (local: string) => {
+      if (!/^[A-Za-z_$][\w$]*$/.test(local)) return;
+      out.push({ local, pos: doc.positionAt(m!.index + seg.indexOf(local)) });
+    };
+    if (m[1]) {
+      for (const part of m[1].split(",")) {
+        const raw = part.trim();
+        if (!raw || raw.startsWith("type ")) continue;          // per-binding `type Foo`
+        add(raw.split(/\s+as\s+/).pop()!.trim());               // `a as b` → b
+      }
+    } else if (m[2]) add(m[2]);
+    else if (m[3]) add(m[3]);
+  }
+  return out;
+}
 
 function flatten(syms: vscode.DocumentSymbol[], out: FlatSym[]): void {
   for (const s of syms) {
@@ -247,14 +297,22 @@ export async function buildResolvedGraph(
     return emptyGraph(anchorUri, anchorPos, repoRoot, quality, maxDepth,
                       [{ node: "", query: "anchorAtCursor", reason: "no_symbol_at_cursor" }]);
   }
+  // The anchor is the OUTERMOST symbol under the cursor (the class/component the user
+  // posits), not an inner local — a click anywhere inside it anchors the whole unit.
   containing.sort((a, b) => (a.range.contains(b.range) ? -1 : 1));   // outermost first
-  const anchorSym = containing.find((s) => CONTAINER_KINDS.has(s.kind)) ?? containing[containing.length - 1];
+  const anchorSym = containing.find((s) => CONTAINER_KINDS.has(s.kind)) ?? containing[0];
   const anchorEnc = await enclosingOf(anchorUri, anchorSym.sel);
   const anchorId = ensureNode(anchorUri, anchorSym.name, anchorSym.kind, anchorSym.sel, anchorSym.range, anchorEnc);
 
-  // members = symbols whose container is the anchor (its methods/fields) → the core seeds.
-  const members = flatAnchor.filter((s) =>
-    s !== anchorSym && anchorSym.range.contains(s.range) && !CONTAINER_KINDS.has(s.kind));
+  // The CORE sub-units, relative to the anchor:
+  //   - a CLASS decomposes into its METHODS (each a core);
+  //   - a function / component is ONE core (its inner `const`s are its BODY, not sub-cores —
+  //     promoting them all to core was the "wall of amber" bug). Its value is in what it
+  //     wires OUT to, surfaced as links below.
+  const isClassLike = CONTAINER_KINDS.has(anchorSym.kind);
+  const members = isClassLike
+    ? flatAnchor.filter((s) => s !== anchorSym && anchorSym.range.contains(s.range) && METHOD_KINDS.has(s.kind))
+    : [];
   const seeds: { id: string; uri: vscode.Uri; sel: vscode.Range }[] = [];
   if (members.length) {
     for (const m of members) {
@@ -262,7 +320,7 @@ export async function buildResolvedGraph(
       seeds.push({ id, uri: anchorUri, sel: m.sel });
     }
   } else {
-    seeds.push({ id: anchorId, uri: anchorUri, sel: anchorSym.sel });   // a function anchor
+    seeds.push({ id: anchorId, uri: anchorUri, sel: anchorSym.sel });   // a function / single-unit anchor
   }
 
   // ---- bounded BFS over the resolved CALL GRAPH (outgoing from the anchor's members) ----
@@ -289,6 +347,14 @@ export async function buildResolvedGraph(
       unresolved.push({ node: cur.id, query: "outgoingCalls", reason: out.reason });
     } else {
       for (const call of out.value) {
+        // Skip a callee DEFINED INSIDE the anchor (an internal local of the body) — it is
+        // not a boundary crossing, so it is not a node. A call to an existing node (a sibling
+        // class method) is kept: that is a real core→core edge (cohesion). Cross-boundary
+        // callees ARE added — they are the links the anchor wires out to.
+        const internal = call.to.uri.fsPath === anchorUri.fsPath
+          && anchorSym.range.contains(call.to.range)
+          && !idByKey.has(keyOf(call.to.uri, call.to.selectionRange));
+        if (internal) continue;
         const toId = await nodeFromItem(call.to);
         addEdge(cur.id, toId, "call", edgeProv);
         queue.push({ id: toId, uri: call.to.uri, sel: call.to.selectionRange, depth: cur.depth + 1 });
@@ -308,6 +374,35 @@ export async function buildResolvedGraph(
       }
     }
   }
+
+  // AUGMENTATION — import-definition links. A component's wiring is mostly JSX + hooks,
+  // which the call graph does NOT see (call hierarchy ignores JSX). So resolve the IMPORTED
+  // symbols the anchor body actually uses, via the definition provider: those are the links
+  // it wires out to. Robust exactly where call hierarchy is blind (React). Best-effort —
+  // a failure to resolve becomes an `unresolved[]` entry, never a fabricated edge.
+  try {
+    const doc = await vscode.workspace.openTextDocument(anchorUri);
+    const text = doc.getText();
+    const body = text.slice(doc.offsetAt(anchorSym.range.start), doc.offsetAt(anchorSym.range.end));
+    for (const b of parseImportBindings(text, doc)) {
+      if (nodes.size >= maxNodes) { truncated = true; break; }
+      if (!new RegExp(`\\b${b.local}\\b`).test(body)) continue;        // not used by the anchor
+      const def = await resolver.getDefinition(anchorUri, b.pos);
+      if (def.kind === "unknown" || !def.value.length) {
+        // the LS couldn't resolve this import (the broken-monorepo signature) — record it as
+        // UNKNOWN so the blind-spot map shows WHY a link is missing, never silently dropped.
+        unresolved.push({ node: anchorId, query: `definition(${b.local})`,
+                          reason: def.kind === "unknown" ? def.reason : "no_definition" });
+        continue;
+      }
+      const { uri, range } = locTarget(def.value[0]);
+      if (uri.fsPath === anchorUri.fsPath && anchorSym.range.contains(range)) continue;  // internal
+      if (uri.fsPath.includes("/node_modules/")) continue;             // framework lib, not first-party wiring
+      const enc = await enclosingOf(uri, range);
+      const id = ensureNode(uri, b.local, vscode.SymbolKind.Variable, range, range, enc);
+      addEdge(anchorId, id, "import", edgeProv);
+    }
+  } catch { /* augmentation is best-effort; the call-graph result still stands */ }
 
   return {
     version: 1,
