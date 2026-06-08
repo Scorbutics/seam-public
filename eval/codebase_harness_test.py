@@ -22,13 +22,13 @@ GRAPH = str(FIXTURES / "resolved-graph-sample.json")
 
 def test_matching_gold_scores_perfect():
     rep = codebase_harness.score(GRAPH, str(GOLD / "resolved-graph-sample.json"))
-    assert rep["roles"]["accuracy"] == 1.0
-    assert rep["roles"]["divergences"] == []
-    assert rep["seams"]["partition_f1"]["f1"] == 1.0
-    assert rep["seams"]["cause_worklist"] == []
+    assert rep["gated"]["role_accuracy"] == 1.0
+    assert rep["gated"]["role_divergences"] == []
+    assert rep["proposal"]["partition_f1"]["f1"] == 1.0
+    assert rep["proposal"]["cause_worklist"] == []
     # the DI-wired validate is a CONFIRMED shadow (engine + gold agree it's isolated).
-    assert rep["shadow_audit"]["confirmed_shadows"] == ["n8"]
-    assert rep["shadow_audit"]["suspect_missed_edges"] == []
+    assert rep["gated"]["shadow"]["confirmed_shadows"] == ["n8"]
+    assert rep["gated"]["shadow"]["suspect_missed_edges"] == []
 
 
 def test_divergent_gold_is_surfaced(tmp_path):
@@ -44,12 +44,40 @@ def test_divergent_gold_is_surfaced(tmp_path):
     rep = codebase_harness.score(GRAPH, str(gp))
 
     # roles still match; the disagreement is purely about GRAIN + the shadow.
-    assert rep["roles"]["accuracy"] == 1.0
-    assert rep["seams"]["partition_f1"]["f1"] < 1.0          # partition disagreement detected
+    assert rep["gated"]["role_accuracy"] == 1.0
+    assert rep["proposal"]["partition_f1"]["f1"] < 1.0          # partition disagreement detected
     # n8-vs-payment pairs land on the Cause A/B worklist for the human to classify.
-    pairs = {tuple(sorted((c["a"], c["b"]))) for c in rep["seams"]["cause_worklist"]}
+    pairs = {tuple(sorted((c["a"], c["b"]))) for c in rep["proposal"]["cause_worklist"]}
     assert ("n2", "n8") in pairs and ("n3", "n8") in pairs
     # the engine isolated n8 but the gold didn't → flagged as a SUSPECT missed edge (the
     # exact "true shadow vs missed edge" call §5 asks a human to make — here: the DI edge).
-    assert rep["shadow_audit"]["suspect_missed_edges"] == ["n8"]
-    assert rep["shadow_audit"]["confirmed_shadows"] == []
+    assert rep["gated"]["shadow"]["suspect_missed_edges"] == ["n8"]
+    assert rep["gated"]["shadow"]["confirmed_shadows"] == []
+
+
+# --------------------------------------------------------------------------- real-anchor golds (F3)
+def test_cpp_buffer_floor_matches_gold():
+    """C++ multi-member class: the floor's co-occurrence reproduces the hand intents
+    (input=read, output=write+flush). A clean MATCH on C++ paths — floor is language-neutral."""
+    rep = codebase_harness.score(str(FIXTURES / "cpp-buffer.json"), str(GOLD / "cpp-buffer.json"))
+    assert rep["gated"]["role_accuracy"] == 1.0
+    assert rep["proposal"]["partition_f1"]["f1"] == 1.0
+    assert rep["proposal"]["cause_worklist"] == []
+
+
+def test_availability_divergence_is_a_proposal_not_a_regression():
+    """Real availability.ts shape: the floor splits `defaultDayRange` off (its consumer differs)
+    while the human gold bundles it into 'seed a schedule'. The harness must REPORT this as a
+    Cause A/B proposal (partition F1 < 1) but the GATE must still PASS — a different reading is
+    not a regression."""
+    rep = codebase_harness.score(str(FIXTURES / "availability-module.json"),
+                                 str(GOLD / "availability-module.json"))
+    assert rep["gated"]["role_accuracy"] == 1.0                 # roles are facts → still perfect
+    assert rep["proposal"]["partition_f1"]["f1"] < 1.0          # the DDR divergence shows up
+    pairs = {tuple(sorted((c["a"], c["b"]))) for c in rep["proposal"]["cause_worklist"]}
+    assert ("DDR", "DS") in pairs or ("DDR", "GAFS") in pairs   # defaultDayRange ↔ seed, to review
+    # the partition divergence must NOT count as a regression (it's a proposal).
+    baseline = codebase_harness.score(str(FIXTURES / "availability-module.json"),
+                                      str(GOLD / "availability-module.json"))
+    # even with a WORSE partition than baseline, the gate passes (partition is never gated):
+    assert codebase_harness.gate(rep, baseline) == 0

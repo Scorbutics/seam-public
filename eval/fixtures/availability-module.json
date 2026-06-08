@@ -1,0 +1,46 @@
+{
+  "_note": "Real-shaped ResolvedGraph hand-built from cal.com packages/lib/availability.ts (AGPLv3) and its actual consumers (grep, calibration §11.1). A multi-member module: the carriers are its exported functions; consumers import distinct ones. anchor = the module; members = exported functions (enclosing 'availability'). Hand-built because the LSP resolver runs only in the extension (F5).",
+  "version": 1,
+  "anchor": { "id": "mod", "symbol": "availability", "file": "packages/lib/availability.ts", "range": [0, 130] },
+  "language": "typescript",
+  "resolutionQuality": "FULL",
+  "depth": 2,
+  "complete": true,
+  "nodes": [
+    { "id": "mod",  "symbol": "availability",              "kind": "module",   "file": "packages/lib/availability.ts", "range": [0, 130], "enclosing": "",             "complexity": 130 },
+    { "id": "DS",   "symbol": "DEFAULT_SCHEDULE",          "kind": "constant", "file": "packages/lib/availability.ts", "range": [14, 23], "enclosing": "availability", "complexity": 10 },
+    { "id": "GAFS", "symbol": "getAvailabilityFromSchedule","kind": "function","file": "packages/lib/availability.ts", "range": [24, 53], "enclosing": "availability", "complexity": 30 },
+    { "id": "GWH",  "symbol": "getWorkingHours",           "kind": "function", "file": "packages/lib/availability.ts", "range": [61, 128],"enclosing": "availability", "complexity": 67 },
+    { "id": "AAS",  "symbol": "availabilityAsString",      "kind": "function", "file": "packages/lib/availability.ts", "range": [129, 160],"enclosing": "availability","complexity": 31 },
+    { "id": "DDR",  "symbol": "defaultDayRange",           "kind": "constant", "file": "packages/lib/availability.ts", "range": [9, 13],  "enclosing": "availability", "complexity": 5 },
+
+    { "id": "c_invite",   "symbol": "inviteMemberUtils",   "kind": "function", "file": "packages/trpc/server/routers/viewer/teams/inviteMember/utils.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_orgcreate","symbol": "orgCreateHandler",    "kind": "function", "file": "packages/trpc/server/routers/viewer/organizations/create.handler.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_schedcreate","symbol": "scheduleCreate",    "kind": "function", "file": "packages/trpc/server/routers/viewer/availability/schedule/create.handler.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_userrepo", "symbol": "UserRepository",      "kind": "method",   "file": "packages/features/users/repositories/UserRepository.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_schedsvc", "symbol": "ScheduleService",     "kind": "method",   "file": "packages/features/schedules/services/ScheduleService.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_avset",    "symbol": "AvailabilitySettings","kind": "function", "file": "packages/platform/atoms/availability/AvailabilitySettings.tsx", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_listitem", "symbol": "ScheduleListItem",    "kind": "function", "file": "packages/features/schedules/components/ScheduleListItem.tsx", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_foratom",  "symbol": "forAtom",             "kind": "function", "file": "packages/lib/schedules/transformers/for-atom.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_getavail", "symbol": "getUserAvailability", "kind": "function", "file": "packages/features/availability/lib/getUserAvailability.ts", "range": [1, 1], "enclosing": "", "complexity": 1 },
+    { "id": "c_schedcomp","symbol": "ScheduleComponent",   "kind": "function", "file": "packages/features/schedules/components/ScheduleComponent.tsx", "range": [1, 1], "enclosing": "", "complexity": 1 }
+  ],
+  "edges": [
+    { "from": "c_invite",    "to": "DS",   "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_invite",    "to": "GAFS", "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_orgcreate", "to": "DS",   "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_orgcreate", "to": "GAFS", "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_schedcreate","to": "DS",  "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_schedcreate","to": "GAFS","kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_userrepo",  "to": "DS",   "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_userrepo",  "to": "GAFS", "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_schedsvc",  "to": "GAFS", "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_avset",     "to": "AAS",  "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_listitem",  "to": "AAS",  "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_foratom",   "to": "GWH",  "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_getavail",  "to": "GWH",  "kind": "reference", "provenance": "RESOLVED_FULL" },
+    { "from": "c_schedcomp", "to": "DDR",  "kind": "reference", "provenance": "RESOLVED_FULL" }
+  ],
+  "blindspots": [],
+  "unresolved": []
+}

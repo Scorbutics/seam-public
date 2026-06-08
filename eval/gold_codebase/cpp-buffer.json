@@ -1,0 +1,11 @@
+{
+  "_note": "HAND partition of the C++ Buffer class (Claude's §5 stand-in). A human reads two intents: an input path (read) and an output path (write+flush, used together). This MATCHES the floor's co-occurrence — the calibration's clean multi-member case, on C++ paths.",
+  "roles": {
+    "buf": "core", "read": "core", "write": "core", "flush": "core"
+  },
+  "seams": {
+    "read": "s_input",
+    "write": "s_output", "flush": "s_output"
+  },
+  "warnings": {}
+}

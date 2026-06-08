@@ -1,0 +1,12 @@
+{
+  "_note": "HAND partition (Claude's §5 stand-in — Brice should validate) of availability.ts. A human reading: 'seed a schedule' bundles the schedule defaults INCLUDING defaultDayRange (conceptually part of schedule setup), even though its only current consumer differs. This deliberately DIVERGES from the floor (which separates defaultDayRange by usage) to exercise proposal-scoring: the divergence is a 'reading to review', not a regression.",
+  "roles": {
+    "mod": "core", "DS": "core", "GAFS": "core", "GWH": "core", "AAS": "core", "DDR": "core"
+  },
+  "seams": {
+    "DS": "s_seed", "GAFS": "s_seed", "DDR": "s_seed",
+    "GWH": "s_compute",
+    "AAS": "s_render"
+  },
+  "warnings": {}
+}

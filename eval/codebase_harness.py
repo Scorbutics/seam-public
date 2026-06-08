@@ -112,46 +112,86 @@ def score(graph_path: str, gold_path: str) -> dict:
 
     return {
         "case": Path(graph_path).stem,
-        "roles": {"accuracy": round(role_acc, 3) if role_acc is not None else None,
-                  "confusions": [{"gold": gd, "pred": pr} for gd, pr in confusion],
-                  "divergences": role_divergences},
-        "seams": {"partition_f1": seam_f1, "cause_worklist": cause_pairs},
-        "shadow_audit": shadow_audit,
+        # GATED — resolved FACTS: a regression here is real (roles + the honest-gap map).
+        "gated": {
+            "role_accuracy": round(role_acc, 3) if role_acc is not None else None,
+            "role_confusions": [{"gold": gd, "pred": pr} for gd, pr in confusion],
+            "role_divergences": role_divergences,
+            "shadow": shadow_audit,
+        },
+        # PROPOSAL — the intent PARTITION is a READING, not a fact: reported for human review,
+        # NEVER gated. A different grouping than gold is "a reading to review" (Cause A/B), not a
+        # regression. (Even a deterministic partition is a proposal — §0 of the exploration.)
+        "proposal": {
+            "partition_f1": seam_f1,
+            "cause_worklist": cause_pairs,
+        },
         "health": health["postures"],
     }
 
 
 def _print(rep: dict) -> None:
     print(f"\n=== codebase decomposition scorecard | {rep['case']} ===")
-    r = rep["roles"]
-    print(f"  role accuracy    {r['accuracy']}")
-    if r["confusions"]:
-        print("  confusions       " + "; ".join(f"{c['gold']}->{c['pred']}" for c in r["confusions"]))
-    s = rep["seams"]
-    if s["partition_f1"] is not None:
-        f = s["partition_f1"]
-        print(f"  seam partition   F1 {f['f1']}  (precision {f['precision']} recall {f['recall']})")
-    sa = rep["shadow_audit"]
-    print(f"  shadow audit     confirmed={sa['confirmed_shadows'] or '—'}  "
+    gd = rep["gated"]
+    print(f"  [GATED] role accuracy   {gd['role_accuracy']}")
+    if gd["role_confusions"]:
+        print("          confusions      " + "; ".join(f"{c['gold']}->{c['pred']}" for c in gd["role_confusions"]))
+    sa = gd["shadow"]
+    print(f"  [GATED] shadow audit    confirmed={sa['confirmed_shadows'] or '—'}  "
           f"suspect_missed_edge={sa['suspect_missed_edges'] or '—'}  "
           f"suspect_over_wired={sa['suspect_over_wired'] or '—'}")
-    if s["cause_worklist"]:
-        print("  CAUSE A/B worklist (human classifies each):")
-        for c in s["cause_worklist"]:
-            print(f"    - {c['a']} & {c['b']}: engine {c['engine']}, gold {c['gold']} — {c['classify']}")
-    if r["divergences"]:
-        print("  role divergences (audit gold vs engine before trusting either):")
-        for d in r["divergences"]:
-            print(f"    - {d['node']}: gold {d['gold']} vs engine {d['pred']}")
-    print(f"  health           {rep['health']}")
+    if gd["role_divergences"]:
+        print("          role divergences (audit gold vs engine):")
+        for d in gd["role_divergences"]:
+            print(f"            - {d['node']}: gold {d['gold']} vs engine {d['pred']}")
+    pr = rep["proposal"]
+    f = pr["partition_f1"]
+    if f is not None:
+        print(f"  [proposal] seam partition  F1 {f['f1']}  (precision {f['precision']} recall {f['recall']})"
+              "   — a reading to review, NOT gated")
+    if pr["cause_worklist"]:
+        print("  [proposal] CAUSE A/B worklist (human classifies each — a different reading, not a bug):")
+        for c in pr["cause_worklist"]:
+            print(f"            - {c['a']} & {c['b']}: engine {c['engine']}, gold {c['gold']} — {c['classify']}")
+    print(f"  health          {rep['health']}")
+
+
+def gate(report: dict, baseline: dict, tol: float = 0.05) -> int:
+    """Fail (exit 1) ONLY on a regression in the GATED facts — role accuracy dropping, or more
+    suspect-missed-edges (the resolver getting blinder). The PROPOSAL partition is NEVER gated: a
+    different intent grouping is a reading to review, not a regression."""
+    regressed: list[str] = []
+    cg, bg = report["gated"], baseline.get("gated", {})
+    if cg["role_accuracy"] is not None and bg.get("role_accuracy") is not None \
+            and cg["role_accuracy"] < bg["role_accuracy"] - tol:
+        regressed.append(f"role_accuracy {bg['role_accuracy']} -> {cg['role_accuracy']}")
+    cm = len(cg["shadow"]["suspect_missed_edges"])
+    bm = len(bg.get("shadow", {}).get("suspect_missed_edges", []))
+    if cm > bm:
+        regressed.append(f"suspect_missed_edges {bm} -> {cm} (resolver blinder)")
+    if regressed:
+        print("\n❌ REGRESSION (gated facts):")
+        for r in regressed:
+            print(f"   - {r}")
+        return 1
+    print("\n✅ no regression in gated facts (partition divergences are proposals, not failures)")
+    return 0
 
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--graph", required=True, help="a ResolvedGraph JSON (the resolver's output)")
     ap.add_argument("--gold", required=True, help="the hand decomposition to score against")
+    ap.add_argument("--baseline", help="a saved scorecard JSON; gate on regression in gated facts")
+    ap.add_argument("--save", help="write the scorecard JSON here")
+    ap.add_argument("--tol", type=float, default=0.05)
     args = ap.parse_args(argv)
-    _print(score(args.graph, args.gold))
+    rep = score(args.graph, args.gold)
+    _print(rep)
+    if args.save:
+        Path(args.save).write_text(json.dumps(rep, indent=2), encoding="utf-8")
+    if args.baseline:
+        return gate(rep, json.loads(Path(args.baseline).read_text(encoding="utf-8")), args.tol)
     return 0
 
 
