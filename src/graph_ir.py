@@ -82,6 +82,11 @@ class Node:
     # coupling. Empty unless the codebase Layer-B pass ran. Each item:
     #   {id, label, ranges: [[start,end],…], reads: [name,…], proposed: true}
     subcores: list = field(default_factory=list)
+    # Model A: this core's CONTRACT decomposed into its params/props — the finer altitude of the
+    # usage edge. A member INVOKED in the body is a behavioural link (a threaded callback); a
+    # read-only member is environment (passive data). All RESOLVED. Each item:
+    #   {name, role: "link"|"environment", ranges: [[start,end],…], invoked: bool}
+    contract: list = field(default_factory=list)
 
 
 @dataclass

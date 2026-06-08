@@ -1,20 +1,17 @@
-"""Behavioural ATOMS for Model B — the verified SUBSTRATE (plan `seam-B-…` §1/§4).
+"""Tree-sitter SUBSTRATE for the codebase product's intra-anchor decomposition.
 
-Cross-language via tree-sitter (offline-testable; reuses `facts_treesitter`). An atom is a
-behavioural unit INSIDE a core: the **outermost nested function-like nodes** (event handlers,
-callbacks, methods) of the anchor's body — the units a reader thinks of as "what it does".
-Each atom carries the identifier NAMES it references — a GROUPING SIGNAL ONLY: reliable for
-locals/params (one lexical scope), name-only for external calls, and NEVER emitted as an edge
-(invariant: a suggested partition may group verified atoms; it may not assert a coupling).
+Cross-language (reuses `facts_treesitter`), offline-testable. Two extractors over the same
+verified substrate — boundaries are RESOLVED (real code regions), the readings built on top
+(codebase.py) are graded link/environment/PROPOSED:
 
-Boundaries (atom line ranges) are RESOLVED — exact regions of code. The grouping built on top
-(codebase.detect_subcores) is PROPOSED. On ANY failure — no tree-sitter, unsupported grammar,
-parse error, fewer than two function-like units — this returns `[]`, so Model B degrades to the
-single-core Model A view. It never produces a *wrong* split, only sometimes *no* split.
+  - `extract_atoms`     — Model B: the outermost nested function-like units inside the anchor
+                          (handlers/callbacks). Behavioural sub-cores group these.
+  - `extract_contract`  — Model A: the anchor's parameters / props (its contract surface), each
+                          with where it's used in the body and whether it is INVOKED there (a
+                          called callback = a behavioural link; a read-only prop = environment).
 
-B1 deliberately splits ONLY on nested function-like units (conservative, avoids spurious
-statement-level fragments). Finer granularity (branches / statements / JSX blocks) is a later
-step gated on the §5 validation.
+On ANY failure (no tree-sitter, unsupported grammar, parse error, no aligned function) both
+return `[]` → the feature degrades off; never a wrong result.
 """
 from __future__ import annotations
 
@@ -22,11 +19,9 @@ from dataclasses import dataclass, field
 
 from .facts_treesitter import _LANG_BY_EXT, _parser, available
 
-# Function-like node kinds across grammars (substring match — names vary per grammar).
 _FUNCLIKE = ("arrow_function", "function_definition", "function_declaration",
              "function_expression", "method_definition", "method_declaration",
              "function_item", "lambda")
-# The body block of a function (the scope whose children we scan for nested handlers).
 _BODYISH = ("block", "body")
 
 
@@ -37,84 +32,213 @@ class Atom:
     names: set[str] = field(default_factory=set)  # identifiers referenced (grouping signal only)
 
 
+@dataclass
+class ContractMember:
+    name: str
+    invoked: bool                               # called in the body (a behavioural callback) vs read-only
+    ranges: list = field(default_factory=list)  # [[start,end],…] internal-use line ranges (0-based)
+
+
+# --------------------------------------------------------------------------- shared substrate
 def lang_for(file_path: str) -> str | None:
-    """tree-sitter grammar for a file, or None (→ no atoms → single-core view)."""
     ext = file_path[file_path.rfind("."):].lower() if "." in file_path else ""
     return _LANG_BY_EXT.get(ext)
 
 
+class _Ctx:
+    """A parsed file with byte→line + node helpers (binding accessors are callables)."""
+    def __init__(self, content: str, lang: str):
+        self.cb = content.encode("utf-8")
+        self.root = _parser(lang).parse(content).root_node()
+
+    def ln(self, byte: int) -> int:
+        return self.cb[:byte].count(b"\n")
+
+    def span(self, n):
+        return self.ln(n.start_byte()), self.ln(n.end_byte())
+
+    def children(self, n):
+        return [n.child(i) for i in range(n.child_count())]
+
+    def text(self, n) -> str:
+        return self.cb[n.start_byte():n.end_byte()].decode("utf-8", "replace")
+
+    def col(self, byte: int) -> int:                  # 0-based column of a byte offset
+        return byte - (self.cb.rfind(b"\n", 0, byte) + 1)
+
+    def collect(self, root, pred) -> list:
+        out, st = [], [root]
+        while st:
+            x = st.pop()
+            if pred(x.kind()):
+                out.append(x)
+            st.extend(self.children(x))
+        return out
+
+
+def _anchor_func(ctx: _Ctx, start_line: int):
+    """The function-like node whose start best aligns with the anchor's start line (robust to a
+    slightly off end). None if nothing aligns within a few lines (→ no decomposition)."""
+    funcs = ctx.collect(ctx.root, lambda k: any(f in k for f in _FUNCLIKE))
+    if not funcs:
+        return None
+    af = min(funcs, key=lambda n: (abs(ctx.span(n)[0] - start_line), -(ctx.span(n)[1] - ctx.span(n)[0])))
+    return af if abs(ctx.span(af)[0] - start_line) <= 3 else None
+
+
+def _body_of(ctx: _Ctx, func):
+    for c in ctx.children(func):
+        if any(b in c.kind() for b in _BODYISH):
+            return c
+    return func
+
+
+def _merge_lines(lines: list[int]) -> list:
+    out: list = []
+    for l in sorted(set(lines)):
+        if out and l <= out[-1][1] + 1:
+            out[-1][1] = l
+        else:
+            out.append([l, l])
+    return out
+
+
+# --------------------------------------------------------------------------- Model B: atoms
 def extract_atoms(content: str, lang: str, start_line: int, end_line: int) -> list[Atom]:
-    """The outermost function-like units inside the anchor's body (the behavioural atoms).
-    `start_line`/`end_line` are 0-based inclusive file lines bounding the anchor. Returns [] on
-    any failure or when there are fewer than two units (caller collapses to the single core)."""
     if not available():
         return []
     try:
-        root = _parser(lang).parse(content).root_node()
+        ctx = _Ctx(content, lang)
     except Exception:
         return []
-    cb = content.encode("utf-8")
-
-    def ln(byte: int) -> int:
-        return cb[:byte].count(b"\n")                  # 0-based line of a byte offset
-
-    def span(n):
-        return ln(n.start_byte()), ln(n.end_byte())
-
-    def children(n):
-        return [n.child(i) for i in range(n.child_count())]
-
-    # 1) the anchor's own FUNCTION node = the function-like node whose start best aligns with the
-    #    anchor's start line (robust to an end line that slightly over/undershoots the symbol).
-    all_funcs: list = []
-
-    def gather(n) -> None:
-        for c in children(n):
-            if any(f in c.kind() for f in _FUNCLIKE):
-                all_funcs.append(c)
-            gather(c)
-
-    gather(root)
-    if not all_funcs:
+    func = _anchor_func(ctx, start_line)
+    if func is None:
         return []
-    anchor_func = min(all_funcs, key=lambda n: (abs(span(n)[0] - start_line), -(span(n)[1] - span(n)[0])))
-    if abs(span(anchor_func)[0] - start_line) > 3:        # no function aligns with the anchor → no split
-        return []
+    body = _body_of(ctx, func)
 
-    # 2) the anchor function's OWN body block — its DIRECT block/body child (not a nested one),
-    #    so we scan INSIDE the anchor while excluding the anchor function itself.
-    body = anchor_func
-    for c in children(anchor_func):
-        if any(b in c.kind() for b in _BODYISH):
-            body = c
-            break
-
-    # 3) outermost function-like nodes inside the body (don't descend into one already taken).
     funcs: list = []
 
     def walk(n) -> None:
-        for c in children(n):
+        for c in ctx.children(n):
             if any(f in c.kind() for f in _FUNCLIKE):
                 funcs.append(c)
             else:
                 walk(c)
 
     walk(body)
-
-    def names_of(n) -> set[str]:
-        out: set[str] = set()
-        stack = [n]
-        while stack:
-            x = stack.pop()
-            if "identifier" in x.kind():
-                out.add(cb[x.start_byte():x.end_byte()].decode("utf-8", "replace"))
-            stack.extend(children(x))
-        return out
-
     atoms: list[Atom] = []
     for n in funcs:
-        s, e = span(n)
+        s, e = ctx.span(n)
         if s < start_line or e > end_line:
             continue
-        atoms.append(Atom(start=s, end=e, names=names_of(n)))
+        names = {ctx.text(i) for i in ctx.collect(n, lambda k: "identifier" in k)}
+        atoms.append(Atom(start=s, end=e, names=names))
     return atoms
+
+
+# --------------------------------------------------------------------------- Model A: contract
+def extract_contract(content: str, lang: str, start_line: int, end_line: int) -> list[ContractMember]:
+    """The anchor's contract members (parameters / destructured props) used in its body, each
+    flagged `invoked` (called → a behavioural link) and with its internal-use line ranges.
+
+    Handles the two common shapes: destructured in the signature `({a, b}: T)` and destructured
+    in the body `const { a, b } = props`. Renamed/nested patterns are best-effort (skipped).
+    """
+    if not available():
+        return []
+    try:
+        ctx = _Ctx(content, lang)
+    except Exception:
+        return []
+    func = _anchor_func(ctx, start_line)
+    if func is None:
+        return []
+    body = _body_of(ctx, func)
+
+    params = next((c for c in ctx.children(func) if "parameter" in c.kind()), None)
+    sig_fields: set[str] = set()
+    plain_params: set[str] = set()
+    if params is not None:
+        for f in ctx.collect(params, lambda k: "shorthand_property_identifier_pattern" in k):
+            sig_fields.add(ctx.text(f))
+        # a bare identifier parameter (e.g. `props`) — a possible destructure source
+        for p in ctx.children(params):
+            ids = [c for c in ctx.children(p) if c.kind() == "identifier"]
+            if p.kind() == "identifier":
+                plain_params.add(ctx.text(p))
+            elif ids and not ctx.collect(p, lambda k: "pattern" in k):
+                plain_params.add(ctx.text(ids[0]))
+
+    # body destructure: `const { a, b } = <plainParam>`
+    body_fields: set[str] = set()
+    sources: set[str] = set()
+    for d in ctx.collect(body, lambda k: k == "variable_declarator"):
+        ch = ctx.children(d)
+        if len(ch) < 2:
+            continue
+        pat, val = ch[0], ch[-1]
+        if "object_pattern" in pat.kind() and val.kind() == "identifier" and ctx.text(val) in plain_params:
+            sources.add(ctx.text(val))
+            for f in ctx.collect(pat, lambda k: "shorthand_property_identifier_pattern" in k):
+                body_fields.add(ctx.text(f))
+
+    contract = sig_fields | body_fields | (plain_params - sources)
+    if not contract:
+        return []
+
+    idents = ctx.collect(body, lambda k: "identifier" in k)
+    called = {ctx.text(ctx.children(c)[0]) for c in ctx.collect(body, lambda k: k == "call_expression")
+              if ctx.children(c) and ctx.children(c)[0].kind() == "identifier"}
+
+    members: list[ContractMember] = []
+    for name in sorted(contract):
+        occ = [ctx.span(i)[0] for i in idents if ctx.text(i) == name]
+        if not occ:
+            continue                                       # declared but unused in the body → skip
+        members.append(ContractMember(name=name, invoked=name in called, ranges=_merge_lines(occ)))
+    return members
+
+
+def extract_consumer_feeds(content: str, lang: str, anchor_name: str) -> dict:
+    """Model A2: at a CONSUMER, which value it feeds to each prop of the anchor — completing the
+    thread consumer → prop → internal use. JSX-first (named attributes are the clean, common
+    case): for every `<Anchor …/>` usage, map `propName` → the passed value EXPRESSION + line.
+    Deterministic from the consumer's AST (the binding is real, RESOLVED); resolving the value's
+    *definition* is a further LSP step (not done here). Positional/kwarg calls are best-effort,
+    left for later. Returns {propName: [{value, line}]}.
+    """
+    if not available():
+        return {}
+    try:
+        ctx = _Ctx(content, lang)
+    except Exception:
+        return {}
+    feeds: dict = {}
+    elements = ctx.collect(ctx.root, lambda k: k in ("jsx_opening_element", "jsx_self_closing_element"))
+    for el in elements:
+        tag = next((c for c in ctx.children(el)
+                    if c.kind() in ("identifier", "member_expression", "nested_identifier")), None)
+        if tag is None or ctx.text(tag) != anchor_name:
+            continue
+        for attr in (c for c in ctx.children(el) if c.kind() == "jsx_attribute"):
+            ch = ctx.children(attr)
+            pname = next((ctx.text(c) for c in ch
+                          if "property_identifier" in c.kind() or c.kind() == "identifier"), None)
+            if not pname:
+                continue
+            valnode = next((c for c in ch if c.kind() in ("jsx_expression", "string")), None)
+            vnode = None
+            if valnode is None:
+                value = "true"                             # boolean shorthand `<X disabled/>`
+            elif valnode.kind() == "jsx_expression":
+                inner = [c for c in ctx.children(valnode) if c.is_named()]
+                vnode = inner[0] if inner else valnode
+                value = ctx.text(vnode)
+            else:
+                vnode = valnode
+                value = ctx.text(valnode)
+            feed = {"value": value.strip(), "line": ctx.span(attr)[0]}
+            if vnode is not None:                          # the value's precise position (for A3 def resolution)
+                feed["valLine"], feed["valCol"] = ctx.span(vnode)[0], ctx.col(vnode.start_byte())
+            feeds.setdefault(pname, []).append(feed)
+    return feeds

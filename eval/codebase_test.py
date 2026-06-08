@@ -159,6 +159,88 @@ def test_subcores_split_component_by_behaviour(tmp_path):
             assert 0 <= lo <= hi <= last
 
 
+# --------------------------------------------------------------------------- Model A (contract)
+_DELETE_DIALOG_TSX = """export function DeleteDialog({
+  isManagedEvent,
+  eventTypeId,
+  open,
+  onOpenChange,
+  onDelete,
+  isDeleting,
+}: Props) {
+  const { t } = useLocale();
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <Content isPending={isDeleting} title={t(`deletes${isManagedEvent}`)}
+        onConfirm={(e) => { e.preventDefault(); onDelete(eventTypeId); }} />
+    </Dialog>
+  );
+}
+"""
+
+
+@_requires_ts
+def test_contract_marks_invoked_prop_as_link():
+    last = _DELETE_DIALOG_TSX.rstrip().count("\n")
+    members = atoms_mod.extract_contract(_DELETE_DIALOG_TSX, "tsx", 0, last)
+    by = {m.name: m for m in members}
+    assert by["onDelete"].invoked is True                   # called in the body → a behavioural link
+    assert by["open"].invoked is False and by["isDeleting"].invoked is False   # read-only data
+    assert by["onDelete"].ranges                            # has an internal-use range
+
+
+@_requires_ts
+def test_contract_emitted_as_link_and_environment(tmp_path):
+    last = _DELETE_DIALOG_TSX.rstrip().count("\n")
+    (tmp_path / "DeleteDialog.tsx").write_text(_DELETE_DIALOG_TSX, encoding="utf-8")
+    g = graph_ir.from_resolved_graph({
+        "version": 1,
+        "anchor": {"id": "a", "symbol": "DeleteDialog", "file": "DeleteDialog.tsx", "range": [0, last]},
+        "language": "typescriptreact", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [{"id": "a", "symbol": "DeleteDialog", "kind": "function",
+                   "file": "DeleteDialog.tsx", "range": [0, last], "enclosing": "", "complexity": last}],
+        "edges": [], "blindspots": [], "unresolved": [],
+    })
+    model = codebase.decompose(g, repo=str(tmp_path))
+    core = model["clusters"][0]["seams"][0]["hunks"][0]
+    contract = {c["name"]: c for c in core["contract"]}
+    assert contract["onDelete"]["role"] == "link"          # the invoked callback is a link
+    assert contract["open"]["role"] == "environment"       # passive data
+    assert contract["onDelete"]["ranges"]
+
+
+@_requires_ts
+def test_consumer_feed_completes_the_prop_thread(tmp_path):
+    """A2: the contract member's thread is completed with WHO FEEDS it — the value a consumer
+    passes to that prop, parsed from the consumer's <Anchor …/> usage."""
+    last = _DELETE_DIALOG_TSX.rstrip().count("\n")
+    (tmp_path / "DeleteDialog.tsx").write_text(_DELETE_DIALOG_TSX, encoding="utf-8")
+    (tmp_path / "Layout.tsx").write_text(
+        "export function Layout() {\n"
+        "  return (\n"
+        "    <DeleteDialog eventTypeId={eventType.id} open={deleteOpen} onDelete={onDelete} />\n"
+        "  );\n}\n", encoding="utf-8")
+    g = graph_ir.from_resolved_graph({
+        "version": 1,
+        "anchor": {"id": "a", "symbol": "DeleteDialog", "file": "DeleteDialog.tsx", "range": [0, last]},
+        "language": "typescriptreact", "resolutionQuality": "FULL", "depth": 2, "complete": True,
+        "nodes": [
+            {"id": "a", "symbol": "DeleteDialog", "kind": "function", "file": "DeleteDialog.tsx", "range": [0, last], "enclosing": "", "complexity": last},
+            {"id": "c", "symbol": "Layout", "kind": "function", "file": "Layout.tsx", "range": [0, 4], "enclosing": "", "complexity": 4},
+        ],
+        "edges": [{"from": "c", "to": "a", "kind": "reference", "provenance": "RESOLVED_FULL"}],
+        "blindspots": [], "unresolved": [],
+    })
+    model = codebase.decompose(g, repo=str(tmp_path))
+    core = next(h for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"] if h["id"] == "a")
+    contract = {c["name"]: c for c in core["contract"]}
+    feeds = contract["onDelete"].get("feeds", [])
+    assert feeds and feeds[0]["value"] == "onDelete" and feeds[0]["from"] == "Layout.tsx"
+    assert contract["eventTypeId"]["feeds"][0]["value"] == "eventType.id"
+    # A3: the feed carries the value's precise position so the extension can resolve its def.
+    assert feeds[0]["valLine"] >= 0 and feeds[0]["valCol"] >= 0
+
+
 def test_subcores_inert_without_repo():
     # no repo to read source → no proposed partition (contract stays lean; B degrades to A).
     g = graph_ir.from_resolved_graph(json.loads(FIXTURE.read_text(encoding="utf-8")))

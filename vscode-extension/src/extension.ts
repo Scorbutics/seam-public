@@ -12,7 +12,11 @@ interface ExternalRef { symbol: string; source: string; }
 // regions); the grouping is a *proposal* — rendered with a deliberately distinct affordance so
 // it never reads as verified structure (R-B3).
 interface SubCore { id: string; label: string; ranges: [number, number][]; reads: string[]; proposed: boolean; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; }
+// Model A: a contract member (param/prop) of a core. An invoked callback is role "link"
+// (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
+interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
+interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -169,6 +173,9 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.open", openHunk),
     vscode.commands.registerCommand("seam.goToDef", goToDef),
     vscode.commands.registerCommand("seam.openSubcore", openSubcore),
+    vscode.commands.registerCommand("seam.openContract", openContract),
+    vscode.commands.registerCommand("seam.openFeed", openFeed),
+    vscode.commands.registerCommand("seam.openLocation", openLocation),
     vscode.commands.registerCommand("seam.focusSeamById", focusSeamById),
     treeView.onDidChangeSelection(onSelect),
     vscode.window.onDidChangeVisibleTextEditors(applyToVisible),
@@ -219,7 +226,8 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
   // resolved targets, the blind-spot overlay, and proposed sub-cores don't drive seam focus
   // (a sub-core paints its own overlay via its command instead).
   if (sel && (sel.kind === "extTarget" || sel.kind === "shadows" || sel.kind === "blindspot"
-              || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore")) return;
+              || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore"
+              || sel.kind === "contract" || sel.kind === "feed" || sel.kind === "feedDef")) return;
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
@@ -780,6 +788,32 @@ function clearProposed() {
   for (const ed of vscode.window.visibleTextEditors) ed.setDecorations(decoProposed, []);
 }
 
+// Model A: reveal a contract member's internal use (RESOLVED — a real reference, so a plain
+// reveal/select, no "proposed" overlay).
+async function openContract(hunk: SeamHunk, member: ContractMember) {
+  if (!repoRoot || !member.ranges.length) return;
+  const uri = vscode.Uri.file(path.join(repoRoot, hunk.file));
+  const editor = await vscode.window.showTextDocument(uri, { preview: true });
+  const [a, b] = member.ranges[0];
+  const range = new vscode.Range(a, 0, b, 0);
+  editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  editor.selection = new vscode.Selection(range.start, range.start);
+}
+
+// A2: jump to a consumer's feed site (where it passes a value to the anchor's prop).
+async function openFeed(feed: ContractFeed) {
+  if (!repoRoot) return;
+  await openLocation(vscode.Uri.file(path.join(repoRoot, feed.from)), feed.line);
+}
+
+// Reveal a (uri, line) — used by A3's resolved feed definition.
+async function openLocation(uri: vscode.Uri, line: number) {
+  const editor = await vscode.window.showTextDocument(uri, { preview: true });
+  const range = new vscode.Range(line, 0, line, 0);
+  editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
+  editor.selection = new vscode.Selection(range.start, range.start);
+}
+
 // --- Layer 2: resolve an external coupling to WHERE it lives + its signature -----
 // An unwired link wires to code OUTSIDE the diff (e.g. ToastProvider from @coss/ui).
 // We don't BUILD codebase-awareness — we BORROW the editor's language services. A
@@ -874,7 +908,14 @@ type Node =
   | { kind: "candidate"; cand: SuggestedCandidate }
   | { kind: "unknown"; ur: Unresolved }
   // Model B: a proposed behavioural sub-core under a core hunk.
-  | { kind: "subcore"; hunk: SeamHunk; sub: SubCore };
+  | { kind: "subcore"; hunk: SeamHunk; sub: SubCore }
+  // Model A: a contract member (prop/param) under a core hunk, and (A2) its feeders.
+  | { kind: "contract"; hunk: SeamHunk; member: ContractMember }
+  | { kind: "feed"; feed: ContractFeed; prop: string }
+  | { kind: "feedDef"; uri: vscode.Uri; line: number; value: string };   // A3: where a fed value is defined
+
+// A3: lazy cache of "where does this fed value come from" (one more hop up the chain).
+const feedDefCache = new Map<string, Promise<{ uri: vscode.Uri; line: number }[]>>();
 
 // Find a rendered hunk by node id (for navigating to a blind spot's location).
 function findHunkById(id: string): SeamHunk | undefined {
@@ -910,14 +951,40 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     }
     if (el.kind === "blindspot")
       return el.bs.candidates.map((cand) => ({ kind: "candidate", cand } as Node));
+    if (el.kind === "contract")
+      return (el.member.feeds ?? []).map((feed) => ({ kind: "feed", feed, prop: el.member.name } as Node));
+    if (el.kind === "feed") {
+      const f = el.feed;
+      if (f.valLine === undefined || f.valCol === undefined) return [];
+      const uri = vscode.Uri.file(path.join(repoRoot, f.from));
+      const key = `${uri.fsPath}#${f.valLine}:${f.valCol}`;
+      let p = feedDefCache.get(key);
+      if (!p) {
+        p = (async () => {
+          try {
+            const defs = await vscode.commands.executeCommand<(vscode.Location | vscode.LocationLink)[]>(
+              "vscode.executeDefinitionProvider", uri, new vscode.Position(f.valLine!, f.valCol!));
+            return (defs ?? []).map((d) => "targetUri" in d
+              ? { uri: d.targetUri, line: d.targetRange.start.line }
+              : { uri: d.uri, line: d.range.start.line });
+          } catch { return []; }
+        })();
+        feedDefCache.set(key, p);
+      }
+      return p.then((defs) => defs.slice(0, 1).map((d) =>
+        ({ kind: "feedDef", uri: d.uri, line: d.line, value: f.value } as Node)));
+    }
     if (el.kind === "cluster")
       return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     if (el.kind === "seam")
       return el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
     if (el.kind === "hunk") {
-      // Model B: a core's proposed behavioural sub-cores expand under it.
-      if (el.hunk.subcores?.length)
-        return el.hunk.subcores.map((sub) => ({ kind: "subcore", hunk: el.hunk, sub } as Node));
+      // A core expands to its drill-downs: the CONTRACT members (Model A) and any proposed
+      // behavioural sub-cores (Model B) — both are finer altitudes of the one core.
+      const drill: Node[] = [];
+      for (const member of el.hunk.contract ?? []) drill.push({ kind: "contract", hunk: el.hunk, member });
+      for (const sub of el.hunk.subcores ?? []) drill.push({ kind: "subcore", hunk: el.hunk, sub });
+      if (drill.length) return drill;
       // Lazy Layer 2: resolve the hunk's external couplings only when it's expanded.
       const refs = el.hunk.externalRefs ?? [];
       if (!refs.length) return [];
@@ -986,6 +1053,40 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       if (h) it.command = { command: "seam.open", title: "Open", arguments: [h] };
       return it;
     }
+    if (el.kind === "feed") {
+      const f = el.feed;
+      const it = new vscode.TreeItem(`← ${f.value}`,
+        f.valLine !== undefined ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      it.description = `${f.from.split("/").pop()}:${f.line + 1}`;
+      it.iconPath = new vscode.ThemeIcon("arrow-small-left");
+      it.tooltip = `${f.from}:${f.line + 1} feeds \`${f.value}\` to prop \`${el.prop}\`` +
+        (f.valLine !== undefined ? "\nExpand to resolve where this value is defined." : "");
+      it.command = { command: "seam.openFeed", title: "Reveal feeder", arguments: [f] };
+      return it;
+    }
+    if (el.kind === "feedDef") {
+      const it = new vscode.TreeItem(`→ ${el.value}`, vscode.TreeItemCollapsibleState.None);
+      it.description = `defined: ${path.basename(el.uri.fsPath)}:${el.line + 1}`;
+      it.iconPath = new vscode.ThemeIcon("symbol-reference");
+      it.tooltip = `\`${el.value}\` is defined at ${el.uri.fsPath}:${el.line + 1}`;
+      it.command = { command: "seam.openLocation", title: "Go to definition", arguments: [el.uri, el.line] };
+      return it;
+    }
+    if (el.kind === "contract") {
+      const m = el.member;
+      const lines = m.ranges.map(([a, b]) => a === b ? `${a + 1}` : `${a + 1}-${b + 1}`).join(", ");
+      const nf = m.feeds?.length ?? 0;
+      const it = new vscode.TreeItem(m.name,
+        nf ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
+      it.description = `${m.invoked ? "link" : "data"} · used ${lines}${nf ? ` · ${nf} feeder${nf > 1 ? "s" : ""}` : ""}`;
+      it.iconPath = new vscode.ThemeIcon(m.role === "link" ? "link" : "symbol-field",
+        new vscode.ThemeColor(m.role === "link" ? "charts.blue" : "charts.foreground"));
+      it.tooltip = m.invoked
+        ? `Contract LINK: \`${m.name}\` is a callback this anchor INVOKES — behaviour threaded in across the boundary.`
+        : `Contract data: \`${m.name}\` is read-only (passive prop) — environment.`;
+      it.command = { command: "seam.openContract", title: "Reveal contract use", arguments: [el.hunk, m] };
+      return it;
+    }
     if (el.kind === "subcore") {
       const s = el.sub;
       const lines = s.ranges.map(([a, b]) => a === b ? `${a + 1}` : `${a + 1}-${b + 1}`).join(", ");
@@ -1012,12 +1113,14 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const unc = isUncertain(h);
     const ext = extTag(h);
     const rw = rewireStr(h);
-    const expandable = (h.externalRefs && h.externalRefs.length) || (h.subcores && h.subcores.length);
+    const ncon = h.contract?.length ?? 0, nsub = h.subcores?.length ?? 0;
+    const expandable = (h.externalRefs && h.externalRefs.length) || nsub || ncon;
     const it = new vscode.TreeItem(
       `${h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
-    const nsub = h.subcores?.length ?? 0;
+    const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
     const desc = [rw ? `↻ ${rw}` : "", unc ? `uncertain ${confPct(h)}%` : "",
+                  ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
                   nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");
     if (desc) it.description = desc;
     it.tooltip =

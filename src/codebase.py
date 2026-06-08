@@ -285,17 +285,82 @@ def detect_subcores(g: Graph, repo: str) -> None:
     node.subcores = subcores
 
 
+def detect_contract(g: Graph, repo: str) -> None:
+    """Model A (plan §A): decompose the ANCHOR core's CONTRACT (its params/props) — the finer
+    altitude of the usage edge ("X uses me" → "X feeds me prop P, used at line L"), which is
+    where a single-core component finally carries information. A member INVOKED in the body is a
+    behavioural LINK (a threaded callback, e.g. `onDelete`); a read-only member is ENVIRONMENT
+    (passive data, e.g. `open`/`isDeleting`). RESOLVED — params + intra-scope uses are
+    deterministic. Skips a class anchor (its methods are the decomposition). The consumer-feed
+    (which arg the caller passes to each prop) is the best-effort layer A2, not built here."""
+    if not g.anchor or g.anchor not in g.nodes:
+        return
+    node = g.nodes[g.anchor]
+    if any(n.enclosing == node.label for n in g.nodes.values() if n.id != g.anchor):
+        return                                              # a class — already method-decomposed
+    lang = atoms_mod.lang_for(node.file)
+    if not lang:
+        return
+    try:
+        content = Path(os.path.join(repo, node.file)).read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return
+    members = atoms_mod.extract_contract(content, lang, node.start, node.end)
+    node.contract = [{"name": m.name, "role": "link" if m.invoked else "environment",
+                      "ranges": [list(r) for r in m.ranges], "invoked": m.invoked} for m in members]
+
+
+def detect_consumer_feeds(g: Graph, repo: str) -> None:
+    """Model A2: complete each contract member's thread with WHO FEEDS IT — at every consumer of
+    the anchor, the value passed to that prop (consumer → prop → internal use). The consumers are
+    already the resolved usage links; we parse each one's `<Anchor …/>` usage for the per-prop
+    bindings (RESOLVED — a real binding; the value's own definition is a further step). Mutates
+    the existing `node.contract` entries with a `feeds: [{from, value, line}]` list."""
+    if not g.anchor or g.anchor not in g.nodes:
+        return
+    node = g.nodes[g.anchor]
+    by_name = {c["name"]: c for c in node.contract}
+    if not by_name:
+        return
+    anchor_name = node.label
+    consumers = {e.src for e in g.edges if e.dst == g.anchor}    # who references the anchor
+    seen: set[str] = set()
+    for cid in consumers:
+        cn = g.nodes.get(cid)
+        if cn is None or not cn.file or cn.file in seen:
+            continue
+        seen.add(cn.file)
+        lang = atoms_mod.lang_for(cn.file)
+        if not lang:
+            continue
+        try:
+            content = Path(os.path.join(repo, cn.file)).read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            continue
+        for pname, binds in atoms_mod.extract_consumer_feeds(content, lang, anchor_name).items():
+            member = by_name.get(pname)
+            if member is None:
+                continue
+            for b in binds:
+                feed = {"from": cn.file, "value": b["value"], "line": b["line"]}
+                if "valLine" in b:                          # the value's position, for A3 def resolution
+                    feed["valLine"], feed["valCol"] = b["valLine"], b["valCol"]
+                member.setdefault("feeds", []).append(feed)
+
+
 def decompose(g: Graph, repo: str | None = None) -> dict:
     """Run the codebase layers in order (roles → clusters → seams → Layer-2 blind spots →
-    Model-B sub-cores → well-formedness) and return the SeamModel the extension renders. `g` is
-    mutated. When `repo` is given, scan it for statically-opaque couplings (dynamic imports) and
-    propose a behavioural sub-core decomposition of the anchor."""
+    Model-B sub-cores → Model-A contract → well-formedness) and return the SeamModel. `g` is
+    mutated. When `repo` is given, scan for statically-opaque couplings (dynamic imports), propose
+    a behavioural sub-core decomposition, and decompose the anchor's contract into prop-links."""
     assign_roles(g)
     assign_clusters(g)
     assign_seams(g)
     if repo:
         detect_dynamic_import_blindspots(g, repo)
         detect_subcores(g, repo)
+        detect_contract(g, repo)
+        detect_consumer_feeds(g, repo)          # A2: complete each prop thread with its feeders
     health = wellformedness(g)
     return emit_seams(g, health)
 
@@ -312,6 +377,8 @@ def _seam_hunk(n: graph_ir.Node, provenance: str) -> dict:
            "external": [], "externalRefs": [], "rewire": None}
     if n.subcores:
         out["subcores"] = n.subcores
+    if n.contract:
+        out["contract"] = n.contract
     return out
 
 
