@@ -3,7 +3,7 @@ import { execFile } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
-import { VSCodeSymbolResolver, buildResolvedGraph } from "./resolver";
+import { VSCodeSymbolResolver, anchorSymbolAt } from "./resolver";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
@@ -548,46 +548,43 @@ async function analyzeCodebase() {
     vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
     return;
   }
-  const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
   const anchorUri = editor.document.uri;
   const anchorPos = editor.selection.active;
 
+  // LSP's KEPT role: name the anchor under the cursor via single-file `documentSymbols` (reliable),
+  // then hand (symbol, file) to the deterministic import-scan front. Consumer DISCOVERY no longer
+  // goes through cross-project `references` (project-scoped / monorepo-blind — see resolver.ts).
+  const anchor = await anchorSymbolAt(new VSCodeSymbolResolver(), anchorUri, anchorPos, repoRoot);
+  if (!anchor) {
+    vscode.window.showErrorMessage(
+      "Seam: couldn't identify a symbol here. Put the cursor on a class/function/method name " +
+      "and wait for the language server to finish indexing.");
+    return;
+  }
+
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "Seam: analysing codebase from anchor…" },
+    { location: vscode.ProgressLocation.Notification, title: `Seam: scanning consumers of ${anchor.symbol}…` },
     async () => {
-      const graphPath = path.join(tool, `.seam-graph-${Date.now()}.json`);
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
-        const graph = await buildResolvedGraph(new VSCodeSymbolResolver(), anchorUri, anchorPos,
-                                               repoRoot, { maxDepth: depth });
-        if (!graph.nodes.length || !graph.anchor.id) {
-          vscode.window.showErrorMessage(
-            "Seam: couldn't resolve a symbol here. Put the cursor on a class/method name and wait " +
-            "for the language server to finish indexing (resolution: " + graph.resolutionQuality + ").");
-          return;
-        }
-        fs.writeFileSync(graphPath, JSON.stringify(graph), "utf-8");
-        // --repo lets Python run the Layer-2 scan (dynamic-import couplings the reference resolver
-        // can't see). --classifier (from seam.engine) lets the LLM REFINE the intent partition:
-        // 'det' = deterministic floor only; 'hybrid'/'llm' = LLM-refined intents (proposed).
+        // --scan: Python builds the ResolvedGraph by a deterministic named-import scan (monorepo-safe
+        // consumer discovery, offline) then decomposes it. --classifier (from seam.engine) lets the
+        // LLM REFINE the intent partition: 'det' = deterministic floor only; 'hybrid'/'llm' = refined.
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        await execFileP(py, [path.join(tool, "decompose.py"), "--graph", graphPath,
-                             "--repo", repoRoot, "--classifier", engine, "--emit-seams", out], tool);
+        await execFileP(py, [path.join(tool, "decompose.py"), "--scan",
+                             "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol,
+                             "--classifier", engine, "--emit-seams", out], tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
-        const range = `anchor ${graph.anchor.symbol}`;
+        const range = `anchor ${anchor.symbol}`;
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
-        const gaps = (graph.unresolved.length || graph.blindspots.length)
-          ? `  ·  ${graph.unresolved.length} unknown, ${graph.blindspots.length} blind spot(s)` : "";
         vscode.window.showInformationMessage(
-          `Seam (codebase): ${graph.anchor.symbol} — ${parsed.clusters.length} clusters, ${n} seams.  ` +
-          `resolution ${graph.resolutionQuality}${gaps}`);
+          `Seam (codebase): ${anchor.symbol} — ${parsed.clusters.length} cluster(s), ${n} seam(s).`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam codebase analysis failed: ${e instanceof Error ? e.message : e}`);
       } finally {
-        try { fs.unlinkSync(graphPath); } catch { /* ignore */ }
         try { fs.unlinkSync(out); } catch { /* ignore */ }
       }
     },

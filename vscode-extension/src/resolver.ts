@@ -355,6 +355,27 @@ export async function buildResolvedGraph(
   };
 }
 
+// Identify the ANCHOR symbol under the cursor using ONLY `documentSymbols` — a single-file query
+// that the language server answers reliably (unlike cross-project `references`, which is
+// project-scoped and monorepo-blind — memory: lsp-references-monorepo-blind). This is the LSP's
+// kept role once consumer DISCOVERY moves to the deterministic import scan: name the anchor, hand
+// (symbol, file) to the Python scan front. Returns null if no symbol resolves at the cursor.
+export async function anchorSymbolAt(
+  resolver: SymbolResolver, anchorUri: vscode.Uri, anchorPos: vscode.Position, repoRoot: string,
+): Promise<{ symbol: string; file: string; range: [number, number]; kind: string } | null> {
+  const docs = await resolver.documentSymbols(anchorUri);
+  if (docs.kind !== "resolved") return null;
+  const flat: FlatSym[] = [];
+  flatten(docs.value, flat);
+  const containing = flat.filter((s) => s.range.contains(anchorPos));
+  if (!containing.length) return null;
+  containing.sort((a, b) => (a.range.contains(b.range) ? -1 : 1));   // outermost first
+  const sym = containing.find((s) => CONTAINER_KINDS.has(s.kind)) ?? containing[0];
+  const file = path.relative(repoRoot, anchorUri.fsPath).split(path.sep).join("/");
+  return { symbol: sym.name, file, range: [sym.range.start.line, sym.range.end.line],
+           kind: SYMBOL_KIND_NAMES[sym.kind] ?? "symbol" };
+}
+
 function emptyGraph(uri: vscode.Uri, pos: vscode.Position, repoRoot: string,
                     quality: ResolutionQuality, depth: number,
                     unresolved: { node: string; query: string; reason: string }[]): ResolvedGraph {

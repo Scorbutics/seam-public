@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
                         help="CODEBASE MODE: decompose a ResolvedGraph JSON (the SymbolResolver "
                              "front's output — anchor + resolved nodes/edges) instead of a diff. "
                              "Use with --emit-seams. No LLM, no diff parsing.")
+    source.add_argument("--scan", action="store_true",
+                        help="CODEBASE MODE (import-scan discovery): build the ResolvedGraph by a "
+                             "deterministic named-import scan instead of LSP find-references "
+                             "(monorepo-safe, offline). Requires --repo, --anchor-file, --symbol.")
+    ap.add_argument("--anchor-file", help="--scan: repo-relative path of the anchor symbol's defining file")
+    ap.add_argument("--symbol", help="--scan: the anchor symbol name")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -78,16 +84,32 @@ def main(argv: list[str] | None = None) -> int:
                          "and dump <out>.prompt.txt / <out>.reply.txt")
     args = ap.parse_args(argv)
 
-    if args.graph:
-        # CODEBASE MODE — decompose the resolver's ResolvedGraph (plan §3). Entirely
-        # downstream of the SymbolResolver: the VSCode API never reaches here, only its
-        # JSON contract (constraint §4). No diff, no LLM.
+    if args.graph or args.scan:
+        # CODEBASE MODE — decompose a ResolvedGraph (plan §3). Entirely downstream of the FRONT:
+        # the VSCode API never reaches here, only the JSON contract (constraint §4). No diff, no LLM.
+        # Two fronts produce the same contract: --graph (the LSP SymbolResolver's emitted JSON) and
+        # --scan (the deterministic import-scan front — monorepo-safe consumer discovery, offline).
         from src import codebase, graph_ir
-        try:
-            data = json.loads(Path(args.graph).read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            print(f"error: could not load resolved graph: {exc}", file=sys.stderr)
-            return 2
+        if args.scan:
+            if not args.anchor_file:
+                print("error: --scan requires --anchor-file", file=sys.stderr)
+                return 2
+            from src import import_scan
+            try:
+                # --symbol → single-symbol anchor; omit → MODULE mode (all exports as members,
+                # partitioned by member co-occurrence — the §11.1 multi-member intent case).
+                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol)
+                        if args.symbol
+                        else import_scan.build_module_graph(args.repo, args.anchor_file))
+            except Exception as exc:  # noqa: BLE001 — surface any scan failure as a clean error
+                print(f"error: import scan failed: {exc}", file=sys.stderr)
+                return 2
+        else:
+            try:
+                data = json.loads(Path(args.graph).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                print(f"error: could not load resolved graph: {exc}", file=sys.stderr)
+                return 2
         g = graph_ir.from_resolved_graph(data)
         if not g.nodes:
             print("error: resolved graph has no nodes", file=sys.stderr)

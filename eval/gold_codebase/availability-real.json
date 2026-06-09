@@ -1,0 +1,15 @@
+{
+  "_note": "HUMAN reading (§11.1) of cal.com packages/lib/availability.ts, keyed by SYMBOL-name ids so it scores the REAL ResolvedGraph produced by `python -m src.import_scan --anchor-file packages/lib/availability.ts` (module mode). Unlike availability-module.json (hand-built graph + abbreviated ids = a harness regression fixture), this is a MANUAL real-data validation gold: the graph is generated from cal.com (not committed), the gold is the intent reading. Deliberate divergences from the deterministic floor (DDR bundled into seed; the MINUTES_* day-bound constants bundled into compute) exercise proposal-scoring — a 'reading to review', never gated.",
+  "roles": {
+    "mod": "core",
+    "DEFAULT_SCHEDULE": "core", "getAvailabilityFromSchedule": "core", "defaultDayRange": "core",
+    "getWorkingHours": "core", "MINUTES_DAY_START": "core", "MINUTES_DAY_END": "core", "MINUTES_IN_DAY": "core",
+    "availabilityAsString": "core"
+  },
+  "seams": {
+    "DEFAULT_SCHEDULE": "s_seed", "getAvailabilityFromSchedule": "s_seed", "defaultDayRange": "s_seed",
+    "getWorkingHours": "s_compute", "MINUTES_DAY_START": "s_compute", "MINUTES_DAY_END": "s_compute", "MINUTES_IN_DAY": "s_compute",
+    "availabilityAsString": "s_render"
+  },
+  "warnings": {}
+}
