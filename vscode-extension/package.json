@@ -17,6 +17,8 @@
       { "command": "seam.analyzeFromIntent", "title": "Seam: Find footprint by intent…", "icon": "$(search-fuzzy)" },
       { "command": "seam.expandNode", "title": "Seam: Expand → consumers (who uses this)", "icon": "$(arrow-up)" },
       { "command": "seam.expandDown", "title": "Seam: Expand → dependencies (what this uses)", "icon": "$(arrow-down)" },
+      { "command": "seam.crossBoundary", "title": "Seam: Cross boundary (suggested impl)", "icon": "$(git-compare)" },
+      { "command": "seam.findCallsites", "title": "Seam: Find method call-sites (DI / interface usage)", "icon": "$(references)" },
       { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
       { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
       { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
@@ -49,7 +51,9 @@
       ],
       "view/item/context": [
         { "command": "seam.expandNode", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@1" },
-        { "command": "seam.expandDown", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@2" }
+        { "command": "seam.expandDown", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@2" },
+        { "command": "seam.findCallsites", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@3" },
+        { "command": "seam.crossBoundary", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@4" }
       ]
     },
     "keybindings": [

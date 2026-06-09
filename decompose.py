@@ -66,6 +66,13 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--down", action="store_true",
                     help="--expand-graph: expand DOWNWARD to the node's dependencies (what it uses: "
                          "service→repository→prisma) instead of upward to its consumers (P3).")
+    ap.add_argument("--callsites", action="store_true",
+                    help="--expand-graph: expand a CLASS/INTERFACE to every repo `x.method(…)` "
+                         "CALL-SITE of its methods — the DI/factory-mediated consumers the import "
+                         "scan can't see (RESOLVED_PARTIAL; distinctive method names are safe).")
+    ap.add_argument("--cross-from", metavar="TEXT",
+                    help="--expand-graph: this expansion CROSSED a boundary via symbol-match (P4) — "
+                         "record it as a SUGGESTED-crossing blind spot (an assumption, not resolved).")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -124,10 +131,17 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 base = json.loads(Path(args.expand_graph).read_text(encoding="utf-8"))
                 # UP (default) = the node's consumers; DOWN = its dependencies (P3).
-                add = (import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
-                       if args.down
-                       else import_scan.build_resolved_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line))
+                if args.callsites:
+                    add = import_scan.build_callsite_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
+                elif args.down:
+                    add = import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
+                else:
+                    add = import_scan.build_resolved_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line)
                 data = expand.merge_resolved(base, add, expand_anchor=add.get("anchor", {}).get("id"))
+                if args.cross_from:    # P4: this expansion crossed a boundary by assumption — record it
+                    data.setdefault("blindspots", []).append(
+                        {"node": add.get("anchor", {}).get("symbol", ""), "mechanism": "suggested-crossing",
+                         "evidence": args.cross_from, "candidates": []})
             except Exception as exc:  # noqa: BLE001
                 print(f"error: expand failed: {exc}", file=sys.stderr)
                 return 2

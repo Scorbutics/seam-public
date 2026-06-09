@@ -218,6 +218,27 @@ def _call_lines(ctx: _Ctx, local: str) -> list[int]:
     return lines
 
 
+def _ref_lines(ctx: _Ctx, local: str) -> list[int]:
+    """0-based lines where `local` appears as an identifier — ANY reference, not just a call (a TYPE
+    position like `implements IRoleManager`, an annotation, a `new X()`). Lets a consumer that USES a
+    symbol without calling it still land on the real usage line / enclosing symbol, not file:0."""
+    return sorted({ctx.span(i)[0] for i in ctx.collect(ctx.root, lambda k: "identifier" in k)
+                   if ctx.text(i) == local})
+
+
+def _usage_lines(ctx: _Ctx, units: list, local: str) -> list[int]:
+    """Where to anchor a consumer of `local`: its call-sites; else references INSIDE a named unit
+    (so the node gets the real class/function); else the remaining references (a module-level
+    `new X()`) MINUS the import line, so navigation still lands on a real usage rather than file:0.
+    Empty only if the symbol is imported but never referenced."""
+    calls = _call_lines(ctx, local)
+    if calls:
+        return calls
+    refs = _ref_lines(ctx, local)
+    inside = [ln for ln in refs if _enclosing(units, ln)]
+    return inside or refs[1:]                         # refs[0] is the import; the rest are usages
+
+
 def _read(repo: str, rel: str) -> tuple[str, str] | None:
     lang = lang_for(rel)
     if not lang:
@@ -408,7 +429,7 @@ def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
                 continue
             units = _named_units(cctx)
             for tid, local in hits.items():
-                line = next(iter(_call_lines(cctx, local)), 0)
+                line = next(iter(_usage_lines(cctx, units, local)), 0)
                 enc = _enclosing(units, line)
                 if enc:
                     name, kind, start, end = enc
@@ -480,7 +501,7 @@ def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int
         except Exception:
             continue
         units = _named_units(cctx)
-        lines = _call_lines(cctx, con.local) or [0]
+        lines = _usage_lines(cctx, units, con.local) or [0]
         for ln in lines:
             enc = _enclosing(units, ln)
             if enc:
@@ -621,7 +642,7 @@ def build_module_graph(repo: str, anchor_file: str) -> dict:
             try:
                 cctx = _Ctx(rd[0], rd[1])
                 units = _named_units(cctx)
-                line = next((ln for local in used.values() for ln in _call_lines(cctx, local)), None)
+                line = next((ln for local in used.values() for ln in _usage_lines(cctx, units, local)), None)
                 enc = _enclosing(units, line) if line is not None else None
                 if enc:
                     sym, kind, rng = enc[0], enc[1], [enc[2], enc[3]]
@@ -706,7 +727,9 @@ def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: in
                      if m in method_names}
             prov = "RESOLVED_PARTIAL"
         units = _named_units(cctx)
-        line = min(usage.values()) if usage else 0
+        # a traced method call gives the line; otherwise anchor on where the CLASS itself is
+        # referenced (`new X()`, a type position) so an untraced consumer still lands on a real line.
+        line = min(usage.values()) if usage else next(iter(_usage_lines(cctx, units, con.local)), 0)
         enc = _enclosing(units, line)
         sym, kind, start, end = enc if enc else (os.path.splitext(os.path.basename(con.file))[0], "module", line, line)
         pending.append((con.file, sym, kind, start, end, usage, prov))
@@ -771,6 +794,99 @@ def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: in
         "blindspots": blindspots,
         "unresolved": unresolved,
     }
+
+
+def _type_methods(ctx: _Ctx, name: str) -> list[tuple[str, int, int]]:
+    """Behavioural method names of a CLASS or an INTERFACE named `name` (so an abstraction's methods
+    are known even when only the interface is in hand)."""
+    cm = _class_methods(ctx, name)
+    if cm:
+        return cm
+    iface = next((c for c in ctx.collect(ctx.root, lambda k: k == "interface_declaration")
+                  if _name_of(ctx, c) == name), None)
+    if iface is None:
+        return []
+    out: list[tuple[str, int, int]] = []
+    for m in ctx.collect(iface, lambda k: k in ("method_signature", "property_signature")):
+        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() == "property_identifier"), None)
+        if nm:
+            s, e = ctx.span(m)
+            out.append((nm, s, e))
+    seen: set[str] = set()
+    return [x for x in out if not (x[0] in seen or seen.add(x[0]))]
+
+
+def build_callsite_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
+    """CALL-SITE discovery: the anchor (a class/interface) + every place a consumer CALLS one of its
+    methods — `x.method(…)` ANYWHERE in the repo, regardless of how `x` was obtained (DI, factory,
+    interface typing). This is what makes abstraction usage visible when the concrete class is never
+    imported by name. Edges are RESOLVED_PARTIAL: a `.method(` match is a strong-but-not-certain
+    signal (a different type with the same method name could collide — distinctive names are safe,
+    common ones noisy). Anchor on (file, line) so it merges/dedups with an existing node."""
+    repo = os.path.expanduser(repo)
+    ar = _read(repo, anchor_file)
+    if not ar or not available():
+        raise RuntimeError(f"cannot parse anchor {anchor_file}")
+    actx = _Ctx(ar[0], ar[1])
+    arange, akind = [0, 0], "symbol"
+    defu = next((u for u in _named_units(actx) if u[0] == symbol), None)
+    if defu:
+        akind, arange = defu[1], [defu[2], defu[3]]
+    elif any(_name_of(actx, c) == symbol for c in actx.collect(actx.root, lambda k: k == "interface_declaration")):
+        akind = "interface"
+        ifc = next(c for c in actx.collect(actx.root, lambda k: k == "interface_declaration") if _name_of(actx, c) == symbol)
+        arange = list(actx.span(ifc))
+    if anchor_line is not None:
+        arange = [anchor_line, max(anchor_line, arange[1])]
+    methods = {m[0] for m in _type_methods(actx, symbol)}
+
+    nodes = [{"id": "n1", "symbol": symbol, "kind": akind, "file": anchor_file, "range": arange,
+              "enclosing": "", "complexity": max(1, arange[1] - arange[0] + 1)}]
+    edges: list[dict] = []
+    if not methods:
+        return {"version": 1, "anchor": {"id": "n1", "symbol": symbol, "file": anchor_file, "range": arange},
+                "language": (lang_for(anchor_file) or ""), "resolutionQuality": "FULL", "depth": 1,
+                "complete": True, "nodes": nodes, "edges": edges, "blindspots": [], "unresolved": []}
+
+    anchor_abs = os.path.normpath(os.path.join(repo, anchor_file))
+    counter = 0
+    seen: dict[str, str] = {}
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            if not fn.endswith(_EXTS):
+                continue
+            path = os.path.join(root, fn)
+            if os.path.normpath(path) == anchor_abs:
+                continue
+            try:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if not any(m in text for m in methods):
+                continue
+            rel = os.path.relpath(path, repo)
+            try:
+                cctx = _Ctx(text, lang_for(rel))
+            except Exception:
+                continue
+            units = _named_units(cctx)
+            for method, line, _col in _class_call_sites(cctx, methods):
+                enc = _enclosing(units, line)
+                sym, kind, start, end = enc if enc else (os.path.splitext(fn)[0], "module", line, line)
+                key = f"{rel}#{sym}#{start}"
+                if key in seen:
+                    continue
+                counter += 1
+                cid = f"c{counter}"
+                seen[key] = cid
+                nodes.append({"id": cid, "symbol": sym, "kind": _kind_for(rel, kind), "file": rel,
+                              "range": [start, end], "enclosing": "", "complexity": max(1, end - start + 1)})
+                edges.append({"from": cid, "to": "n1", "kind": "call", "provenance": "RESOLVED_PARTIAL"})
+
+    return {"version": 1, "anchor": {"id": "n1", "symbol": symbol, "file": anchor_file, "range": arange},
+            "language": (lang_for(anchor_file) or ""), "resolutionQuality": "FULL", "depth": 1,
+            "complete": True, "nodes": nodes, "edges": edges, "blindspots": [], "unresolved": []}
 
 
 def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:

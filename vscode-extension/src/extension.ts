@@ -183,6 +183,8 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.analyzeFromIntent", analyzeFromIntent),
     vscode.commands.registerCommand("seam.expandNode", expandNode),
     vscode.commands.registerCommand("seam.expandDown", expandDown),
+    vscode.commands.registerCommand("seam.crossBoundary", crossBoundary),
+    vscode.commands.registerCommand("seam.findCallsites", findCallsites),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -707,7 +709,7 @@ async function analyzeModule() {
 // intent that direction. UP (default) = its consumers; DOWN = its dependencies (service→repo→db).
 // Re-applies the persisted question to re-focus. Invoked from the tree's context menu (it receives
 // the hunk Node).
-async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean) {
+async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, crossNote?: string, callsites?: boolean) {
   const h = node?.hunk;
   if (!h) return;
   if (!sessionGraph || !fs.existsSync(sessionGraph)) {
@@ -723,7 +725,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean) 
   if (!env) return;
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
   const before = nodeCount(model);
-  const dir = down ? "dependencies of" : "consumers of";
+  const dir = callsites ? "method call-sites of" : down ? "dependencies of" : "consumers of";
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…` },
     async () => {
@@ -735,6 +737,8 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean) 
                       "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
                       "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
         if (down) args.push("--down");
+        if (callsites) args.push("--callsites");
+        if (crossNote) args.push("--cross-from", crossNote);
         if (sessionIntent) args.push("--intent", sessionIntent);
         await execFileP(env.py, args, env.tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
@@ -768,6 +772,43 @@ function nodeCount(m?: SeamModel): number {
 
 const expandNode = (node?: { hunk?: SeamHunk }) => expandFrom(node, false);   // UP: consumers
 const expandDown = (node?: { hunk?: SeamHunk }) => expandFrom(node, true);    // DOWN: dependencies
+const findCallsites = (node?: { hunk?: SeamHunk }) =>                         // method CALL-SITES (DI usage)
+  expandFrom(node, false, undefined, true);
+
+// P4: CROSS a layer boundary by SUGGESTED symbol-match. When resolved expansion stops at an
+// abstraction/DI symbol (an interface, a DI token), find related in-repo impls and let the user
+// pick one to continue through — recorded as an ASSUMPTION (a suggested-crossing blind spot), then
+// the picked target's footprint is RESOLVED.
+async function crossBoundary(node?: { hunk?: SeamHunk }) {
+  const h = node?.hunk;
+  if (!h || !h.label) return;
+  const env = codebaseEnv();
+  if (!env) return;
+  const symbol = h.label;
+  let targets: Array<{ name: string; file: string; kind: string }> = [];
+  const out = path.join(env.tool, `.seam-cross-${Date.now()}.json`);
+  try {
+    await execFileP(env.py, ["-m", "src.anchor_rank", "--crossings", "--intent", symbol,
+                             "--repo", repoRoot, "--exclude-file", h.file, "--out", out], env.tool);
+    targets = JSON.parse(fs.readFileSync(out, "utf-8"));
+  } catch (e) {
+    vscode.window.showErrorMessage(`Seam: crossing search failed: ${e instanceof Error ? e.message : e}`);
+    return;
+  } finally {
+    try { fs.unlinkSync(out); } catch { /* ignore */ }
+  }
+  if (!targets.length) {
+    vscode.window.showInformationMessage(`Seam: no in-repo crossing found for ${symbol} (a terminal/external boundary).`);
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(
+    targets.map((t) => ({ label: t.name, description: `${t.kind} · suggested crossing`, detail: t.file, t })),
+    { title: `Cross from ${symbol} to… (a symbol-match assumption)`, matchOnDetail: true, ignoreFocusOut: true },
+  );
+  if (!pick) return;
+  const synthetic = { hunk: { id: "", file: pick.t.file, label: pick.t.name, start: 0, end: 0, role: "" } as SeamHunk };
+  await expandFrom(synthetic, false, `crossed from ${symbol} → ${pick.t.name} (symbol-match assumption, unverified)`);
+}
 
 // FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → Python ranks them →
 // the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's

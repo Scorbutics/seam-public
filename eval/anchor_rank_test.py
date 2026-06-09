@@ -89,3 +89,12 @@ def test_find_anchor_candidates_keyword_filtered_no_plain_const():
     assert "makeWidget" in names           # `export function makeWidget` — a real anchor decl
     assert "WIDGET_KIND" not in names      # a plain (non-arrow) const is not an anchor decl
     assert "PaymentService" not in names   # no 'widget' stem → not discovered
+
+
+def test_suggest_crossings_interface_to_impl():
+    # P4: a boundary at the interface `IPaymentGateway` → its in-repo implementations (symbol match)
+    cr = anchor_rank.suggest_crossings(REPO, "IPaymentGateway")
+    names = {c["name"] for c in cr}
+    assert "PaymentGateway" in names and "StripePaymentGateway" in names
+    assert "IPaymentGateway" not in names                 # never itself
+    assert all(c["kind"] == "class" for c in cr)          # behavioural impls

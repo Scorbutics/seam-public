@@ -141,17 +141,53 @@ def find_anchor_candidates(repo: str, keywords, *, limit: int = 300) -> list[dic
     return out
 
 
+def suggest_crossings(repo: str, symbol: str, *, exclude_file: str | None = None, limit: int = 6) -> list[dict]:
+    """SUGGESTED boundary crossings (P4): when resolved expansion stops at an abstraction / DI / ORM
+    boundary, find in-repo behavioural defs RELATED to `symbol` — an interface's implementation, a
+    similarly-named class — as candidate ways to CONTINUE across the layer. These are ASSUMPTIONS
+    (symbol match, not resolution), so the caller marks them SUGGESTED. Reuses the deterministic
+    anchor scan over the symbol's OWN tokens, so `IRoleRepository` → `RoleRepository`, dropping the
+    symbol itself and (usually) its declaring file."""
+    cands = find_anchor_candidates(repo, _tokens(symbol))
+    out: list[dict] = []
+    for c in rank_anchors(symbol, cands):
+        if c["name"] == symbol:
+            continue                                     # not itself
+        if exclude_file and c["file"].replace("\\", "/") == exclude_file.replace("\\", "/"):
+            continue
+        out.append({"name": c["name"], "file": c["file"], "kind": c["kind"]})
+        if len(out) >= limit:
+            break
+    return out
+
+
 def main(argv=None) -> int:
     import argparse
     import json
     import sys
     ap = argparse.ArgumentParser(description="Find + rank candidate anchors against a typed intent.")
-    ap.add_argument("--intent", required=True)
+    ap.add_argument("--intent", required=True, help="the typed intent, OR (with --crossings) a symbol")
     ap.add_argument("--repo", help="scan this repo for candidate anchors (deterministic; preferred)")
     ap.add_argument("--candidates", help="JSON file of pre-gathered candidates [{name,file,kind}] "
                                          "(used if --repo is omitted)")
+    ap.add_argument("--crossings", action="store_true",
+                    help="P4: emit SUGGESTED boundary CROSSINGS for --intent (a symbol) instead of "
+                         "intent ranking (interface→impl etc.); needs --repo")
+    ap.add_argument("--exclude-file", help="--crossings: the symbol's own file to exclude")
     ap.add_argument("--out", help="write ranked JSON here (else stdout)")
     a = ap.parse_args(argv)
+    if a.crossings:
+        if not a.repo:
+            print("error: --crossings needs --repo", file=sys.stderr)
+            return 2
+        ranked = suggest_crossings(a.repo, a.intent, exclude_file=a.exclude_file)
+        text = json.dumps(ranked, indent=2)
+        if a.out:
+            open(a.out, "w", encoding="utf-8").write(text)
+            print(f"Crossings: {a.out}  ({len(ranked)} suggestion(s))")
+        else:
+            print(text)
+        return 0
     if a.repo:
         cands = find_anchor_candidates(a.repo, sorted(_content_words(a.intent)))
     elif a.candidates:

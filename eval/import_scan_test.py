@@ -99,6 +99,18 @@ def test_class_mode_method_attribution():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_callsite_graph_finds_method_callsites_regardless_of_import():
+    # repo-wide `.method(` discovery: charge/refund/validate are called in checkout.ts/admin.ts/di.ts
+    g = import_scan.build_callsite_graph(REPO, CLS_ANCHOR, CLS)
+    files = {n["file"].replace("\\", "/") for n in g["nodes"] if n["id"] != "n1"}
+    assert "apps/web/checkout.ts" in files    # ps.charge() / ps.refund()
+    assert "apps/web/admin.ts" in files        # ps.validate()
+    assert "apps/web/di.ts" in files           # this.payments.charge()
+    method_edges = [e for e in g["edges"] if e["to"] == "n1"]
+    assert method_edges and all(e["provenance"] == "RESOLVED_PARTIAL" for e in method_edges)
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_dependency_graph_downward_finds_behavioural_deps():
     # DOWNWARD (P3): checkout.ts imports the PaymentService CLASS → a dependency core in the chain
     g = import_scan.build_dependency_graph(REPO, "apps/web/checkout.ts", "checkout")
