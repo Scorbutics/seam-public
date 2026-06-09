@@ -170,6 +170,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.review", () => runReview("HEAD")),
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
+    vscode.commands.registerCommand("seam.analyzeModule", analyzeModule),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -523,65 +524,50 @@ async function runReview(range: string) {
   );
 }
 
-// CODEBASE MODE (plan §3): decompose from an ANCHOR (the class/method under the cursor)
-// instead of a diff. The VSCode SymbolResolver builds an anchor-bounded ResolvedGraph
-// (Layer 1), Python decomposes it (`decompose.py --graph`, layers 3-6), and the SAME
-// native renderer paints the result. The resolver output is the abstraction boundary —
-// the engine never sees `vscode` (constraint §4).
-async function analyzeCodebase() {
-  const editor = vscode.window.activeTextEditor;
-  if (!editor) {
-    vscode.window.showErrorMessage("Seam: open a file and put the cursor on a class or method first.");
-    return;
-  }
+// CODEBASE MODE (plan §3): decompose from an ANCHOR (a symbol, or a whole module) instead of a
+// diff. Consumer discovery is the deterministic import scan (`decompose.py --scan` — monorepo-safe,
+// offline; LSP find-references is project-scoped/blind, see resolver.ts). The SAME native renderer
+// paints the SeamModel; the engine never sees `vscode` (constraint §4).
+
+// Shared env guard: workspace folder + decompose.py + python. Sets repoRoot; null (after an error
+// message) if anything is missing.
+function codebaseEnv(): { tool: string; py: string } | null {
   const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
+  if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return null; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
   if (!fs.existsSync(path.join(tool, "decompose.py"))) {
     vscode.window.showErrorMessage(
       `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" (Settings → Seam).`);
-    return;
+    return null;
   }
   const py = pythonPath(tool);
   if (!fs.existsSync(py)) {
     vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
-    return;
+    return null;
   }
-  const anchorUri = editor.document.uri;
-  const anchorPos = editor.selection.active;
+  return { tool, py };
+}
 
-  // LSP's KEPT role: name the anchor under the cursor via single-file `documentSymbols` (reliable),
-  // then hand (symbol, file) to the deterministic import-scan front. Consumer DISCOVERY no longer
-  // goes through cross-project `references` (project-scoped / monorepo-blind — see resolver.ts).
-  const anchor = await anchorSymbolAt(new VSCodeSymbolResolver(), anchorUri, anchorPos, repoRoot);
-  if (!anchor) {
-    vscode.window.showErrorMessage(
-      "Seam: couldn't identify a symbol here. Put the cursor on a class/function/method name " +
-      "and wait for the language server to finish indexing.");
-    return;
-  }
-
+// Run `decompose.py --scan` with the given anchor args (single-symbol or whole-module) and paint
+// the result. --classifier (seam.engine) decides the partition: 'det' = floor only; 'hybrid'/'llm'
+// = LLM-refined intent labels (proposed).
+async function runScan(tool: string, py: string, scanArgs: string[], title: string, range: string) {
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Seam: scanning consumers of ${anchor.symbol}…` },
+    { location: vscode.ProgressLocation.Notification, title },
     async () => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
-        // --scan: Python builds the ResolvedGraph by a deterministic named-import scan (monorepo-safe
-        // consumer discovery, offline) then decomposes it. --classifier (from seam.engine) lets the
-        // LLM REFINE the intent partition: 'det' = deterministic floor only; 'hybrid'/'llm' = refined.
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        await execFileP(py, [path.join(tool, "decompose.py"), "--scan",
-                             "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol,
-                             "--classifier", engine, "--emit-seams", out], tool);
+        await execFileP(py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
+                             ...scanArgs, "--classifier", engine, "--emit-seams", out], tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
-        const range = `anchor ${anchor.symbol}`;
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
-          `Seam (codebase): ${anchor.symbol} — ${parsed.clusters.length} cluster(s), ${n} seam(s).`);
+          `Seam (codebase): ${range} — ${parsed.clusters.length} cluster(s), ${n} seam(s).`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam codebase analysis failed: ${e instanceof Error ? e.message : e}`);
       } finally {
@@ -589,6 +575,41 @@ async function analyzeCodebase() {
       }
     },
   );
+}
+
+// SINGLE-SYMBOL anchor: the symbol under the cursor (LSP `documentSymbols` names it — single-file,
+// reliable), then scan its consumers.
+async function analyzeCodebase() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) {
+    vscode.window.showErrorMessage("Seam: open a file and put the cursor on a class or method first.");
+    return;
+  }
+  const env = codebaseEnv();
+  if (!env) return;
+  const anchor = await anchorSymbolAt(new VSCodeSymbolResolver(), editor.document.uri, editor.selection.active, repoRoot);
+  if (!anchor) {
+    vscode.window.showErrorMessage(
+      "Seam: couldn't identify a symbol here. Put the cursor on a class/function/method name " +
+      "and wait for the language server to finish indexing.");
+    return;
+  }
+  await runScan(env.tool, env.py, ["--anchor-file", anchor.file, "--symbol", anchor.symbol],
+                `Seam: scanning consumers of ${anchor.symbol}…`, `anchor ${anchor.symbol}`);
+}
+
+// MODULE anchor: the WHOLE active file — every export is a carrier, partitioned by member
+// co-occurrence (the §11.1 multi-member intent view). No symbol/cursor needed; omitting --symbol
+// puts decompose.py --scan into module mode.
+async function analyzeModule() {
+  const editor = vscode.window.activeTextEditor;
+  if (!editor) { vscode.window.showErrorMessage("Seam: open the module file you want to analyse first."); return; }
+  const env = codebaseEnv();
+  if (!env) return;
+  const file = path.relative(repoRoot, editor.document.uri.fsPath).split(path.sep).join("/");
+  const base = path.basename(file);
+  await runScan(env.tool, env.py, ["--anchor-file", file],
+                `Seam: scanning module ${base}…`, `module ${base}`);
 }
 
 // Repo-relative path IF this document is the MODIFIED (new) side we should decorate:
@@ -767,14 +788,24 @@ class SeamLensProvider implements vscode.CodeLensProvider {
 async function openHunk(hunk: SeamHunk) {
   if (!repoRoot) return;
   const uri = vscode.Uri.file(path.join(repoRoot, hunk.file));
-  try {
-    await vscode.commands.executeCommand("git.openChange", uri); // native diff editor
-  } catch {
-    await vscode.window.showTextDocument(uri, { preview: true });
+  // Codebase mode opens a plain source file (no git change) and its line ranges are 0-based
+  // (resolver/tree-sitter spans). Diff mode opens the native diff editor and its hunk lines are
+  // 1-based. Branching on mode fixes both the jump (git.openChange leaves a diff editor whose uri
+  // doesn't match, so the reveal was skipped) and the off-by-one.
+  const codebase = model?.mode === "codebase";
+  let editor: vscode.TextEditor | undefined;
+  if (codebase) {
+    editor = await vscode.window.showTextDocument(uri, { preview: true });
+  } else {
+    try {
+      await vscode.commands.executeCommand("git.openChange", uri); // native diff editor
+    } catch {
+      await vscode.window.showTextDocument(uri, { preview: true });
+    }
+    editor = vscode.window.activeTextEditor;
   }
-  const editor = vscode.window.activeTextEditor;
   if (editor && editor.document.uri.fsPath === uri.fsPath) {
-    const line = Math.max(0, hunk.start - 1);
+    const line = Math.max(0, codebase ? hunk.start : hunk.start - 1);
     const range = new vscode.Range(line, 0, line, 0);
     editor.revealRange(range, vscode.TextEditorRevealType.InCenter);
     editor.selection = new vscode.Selection(range.start, range.start);

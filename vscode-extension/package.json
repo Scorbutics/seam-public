@@ -13,6 +13,7 @@
       { "command": "seam.review", "title": "Seam: Review working changes", "icon": "$(symbol-color)" },
       { "command": "seam.reviewCommit", "title": "Seam: Review a commit…" },
       { "command": "seam.analyzeCodebase", "title": "Seam: Analyze codebase from anchor (cursor)", "icon": "$(target)" },
+      { "command": "seam.analyzeModule", "title": "Seam: Analyze module (all exports of this file)", "icon": "$(symbol-namespace)" },
       { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
       { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
       { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
@@ -32,13 +33,15 @@
       "view/title": [
         { "command": "seam.review", "when": "view == seam.tree", "group": "navigation@1" },
         { "command": "seam.analyzeCodebase", "when": "view == seam.tree", "group": "navigation@2" },
+        { "command": "seam.analyzeModule", "when": "view == seam.tree", "group": "navigation@2" },
         { "command": "seam.prev", "when": "view == seam.tree", "group": "navigation@3" },
         { "command": "seam.next", "when": "view == seam.tree", "group": "navigation@4" },
         { "command": "seam.showAll", "when": "view == seam.tree", "group": "navigation@5" },
         { "command": "seam.clear", "when": "view == seam.tree", "group": "navigation@6" }
       ],
       "editor/context": [
-        { "command": "seam.analyzeCodebase", "when": "editorTextFocus", "group": "navigation@9" }
+        { "command": "seam.analyzeCodebase", "when": "editorTextFocus", "group": "navigation@9" },
+        { "command": "seam.analyzeModule", "when": "editorTextFocus", "group": "navigation@9" }
       ]
     },
     "keybindings": [
