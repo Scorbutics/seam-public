@@ -368,6 +368,40 @@ def test_llm_refine_cannot_invent_carriers(monkeypatch):
     assert "junk" not in labels
 
 
+def test_intent_fused_selection_marks_seam(monkeypatch):
+    """P1: with an intent, the SAME refine pass also marks the matching seam (`match`) → the model
+    carries `selectedSeam` + the seam's `selected` flag (focus). Fused: one pass groups AND selects."""
+    monkeypatch.setattr(codebase.llm, "run_pass",
+                        lambda *a, **k: {"m1": {"seam": "S1", "label": "alpha"},
+                                         "m2": {"seam": "S2", "label": "beta", "match": True},
+                                         "m3": {"seam": "S2", "match": True}})
+    model = codebase.decompose(_svc_graph(), use_llm=True, intent="how does beta work")
+    sel = model["selectedSeam"]
+    assert sel
+    seams = {s["id"]: s for cl in model["clusters"] for s in cl["seams"]}
+    assert seams[sel]["selected"] is True
+    assert sum(1 for s in seams.values() if s.get("selected")) == 1     # exactly one focus
+    assert {"m2", "m3"} <= {h["id"] for h in seams[sel]["hunks"]}        # the matched members
+
+
+def test_no_intent_leaves_no_selection(monkeypatch):
+    """No intent → the refine pass omits the selection ask → no seam is focused (unchanged path)."""
+    monkeypatch.setattr(codebase.llm, "run_pass",
+                        lambda *a, **k: {"m1": {"seam": "S1"}, "m2": {"seam": "S2"}, "m3": {"seam": "S2"}})
+    model = codebase.decompose(_svc_graph(), use_llm=True)
+    assert model["selectedSeam"] == ""
+    assert not any(s.get("selected") for cl in model["clusters"] for s in cl["seams"])
+
+
+def test_intent_degrades_to_floor_with_no_selection(monkeypatch):
+    """Intent given but the LLM fails → the deterministic floor stands and nothing is focused."""
+    def boom(*a, **k):
+        raise codebase.llm.LLMError("no backend")
+    monkeypatch.setattr(codebase.llm, "run_pass", boom)
+    model = codebase.decompose(_svc_graph(), use_llm=True, intent="how are roles saved")
+    assert model["selectedSeam"] == ""
+
+
 # --------------------------------------------------------------------------- seam grain (Layer 4)
 def _seams_of(model):
     """{node_id: frozenset(seam ids it appears in)} — a node may be in several seams (many-to-many)."""

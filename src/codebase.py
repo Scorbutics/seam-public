@@ -212,11 +212,13 @@ def assign_intent_seams(g: Graph) -> list[dict]:
 
 
 # --------------------------------------------------------------------------- F4: LLM refine
-def _build_refine_prompt(g: Graph, members: list, floor_of: dict, uses: dict) -> str:
+def _build_refine_prompt(g: Graph, members: list, floor_of: dict, uses: dict,
+                         intent: str | None = None) -> str:
     """Prompt the LLM to refine the FLOOR partition into named technical intents. It is given the
     carriers (members), the deterministic floor grouping as a STARTING POINT, and which consumers
     use which carriers (the co-occurrence evidence). It regroups + names — it MUST only use the
-    given carrier ids."""
+    given carrier ids. When an `intent` (the user's question) is given, the SAME pass also marks the
+    one seam that best answers it (`match`) — fused to save a round-trip; partition is unchanged."""
     anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else g.anchor
     lines = [
         f"A code symbol `{anchor_sym}` has these MEMBERS (carriers). Group them into technical-intent",
@@ -232,17 +234,26 @@ def _build_refine_prompt(g: Graph, members: list, floor_of: dict, uses: dict) ->
     for cid, used in uses.items():
         if used:
             lines.append(f"  {g.nodes[cid].label} → {', '.join(used)}")
-    lines.append('\nOutput ONLY a JSON array, one object per MEMBER:')
-    lines.append('[{"id":"<member id>","seam":"S1","label":"<intent name>"}]')
+    if intent:
+        lines.append(f'\nThe user is asking: "{intent}". On the members of the ONE seam that best '
+                     'answers that question, set "match": true (leave it false/absent on all others).')
+        lines.append('\nOutput ONLY a JSON array, one object per MEMBER:')
+        lines.append('[{"id":"<member id>","seam":"S1","label":"<intent name>","match":false}]')
+    else:
+        lines.append('\nOutput ONLY a JSON array, one object per MEMBER:')
+        lines.append('[{"id":"<member id>","seam":"S1","label":"<intent name>"}]')
     return "\n".join(lines)
 
 
-def refine_seams_llm(g: Graph, floor_seams: list[dict], *, model: str = "claude-haiku-4-5",
-                     claude_bin: str | None = None, verbose: bool = False) -> list[dict]:
+def refine_seams_llm(g: Graph, floor_seams: list[dict], *, intent: str | None = None,
+                     model: str = "claude-haiku-4-5", claude_bin: str | None = None,
+                     verbose: bool = False) -> list[dict]:
     """F4: the LLM refines the FLOOR partition into named technical-intent seams — a PROPOSED
     partition over the VERIFIED carriers. It regroups + names the given member ids; it CANNOT
     invent a carrier (unknown ids are dropped) or an edge (it never touches the resolved graph).
-    Seeded by the floor for stability. Falls back to the floor on any failure (no LLM / parse)."""
+    Seeded by the floor for stability. Falls back to the floor on any failure (no LLM / parse).
+    When `intent` is given, the SAME pass also marks the best-matching seam (`selected` on it) —
+    fused selection (P1), so the question focuses one seam without a second round-trip."""
     anchor = g.anchor
     anchor_node = g.nodes.get(anchor)
     if anchor_node is None:
@@ -262,13 +273,14 @@ def refine_seams_llm(g: Graph, floor_seams: list[dict], *, model: str = "claude-
                 floor_of[nid] = s["id"]
 
     try:
-        out = llm.run_pass(_build_refine_prompt(g, members, floor_of, uses),
+        out = llm.run_pass(_build_refine_prompt(g, members, floor_of, uses, intent),
                            model=model, claude_bin=claude_bin, tag="seam-refine", verbose=verbose)
     except llm.LLMError:
         return floor_seams                          # degrade to the floor (still a valid proposal)
 
     grouping: dict[str, str] = {}
     labels: dict[str, str] = {}
+    match_votes: dict[str, int] = {}                # fused selection: which seam answers the intent
     for cid, obj in out.items():
         if cid in cset and isinstance(obj, dict):   # ONLY known carriers — cannot invent
             sk = str(obj.get("seam", "")).strip()
@@ -277,10 +289,13 @@ def refine_seams_llm(g: Graph, floor_seams: list[dict], *, model: str = "claude-
                 lab = str(obj.get("label", "")).strip()
                 if lab:
                     labels.setdefault(sk, lab)
+                if intent and obj.get("match") in (True, "true", "True", 1):
+                    match_votes[sk] = match_votes.get(sk, 0) + 1
     if not grouping:
         return floor_seams
     for m in members:                               # carriers the LLM didn't place → keep floor group
         grouping.setdefault(m.id, floor_of.get(m.id, m.id))
+    selected_sk = max(match_votes, key=match_votes.get) if match_votes else None
 
     by_seam: dict[str, list[str]] = {}
     for cid, sk in grouping.items():
@@ -290,8 +305,11 @@ def refine_seams_llm(g: Graph, floor_seams: list[dict], *, model: str = "claude-
         cs = set(cids)
         cons = [c.id for c in consumers if cs & set(uses[c.id])]
         rep = max((g.nodes[c] for c in cids), key=lambda n: n.complexity)
-        seams.append(_mk_seam(rep.id, labels.get(sk) or rep.label, [anchor, *sorted(cids), *cons],
-                              link_only=False, proposed_by="llm"))
+        seam = _mk_seam(rep.id, labels.get(sk) or rep.label, [anchor, *sorted(cids), *cons],
+                        link_only=False, proposed_by="llm")
+        if sk == selected_sk:
+            seam["selected"] = True                 # the seam that best answers the intent (focus)
+        seams.append(seam)
     return _sweep_leftovers(g, seams, adj)
 
 
@@ -482,12 +500,14 @@ def detect_consumer_feeds(g: Graph, repo: str) -> None:
                 member.setdefault("feeds", []).append(feed)
 
 
-def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False,
+def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False, intent: str | None = None,
               model: str = "claude-haiku-4-5", claude_bin: str | None = None) -> dict:
     """Run the codebase layers (roles → clusters → blind spots/sub-cores/contract → intent FLOOR
     → optional LLM refine → well-formedness) and return the SeamModel. `g` is mutated. `repo`
     enables the Layer-2 scan + A/B substrate. `use_llm` lets the LLM refine the floor partition
-    (a PROPOSED partition, seeded by the floor; degrades to the floor if no LLM)."""
+    (a PROPOSED partition, seeded by the floor; degrades to the floor if no LLM). `intent` (the
+    user's question, P1) fuses seam SELECTION into the refine pass — the matching seam is marked
+    `selected` so the renderer can focus it (needs use_llm; ignored by the deterministic floor)."""
     assign_roles(g)
     assign_clusters(g)
     if repo:
@@ -497,7 +517,7 @@ def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False,
         detect_consumer_feeds(g, repo)          # A2: complete each prop thread with its feeders
     seams = assign_intent_seams(g)              # F2: the deterministic intent floor (proposed)
     if use_llm:                                 # F4: the LLM refines/names the partition (proposed)
-        seams = refine_seams_llm(g, seams, model=model, claude_bin=claude_bin)
+        seams = refine_seams_llm(g, seams, intent=intent, model=model, claude_bin=claude_bin)
     health = wellformedness(g)
     return emit_seams(g, health, seams)
 
@@ -549,8 +569,9 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
                     warns.append(w)
         out_seams.append({"id": s["id"], "label": s["label"], "linkOnly": s["linkOnly"],
                           "uncertain": False, "warnings": warns, "hunks": hunks,
-                          "proposedBy": s.get("proposedBy", "floor")})
+                          "proposedBy": s.get("proposedBy", "floor"), "selected": s.get("selected", False)})
 
+    selected_seam = next((s["id"] for s in out_seams if s.get("selected")), "")
     clusters = [{"id": "g1", "intent": anchor_sym or g.anchor, "colorIndex": 0, "seams": out_seams}]
     tests = [_seam_hunk(n, "RESOLVED_FULL") for n in g.nodes.values() if n.role == "test"]
     return {
@@ -559,6 +580,7 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
         "noise": [],
         # codebase-mode additions (extension reads additively; diff-mode omits them):
         "mode": "codebase",
+        "selectedSeam": selected_seam,          # P1: the seam matching the user's intent (focus), or ""
         "anchor": g.anchor,
         "resolutionQuality": g.resolution_quality,
         "language": g.language,

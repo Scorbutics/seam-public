@@ -49,6 +49,9 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--attribution", metavar="JSON",
                     help="--scan CLASS anchor: an LSP-verified {file: {method: line}} attribution to "
                          "use (RESOLVED_FULL) instead of the tree-sitter heuristic (RESOLVED_PARTIAL)")
+    ap.add_argument("--intent", metavar="TEXT",
+                    help="CODEBASE mode (P1): the user's question; the LLM refine pass marks the "
+                         "best-matching seam (`selectedSeam`) so the renderer focuses it. Needs an LLM.")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -146,7 +149,7 @@ def main(argv: list[str] | None = None) -> int:
         # --classifier llm|hybrid lets the LLM refine the intent partition (a PROPOSED partition,
         # seeded by the deterministic floor); det = floor only.
         use_llm = args.classifier in ("llm", "hybrid")
-        model = codebase.decompose(g, repo=args.repo, use_llm=use_llm,
+        model = codebase.decompose(g, repo=args.repo, use_llm=use_llm, intent=args.intent,
                                    model=args.model, claude_bin=args.claude_bin)
         counts: dict[str, int] = {}
         for n in g.nodes.values():
