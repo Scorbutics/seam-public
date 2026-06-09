@@ -163,6 +163,12 @@ const SYMBOL_KIND_NAMES: Partial<Record<vscode.SymbolKind, string>> = {
   [vscode.SymbolKind.Struct]: "struct",
   [vscode.SymbolKind.Enum]: "enum",
 };
+// The string kind name for a SymbolKind (the same vocabulary the scan/decompose use). Exported for
+// the fuzzy entry ramp, which routes a picked workspace symbol by kind (class → method mode).
+export function symbolKindName(k: vscode.SymbolKind): string {
+  return SYMBOL_KIND_NAMES[k] ?? "symbol";
+}
+
 const CONTAINER_KINDS = new Set<vscode.SymbolKind>([
   vscode.SymbolKind.Class, vscode.SymbolKind.Interface, vscode.SymbolKind.Struct,
   vscode.SymbolKind.Namespace, vscode.SymbolKind.Enum,
@@ -374,6 +380,37 @@ export async function anchorSymbolAt(
   const file = path.relative(repoRoot, anchorUri.fsPath).split(path.sep).join("/");
   return { symbol: sym.name, file, range: [sym.range.start.line, sym.range.end.line],
            kind: SYMBOL_KIND_NAMES[sym.kind] ?? "symbol" };
+}
+
+// A method call-site the Python scan found (name matches an anchor-class method); the extension
+// go-to-defs it to confirm it really binds to the anchor class. Positions are 0-based.
+export interface MethodCandidate { file: string; line: number; col: number; method: string; }
+
+// LSP-VERIFIED class-method attribution (the precision upgrade the import scan reserves for the
+// LSP). For each candidate call-site, run go-to-definition and KEEP the ones whose definition lands
+// in the anchor class's file → `{consumerFile: {method: firstLine}}`. This catches DI / untyped
+// receivers the tree-sitter heuristic can't trace, and rejects same-named methods of other classes.
+// Single-file go-to-definition is the LSP's RELIABLE capability (unlike cross-project references —
+// memory: lsp-references-monorepo-blind), so this is the right place to spend LSP. Returns {} when
+// nothing verifies (no provider / mid-indexing) → the caller falls back to the heuristic.
+export async function verifyMethodAttribution(
+  resolver: SymbolResolver, candidates: MethodCandidate[], anchorFile: string, repoRoot: string,
+): Promise<Record<string, Record<string, number>>> {
+  const anchorAbs = path.resolve(repoRoot, anchorFile);
+  const out: Record<string, Record<string, number>> = {};
+  for (const c of candidates) {
+    const uri = vscode.Uri.file(path.resolve(repoRoot, c.file));
+    const defs = await resolver.getDefinition(uri, new vscode.Position(c.line, c.col));
+    if (defs.kind !== "resolved") continue;
+    const landsInAnchor = defs.value.some((d) => {
+      const target = (d as vscode.Location).uri ?? (d as vscode.LocationLink).targetUri;
+      return !!target && path.resolve(target.fsPath) === anchorAbs;
+    });
+    if (landsInAnchor) {
+      (out[c.file] ??= {})[c.method] = c.line;   // first line wins (matches the heuristic's shape)
+    }
+  }
+  return out;
 }
 
 function emptyGraph(uri: vscode.Uri, pos: vscode.Position, repoRoot: string,

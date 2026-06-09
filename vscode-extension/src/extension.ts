@@ -3,7 +3,7 @@ import { execFile } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
-import { VSCodeSymbolResolver, anchorSymbolAt } from "./resolver";
+import { VSCodeSymbolResolver, anchorSymbolAt, verifyMethodAttribution, MethodCandidate, symbolKindName } from "./resolver";
 
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
@@ -171,6 +171,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
     vscode.commands.registerCommand("seam.analyzeModule", analyzeModule),
+    vscode.commands.registerCommand("seam.analyzeFromIntent", analyzeFromIntent),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -596,9 +597,62 @@ async function analyzeCodebase() {
   }
   // depth 2 (default) adds the environment ripple = the boundary frontier (consumers-of-consumers).
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
-  await runScan(env.tool, env.py,
-                ["--anchor-file", anchor.file, "--symbol", anchor.symbol, "--depth", String(depth)],
-                `Seam: scanning consumers of ${anchor.symbol}…`, `anchor ${anchor.symbol}`);
+  if (anchor.kind === "class") {
+    // A class anchor splits by METHOD: the LSP verifies which method each consumer calls (the
+    // precision path), with the tree-sitter heuristic as the degrade fallback.
+    await runScanClass(env.tool, env.py, anchor, depth);
+  } else {
+    await runScan(env.tool, env.py,
+                  ["--anchor-file", anchor.file, "--symbol", anchor.symbol, "--depth", String(depth)],
+                  `Seam: scanning consumers of ${anchor.symbol}…`, `anchor ${anchor.symbol}`);
+  }
+}
+
+// CLASS anchor — the LSP-verified method-attribution flow (3 phases): (1) Python emits the method
+// call-site candidates; (2) the LSP go-to-defs each to confirm it binds to the anchor class; (3)
+// Python rebuilds with the verified attribution (RESOLVED_FULL). If the LSP confirms nothing
+// (no provider / mid-indexing), it falls back to the tree-sitter heuristic (RESOLVED_PARTIAL).
+async function runScanClass(tool: string, py: string,
+                            anchor: { symbol: string; file: string }, depth: number) {
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Seam: resolving methods of ${anchor.symbol}…` },
+    async () => {
+      const cand = path.join(tool, `.seam-cand-${Date.now()}.json`);
+      const attr = path.join(tool, `.seam-attr-${Date.now()}.json`);
+      const out = path.join(tool, `.seam-${Date.now()}.json`);
+      try {
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const base = [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
+                      "--anchor-file", anchor.file, "--symbol", anchor.symbol];
+        // phase 1 — candidates
+        await execFileP(py, [...base, "--emit-candidates", cand], tool);
+        const candidates = JSON.parse(fs.readFileSync(cand, "utf-8")) as MethodCandidate[];
+        // phase 2 — LSP verify
+        const verified = await verifyMethodAttribution(new VSCodeSymbolResolver(), candidates, anchor.file, repoRoot);
+        const scanArgs = ["--depth", String(depth)];
+        const nVerified = Object.values(verified).reduce((a, m) => a + Object.keys(m).length, 0);
+        if (nVerified > 0) {
+          fs.writeFileSync(attr, JSON.stringify(verified), "utf-8");
+          scanArgs.push("--attribution", attr);     // else: fall back to the heuristic
+        }
+        // phase 3 — decompose with the verified (or heuristic) attribution
+        await execFileP(py, [...base, ...scanArgs, "--classifier", engine, "--emit-seams", out], tool);
+        const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        const ts = Date.now();
+        const range = `class ${anchor.symbol}`;
+        activateModel(parsed, repoRoot, range, ts);
+        extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
+        const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+        const how = nVerified > 0 ? `${nVerified} method call(s) LSP-verified` : "heuristic (no LSP)";
+        vscode.window.showInformationMessage(
+          `Seam (codebase): ${anchor.symbol} — ${parsed.clusters.length} cluster(s), ${n} seam(s).  ${how}.`);
+      } catch (e) {
+        vscode.window.showErrorMessage(`Seam class analysis failed: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        for (const f of [cand, attr, out]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+      }
+    },
+  );
 }
 
 // MODULE anchor: the WHOLE active file — every export is a carrier, partitioned by member
@@ -613,6 +667,79 @@ async function analyzeModule() {
   const base = path.basename(file);
   await runScan(env.tool, env.py, ["--anchor-file", file],
                 `Seam: scanning module ${base}…`, `module ${base}`);
+}
+
+// FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → Python ranks them →
+// the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's
+// invariant: the guarantee attaches only AFTER confirmation, never from an unconfirmed match).
+const _INTENT_STOP = new Set(["how", "does", "the", "and", "for", "with", "work", "works", "use",
+  "used", "using", "what", "where", "when", "this", "that", "code", "from", "into"]);
+
+async function analyzeFromIntent() {
+  const env = codebaseEnv();
+  if (!env) return;
+  const intent = await vscode.window.showInputBox({
+    title: "Seam: find a footprint by intent",
+    prompt: "Describe the feature or symbol you want to map",
+    placeHolder: "e.g. how does scoring work · role assignment · availability",
+    ignoreFocusOut: true,
+  });
+  if (!intent || !intent.trim()) return;
+
+  const picked = await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Seam: finding anchors for “${intent}”…` },
+    async (): Promise<{ symbol: string; file: string; kind: string } | undefined> => {
+      // keywords drive the workspaceSymbol queries (a full sentence won't match symbol names)
+      const words = intent.split(/[^A-Za-z0-9]+/).filter((w) => w.length > 2 && !_INTENT_STOP.has(w.toLowerCase()));
+      const queries = words.length ? words : [intent];
+      const seen = new Map<string, { name: string; file: string; kind: string }>();
+      for (const q of queries) {
+        const syms = (await vscode.commands.executeCommand<vscode.SymbolInformation[]>(
+          "vscode.executeWorkspaceSymbolProvider", q)) || [];
+        for (const s of syms) {
+          const file = path.relative(repoRoot, s.location.uri.fsPath).split(path.sep).join("/");
+          if (file.startsWith("..") || file.includes("node_modules")) continue;   // outside the repo
+          const key = `${file}#${s.name}`;
+          if (!seen.has(key)) seen.set(key, { name: s.name, file, kind: symbolKindName(s.kind) });
+        }
+      }
+      if (!seen.size) {
+        vscode.window.showWarningMessage(`Seam: no symbols matched “${intent}”. Try a keyword from the code.`);
+        return undefined;
+      }
+      // rank in Python (deterministic, offline)
+      const cand = path.join(env.tool, `.seam-cand-${Date.now()}.json`);
+      const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
+      let items: Array<{ name: string; file: string; kind: string; terms?: string[] }> = [];
+      try {
+        fs.writeFileSync(cand, JSON.stringify([...seen.values()]), "utf-8");
+        await execFileP(env.py, ["-m", "src.anchor_rank", "--intent", intent, "--candidates", cand, "--out", ranked], env.tool);
+        items = JSON.parse(fs.readFileSync(ranked, "utf-8"));
+      } finally {
+        for (const f of [cand, ranked]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+      }
+      const pick = await vscode.window.showQuickPick(
+        items.map((c) => ({
+          label: c.name,
+          description: c.kind,
+          detail: c.file + (c.terms?.length ? `   · matched: ${c.terms.join(", ")}` : ""),
+          anchor: { symbol: c.name, file: c.file, kind: c.kind },
+        })),
+        { title: `Anchors for “${intent}” — pick one to map its footprint`, matchOnDetail: true, ignoreFocusOut: true },
+      );
+      return pick?.anchor;
+    },
+  );
+  if (!picked) return;
+
+  const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
+  if (picked.kind === "class") {
+    await runScanClass(env.tool, env.py, picked, depth);
+  } else {
+    await runScan(env.tool, env.py,
+                  ["--anchor-file", picked.file, "--symbol", picked.symbol, "--depth", String(depth)],
+                  `Seam: scanning consumers of ${picked.symbol}…`, `anchor ${picked.symbol}`);
+  }
 }
 
 // Repo-relative path IF this document is the MODIFIED (new) side we should decorate:

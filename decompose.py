@@ -43,6 +43,12 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--depth", type=int, default=1,
                     help="--scan single-symbol: 1 = direct consumers; 2 = + environment ripple "
                          "(consumers-of-consumers = the boundary frontier)")
+    ap.add_argument("--emit-candidates", metavar="JSON",
+                    help="--scan CLASS anchor: write the method call-site candidates (file/line/col/"
+                         "method) for the extension's LSP go-to-definition verification, then exit")
+    ap.add_argument("--attribution", metavar="JSON",
+                    help="--scan CLASS anchor: an LSP-verified {file: {method: line}} attribution to "
+                         "use (RESOLVED_FULL) instead of the tree-sitter heuristic (RESOLVED_PARTIAL)")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -98,10 +104,28 @@ def main(argv: list[str] | None = None) -> int:
                 print("error: --scan requires --anchor-file", file=sys.stderr)
                 return 2
             from src import import_scan
+            # CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension
+            # verifies them, then re-invokes with --attribution).
+            if args.emit_candidates:
+                if not args.symbol:
+                    print("error: --emit-candidates needs --symbol (a class anchor)", file=sys.stderr)
+                    return 2
+                cands = import_scan.class_call_candidates(args.repo, args.anchor_file, args.symbol)
+                Path(args.emit_candidates).write_text(json.dumps(cands), encoding="utf-8")
+                print(f"Candidates: {args.emit_candidates}  ({len(cands)} call-site(s))")
+                return 0
+            verified = None
+            if args.attribution:
+                try:
+                    verified = json.loads(Path(args.attribution).read_text(encoding="utf-8"))
+                except (OSError, ValueError) as exc:
+                    print(f"error: could not load attribution: {exc}", file=sys.stderr)
+                    return 2
             try:
-                # --symbol → single-symbol anchor; omit → MODULE mode (all exports as members,
-                # partitioned by member co-occurrence — the §11.1 multi-member intent case).
-                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol, depth=args.depth)
+                # --symbol → single-symbol anchor (a CLASS delegates to method mode, using `verified`
+                # if given); omit → MODULE mode (all exports as members, member co-occurrence — §11.1).
+                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol,
+                                                         depth=args.depth, verified=verified)
                         if args.symbol
                         else import_scan.build_module_graph(args.repo, args.anchor_file))
             except Exception as exc:  # noqa: BLE001 — surface any scan failure as a clean error

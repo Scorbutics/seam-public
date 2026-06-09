@@ -72,6 +72,90 @@ def test_anchor_def_resolved_by_treesitter():
     assert anchor["range"][1] > anchor["range"][0]      # a real multi-line span, not [0,0]
 
 
+CLS_ANCHOR = "packages/lib/payments.ts"
+CLS = "PaymentService"
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_class_mode_method_attribution():
+    g = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS)
+    members = {n["symbol"] for n in g["nodes"] if n["enclosing"] == CLS}
+    # only PARTICIPATING methods are carriers; `unused` is summarised, not a node
+    assert members == {"charge", "refund", "validate"}
+    assert "unused" not in members
+    edges_from = {}
+    for e in g["edges"]:
+        if e["from"].startswith("c"):
+            edges_from.setdefault(e["from"], set()).add(e["to"])
+    by_file = {n["file"].replace("\\", "/"): n["id"] for n in g["nodes"] if n["id"].startswith("c")}
+    mid = lambda m: f"{CLS}.{m}"
+    # each receiver form attributes the right method(s):
+    assert edges_from[by_file["apps/web/checkout.ts"]] == {mid("charge"), mid("refund")}   # new X()
+    assert edges_from[by_file["apps/web/admin.ts"]] == {mid("validate")}                    # typed param
+    assert edges_from[by_file["apps/web/di.ts"]] == {mid("charge")}                         # this.field DI
+    # attribution edges are RESOLVED_PARTIAL (instance-aware heuristic, not a fact)
+    part = [e for e in g["edges"] if e["from"].startswith("c") and e["to"] != CLS]
+    assert part and all(e["provenance"] == "RESOLVED_PARTIAL" for e in part)
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_class_call_candidates_for_lsp_verification():
+    cands = import_scan.class_call_candidates(REPO, CLS_ANCHOR, CLS)
+    got = {(c["file"].replace("\\", "/").split("/")[-1], c["method"]) for c in cands}
+    # every method call-site (ANY receiver — incl. the this.field DI in di.ts) is emitted for the
+    # extension to verify; positions present
+    assert ("checkout.ts", "charge") in got and ("checkout.ts", "refund") in got
+    assert ("admin.ts", "validate") in got
+    assert ("di.ts", "charge") in got
+    assert all(isinstance(c["line"], int) and isinstance(c["col"], int) for c in cands)
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_verified_attribution_merges_lsp_with_heuristic_floor():
+    # LSP verifies ONLY checkout; the others must FALL BACK to the heuristic, not be lost (additive).
+    verified = {"apps/web/checkout.ts": {"charge": 5, "refund": 6}}
+    g = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS, verified=verified)
+    by_file = {n["file"].replace("\\", "/"): n["id"] for n in g["nodes"] if n["id"].startswith("c")}
+    prov = {}
+    for e in g["edges"]:
+        if e["from"].startswith("c") and "." in e["to"]:
+            prov.setdefault(e["from"], set()).add(e["provenance"])
+    assert prov[by_file["apps/web/checkout.ts"]] == {"RESOLVED_FULL"}      # LSP-verified
+    assert prov[by_file["apps/web/di.ts"]] == {"RESOLVED_PARTIAL"}        # heuristic floor — NOT lost
+    assert prov[by_file["apps/web/admin.ts"]] == {"RESOLVED_PARTIAL"}
+    # degrade (no verified) → all heuristic
+    g2 = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS)
+    he = [e for e in g2["edges"] if e["from"].startswith("c") and "." in e["to"]]
+    assert he and all(e["provenance"] == "RESOLVED_PARTIAL" for e in he)
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_class_mode_untraced_and_unused_blindspots():
+    g = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS)
+    ev = " ".join(b["evidence"] for b in g["blindspots"])
+    assert "registry.ts" in ev                 # imports the class, no traced method → untraced blind spot
+    assert "unused" in ev                       # the unused method → summary coverage note
+    # the untraced consumer wired to the CLASS (not dropped), as RESOLVED_FULL
+    assert any(e["to"] == CLS and e["provenance"] == "RESOLVED_FULL" for e in g["edges"])
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_class_mode_cooccurrence_and_delegation():
+    from src import codebase, graph_ir
+    # build_resolved_graph DELEGATES to class mode for a class anchor
+    g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, CLS_ANCHOR, CLS))
+    model = codebase.decompose(g)
+    seam_of = {}
+    for cl in model["clusters"]:
+        for s in cl["seams"]:
+            for h in s["hunks"]:
+                if h["id"] in (f"{CLS}.charge", f"{CLS}.refund", f"{CLS}.validate"):
+                    seam_of[h["id"]] = s["id"]
+    # charge + refund co-occur (checkout uses both) → same seam; validate (admin only) → separate
+    assert seam_of[f"{CLS}.charge"] == seam_of[f"{CLS}.refund"]
+    assert seam_of[f"{CLS}.validate"] != seam_of[f"{CLS}.charge"]
+
+
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_test_file_consumer_gets_test_role():
     from src import codebase, graph_ir

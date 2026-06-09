@@ -228,6 +228,124 @@ def _read(repo: str, rel: str) -> tuple[str, str] | None:
         return None
 
 
+# --------------------------------------------------------------------------- CLASS method attribution
+def _class_methods(ctx: _Ctx, class_name: str) -> list[tuple[str, int, int]]:
+    """The behavioural methods of `class_name` as (name, start, end) — the carriers for a class
+    anchor. Excludes the constructor (not an intent-bearing behaviour)."""
+    cls = next((c for c in ctx.collect(ctx.root, lambda k: k in _CLASS_KINDS)
+                if _name_of(ctx, c) == class_name), None)
+    if cls is None:
+        return []
+    out: list[tuple[str, int, int]] = []
+    for m in ctx.collect(cls, lambda k: k in ("method_definition", "method_declaration")):
+        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() == "property_identifier"), None)
+        if nm and nm != "constructor":
+            s, e = ctx.span(m)
+            out.append((nm, s, e))
+    seen: set[str] = set()
+    return [x for x in out if not (x[0] in seen or seen.add(x[0]))]
+
+
+def _is_new_of(ctx: _Ctx, node, class_name: str) -> bool:
+    if node.kind() != "new_expression":
+        return False
+    cons = next((c for c in ctx.children(node) if c.kind() in ("identifier", "member_expression")), None)
+    return cons is not None and ctx.text(cons) == class_name
+
+
+def _instances_of(ctx: _Ctx, class_name: str) -> set[str]:
+    """Names bound to an INSTANCE of `class_name` in this file — conservative & instance-aware
+    (the heuristic's precision): `new ClassName()` bindings and `: ClassName`-typed vars / params /
+    constructor-injected fields. The binding may also be reached via `this.<name>`."""
+    names: set[str] = set()
+    binders = ("variable_declarator", "required_parameter", "optional_parameter",
+               "public_field_definition", "property_signature", "field_definition")
+    for node in ctx.collect(ctx.root, lambda k: k in binders):
+        nm = next((ctx.text(c) for c in ctx.children(node) if c.kind() in _NAME_KINDS), None)
+        if not nm:
+            continue
+        typed = any(ctx.text(t) == class_name for t in ctx.collect(node, lambda k: k == "type_identifier"))
+        newed = any(_is_new_of(ctx, nx, class_name) for nx in ctx.collect(node, lambda k: k == "new_expression"))
+        if typed or newed:
+            names.add(nm)
+    return names
+
+
+def _class_call_sites(ctx: _Ctx, methods: set[str]) -> list[tuple[str, int, int]]:
+    """EVERY `<expr>.<method>(…)` call whose `method` ∈ `methods`, as (method, line, col) of the
+    method identifier — regardless of receiver. These are the candidates an LSP go-to-definition
+    verifies (does this call bind to the anchor class's method?), which catches the DI / untyped
+    receivers the conservative instance-aware heuristic can't trace."""
+    out: list[tuple[str, int, int]] = []
+    for call in ctx.collect(ctx.root, lambda k: k == "call_expression"):
+        ch = ctx.children(call)
+        fn = ch[0] if ch else None
+        if fn is None or fn.kind() != "member_expression":
+            continue
+        prop = next((c for c in ctx.children(fn) if c.kind() == "property_identifier"), None)
+        if prop is not None and ctx.text(prop) in methods:
+            out.append((ctx.text(prop), ctx.span(prop)[0], ctx.col(prop.start_byte())))
+    return out
+
+
+def class_call_candidates(repo: str, anchor_file: str, class_name: str) -> list[dict]:
+    """For the EXTENSION's LSP verification pass: every consumer call-site whose method name matches
+    a method of `class_name`, with its position. The extension runs go-to-definition at each and
+    keeps the ones resolving into the anchor class — the RESOLVED (type-verified) attribution that
+    upgrades / completes the instance-aware heuristic. Pure scan; no graph, no decomposition."""
+    repo = os.path.expanduser(repo)
+    ar = _read(repo, anchor_file)
+    if not ar or not available():
+        return []
+    methods = {m[0] for m in _class_methods(_Ctx(ar[0], ar[1]), class_name)}
+    if not methods:
+        return []
+    pkgs = _pkg_map(repo)
+    out: list[dict] = []
+    for con in scan_consumers(repo, anchor_file, class_name):
+        if con.status != "resolved":
+            continue
+        rd = _read(repo, con.file)
+        if not rd:
+            continue
+        try:
+            cctx = _Ctx(rd[0], rd[1])
+        except Exception:
+            continue
+        for method, line, col in _class_call_sites(cctx, methods):
+            out.append({"file": con.file, "line": line, "col": col, "method": method})
+    return out
+
+
+def _class_method_usage(ctx: _Ctx, class_name: str, methods: set[str]) -> dict[str, int]:
+    """{method → first call line} for methods of `class_name` invoked on a TRACED instance:
+    `inst.m()`, `new ClassName().m()`, or `this.field.m()` where `field`/`inst` is an instance of
+    the class. A `.m()` on an untraced receiver is NOT attributed (under-attribute, never lie)."""
+    inst = _instances_of(ctx, class_name)
+    used: dict[str, int] = {}
+    for call in ctx.collect(ctx.root, lambda k: k == "call_expression"):
+        ch = ctx.children(call)
+        fn = ch[0] if ch else None
+        if fn is None or fn.kind() != "member_expression":
+            continue
+        mch = ctx.children(fn)
+        obj = mch[0] if mch else None
+        prop = next((c for c in mch if c.kind() == "property_identifier"), None)
+        if obj is None or prop is None:
+            continue
+        m = ctx.text(prop)
+        if m not in methods:
+            continue
+        hit = ((obj.kind() == "identifier" and ctx.text(obj) in inst)
+               or (obj.kind() == "new_expression" and _is_new_of(ctx, obj, class_name))
+               or (obj.kind() == "member_expression"
+                   and (ip := next((c for c in ctx.children(obj) if c.kind() == "property_identifier"), None))
+                   and ctx.text(ip) in inst))
+        if hit:
+            used.setdefault(m, ctx.span(call)[0])
+    return used
+
+
 # --------------------------------------------------------------------------- depth-2 ripple
 def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
                    counter: int, seen_keys: dict[str, str]) -> tuple[list[dict], list[dict], int]:
@@ -310,11 +428,13 @@ def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
 
 
 # --------------------------------------------------------------------------- ResolvedGraph build
-def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int = 1) -> dict:
+def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int = 1,
+                         verified: dict | None = None) -> dict:
     """Assemble the `ResolvedGraph` JSON (resolver.ts contract) from a deterministic import scan.
     Anchor = the symbol's definition; nodes = the enclosing symbol at each resolved consumer's
     call-site; resolved edges = consumer → anchor. Unresolved-module name matches become
-    SUGGESTED blindspots (honest under-claim), never resolved edges."""
+    SUGGESTED blindspots (honest under-claim), never resolved edges. A CLASS anchor delegates to
+    `build_class_graph` (passing `verified` — the LSP-confirmed method attribution, if any)."""
     repo = os.path.expanduser(repo)
     nodes: list[dict] = []
     edges: list[dict] = []
@@ -333,6 +453,10 @@ def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int
                 akind, arange = defu[1], [defu[2], defu[3]]
         except Exception:
             pass
+    # A CLASS anchor decomposes into its METHODS (carriers) — consumers are attributed per-method
+    # so the class splits by behavioural intent (charge/refund vs validate), not lumped by area.
+    if akind == "class":
+        return build_class_graph(repo, anchor_file, symbol, depth=depth, verified=verified)
     nodes.append({"id": "n1", "symbol": symbol, "kind": akind, "file": anchor_file,
                   "range": arange, "enclosing": "", "complexity": max(1, arange[1] - arange[0] + 1)})
 
@@ -518,6 +642,132 @@ def build_module_graph(repo: str, anchor_file: str) -> dict:
         "edges": edges,
         "blindspots": [],
         "unresolved": [],
+    }
+
+
+def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: int = 1,
+                      verified: dict | None = None) -> dict:
+    """CLASS mode: anchor = a class; carriers = its METHODS; each consumer is attributed to the
+    method(s) it calls. Two attribution sources, same shape ({consumer_file: {method: line}}):
+
+      - `verified` given  → the EXTENSION's LSP go-to-definition result (type-verified) → edges are
+        RESOLVED_FULL. Catches DI / untyped receivers the heuristic can't trace.
+      - `verified` is None → the instance-aware tree-sitter heuristic (`new`/typed/`this.field`) →
+        edges RESOLVED_PARTIAL (conservative; under-attributes, never lies). The degrade path when
+        no LSP is available.
+
+    Methods are member nodes (enclosing = class) wired to the class by containment, so co-occurrence
+    + roles + wellformedness reuse the existing machinery. A consumer with no attributed method wires
+    to the class and is flagged a blind spot (honest under-attribution)."""
+    repo = os.path.expanduser(repo)
+    ar = _read(repo, anchor_file)
+    if not ar or not available():
+        raise RuntimeError(f"cannot parse class anchor {anchor_file}")
+    ctx = _Ctx(ar[0], ar[1])
+    cls = next((c for c in ctx.collect(ctx.root, lambda k: k in _CLASS_KINDS) if _name_of(ctx, c) == class_name), None)
+    crange = list(ctx.span(cls)) if cls is not None else [0, 0]
+    methods = _class_methods(ctx, class_name)
+    method_names = {m[0] for m in methods}
+    method_span = {m[0]: (m[1], m[2]) for m in methods}
+
+    blindspots: list[dict] = []
+    unresolved: list[dict] = []
+
+    # PASS 1: scan consumers, attribute methods. Collect which methods are actually USED so only
+    # PARTICIPATING methods become carriers (an unused method isn't part of any consumer's intent —
+    # showing it as an isolated core would be noise; it's summarised instead).
+    pending: list[tuple[str, str, str, int, int, dict]] = []   # (file, sym, kind, start, end, usage)
+    used_methods: set[str] = set()
+    for con in scan_consumers(repo, anchor_file, class_name):
+        if con.status == "suggested":
+            blindspots.append({"node": class_name, "mechanism": "unresolved-import",
+                               "evidence": f"{con.file} imports {class_name} from '{con.source}' (module unresolved)",
+                               "candidates": [{"symbol": con.file}]})
+            unresolved.append({"node": class_name, "query": "resolveModule", "reason": f"unresolved:{con.source}"})
+            continue
+        rd = _read(repo, con.file)
+        if not rd:
+            continue
+        try:
+            cctx = _Ctx(rd[0], rd[1])
+        except Exception:
+            continue
+        # MERGE: the LSP is ADDITIVE precision on the heuristic FLOOR, never a replacement. Per
+        # consumer: LSP-verified → RESOLVED_FULL; LSP silent (interface-typed / factory / DI it
+        # couldn't follow) → fall back to the tree-sitter heuristic → RESOLVED_PARTIAL. This stops a
+        # flaky/partial LSP from LOSING the coverage the heuristic already had.
+        if verified is not None and (v := {m: ln for m, ln in (verified.get(con.file) or {}).items()
+                                           if m in method_names}):
+            usage, prov = v, "RESOLVED_FULL"
+        else:
+            usage = {m: ln for m, ln in _class_method_usage(cctx, class_name, method_names).items()
+                     if m in method_names}
+            prov = "RESOLVED_PARTIAL"
+        units = _named_units(cctx)
+        line = min(usage.values()) if usage else 0
+        enc = _enclosing(units, line)
+        sym, kind, start, end = enc if enc else (os.path.splitext(os.path.basename(con.file))[0], "module", line, line)
+        pending.append((con.file, sym, kind, start, end, usage, prov))
+        used_methods |= set(usage)
+
+    # carriers = only the PARTICIPATING methods (≥1 traced consumer)
+    nodes: list[dict] = [{"id": class_name, "symbol": class_name, "kind": "class", "file": anchor_file,
+                          "range": crange, "enclosing": "", "complexity": max(1, crange[1] - crange[0] + 1)}]
+    edges: list[dict] = []
+    for mn in sorted(used_methods):
+        s, e = method_span[mn]
+        nodes.append({"id": f"{class_name}.{mn}", "symbol": mn, "kind": "method", "file": anchor_file,
+                      "range": [s, e], "enclosing": class_name, "complexity": max(1, e - s + 1)})
+        edges.append({"from": f"{class_name}.{mn}", "to": class_name, "kind": "contains", "provenance": "RESOLVED_FULL"})
+    unused = method_names - used_methods
+    if unused:                                       # honest coverage note, not N isolated-core warnings
+        blindspots.append({"node": class_name, "mechanism": "untraced-or-unused-methods",
+                           "evidence": f"{len(unused)} of {len(method_names)} methods have no traced consumer "
+                                       f"(unused, or used via an instance we couldn't trace): {', '.join(sorted(unused))}",
+                           "candidates": []})
+
+    # PASS 2: emit consumer nodes + method-attribution edges (per-consumer provenance from the merge).
+    counter = 0
+    seen_keys: dict[str, str] = {}
+    n_methods = len(used_methods)
+    untraced: list[str] = []
+    for cfile, sym, kind, start, end, usage, prov in pending:
+        counter += 1
+        cid = f"c{counter}"
+        seen_keys[f"{cfile}#{sym}#{start}"] = cid
+        nodes.append({"id": cid, "symbol": sym, "kind": _kind_for(cfile, kind), "file": cfile,
+                      "range": [start, end], "enclosing": "", "complexity": max(1, end - start + 1)})
+        if usage:
+            for mn in sorted(usage):
+                edges.append({"from": cid, "to": f"{class_name}.{mn}", "kind": "reference", "provenance": prov})
+        else:                                         # a RESOLVED consumer; method-level detail unavailable
+            edges.append({"from": cid, "to": class_name, "kind": "reference", "provenance": "RESOLVED_FULL"})
+            untraced.append(cfile)
+    if untraced:
+        # ONE honest note, candidates=[] so these RESOLVED imports do NOT render as "SUGGESTED" — the
+        # reference is a fact; only WHICH method it calls couldn't be pinned (factory/DI/dynamic).
+        blindspots.append({"node": class_name, "mechanism": "method-unattributed-consumers",
+                           "evidence": f"{len(untraced)} consumer(s) import {class_name} as a RESOLVED reference "
+                                       f"but no method call could be attributed to an instance (factory/DI/dynamic): "
+                                       f"{', '.join(sorted(untraced))}",
+                           "candidates": []})
+
+    if depth >= 2:
+        d2_nodes, d2_edges, counter = _depth2_ripple(repo, nodes[1 + n_methods:], _pkg_map(repo), counter, seen_keys)
+        nodes.extend(d2_nodes)
+        edges.extend(d2_edges)
+
+    return {
+        "version": 1,
+        "anchor": {"id": class_name, "symbol": class_name, "file": anchor_file, "range": crange},
+        "language": (lang_for(anchor_file) or ""),
+        "resolutionQuality": "FULL",
+        "depth": depth,
+        "complete": True,
+        "nodes": nodes,
+        "edges": edges,
+        "blindspots": blindspots,
+        "unresolved": unresolved,
     }
 
 
