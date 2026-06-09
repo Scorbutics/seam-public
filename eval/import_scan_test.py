@@ -73,6 +73,15 @@ def test_anchor_def_resolved_by_treesitter():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_test_file_consumer_gets_test_role():
+    from src import codebase, graph_ir
+    g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, ANCHOR, SYM))
+    codebase.decompose(g)
+    t = next((n for n in g.nodes.values() if n.file.replace("\\", "/") == "apps/web/widget.test.ts"), None)
+    assert t is not None and t.role == "test"    # verification, not an in-footprint link
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_depth2_ripple_adds_consumers_of_consumers():
     g1 = import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=1)
     g2 = import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=2)

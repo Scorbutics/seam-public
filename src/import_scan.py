@@ -30,6 +30,15 @@ from .lang import _IMPORT_RE
 _SKIP_DIRS = {"node_modules", ".next", ".git", "dist", "build", ".turbo", "coverage", ".venv", "out"}
 _EXTS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts")
 _RESOLVE_EXTS = (".ts", ".tsx", ".d.ts", ".js", ".jsx", ".mts", ".cts")
+# A consumer in a test file is VERIFICATION (the `test` role), not an in-footprint link or a
+# boundary intent — so it's separated out (mirrors resolver.ts TEST_PATH). Covers `*.test.ts` /
+# `*.spec.ts` and `tests/` `__tests__/` `spec/` dirs.
+_TEST_RE = re.compile(r"(\.(test|spec)\.[a-z]+$)|((^|/)(tests?|__tests__|spec)/)", re.I)
+
+
+def _kind_for(file: str, kind: str) -> str:
+    """A consumer node's kind, overriding to 'test' for test files (→ the `test` role)."""
+    return "test" if _TEST_RE.search(file.replace("\\", "/")) else kind
 
 # tree-sitter declaration kinds that carry a name → an enclosing symbol (a consumer unit).
 _METHOD_KINDS = {"method_definition", "method_declaration", "constructor_declaration"}
@@ -293,7 +302,7 @@ def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
                     counter += 1
                     d2id = f"n{counter}"
                     seen_keys[key] = d2id
-                    new_nodes.append({"id": d2id, "symbol": name, "kind": kind, "file": rel,
+                    new_nodes.append({"id": d2id, "symbol": name, "kind": _kind_for(rel, kind), "file": rel,
                                       "range": [start, end], "enclosing": "", "complexity": max(1, end - start + 1)})
                 if d2id != tid:
                     new_edges.append({"from": d2id, "to": tid, "kind": "reference", "provenance": "RESOLVED_FULL"})
@@ -360,7 +369,7 @@ def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int
             counter += 1
             cid = f"n{counter}"
             seen_keys[key] = cid
-            nodes.append({"id": cid, "symbol": name, "kind": kind, "file": con.file,
+            nodes.append({"id": cid, "symbol": name, "kind": _kind_for(con.file, kind), "file": con.file,
                           "range": [start, end], "enclosing": cls,
                           "complexity": max(1, end - start + 1)})
             edges.append({"from": cid, "to": "n1", "kind": "reference", "provenance": "RESOLVED_FULL"})
@@ -493,7 +502,7 @@ def build_module_graph(repo: str, anchor_file: str) -> dict:
             except Exception:
                 pass
         cid = f"c{counter}"
-        nodes.append({"id": cid, "symbol": sym, "kind": kind, "file": cfile,
+        nodes.append({"id": cid, "symbol": sym, "kind": _kind_for(cfile, kind), "file": cfile,
                       "range": rng, "enclosing": "", "complexity": 1})
         for mname in sorted(used):
             edges.append({"from": cid, "to": mname, "kind": "reference", "provenance": "RESOLVED_FULL"})
