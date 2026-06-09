@@ -918,8 +918,10 @@ def build_consumers_graph(repo: str, anchor_file: str, symbol: str, *, depth: in
 def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
     """DOWNWARD direction (P3): the anchor's direct DEPENDENCIES — the behavioural symbols its file
     imports (resolved) — so an intent can grow toward what it USES (service → repository → prisma),
-    not just who uses it. The deps are CORES in the implementation chain (added to `anchors`), fused
-    to the anchor by the import edge. Usage-first stays the seed; this is an intent-CHOSEN expansion.
+    not just who uses it. The source node is promoted to a core (the expand anchor); the deps are
+    NOT added to `anchors`, so they're LINKS (wiring adjacent to that core) — following a dependency
+    adds connective tissue, not new cores, keeping the core set the deliberate focus. So `down` on a
+    core keeps it a core; `down` on a link promotes that link to a core, and its deps are links.
     Type/constant imports fall away naturally (only function/class/method defs are kept); an import
     that doesn't resolve to a repo file (external pkg / alias / DI) becomes a SUGGESTED blind spot —
     the honest dependency boundary."""
@@ -979,7 +981,8 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
                 nodes.append({"id": did, "symbol": imported, "kind": defu[1], "file": resolved_to,
                               "range": [defu[2], defu[3]], "enclosing": "", "complexity": max(1, defu[3] - defu[2] + 1)})
                 edges.append({"from": "n1", "to": did, "kind": "import", "provenance": "RESOLVED_FULL"})
-                anchors.append(did)                      # a dependency layer = a core in the chain
+                # a followed dependency is NOT added to `anchors` → it's WIRING (a link adjacent to the
+                # source, which IS promoted to a core), not a new core. Keeps the core set the focus.
 
     return {
         "version": 1,

@@ -130,8 +130,9 @@ def main(argv: list[str] | None = None) -> int:
             from src import expand, import_scan
             try:
                 base = json.loads(Path(args.expand_graph).read_text(encoding="utf-8"))
-                # UP (default) = the node's consumers; DOWN = its dependencies (P3).
-                # UP (default) = consumers (importers + call-sites); DOWN = dependencies.
+                # The expanded node becomes a core either way. UP (default) = consumers (importers +
+                # call-sites). DOWN = dependencies, added as WIRING (links adjacent to the now-core
+                # source) — deps don't become cores, so the core set stays the focus (no flattening).
                 add = (import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
                        if args.down
                        else import_scan.build_consumers_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line))

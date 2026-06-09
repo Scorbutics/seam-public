@@ -29,7 +29,8 @@ def merge_resolved(base: dict, add: dict, *, expand_anchor: str | None = None) -
     """Merge ResolvedGraph `add` INTO `base` (both the resolver/scan JSON contract) and return the
     union. Nodes dedup by `_key`; `add`'s edges/blindspots/unresolved are remapped onto the surviving
     ids. `expand_anchor` (an id IN `add`, e.g. the node the user expanded) is added to the merged
-    `anchors` lineage; otherwise `add`'s own anchor is. Idempotent on identical inputs."""
+    `anchors` lineage; otherwise `add`'s own anchor is — so the expanded node becomes a core, and a
+    DOWN expansion's deps (NOT in `add.anchors`) stay links adjacent to it. Idempotent on identical."""
     merged = copy.deepcopy(base)
     by_key: dict[str, str] = {_key(n): n["id"] for n in merged["nodes"]}
     used_ids: set[str] = {n["id"] for n in merged["nodes"]}
@@ -65,8 +66,8 @@ def merge_resolved(base: dict, add: dict, *, expand_anchor: str | None = None) -
         merged.setdefault("unresolved", []).append({**u, "node": idmap.get(u.get("node"), u.get("node"))})
 
     base_anchors = merged.get("anchors") or [merged.get("anchor", {}).get("id")]
-    # union the incoming graph's anchors (DOWNWARD expansion adds several dependency cores), remapped,
-    # plus the explicitly-expanded node.
+    # union the incoming graph's anchors (the expanded source becomes a core), remapped, plus the
+    # explicitly-expanded node. A DOWN expansion's deps are NOT in add.anchors, so they stay links.
     add_anchors = [idmap.get(a, a) for a in (add.get("anchors") or [add.get("anchor", {}).get("id")])]
     extra = [idmap.get(expand_anchor, expand_anchor)] if expand_anchor else []
     merged["anchors"] = list(dict.fromkeys([a for a in [*base_anchors, *add_anchors, *extra] if a]))

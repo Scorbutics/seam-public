@@ -90,6 +90,7 @@ def auto_orchestrate(repo: str, anchor_file: str, symbol: str, intent: str, *, m
             history.append({"node": node_sym, "direction": direction, "added": 0, "skipped": f"too broad (+{new_nodes})"})
             continue
         before = len(data["nodes"])
+        # the expanded node becomes a core; DOWN deps ride in as links adjacent to it.
         data = expand.merge_resolved(data, add, expand_anchor=add.get("anchor", {}).get("id"))
         history.append({"node": node_sym, "direction": direction, "added": len(data["nodes"]) - before})
         if history[-1]["added"] == 0:                    # the move reached nothing new (a dead-end)

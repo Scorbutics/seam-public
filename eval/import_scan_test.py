@@ -111,12 +111,14 @@ def test_callsite_graph_finds_method_callsites_regardless_of_import():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
-def test_dependency_graph_downward_finds_behavioural_deps():
-    # DOWNWARD (P3): checkout.ts imports the PaymentService CLASS → a dependency core in the chain
+def test_dependency_graph_downward_finds_behavioural_deps_as_links():
+    # DOWNWARD: checkout.ts imports the PaymentService CLASS → a dependency that is NOT added to
+    # `anchors`, so on merge it becomes WIRING (a link adjacent to the now-core source), not a new
+    # core — following a dependency keeps the core set the deliberate focus (no all-core flattening).
     g = import_scan.build_dependency_graph(REPO, "apps/web/checkout.ts", "checkout")
     dep = next((n for n in g["nodes"] if n["symbol"] == "PaymentService"), None)
     assert dep is not None and dep["kind"] == "class"
-    assert dep["id"] in g["anchors"]                                   # deps are cores in the chain
+    assert dep["id"] not in g["anchors"]                               # not a core; the source (n1) is
     assert any(e["from"] == "n1" and e["to"] == dep["id"] and e["kind"] == "import" for e in g["edges"])
 
 
