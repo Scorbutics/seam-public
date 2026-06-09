@@ -132,11 +132,14 @@ def _mk_seam(sid: str, label: str, node_ids: list[str], link_only: bool,
 
 
 def _sweep_leftovers(g: Graph, seams: list[dict], adj: dict) -> list[dict]:
-    """Place any reached link/env node not yet in a seam into an adjacent seam (else the first) —
-    so nothing resolved is silently dropped. Dedups node_ids preserving order."""
+    """Place any reached node not yet in a seam into an adjacent seam (else the first) — so nothing
+    resolved is silently dropped. Includes leftover CORES: after a multi-anchor expansion the new
+    anchors' cores (e.g. an expanded dependency like RolesService→RolesList) aren't the primary
+    anchor's `members`, so the LLM refine never groups them — without this they'd vanish from every
+    seam (the "expand added nothing" bug). Tests render separately, so they're left out. Dedups."""
     placed = {nid for s in seams for nid in s["node_ids"]}
     for n in g.nodes.values():
-        if n.role in ("link", "environment") and n.id not in placed:
+        if n.role in ("core", "link", "environment") and n.id not in placed:
             host = next((s for s in seams if adj.get(n.id, set()) & set(s["node_ids"])),
                         seams[0] if seams else None)
             if host is not None:
