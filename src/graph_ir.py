@@ -72,6 +72,9 @@ class Node:
     # filled by the (mode-specific) assignment passes:
     role: str = ""                  # core | link | environment | test | noise | ""
     role_confidence: float = 1.0
+    relevant: bool = True           # mark-relevance: is this wiring ON the answer path (vs incidental,
+                                    # reached-but-not-part-of-the-answer)? Default True; the LLM pass
+                                    # only marks links False so the UI DIMS them — never drops (honest).
     group: str = ""                 # cluster id (Layer 4 output)
     intent: str = ""                # cluster label
     seam: str = ""                  # for a core: the seam id it anchors

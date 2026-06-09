@@ -338,6 +338,44 @@ def refine_seams_llm(g: Graph, floor_seams: list[dict], *, intent: str | None = 
     return _sweep_leftovers(g, seams, adj)
 
 
+def _relevance_prompt(intent: str, cores: list, links: list) -> str:
+    lines = [f'A developer is mapping the code that answers: "{intent}".', "",
+             "FOCUS — the core code this question is about:"]
+    lines += [f"  {n.label}  ({n.file})" for n in cores[:30]]
+    lines += ["",
+              "CANDIDATE WIRING — code reached while mapping the question. For EACH, decide if it is ON",
+              "the path to answering it (relevant), or INCIDENTAL — connected but not part of the answer",
+              "(session/auth setup, logging, config, generic utilities, an unrelated sibling import):"]
+    lines += [f"  {n.id}: {n.label}  ({n.file})" for n in links]
+    lines += ["",
+              "Default to relevant when unsure; mark incidental ONLY when clearly off the answer path.",
+              "Output ONLY a JSON array, one object per candidate:",
+              '[{"id":"<id>","relevant":true|false}]']
+    return "\n".join(lines)
+
+
+def mark_relevance_llm(g: Graph, intent: str, *, model: str = "claude-haiku-4-5",
+                       claude_bin: str | None = None, verbose: bool = False) -> None:
+    """Mark-relevance: tag each LINK as ON-the-answer-path (relevant) or INCIDENTAL relative to
+    `intent`. ADDITIVE — sets `n.relevant` (default True), never drops a node (the UI DIMS the
+    incidental, so completeness stays honest). Cores are the deliberate focus → always relevant.
+    Needs an LLM (relevance to a question is semantic, not structural); degrades to all-relevant on
+    any failure. One thinking-off pass, so it stays inside the generation budget."""
+    links = [n for n in g.nodes.values() if n.role == "link"]
+    if not intent or not links:
+        return
+    cores = [n for n in g.nodes.values() if n.role == "core"]
+    try:
+        out = llm.run_pass(_relevance_prompt(intent, cores, links),
+                           model=model, claude_bin=claude_bin, tag="relevance", verbose=verbose)
+    except llm.LLMError:
+        return                                      # degrade: nothing dimmed (all stay relevant)
+    for n in links:
+        obj = out.get(n.id)
+        if isinstance(obj, dict) and obj.get("relevant") in (False, "false", "False", 0):
+            n.relevant = False                      # incidental → the UI dims it (kept, not dropped)
+
+
 # --------------------------------------------------------------------------- Layer 2: blind spots
 _DYNAMIC_IMPORT_RE = re.compile(r"""import\(\s*['"]([^'"]+)['"]\s*\)""")
 _SCAN_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
@@ -543,6 +581,8 @@ def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False, inten
     seams = assign_intent_seams(g)              # F2: the deterministic intent floor (proposed)
     if use_llm:                                 # F4: the LLM refines/names the partition (proposed)
         seams = refine_seams_llm(g, seams, intent=intent, model=model, claude_bin=claude_bin)
+        if intent:                              # F5: mark-relevance — dim incidental wiring (additive)
+            mark_relevance_llm(g, intent, model=model, claude_bin=claude_bin)
     health = wellformedness(g)
     return emit_seams(g, health, seams)
 
@@ -555,7 +595,7 @@ def _seam_hunk(n: graph_ir.Node, provenance: str) -> dict:
     `subcores` — a PROPOSED behavioural partition (Model B), additive and clearly flagged."""
     out = {"id": n.id, "file": n.file, "start": n.start, "end": n.end,
            "role": n.role, "confidence": round(n.role_confidence, 2),
-           "label": n.label, "provenance": provenance,
+           "label": n.label, "provenance": provenance, "relevant": n.relevant,
            "external": [], "externalRefs": [], "rewire": None}
     if n.subcores:
         out["subcores"] = n.subcores

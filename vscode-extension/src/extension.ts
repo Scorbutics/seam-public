@@ -16,7 +16,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -1447,11 +1447,14 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     // — it uses the footprint but serves a different intent). Render it distinctly: a hollow, muted,
     // ripples-outward look so it reads as "the edge of the footprint", not an in-footprint member.
     const boundary = model?.mode === "codebase" && h.role === "environment";
+    // mark-relevance: a link the LLM judged INCIDENTAL (connected but off the answer path) is kept
+    // but DIMMED — muted icon + an "incidental" tag — never dropped, so completeness stays honest.
+    const incidental = model?.mode === "codebase" && h.relevant === false;
     const it = new vscode.TreeItem(
       `${boundary ? "⤳ boundary" : h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
-    const desc = [boundary ? "ripple · 1 hop out" : "", rw ? `↻ ${rw}` : "",
+    const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "", rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
                   nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");
@@ -1459,13 +1462,17 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     it.tooltip = boundary
       ? `boundary frontier — a consumer of a consumer (depth-2). It uses this footprint but serves ` +
         `a different intent; this is where the footprint ends.\n${h.file}:${h.start}-${h.end}`
-      : (unc ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe`
+      : (incidental ? `incidental wiring — connected to the footprint but judged OFF the answer path ` +
+                      `for this intent; kept (not dropped), just dimmed.\n` : "") +
+        (unc ? `${h.role}? — role vote was split (confidence ${confPct(h)}%); treat as a maybe`
              : h.role) +
         ` — ${h.file}:${h.start}-${h.end}` +
         (rw ? `\nre-routes ${rw}` : "") +
         (ext ? `\nwires outside the diff:${ext} (the §I boundary — go look there)` : "");
     it.iconPath = boundary
       ? new vscode.ThemeIcon("circle-large-outline", new vscode.ThemeColor("descriptionForeground"))
+      : incidental
+      ? new vscode.ThemeIcon(ROLE_ICON[h.role] ?? "circle-small", new vscode.ThemeColor("descriptionForeground"))
       : new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
     // P2/P3: a codebase-mode node can be EXPANDED — up (its consumers) or down (its dependencies).

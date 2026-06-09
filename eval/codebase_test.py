@@ -82,6 +82,25 @@ def test_anchor_relative_roles(g):
     assert role["n7"] == "test"            # verification node
 
 
+# --------------------------------------------------------------------------- mark-relevance (F5)
+def test_mark_relevance_dims_incidental_links(g, monkeypatch):
+    codebase.assign_roles(g)               # n4 = link, n1 = core
+    monkeypatch.setattr(codebase.llm, "run_pass", lambda *a, **k: {"n4": {"relevant": False}})
+    codebase.mark_relevance_llm(g, "how does the anchor persist data?")
+    assert g.nodes["n4"].relevant is False         # incidental link → dimmed (kept, not dropped)
+    assert g.nodes["n1"].relevant is True          # a core is the focus → always relevant
+    assert g.nodes["n4"].id in {n.id for n in g.nodes.values()}   # still present
+
+
+def test_mark_relevance_degrades_to_all_relevant(g, monkeypatch):
+    codebase.assign_roles(g)
+    def boom(*a, **k):
+        raise codebase.llm.LLMError("no backend")
+    monkeypatch.setattr(codebase.llm, "run_pass", boom)
+    codebase.mark_relevance_llm(g, "q")
+    assert all(n.relevant for n in g.nodes.values())   # nothing dimmed on LLM failure (honest default)
+
+
 # --------------------------------------------------------------------------- well-formedness (Layer 6)
 def test_isolated_core_is_surfaced(g):
     codebase.assign_roles(g)
