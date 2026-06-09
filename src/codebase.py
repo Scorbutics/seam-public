@@ -47,12 +47,15 @@ _CONF_ENV = 0.6
 
 
 def assign_roles(g: Graph) -> None:
-    """Layer 3: anchor-relative roles over the RESOLVED adjacency. Mutates `g.nodes`."""
-    anchor_sym = g.nodes[g.anchor].label if g.anchor in g.nodes else ""
+    """Layer 3: anchor-relative roles over the RESOLVED adjacency. Mutates `g.nodes`. With expansion
+    (P2) the graph has MULTIPLE anchors (the lineage); core = the union of every anchor + its members,
+    so the original seed AND each expanded node are cores, and links/env are relative to that set."""
+    anchor_ids = [a for a in (g.anchors or [g.anchor]) if a in g.nodes]
+    anchor_syms = {g.nodes[a].label for a in anchor_ids if g.nodes[a].label}
     adj = undirected_adjacency(g.resolved_edges())
 
     core = {n.id for n in g.nodes.values()
-            if n.id == g.anchor or (anchor_sym and n.enclosing == anchor_sym)}
+            if n.id in anchor_ids or (n.enclosing and n.enclosing in anchor_syms)}
     tests = {n.id for n in g.nodes.values() if n.kind == "test"}
     link = {nid for nid in g.nodes
             if nid not in core and nid not in tests and (adj.get(nid, set()) & core)}
@@ -157,25 +160,37 @@ def assign_intent_seams(g: Graph) -> list[dict]:
     Returns a list of seam dicts (`node_ids` may overlap — the many-to-many). NOT a partition of
     nodes; a reading over them. Deterministic ≠ resolved: this is a proposal, not a fact.
     """
-    anchor = g.anchor
-    anchor_node = g.nodes.get(anchor)
-    if anchor_node is None:
+    anchors = [a for a in (g.anchors or [g.anchor]) if a in g.nodes]
+    if not anchors:
         return []
-    anchor_sym = anchor_node.label
     adj = undirected_adjacency(g.resolved_edges())
-    members = [n for n in g.nodes.values()
-               if n.role == "core" and n.id != anchor and n.enclosing == anchor_sym]
-    consumers = [n for n in g.nodes.values() if n.role == "link"]
 
-    carriers = members if members else [anchor_node]
+    # Carriers = EACH anchor's member cores (else the anchor itself). With expansion (P2) there are
+    # several anchors; carrier_anchor records which anchor a carrier belongs to, so a seam can name
+    # its owning anchor(s) and cross-anchor wiring can fuse the grown intent.
+    carriers: list = []
+    carrier_anchor: dict[str, str] = {}
+    seen_c: set[str] = set()
+    for a in anchors:
+        a_sym = g.nodes[a].label
+        members = [n for n in g.nodes.values()
+                   if n.role == "core" and n.id != a and n.enclosing == a_sym]
+        for c in (members if members else [g.nodes[a]]):
+            if c.id not in seen_c:
+                seen_c.add(c.id)
+                carriers.append(c)
+                carrier_anchor[c.id] = a
     cset = {c.id for c in carriers}
-    uses: dict[str, set[str]] = {}                      # consumer → carriers it uses
+    consumers = [n for n in g.nodes.values() if n.role == "link"]
+    uses: dict[str, set[str]] = {}                      # consumer → carriers (or whole-anchors) it uses
     for con in consumers:
         used = {cid for cid in cset if cid in adj.get(con.id, set())}
-        if not used and anchor in adj.get(con.id, set()):
-            used = {anchor}                            # used the anchor as a whole
+        if not used:
+            used = {a for a in anchors if a in adj.get(con.id, set())}   # used an anchor as a whole
         uses[con.id] = used
 
+    anchor0 = anchors[0]
+    anchor0_sym = g.nodes[anchor0].label
     seams: list[dict] = []
     if len(carriers) > 1 and any(uses.values()):
         # multi-member: co-occurrence of carriers used together by the same consumer. A consumer
@@ -189,6 +204,12 @@ def assign_intent_seams(g: Graph) -> list[dict]:
             if len(u) > cut:
                 continue                           # ambient consumer → no co-occurrence edge
             cooc += [(u[0], x) for x in u[1:]]
+        # CROSS-ANCHOR wiring fuses the grown intent: an expanded anchor that consumes the original
+        # (a resolved core→core edge BETWEEN anchors' carriers) shares its seam. Within one anchor's
+        # members we DON'T add these, so single-anchor partitioning (and its golds) is unchanged.
+        for e in g.resolved_edges():
+            if e.src in cset and e.dst in cset and carrier_anchor.get(e.src) != carrier_anchor.get(e.dst):
+                cooc.append((e.src, e.dst))
         cluster_of = connected_components([c.id for c in carriers], cooc)
         by_cluster: dict[str, list[str]] = {}
         for cid in cset:
@@ -197,16 +218,17 @@ def assign_intent_seams(g: Graph) -> list[dict]:
             cs = set(cids)
             cons = [cid for cid, u in uses.items() if u & cs]
             rep = max((g.nodes[c] for c in cids), key=lambda n: n.complexity)
-            seams.append(_mk_seam(rep.id, rep.label, [anchor, *sorted(cids), *cons], link_only=False))
+            owners = [a for a in anchors if a in cs or g.nodes[a].label in {g.nodes[c].enclosing for c in cs}]
+            seams.append(_mk_seam(rep.id, rep.label, [*owners, *sorted(cids), *cons], link_only=False))
     else:
-        # single-member: the anchor IS the carrier — split consumers by module-area
+        # single carrier total (one anchor, one member): split consumers by module-area
         by_area: dict[str, list[str]] = {}
         for con in consumers:
             by_area.setdefault(_area(con.file), []).append(con.id)
         if not by_area:
-            seams.append(_mk_seam(anchor, anchor_sym, [anchor], link_only=False))
+            seams.append(_mk_seam(anchor0, anchor0_sym, [anchor0], link_only=False))
         for area, cons in by_area.items():
-            seams.append(_mk_seam(f"{anchor}@{area}", f"{anchor_sym} · {area}", [anchor, *cons], link_only=False))
+            seams.append(_mk_seam(f"{anchor0}@{area}", f"{anchor0_sym} · {area}", [anchor0, *cons], link_only=False))
 
     return _sweep_leftovers(g, seams, adj)      # place reached env, drop nothing
 

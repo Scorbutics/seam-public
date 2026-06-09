@@ -52,6 +52,20 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--intent", metavar="TEXT",
                     help="CODEBASE mode (P1): the user's question; the LLM refine pass marks the "
                          "best-matching seam (`selectedSeam`) so the renderer focuses it. Needs an LLM.")
+    ap.add_argument("--emit-graph", metavar="JSON",
+                    help="CODEBASE mode: also write the (scanned/merged) ResolvedGraph here so the "
+                         "extension can keep it as the session graph and EXPAND it (P2).")
+    source.add_argument("--expand-graph", metavar="JSON",
+                        help="CODEBASE mode (P2 expand): a base ResolvedGraph to GROW — scan --expand-file/"
+                             "--expand-symbol and MERGE it in (the picked node becomes a sub-anchor).")
+    ap.add_argument("--expand-file", help="--expand-graph: repo-relative file of the node to expand from")
+    ap.add_argument("--expand-symbol", help="--expand-graph: symbol name of the node to expand from")
+    ap.add_argument("--expand-line", type=int,
+                    help="--expand-graph: the node's start line, so the merge dedups it to the "
+                         "existing node (esp. for label-less / module-level nodes)")
+    ap.add_argument("--down", action="store_true",
+                    help="--expand-graph: expand DOWNWARD to the node's dependencies (what it uses: "
+                         "service→repository→prisma) instead of upward to its consumers (P3).")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -96,13 +110,28 @@ def main(argv: list[str] | None = None) -> int:
                          "and dump <out>.prompt.txt / <out>.reply.txt")
     args = ap.parse_args(argv)
 
-    if args.graph or args.scan:
+    if args.graph or args.scan or args.expand_graph:
         # CODEBASE MODE — decompose a ResolvedGraph (plan §3). Entirely downstream of the FRONT:
         # the VSCode API never reaches here, only the JSON contract (constraint §4). No diff, no LLM.
-        # Two fronts produce the same contract: --graph (the LSP SymbolResolver's emitted JSON) and
-        # --scan (the deterministic import-scan front — monorepo-safe consumer discovery, offline).
+        # Fronts producing the same contract: --graph (LSP resolver JSON), --scan (import-scan front),
+        # --expand-graph (P2: grow an existing graph by merging another scan into it).
         from src import codebase, graph_ir
-        if args.scan:
+        if args.expand_graph:
+            if not (args.expand_file and args.expand_symbol):
+                print("error: --expand-graph requires --expand-file and --expand-symbol", file=sys.stderr)
+                return 2
+            from src import expand, import_scan
+            try:
+                base = json.loads(Path(args.expand_graph).read_text(encoding="utf-8"))
+                # UP (default) = the node's consumers; DOWN = its dependencies (P3).
+                add = (import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
+                       if args.down
+                       else import_scan.build_resolved_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line))
+                data = expand.merge_resolved(base, add, expand_anchor=add.get("anchor", {}).get("id"))
+            except Exception as exc:  # noqa: BLE001
+                print(f"error: expand failed: {exc}", file=sys.stderr)
+                return 2
+        elif args.scan:
             if not args.anchor_file:
                 print("error: --scan requires --anchor-file", file=sys.stderr)
                 return 2
@@ -160,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
         if g.unresolved:
             print(f"  {len(g.unresolved)} unresolved (UNKNOWN, not 'no link'); "
                   f"{len(g.blindspots)} blind spot(s)")
+        if args.emit_graph:        # the session ResolvedGraph (scanned/merged) — the extension keeps it to EXPAND
+            Path(args.emit_graph).write_text(json.dumps(data), encoding="utf-8")
         if args.emit_seams:
             Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
             print(f"Seams: {args.emit_seams}")

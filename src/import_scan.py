@@ -429,7 +429,7 @@ def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
 
 # --------------------------------------------------------------------------- ResolvedGraph build
 def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int = 1,
-                         verified: dict | None = None) -> dict:
+                         verified: dict | None = None, anchor_line: int | None = None) -> dict:
     """Assemble the `ResolvedGraph` JSON (resolver.ts contract) from a deterministic import scan.
     Anchor = the symbol's definition; nodes = the enclosing symbol at each resolved consumer's
     call-site; resolved edges = consumer → anchor. Unresolved-module name matches become
@@ -453,6 +453,8 @@ def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int
                 akind, arange = defu[1], [defu[2], defu[3]]
         except Exception:
             pass
+    if anchor_line is not None:                          # match the EXISTING node's line so merge dedups
+        arange = [anchor_line, max(anchor_line, arange[1])]
     # A CLASS anchor decomposes into its METHODS (carriers) — consumers are attributed per-method
     # so the class splits by behavioural intent (charge/refund vs validate), not lumped by area.
     if akind == "class":
@@ -768,6 +770,87 @@ def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: in
         "edges": edges,
         "blindspots": blindspots,
         "unresolved": unresolved,
+    }
+
+
+def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
+    """DOWNWARD direction (P3): the anchor's direct DEPENDENCIES — the behavioural symbols its file
+    imports (resolved) — so an intent can grow toward what it USES (service → repository → prisma),
+    not just who uses it. The deps are CORES in the implementation chain (added to `anchors`), fused
+    to the anchor by the import edge. Usage-first stays the seed; this is an intent-CHOSEN expansion.
+    Type/constant imports fall away naturally (only function/class/method defs are kept); an import
+    that doesn't resolve to a repo file (external pkg / alias / DI) becomes a SUGGESTED blind spot —
+    the honest dependency boundary."""
+    repo = os.path.expanduser(repo)
+    nodes: list[dict] = []
+    edges: list[dict] = []
+    blindspots: list[dict] = []
+    arange, akind = [0, 0], "symbol"
+    ar = _read(repo, anchor_file)
+    if ar and available():
+        try:
+            defu = next((u for u in _named_units(_Ctx(ar[0], ar[1])) if u[0] == symbol), None)
+            if defu:
+                akind, arange = defu[1], [defu[2], defu[3]]
+        except Exception:
+            pass
+    if anchor_line is not None:                          # match the EXISTING node's line so merge dedups
+        arange = [anchor_line, max(anchor_line, arange[1])]
+    nodes.append({"id": "n1", "symbol": symbol, "kind": akind, "file": anchor_file,
+                  "range": arange, "enclosing": "", "complexity": max(1, arange[1] - arange[0] + 1)})
+    anchors = ["n1"]
+
+    if ar and available():
+        pkgs = _pkg_map(repo)
+        dep_units: dict[str, list] = {}
+        counter = 0
+        seen: set[tuple[str, str]] = set()
+        for m in _IMPORT_RE.finditer(ar[0]):
+            named, source = m.group(2), m.group(3)
+            if not named:
+                continue
+            resolved_to = resolve_module(repo, anchor_file, source, pkgs)
+            for part in named.split(","):
+                ln = _local_name(part)
+                if not ln:
+                    continue
+                imported = ln[0]
+                if resolved_to is None:                  # external pkg / alias / DI → the dependency boundary
+                    blindspots.append({"node": "n1", "mechanism": "external-dependency",
+                                       "evidence": f"{symbol} depends on {imported} from '{source}' (outside the repo / unresolved)",
+                                       "candidates": []})
+                    continue
+                if resolved_to not in dep_units:
+                    rd = _read(repo, resolved_to)
+                    try:
+                        dep_units[resolved_to] = _named_units(_Ctx(rd[0], rd[1])) if rd else []
+                    except Exception:
+                        dep_units[resolved_to] = []
+                defu = next((u for u in dep_units[resolved_to] if u[0] == imported), None)
+                if defu is None:                         # not a behavioural top-level def (type/const/re-export)
+                    continue
+                if (imported, resolved_to) in seen:
+                    continue
+                seen.add((imported, resolved_to))
+                counter += 1
+                did = f"d{counter}"
+                nodes.append({"id": did, "symbol": imported, "kind": defu[1], "file": resolved_to,
+                              "range": [defu[2], defu[3]], "enclosing": "", "complexity": max(1, defu[3] - defu[2] + 1)})
+                edges.append({"from": "n1", "to": did, "kind": "import", "provenance": "RESOLVED_FULL"})
+                anchors.append(did)                      # a dependency layer = a core in the chain
+
+    return {
+        "version": 1,
+        "anchor": {"id": "n1", "symbol": symbol, "file": anchor_file, "range": arange},
+        "anchors": anchors,
+        "language": (lang_for(anchor_file) or ""),
+        "resolutionQuality": "FULL",
+        "depth": 1,
+        "complete": True,
+        "nodes": nodes,
+        "edges": edges,
+        "blindspots": blindspots,
+        "unresolved": [],
     }
 
 

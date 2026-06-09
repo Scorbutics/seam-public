@@ -15,6 +15,8 @@
       { "command": "seam.analyzeCodebase", "title": "Seam: Analyze codebase from anchor (cursor)", "icon": "$(target)" },
       { "command": "seam.analyzeModule", "title": "Seam: Analyze module (all exports of this file)", "icon": "$(symbol-namespace)" },
       { "command": "seam.analyzeFromIntent", "title": "Seam: Find footprint by intent…", "icon": "$(search-fuzzy)" },
+      { "command": "seam.expandNode", "title": "Seam: Expand → consumers (who uses this)", "icon": "$(arrow-up)" },
+      { "command": "seam.expandDown", "title": "Seam: Expand → dependencies (what this uses)", "icon": "$(arrow-down)" },
       { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
       { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
       { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
@@ -44,6 +46,10 @@
       "editor/context": [
         { "command": "seam.analyzeCodebase", "when": "editorTextFocus", "group": "navigation@9" },
         { "command": "seam.analyzeModule", "when": "editorTextFocus", "group": "navigation@9" }
+      ],
+      "view/item/context": [
+        { "command": "seam.expandNode", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@1" },
+        { "command": "seam.expandDown", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@2" }
       ]
     },
     "keybindings": [

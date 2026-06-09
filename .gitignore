@@ -6,6 +6,7 @@ __pycache__/
 report*.html
 *.prompt.txt
 *.reply.txt
+.seam-session-graph.json
 
 # diffs fed to the tool (keep the sample fixture + the eval case fixtures)
 *.patch

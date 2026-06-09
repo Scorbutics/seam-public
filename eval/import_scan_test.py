@@ -99,6 +99,16 @@ def test_class_mode_method_attribution():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_dependency_graph_downward_finds_behavioural_deps():
+    # DOWNWARD (P3): checkout.ts imports the PaymentService CLASS → a dependency core in the chain
+    g = import_scan.build_dependency_graph(REPO, "apps/web/checkout.ts", "checkout")
+    dep = next((n for n in g["nodes"] if n["symbol"] == "PaymentService"), None)
+    assert dep is not None and dep["kind"] == "class"
+    assert dep["id"] in g["anchors"]                                   # deps are cores in the chain
+    assert any(e["from"] == "n1" and e["to"] == dep["id"] and e["kind"] == "import" for e in g["edges"])
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_class_call_candidates_for_lsp_verification():
     cands = import_scan.class_call_candidates(REPO, CLS_ANCHOR, CLS)
     got = {(c["file"].replace("\\", "/").split("/")[-1], c["method"]) for c in cands}

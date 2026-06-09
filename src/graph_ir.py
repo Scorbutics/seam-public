@@ -121,7 +121,8 @@ class Graph:
     nodes: dict[str, Node] = field(default_factory=dict)
     edges: list[Edge] = field(default_factory=list)
     # codebase-mode metadata (unused by diff-mode; documents the contract — plan §2.1):
-    anchor: str = ""
+    anchor: str = ""                # the PRIMARY anchor (the seed)
+    anchors: list[str] = field(default_factory=list)  # expansion lineage (P2): all cores' anchors
     language: str = ""
     resolution_quality: str = ""    # FULL | PARTIAL | HEURISTIC | NONE (probed, plan §4)
     depth: int = 0                  # BFS depth resolved to (anchor-bounded, plan D5)
@@ -283,6 +284,9 @@ def from_resolved_graph(data: dict) -> Graph:
     if g.anchor not in present and a.get("symbol"):
         g.anchor = next((n.id for n in g.nodes.values()
                          if n.label == a["symbol"] and (not a.get("file") or n.file == a["file"])), "")
+    # P2: the expansion lineage — every anchor whose footprint was merged in (roles are computed
+    # relative to ALL of them). Falls back to the single primary anchor for an un-expanded scan.
+    g.anchors = [aid for aid in data.get("anchors", []) if aid in present] or ([g.anchor] if g.anchor in present else [])
 
     for bs in data.get("blindspots", []):
         cands = [Edge(src=bs["node"], dst=c.get("symbol", ""), kind="blindspot",

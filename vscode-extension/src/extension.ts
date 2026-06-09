@@ -16,7 +16,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -84,6 +84,11 @@ function hexToRgba(hex: string, a: number): string {
 type TDeco = vscode.TextEditorDecorationType;
 let model: SeamModel | undefined;
 let repoRoot = "";
+// P2 (expand): the accumulating ResolvedGraph for this session (a fresh analysis resets it; expanding
+// a node merges its scan in). `sessionIntent` is re-applied on each expand so the focus persists.
+const SESSION_GRAPH = ".seam-session-graph.json";
+let sessionGraph: string | null = null;
+let sessionIntent = "";
 let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file → its hunk occurrences
 // Seam graph (S1): seam id → label, and seam id → its wired neighbours (resolved seam-to-seam).
 let seamLabel: Map<string, string> = new Map();
@@ -120,6 +125,9 @@ let extContext: vscode.ExtensionContext;
 // intent in isolation. null = show all. "Show all seams" (eye) resets it.
 let focusIds: Set<string> | null = null;
 let focusLabel = "";
+// P2 #2 (isolate): in codebase mode, focusing a seam also HIDES the other seams from the TREE (not
+// just the editor decorations) — "select a seam → the others are discarded". null = show all seams.
+let focusedSeamId: string | null = null;
 let lastRunBanner = "";
 let navCursor = -1;   // position within the current scope's ordered hunk list
 
@@ -173,6 +181,8 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
     vscode.commands.registerCommand("seam.analyzeModule", analyzeModule),
     vscode.commands.registerCommand("seam.analyzeFromIntent", analyzeFromIntent),
+    vscode.commands.registerCommand("seam.expandNode", expandNode),
+    vscode.commands.registerCommand("seam.expandDown", expandDown),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -236,13 +246,16 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
               || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore"
               || sel.kind === "contract" || sel.kind === "feed" || sel.kind === "feedDef"
               || sel.kind === "seamLink")) return;
+  const codebase = model?.mode === "codebase";
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
     focusLabel = sel.seam.label;
+    if (codebase) { focusedSeamId = sel.seam.id; treeProvider.refresh(); }   // isolate this seam in the tree
   } else if (sel.kind === "cluster") {
     focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map(spanKey)));
     focusLabel = sel.cluster.intent;
+    if (codebase && focusedSeamId) { focusedSeamId = null; treeProvider.refresh(); }   // cluster = widen
   }
   rerender();
 }
@@ -250,7 +263,9 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
 function showAll() {
   focusIds = null;
   focusLabel = "";
+  focusedSeamId = null;      // widen the tree back to every seam
   clearProposed();           // show-all is the verified view; drop the opt-in proposed overlay
+  treeProvider.refresh();
   rerender();
 }
 
@@ -286,9 +301,12 @@ function navStep(delta: number, fromKey?: string) {
 
 function updateBanner() {
   if (!treeView) return;
-  treeView.message = focusIds
-    ? `focus: ${focusLabel}  —  press the eye (Show all seams) to see everything`
-    : lastRunBanner;
+  const total = model?.clusters.reduce((a, c) => a + c.seams.length, 0) ?? 0;
+  treeView.message = focusedSeamId
+    ? `intent: ${focusLabel}  —  isolated 1 of ${total} seams · press the eye (Show all) to widen`
+    : focusIds
+      ? `focus: ${focusLabel}  —  press the eye (Show all seams) to see everything`
+      : lastRunBanner;
 }
 
 // Load a model into the view (tree + decorations + the "last run" message banner).
@@ -298,11 +316,13 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   resolveCache.clear();       // a new run invalidates resolved external targets
   focusIds = null;            // a fresh/restored run starts showing all seams
   focusLabel = "";
-  // P1 (intent focus): if the run carried a question, the engine marked the matching seam — lead
-  // with it (the user presses "Show all seams" to widen). This is the fix for the goal-less dump.
+  focusedSeamId = null;
+  // P1 (intent focus) + P2 #2 (isolate): if the run carried a question, the engine marked the matching
+  // seam — lead with it AND hide the other seams from the tree (the user presses "Show all seams" to
+  // widen). This is the fix for the goal-less dump.
   if (m.selectedSeam) {
     const sel = m.clusters.flatMap((c) => c.seams).find((s) => s.id === m.selectedSeam);
-    if (sel) { focusIds = new Set(sel.hunks.map(spanKey)); focusLabel = sel.label; }
+    if (sel) { focusIds = new Set(sel.hunks.map(spanKey)); focusLabel = sel.label; focusedSeamId = sel.id; }
   }
   // Codebase mode leads with the HONESTY FRONTIER (plan §4): the probed resolution quality
   // and the size of the blind-spot map sit in the persistent banner, not just a toast.
@@ -565,11 +585,13 @@ async function runScan(tool: string, py: string, scanArgs: string[], title: stri
     { location: vscode.ProgressLocation.Notification, title },
     async () => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
+      const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         await execFileP(py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
-                             ...scanArgs, "--classifier", engine, "--emit-seams", out], tool);
+                             ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out], tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        sessionGraph = graph;                          // fresh analysis = new session to grow from
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
@@ -603,6 +625,7 @@ async function analyzeCodebase() {
     return;
   }
   // depth 2 (default) adds the environment ripple = the boundary frontier (consumers-of-consumers).
+  sessionIntent = "";                      // a cursor-anchored analysis has no question to focus on
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
   if (anchor.kind === "class") {
     // A class anchor splits by METHOD: the LSP verifies which method each consumer calls (the
@@ -644,8 +667,10 @@ async function runScanClass(tool: string, py: string,
           scanArgs.push("--attribution", attr);     // else: fall back to the heuristic
         }
         // phase 3 — decompose with the verified (or heuristic) attribution
-        await execFileP(py, [...base, ...scanArgs, "--classifier", engine, "--emit-seams", out], tool);
+        const graph = path.join(tool, SESSION_GRAPH);
+        await execFileP(py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out], tool);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        sessionGraph = graph;
         const ts = Date.now();
         const range = `class ${anchor.symbol}`;
         activateModel(parsed, repoRoot, range, ts);
@@ -673,9 +698,76 @@ async function analyzeModule() {
   if (!env) return;
   const file = path.relative(repoRoot, editor.document.uri.fsPath).split(path.sep).join("/");
   const base = path.basename(file);
+  sessionIntent = "";
   await runScan(env.tool, env.py, ["--anchor-file", file],
                 `Seam: scanning module ${base}…`, `module ${base}`);
 }
+
+// P2/P3: EXPAND from a node — scan its footprint and MERGE it into the session graph, growing the
+// intent that direction. UP (default) = its consumers; DOWN = its dependencies (service→repo→db).
+// Re-applies the persisted question to re-focus. Invoked from the tree's context menu (it receives
+// the hunk Node).
+async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean) {
+  const h = node?.hunk;
+  if (!h) return;
+  if (!sessionGraph || !fs.existsSync(sessionGraph)) {
+    vscode.window.showErrorMessage("Seam: run an analysis first, then expand a node.");
+    return;
+  }
+  const symbol = h.label;
+  if (!symbol) {
+    vscode.window.showWarningMessage("Seam: this node has no symbol to expand from.");
+    return;
+  }
+  const env = codebaseEnv();
+  if (!env) return;
+  const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
+  const before = nodeCount(model);
+  const dir = down ? "dependencies of" : "consumers of";
+  await vscode.window.withProgress(
+    { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…` },
+    async () => {
+      const out = path.join(env.tool, `.seam-${Date.now()}.json`);
+      try {
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        // read the session graph AND write the grown one back to it (decompose loads before writing)
+        const args = [path.join(env.tool, "decompose.py"), "--expand-graph", sessionGraph!, "--repo", repoRoot,
+                      "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
+                      "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
+        if (down) args.push("--down");
+        if (sessionIntent) args.push("--intent", sessionIntent);
+        await execFileP(env.py, args, env.tool);
+        const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        const ts = Date.now();
+        const range = `expanded ${down ? "↓" : "+"}${symbol}`;
+        activateModel(parsed, repoRoot, range, ts);
+        extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
+        const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+        if (nodeCount(parsed) <= before) {
+          vscode.window.showInformationMessage(
+            `Seam: nothing new reached ${down ? "below" : "above"} ${symbol} — a dead-end ` +
+            `(${down ? "no resolvable dependencies" : "no by-name consumers, e.g. a router endpoint"}).`);
+        } else {
+          vscode.window.showInformationMessage(`Seam: grew the intent ${down ? "downward" : ""} from ${symbol} — ${n} seam(s) now.`);
+        }
+      } catch (e) {
+        vscode.window.showErrorMessage(`Seam expand failed: ${e instanceof Error ? e.message : e}`);
+      } finally {
+        try { fs.unlinkSync(out); } catch { /* ignore */ }
+      }
+    },
+  );
+}
+
+function nodeCount(m?: SeamModel): number {
+  if (!m) return 0;
+  const ids = new Set<string>();
+  for (const cl of m.clusters) for (const s of cl.seams) for (const h of s.hunks) ids.add(h.id);
+  return ids.size;
+}
+
+const expandNode = (node?: { hunk?: SeamHunk }) => expandFrom(node, false);   // UP: consumers
+const expandDown = (node?: { hunk?: SeamHunk }) => expandFrom(node, true);    // DOWN: dependencies
 
 // FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → Python ranks them →
 // the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's
@@ -690,6 +782,7 @@ async function analyzeFromIntent() {
     ignoreFocusOut: true,
   });
   if (!intent || !intent.trim()) return;
+  sessionIntent = intent;                  // persist the question so expansions re-focus the answer
 
   const picked = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: finding anchors for “${intent}”…` },
@@ -1140,8 +1233,13 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return p.then((defs) => defs.slice(0, 1).map((d) =>
         ({ kind: "feedDef", uri: d.uri, line: d.line, value: f.value } as Node)));
     }
-    if (el.kind === "cluster")
-      return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+    if (el.kind === "cluster") {
+      // P2 #2: when a seam is focused, ISOLATE it — show only that seam (others discarded). Guarded:
+      // if the focused id isn't in this model (e.g. it changed after an expand), fall back to all.
+      const isolate = focusedSeamId && el.cluster.seams.some((s) => s.id === focusedSeamId);
+      const seams = isolate ? el.cluster.seams.filter((s) => s.id === focusedSeamId) : el.cluster.seams;
+      return seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+    }
     if (el.kind === "seam") {
       // the seam's resolved wiring (other seams it connects to) shows first, then its hunks.
       const links: Node[] = (seamNeighbors.get(el.seam.id) ?? [])
@@ -1320,6 +1418,11 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       ? new vscode.ThemeIcon("circle-large-outline", new vscode.ThemeColor("descriptionForeground"))
       : new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
+    // P2/P3: a codebase-mode node can be EXPANDED — up (its consumers) or down (its dependencies).
+    // The contextValue gates the expand menu; the command receives this tree Node and reads its hunk.
+    if (model?.mode === "codebase" && (h.role === "link" || h.role === "environment" || h.role === "core")) {
+      it.contextValue = "seamExpandable";
+    }
     return it;
   }
 }
