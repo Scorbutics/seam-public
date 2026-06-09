@@ -73,6 +73,35 @@ def test_anchor_def_resolved_by_treesitter():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_depth2_ripple_adds_consumers_of_consumers():
+    g1 = import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=1)
+    g2 = import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=2)
+    files1 = {n["file"].replace("\\", "/") for n in g1["nodes"]}
+    files2 = {n["file"].replace("\\", "/") for n in g2["nodes"]}
+    # page-host.ts imports the EXPORTED depth-1 consumer renderPage → only appears at depth 2
+    assert "apps/web/page-host.ts" not in files1
+    assert "apps/web/page-host.ts" in files2
+    # the ripple node wires to the renderPage CONSUMER node, not to the anchor (it's depth-2)
+    host = next(n for n in g2["nodes"] if n["file"].replace("\\", "/") == "apps/web/page-host.ts")
+    renderpage = next(n for n in g2["nodes"] if n["symbol"] == "renderPage")
+    e2 = {(e["from"], e["to"]) for e in g2["edges"]}
+    assert (host["id"], renderpage["id"]) in e2
+    assert (host["id"], "n1") not in e2
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
+def test_depth2_node_is_environment_boundary():
+    from src import codebase, graph_ir
+    g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=2))
+    codebase.decompose(g)
+    host = next(n for n in g.nodes.values() if n.file.replace("\\", "/") == "apps/web/page-host.ts")
+    assert host.role == "environment"      # depth-2 = the boundary frontier
+    # direct consumers stay link (in-footprint)
+    rp = next(n for n in g.nodes.values() if n.label == "renderPage")
+    assert rp.role == "link"
+
+
+@pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_module_mode_members_and_cooccurrence():
     g = import_scan.build_module_graph(REPO, ANCHOR)
     members = {n["symbol"]: n for n in g["nodes"] if n["enclosing"] == "widget"}

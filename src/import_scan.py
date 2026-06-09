@@ -219,6 +219,87 @@ def _read(repo: str, rel: str) -> tuple[str, str] | None:
         return None
 
 
+# --------------------------------------------------------------------------- depth-2 ripple
+def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
+                   counter: int, seen_keys: dict[str, str]) -> tuple[list[dict], list[dict], int]:
+    """The ENVIRONMENT RIPPLE (plan: depth-2 = the boundary frontier). For each depth-1 consumer
+    that is itself an EXPORTED symbol, find ITS importers (consumers-of-consumers) and wire them in.
+    They become `environment` by role (adjacent to a link, not the core) = the frontier where the
+    footprint hands off to other intents. Honest gap: a NON-exported consumer (an internal/anon
+    function) has no import-scan-discoverable ripple — it's a leaf of this view."""
+    targets: dict[tuple[str, str], str] = {}        # (exported symbol, norm file) → consumer node id
+    for n in consumers:
+        if n["kind"] == "module":                   # a module-level use, not a named export
+            continue
+        rd = _read(repo, n["file"])
+        if not rd:
+            continue
+        try:
+            if n["symbol"] in {m[0] for m in _exported_members(_Ctx(rd[0], rd[1]))}:
+                targets[(n["symbol"], os.path.normpath(n["file"]))] = n["id"]
+        except Exception:
+            continue
+    if not targets:
+        return [], [], counter
+    target_syms = {s for s, _ in targets}
+    new_nodes: list[dict] = []
+    new_edges: list[dict] = []
+    for root, dirs, files in os.walk(repo):
+        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+        for fn in files:
+            if not fn.endswith(_EXTS):
+                continue
+            path = os.path.join(root, fn)
+            try:
+                text = open(path, encoding="utf-8", errors="ignore").read()
+            except OSError:
+                continue
+            if not any(s in text for s in target_syms):
+                continue
+            rel = os.path.relpath(path, repo)
+            hits: dict[str, str] = {}                # target consumer node id → local binding
+            for m in _IMPORT_RE.finditer(text):
+                named, source = m.group(2), m.group(3)
+                if not named:
+                    continue
+                resolved_to = resolve_module(repo, rel, source, pkgs)
+                if resolved_to is None:
+                    continue
+                rnorm = os.path.normpath(resolved_to)
+                for part in named.split(","):
+                    ln = _local_name(part)
+                    if ln and (tid := targets.get((ln[0], rnorm))):
+                        hits[tid] = ln[1]
+            if not hits:
+                continue
+            rd = _read(repo, rel)
+            if not rd:
+                continue
+            try:
+                cctx = _Ctx(rd[0], rd[1])
+            except Exception:
+                continue
+            units = _named_units(cctx)
+            for tid, local in hits.items():
+                line = next(iter(_call_lines(cctx, local)), 0)
+                enc = _enclosing(units, line)
+                if enc:
+                    name, kind, start, end = enc
+                else:
+                    name, kind, start, end = os.path.splitext(os.path.basename(rel))[0], "module", line, line
+                key = f"{rel}#{name}#{start}"
+                d2id = seen_keys.get(key)
+                if d2id is None:
+                    counter += 1
+                    d2id = f"n{counter}"
+                    seen_keys[key] = d2id
+                    new_nodes.append({"id": d2id, "symbol": name, "kind": kind, "file": rel,
+                                      "range": [start, end], "enclosing": "", "complexity": max(1, end - start + 1)})
+                if d2id != tid:
+                    new_edges.append({"from": d2id, "to": tid, "kind": "reference", "provenance": "RESOLVED_FULL"})
+    return new_nodes, new_edges, counter
+
+
 # --------------------------------------------------------------------------- ResolvedGraph build
 def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int = 1) -> dict:
     """Assemble the `ResolvedGraph` JSON (resolver.ts contract) from a deterministic import scan.
@@ -283,6 +364,12 @@ def build_resolved_graph(repo: str, anchor_file: str, symbol: str, *, depth: int
                           "range": [start, end], "enclosing": cls,
                           "complexity": max(1, end - start + 1)})
             edges.append({"from": cid, "to": "n1", "kind": "reference", "provenance": "RESOLVED_FULL"})
+
+    # depth-2 ripple (the boundary frontier): consumers-of-consumers, auto-roled environment.
+    if depth >= 2 and available():
+        d2_nodes, d2_edges, counter = _depth2_ripple(repo, nodes[1:], _pkg_map(repo), counter, seen_keys)
+        nodes.extend(d2_nodes)
+        edges.extend(d2_edges)
 
     return {
         "version": 1,
@@ -431,10 +518,11 @@ def main(argv=None) -> int:
     ap.add_argument("--repo", required=True)
     ap.add_argument("--anchor-file", required=True, help="repo-relative path of the symbol's defining file")
     ap.add_argument("--symbol", help="single-symbol anchor; OMIT for MODULE mode (all exports as members)")
+    ap.add_argument("--depth", type=int, default=1, help="1 = direct consumers; 2 = + the environment ripple (consumers-of-consumers)")
     ap.add_argument("--out", help="write the ResolvedGraph JSON here (else stdout)")
     a = ap.parse_args(argv)
     g = build_module_graph(a.repo, a.anchor_file) if not a.symbol \
-        else build_resolved_graph(a.repo, a.anchor_file, a.symbol)
+        else build_resolved_graph(a.repo, a.anchor_file, a.symbol, depth=a.depth)
     text = json.dumps(g, indent=2)
     if a.out:
         open(a.out, "w", encoding="utf-8").write(text)

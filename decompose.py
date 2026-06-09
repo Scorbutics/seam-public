@@ -40,6 +40,9 @@ def main(argv: list[str] | None = None) -> int:
                              "(monorepo-safe, offline). Requires --repo, --anchor-file, --symbol.")
     ap.add_argument("--anchor-file", help="--scan: repo-relative path of the anchor symbol's defining file")
     ap.add_argument("--symbol", help="--scan: the anchor symbol name")
+    ap.add_argument("--depth", type=int, default=1,
+                    help="--scan single-symbol: 1 = direct consumers; 2 = + environment ripple "
+                         "(consumers-of-consumers = the boundary frontier)")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
     ap.add_argument("--dump-classified", metavar="JSON",
@@ -98,7 +101,7 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 # --symbol → single-symbol anchor; omit → MODULE mode (all exports as members,
                 # partitioned by member co-occurrence — the §11.1 multi-member intent case).
-                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol)
+                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol, depth=args.depth)
                         if args.symbol
                         else import_scan.build_module_graph(args.repo, args.anchor_file))
             except Exception as exc:  # noqa: BLE001 — surface any scan failure as a clean error
