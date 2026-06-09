@@ -217,6 +217,11 @@ def main(argv: list[str] | None = None) -> int:
         use_llm = args.classifier in ("llm", "hybrid")
         model = codebase.decompose(g, repo=args.repo, use_llm=use_llm, intent=args.intent,
                                    model=args.model, claude_bin=args.claude_bin)
+        if args.expand_graph:
+            # An expansion GROWS the footprint (you dug into a node to see what it reaches) — show the
+            # whole grown graph, don't re-run the intent selection and isolate to one seam (which jumps
+            # away from both your focus and the very nodes you just expanded into).
+            model["autoGrown"] = True
         counts: dict[str, int] = {}
         for n in g.nodes.values():
             counts[n.role] = counts.get(n.role, 0) + 1
