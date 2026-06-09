@@ -889,6 +889,32 @@ def build_callsite_graph(repo: str, anchor_file: str, symbol: str, *, anchor_lin
             "complete": True, "nodes": nodes, "edges": edges, "blindspots": [], "unresolved": []}
 
 
+def build_consumers_graph(repo: str, anchor_file: str, symbol: str, *, depth: int = 1,
+                          verified: dict | None = None, anchor_line: int | None = None) -> dict:
+    """UP / consumers — the COMPLETE "who uses this", one primitive: by-name importers (resolved)
+    UNIONED with method CALL-SITES (the DI/factory/interface usage the import scan can't see) when
+    the anchor is a class/interface. The LLM (and the human) reasons over one "consumers" move; the
+    engine picks the mechanism. Per-edge provenance stays honest (RESOLVED_FULL importers,
+    RESOLVED_PARTIAL call-sites). A plain function has no methods, so it's just its importers."""
+    from .expand import merge_resolved
+    base = build_resolved_graph(repo, anchor_file, symbol, depth=depth, verified=verified, anchor_line=anchor_line)
+    ar = _read(repo, anchor_file)
+    if ar and available():
+        # Call-sites are added ONLY for an INTERFACE — the DI/abstraction case where consumers don't
+        # import a concrete class, so the import scan is blind to them. A concrete CLASS is reached
+        # fine by its importers; adding its method call-sites would EXPLODE on common method names
+        # (every `.update()`/`.getRole()` in the repo). The interface's distinctive methods are safe.
+        try:
+            ctx = _Ctx(ar[0], ar[1])
+            is_interface = any(_name_of(ctx, c) == symbol
+                               for c in ctx.collect(ctx.root, lambda k: k == "interface_declaration"))
+        except Exception:
+            is_interface = False
+        if is_interface:
+            base = merge_resolved(base, build_callsite_graph(repo, anchor_file, symbol, anchor_line=anchor_line))
+    return base
+
+
 def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
     """DOWNWARD direction (P3): the anchor's direct DEPENDENCIES — the behavioural symbols its file
     imports (resolved) — so an intent can grow toward what it USES (service → repository → prisma),

@@ -52,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--intent", metavar="TEXT",
                     help="CODEBASE mode (P1): the user's question; the LLM refine pass marks the "
                          "best-matching seam (`selectedSeam`) so the renderer focuses it. Needs an LLM.")
+    ap.add_argument("--auto", action="store_true",
+                    help="--scan (P5): LLM-directional AUTO-orchestration — grow the footprint toward "
+                         "--intent (the LLM picks node + up/down each step). Needs --symbol + --intent + LLM.")
+    ap.add_argument("--max-steps", type=int, default=4, help="--auto: max expansion steps (default 4)")
     ap.add_argument("--emit-graph", metavar="JSON",
                     help="CODEBASE mode: also write the (scanned/merged) ResolvedGraph here so the "
                          "extension can keep it as the session graph and EXPAND it (P2).")
@@ -66,10 +70,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--down", action="store_true",
                     help="--expand-graph: expand DOWNWARD to the node's dependencies (what it uses: "
                          "service→repository→prisma) instead of upward to its consumers (P3).")
-    ap.add_argument("--callsites", action="store_true",
-                    help="--expand-graph: expand a CLASS/INTERFACE to every repo `x.method(…)` "
-                         "CALL-SITE of its methods — the DI/factory-mediated consumers the import "
-                         "scan can't see (RESOLVED_PARTIAL; distinctive method names are safe).")
     ap.add_argument("--cross-from", metavar="TEXT",
                     help="--expand-graph: this expansion CROSSED a boundary via symbol-match (P4) — "
                          "record it as a SUGGESTED-crossing blind spot (an assumption, not resolved).")
@@ -131,12 +131,10 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 base = json.loads(Path(args.expand_graph).read_text(encoding="utf-8"))
                 # UP (default) = the node's consumers; DOWN = its dependencies (P3).
-                if args.callsites:
-                    add = import_scan.build_callsite_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
-                elif args.down:
-                    add = import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
-                else:
-                    add = import_scan.build_resolved_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line)
+                # UP (default) = consumers (importers + call-sites); DOWN = dependencies.
+                add = (import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
+                       if args.down
+                       else import_scan.build_consumers_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line))
                 data = expand.merge_resolved(base, add, expand_anchor=add.get("anchor", {}).get("id"))
                 if args.cross_from:    # P4: this expansion crossed a boundary by assumption — record it
                     data.setdefault("blindspots", []).append(
@@ -160,6 +158,30 @@ def main(argv: list[str] | None = None) -> int:
                 Path(args.emit_candidates).write_text(json.dumps(cands), encoding="utf-8")
                 print(f"Candidates: {args.emit_candidates}  ({len(cands)} call-site(s))")
                 return 0
+            if args.auto:
+                # P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
+                if not (args.symbol and args.intent):
+                    print("error: --auto requires --symbol and --intent", file=sys.stderr)
+                    return 2
+                from src import orchestrate
+                try:
+                    data, hist = orchestrate.auto_orchestrate(args.repo, args.anchor_file, args.symbol,
+                                                              args.intent, max_steps=args.max_steps,
+                                                              model=args.model, claude_bin=args.claude_bin)
+                except Exception as exc:  # noqa: BLE001
+                    print(f"error: auto-orchestration failed: {exc}", file=sys.stderr)
+                    return 2
+                print(f"[auto] {len(hist)} move(s): " + (", ".join(f"{h['direction']}:{h['node']}(+{h['added']})" for h in hist) or "none"))
+                g = graph_ir.from_resolved_graph(data)
+                model = codebase.decompose(g, repo=args.repo, use_llm=True, intent=args.intent,
+                                           model=args.model, claude_bin=args.claude_bin)
+                model["autoGrown"] = True   # the GROWN footprint is the answer — render it ALL, don't isolate one seam
+                if args.emit_graph:
+                    Path(args.emit_graph).write_text(json.dumps(data), encoding="utf-8")
+                if args.emit_seams:
+                    Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
+                    print(f"Seams: {args.emit_seams}")
+                return 0
             verified = None
             if args.attribution:
                 try:
@@ -168,10 +190,11 @@ def main(argv: list[str] | None = None) -> int:
                     print(f"error: could not load attribution: {exc}", file=sys.stderr)
                     return 2
             try:
-                # --symbol → single-symbol anchor (a CLASS delegates to method mode, using `verified`
-                # if given); omit → MODULE mode (all exports as members, member co-occurrence — §11.1).
-                data = (import_scan.build_resolved_graph(args.repo, args.anchor_file, args.symbol,
-                                                         depth=args.depth, verified=verified)
+                # --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites
+                # in one (a class still delegates to method mode internally, using `verified`). Omit
+                # --symbol → MODULE mode (all exports as members, member co-occurrence — §11.1).
+                data = (import_scan.build_consumers_graph(args.repo, args.anchor_file, args.symbol,
+                                                          depth=args.depth, verified=verified)
                         if args.symbol
                         else import_scan.build_module_graph(args.repo, args.anchor_file))
             except Exception as exc:  # noqa: BLE001 — surface any scan failure as a clean error

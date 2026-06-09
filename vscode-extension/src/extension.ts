@@ -33,6 +33,7 @@ interface SeamModel {
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
   complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[]; seamEdges?: SeamEdge[];
   selectedSeam?: string;   // P1: the seam matching the user's intent (auto-focused), or ""
+  autoGrown?: boolean;     // P5: an LLM-grown footprint — show it ALL (the growth is the answer), don't isolate
 }
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
@@ -180,11 +181,11 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
     vscode.commands.registerCommand("seam.analyzeModule", analyzeModule),
-    vscode.commands.registerCommand("seam.analyzeFromIntent", analyzeFromIntent),
+    vscode.commands.registerCommand("seam.analyzeFromIntent", () => analyzeFromIntent(false)),
+    vscode.commands.registerCommand("seam.autoMapIntent", autoMapIntent),
     vscode.commands.registerCommand("seam.expandNode", expandNode),
     vscode.commands.registerCommand("seam.expandDown", expandDown),
     vscode.commands.registerCommand("seam.crossBoundary", crossBoundary),
-    vscode.commands.registerCommand("seam.findCallsites", findCallsites),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
@@ -248,12 +249,15 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
               || sel.kind === "candidate" || sel.kind === "unknown" || sel.kind === "subcore"
               || sel.kind === "contract" || sel.kind === "feed" || sel.kind === "feedDef"
               || sel.kind === "seamLink")) return;
+  // An auto-grown footprint is shown whole (the growth is the answer) — clicking a node must NOT
+  // isolate a seam (that's the manual flow's "select → discard others"). It still focuses decorations.
   const codebase = model?.mode === "codebase";
+  const canIsolate = codebase && !model?.autoGrown;
   if (!sel) { focusIds = null; focusLabel = ""; }
   else if (sel.kind === "seam" || sel.kind === "hunk") {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
     focusLabel = sel.seam.label;
-    if (codebase) { focusedSeamId = sel.seam.id; treeProvider.refresh(); }   // isolate this seam in the tree
+    if (canIsolate) { focusedSeamId = sel.seam.id; treeProvider.refresh(); }   // isolate this seam in the tree
   } else if (sel.kind === "cluster") {
     focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map(spanKey)));
     focusLabel = sel.cluster.intent;
@@ -321,8 +325,9 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   focusedSeamId = null;
   // P1 (intent focus) + P2 #2 (isolate): if the run carried a question, the engine marked the matching
   // seam — lead with it AND hide the other seams from the tree (the user presses "Show all seams" to
-  // widen). This is the fix for the goal-less dump.
-  if (m.selectedSeam) {
+  // widen). EXCEPT for an AUTO-grown footprint (P5): the LLM grew the whole answer path (service →
+  // repository → …), so show it ALL — isolating one seam would hide the layers it just reached.
+  if (m.selectedSeam && !m.autoGrown) {
     const sel = m.clusters.flatMap((c) => c.seams).find((s) => s.id === m.selectedSeam);
     if (sel) { focusIds = new Set(sel.hunks.map(spanKey)); focusLabel = sel.label; focusedSeamId = sel.id; }
   }
@@ -709,7 +714,7 @@ async function analyzeModule() {
 // intent that direction. UP (default) = its consumers; DOWN = its dependencies (service→repo→db).
 // Re-applies the persisted question to re-focus. Invoked from the tree's context menu (it receives
 // the hunk Node).
-async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, crossNote?: string, callsites?: boolean) {
+async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, crossNote?: string) {
   const h = node?.hunk;
   if (!h) return;
   if (!sessionGraph || !fs.existsSync(sessionGraph)) {
@@ -725,7 +730,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
   if (!env) return;
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
   const before = nodeCount(model);
-  const dir = callsites ? "method call-sites of" : down ? "dependencies of" : "consumers of";
+  const dir = down ? "dependencies of" : "consumers of";
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…` },
     async () => {
@@ -737,7 +742,6 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
                       "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
                       "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
         if (down) args.push("--down");
-        if (callsites) args.push("--callsites");
         if (crossNote) args.push("--cross-from", crossNote);
         if (sessionIntent) args.push("--intent", sessionIntent);
         await execFileP(env.py, args, env.tool);
@@ -770,10 +774,8 @@ function nodeCount(m?: SeamModel): number {
   return ids.size;
 }
 
-const expandNode = (node?: { hunk?: SeamHunk }) => expandFrom(node, false);   // UP: consumers
+const expandNode = (node?: { hunk?: SeamHunk }) => expandFrom(node, false);   // UP: consumers (importers + call-sites)
 const expandDown = (node?: { hunk?: SeamHunk }) => expandFrom(node, true);    // DOWN: dependencies
-const findCallsites = (node?: { hunk?: SeamHunk }) =>                         // method CALL-SITES (DI usage)
-  expandFrom(node, false, undefined, true);
 
 // P4: CROSS a layer boundary by SUGGESTED symbol-match. When resolved expansion stops at an
 // abstraction/DI symbol (an interface, a DI token), find related in-repo impls and let the user
@@ -813,7 +815,7 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
 // FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → Python ranks them →
 // the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's
 // invariant: the guarantee attaches only AFTER confirmation, never from an unconfirmed match).
-async function analyzeFromIntent() {
+async function analyzeFromIntent(auto = false) {
   const env = codebaseEnv();
   if (!env) return;
   const intent = await vscode.window.showInputBox({
@@ -858,7 +860,13 @@ async function analyzeFromIntent() {
   if (!picked) return;
 
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
-  if (picked.kind === "class") {
+  if (auto) {
+    // P5: the LLM grows the footprint toward the question (picks node + up/down each step), then focuses.
+    await runScan(env.tool, env.py,
+                  ["--anchor-file", picked.file, "--symbol", picked.symbol, "--intent", intent,
+                   "--auto", "--max-steps", "3"],
+                  `Seam: auto-growing the footprint for “${intent}”…`, `auto · ${picked.symbol}`);
+  } else if (picked.kind === "class") {
     await runScanClass(env.tool, env.py, picked, depth, intent);   // intent focuses the matching seam
   } else {
     await runScan(env.tool, env.py,
@@ -867,6 +875,7 @@ async function analyzeFromIntent() {
                   `Seam: scanning consumers of ${picked.symbol}…`, `anchor ${picked.symbol}`);
   }
 }
+const autoMapIntent = () => analyzeFromIntent(true);
 
 // Repo-relative path IF this document is the MODIFIED (new) side we should decorate:
 // the working file (`file:`) or a diff's modified side (`git:` with empty ref =
