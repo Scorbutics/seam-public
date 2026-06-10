@@ -60,8 +60,9 @@ def test_multi_anchor_roles_promote_expanded_node_to_core():
     assert roles["C2"] == "link"       # the newly reached consumer of C1
 
 
-def test_expansion_fuses_into_one_grown_seam():
-    # C1 consumed A (a cross-anchor core→core edge) → the grown intent is ONE seam, not two.
+def test_expansion_stacks_anchors_into_distinct_seams():
+    # A (n1) and the expanded C1 (n2) are distinct hops of the grown chain → DISTINCT seams, STACKED,
+    # not fused. The cross-anchor core→core edge survives as a seam CONTRACT (the chain link).
     merged = expand.merge_resolved(_base(), _add(), expand_anchor="m1")
     g = graph_ir.from_resolved_graph(merged)
     model = codebase.decompose(g)
@@ -71,4 +72,6 @@ def test_expansion_fuses_into_one_grown_seam():
             for h in s["hunks"]:
                 if h["id"] in ("n1", "n2"):    # A and C1 (the two anchors)
                     seam_of[h["id"]] = s["id"]
-    assert seam_of.get("n1") and seam_of["n1"] == seam_of["n2"]
+    assert seam_of.get("n1") and seam_of.get("n2") and seam_of["n1"] != seam_of["n2"]   # stacked, not fused
+    pair = {(c["seamA"], c["seamB"]) for c in model.get("seamContracts", [])}
+    assert (seam_of["n1"], seam_of["n2"]) in pair or (seam_of["n2"], seam_of["n1"]) in pair

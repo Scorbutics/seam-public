@@ -131,6 +131,43 @@ def _mk_seam(sid: str, label: str, node_ids: list[str], link_only: bool,
             "node_ids": list(node_ids), "proposedBy": proposed_by}
 
 
+def _is_crossing(e: Edge) -> bool:
+    """A boundary crossed by HEURISTIC, not a hard binding — a string-dispatch (tier 2, kind
+    'dispatch') or an assumed (SUGGESTED) edge. It LINKS seams but must not FUSE them: the target is
+    the OTHER side of a boundary (a separate intent), so it earns its own SUGGESTED seam rather than
+    being pulled into the source's. (RESOLVED_PARTIAL alone is NOT a crossing — class-method
+    attribution is ordinary usage; only the dispatch/assumed kinds delimit.)"""
+    return e.kind == "dispatch" or e.provenance == Provenance.SUGGESTED
+
+
+def _extract_suggested_seams(g: Graph, seams: list[dict]) -> list[dict]:
+    """Pull each crossing TARGET out of the seam it fused into and give it its OWN seam, flagged
+    `suggested` — so a string-dispatch chain reads as distinct hops (PaymentsTab → … ↝ the edge
+    function), not one blob. The crossing edge survives in `edges`/contracts (the chain link); only
+    the GRAIN changes. Without this, `assign_clusters` fuses the target via the (resolved) partial edge."""
+    anchors = set(g.anchors or [g.anchor])
+    targets = {e.dst for e in g.resolved_edges() if _is_crossing(e) and e.dst not in anchors}
+    if not targets:
+        return seams
+    out: list[dict] = []
+    made: dict[str, dict] = {}
+    for s in seams:
+        rest = [n for n in s["node_ids"] if n not in targets]
+        ts = [n for n in s["node_ids"] if n in targets]
+        if rest or not ts:
+            s["node_ids"] = rest or s["node_ids"]
+            out.append(s)
+        for t in ts:
+            if t not in made:
+                node = g.nodes[t]
+                sug = _mk_seam(f"sug-{t}", node.label or t, [t],
+                               link_only=(node.role != "core"), proposed_by="crossing")
+                sug["suggested"] = True
+                made[t] = sug
+                out.append(sug)
+    return out
+
+
 def _sweep_leftovers(g: Graph, seams: list[dict], adj: dict) -> list[dict]:
     """Place any reached node not yet in a seam into an adjacent seam (else the first) — so nothing
     resolved is silently dropped. Includes leftover CORES: after a multi-anchor expansion the new
@@ -207,12 +244,11 @@ def assign_intent_seams(g: Graph) -> list[dict]:
             if len(u) > cut:
                 continue                           # ambient consumer → no co-occurrence edge
             cooc += [(u[0], x) for x in u[1:]]
-        # CROSS-ANCHOR wiring fuses the grown intent: an expanded anchor that consumes the original
-        # (a resolved core→core edge BETWEEN anchors' carriers) shares its seam. Within one anchor's
-        # members we DON'T add these, so single-anchor partitioning (and its golds) is unchanged.
-        for e in g.resolved_edges():
-            if e.src in cset and e.dst in cset and carrier_anchor.get(e.src) != carrier_anchor.get(e.dst):
-                cooc.append((e.src, e.dst))
+        # CROSS-ANCHOR edges are NOT fused: each expansion hop (a deliberately-grown anchor) is a
+        # DISTINCT intent → its OWN seam, STACKED, not merged into the source. The core→core edge
+        # between anchors survives as a seam CONTRACT (the chain link), so the chain reads as
+        # PaymentsTab → invokeProcessPayment ↝ process-payment, not one blob. (Single-anchor
+        # partitioning is untouched — there are no cross-anchor carriers, so the golds are unchanged.)
         cluster_of = connected_components([c.id for c in carriers], cooc)
         by_cluster: dict[str, list[str]] = {}
         for cid in cset:
@@ -583,6 +619,7 @@ def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False, inten
         seams = refine_seams_llm(g, seams, intent=intent, model=model, claude_bin=claude_bin)
         if intent:                              # F5: mark-relevance — dim incidental wiring (additive)
             mark_relevance_llm(g, intent, model=model, claude_bin=claude_bin)
+    seams = _extract_suggested_seams(g, seams)  # F6: a crossing (string-dispatch/assumed) → its OWN seam
     health = wellformedness(g)
     return emit_seams(g, health, seams)
 
@@ -617,8 +654,11 @@ def _seam_contracts(g: Graph, seams: list[dict]) -> list[dict]:
     pairs: dict[tuple[str, str], list[dict]] = {}
     seen: set[tuple] = set()
     for e in g.resolved_edges():
-        if e.kind == "contains" or e.src == g.anchor or e.dst == g.anchor:
+        if e.kind == "contains":          # containment is structure, not a contract
             continue
+        # (the anchor is no longer excluded: with stacked seams it lives in ONE seam, so its edges to
+        # other seams ARE the chain's contracts — the first hop. The a==b check below drops any edge
+        # whose endpoints still share a seam, so a many-to-many anchor never mints a self-contract.)
         for a in node_seams.get(e.src, ()):
             for b in node_seams.get(e.dst, ()):
                 if a == b:
@@ -668,7 +708,8 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
                     warns.append(w)
         out_seams.append({"id": s["id"], "label": s["label"], "linkOnly": s["linkOnly"],
                           "uncertain": False, "warnings": warns, "hunks": hunks,
-                          "proposedBy": s.get("proposedBy", "floor"), "selected": s.get("selected", False)})
+                          "proposedBy": s.get("proposedBy", "floor"), "selected": s.get("selected", False),
+                          "suggested": s.get("suggested", False)})
 
     selected_seam = next((s["id"] for s in out_seams if s.get("selected")), "")
     clusters = [{"id": "g1", "intent": anchor_sym or g.anchor, "colorIndex": 0, "seams": out_seams}]

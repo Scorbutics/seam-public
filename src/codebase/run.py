@@ -33,7 +33,12 @@ class CodebaseMode:
                 # The expanded node becomes a core either way. UP (default) = consumers (importers +
                 # call-sites). DOWN = dependencies, added as WIRING (links adjacent to the now-core
                 # source) — deps don't become cores, so the core set stays the focus (no flattening).
-                add = (import_scan.build_dependency_graph(args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line)
+                # DOWN expansion may run tier 3 (LLM discovery of residual couplings → SUGGESTED) when
+                # the LLM is opted in via --classifier llm|hybrid; default stays deterministic (tiers 1+2).
+                add = (import_scan.build_dependency_graph(
+                           args.repo, args.expand_file, args.expand_symbol, anchor_line=args.expand_line,
+                           use_llm=args.classifier in ("llm", "hybrid"),
+                           model=args.model, claude_bin=args.claude_bin)
                        if args.down
                        else import_scan.build_consumers_graph(args.repo, args.expand_file, args.expand_symbol, depth=args.depth, anchor_line=args.expand_line))
                 data = expand.merge_resolved(base, add, expand_anchor=add.get("anchor", {}).get("id"))

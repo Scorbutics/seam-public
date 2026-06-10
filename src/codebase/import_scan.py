@@ -24,6 +24,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from . import llm_discovery, string_coupling
 from .atoms import _CALL, _FUNCLIKE, _Ctx, available, lang_for
 from .languages.typescript import _IMPORT_RE
 from .languages.base import SKIP_DIRS as _SKIP_DIRS         # shared walk skip-dirs (generic)
@@ -1022,7 +1023,9 @@ def _python_dependency_graph(repo: str, anchor_file: str, symbol: str, anchor_li
             "depth": 1, "complete": True, "nodes": nodes, "edges": edges, "blindspots": blindspots, "unresolved": []}
 
 
-def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
+def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None,
+                           use_llm: bool = False, model: str = "claude-haiku-4-5",
+                           claude_bin: str | None = None) -> dict:
     """DOWNWARD direction (P3): the anchor's direct DEPENDENCIES — the behavioural symbols its file
     imports (resolved) — so an intent can grow toward what it USES (service → repository → prisma),
     not just who uses it. The source node is promoted to a core (the expand anchor); the deps are
@@ -1098,6 +1101,43 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
             blindspots.append({"node": "n1", "mechanism": "external-libraries",
                                "evidence": f"{symbol} uses {len(external_pkgs)} external package(s): {shown}",
                                "candidates": []})
+
+        # Tier 2 of the edge ladder — string-dispatch couplings the import scan can't see: a string
+        # literal in the anchor's body naming a UNIQUE module entry (`invoke("process-payment")` →
+        # `**/process-payment/index.*`). Validated on both ends → RESOLVED_PARTIAL; ambiguous → a blind
+        # spot (candidates). Unmatched dispatch strings are left for tier 3 (the LLM). See string_coupling.
+        try:
+            sc_ctx = _Ctx(ar[0], ar[1])
+            entry_idx = string_coupling.module_entry_index(repo, _SKIP_DIRS)
+            sc_edges, sc_ambig = string_coupling.detect(sc_ctx, arange[0], arange[1], entry_idx, anchor_file)
+            for name, path in sc_edges:
+                if (name, path) in seen:
+                    continue
+                seen.add((name, path))
+                counter += 1
+                did = f"d{counter}"
+                nodes.append({"id": did, "symbol": name, "kind": "module", "file": path, "range": [0, 0],
+                              "enclosing": "", "complexity": 1})
+                edges.append({"from": "n1", "to": did, "kind": "dispatch", "provenance": "RESOLVED_PARTIAL"})
+            for name, hits in sc_ambig:
+                blindspots.append({"node": "n1", "mechanism": "string-dispatch-ambiguous",
+                                   "evidence": f"'{name}' names {len(hits)} module entries (ambiguous)",
+                                   "candidates": [{"file": h, "symbol": name, "provenance": "SUGGESTED"} for h in hits]})
+        except Exception:
+            pass
+
+        # Tier 3 of the edge ladder (opt-in) — LLM DISCOVERY on the residual: couplings tiers 1+2 can't
+        # see (camelCase dispatch keys, config keys, conventions). PROPOSED, GROUNDED to real repo paths
+        # → SUGGESTED blind-spot candidates, NEVER resolved edges. See llm_discovery.
+        if use_llm:
+            resolved_files = [n["file"] for n in nodes if n["id"] != "n1"]
+            for c in llm_discovery.discover(repo, anchor_file, ar[0], arange[0], arange[1], resolved_files,
+                                            model=model, claude_bin=claude_bin):
+                blindspots.append({"node": "n1", "mechanism": "llm-suggested-coupling",
+                                   "evidence": c["evidence"], "candidates": [
+                                       {"file": c["file"],
+                                        "symbol": os.path.basename(os.path.dirname(c["file"])) or c["file"],
+                                        "provenance": "SUGGESTED"}]})
 
     return {
         "version": 1,

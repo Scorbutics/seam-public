@@ -16,8 +16,8 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; }
-interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; }
+interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
 // omits them, so all are optional). `resolutionQuality` drives the honesty banner, and
@@ -77,6 +77,19 @@ const rewireStr = (h: SeamHunk): string =>
 // so focus/nav/decorations must key on (id + range), not the id alone. Today every
 // occurrence carries the full range, so this behaves exactly like the id did.
 const spanKey = (h: SeamHunk): string => `${h.id}:${h.start}:${h.end}`;
+
+// A node's display name: its file basename, EXCEPT a module ENTRY (`index.*`) is identified by its
+// DIRECTORY — `…/process-payment/index.ts` → `process-payment/` — because the basename `index.ts` is
+// noise (it's how a string-dispatch crossing to an edge function / route lands). See the edge ladder.
+const isModuleEntry = (h: SeamHunk): boolean => /^index\.\w+$/.test(h.file.split("/").pop() ?? "");
+const hunkName = (h: SeamHunk): string => {
+  const parts = h.file.split("/");
+  return isModuleEntry(h) && parts.length > 1 ? `${parts[parts.length - 2]}/` : (parts.pop() ?? h.file);
+};
+// A non-FULL edge into this node — a string-dispatch heuristic (RESOLVED_PARTIAL) or an LLM/assumed
+// crossing (SUGGESTED): surface it so the node reads as a boundary to verify, not a hard import.
+const provTag = (h: SeamHunk): string =>
+  /SUGGEST/i.test(h.provenance ?? "") ? "~ suggested" : /PARTIAL/.test(h.provenance ?? "") ? "↝ dispatch (partial)" : "";
 // Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
 // hunk's boundary; the fill is lighter so code stays legible over it).
 const ROLE_BG_ALPHA = 0.19;      // line-background wash
@@ -805,7 +818,7 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
   let targets: Array<{ name: string; file: string; kind: string }> = [];
   const out = path.join(env.tool, `.seam-cross-${Date.now()}.json`);
   try {
-    await execFileP(env.py, ["-m", "src.anchor_rank", "--crossings", "--intent", symbol,
+    await execFileP(env.py, ["-m", "src.codebase.anchor_rank", "--crossings", "--intent", symbol,
                              "--repo", repoRoot, "--exclude-file", h.file, "--out", out], env.tool);
     targets = JSON.parse(fs.readFileSync(out, "utf-8"));
   } catch (e) {
@@ -851,7 +864,7 @@ async function analyzeFromIntent(auto = false) {
       const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
       let items: Array<{ name: string; file: string; kind: string; terms?: string[] }> = [];
       try {
-        await execFileP(env.py, ["-m", "src.anchor_rank", "--intent", intent, "--repo", repoRoot, "--out", ranked], env.tool);
+        await execFileP(env.py, ["-m", "src.codebase.anchor_rank", "--intent", intent, "--repo", repoRoot, "--out", ranked], env.tool);
         items = JSON.parse(fs.readFileSync(ranked, "utf-8"));
       } finally {
         try { fs.unlinkSync(ranked); } catch { /* ignore */ }
@@ -1374,11 +1387,18 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return it;
     }
     if (el.kind === "seam") {
-      const it = new vscode.TreeItem(el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
+      const sug = el.seam.suggested === true;   // reached only across a heuristic crossing (string-dispatch/assumed)
+      const it = new vscode.TreeItem(sug ? `↝ ${el.seam.label}` : el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
       const wired = seamNeighbors.get(el.seam.id)?.length ?? 0;
-      it.description = [el.seam.linkOnly ? "link-only" : "", el.seam.uncertain ? "uncertain" : "",
-                        wired ? `↔ ${wired}` : ""].filter(Boolean).join(" · ");
-      it.iconPath = new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
+      it.description = [sug ? "suggested seam" : "", el.seam.linkOnly ? "link-only" : "",
+                        el.seam.uncertain ? "uncertain" : "", wired ? `↔ ${wired}` : ""].filter(Boolean).join(" · ");
+      it.iconPath = sug
+        ? new vscode.ThemeIcon("git-merge", new vscode.ThemeColor("charts.orange"))   // a boundary to verify
+        : new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
+      it.tooltip = sug
+        ? `A SUGGESTED seam — the other side of a boundary crossed by heuristic (a string-dispatch / `
+          + `assumed link, not a hard import). The chain reaches it, but go verify the crossing.`
+        : undefined;
       return it;
     }
     if (el.kind === "seamLink") {
@@ -1576,11 +1596,12 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     // mark-relevance: a link the LLM judged INCIDENTAL (connected but off the answer path) is kept
     // but DIMMED — muted icon + an "incidental" tag — never dropped, so completeness stays honest.
     const incidental = model?.mode === "codebase" && h.relevant === false;
+    const pv = provTag(h);
     const it = new vscode.TreeItem(
-      `${boundary ? "⤳ boundary" : h.role}${unc ? "?" : ""}${ext}  ·  ${h.file.split("/").pop()}:${h.start}`,
+      `${boundary ? "⤳ boundary" : h.role}${unc ? "?" : ""}${ext}  ·  ${hunkName(h)}${isModuleEntry(h) ? "" : ":" + h.start}`,
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
-    const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "", rw ? `↻ ${rw}` : "",
+    const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "", pv, rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
                   nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");
@@ -1599,6 +1620,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       ? new vscode.ThemeIcon("circle-large-outline", new vscode.ThemeColor("descriptionForeground"))
       : incidental
       ? new vscode.ThemeIcon(ROLE_ICON[h.role] ?? "circle-small", new vscode.ThemeColor("descriptionForeground"))
+      : pv   // a string-dispatch (partial) / suggested crossing → tinted so it reads as "go verify"
+      ? new vscode.ThemeIcon(ROLE_ICON[h.role] ?? "circle-small",
+          new vscode.ThemeColor(/SUGGEST/i.test(h.provenance ?? "") ? "charts.yellow" : "charts.orange"))
       : new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
     // P2/P3: a codebase-mode node can be EXPANDED — up (its consumers) or down (its dependencies).

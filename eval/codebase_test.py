@@ -556,3 +556,25 @@ def test_floor_single_core_is_one_seam():
     sm = _seams_of(model)
     assert len(sm["a"]) == 1 and sm["a"] == sm["c"]        # anchor + consumer → one seam
     assert model["seamEdges"] == []                        # floor defers seam-to-seam wiring
+
+
+# --------------------------------------------------------------------------- suggested seams (crossings)
+def test_dispatch_crossing_becomes_its_own_suggested_seam():
+    # A → B is a hard import (RESOLVED_FULL); B → C is a string-dispatch (RESOLVED_PARTIAL, kind
+    # 'dispatch') reaching an edge function. C must NOT fuse into A/B's seam — it earns its own
+    # SUGGESTED seam (the other side of a boundary crossed by heuristic).
+    g = graph_ir.from_resolved_graph({
+        "anchor": {"id": "A"}, "anchors": ["A"],
+        "nodes": [{"id": "A", "symbol": "Comp", "file": "a.tsx"},
+                  {"id": "B", "symbol": "svc", "file": "b.ts"},
+                  {"id": "C", "symbol": "proc", "file": "functions/proc/index.ts", "kind": "module"}],
+        "edges": [{"from": "A", "to": "B", "kind": "import", "provenance": "RESOLVED_FULL"},
+                  {"from": "B", "to": "C", "kind": "dispatch", "provenance": "RESOLVED_PARTIAL"}],
+    })
+    model = codebase.decompose(g)
+    seams = [s for cl in model["clusters"] for s in cl["seams"]]
+    sug = [s for s in seams if s.get("suggested")]
+    assert len(sug) == 1                                              # exactly the crossing target
+    assert any(h["file"].endswith("functions/proc/index.ts") for h in sug[0]["hunks"])
+    # C is pulled OUT of the non-suggested seams (not fused)
+    assert all(all(h["id"] != "C" for h in s["hunks"]) for s in seams if not s.get("suggested"))
