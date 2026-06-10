@@ -223,3 +223,31 @@ _IMPORT_RE = re.compile(
     r'from\s*["\']([^"\']+)["\']',
     re.DOTALL,
 )
+
+
+def imports(text: str) -> list:
+    """NAMED imports → [ImportRef(name, local, line, col, source=module)]. `source` is the quoted
+    module the generic scan resolves via the TS floor. (Default/namespace bindings are not scanned —
+    preserves the long-standing scan behaviour.)"""
+    from .base import ImportRef
+    out = []
+    for m in _IMPORT_RE.finditer(text):
+        named, source = m.group(2), m.group(3)
+        if not named:
+            continue
+        line = text.count("\n", 0, m.start())
+        for part in named.split(","):
+            p = part.strip()
+            if not p:
+                continue
+            if " as " in p:
+                a, b = p.split(" as ", 1)
+                orig, local = a.strip(), b.strip()
+            else:
+                orig = local = p
+            if orig:
+                out.append(ImportRef(orig, local, line, 0, source))
+    return out
+
+
+PROVIDER.imports = imports          # wire (the function is defined after the PROVIDER literal above)

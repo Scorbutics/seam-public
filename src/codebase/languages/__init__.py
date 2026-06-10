@@ -61,6 +61,14 @@ def is_module_entry(file: str) -> bool:
     return any(p.module_entry and p.module_entry.match(base) for p in PROVIDERS)
 
 
+def parse_imports(file: str, text: str) -> list:
+    """The file's imports as `ImportRef`s, via its language provider — the uniform unit the generic
+    scan consumes (TS: source-string imports → module-path resolve; Python: source=None → symbol
+    resolve). Empty list if the language has no import parser yet."""
+    p = provider_for(file)
+    return p.imports(text) if (p and p.imports) else []
+
+
 def entrypoint_line(file: str, ctx) -> int:
     """The MAIN entrypoint line inside a module entry, via the file's language heuristic (TS: a
     top-level handler call / `export default`; Python: `if __name__=='__main__'` / a top-level call).

@@ -68,3 +68,13 @@ PROVIDER = LanguageProvider(
         notes="Phase 2. pyright via bun x; venv detection (python.venvPath/pythonPath).",
     ),
 )
+
+
+def imports(text: str) -> list:
+    """Python imports → [ImportRef(name, name, line, col, source=None)] — `source` is None so the
+    generic scan resolves each by SYMBOL position (pyright go-to-def), not a module path."""
+    from .base import ImportRef
+    return [ImportRef(name, name, line, col, None) for name, line, col in parse_imports(text)]
+
+
+PROVIDER.imports = imports

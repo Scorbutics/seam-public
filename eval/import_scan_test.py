@@ -21,17 +21,20 @@ def _by_file(consumers):
 
 
 def test_module_resolution_package_and_relative():
-    pkgs = import_scan._pkg_map(REPO)
+    # the deterministic floor lives in the TS provider now; the scan reaches it via languages.floor_resolve
+    from src.codebase import languages
+    from src.codebase.languages import typescript
+    pkgs = typescript._pkg_map(REPO)
     assert pkgs.get("@demo/lib", "").replace("\\", "/") == "packages/lib"
     assert pkgs.get("@demo/web", "").replace("\\", "/") == "apps/web"
     # cross-package import resolves to the anchor file
-    r = import_scan.resolve_module(REPO, "apps/web/consumer.ts", "@demo/lib/widget", pkgs)
+    r = languages.floor_resolve(REPO, "apps/web/consumer.ts", "@demo/lib/widget")
     assert r and r.replace("\\", "/") == "packages/lib/widget.ts"
     # relative import resolves to the anchor file
-    r2 = import_scan.resolve_module(REPO, "packages/lib/sibling.ts", "./widget", pkgs)
+    r2 = languages.floor_resolve(REPO, "packages/lib/sibling.ts", "./widget")
     assert r2 and r2.replace("\\", "/") == "packages/lib/widget.ts"
     # unresolvable alias → None
-    assert import_scan.resolve_module(REPO, "apps/web/aliased.ts", "~/widget", pkgs) is None
+    assert languages.floor_resolve(REPO, "apps/web/aliased.ts", "~/widget") is None
 
 
 def test_scan_classifies_resolved_suggested_excluded():

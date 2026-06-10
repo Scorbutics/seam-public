@@ -56,11 +56,11 @@ def test_injection_point_uses_active_resolver():
             return "STUB"
     import_scan.set_resolver(Stub())
     try:
-        assert import_scan._resolve("r", "f", "s", {}) == "STUB"
+        assert import_scan._resolve("r", "f", "s") == "STUB"
     finally:
         import_scan.set_resolver(None)
-    # default (no override) = the deterministic floor
-    assert import_scan._resolve(FIX, CHECKOUT, PKG, import_scan._pkg_map(FIX)).replace("\\", "/").endswith("payments.ts")
+    # default (no override) = the deterministic floor (via languages.floor_resolve)
+    assert import_scan._resolve(FIX, CHECKOUT, PKG).replace("\\", "/").endswith("payments.ts")
 
 
 def test_auto_falls_back_to_floor_when_no_server(monkeypatch):

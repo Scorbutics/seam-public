@@ -15,6 +15,18 @@ SKIP_DIRS = {"node_modules", ".next", ".git", "dist", "build", ".turbo", "covera
 
 
 @dataclass
+class ImportRef:
+    """One imported symbol, the uniform unit the generic scan consumes (so it's language-agnostic).
+    `source` set ⇒ resolve the MODULE path (TS: `from "x" import …`); `source` None ⇒ resolve the
+    SYMBOL at (line, col) via the LSP (Python: `from .x import …`)."""
+    name: str                # the imported symbol's ORIGINAL name (matched against the anchor)
+    local: str               # its local binding (after `as`) — the consumer node label
+    line: int                # 0-based line of the import (symbol-position resolution)
+    col: int
+    source: str | None       # the module string, or None when there's no quoted module to resolve
+
+
+@dataclass
 class ServerSpec:
     """How to launch + drive a language's LSP server. Pure config — no resolution logic."""
     language: str
@@ -41,6 +53,9 @@ class LanguageProvider:
     # callable(ctx) -> int | None: the MAIN-entry line INSIDE a module entry (so a dispatch node opens
     # the handler, not line 0). Language-specific AST heuristic; `ctx` is a tree-sitter `_Ctx` (duck).
     entrypoint: object = None
+    # callable(text) -> list[ImportRef]: the file's import statements, the uniform unit the generic
+    # codebase SCAN consumes (replaces per-language `_IMPORT_RE` loops). None ⇒ no scan support yet.
+    imports: object = None
 
 
 def bun_x(*pkg_args: str):
