@@ -604,6 +604,39 @@ def _seam_hunk(n: graph_ir.Node, provenance: str) -> dict:
     return out
 
 
+def _seam_contracts(g: Graph, seams: list[dict]) -> list[dict]:
+    """The CONTRACT between seams: for each PAIR of seams, the symbol→symbol edges that BRIDGE them
+    (an endpoint in each), i.e. what one intent depends on from another. Excludes containment (a
+    method living in its class is structure, not a contract) and the shared anchor (its core is in
+    every seam — not a boundary). A contract is BLURRY when any bridging edge is heuristic
+    (RESOLVED_PARTIAL) or assumed (SUGGESTED) — the case a reviewer most needs to eyeball."""
+    node_seams: dict[str, set[str]] = {}
+    for s in seams:
+        for nid in s["node_ids"]:
+            node_seams.setdefault(nid, set()).add(s["id"])
+    pairs: dict[tuple[str, str], list[dict]] = {}
+    seen: set[tuple] = set()
+    for e in g.resolved_edges():
+        if e.kind == "contains" or e.src == g.anchor or e.dst == g.anchor:
+            continue
+        for a in node_seams.get(e.src, ()):
+            for b in node_seams.get(e.dst, ()):
+                if a == b:
+                    continue
+                key = (a, b) if a < b else (b, a)        # unordered seam pair
+                dk = (key, e.src, e.dst, e.kind)
+                if dk in seen:
+                    continue
+                seen.add(dk)
+                pairs.setdefault(key, []).append(
+                    {"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value})
+    out = []
+    for (a, b), links in pairs.items():
+        blurry = any(l["provenance"] != "RESOLVED_FULL" for l in links)
+        out.append({"seamA": a, "seamB": b, "links": links, "blurry": blurry})
+    return out
+
+
 def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
     """Assemble the SeamModel from the F2 intent-seam list. Each intent-seam renders as a SeamModel
     seam (under one cluster — product-intent grouping is the LLM's later job); a node may appear in
@@ -653,6 +686,13 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
         # seam-to-seam wiring is reserved for between genuinely distinct intents (S2/S3); the
         # floor's many-to-many is carried by shared nodes (the core appearing in several seams).
         "seamEdges": [],
+        # the raw directed graph — every resolved symbol→symbol edge with its relation + provenance,
+        # so the CHAIN view can restitute the call/dependency graph (RESOLVED / RESOLVED_PARTIAL).
+        "edges": [{"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value}
+                  for e in g.resolved_edges()],
+        # the seam-to-seam CONTRACT: which symbols bridge each pair of seams + how solid (blurry when
+        # any bridging edge is heuristic/assumed) — the inter-seam boundary a reviewer validates.
+        "seamContracts": _seam_contracts(g, seams),
         "blindspots": [{"node": b.node, "mechanism": b.mechanism, "evidence": b.evidence,
                         "candidates": [{"symbol": c.dst, "provenance": c.provenance.value}
                                        for c in b.candidates]} for b in g.blindspots],

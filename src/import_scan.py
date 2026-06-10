@@ -339,9 +339,11 @@ def class_call_candidates(repo: str, anchor_file: str, class_name: str) -> list[
 
 
 def _class_method_usage(ctx: _Ctx, class_name: str, methods: set[str]) -> dict[str, int]:
-    """{method → first call line} for methods of `class_name` invoked on a TRACED instance:
-    `inst.m()`, `new ClassName().m()`, or `this.field.m()` where `field`/`inst` is an instance of
-    the class. A `.m()` on an untraced receiver is NOT attributed (under-attribute, never lie)."""
+    """{method → first call line} for methods of `class_name` invoked on a TRACED instance: a name
+    bound to `new ClassName()`, or one EXPLICITLY typed `: ClassName` (param / DI field), or
+    `new ClassName().m()` / `this.field.m()` directly. Either way the receiver is a type-checked
+    reference to the class itself — so the attribution is RESOLVED (certain), not a guess. A `.m()`
+    on an UNTYPED receiver is NOT attributed here (it's the call-site scan's job, RESOLVED_PARTIAL)."""
     inst = _instances_of(ctx, class_name)
     used: dict[str, int] = {}
     for call in ctx.collect(ctx.root, lambda k: k == "call_expression"):
@@ -721,11 +723,13 @@ def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: in
         # flaky/partial LSP from LOSING the coverage the heuristic already had.
         if verified is not None and (v := {m: ln for m, ln in (verified.get(con.file) or {}).items()
                                            if m in method_names}):
-            usage, prov = v, "RESOLVED_FULL"
+            usage = v                                                   # LSP-verified
         else:
             usage = {m: ln for m, ln in _class_method_usage(cctx, class_name, method_names).items()
                      if m in method_names}
-            prov = "RESOLVED_PARTIAL"
+        # the receiver is a type-checked reference to the class (newed or `: Class`-typed) — RESOLVED.
+        # (Untyped, name-only matches don't reach here; they're the call-site scan's RESOLVED_PARTIAL.)
+        prov = "RESOLVED_FULL"
         units = _named_units(cctx)
         # a traced method call gives the line; otherwise anchor on where the CLASS itself is
         # referenced (`new X()`, a type position) so an untraced consumer still lands on a real line.

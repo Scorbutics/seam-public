@@ -28,10 +28,14 @@ interface SuggestedCandidate { symbol: string; provenance: string; }
 interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: SuggestedCandidate[]; }
 interface Unresolved { node: string; query: string; reason: string; }
 interface SeamEdge { from: string; to: string; provenance: string; }   // resolved seam-to-seam wiring (S1)
+interface GraphEdge { from: string; to: string; kind: string; provenance: string; }   // the raw symbol→symbol graph (chain view)
+interface SeamContract { seamA: string; seamB: string; links: GraphEdge[]; blurry: boolean; }   // the symbols bridging two seams
 interface SeamModel {
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
   complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[]; seamEdges?: SeamEdge[];
+  edges?: GraphEdge[];     // the directed call/dependency graph — for the chain view
+  seamContracts?: SeamContract[];   // the symbols bridging each pair of seams (the inter-seam contract)
   selectedSeam?: string;   // P1: the seam matching the user's intent (auto-focused), or ""
   autoGrown?: boolean;     // P5: an LLM-grown footprint — show it ALL (the growth is the answer), don't isolate
 }
@@ -129,6 +133,10 @@ let focusLabel = "";
 // P2 #2 (isolate): in codebase mode, focusing a seam also HIDES the other seams from the TREE (not
 // just the editor decorations) — "select a seam → the others are discarded". null = show all seams.
 let focusedSeamId: string | null = null;
+// Chain view: render symbol→symbol EDGES (the call/dependency graph) under each node, with their
+// nature (RESOLVED / RESOLVED_PARTIAL / SUGGESTED), instead of the role drill-downs. A second reading
+// of the same footprint — "how the symbols wire together" rather than "what role each plays".
+let chainView = false;
 let lastRunBanner = "";
 let navCursor = -1;   // position within the current scope's ordered hunk list
 
@@ -188,6 +196,12 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.crossBoundary", crossBoundary),
     vscode.commands.registerCommand("seam.clear", clearAll),
     vscode.commands.registerCommand("seam.showAll", showAll),
+    vscode.commands.registerCommand("seam.toggleChain", () => {
+      chainView = !chainView;
+      vscode.commands.executeCommand("setContext", "seam.chainView", chainView);
+      updateBanner();
+      treeProvider.refresh();
+    }),
     vscode.commands.registerCommand("seam.next", (fromId?: string) => navStep(1, fromId)),
     vscode.commands.registerCommand("seam.prev", (fromId?: string) => navStep(-1, fromId)),
     vscode.commands.registerCommand("seam.open", openHunk),
@@ -308,11 +322,12 @@ function navStep(delta: number, fromKey?: string) {
 function updateBanner() {
   if (!treeView) return;
   const total = model?.clusters.reduce((a, c) => a + c.seams.length, 0) ?? 0;
-  treeView.message = focusedSeamId
+  const chain = chainView ? "⛓ chain view — each symbol shows its links (→ depends · ← used by · ⧉ suggested).  " : "";
+  treeView.message = chain + (focusedSeamId
     ? `intent: ${focusLabel}  —  isolated 1 of ${total} seams · press the eye (Show all) to widen`
     : focusIds
       ? `focus: ${focusLabel}  —  press the eye (Show all seams) to see everything`
-      : lastRunBanner;
+      : lastRunBanner);
 }
 
 // Load a model into the view (tree + decorations + the "last run" message banner).
@@ -1221,7 +1236,14 @@ type Node =
   | { kind: "feed"; feed: ContractFeed; prop: string }
   | { kind: "feedDef"; uri: vscode.Uri; line: number; value: string }   // A3: where a fed value is defined
   // S1: a resolved seam-to-seam wiring under a seam (the seam graph).
-  | { kind: "seamLink"; toId: string; provenance: string };
+  | { kind: "seamLink"; toId: string; provenance: string }
+  // Chain view: one directed edge off a symbol — outgoing dep (→), incoming use (←), or a SUGGESTED
+  // crossing (⧉). Carries the relation kind + provenance so the nature is visible.
+  | { kind: "edge"; dir: "out" | "in" | "suggested"; toId?: string; targetLabel?: string; edgeKind: string; provenance: string }
+  // The inter-seam CONTRACT layer: the section, one seam-pair, and one bridging symbol→symbol link.
+  | { kind: "contracts" }
+  | { kind: "contractPair"; contract: SeamContract }
+  | { kind: "contractLink"; link: GraphEdge };
 
 // A3: lazy cache of "where does this fed value come from" (one more hop up the chain).
 const feedDefCache = new Map<string, Promise<{ uri: vscode.Uri; line: number }[]>>();
@@ -1249,11 +1271,18 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     if (!model) return [];
     if (!el) {
       const roots: Node[] = model.clusters.map((cluster) => ({ kind: "cluster", cluster }));
+      // The inter-seam CONTRACT layer sits BETWEEN the seams and the blind spots — its own dedicated
+      // space (the symbols bridging seam pairs), so the boundary a reviewer must validate is explicit.
+      if (model.seamContracts?.length) roots.push({ kind: "contracts" });
       // The blind-spot map sits at the TOP LEVEL, beside the seams, so "where I'm blind"
       // is as visible as "what I resolved" (the differentiator — never buried).
       if (hasShadows(model)) roots.push({ kind: "shadows" });
       return roots;
     }
+    if (el.kind === "contracts")
+      return (model.seamContracts ?? []).map((contract) => ({ kind: "contractPair", contract } as Node));
+    if (el.kind === "contractPair")
+      return el.contract.links.map((link) => ({ kind: "contractLink", link } as Node));
     if (el.kind === "shadows") {
       const out: Node[] = (model.blindspots ?? []).map((bs) => ({ kind: "blindspot", bs } as Node));
       return out.concat((model.unresolved ?? []).map((ur) => ({ kind: "unknown", ur } as Node)));
@@ -1298,6 +1327,20 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return [...links, ...hunks];
     }
     if (el.kind === "hunk") {
+      if (chainView) {
+        // Chain view: this symbol's directed edges — what it depends on (→), what uses it (←), and
+        // any SUGGESTED crossing (⧉) — each with its relation kind + provenance.
+        const id = el.hunk.id;
+        const out = (model.edges ?? []).filter((e) => e.from === id)
+          .map((e) => ({ kind: "edge", dir: "out", toId: e.to, edgeKind: e.kind, provenance: e.provenance } as Node));
+        const inc = (model.edges ?? []).filter((e) => e.to === id)
+          .map((e) => ({ kind: "edge", dir: "in", toId: e.from, edgeKind: e.kind, provenance: e.provenance } as Node));
+        const sug = (model.blindspots ?? [])
+          .filter((b) => b.node === el.hunk.label || b.node === id)
+          .flatMap((b) => b.candidates.map((c) =>
+            ({ kind: "edge", dir: "suggested", targetLabel: c.symbol, edgeKind: b.mechanism, provenance: c.provenance } as Node)));
+        return [...out, ...inc, ...sug];
+      }
       // A core expands to its drill-downs: the CONTRACT members (Model A) and any proposed
       // behavioural sub-cores (Model B) — both are finer altitudes of the one core.
       const drill: Node[] = [];
@@ -1339,6 +1382,60 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.iconPath = new vscode.ThemeIcon("arrow-both");
       it.tooltip = `Resolved seam-to-seam wiring → ${seamLabel.get(el.toId) ?? el.toId} (${el.provenance}). Click to focus it.`;
       it.command = { command: "seam.focusSeamById", title: "Focus wired seam", arguments: [el.toId] };
+      return it;
+    }
+    if (el.kind === "edge") {
+      // Chain view: one symbol→symbol link with its nature. → depends on, ← used by, ⧉ suggested.
+      const target = el.toId ? findHunkById(el.toId) : undefined;
+      const label = el.targetLabel ?? target?.label ?? el.toId ?? "?";
+      const arrow = el.dir === "out" ? "→" : el.dir === "in" ? "←" : "⧉";
+      const partial = /PARTIAL/.test(el.provenance), suggested = el.dir === "suggested" || /SUGGEST/i.test(el.provenance);
+      const it = new vscode.TreeItem(`${arrow} ${label}`, vscode.TreeItemCollapsibleState.None);
+      const provLabel = suggested ? "SUGGESTED" : partial ? "RESOLVED (partial)" : "RESOLVED";
+      it.description = `${el.edgeKind} · ${provLabel}`;
+      it.iconPath = new vscode.ThemeIcon(
+        suggested ? "lightbulb" : el.dir === "in" ? "arrow-small-left" : "arrow-small-right",
+        new vscode.ThemeColor(suggested ? "charts.yellow" : partial ? "charts.orange" : "charts.green"));
+      const verb = el.dir === "in" ? "used by" : el.dir === "suggested" ? "assumed to reach" : "depends on";
+      it.tooltip = `${verb} ${label}\nrelation: ${el.edgeKind} · ${provLabel}` +
+        (suggested ? "\n(an assumption — never counted as resolved)" :
+         partial ? "\n(heuristic match — a strong but unverified signal)" : "");
+      if (target) it.command = { command: "seam.open", title: "Open", arguments: [target] };
+      return it;
+    }
+    if (el.kind === "contracts") {
+      const cs = model?.seamContracts ?? [];
+      const blurry = cs.filter((c) => c.blurry).length;
+      const it = new vscode.TreeItem("Seam contracts", vscode.TreeItemCollapsibleState.Expanded);
+      it.description = `${cs.length} between seams${blurry ? ` · ${blurry} blurry` : ""}`;
+      it.iconPath = new vscode.ThemeIcon("git-compare", blurry ? new vscode.ThemeColor("charts.yellow") : undefined);
+      it.tooltip = "The CONTRACT between seams — the symbols that bridge each pair of intents, and how " +
+        "solid the link is. A BLURRY contract (heuristic / assumed edges) is the boundary to eyeball.";
+      return it;
+    }
+    if (el.kind === "contractPair") {
+      const c = el.contract;
+      const a = seamLabel.get(c.seamA) ?? c.seamA, b = seamLabel.get(c.seamB) ?? c.seamB;
+      const it = new vscode.TreeItem(`${a}  ↔  ${b}`, vscode.TreeItemCollapsibleState.Expanded);
+      it.description = `${c.links.length} link${c.links.length > 1 ? "s" : ""}${c.blurry ? "  ·  ⚠ blurry" : ""}`;
+      it.iconPath = new vscode.ThemeIcon(c.blurry ? "warning" : "arrow-both",
+        new vscode.ThemeColor(c.blurry ? "charts.yellow" : "charts.green"));
+      it.tooltip = c.blurry
+        ? `"${a}" and "${b}" are linked by HEURISTIC/assumed edges — a blurry contract to validate.`
+        : `"${a}" and "${b}" are linked by resolved edges.`;
+      return it;
+    }
+    if (el.kind === "contractLink") {
+      const l = el.link;
+      const from = findHunkById(l.from), to = findHunkById(l.to);
+      const partial = /PARTIAL/.test(l.provenance), suggested = /SUGGEST/i.test(l.provenance);
+      const it = new vscode.TreeItem(`${from?.label ?? l.from} → ${to?.label ?? l.to}`, vscode.TreeItemCollapsibleState.None);
+      it.description = `${l.kind} · ${suggested ? "SUGGESTED" : partial ? "RESOLVED (partial)" : "RESOLVED"}`;
+      it.iconPath = new vscode.ThemeIcon(suggested ? "lightbulb" : partial ? "kebab-horizontal" : "arrow-right",
+        new vscode.ThemeColor(suggested ? "charts.yellow" : partial ? "charts.orange" : "charts.green"));
+      it.tooltip = `${from?.label ?? l.from} → ${to?.label ?? l.to}\nrelation: ${l.kind} · ${l.provenance}` +
+        (partial ? "\n(heuristic match — a strong but unverified bridge across the seam boundary)" : "");
+      if (to) it.command = { command: "seam.open", title: "Open", arguments: [to] };
       return it;
     }
     if (el.kind === "shadows") {
@@ -1442,7 +1539,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const ext = extTag(h);
     const rw = rewireStr(h);
     const ncon = h.contract?.length ?? 0, nsub = h.subcores?.length ?? 0;
-    const expandable = (h.externalRefs && h.externalRefs.length) || nsub || ncon;
+    // in chain view a symbol expands to its edges (any node touching this id); otherwise to its drill-downs.
+    const hasEdges = chainView && (model?.edges ?? []).some((e) => e.from === h.id || e.to === h.id);
+    const expandable = hasEdges || (!chainView && ((h.externalRefs && h.externalRefs.length) || nsub || ncon));
     // Codebase mode: a depth-2 `environment` node is the BOUNDARY FRONTIER (a consumer-of-a-consumer
     // — it uses the footprint but serves a different intent). Render it distinctly: a hollow, muted,
     // ripples-outward look so it reads as "the edge of the footprint", not an in-footprint member.

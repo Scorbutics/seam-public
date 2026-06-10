@@ -20,6 +20,7 @@
       { "command": "seam.expandDown", "title": "Seam: Expand → dependencies (what this uses)", "icon": "$(arrow-down)" },
       { "command": "seam.crossBoundary", "title": "Seam: Cross boundary (suggested impl)", "icon": "$(git-compare)" },
       { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
+      { "command": "seam.toggleChain", "title": "Seam: Toggle chain view (symbol links + nature)", "icon": "$(type-hierarchy)" },
       { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
       { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
       { "command": "seam.clear", "title": "Seam: Clear decorations", "icon": "$(clear-all)" }
@@ -44,6 +45,7 @@
         { "command": "seam.prev", "when": "view == seam.tree", "group": "navigation@3" },
         { "command": "seam.next", "when": "view == seam.tree", "group": "navigation@4" },
         { "command": "seam.showAll", "when": "view == seam.tree", "group": "navigation@5" },
+        { "command": "seam.toggleChain", "when": "view == seam.tree", "group": "navigation@5" },
         { "command": "seam.clear", "when": "view == seam.tree", "group": "navigation@6" }
       ],
       "editor/context": [

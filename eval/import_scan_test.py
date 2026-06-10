@@ -93,9 +93,16 @@ def test_class_mode_method_attribution():
     assert edges_from[by_file["apps/web/checkout.ts"]] == {mid("charge"), mid("refund")}   # new X()
     assert edges_from[by_file["apps/web/admin.ts"]] == {mid("validate")}                    # typed param
     assert edges_from[by_file["apps/web/di.ts"]] == {mid("charge")}                         # this.field DI
-    # attribution edges are RESOLVED_PARTIAL (instance-aware heuristic, not a fact)
-    part = [e for e in g["edges"] if e["from"].startswith("c") and e["to"] != CLS]
-    assert part and all(e["provenance"] == "RESOLVED_PARTIAL" for e in part)
+    # the receiver is a TYPE-CHECKED reference to the class — `new X()`, a `: X`-typed param, or a
+    # `: X` DI field — so all three attributions are RESOLVED (certain), not a guess. (An UNTYPED
+    # name-only match doesn't reach here; that's the call-site scan's RESOLVED_PARTIAL.)
+    prov = {}
+    for e in g["edges"]:
+        if e["from"].startswith("c") and e["to"] != CLS:
+            prov.setdefault(e["from"], set()).add(e["provenance"])
+    assert prov[by_file["apps/web/checkout.ts"]] == {"RESOLVED_FULL"}     # new PaymentService()
+    assert prov[by_file["apps/web/admin.ts"]] == {"RESOLVED_FULL"}        # ps: PaymentService param
+    assert prov[by_file["apps/web/di.ts"]] == {"RESOLVED_FULL"}           # this.payments: PaymentService
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
@@ -135,22 +142,24 @@ def test_class_call_candidates_for_lsp_verification():
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
-def test_verified_attribution_merges_lsp_with_heuristic_floor():
-    # LSP verifies ONLY checkout; the others must FALL BACK to the heuristic, not be lost (additive).
-    verified = {"apps/web/checkout.ts": {"charge": 5, "refund": 6}}
-    g = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS, verified=verified)
-    by_file = {n["file"].replace("\\", "/"): n["id"] for n in g["nodes"] if n["id"].startswith("c")}
-    prov = {}
-    for e in g["edges"]:
-        if e["from"].startswith("c") and "." in e["to"]:
-            prov.setdefault(e["from"], set()).add(e["provenance"])
-    assert prov[by_file["apps/web/checkout.ts"]] == {"RESOLVED_FULL"}      # LSP-verified
-    assert prov[by_file["apps/web/di.ts"]] == {"RESOLVED_PARTIAL"}        # heuristic floor — NOT lost
-    assert prov[by_file["apps/web/admin.ts"]] == {"RESOLVED_PARTIAL"}
-    # degrade (no verified) → all heuristic
-    g2 = import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS)
-    he = [e for e in g2["edges"] if e["from"].startswith("c") and "." in e["to"]]
-    assert he and all(e["provenance"] == "RESOLVED_PARTIAL" for e in he)
+def test_verified_attribution_is_additive_and_loses_no_consumer():
+    # LSP verifies ONLY checkout; di/admin fall back to the typed/newed heuristic — ALL RESOLVED (each
+    # receiver is a type-checked reference to the class), and NONE is lost (LSP is additive precision,
+    # never a replacement). Both with and without the LSP, class-mode attribution is RESOLVED.
+    def provs(g):
+        by = {n["file"].replace("\\", "/"): n["id"] for n in g["nodes"] if n["id"].startswith("c")}
+        p = {}
+        for e in g["edges"]:
+            if e["from"].startswith("c") and "." in e["to"]:
+                p.setdefault(e["from"], set()).add(e["provenance"])
+        return {f: p.get(i, set()) for f, i in by.items()}
+    files = ("apps/web/checkout.ts", "apps/web/di.ts", "apps/web/admin.ts")
+    with_lsp = provs(import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS,
+                                                   verified={"apps/web/checkout.ts": {"charge": 5, "refund": 6}}))
+    offline = provs(import_scan.build_class_graph(REPO, CLS_ANCHOR, CLS))
+    for f in files:                                  # every traced consumer present + RESOLVED, both ways
+        assert with_lsp[f] == {"RESOLVED_FULL"}
+        assert offline[f] == {"RESOLVED_FULL"}
 
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")

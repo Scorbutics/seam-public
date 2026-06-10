@@ -101,6 +101,31 @@ def test_mark_relevance_degrades_to_all_relevant(g, monkeypatch):
     assert all(n.relevant for n in g.nodes.values())   # nothing dimmed on LLM failure (honest default)
 
 
+# --------------------------------------------------------------------------- seam contracts (inter-seam)
+def test_seam_contracts_finds_bridging_symbol_and_blurriness():
+    # a consumer `C` uses methods that live in TWO seams → it BRIDGES them; the edges are heuristic
+    # (RESOLVED_PARTIAL) → the contract is BLURRY. Containment (m→Svc) and the anchor are excluded.
+    g = graph_ir.from_resolved_graph({
+        "anchor": {"id": "A"}, "anchors": ["A"],
+        "nodes": [{"id": "A", "symbol": "Svc"}, {"id": "m1", "symbol": "create", "enclosing": "Svc"},
+                  {"id": "m2", "symbol": "remove", "enclosing": "Svc"}, {"id": "C", "symbol": "router"}],
+        "edges": [{"from": "m1", "to": "A", "kind": "contains", "provenance": "RESOLVED_FULL"},
+                  {"from": "m2", "to": "A", "kind": "contains", "provenance": "RESOLVED_FULL"},
+                  {"from": "C", "to": "m1", "kind": "reference", "provenance": "RESOLVED_PARTIAL"},
+                  {"from": "C", "to": "m2", "kind": "reference", "provenance": "RESOLVED_PARTIAL"}],
+    })
+    seams = [{"id": "s1", "label": "Create", "node_ids": ["A", "m1", "C"]},
+             {"id": "s2", "label": "Remove", "node_ids": ["A", "m2", "C"]}]
+    cs = codebase._seam_contracts(g, seams)
+    assert len(cs) == 1
+    c = cs[0]
+    assert {c["seamA"], c["seamB"]} == {"s1", "s2"}
+    assert c["blurry"] is True                          # bridged only by heuristic edges
+    bridged = {(l["from"], l["to"]) for l in c["links"]}
+    assert ("C", "m1") in bridged and ("C", "m2") in bridged
+    assert all(l["kind"] != "contains" for l in c["links"])   # containment is structure, not a contract
+
+
 # --------------------------------------------------------------------------- well-formedness (Layer 6)
 def test_isolated_core_is_surfaced(g):
     codebase.assign_roles(g)
