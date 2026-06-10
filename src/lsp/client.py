@@ -2,7 +2,7 @@
 it speaks `initialize` / `textDocument/didOpen` / `textDocument/definition` and auto-replies to the
 server→client requests (`workspace/configuration`, capability registration) that would otherwise hang
 it. Promoted from the validated spike. The per-language bits (which server, which init options) live
-in `registry.py`; this file is reused unchanged across TypeScript, Python, Go, …"""
+in `src/languages/`; this file is reused unchanged across TypeScript, Python, Go, …"""
 from __future__ import annotations
 
 import json

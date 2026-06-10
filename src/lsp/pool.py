@@ -8,7 +8,8 @@ import atexit
 import os
 
 from . import client as _client
-from . import registry
+from .. import languages
+
 
 
 class LspPool:
@@ -19,10 +20,10 @@ class LspPool:
 
     def client_for(self, repo: str, file: str):
         """(LspClient|None, ServerSpec|None, root). None client ⇒ unsupported lang / no server."""
-        spec = registry.spec_for_file(file)
+        spec = languages.spec_for_file(file)
         if spec is None:
             return None, None, repo
-        root = registry.project_root(repo, file, spec)
+        root = languages.project_root(repo, file, spec)
         key = (spec.language, root)
         if key not in self._clients:
             self._clients[key] = self._start(spec, root)
@@ -50,7 +51,7 @@ class LspPool:
                 text = open(os.path.join(repo, file), encoding="utf-8", errors="ignore").read()
             except OSError:
                 return None
-            c.did_open(uri, registry.language_id_for(spec, file), text)
+            c.did_open(uri, languages.language_id_for(spec, file), text)
             self._open.add(k)
         return uri
 

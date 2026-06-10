@@ -13,7 +13,7 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
-from . import import_scan
+from . import languages
 
 
 class Resolver(Protocol):
@@ -23,19 +23,12 @@ class Resolver(Protocol):
 
 
 class DeterministicResolver:
-    """The floor — the current relative / package / tsconfig-`paths` logic. Caches `_pkg_map` per repo."""
-
-    def __init__(self) -> None:
-        self._pkgs: dict[str, dict[str, str]] = {}
-
-    def _pkg(self, repo: str) -> dict[str, str]:
-        if repo not in self._pkgs:
-            self._pkgs[repo] = import_scan._pkg_map(repo)
-        return self._pkgs[repo]
+    """The deterministic FLOOR — per-language offline resolution (relative / package / tsconfig alias),
+    dispatched to the importing file's language provider (`src/languages/`). TS is implemented; a
+    language with no floor resolves to None (resolution then relies on the LSP)."""
 
     def resolve_module(self, repo: str, importing_file: str, source: str) -> str | None:
-        repo = os.path.expanduser(repo)
-        return import_scan.resolve_module(repo, importing_file, source, self._pkg(repo))
+        return languages.floor_resolve(os.path.expanduser(repo), importing_file, source)
 
 
 def make_resolver(kind: str):

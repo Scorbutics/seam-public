@@ -11,7 +11,7 @@ import time
 import pytest
 
 from src import import_scan, resolver
-from src.lsp import registry
+from src import languages
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "scan_repo")
 CHECKOUT, PKG = "apps/web/checkout.ts", "@demo/lib/payments"
@@ -30,19 +30,19 @@ def test_make_resolver_lsp_and_auto():
 
 
 def test_registry_ext_to_language():
-    assert registry.spec_for_file("a/b/c.tsx").language == "typescript"
-    assert registry.spec_for_file("x.py").language == "python"
-    assert registry.spec_for_file("x.kt").language == "kotlin"
-    assert registry.spec_for_file("x.cpp").language == "cpp"
-    assert registry.spec_for_file("x.rb").language == "ruby"
-    assert registry.spec_for_file("README.md") is None   # unsupported → caller keeps the floor
+    assert languages.spec_for_file("a/b/c.tsx").language == "typescript"
+    assert languages.spec_for_file("x.py").language == "python"
+    assert languages.spec_for_file("x.kt").language == "kotlin"
+    assert languages.spec_for_file("x.cpp").language == "cpp"
+    assert languages.spec_for_file("x.rb").language == "ruby"
+    assert languages.spec_for_file("README.md") is None   # unsupported → caller keeps the floor
 
 
 def test_registry_language_id_per_file():
-    ts = registry.spec_for_file("x.ts")
-    assert registry.language_id_for(ts, "a.tsx") == "typescriptreact"
-    assert registry.language_id_for(ts, "a.ts") == "typescript"
-    assert registry.language_id_for(ts, "a.jsx") == "javascriptreact"
+    ts = languages.spec_for_file("x.ts")
+    assert languages.language_id_for(ts, "a.tsx") == "typescriptreact"
+    assert languages.language_id_for(ts, "a.ts") == "typescript"
+    assert languages.language_id_for(ts, "a.jsx") == "javascriptreact"
 
 
 def test_deterministic_resolver_matches_floor():
