@@ -85,22 +85,42 @@ class LspResolver:
     # --- exact symbol resolution (P1.5) ----------------------------------
     def resolve_symbol(self, repo: str, file: str, line: int, col: int):
         """go-to-definition at (file, line, col) → (repo-relative target file, 0-based def line), or
-        None. Lets the scan land the EXACT definition instead of re-parsing the resolved module."""
+        None. Polls for project readiness like resolve_module (the first query absorbs the index)."""
         repo = os.path.expanduser(repo)
         try:
-            c, spec, _root = self.pool.client_for(repo, file)
+            c, spec, root = self.pool.client_for(repo, file)
             if c is None:
                 return None
             uri = self.pool.ensure_open(c, repo, file, spec)
             if uri is None:
                 return None
-            for t, ln in c.definition_locs(uri, line, col):
-                rel = os.path.relpath(t, repo)
-                if not rel.startswith("..") and "node_modules" not in rel.split(os.sep):
+            self_abs = os.path.abspath(os.path.join(repo, file))
+
+            def q():
+                for t, ln in c.definition_locs(uri, line, col):
+                    if os.path.abspath(t) == self_abs:
+                        continue
+                    rel = os.path.relpath(t, repo)
+                    parts = rel.split(os.sep)
+                    if rel.startswith("..") or "node_modules" in parts or "site-packages" in parts:
+                        continue                      # the external boundary
                     return rel, ln
+                return None
+
+            key = (spec.language, root)
+            if key not in self._ready:
+                deadline = time.time() + self.ready_timeout
+                while time.time() < deadline:
+                    r = q()
+                    if r is not None:
+                        self._ready.add(key)
+                        return r
+                    time.sleep(0.4)
+                self._ready.add(key)
+                return None
+            return q()
         except Exception:
-            pass
-        return None
+            return None
 
     # --- deterministic floor (auto fallback) -----------------------------
     def _floor(self, repo: str, importing_file: str, source: str) -> str | None:

@@ -872,6 +872,8 @@ def build_consumers_graph(repo: str, anchor_file: str, symbol: str, *, depth: in
     the anchor is a class/interface. The LLM (and the human) reasons over one "consumers" move; the
     engine picks the mechanism. Per-edge provenance stays honest (RESOLVED_FULL importers,
     RESOLVED_PARTIAL call-sites). A plain function has no methods, so it's just its importers."""
+    if (lang_for(anchor_file) or "") == "python":        # cross-language: Python consumers via LSP
+        return _python_consumers_graph(os.path.expanduser(repo), anchor_file, symbol, anchor_line)
     from .expand import merge_resolved
     base = build_resolved_graph(repo, anchor_file, symbol, depth=depth, verified=verified, anchor_line=anchor_line)
     ar = _read(repo, anchor_file)
@@ -891,6 +893,135 @@ def build_consumers_graph(repo: str, anchor_file: str, symbol: str, *, depth: in
     return base
 
 
+def _python_consumers_graph(repo: str, anchor_file: str, symbol: str, anchor_line: int | None) -> dict:
+    """UPWARD for Python: who uses the anchor symbol. Recall = the Python import parser finds files
+    that `from M import <symbol>`; PRECISION = `resolve_symbol` (pyright go-to-def) on that import
+    confirms it lands on THIS anchor (not a same-named symbol elsewhere). The consumer unit (the
+    function/class using it) comes from tree-sitter (Python-aware). No instance/method attribution
+    yet — a consumer wires the symbol (a link); class-method granularity is a later refinement."""
+    from .languages import python as _py
+    ar = _read(repo, anchor_file)
+    arange, akind = [0, 0], "symbol"
+    if ar and available():
+        try:
+            defu = next((u for u in _named_units(_Ctx(ar[0], ar[1])) if u[0] == symbol), None)
+            if defu:
+                akind, arange = defu[1], [defu[2], defu[3]]
+        except Exception:
+            pass
+    if anchor_line is not None:
+        arange = [anchor_line, max(anchor_line, arange[1])]
+    nodes = [{"id": "n1", "symbol": symbol, "kind": akind, "file": anchor_file, "range": arange,
+              "enclosing": "", "complexity": max(1, arange[1] - arange[0] + 1)}]
+    edges: list[dict] = []
+
+    resolver = _ACTIVE_RESOLVER
+    if ar and available() and resolver is not None and hasattr(resolver, "resolve_symbol"):
+        anchor_abs = os.path.normpath(os.path.join(repo, anchor_file))
+        counter = 0
+        seen: set[str] = set()
+        for root, dirs, files in os.walk(repo):
+            dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
+            for fn in files:
+                if not fn.endswith((".py", ".pyi")):
+                    continue
+                path = os.path.join(root, fn)
+                if os.path.normpath(path) == anchor_abs:
+                    continue
+                try:
+                    text = open(path, encoding="utf-8", errors="ignore").read()
+                except OSError:
+                    continue
+                hit = next((p for name, *p in _py.parse_imports(text) if name == symbol), None)
+                if hit is None:                          # only files that IMPORT the symbol by name
+                    continue
+                rel = os.path.relpath(path, repo)
+                res = resolver.resolve_symbol(repo, rel, hit[0], hit[1])
+                if not (res and os.path.normpath(os.path.join(repo, res[0])) == anchor_abs):
+                    continue                             # a same-named symbol from elsewhere → not ours
+                try:
+                    cctx = _Ctx(text, lang_for(rel))
+                    units = _named_units(cctx)
+                except Exception:
+                    units = []
+                line = next(iter(_usage_lines(cctx, units, symbol)), hit[0]) if units else hit[0]
+                enc = _enclosing(units, line)
+                sym, kind, s, e = enc if enc else (os.path.splitext(fn)[0], "module", line, line)
+                key = f"{rel}#{sym}#{s}"
+                if key in seen:
+                    continue
+                seen.add(key)
+                counter += 1
+                nodes.append({"id": f"c{counter}", "symbol": sym, "kind": _kind_for(rel, kind), "file": rel,
+                              "range": [s, e], "enclosing": "", "complexity": max(1, e - s + 1)})
+                edges.append({"from": f"c{counter}", "to": "n1", "kind": "reference", "provenance": "RESOLVED_FULL"})
+
+    return {"version": 1, "anchor": {"id": "n1", "symbol": symbol, "file": anchor_file, "range": arange},
+            "anchors": ["n1"], "language": (lang_for(anchor_file) or ""), "resolutionQuality": "FULL",
+            "depth": 1, "complete": True, "nodes": nodes, "edges": edges, "blindspots": [], "unresolved": []}
+
+
+def _python_dependency_graph(repo: str, anchor_file: str, symbol: str, anchor_line: int | None) -> dict:
+    """DOWNWARD for Python (cross-language proof): parse the file's `from M import a` names, then
+    resolve EACH via the active resolver's `resolve_symbol` (LSP go-to-definition — pyright), which
+    lands the exact def file+line. Tree-sitter (already Python-aware) gives the def's range/kind.
+    Needs an LSP resolver (Python has no deterministic floor); externals/stdlib → one aggregated note."""
+    from .languages import python as _py
+    ar = _read(repo, anchor_file)
+    arange, akind = [0, 0], "symbol"
+    if ar and available():
+        try:
+            defu = next((u for u in _named_units(_Ctx(ar[0], ar[1])) if u[0] == symbol), None)
+            if defu:
+                akind, arange = defu[1], [defu[2], defu[3]]
+        except Exception:
+            pass
+    if anchor_line is not None:
+        arange = [anchor_line, max(anchor_line, arange[1])]
+    nodes = [{"id": "n1", "symbol": symbol, "kind": akind, "file": anchor_file, "range": arange,
+              "enclosing": "", "complexity": max(1, arange[1] - arange[0] + 1)}]
+    edges: list[dict] = []
+    blindspots: list[dict] = []
+
+    resolver = _ACTIVE_RESOLVER
+    if ar and resolver is not None and hasattr(resolver, "resolve_symbol"):
+        dep_units: dict[str, list] = {}
+        external: list[str] = []
+        seen: set[tuple[str, str]] = set()
+        counter = 0
+        for name, line, col in _py.parse_imports(ar[0]):
+            res = resolver.resolve_symbol(repo, anchor_file, line, col)
+            if res is None:
+                if name not in external:
+                    external.append(name)
+                continue
+            dep_file, dep_line = res
+            if (name, dep_file) in seen:
+                continue
+            seen.add((name, dep_file))
+            if dep_file not in dep_units:
+                rd = _read(repo, dep_file)
+                try:
+                    dep_units[dep_file] = _named_units(_Ctx(rd[0], rd[1])) if rd else []
+                except Exception:
+                    dep_units[dep_file] = []
+            defu = next((u for u in dep_units[dep_file] if u[0] == name), None)
+            kind, rng = (defu[1], [defu[2], defu[3]]) if defu else ("symbol", [dep_line, dep_line])
+            counter += 1
+            nodes.append({"id": f"d{counter}", "symbol": name, "kind": _kind_for(dep_file, kind),
+                          "file": dep_file, "range": rng, "enclosing": "", "complexity": max(1, rng[1] - rng[0] + 1)})
+            edges.append({"from": "n1", "to": f"d{counter}", "kind": "import", "provenance": "RESOLVED_FULL"})
+        if external:
+            shown = ", ".join(external[:8]) + (" …" if len(external) > 8 else "")
+            blindspots.append({"node": "n1", "mechanism": "external-libraries",
+                               "evidence": f"{symbol} uses {len(external)} external/stdlib symbol(s): {shown}",
+                               "candidates": []})
+
+    return {"version": 1, "anchor": {"id": "n1", "symbol": symbol, "file": anchor_file, "range": arange},
+            "anchors": ["n1"], "language": (lang_for(anchor_file) or ""), "resolutionQuality": "FULL",
+            "depth": 1, "complete": True, "nodes": nodes, "edges": edges, "blindspots": blindspots, "unresolved": []}
+
+
 def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_line: int | None = None) -> dict:
     """DOWNWARD direction (P3): the anchor's direct DEPENDENCIES — the behavioural symbols its file
     imports (resolved) — so an intent can grow toward what it USES (service → repository → prisma),
@@ -902,6 +1033,8 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
     that doesn't resolve to a repo file (external pkg / alias / DI) becomes a SUGGESTED blind spot —
     the honest dependency boundary."""
     repo = os.path.expanduser(repo)
+    if (lang_for(anchor_file) or "") == "python":        # cross-language: Python deps via LSP go-to-def
+        return _python_dependency_graph(repo, anchor_file, symbol, anchor_line)
     nodes: list[dict] = []
     edges: list[dict] = []
     blindspots: list[dict] = []

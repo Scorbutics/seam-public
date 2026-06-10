@@ -92,12 +92,61 @@ def test_daemon_resolver_degrades_to_floor(monkeypatch):
     assert got and got.replace("\\", "/").endswith("payments.ts")             # floor answered
 
 
+def test_python_import_parser():
+    from src.languages import python
+    src = "from .atoms import _Ctx, available as av\nimport os\nfrom x import *  # noqa\n"
+    got = {n for n, _, _ in python.parse_imports(src)}
+    assert {"_Ctx", "available", "os"} <= got     # named + `as`-original + module import
+    assert "av" not in got and "*" not in got      # alias + star excluded
+
+
 # --------------------------------------------------------------------------- gated integration (real LSP)
-_BUN = shutil.which("bun") or os.path.expanduser("~/.bun/bin/bun")
+import glob  # noqa: E402
+
+_BUN = bool(shutil.which("bun") or os.path.exists(os.path.expanduser("~/.bun/bin/bun")))
 _PRIVATE_APP = os.path.expanduser("~/dev/private-app")
-_GATED = os.path.exists(_BUN) and os.path.isdir(_PRIVATE_APP) and os.path.exists(os.path.join(_PRIVATE_APP, "node_modules/typescript"))
+_GATED = _BUN and os.path.isdir(_PRIVATE_APP) and os.path.exists(os.path.join(_PRIVATE_APP, "node_modules/typescript"))
+_PYRIGHT = _BUN and bool(glob.glob(os.path.expanduser("~/.bun/install/cache/pyright@*")))
+_PY_REPO = os.path.join(FIX, "..", "py_repo")           # a tiny Python project (fast pyright index)
+_PY_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures", "py_repo"))
 
 
+@pytest.mark.integration
+@pytest.mark.skipif(not _PYRIGHT, reason="integration: needs bun + a cached pyright (P2 cross-language)")
+def test_python_dependency_graph_via_lsp():
+    # P2 DOWN — parse `from core import process, Engine` and resolve each via pyright go-to-def.
+    from src import import_scan
+    from src.lsp.resolver import LspResolver
+    r = LspResolver(fallback=False)
+    import_scan.set_resolver(r)
+    try:
+        g = import_scan.build_dependency_graph(_PY_REPO, "app.py", "handle")
+        deps = {n["symbol"]: n["file"].replace("\\", "/") for n in g["nodes"] if n["id"] != "n1"}
+        assert deps.get("process") == "core.py" and deps.get("Engine") == "core.py"
+    finally:
+        import_scan.set_resolver(None)
+        r.pool.shutdown_all()
+
+
+@pytest.mark.integration
+@pytest.mark.skipif(not _PYRIGHT, reason="integration: needs bun + a cached pyright (P2 cross-language)")
+def test_python_consumers_graph_via_lsp():
+    # P2 UP — who imports `process` (defined in core.py): app.py + admin.py, confirmed via pyright.
+    from src import import_scan
+    from src.lsp.resolver import LspResolver
+    r = LspResolver(fallback=False)
+    import_scan.set_resolver(r)
+    try:
+        g = import_scan.build_consumers_graph(_PY_REPO, "core.py", "process")
+        consumers = {n["file"].replace("\\", "/") for n in g["nodes"] if n["id"] != "n1"}
+        assert "app.py" in consumers and "admin.py" in consumers
+        assert all(e["provenance"] == "RESOLVED_FULL" for e in g["edges"])   # LSP-confirmed
+    finally:
+        import_scan.set_resolver(None)
+        r.pool.shutdown_all()
+
+
+@pytest.mark.integration
 @pytest.mark.skipif(not _GATED, reason="integration: needs bun + ~/dev/private-app + its node_modules")
 def test_lsp_resolves_tsconfig_alias_real_server():
     from src.lsp.resolver import LspResolver
@@ -111,6 +160,7 @@ def test_lsp_resolves_tsconfig_alias_real_server():
         r.pool.shutdown_all()
 
 
+@pytest.mark.integration
 @pytest.mark.skipif(not _GATED, reason="integration: needs bun + ~/dev/private-app + its node_modules")
 def test_daemon_warm_servers_reused_across_invocations(tmp_path):
     # P4: the index is paid ONCE; a second (fresh) DaemonResolver hits the same warm daemon → fast.

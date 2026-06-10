@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import signal
 import subprocess
 import threading
 import time
@@ -19,8 +20,11 @@ class LspError(RuntimeError):
 class LspClient:
     def __init__(self, command: list[str], cwd: str, env: dict | None = None):
         try:
+            # start_new_session ⇒ the server (and any child it spawns, e.g. `bun x` → the real server)
+            # is in its OWN process group, so shutdown can kill the WHOLE group — no orphaned servers.
             self.p = subprocess.Popen(command, cwd=cwd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                      stderr=subprocess.DEVNULL, env=env or os.environ.copy())
+                                      stderr=subprocess.DEVNULL, env=env or os.environ.copy(),
+                                      start_new_session=True)
         except (OSError, ValueError) as exc:
             raise LspError(f"could not start LSP server {command!r}: {exc}") from exc
         self._id = 0
@@ -95,7 +99,7 @@ class LspClient:
         self.notify("textDocument/didOpen", {"textDocument": {
             "uri": uri, "languageId": language_id, "version": 1, "text": text}})
 
-    def definition_locs(self, uri: str, line: int, char: int, timeout: float = 30.0) -> list[tuple[str, int]]:
+    def definition_locs(self, uri: str, line: int, char: int, timeout: float = 12.0) -> list[tuple[str, int]]:
         """go-to-definition → [(target file, 0-based def line)], order-preserving."""
         r = self.request("textDocument/definition", {
             "textDocument": {"uri": uri}, "position": {"line": line, "character": char}}, timeout=timeout)
@@ -124,7 +128,10 @@ class LspClient:
             self.notify("exit", {})
         except LspError:
             pass
-        try:
-            self.p.terminate()
-        except Exception:
-            pass
+        try:                                             # kill the whole process group (server + children)
+            os.killpg(os.getpgid(self.p.pid), signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            try:
+                self.p.terminate()
+            except Exception:
+                pass
