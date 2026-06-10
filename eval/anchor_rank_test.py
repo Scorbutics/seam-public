@@ -1,7 +1,7 @@
 """Tests for the fuzzy-entry anchor ranking (src/anchor_rank.py)."""
 import os
 
-from src import anchor_rank
+from src.codebase import anchor_rank
 
 REPO = os.path.join(os.path.dirname(__file__), "fixtures", "scan_repo")
 

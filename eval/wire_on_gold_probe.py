@@ -17,8 +17,8 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
-from src import parser, classifier
-from src.symbol_edges import candidate_wirings
+from src.diff import parser, classifier
+from src.diff.symbol_edges import candidate_wirings
 from eval.harness import _wiring_edges
 
 CASES = _ROOT / "eval" / "cases"

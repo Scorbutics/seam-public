@@ -3,8 +3,8 @@ import os
 
 import pytest
 
-from src import orchestrate
-from src.atoms import available
+from src.codebase import orchestrate
+from src.codebase.atoms import available
 
 REPO = os.path.join(os.path.dirname(__file__), "fixtures", "scan_repo")
 ANCHOR = "packages/lib/payments.ts"

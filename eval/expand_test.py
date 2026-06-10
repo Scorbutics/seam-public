@@ -1,5 +1,6 @@
 """Tests for graph merge + multi-anchor roles (src/expand.py, P2 foundation)."""
-from src import codebase, expand, graph_ir
+from src.codebase import codebase, expand
+from src.core import graph_ir
 
 
 def _base():

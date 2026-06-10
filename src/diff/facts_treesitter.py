@@ -16,36 +16,9 @@ callers should use RegexFactsProvider. All tree-sitter specifics (including this
 quirk that node accessors are callables) are isolated to this module."""
 from __future__ import annotations
 
+from ..core.treesitter import _LANG_BY_EXT, _is_comment_or_string, _parser, available  # noqa: F401
 from .facts import FactsProvider, FileSource, HunkFacts, RegexFactsProvider, facts_for_hunk
 from .parser import Hunk
-
-# file extension -> tree-sitter grammar name (tree_sitter_language_pack)
-_LANG_BY_EXT = {
-    ".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript",
-    ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
-    ".c": "c", ".h": "cpp", ".hpp": "cpp", ".hh": "cpp", ".hxx": "cpp",
-    ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".kt": "kotlin", ".kts": "kotlin",
-    ".go": "go", ".rb": "ruby", ".java": "java", ".cs": "csharp", ".rs": "rust",
-}
-
-# A node whose KIND names a comment / string / char literal — its text is not code, so we
-# blank it before any logic extraction. Universal across grammars (the names vary, but all
-# contain one of these substrings).
-def _is_comment_or_string(kind: str) -> bool:
-    return "comment" in kind or "string" in kind or "char_literal" in kind
-
-
-def available() -> bool:
-    try:
-        import tree_sitter_language_pack  # noqa: F401
-        return True
-    except Exception:
-        return False
-
-
-def _parser(lang: str):
-    from tree_sitter_language_pack import get_parser
-    return get_parser(lang)
 
 
 def _ast_mask(content: str, lang: str) -> str | None:

@@ -8,8 +8,8 @@ import os
 
 import pytest
 
-from src import import_scan
-from src.atoms import available
+from src.codebase import import_scan
+from src.codebase.atoms import available
 
 REPO = os.path.join(os.path.dirname(__file__), "fixtures", "scan_repo")
 ANCHOR = "packages/lib/widget.ts"
@@ -174,7 +174,8 @@ def test_class_mode_untraced_and_unused_blindspots():
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_class_mode_cooccurrence_and_delegation():
-    from src import codebase, graph_ir
+    from src.codebase import codebase
+    from src.core import graph_ir
     # build_resolved_graph DELEGATES to class mode for a class anchor
     g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, CLS_ANCHOR, CLS))
     model = codebase.decompose(g)
@@ -191,7 +192,8 @@ def test_class_mode_cooccurrence_and_delegation():
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_test_file_consumer_gets_test_role():
-    from src import codebase, graph_ir
+    from src.codebase import codebase
+    from src.core import graph_ir
     g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, ANCHOR, SYM))
     codebase.decompose(g)
     t = next((n for n in g.nodes.values() if n.file.replace("\\", "/") == "apps/web/widget.test.ts"), None)
@@ -217,7 +219,8 @@ def test_depth2_ripple_adds_consumers_of_consumers():
 
 @pytest.mark.skipif(not available(), reason="tree-sitter not installed")
 def test_depth2_node_is_environment_boundary():
-    from src import codebase, graph_ir
+    from src.codebase import codebase
+    from src.core import graph_ir
     g = graph_ir.from_resolved_graph(import_scan.build_resolved_graph(REPO, ANCHOR, SYM, depth=2))
     codebase.decompose(g)
     host = next(n for n in g.nodes.values() if n.file.replace("\\", "/") == "apps/web/page-host.ts")
@@ -249,7 +252,8 @@ def test_module_mode_members_and_cooccurrence():
 def test_module_mode_decomposes_with_cooccurrence_seam():
     # end-to-end: the floor should fuse makeWidget + WIDGET_KIND (co-used by consumer.ts) into ONE
     # seam, and leave makeOrphan isolated.
-    from src import codebase, graph_ir
+    from src.codebase import codebase
+    from src.core import graph_ir
     g = graph_ir.from_resolved_graph(import_scan.build_module_graph(REPO, ANCHOR))
     model = codebase.decompose(g)
     seam_of = {}

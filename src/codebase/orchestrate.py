@@ -12,7 +12,9 @@ engine handles importers-vs-call-sites-vs-class-mode underneath.
 """
 from __future__ import annotations
 
-from . import codebase, expand, graph_ir, import_scan, llm
+from . import codebase, expand, import_scan
+from ..core import llm
+from ..core import graph_ir
 
 
 def _summary(data: dict) -> list[dict]:

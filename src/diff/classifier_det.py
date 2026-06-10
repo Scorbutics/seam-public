@@ -45,9 +45,9 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-from . import ROLES
+from .. import ROLES
 from .facts import FactsProvider, HunkFacts, RegexFactsProvider, leading_ambient_lines, new_side_lines
-from .graph_ir import connected_components
+from ..core.graph_ir import connected_components
 from .lang import _added, _defs_refs, _diff_imports, _STOP
 from .parser import Hunk, Placement
 from .symbol_edges import candidate_wirings, resolve_alias, segment_link_by_core

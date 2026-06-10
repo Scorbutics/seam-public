@@ -188,3 +188,16 @@ PROVIDER = LanguageProvider(
         notes="MUST pin the project's node_modules/typescript (bundled TS fails on moduleResolution: bundler).",
     ),
 )
+
+
+# import { A, B as C } from "src";  /  import D from "src";  /  import * as E from "src"
+# DOTALL so a multi-line `{ ... }` named block (common in TS) is captured whole. Used by the codebase
+# import-SCAN (diff-mode keeps its own copy in diff/lang.py — the two modes don't share a regex).
+_IMPORT_RE = re.compile(
+    r'import\s+(?:type\s+)?'
+    r'(?:([A-Za-z_$][\w$]*)\s*,?\s*)?'          # default binding
+    r'(?:\*\s*as\s*[A-Za-z_$][\w$]*\s*)?'       # namespace (binding ignored)
+    r'(?:\{([^}]*)\}\s*)?'                       # named block (may span lines)
+    r'from\s*["\']([^"\']+)["\']',
+    re.DOTALL,
+)

@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .facts_treesitter import _LANG_BY_EXT, _parser, available
+from ..core.treesitter import _LANG_BY_EXT, _parser, available
 
 # ---------------------------------------------------------------------------------------------
 # PER-GRAMMAR NODE-KIND REGISTRY (F1). The extractors reason over CONCEPTS, never literal TSX

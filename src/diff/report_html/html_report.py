@@ -23,7 +23,7 @@ from pathlib import Path
 
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
-from .. import ROLE_DESCRIPTIONS
+from ... import ROLE_DESCRIPTIONS
 from ..parser import Hunk
 from ..seams import _build_clusters, _file_items, _merged_diff, _notes
 

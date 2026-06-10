@@ -22,8 +22,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import facts_treesitter as ts, parser
-from src.facts import DictFileSource, RegexFactsProvider
+from src.diff import facts_treesitter as ts, parser
+from src.diff.facts import DictFileSource, RegexFactsProvider
 
 
 def _hunk(diff: str):

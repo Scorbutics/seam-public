@@ -25,7 +25,7 @@ import re
 from dataclasses import dataclass, field
 
 from .atoms import _CALL, _FUNCLIKE, _Ctx, available, lang_for
-from .lang import _IMPORT_RE
+from .languages.typescript import _IMPORT_RE
 from .languages.base import SKIP_DIRS as _SKIP_DIRS         # shared walk skip-dirs (generic)
 from .languages.typescript import _pkg_map, resolve_module  # the TS/JS deterministic floor (per-language)
 

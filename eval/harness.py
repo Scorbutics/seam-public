@@ -64,7 +64,7 @@ def _cases(only: str | None) -> list[Path]:
 
 
 def generate(args) -> int:
-    from src import classifier, classifier_det, noise_filter, parser
+    from src.diff import classifier, classifier_det, noise_filter, parser
     engine = classifier_det if args.engine == "det" else classifier
     # The deterministic engine is a pure function of the diff — N identical runs would
     # waste effort and the stability spread is trivially perfect, so cap it at 1.

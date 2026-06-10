@@ -35,7 +35,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import codebase, graph_ir  # noqa: E402
+from src.codebase import codebase
+from src.core import graph_ir
 
 
 def _pairwise_f1(pred: dict[str, str], gold: dict[str, str]) -> dict:

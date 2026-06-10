@@ -27,9 +27,9 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import classifier_det, noise_filter, parser, seams  # noqa: E402
-from src.facts import HunkFacts, leading_ambient_lines  # noqa: E402
-from src.parser import Hunk  # noqa: E402
+from src.diff import classifier_det, noise_filter, parser, seams
+from src.diff.facts import HunkFacts, leading_ambient_lines  # noqa: E402
+from src.diff.parser import Hunk  # noqa: E402
 
 
 def mk(hid: str, body: str, file: str = "a.tsx", header: str = "", start: int = 1) -> Hunk:

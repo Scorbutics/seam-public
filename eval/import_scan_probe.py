@@ -22,7 +22,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from src.lang import _IMPORT_RE  # reuse the existing import parser (named-block aware)
+from src.diff.lang import _IMPORT_RE  # reuse the existing import parser (named-block aware)
 
 _SKIP_DIRS = {"node_modules", ".next", ".git", "dist", "build", ".turbo", "coverage", ".venv"}
 _EXTS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts")

@@ -33,9 +33,9 @@ from collections import Counter
 from pathlib import Path
 
 from . import atoms as atoms_mod
-from . import graph_ir
-from . import llm
-from .graph_ir import (BlindSpot, Edge, Graph, Provenance, connected_components,
+from ..core import graph_ir
+from ..core import llm
+from ..core.graph_ir import (BlindSpot, Edge, Graph, Provenance, connected_components,
                        undirected_adjacency, wellformedness)
 
 # Role confidence == how structural the call is. Core/test are structural facts; link is a

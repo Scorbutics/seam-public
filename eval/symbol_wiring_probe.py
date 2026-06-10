@@ -16,7 +16,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
-from src import parser  # noqa: E402
+from src.diff import parser
 
 CASES = _ROOT / "eval" / "cases"
 GOLD = _ROOT / "eval" / "gold"

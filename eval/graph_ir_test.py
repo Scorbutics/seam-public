@@ -24,13 +24,13 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import classifier_det, noise_filter, parser  # noqa: E402
-from src.facts import RegexFactsProvider  # noqa: E402
-from src.graph_ir import (  # noqa: E402
+from src.diff import classifier_det, noise_filter, parser
+from src.diff.facts import RegexFactsProvider  # noqa: E402
+from src.core.graph_ir import (  # noqa: E402
     RESOLVED, Edge, Provenance, ResolvedOnlyViolation, assert_resolved_only,
     connected_components, from_hunks,
 )
-from src.parser import Hunk  # noqa: E402
+from src.diff.parser import Hunk  # noqa: E402
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
 

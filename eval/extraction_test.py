@@ -18,7 +18,7 @@ from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
-from src import symbol_edges  # noqa: E402
+from src.diff import symbol_edges
 
 GOLD = Path(__file__).resolve().parent / "extraction_gold.json"
 

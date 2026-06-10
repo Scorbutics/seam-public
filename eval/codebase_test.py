@@ -27,9 +27,10 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import atoms as atoms_mod  # noqa: E402
-from src import codebase, graph_ir  # noqa: E402
-from src.graph_ir import Provenance, assert_resolved_only  # noqa: E402
+from src.codebase import atoms as atoms_mod
+from src.codebase import codebase
+from src.core import graph_ir
+from src.core.graph_ir import Provenance, assert_resolved_only  # noqa: E402
 
 # A component shaped like cal.com's AssignmentWarningDialog: one core, two handlers that split
 # on distinctive props (id vs pendingRoute/leaveWithoutAssigningHosts), sharing ambient glue.

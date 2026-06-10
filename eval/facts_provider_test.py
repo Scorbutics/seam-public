@@ -19,8 +19,8 @@ from pathlib import Path
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import classifier_det, noise_filter, parser
-from src.facts import (ExternalFactsProvider, FACTS_SCHEMA_VERSION, FactsProvider,
+from src.diff import classifier_det, noise_filter, parser
+from src.diff.facts import (ExternalFactsProvider, FACTS_SCHEMA_VERSION, FactsProvider,
                        HunkFacts, MergedFactsProvider, RegexFactsProvider, facts_payload)
 
 CASES = sorted((Path(__file__).resolve().parent / "cases").glob("*.patch"))
