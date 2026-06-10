@@ -140,15 +140,40 @@ def _is_crossing(e: Edge) -> bool:
     return e.kind == "dispatch" or e.provenance == Provenance.SUGGESTED
 
 
+def _hard_reachable(g: Graph) -> set[str]:
+    """Nodes reachable from the ORIGINAL anchor over NON-crossing edges (+ containment) — the footprint
+    reached by HARD bindings (imports / resolved calls). Anything OUTSIDE was reached only across a
+    heuristic crossing (string-dispatch / assumed), so its seam is SUGGESTED: you believe it only as
+    far as you believe the crossing — even after you follow it (expand into its body), the hop in was
+    still an assumption. Seeds from `g.anchor` (the original seed), NOT the expanded lineage."""
+    adj: dict[str, set[str]] = {}
+    def link(a: str, b: str) -> None:
+        adj.setdefault(a, set()).add(b)
+        adj.setdefault(b, set()).add(a)
+    for e in g.resolved_edges():
+        if not _is_crossing(e):
+            link(e.src, e.dst)
+    for a, b in _containment_edges(g):
+        link(a, b)
+    seed = [g.anchor] if g.anchor in g.nodes else [a for a in (g.anchors or []) if a in g.nodes]
+    seen, stack = set(seed), list(seed)
+    while stack:
+        for nb in adj.get(stack.pop(), ()):
+            if nb not in seen:
+                seen.add(nb)
+                stack.append(nb)
+    return seen
+
+
 def _extract_suggested_seams(g: Graph, seams: list[dict]) -> list[dict]:
-    """Pull each crossing TARGET out of the seam it fused into and give it its OWN seam, flagged
-    `suggested` — so a string-dispatch chain reads as distinct hops (PaymentsTab → … ↝ the edge
-    function), not one blob. The crossing edge survives in `edges`/contracts (the chain link); only
-    the GRAIN changes. Without this, `assign_clusters` fuses the target via the (resolved) partial edge."""
+    """Make crossings read as distinct hops, then flag the suggested side. (1) SPLIT: pull a non-anchor
+    crossing TARGET out of the seam it fused into, into its own seam (else `assign_clusters` keeps it
+    fused via the resolved-partial edge). (2) MARK: any seam reached from the original anchor ONLY
+    across a crossing is `suggested` — this also catches a FOLLOWED crossing (expanded into an anchor),
+    which stacking gives its own seam but reachability still marks suggested. The crossing edge itself
+    survives in `edges`/contracts as the (blurry) chain link; only the GRAIN + the flag change."""
     anchors = set(g.anchors or [g.anchor])
     targets = {e.dst for e in g.resolved_edges() if _is_crossing(e) and e.dst not in anchors}
-    if not targets:
-        return seams
     out: list[dict] = []
     made: dict[str, dict] = {}
     for s in seams:
@@ -160,11 +185,13 @@ def _extract_suggested_seams(g: Graph, seams: list[dict]) -> list[dict]:
         for t in ts:
             if t not in made:
                 node = g.nodes[t]
-                sug = _mk_seam(f"sug-{t}", node.label or t, [t],
-                               link_only=(node.role != "core"), proposed_by="crossing")
-                sug["suggested"] = True
-                made[t] = sug
-                out.append(sug)
+                made[t] = _mk_seam(f"sug-{t}", node.label or t, [t],
+                                   link_only=(node.role != "core"), proposed_by="crossing")
+                out.append(made[t])
+    hard = _hard_reachable(g)
+    for s in out:                                   # believe a seam only as far as you believe its crossing
+        if s["node_ids"] and all(nid not in hard for nid in s["node_ids"]):
+            s["suggested"] = True
     return out
 
 
@@ -701,6 +728,22 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
         idset = set(ids)
         hunks = [_seam_hunk(g.nodes[i], "RESOLVED_FULL" if g.nodes[i].role == "core"
                             else prov_of(i, idset)) for i in ids]
+        # inbound CALLERS (the chain UPSTREAM): a node OUTSIDE this seam that reaches a core IN it →
+        # a link node positioned at the CALL SITE (the edge's call line), so the seam shows WHO calls
+        # it — navigable to the `await foo()` — not only its own deps. Cross-seam only, deduped.
+        seen_c: set[tuple[str, str]] = set()
+        for e in g.resolved_edges():
+            if e.kind == "contains" or e.dst not in idset or e.src in idset:
+                continue
+            c = g.nodes.get(e.src)
+            if c is None or (e.src, e.dst) in seen_c:
+                continue
+            seen_c.add((e.src, e.dst))
+            cl = e.line if (e.line and e.line > 0) else c.start
+            hunks.append({"id": f"call:{e.src}:{e.dst}", "file": c.file, "start": cl, "end": cl,
+                          "role": "link", "confidence": 0.9, "label": c.label, "caller": True,
+                          "provenance": e.provenance.value, "relevant": c.relevant,
+                          "external": [], "externalRefs": [], "rewire": None})
         warns: list[str] = []
         for i in ids:
             for w in seam_warnings.get(i, []) + node_warnings.get(i, []):

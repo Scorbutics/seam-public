@@ -16,7 +16,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -1601,7 +1601,8 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       `${boundary ? "⤳ boundary" : h.role}${unc ? "?" : ""}${ext}  ·  ${hunkName(h)}${isModuleEntry(h) ? "" : ":" + h.start}`,
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
-    const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "", pv, rw ? `↻ ${rw}` : "",
+    const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "",
+                  h.caller ? `↑ called by ${h.label}` : "", pv, rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
                   nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");

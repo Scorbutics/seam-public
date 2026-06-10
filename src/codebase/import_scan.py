@@ -1062,6 +1062,11 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
         counter = 0
         seen: set[tuple[str, str]] = set()
         external_pkgs: list[str] = []                    # genuine node_modules deps — aggregated, not N spots
+        try:                                             # the anchor's own parse — to find each dep's CALL-SITE
+            actx = _Ctx(ar[0], ar[1])
+            aunits = _named_units(actx)
+        except Exception:
+            actx, aunits = None, []
         for m in _IMPORT_RE.finditer(ar[0]):
             named, source = m.group(2), m.group(3)
             if not named:
@@ -1092,7 +1097,11 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
                 did = f"d{counter}"
                 nodes.append({"id": did, "symbol": imported, "kind": defu[1], "file": resolved_to,
                               "range": [defu[2], defu[3]], "enclosing": "", "complexity": max(1, defu[3] - defu[2] + 1)})
-                edges.append({"from": "n1", "to": did, "kind": "import", "provenance": "RESOLVED_FULL"})
+                edge = {"from": "n1", "to": did, "kind": "import", "provenance": "RESOLVED_FULL"}
+                call = next(iter(_usage_lines(actx, aunits, imported)), None) if actx else None
+                if call is not None:                     # the CALL-SITE in the anchor (not the import line), so
+                    edge["line"] = call                  # the seam contract's "← called from" lands on the call
+                edges.append(edge)
                 # a followed dependency is NOT added to `anchors` → it's WIRING (a link adjacent to the
                 # source, which IS promoted to a core), not a new core. Keeps the core set the focus.
 
@@ -1110,7 +1119,7 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
             sc_ctx = _Ctx(ar[0], ar[1])
             entry_idx = string_coupling.module_entry_index(repo, _SKIP_DIRS)
             sc_edges, sc_ambig = string_coupling.detect(sc_ctx, arange[0], arange[1], entry_idx, anchor_file)
-            for name, path in sc_edges:
+            for name, path, line in sc_edges:
                 if (name, path) in seen:
                     continue
                 seen.add((name, path))
@@ -1118,7 +1127,8 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
                 did = f"d{counter}"
                 nodes.append({"id": did, "symbol": name, "kind": "module", "file": path, "range": [0, 0],
                               "enclosing": "", "complexity": 1})
-                edges.append({"from": "n1", "to": did, "kind": "dispatch", "provenance": "RESOLVED_PARTIAL"})
+                edges.append({"from": "n1", "to": did, "kind": "dispatch", "provenance": "RESOLVED_PARTIAL",
+                              "line": line})
             for name, hits in sc_ambig:
                 blindspots.append({"node": "n1", "mechanism": "string-dispatch-ambiguous",
                                    "evidence": f"'{name}' names {len(hits)} module entries (ambiguous)",

@@ -148,7 +148,8 @@ def test_wellformedness_rejects_non_resolved_edges(g):
 # --------------------------------------------------------------------------- emit (end-to-end)
 def test_emit_drops_no_reached_node(g):
     model = codebase.decompose(g)
-    rendered = {h["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]}
+    rendered = {h["id"] for cl in model["clusters"] for s in cl["seams"] for h in s["hunks"]
+                if not h.get("caller")}    # caller nodes are synthetic upstream markers, not graph nodes
     rendered |= {h["id"] for h in model["tests"]}
     assert rendered == set(g.nodes)        # nothing reached is silently dropped
 

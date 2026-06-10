@@ -54,7 +54,7 @@ def detect(ctx: _Ctx, lo: int, hi: int, index: dict[str, list[str]], anchor_file
     Returns (edges, ambiguous): a UNIQUE existing entry → `(name, path)` (RESOLVED_PARTIAL); two-or-more
     → `(name, [paths])` (a blind spot — candidates, never an asserted edge)."""
     anchor_dir = os.path.dirname(anchor_file)
-    edges: list[tuple[str, str]] = []
+    edges: list[tuple[str, str, int]] = []
     ambiguous: list[tuple[str, list[str]]] = []
     seen: set[str] = set()
     for call in ctx.collect(ctx.root, lambda k: k in _CALL):
@@ -68,7 +68,7 @@ def detect(ctx: _Ctx, lo: int, hi: int, index: dict[str, list[str]], anchor_file
             # validate the OTHER end: a unique module entry by that name, not the anchor's own dir
             hits = [p for p in index.get(name, []) if os.path.dirname(p) != anchor_dir]
             if len(hits) == 1:
-                edges.append((name, hits[0]))
+                edges.append((name, hits[0], s))           # s = the dispatch CALL line (for the chain back-link)
             elif len(hits) > 1:
                 ambiguous.append((name, hits))
     return edges, ambiguous

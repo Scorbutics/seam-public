@@ -18,10 +18,14 @@ from ..core import graph_ir
 
 
 def _summary(data: dict) -> list[dict]:
-    """The current footprint as {id, symbol, role, file} — deterministic roles only (fast, no LLM)."""
+    """The current footprint as {id, symbol, role, file, crossing} — deterministic roles only (fast, no
+    LLM). `crossing` flags a node reached across a heuristic boundary (a string-dispatch to an edge
+    function / route, or an assumed link): the frontier the LLM should rank + prefer following (b)."""
     g = graph_ir.from_resolved_graph(data)
     codebase.assign_roles(g)
-    return [{"id": n.id, "symbol": n.label, "role": n.role, "file": n.file} for n in g.nodes.values()]
+    crossings = {e.dst for e in g.resolved_edges() if codebase._is_crossing(e)}
+    return [{"id": n.id, "symbol": n.label, "role": n.role, "file": n.file,
+             "crossing": n.id in crossings} for n in g.nodes.values()]
 
 
 def _step_prompt(intent: str, summary: list[dict]) -> str:
@@ -30,8 +34,11 @@ def _step_prompt(intent: str, summary: list[dict]) -> str:
         "",
         "Current footprint (symbol — role — file):",
     ]
+    has_crossing = False
     for n in summary[:45]:
-        lines.append(f"  {n['symbol']} — {n['role']} — {n['file']}")
+        tag = "   ⤳ SUGGESTED CROSSING" if n.get("crossing") else ""
+        has_crossing = has_crossing or bool(n.get("crossing"))
+        lines.append(f"  {n['symbol']} — {n['role']} — {n['file']}{tag}")
     lines += [
         "",
         "Pick ONE node to expand toward the answer, and a DIRECTION:",
@@ -40,6 +47,16 @@ def _step_prompt(intent: str, summary: list[dict]) -> str:
         "Pick the single move that best advances toward answering the question. Prefer nodes whose",
         "role/area is on the path to the answer. Set done=true once the footprint already covers the",
         "answer — do NOT over-expand.",
+    ]
+    if has_crossing:
+        lines += [
+            "",
+            "A ⤳ SUGGESTED CROSSING is the OTHER SIDE of a boundary the chain reached by heuristic — a",
+            "string-dispatch to an edge function, an HTTP route, a job/queue handler. That is OFTEN where",
+            "the real work happens. If a crossing is on the path to the answer, PREFER expanding it (down)",
+            "over staying on the near side — following it is exactly how the chain reaches the processing.",
+        ]
+    lines += [
         "",
         'Output ONLY a JSON array with exactly ONE object (use a symbol from the list verbatim):',
         '[{"id":"step","node":"<symbol>","direction":"up|down","done":false}]',
