@@ -113,7 +113,7 @@ builds on; informal couplings stay the LLM's job.
    It labels, it does not evaluate — clusters and seams are *proposals* the human's
    §3 self-check can violate.
 5. **symbol_edges** — the deterministic grounding layer, shared by classifier and
-   renderer:
+   seam assembly:
    - `candidate_wirings` — symbol def→use edges (the Pass B/C floor).
    - `external_coupling` / `external_refs` — a hunk wiring code *outside* the diff
      (`import … from "@coss/ui"`): the §I "diff is not the codebase" boundary, made
@@ -123,7 +123,7 @@ builds on; informal couplings stay the LLM's job.
    - `segment_link_by_core` + `resolve_alias` — locate, inside a big multi-core link,
      the line range wiring each core (§B span decomposition); a local wrapper alias
      is resolved by reading the file (the **FilesystemResolver**).
-6. **renderer** — deterministic structuring:
+6. **seams** (assembly) → **report_html** — deterministic structuring:
    - **seam build** — per cluster, one core + the links/env that wire it, adjacent
      (so you read a core next to the links that wire it; the §3 self-check runs per
      seam). Two grains: **intent cluster** (coarse, "why") and **seam** (fine,
@@ -265,7 +265,7 @@ defaults thinking ON, which on a labeling task burns ~15–22K output tokens
 (~160s) for a ~550-token answer — so the role pass forces `MAX_THINKING_TOKENS=0`
 (~16× faster, equal/better roles). The cluster pass keeps thinking (grouping
 needs it). Tune votes via `ROLE_VOTES` and the cluster budget via
-`CLUSTER_THINKING` in `src/classifier.py`. This is batch review tooling — you run
+`CLUSTER_THINKING` in `src/diff/classifier.py`. This is batch review tooling — you run
 it once and read the report — so ~90s is fine.
 
 ## Running the experiment (the actual point — §10)

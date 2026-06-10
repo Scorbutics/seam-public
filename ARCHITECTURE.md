@@ -2,12 +2,47 @@
 
 Reference for how the tool is wired today. For the *why* (the conceptual model — roles,
 trust directions, the read-time-decomposition thesis) see `decomposition-model-and-mvp.md`;
-for usage see `README.md`. This document is the *what and how*.
+for usage see `README.md`. This document is the *what and how* — mostly **diff-mode** (the
+original product); codebase-mode is sketched in §0 and detailed in the plan docs.
 
 > **One-line mental model:** a diff flows through a deterministic shell → a **per-pass
 > classifier** (each of cluster / roles / wiring independently `det` | `llm` | `hybrid`) →
 > a deterministic overlap/spans pass → a deterministic renderer (HTML report or the VS Code
 > native surface). The tool **structures, it never judges.**
+
+---
+
+## 0. Code layout — two modes on a shared core
+
+The tool has **two products** behind one CLI, split into loosely-coupled folders:
+
+```
+src/
+  core/        shared engine, knows NO mode — graph_ir (the IR), llm (claude-CLI plumbing),
+               treesitter (parsing substrate), mode (the strategy Protocol + dispatch)
+  diff/        DIFF-MODE — review working changes → seam report. parser · diff_source · lang ·
+               symbol_edges · facts · facts_treesitter · classifier(_det) · engine · noise_filter ·
+               seams (assembly) · report_html/ (HTML) · run (the DiffMode strategy entry)
+  codebase/    CODEBASE-MODE — anchor on a symbol → intent FOOTPRINT (consumers + deps) → seams.
+               import_scan (scan) · codebase (decompose) · expand · anchor_rank · orchestrate ·
+               resolver · atoms (tree-sitter facts) · languages/ · lsp/ · run (CodebaseMode entry)
+  __init__.py  shared role constants (ROLES, ROLE_DESCRIPTIONS)
+```
+
+**The rule (enforced):** `diff/*` and `codebase/*` import only from `core/*` and within their own
+folder — **never from each other**, and `core/*` imports neither. `eval/architecture_test.py` asserts
+it (AST scan). This keeps the modes independently evolvable; adding a third mode is a new folder + a
+`Mode`, no core surgery.
+
+**The Mode strategy** (`core/mode.py`): each mode exposes `MODE` with `claims(args)` (do these CLI
+flags belong to me?) and `run(args) -> int`. `decompose.py` is just argparse +
+`dispatch([CODEBASE_MODE, DIFF_MODE], args)` — codebase claims `--graph/--scan/--expand-graph`, diff
+is the `--file/--git/--from-classified` fallback. Each mode's pipeline lives in its folder's `run.py`.
+
+The rest of this document details **diff-mode** (§1–§9). Codebase-mode shares `core/graph_ir` (the IR),
+`core/llm`, and `core/treesitter`, but forks role assignment (anchor-relative BFS over a RESOLVED graph,
+not the `HunkFacts` ladder) — see `decomposition-model-and-mvp.md`, `intent-expansion-plan.md`, and
+`resolver-lsp-plan.md`.
 
 ---
 
@@ -18,7 +53,7 @@ for usage see `README.md`. This document is the *what and how*.
   diff (file/git) → diff_source → parser → noise_filter ─────────────┐
                                   (Hunk[])   (marks noise)            │
                                                                       ▼
-   ┌──────────────────────── src/engine.classify (orchestrator) ─────────────────┐
+   ┌──────────────────── src/diff/engine.classify (orchestrator) ─────────────────┐
    │  facts = FactsProvider.facts(work)   # only if any pass is det/hybrid         │
    │                                                                               │
    │   ROLES pass   → roles/role_confidence            (det | llm | hybrid)        │
@@ -28,7 +63,7 @@ for usage see `README.md`. This document is the *what and how*.
    └───────────────────────────────────────────────────────────────────────────────┘
                                                                       │
                                               hunks (fully labelled)  ▼
-                       renderer.render → report.html        OR    renderer.emit_seams_json → JSON
+                       report_html.render → report.html        OR    seams.emit_seams_json → JSON
                        (cytoscape + diff2html)                    (consumed by the VS Code extension)
 ```
 
@@ -39,11 +74,11 @@ Stages (`decompose.py` is the CLI entry):
 3. **`noise_filter`** — deterministic pre-pass marks whitespace / rename / binary / lockfile / doc / generated hunks as `noise` (the one role where determinism matters); they skip the classifier.
 4. **`engine.classify`** — the per-pass classifier (§3).
 5. **`assign_spans`** — deterministic overlap/header-peel (§5), always run.
-6. **`renderer`** — HTML report, or `emit_seams_json` for the extension.
+6. **`seams`** (assembly) → **`report_html`** (HTML report), or **`seams.emit_seams_json`** for the extension.
 
 ---
 
-## 2. Data model (`src/parser.py`, `src/facts.py`)
+## 2. Data model (`src/diff/parser.py`, `src/diff/facts.py`)
 
 - **`Hunk`** — the unit of decomposition. Carries the diff text + metadata, then the labels filled by the passes:
   - `role` ∈ `core | link | environment | test | noise`
@@ -59,7 +94,7 @@ Stages (`decompose.py` is the CLI entry):
 
 ---
 
-## 3. The per-pass classifier (`src/engine.py`)
+## 3. The per-pass classifier (`src/diff/engine.py`)
 
 Three passes, each independently on one of three engines. **Order: roles → wiring → clusters → spans** (each reads the prior). `facts` is computed once if any pass is `det`/`hybrid`.
 
@@ -93,7 +128,7 @@ Deterministic ladder over `HunkFacts` (in order): `is_test` → `is_sql`→env �
 
 ---
 
-## 4. The Facts IR & producers (`src/facts.py`, `src/facts_treesitter.py`)
+## 4. The Facts IR & producers (`src/diff/facts.py`, `src/diff/facts_treesitter.py`)
 
 The deterministic passes contain **zero regex / language knowledge** — they read `HunkFacts`. A `FactsProvider` produces them; swap the provider to change the syntax source. Two producers are *correct iff they emit equal `HunkFacts`* — the contract that makes "tree-sitter ≡ VS Code AST" a test, not a hope.
 
@@ -123,8 +158,8 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 
 ## 6. Output surfaces
 
-- **HTML report** (`renderer.render`) — self-contained (cytoscape graph + diff2html); seams built per cluster, spans/placements applied, per-seam *look-here* flags (isolated-core / dangling-link / uncertain / untested-core).
-- **Seam JSON** (`renderer.emit_seams_json`) — the contract for the extension: `{clusters:[{intent, seams:[{label, linkOnly, uncertain, warnings, hunks:[{id,file,start,end,role,confidence,external,externalRefs,rewire}]}]}], tests, noise}`.
+- **HTML report** (`report_html.render`) — self-contained (cytoscape graph + diff2html); seams built per cluster, spans/placements applied, per-seam *look-here* flags (isolated-core / dangling-link / uncertain / untested-core).
+- **Seam JSON** (`seams.emit_seams_json`) — the contract for the extension: `{clusters:[{intent, seams:[{label, linkOnly, uncertain, warnings, hunks:[{id,file,start,end,role,confidence,external,externalRefs,rewire}]}]}], tests, noise}`.
 - **VS Code extension** (`vscode-extension/`) — consumes `--emit-seams` and renders *natively*: per-seam role gutter bar (split where placements overlap) + scrollbar map + seam tree + CodeLens labels; lazy external-coupling resolution via the editor's go-to-definition (`VsCodeResolver`). It also *produces* facts: `facts.ts:computeSymbolFacts` walks DocumentSymbols → a partial `HunkFacts` payload, passed back via `--facts`. Setting **`seam.engine`** = `hybrid` (default → `--cluster llm --roles det --wiring hybrid`) | `det` (offline) | `llm`. *(The compiled `out/extension.js` must be rebuilt with `npm run compile` after TS edits.)*
 
 ---
@@ -146,6 +181,8 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 - **`facts_provider_test.py`** — the provider contract (round-trip, `external ≡ regex`, merge, fallback; the `assert_providers_equivalent` checker).
 - **`treesitter_test.py`** — tree-sitter producer (comment/string masking win, clean-code equivalence, fallback, alignment guard).
 - **`test_det_spans.py`** (pytest) — the spans/overlap + labelling unit suite.
+- **`architecture_test.py`** — the loose-coupling guard (§0): an AST scan asserting `diff/*` and `codebase/*` never import each other and `core/*` imports neither. Fails if a cross-mode coupling creeps back.
+- **codebase-mode** — `codebase_test.py` (anchor-relative roles → seams, end-to-end on a fixture graph), `resolver_test.py` (the Resolver strategy + real-LSP integration, `-m integration`), `import_scan_test.py`, `expand_test.py`, `orchestrate_test.py`, `anchor_rank_test.py`. Integration tests that spin up real language servers are marked `@pytest.mark.integration` and **excluded from the default run** (`pytest.ini`: `addopts = -m "not integration"`) — run them explicitly with `pytest eval/ -m integration`.
 - **`gold/`** — hand-agreed labels (5 cases across C/C++/Kotlin+Ruby/TS+SQL). **`gold_candidates/`** — meaning-based candidates (LLM-first wiring dumps incl. cal.com) pending audit/promotion; the current wiring gold is symbol-derived and over-dense (private-app-boosters 41 edges/24 hunks), so it under-scores meaning-based wiring (rework in progress).
 
 ---
@@ -162,4 +199,5 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 
 - Vocabulary-saturation diffs (one feature, shared domain vocab) remain hard deterministically — the Layer-2/LLM case.
 - Wiring **gold is being reworked** (symbol-derived, over-dense) so the LLM-first wiring can be measured honestly.
-- VS Code AST producer is validated only on the Python contract; the extension TS needs F5 validation. Static-class / non-diff mode is out of scope.
+- VS Code AST producer is validated only on the Python contract; the extension TS needs F5 validation.
+- **Codebase-mode** (non-diff: anchor → footprint) is **now built** (`src/codebase/`, §0) — no longer out of scope. It shares `core/` but forks role assignment; its language/stack resolution is externalised to real LSP servers (`codebase/lsp/`, `codebase/languages/`) — see `resolver-lsp-plan.md` and `intent-expansion-plan.md`.
