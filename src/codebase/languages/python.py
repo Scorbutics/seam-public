@@ -33,10 +33,32 @@ def parse_imports(text: str) -> list[tuple[str, int, int]]:
     return out
 
 
+# A Python PACKAGE entry is `__init__.py` (NOT `index.py` — that's the JS convention).
+_MODULE_ENTRY = re.compile(r"^__init__\.py$")
+
+
+def _entrypoint(ctx) -> int | None:
+    """Main entry INSIDE a Python module: `if __name__ == '__main__':` → else a top-level CALL
+    (`main()` / `app.run()`) → else the first top-level statement that isn't a comment / import."""
+    top = ctx.children(ctx.root)
+    main = next((n for n in top if n.kind() == "if_statement" and "__main__" in ctx.text(n)[:80]), None)
+    if main is not None:
+        return ctx.span(main)[0]
+    call = next((n for n in top if n.kind() == "expression_statement"
+                 and ctx.children(n) and "call" in ctx.children(n)[0].kind()), None)
+    if call is not None:
+        return ctx.span(call)[0]
+    real = next((n for n in top if n.kind() not in
+                 ("comment", "import_statement", "import_from_statement", "future_import_statement")), None)
+    return ctx.span(real)[0] if real is not None else None
+
+
 PROVIDER = LanguageProvider(
     name="python",
     extensions=(".py", ".pyi"),
     resolve=None,
+    module_entry=_MODULE_ENTRY,
+    entrypoint=_entrypoint,
     lsp=ServerSpec(
         language="python",
         command=bun_x("--package", "pyright", "pyright-langserver", "--stdio"),

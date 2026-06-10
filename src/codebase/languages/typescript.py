@@ -174,10 +174,32 @@ def _init(repo: str) -> dict:
     return {"tsserver": {"path": proj_ts}} if os.path.exists(proj_ts) else {}
 
 
+# A directory holding an `index.*` is a Node/Deno module ENTRY (a thing you import/enter by dir name).
+_MODULE_ENTRY = re.compile(r"^index\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$")
+
+
+def _entrypoint(ctx) -> int | None:
+    """Main entry INSIDE an `index.*`: a top-level handler-registration CALL (`serve(...)` /
+    `Deno.serve(...)` / `app.get(...)`) → else `export default` → else the first top-level statement
+    that isn't a comment / import. `ctx` is a tree-sitter `_Ctx` (used by duck-typing, not imported)."""
+    top = ctx.children(ctx.root)
+    call = next((n for n in top if n.kind() == "expression_statement"
+                 and ctx.children(n) and "call" in ctx.children(n)[0].kind()), None)
+    if call is not None:
+        return ctx.span(call)[0]
+    deflt = next((n for n in top if n.kind() == "export_statement" and "default" in ctx.text(n)[:30]), None)
+    if deflt is not None:
+        return ctx.span(deflt)[0]
+    real = next((n for n in top if n.kind() not in ("comment", "import_statement", "hash_bang_line")), None)
+    return ctx.span(real)[0] if real is not None else None
+
+
 PROVIDER = LanguageProvider(
     name="typescript",
     extensions=EXTENSIONS,
     resolve=floor_resolve,
+    module_entry=_MODULE_ENTRY,
+    entrypoint=_entrypoint,
     lsp=ServerSpec(
         language="typescript",
         command=bun_x("typescript-language-server", "--stdio"),

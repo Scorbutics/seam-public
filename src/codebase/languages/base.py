@@ -34,6 +34,13 @@ class LanguageProvider:
     # None ⇒ this language has no offline floor; resolution relies on the LSP (or stays unresolved).
     resolve: object = None
     lsp: ServerSpec | None = None
+    # MODULE-ENTRY convention: a compiled regex on a basename that marks a module entry — the
+    # 'endpoint-shaped' target a string-dispatch can name (TS/JS `index.*`, Python `__init__.py`).
+    # None ⇒ no such convention. Consumed by string_coupling (tier 2 of the edge ladder).
+    module_entry: object = None
+    # callable(ctx) -> int | None: the MAIN-entry line INSIDE a module entry (so a dispatch node opens
+    # the handler, not line 0). Language-specific AST heuristic; `ctx` is a tree-sitter `_Ctx` (duck).
+    entrypoint: object = None
 
 
 def bun_x(*pkg_args: str):

@@ -25,12 +25,15 @@ import re
 from dataclasses import dataclass, field
 
 from . import llm_discovery, string_coupling
-from .atoms import _CALL, _FUNCLIKE, _Ctx, available, lang_for
+# Cross-language tree-sitter VOCABULARY lives in atoms (no raw grammar literals in this generic scan).
+from .atoms import (_CALL, _CLASS_KINDS, _EXPORT, _FUNCLIKE, _INSTANCE_BINDER, _INTERFACE,
+                    _INTERFACE_MEMBER, _MEMBER, _MEMBER_NAME, _METHOD_KINDS, _NAME_KINDS, _NEW,
+                    _TYPE_REF, _VAR_DECL, _VAR_DECLARATOR, _ANON_FUNC, _Ctx, available, lang_for)
 from .languages.typescript import _IMPORT_RE
 from .languages.base import SKIP_DIRS as _SKIP_DIRS         # shared walk skip-dirs (generic)
 from .languages.typescript import _pkg_map, resolve_module  # the TS/JS deterministic floor (per-language)
 
-_EXTS = (".ts", ".tsx", ".js", ".jsx", ".mts", ".cts")
+from .languages import SOURCE_EXTS as _EXTS   # walk extensions: union of ALL providers (was hardcoded JS)
 # A consumer in a test file is VERIFICATION (the `test` role), not an in-footprint link or a
 # boundary intent — so it's separated out (mirrors resolver.ts TEST_PATH). Covers `*.test.ts` /
 # `*.spec.ts` and `tests/` `__tests__/` `spec/` dirs.
@@ -40,11 +43,6 @@ _TEST_RE = re.compile(r"(\.(test|spec)\.[a-z]+$)|((^|/)(tests?|__tests__|spec)/)
 def _kind_for(file: str, kind: str) -> str:
     """A consumer node's kind, overriding to 'test' for test files (→ the `test` role)."""
     return "test" if _TEST_RE.search(file.replace("\\", "/")) else kind
-
-# tree-sitter declaration kinds that carry a name → an enclosing symbol (a consumer unit).
-_METHOD_KINDS = {"method_definition", "method_declaration", "constructor_declaration"}
-_CLASS_KINDS = {"class_declaration", "class_definition", "class_specifier", "struct_specifier"}
-_NAME_KINDS = {"identifier", "property_identifier", "type_identifier"}
 
 
 
@@ -151,7 +149,7 @@ def _named_units(ctx: _Ctx) -> list[tuple[str, str, int, int]]:
 
     def visit(n) -> None:
         k = n.kind()
-        if k in _FUNCLIKE and k not in ("arrow_function", "function_expression"):
+        if k in _FUNCLIKE and k not in _ANON_FUNC:
             nm = _name_of(ctx, n)
             if nm:
                 s, e = ctx.span(n)
@@ -161,7 +159,7 @@ def _named_units(ctx: _Ctx) -> list[tuple[str, str, int, int]]:
             if nm:
                 s, e = ctx.span(n)
                 units.append((nm, "class", s, e))
-        elif k == "variable_declarator":
+        elif k in _VAR_DECLARATOR:
             ch = ctx.children(n)
             fl = next((c for c in ch if c.kind() in _FUNCLIKE), None)
             if fl is not None and ch and ch[0].kind() in _NAME_KINDS:
@@ -230,8 +228,8 @@ def _class_methods(ctx: _Ctx, class_name: str) -> list[tuple[str, int, int]]:
     if cls is None:
         return []
     out: list[tuple[str, int, int]] = []
-    for m in ctx.collect(cls, lambda k: k in ("method_definition", "method_declaration")):
-        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() == "property_identifier"), None)
+    for m in ctx.collect(cls, lambda k: k in _METHOD_KINDS):
+        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() in _MEMBER_NAME), None)
         if nm and nm != "constructor":
             s, e = ctx.span(m)
             out.append((nm, s, e))
@@ -240,9 +238,9 @@ def _class_methods(ctx: _Ctx, class_name: str) -> list[tuple[str, int, int]]:
 
 
 def _is_new_of(ctx: _Ctx, node, class_name: str) -> bool:
-    if node.kind() != "new_expression":
+    if node.kind() not in _NEW:
         return False
-    cons = next((c for c in ctx.children(node) if c.kind() in ("identifier", "member_expression")), None)
+    cons = next((c for c in ctx.children(node) if c.kind() == "identifier" or c.kind() in _MEMBER), None)
     return cons is not None and ctx.text(cons) == class_name
 
 
@@ -251,14 +249,12 @@ def _instances_of(ctx: _Ctx, class_name: str) -> set[str]:
     (the heuristic's precision): `new ClassName()` bindings and `: ClassName`-typed vars / params /
     constructor-injected fields. The binding may also be reached via `this.<name>`."""
     names: set[str] = set()
-    binders = ("variable_declarator", "required_parameter", "optional_parameter",
-               "public_field_definition", "property_signature", "field_definition")
-    for node in ctx.collect(ctx.root, lambda k: k in binders):
+    for node in ctx.collect(ctx.root, lambda k: k in _INSTANCE_BINDER):
         nm = next((ctx.text(c) for c in ctx.children(node) if c.kind() in _NAME_KINDS), None)
         if not nm:
             continue
-        typed = any(ctx.text(t) == class_name for t in ctx.collect(node, lambda k: k == "type_identifier"))
-        newed = any(_is_new_of(ctx, nx, class_name) for nx in ctx.collect(node, lambda k: k == "new_expression"))
+        typed = any(ctx.text(t) == class_name for t in ctx.collect(node, lambda k: k in _TYPE_REF))
+        newed = any(_is_new_of(ctx, nx, class_name) for nx in ctx.collect(node, lambda k: k in _NEW))
         if typed or newed:
             names.add(nm)
     return names
@@ -270,12 +266,12 @@ def _class_call_sites(ctx: _Ctx, methods: set[str]) -> list[tuple[str, int, int]
     verifies (does this call bind to the anchor class's method?), which catches the DI / untyped
     receivers the conservative instance-aware heuristic can't trace."""
     out: list[tuple[str, int, int]] = []
-    for call in ctx.collect(ctx.root, lambda k: k == "call_expression"):
+    for call in ctx.collect(ctx.root, lambda k: k in _CALL):
         ch = ctx.children(call)
         fn = ch[0] if ch else None
-        if fn is None or fn.kind() != "member_expression":
+        if fn is None or fn.kind() not in _MEMBER:
             continue
-        prop = next((c for c in ctx.children(fn) if c.kind() == "property_identifier"), None)
+        prop = next((c for c in ctx.children(fn) if c.kind() in _MEMBER_NAME), None)
         if prop is not None and ctx.text(prop) in methods:
             out.append((ctx.text(prop), ctx.span(prop)[0], ctx.col(prop.start_byte())))
     return out
@@ -318,23 +314,23 @@ def _class_method_usage(ctx: _Ctx, class_name: str, methods: set[str]) -> dict[s
     on an UNTYPED receiver is NOT attributed here (it's the call-site scan's job, RESOLVED_PARTIAL)."""
     inst = _instances_of(ctx, class_name)
     used: dict[str, int] = {}
-    for call in ctx.collect(ctx.root, lambda k: k == "call_expression"):
+    for call in ctx.collect(ctx.root, lambda k: k in _CALL):
         ch = ctx.children(call)
         fn = ch[0] if ch else None
-        if fn is None or fn.kind() != "member_expression":
+        if fn is None or fn.kind() not in _MEMBER:
             continue
         mch = ctx.children(fn)
         obj = mch[0] if mch else None
-        prop = next((c for c in mch if c.kind() == "property_identifier"), None)
+        prop = next((c for c in mch if c.kind() in _MEMBER_NAME), None)
         if obj is None or prop is None:
             continue
         m = ctx.text(prop)
         if m not in methods:
             continue
         hit = ((obj.kind() == "identifier" and ctx.text(obj) in inst)
-               or (obj.kind() == "new_expression" and _is_new_of(ctx, obj, class_name))
-               or (obj.kind() == "member_expression"
-                   and (ip := next((c for c in ctx.children(obj) if c.kind() == "property_identifier"), None))
+               or (obj.kind() in _NEW and _is_new_of(ctx, obj, class_name))
+               or (obj.kind() in _MEMBER
+                   and (ip := next((c for c in ctx.children(obj) if c.kind() in _MEMBER_NAME), None))
                    and ctx.text(ip) in inst))
         if hit:
             used.setdefault(m, ctx.span(call)[0])
@@ -521,10 +517,10 @@ def _exported_members(ctx: _Ctx) -> list[tuple[str, str, int, int]]:
     `export function/class X` and `export const/let X = …` (kind 'function' if the value is funclike,
     else 'constant'). Re-exports / `export default` are best-effort skipped."""
     out: list[tuple[str, str, int, int]] = []
-    for es in ctx.collect(ctx.root, lambda k: k == "export_statement"):
+    for es in ctx.collect(ctx.root, lambda k: k in _EXPORT):
         for ch in ctx.children(es):
             k = ch.kind()
-            if k in _FUNCLIKE and k not in ("arrow_function", "function_expression"):
+            if k in _FUNCLIKE and k not in _ANON_FUNC:
                 nm = _name_of(ctx, ch)
                 if nm:
                     out.append((nm, "function", *ctx.span(ch)))
@@ -532,9 +528,9 @@ def _exported_members(ctx: _Ctx) -> list[tuple[str, str, int, int]]:
                 nm = _name_of(ctx, ch)
                 if nm:
                     out.append((nm, "class", *ctx.span(ch)))
-            elif k in ("lexical_declaration", "variable_declaration"):
+            elif k in _VAR_DECL:
                 for d in ctx.children(ch):
-                    if d.kind() != "variable_declarator":
+                    if d.kind() not in _VAR_DECLARATOR:
                         continue
                     dch = ctx.children(d)
                     if dch and dch[0].kind() in _NAME_KINDS:
@@ -779,13 +775,13 @@ def _type_methods(ctx: _Ctx, name: str) -> list[tuple[str, int, int]]:
     cm = _class_methods(ctx, name)
     if cm:
         return cm
-    iface = next((c for c in ctx.collect(ctx.root, lambda k: k == "interface_declaration")
+    iface = next((c for c in ctx.collect(ctx.root, lambda k: k in _INTERFACE)
                   if _name_of(ctx, c) == name), None)
     if iface is None:
         return []
     out: list[tuple[str, int, int]] = []
-    for m in ctx.collect(iface, lambda k: k in ("method_signature", "property_signature")):
-        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() == "property_identifier"), None)
+    for m in ctx.collect(iface, lambda k: k in _INTERFACE_MEMBER):
+        nm = next((ctx.text(c) for c in ctx.children(m) if c.kind() in _MEMBER_NAME), None)
         if nm:
             s, e = ctx.span(m)
             out.append((nm, s, e))
@@ -809,9 +805,9 @@ def build_callsite_graph(repo: str, anchor_file: str, symbol: str, *, anchor_lin
     defu = next((u for u in _named_units(actx) if u[0] == symbol), None)
     if defu:
         akind, arange = defu[1], [defu[2], defu[3]]
-    elif any(_name_of(actx, c) == symbol for c in actx.collect(actx.root, lambda k: k == "interface_declaration")):
+    elif any(_name_of(actx, c) == symbol for c in actx.collect(actx.root, lambda k: k in _INTERFACE)):
         akind = "interface"
-        ifc = next(c for c in actx.collect(actx.root, lambda k: k == "interface_declaration") if _name_of(actx, c) == symbol)
+        ifc = next(c for c in actx.collect(actx.root, lambda k: k in _INTERFACE) if _name_of(actx, c) == symbol)
         arange = list(actx.span(ifc))
     if anchor_line is not None:
         arange = [anchor_line, max(anchor_line, arange[1])]
@@ -886,7 +882,7 @@ def build_consumers_graph(repo: str, anchor_file: str, symbol: str, *, depth: in
         try:
             ctx = _Ctx(ar[0], ar[1])
             is_interface = any(_name_of(ctx, c) == symbol
-                               for c in ctx.collect(ctx.root, lambda k: k == "interface_declaration"))
+                               for c in ctx.collect(ctx.root, lambda k: k in _INTERFACE))
         except Exception:
             is_interface = False
         if is_interface:
@@ -924,7 +920,7 @@ def _python_consumers_graph(repo: str, anchor_file: str, symbol: str, anchor_lin
         for root, dirs, files in os.walk(repo):
             dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
             for fn in files:
-                if not fn.endswith((".py", ".pyi")):
+                if not fn.endswith(_py.PROVIDER.extensions):   # the Python provider's extensions
                     continue
                 path = os.path.join(root, fn)
                 if os.path.normpath(path) == anchor_abs:
@@ -1125,7 +1121,8 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
                 seen.add((name, path))
                 counter += 1
                 did = f"d{counter}"
-                nodes.append({"id": did, "symbol": name, "kind": "module", "file": path, "range": [0, 0],
+                entry = string_coupling.entry_line(repo, path)   # land on the handler inside, not line 0
+                nodes.append({"id": did, "symbol": name, "kind": "module", "file": path, "range": [entry, entry],
                               "enclosing": "", "complexity": 1})
                 edges.append({"from": "n1", "to": did, "kind": "dispatch", "provenance": "RESOLVED_PARTIAL",
                               "line": line})

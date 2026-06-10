@@ -19,6 +19,11 @@ def provider_for(file: str) -> LanguageProvider | None:
     return next((p for p in PROVIDERS if f.endswith(p.extensions)), None)
 
 
+# Every source-file extension across all providers — the language-agnostic "is this a source file"
+# set for repo walks (replaces hardcoded per-language extension tuples in the generic scan).
+SOURCE_EXTS: tuple[str, ...] = tuple({ext for p in PROVIDERS for ext in p.extensions})
+
+
 # --- deterministic floor (per language) ----------------------------------
 def floor_resolve(repo: str, importing_file: str, source: str) -> str | None:
     """Resolve via the importing file's language FLOOR (TS today). No floor for a language ⇒ None."""
@@ -45,3 +50,20 @@ def project_root(repo: str, file: str, spec: ServerSpec) -> str:
             return os.path.abspath(d)
         d = os.path.dirname(d)
     return repo
+
+
+# --- module-entry convention + entrypoint (per language; tier 2 of the edge ladder) -------
+def is_module_entry(file: str) -> bool:
+    """True if `file`'s basename marks a module ENTRY in ANY language (TS/JS `index.*`, Python
+    `__init__.py`, …). Checked across all providers (not via `provider_for`) so the convention isn't
+    coupled to extension dispatch — a string-dispatch target is endpoint-shaped regardless of caller."""
+    base = os.path.basename(file)
+    return any(p.module_entry and p.module_entry.match(base) for p in PROVIDERS)
+
+
+def entrypoint_line(file: str, ctx) -> int:
+    """The MAIN entrypoint line inside a module entry, via the file's language heuristic (TS: a
+    top-level handler call / `export default`; Python: `if __name__=='__main__'` / a top-level call).
+    0 when the language has no heuristic or it can't decide."""
+    p = provider_for(file)
+    return (p.entrypoint(ctx) or 0) if (p and p.entrypoint) else 0

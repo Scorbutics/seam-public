@@ -61,6 +61,44 @@ _CALL = {
     "call",                            # Python / Ruby
     "invocation_expression",           # C#
 }
+# --- class / member / instantiation vocabulary (the OO-navigation concepts) -----------------
+# Some of these map across grammars by kind NAME (a union suffices); others differ by AST SHAPE
+# (member-name position, `new`-less instantiation) — there the set is TS-complete and a comment marks
+# the shape-specificity, so the concept is NAMED (no raw literal in the scan) and extensible later.
+_CLASS_KINDS = {"class_declaration", "class_definition", "class_specifier", "struct_specifier"}
+_METHOD_KINDS = {"method_definition", "method_declaration", "constructor_declaration"}
+_NAME_KINDS = {"identifier", "property_identifier", "type_identifier"}
+_MEMBER = {                            # a member / attribute access: obj.x
+    "member_expression",               # TS/JS
+    "attribute",                       # Python
+    "field_access",                    # Java
+    "selector_expression",             # Go
+    "field_expression",                # C++ / Ruby
+}
+_MEMBER_NAME = {                       # the member NAME node in obj.x (and a method-def name) — NOT the
+    "property_identifier",             # TS/JS                                              object node.
+    "field_identifier",                # Go / C
+}                                      # (Python's attribute name is a bare `identifier`, which also
+                                       #  matches the object — shape-specific, so Python uses its own path.)
+_NEW = {                              # instantiation `new X()` (languages WITH `new`); new-less langs
+    "new_expression",                  # TS/JS, C++         (Python/Go/Ruby) instantiate via a plain call.
+    "object_creation_expression",      # Java
+}
+_TYPE_REF = {"type_identifier"}        # a type-annotation reference (TS); other languages vary
+_INSTANCE_BINDER = {                   # a binding site whose name may hold an instance
+    "variable_declarator",             # TS/JS
+    "required_parameter", "optional_parameter",            # TS params
+    "public_field_definition", "field_definition", "property_signature",  # TS / Java fields
+}
+_VAR_DECL = {"lexical_declaration", "variable_declaration"}   # a top-level variable binding (TS/JS)
+_INTERFACE = {"interface_declaration"}                       # TS / Java (Go: a type_declaration — not added)
+_INTERFACE_MEMBER = {"method_signature", "property_signature", "abstract_method_signature"}
+_EXPORT = {"export_statement"}         # JS/TS module export (Python: none — all top-level is public)
+_ANON_FUNC = {                         # nameless function kinds (excluded when collecting NAMED units)
+    "arrow_function", "function_expression",                 # TS/JS
+    "lambda", "lambda_expression", "closure_expression",     # Python / Java / Rust
+}
+_VAR_DECLARATOR = {"variable_declarator", "assignment"}      # a `name = value` binder (TS/JS / Python)
 
 
 @dataclass
