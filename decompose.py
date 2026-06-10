@@ -19,7 +19,8 @@ import sys
 import webbrowser
 from pathlib import Path
 
-from src import classifier, classifier_det, diff_source, noise_filter, parser, renderer
+from src import classifier, classifier_det, diff_source, noise_filter, parser, seams
+from src.report_html import render as render_html  # legacy HTML surface (deprecated)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -366,12 +367,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.emit_seams:
         # Native-rendering surface (VS Code extension): structured seam data, no HTML.
         # repo lets the renderer resolve local aliases against the actual files.
-        Path(args.emit_seams).write_text(json.dumps(renderer.emit_seams_json(hunks, repo=args.repo)),
+        Path(args.emit_seams).write_text(json.dumps(seams.emit_seams_json(hunks, repo=args.repo)),
                                          encoding="utf-8")
         print(f"Seams: {args.emit_seams}")
         return 0
 
-    out_path = renderer.render(hunks, args.out, source_label=Path(source_label).name, repo=args.repo)
+    out_path = render_html(hunks, args.out, source_label=Path(source_label).name, repo=args.repo)
     print(f"Report: {out_path}")
 
     if args.open:

@@ -31,7 +31,7 @@ What it does (deterministic, zero LLM):
   - CLUSTERING by connected components over the wiring graph (links merge the cores
     they bridge). Intent is a STRUCTURAL label (the core's primary symbol) — product
     intent has no deterministic oracle and is left to the LLM cluster pass.
-  - WELL-FORMEDNESS is computed downstream by `renderer._verify_pair`: a malformed
+  - WELL-FORMEDNESS is computed downstream by `seams._verify_pair`: a malformed
     seam STAYS flagged (honest failure). Layer 2 (residual LLM) is deliberately NOT
     built here — gated on the pre-registered Phase-0 measurement.
 
@@ -314,7 +314,7 @@ def merge_seams(work: list[Hunk]) -> None:
     hold SEVERAL cores), then re-point non-core wires to the seam. Deterministic floor:
     cores in the same file editing the same enclosing component merge — e.g. three hunks of
     one `WebhookForm` component become one seam instead of three. The renderer already groups
-    cores by `seam` id (renderer.py); the engine just wasn't producing multi-core seams.
+    cores by `seam` id (seams.py); the engine just wasn't producing multi-core seams.
     Richer cross-file intent grouping is the LLM's job (the hybrid path). Idempotent; keeps
     the representative core's existing label (so an LLM-named seam keeps its name)."""
     cores = [h for h in work if h.role == "core"]

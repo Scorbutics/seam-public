@@ -27,7 +27,7 @@ import pytest
 _ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from src import classifier_det, noise_filter, parser, renderer  # noqa: E402
+from src import classifier_det, noise_filter, parser, seams  # noqa: E402
 from src.facts import HunkFacts, leading_ambient_lines  # noqa: E402
 from src.parser import Hunk  # noqa: E402
 
@@ -120,7 +120,7 @@ def test_phase2_core_placed_into_both_sibling_seams():
     child, form, parent = _siblings()
     hunks = [child, form, parent]
     assert _cores(*hunks) == {"h1": "core", "h2": "core", "h3": "core"}
-    _, core_out = renderer._span_map(hunks)
+    _, core_out = seams._span_map(hunks)
     assert set(core_out.get("h3", {})) == {"h1", "h2"}
 
 
@@ -128,7 +128,7 @@ def test_phase2_core_never_placed_into_own_seam():
     child, form, parent = _siblings()
     hunks = [child, form, parent]
     classifier_det.classify(hunks)
-    _, core_out = renderer._span_map(hunks)
+    _, core_out = seams._span_map(hunks)
     assert "h3" not in core_out.get("h3", {})
 
 
@@ -136,7 +136,7 @@ def test_phase2_leaf_cores_have_no_outward_placement():
     child, form, parent = _siblings()
     hunks = [child, form, parent]
     classifier_det.classify(hunks)
-    _, core_out = renderer._span_map(hunks)
+    _, core_out = seams._span_map(hunks)
     assert "h1" not in core_out and "h2" not in core_out
 
 
@@ -183,7 +183,7 @@ def test_phase2_ambient_namesake_is_not_a_sibling_anchor():
     user = mk("h3", "export function Uses() {\n  if (z) return Helper();\n  return 0;\n}", file="c.tsx")
     hunks = [a, b, user]
     classifier_det.classify(hunks)
-    _, core_out = renderer._span_map(hunks)
+    _, core_out = seams._span_map(hunks)
     assert not core_out.get("h3")
 
 
@@ -221,7 +221,7 @@ def e2e_emit():
     """Run the real pipeline and return the emit_seams_json payload + a path→id map."""
     hunks = parser.parse(_E2E_DIFF)
     classifier_det.classify(noise_filter.classify(hunks))
-    emit = renderer.emit_seams_json(hunks)
+    emit = seams.emit_seams_json(hunks)
     ids = {h.file_path: h.id for h in hunks}
     return emit, ids
 

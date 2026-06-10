@@ -57,7 +57,7 @@ const ROLES = ["core", "link", "environment", "test", "noise"];
 // Roles top out around ~0.8 accuracy (the core/link frontier is genuinely blurry),
 // so we don't pretend they're certain: a hunk whose self-consistency role vote was
 // SPLIT (< this share agreeing) is surfaced as a "maybe", not a fact. Mirrors
-// UNCERTAIN_THRESHOLD in renderer.py. The tool structures; the human judges.
+// UNCERTAIN_THRESHOLD in seams.py. The tool structures; the human judges.
 const UNCERTAIN_THRESHOLD = 0.6;
 const isUncertain = (h: SeamHunk): boolean =>
   h.confidence !== undefined && h.confidence < UNCERTAIN_THRESHOLD;
