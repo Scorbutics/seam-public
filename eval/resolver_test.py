@@ -6,6 +6,7 @@ GATED integration test drives a real typescript-language-server (skipped unless 
 its node_modules are present)."""
 import os
 import shutil
+import time
 
 import pytest
 
@@ -22,10 +23,10 @@ def test_make_resolver_det_is_none():
 
 
 def test_make_resolver_lsp_and_auto():
-    from src.lsp.resolver import LspResolver
-    assert isinstance(resolver.make_resolver("lsp"), LspResolver)
+    from src.lsp.resolver import DaemonResolver
+    assert isinstance(resolver.make_resolver("lsp"), DaemonResolver)
     r = resolver.make_resolver("auto")
-    assert isinstance(r, LspResolver) and r.fallback is True
+    assert isinstance(r, DaemonResolver) and r.fallback is True
 
 
 def test_registry_ext_to_language():
@@ -77,6 +78,20 @@ def test_lsp_only_returns_none_without_server(monkeypatch):
     assert r.resolve_module(FIX, CHECKOUT, PKG) is None   # lsp-only, no fallback → None
 
 
+def test_daemon_resolver_degrades_to_floor(monkeypatch):
+    # daemon unreachable → in-process LSP (yields nothing here) → the deterministic floor answers
+    from src.lsp import daemon as dmod
+    from src.lsp.resolver import DaemonResolver
+
+    def down(*a, **k):
+        raise OSError("daemon down")
+    monkeypatch.setattr(dmod, "call", down)
+    r = DaemonResolver(fallback=True)
+    r._lsp = type("NoLsp", (), {"resolve_module": lambda self, *a: None})()   # in-proc LSP: no server
+    got = r.resolve_module(FIX, CHECKOUT, PKG)
+    assert got and got.replace("\\", "/").endswith("payments.ts")             # floor answered
+
+
 # --------------------------------------------------------------------------- gated integration (real LSP)
 _BUN = shutil.which("bun") or os.path.expanduser("~/.bun/bin/bun")
 _PRIVATE_APP = os.path.expanduser("~/dev/private-app")
@@ -94,3 +109,27 @@ def test_lsp_resolves_tsconfig_alias_real_server():
         assert r.resolve_module(_PRIVATE_APP, f, "react") is None       # node_modules = external boundary
     finally:
         r.pool.shutdown_all()
+
+
+@pytest.mark.skipif(not _GATED, reason="integration: needs bun + ~/dev/private-app + its node_modules")
+def test_daemon_warm_servers_reused_across_invocations(tmp_path):
+    # P4: the index is paid ONCE; a second (fresh) DaemonResolver hits the same warm daemon → fast.
+    from src.lsp import daemon as dmod
+    from src.lsp.resolver import DaemonResolver
+    sock = str(tmp_path / "seam-lsp-test.sock")
+    f = "components/admin/payments-tab.tsx"
+    try:
+        t = time.time()
+        a = DaemonResolver(fallback=False, sock=sock).resolve_module(_PRIVATE_APP, f, "@/lib/services/payments")
+        first = time.time() - t
+        assert a == "lib/services/payments.ts"
+        t = time.time()
+        b = DaemonResolver(fallback=False, sock=sock).resolve_module(_PRIVATE_APP, f, "@/components/ui/badge")
+        second = time.time() - t
+        assert b == "components/ui/badge.tsx"
+        assert second < first                        # warm reuse: the 2nd invocation didn't re-index
+    finally:
+        try:
+            dmod.call(sock, {"op": "shutdown"})
+        except OSError:
+            pass

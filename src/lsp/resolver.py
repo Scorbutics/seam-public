@@ -108,3 +108,48 @@ class LspResolver:
             from ..resolver import DeterministicResolver
             self._det = DeterministicResolver()
         return self._det.resolve_module(repo, importing_file, source)
+
+
+class DaemonResolver:
+    """The production resolver (P4): resolve through the persistent daemon's WARM servers — the index
+    is paid once per machine, reused by every invocation. Degrades cleanly: daemon unreachable →
+    in-process LSP; LSP miss/None + `fallback` → the deterministic floor. Never a hard failure."""
+
+    def __init__(self, fallback: bool = True, sock: str | None = None):
+        from . import daemon
+        self._daemon = daemon
+        self.fallback = fallback
+        self.sock = sock or daemon.default_socket()
+        self._lsp = None                             # in-process LSP, only if the daemon is down
+        self._det = None
+
+    def resolve_module(self, repo: str, importing_file: str, source: str) -> str | None:
+        repo = os.path.expanduser(repo)
+        try:
+            target = self._daemon.call(self.sock, {"op": "resolve_module", "repo": repo,
+                                                   "file": importing_file, "source": source})
+        except OSError:
+            target = self._inproc().resolve_module(repo, importing_file, source)  # daemon down
+        if target is None and self.fallback:
+            return self._floor(repo, importing_file, source)
+        return target
+
+    def resolve_symbol(self, repo: str, file: str, line: int, col: int):
+        repo = os.path.expanduser(repo)
+        try:
+            r = self._daemon.call(self.sock, {"op": "resolve_symbol", "repo": repo,
+                                              "file": file, "line": line, "col": col})
+        except OSError:
+            return self._inproc().resolve_symbol(repo, file, line, col)
+        return tuple(r) if r else None
+
+    def _inproc(self):
+        if self._lsp is None:
+            self._lsp = LspResolver(fallback=False)
+        return self._lsp
+
+    def _floor(self, repo: str, importing_file: str, source: str) -> str | None:
+        if self._det is None:
+            from ..resolver import DeterministicResolver
+            self._det = DeterministicResolver()
+        return self._det.resolve_module(repo, importing_file, source)

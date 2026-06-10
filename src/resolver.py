@@ -40,8 +40,10 @@ class DeterministicResolver:
 
 def make_resolver(kind: str):
     """`det` → floor; `lsp` → LSP only; `auto` → LSP with deterministic fallback. Returns a Resolver
-    or None (None ⇒ keep the default in-scan deterministic path, i.e. `det`)."""
+    or None (None ⇒ keep the default in-scan deterministic path, i.e. `det`). `lsp`/`auto` route
+    through the persistent daemon (P4: warm servers reused across invocations; degrades to in-process
+    LSP then the floor)."""
     if kind == "det":
         return None                                  # the scan's built-in deterministic path
-    from .lsp.resolver import LspResolver            # lazy: only import the LSP stack when asked
-    return LspResolver(fallback=(kind == "auto"))
+    from .lsp.resolver import DaemonResolver          # lazy: only import the LSP stack when asked
+    return DaemonResolver(fallback=(kind == "auto"))
