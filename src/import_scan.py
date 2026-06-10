@@ -768,7 +768,8 @@ def build_class_graph(repo: str, anchor_file: str, class_name: str, *, depth: in
                       "range": [start, end], "enclosing": "", "complexity": max(1, end - start + 1)})
         if usage:
             for mn in sorted(usage):
-                edges.append({"from": cid, "to": f"{class_name}.{mn}", "kind": "reference", "provenance": prov})
+                edges.append({"from": cid, "to": f"{class_name}.{mn}", "kind": "reference",
+                              "provenance": prov, "line": usage[mn]})   # the call-site line in cid's file
         else:                                         # a RESOLVED consumer; method-level detail unavailable
             edges.append({"from": cid, "to": class_name, "kind": "reference", "provenance": "RESOLVED_FULL"})
             untraced.append(cfile)

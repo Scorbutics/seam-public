@@ -629,7 +629,8 @@ def _seam_contracts(g: Graph, seams: list[dict]) -> list[dict]:
                     continue
                 seen.add(dk)
                 pairs.setdefault(key, []).append(
-                    {"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value})
+                    {"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value,
+                     "line": e.line})
     out = []
     for (a, b), links in pairs.items():
         blurry = any(l["provenance"] != "RESOLVED_FULL" for l in links)
@@ -688,8 +689,8 @@ def emit_seams(g: Graph, health: dict, seams: list[dict]) -> dict:
         "seamEdges": [],
         # the raw directed graph — every resolved symbol→symbol edge with its relation + provenance,
         # so the CHAIN view can restitute the call/dependency graph (RESOLVED / RESOLVED_PARTIAL).
-        "edges": [{"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value}
-                  for e in g.resolved_edges()],
+        "edges": [{"from": e.src, "to": e.dst, "kind": e.kind, "provenance": e.provenance.value,
+                   "line": e.line} for e in g.resolved_edges()],
         # the seam-to-seam CONTRACT: which symbols bridge each pair of seams + how solid (blurry when
         # any bridging edge is heuristic/assumed) — the inter-seam boundary a reviewer validates.
         "seamContracts": _seam_contracts(g, seams),

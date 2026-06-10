@@ -104,6 +104,8 @@ class Edge:
     dst: str
     kind: str = "wires"
     provenance: Provenance = Provenance.HEUR
+    line: int = 0                   # 0-based CALL-SITE line in src's file (where src invokes dst), when
+                                    # known — so the chain/contract can jump to the usage, not just the def
 
 
 @dataclass
@@ -278,7 +280,8 @@ def from_resolved_graph(data: dict) -> Graph:
         if src not in present or dst not in present:
             continue                 # an endpoint outside the resolved neighborhood
         prov = Provenance(ed["provenance"]) if ed.get("provenance") else default_prov
-        g.edges.append(Edge(src=src, dst=dst, kind=ed.get("kind", "call"), provenance=prov))
+        g.edges.append(Edge(src=src, dst=dst, kind=ed.get("kind", "call"), provenance=prov,
+                            line=int(ed.get("line", 0) or 0)))
 
     # anchor: the node BFS started from. The contract carries its id; fall back to matching
     # symbol+file so a resolver that omits the id still resolves it.

@@ -28,7 +28,7 @@ interface SuggestedCandidate { symbol: string; provenance: string; }
 interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: SuggestedCandidate[]; }
 interface Unresolved { node: string; query: string; reason: string; }
 interface SeamEdge { from: string; to: string; provenance: string; }   // resolved seam-to-seam wiring (S1)
-interface GraphEdge { from: string; to: string; kind: string; provenance: string; }   // the raw symbol→symbol graph (chain view)
+interface GraphEdge { from: string; to: string; kind: string; provenance: string; line?: number; }   // the raw symbol→symbol graph (chain view); line = call-site in `from`'s file
 interface SeamContract { seamA: string; seamB: string; links: GraphEdge[]; blurry: boolean; }   // the symbols bridging two seams
 interface SeamModel {
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
@@ -1240,10 +1240,12 @@ type Node =
   // Chain view: one directed edge off a symbol — outgoing dep (→), incoming use (←), or a SUGGESTED
   // crossing (⧉). Carries the relation kind + provenance so the nature is visible.
   | { kind: "edge"; dir: "out" | "in" | "suggested"; toId?: string; targetLabel?: string; edgeKind: string; provenance: string }
-  // The inter-seam CONTRACT layer: the section, one seam-pair, and one bridging symbol→symbol link.
+  // The inter-seam CONTRACT layer: the section, one seam-pair, one bridging link, and its two ends
+  // (the CALLER at the call-site, and the CALLEE at its definition) so both sides are reachable.
   | { kind: "contracts" }
   | { kind: "contractPair"; contract: SeamContract }
-  | { kind: "contractLink"; link: GraphEdge };
+  | { kind: "contractLink"; link: GraphEdge }
+  | { kind: "contractEnd"; side: "from" | "to"; link: GraphEdge };
 
 // A3: lazy cache of "where does this fed value come from" (one more hop up the chain).
 const feedDefCache = new Map<string, Promise<{ uri: vscode.Uri; line: number }[]>>();
@@ -1283,6 +1285,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return (model.seamContracts ?? []).map((contract) => ({ kind: "contractPair", contract } as Node));
     if (el.kind === "contractPair")
       return el.contract.links.map((link) => ({ kind: "contractLink", link } as Node));
+    if (el.kind === "contractLink")
+      return [{ kind: "contractEnd", side: "from", link: el.link } as Node,
+              { kind: "contractEnd", side: "to", link: el.link } as Node];
     if (el.kind === "shadows") {
       const out: Node[] = (model.blindspots ?? []).map((bs) => ({ kind: "blindspot", bs } as Node));
       return out.concat((model.unresolved ?? []).map((ur) => ({ kind: "unknown", ur } as Node)));
@@ -1426,16 +1431,38 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return it;
     }
     if (el.kind === "contractLink") {
+      // expandable to BOTH ends — the caller (call-site) and the callee (definition) — so you can see
+      // where one seam reaches into the other, not just the symbol's implementation.
       const l = el.link;
       const from = findHunkById(l.from), to = findHunkById(l.to);
       const partial = /PARTIAL/.test(l.provenance), suggested = /SUGGEST/i.test(l.provenance);
-      const it = new vscode.TreeItem(`${from?.label ?? l.from} → ${to?.label ?? l.to}`, vscode.TreeItemCollapsibleState.None);
+      const it = new vscode.TreeItem(`${from?.label ?? l.from} → ${to?.label ?? l.to}`, vscode.TreeItemCollapsibleState.Collapsed);
       it.description = `${l.kind} · ${suggested ? "SUGGESTED" : partial ? "RESOLVED (partial)" : "RESOLVED"}`;
       it.iconPath = new vscode.ThemeIcon(suggested ? "lightbulb" : partial ? "kebab-horizontal" : "arrow-right",
         new vscode.ThemeColor(suggested ? "charts.yellow" : partial ? "charts.orange" : "charts.green"));
       it.tooltip = `${from?.label ?? l.from} → ${to?.label ?? l.to}\nrelation: ${l.kind} · ${l.provenance}` +
-        (partial ? "\n(heuristic match — a strong but unverified bridge across the seam boundary)" : "");
-      if (to) it.command = { command: "seam.open", title: "Open", arguments: [to] };
+        "\nexpand to jump to the call-site (caller) or the definition (callee)";
+      return it;
+    }
+    if (el.kind === "contractEnd") {
+      const l = el.link;
+      const fromH = findHunkById(l.from), toH = findHunkById(l.to);
+      if (el.side === "from") {
+        // the CALLER side — jump to the exact call-site (call line in the caller's file) if known.
+        const line = l.line && l.line > 0 ? l.line : (fromH?.start ?? 0);
+        const it = new vscode.TreeItem(`← called from ${fromH?.label ?? l.from}`, vscode.TreeItemCollapsibleState.None);
+        it.description = fromH ? `${fromH.file.split("/").pop()}:${line}` : l.from;
+        it.iconPath = new vscode.ThemeIcon("arrow-small-left", new vscode.ThemeColor("charts.blue"));
+        it.tooltip = `where ${fromH?.label ?? l.from} calls ${toH?.label ?? l.to} (the seam boundary crossing)`;
+        if (fromH) it.command = { command: "seam.open", title: "Open call-site",
+          arguments: [{ ...fromH, start: line, end: line }] };
+        return it;
+      }
+      const it = new vscode.TreeItem(`→ ${toH?.label ?? l.to} (definition)`, vscode.TreeItemCollapsibleState.None);
+      it.description = toH ? `${toH.file.split("/").pop()}:${toH.start}` : l.to;
+      it.iconPath = new vscode.ThemeIcon("symbol-method", new vscode.ThemeColor("charts.green"));
+      it.tooltip = `the definition of ${toH?.label ?? l.to}`;
+      if (toH) it.command = { command: "seam.open", title: "Open definition", arguments: [toH] };
       return it;
     }
     if (el.kind === "shadows") {
