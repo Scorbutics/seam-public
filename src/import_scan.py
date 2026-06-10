@@ -65,6 +65,102 @@ def _pkg_map(repo: str) -> dict[str, str]:
     return out
 
 
+def _strip_jsonc(text: str) -> str:
+    """Strip // and /* */ comments, STRING-AWARE — tsconfig path globs like `"@/*"` and `"**/*.ts"`
+    contain `/*` and `*/`, so a naive regex eats the file. Scan char-by-char, skipping strings."""
+    out: list[str] = []
+    i, n, in_str = 0, len(text), False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if c == "\\" and i + 1 < n:
+                out.append(text[i + 1]); i += 2; continue
+            if c == '"':
+                in_str = False
+            i += 1; continue
+        if c == '"':
+            in_str = True; out.append(c); i += 1; continue
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            while i < n and text[i] != "\n":
+                i += 1
+            continue
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2; continue
+        out.append(c); i += 1
+    return "".join(out)
+
+
+def _load_jsonc(path: str) -> dict | None:
+    """Parse a JSONC file (tsconfig/jsconfig allow // and /* */ comments + trailing commas)."""
+    try:
+        text = open(path, encoding="utf-8").read()
+    except OSError:
+        return None
+    text = _strip_jsonc(text)
+    text = re.sub(r",(\s*[}\]])", r"\1", text)                      # trailing commas
+    try:
+        return json.loads(text)
+    except ValueError:
+        return None
+
+
+_TS_ALIAS_CACHE: dict[str, tuple] = {}
+
+
+def _tsconfig_aliases(repo: str) -> tuple:
+    """`compilerOptions.paths` aliases from the repo-root tsconfig/jsconfig → (pattern, replacements,
+    base_dir) rules, so an aliased import like `@/lib/x` (very common: `"@/*": ["./*"]`) resolves to a
+    real file instead of being mistaken for an external package. Follows one `extends`. Cached."""
+    if repo in _TS_ALIAS_CACHE:
+        return _TS_ALIAS_CACHE[repo]
+    rules: list[tuple] = []
+    for cfg in ("tsconfig.json", "jsconfig.json"):
+        data = _load_jsonc(os.path.join(repo, cfg))
+        if not data:
+            continue
+        co = dict(data.get("compilerOptions") or {})
+        paths = co.get("paths") or {}
+        base = co.get("baseUrl") or "."
+        if not paths and isinstance(data.get("extends"), str):       # inherit paths from the base config
+            ext = _load_jsonc(os.path.normpath(os.path.join(repo, data["extends"])))
+            if ext:
+                eco = ext.get("compilerOptions") or {}
+                paths = eco.get("paths") or {}
+                base = co.get("baseUrl") or eco.get("baseUrl") or "."
+        for pat, repls in paths.items():
+            if isinstance(repls, list):
+                rules.append((pat, tuple(repls), base))
+        if rules:
+            break
+    out = tuple(rules)
+    _TS_ALIAS_CACHE[repo] = out
+    return out
+
+
+def _resolve_alias(repo: str, source: str) -> str | None:
+    """Resolve `source` via a tsconfig `paths` alias, or None."""
+    for pat, repls, base in _tsconfig_aliases(repo):
+        if "*" in pat:
+            pre, _, suf = pat.partition("*")
+            if source.startswith(pre) and source.endswith(suf):
+                cap = source[len(pre): len(source) - len(suf)] if suf else source[len(pre):]
+                for r in repls:
+                    rpre, _, rsuf = r.partition("*")
+                    hit = _resolve_file(repo, os.path.normpath(os.path.join(base, rpre + cap + rsuf)))
+                    if hit:
+                        return hit
+        elif source == pat:
+            for r in repls:
+                hit = _resolve_file(repo, os.path.normpath(os.path.join(base, r)))
+                if hit:
+                    return hit
+    return None
+
+
 def _resolve_file(repo: str, base_rel: str) -> str | None:
     """A bare module path (no extension) → an actual repo-relative file, probing the usual
     extensions and `/index`. Returns None if nothing exists (→ unresolved → SUGGESTED)."""
@@ -82,9 +178,9 @@ def _resolve_file(repo: str, base_rel: str) -> str | None:
 
 
 def resolve_module(repo: str, importing_file: str, source: str, pkgs: dict[str, str]) -> str | None:
-    """Resolve an import `source` (as written in `importing_file`) to a repo-relative file, or
-    None. Handles relative (`./`, `../`) and monorepo package names (`@scope/pkg/sub`). tsconfig
-    path aliases (`~/…`) are NOT resolved here (best-effort gap → caller treats as SUGGESTED)."""
+    """Resolve an import `source` (as written in `importing_file`) to a repo-relative file, or None.
+    Handles relative (`./`, `../`), monorepo package names (`@scope/pkg/sub`), and tsconfig/jsconfig
+    `paths` aliases (`@/lib/x` → `./lib/x`). None ⇒ a genuine external (node_modules) boundary."""
     if source.startswith("."):
         base = os.path.join(os.path.dirname(importing_file), source)
         return _resolve_file(repo, base)
@@ -93,7 +189,26 @@ def resolve_module(repo: str, importing_file: str, source: str, pkgs: dict[str, 
         if source == name or source.startswith(name + "/"):
             sub = source[len(name):].lstrip("/")
             return _resolve_file(repo, os.path.join(pkgs[name], sub) if sub else pkgs[name])
-    return None
+    return _resolve_alias(repo, source)              # tsconfig `paths` (@/…) — an INTERNAL import
+
+
+# --------------------------------------------------------------------------- resolver injection (P0)
+# The scan resolves imports through `_resolve`, which uses the process's ACTIVE resolver (set by the
+# CLI's --resolver, e.g. an LspResolver) or, by default, the deterministic floor above. This is the
+# one seam where stack-specific resolution can be swapped for a real language server (see resolver.py).
+_ACTIVE_RESOLVER = None
+
+
+def set_resolver(r) -> None:
+    """Install the process-wide resolver (None ⇒ the deterministic floor). Set once by the CLI."""
+    global _ACTIVE_RESOLVER
+    _ACTIVE_RESOLVER = r
+
+
+def _resolve(repo: str, importing_file: str, source: str, pkgs: dict[str, str]) -> str | None:
+    if _ACTIVE_RESOLVER is not None:
+        return _ACTIVE_RESOLVER.resolve_module(repo, importing_file, source)
+    return resolve_module(repo, importing_file, source, pkgs)
 
 
 # --------------------------------------------------------------------------- named-import scan
@@ -153,7 +268,7 @@ def scan_consumers(repo: str, anchor_file: str, symbol: str) -> list[Consumer]:
                             if (ln := _local_name(part)) and ln[0] == symbol), None)
                 if not hit:
                     continue
-                resolved_to = resolve_module(repo, rel, source, pkgs)
+                resolved_to = _resolve(repo, rel, source, pkgs)
                 if resolved_to is not None:
                     if os.path.normpath(resolved_to) == anchor_norm:
                         out.append(Consumer(rel, hit[1], source, "resolved"))
@@ -412,7 +527,7 @@ def _depth2_ripple(repo: str, consumers: list[dict], pkgs: dict[str, str],
                 named, source = m.group(2), m.group(3)
                 if not named:
                     continue
-                resolved_to = resolve_module(repo, rel, source, pkgs)
+                resolved_to = _resolve(repo, rel, source, pkgs)
                 if resolved_to is None:
                     continue
                 rnorm = os.path.normpath(resolved_to)
@@ -600,7 +715,7 @@ def scan_module_consumers(repo: str, anchor_file: str, member_names: set[str],
                 named, source = m.group(2), m.group(3)
                 if not named:
                     continue
-                resolved_to = resolve_module(repo, rel, source, pkgs)
+                resolved_to = _resolve(repo, rel, source, pkgs)
                 if resolved_to is None or os.path.normpath(resolved_to) != anchor_norm:
                     continue
                 for part in named.split(","):
@@ -954,20 +1069,20 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
         dep_units: dict[str, list] = {}
         counter = 0
         seen: set[tuple[str, str]] = set()
+        external_pkgs: list[str] = []                    # genuine node_modules deps — aggregated, not N spots
         for m in _IMPORT_RE.finditer(ar[0]):
             named, source = m.group(2), m.group(3)
             if not named:
                 continue
-            resolved_to = resolve_module(repo, anchor_file, source, pkgs)
+            resolved_to = _resolve(repo, anchor_file, source, pkgs)
             for part in named.split(","):
                 ln = _local_name(part)
                 if not ln:
                     continue
                 imported = ln[0]
                 if resolved_to is None:                  # external pkg / alias / DI → the dependency boundary
-                    blindspots.append({"node": "n1", "mechanism": "external-dependency",
-                                       "evidence": f"{symbol} depends on {imported} from '{source}' (outside the repo / unresolved)",
-                                       "candidates": []})
+                    if source not in external_pkgs:
+                        external_pkgs.append(source)
                     continue
                 if resolved_to not in dep_units:
                     rd = _read(repo, resolved_to)
@@ -988,6 +1103,12 @@ def build_dependency_graph(repo: str, anchor_file: str, symbol: str, *, anchor_l
                 edges.append({"from": "n1", "to": did, "kind": "import", "provenance": "RESOLVED_FULL"})
                 # a followed dependency is NOT added to `anchors` → it's WIRING (a link adjacent to the
                 # source, which IS promoted to a core), not a new core. Keeps the core set the focus.
+
+        if external_pkgs:                                # ONE quiet boundary, not a wall of per-lib spots
+            shown = ", ".join(external_pkgs[:8]) + (" …" if len(external_pkgs) > 8 else "")
+            blindspots.append({"node": "n1", "mechanism": "external-libraries",
+                               "evidence": f"{symbol} uses {len(external_pkgs)} external package(s): {shown}",
+                               "candidates": []})
 
     return {
         "version": 1,

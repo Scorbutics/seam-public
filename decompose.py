@@ -92,6 +92,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="preset that sets ALL THREE passes to one engine (a per-pass flag "
                          "overrides it). Omit for the default (cluster=llm, roles=det, wiring=hybrid); "
                          "use 'det' for fully offline (no LLM)")
+    ap.add_argument("--resolver", choices=("det", "lsp", "auto"), default="det",
+                    help="how to resolve imports (codebase mode): 'det' = deterministic floor "
+                         "(relative+package+tsconfig paths, offline); 'lsp' = a real language server "
+                         "(go-to-definition, cross-language, needs the toolchain); 'auto' = LSP with "
+                         "deterministic fallback. See resolver-lsp-plan.md.")
     ap.add_argument("--facts", metavar="JSON",
                     help="external HunkFacts payload (e.g. AST facts the VS Code extension "
                          "computed) to drive the 'det' classifier; missing hunks fall back to regex")
@@ -116,6 +121,10 @@ def main(argv: list[str] | None = None) -> int:
                     help="print the model's raw reply + backend diagnostics to stderr, "
                          "and dump <out>.prompt.txt / <out>.reply.txt")
     args = ap.parse_args(argv)
+
+    if getattr(args, "resolver", "det") != "det":    # install the resolution strategy (det is the default floor)
+        from src import import_scan, resolver
+        import_scan.set_resolver(resolver.make_resolver(args.resolver))
 
     if args.graph or args.scan or args.expand_graph:
         # CODEBASE MODE — decompose a ResolvedGraph (plan §3). Entirely downstream of the FRONT:
