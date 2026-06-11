@@ -659,8 +659,12 @@ async function runReview(range: string) {
             factsPath = await buildAstFacts(tool, (skel) => runPy(bun,
               [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
           }
+          // Blast radius (who outside the diff consumes a changed symbol) via the deterministic
+          // resolver floor; --resolver lsp|auto degrades to the floor in the TS engine for now.
           const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
-                        ...(factsPath ? ["--facts", factsPath] : []), "--emit-seams", out];
+                        ...(factsPath ? ["--facts", factsPath] : []),
+                        ...(blastRadius ? ["--blast-radius"] : []),
+                        "--emit-seams", out];
           await runPy(bun, args, tool, (m) => progress.report({ message: m }));
           const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
           const ts = Date.now();

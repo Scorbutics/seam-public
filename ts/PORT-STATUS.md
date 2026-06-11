@@ -124,6 +124,24 @@ both facts producers (editor AST + headless tree-sitter) · eval-harness gate. E
 byte-verified against Python (host-bus prompt/inject parity for LLM passes), live-confirmed with a
 real model, and the extension runs all of it natively via `seam.backend=ts`.
 
+## ✅ Blast-radius + deterministic resolver floor (diff-mode)
+
+- `core/resolve/` floor ported: `languages/{base,typescript,python,index}` (TS/JS floor — relative
+  paths, `package.json` name map, `tsconfig` `paths` aliases with `extends` + nearest-ancestor; named-
+  import parser), `consumers` (the `set_resolver`/`_resolve`/`_resolve_import` seam), `resolver`
+  (`DeterministicResolver` + `make_resolver`). `diff/{blast_radius,facts_resolve}`. CLI:
+  `--blast-radius`, `--resolver`, `--facts-engine resolve`; extension passes `--blast-radius` on the
+  TS backend. *Gate:* blast-radius consumers **identical to Python** on a committed fixture across all
+  three resolution modes (relative / tsconfig alias / package name) with the same-named decoy
+  excluded; `--facts-engine resolve` identical.
+
+### Headless LSP (`--resolver lsp|auto`) — deliberately folded into codebase mode
+The floor is the right resolver for diff-mode blast-radius (node_modules/external are correctly
+excluded anyway; the floor covers relative/package/tsconfig). The headless LSP's precision pays off
+in **codebase mode**, and its async client clashes with the synchronous `_resolve` call deep in the
+pipeline — bridging that (worker+Atomics sync shim, or async emit-path refactor) is best done once,
+with codebase mode. Until then `lsp|auto` degrade to the floor (a stderr note), so nothing errors.
+
 ## ⏭️ Remaining (deferred — not diff-mode)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,

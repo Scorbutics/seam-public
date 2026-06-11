@@ -11,11 +11,18 @@ export class DeterministicResolver implements Resolver {
   }
 }
 
-// 'det' → null (the scan's built-in deterministic floor); 'lsp'/'auto' → the LSP DaemonResolver
-// (headless language server — ported in the LSP phase; see ts/PORT-STATUS.md).
+// 'det' → null (the deterministic floor). 'lsp'/'auto' → the headless language server.
+//
+// NOTE: the headless LSP resolver is deliberately deferred to land WITH codebase mode. Diff-mode
+// blast-radius is well served by the floor (relative + package.json + tsconfig `paths`; node_modules
+// and external are correctly excluded anyway), and an interactive LSP client is async while `_resolve`
+// is called synchronously deep in the pipeline — bridging that (a worker+Atomics sync shim, or an
+// async refactor of the emit path) is best done once, with codebase mode, where the LSP's precision
+// actually pays off. Until then, lsp/auto degrade to the floor so the CLI/extension never error.
 export async function make_resolver(kind: string): Promise<Resolver | null> {
-  if (kind === "det") return null;
-  const lsp = await import("./lsp/resolver.js").catch(() => null);
-  if (!lsp) throw new Error(`--resolver ${kind} (headless LSP) is not yet ported; use --resolver det.`);
-  return new lsp.DaemonResolver(kind === "auto");
+  if (kind !== "det") {
+    process.stderr.write(`note: --resolver ${kind} (headless LSP) not yet ported in the TS engine; `
+      + `using the deterministic floor (lands with codebase mode).\n`);
+  }
+  return null;
 }
