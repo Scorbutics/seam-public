@@ -1,0 +1,20 @@
+Seam · 9 hunks → 2 clusters · 3 seams · 4 cores  (roles: core 4  link 1  env 4)
+◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
+
+◆ g1  method
+├─ ▣ h1  RootActivity    ⚠ untested · ~ uncertain 50%
+│  ├─ ◆ core RootActivity.kt:54   defines RootActivity
+│  ├─ ◆ core RootActivity.kt:308   defines RootActivity
+│  ├─ ◆ core RootActivity.kt:553   defines RootActivity
+│  ├─ → link RootActivity.kt:587   references a core's symbol (wires it in)
+│  ├─ ∙ env  RootActivity.kt:603   wires: method
+│  ├─ ∙ env  RootActivity.kt:634   no logic or wiring detected (uncertain)
+│  └─ ∙ env  RootActivity.kt:826   wires: method
+└─ ▣ h9  method    ⚠ untested · ⚠ isolated-core
+   ├─ ∙ env  RootActivity.kt:603   wires: RootActivity
+   ├─ ∙ env  RootActivity.kt:826   wires: RootActivity
+   └─ ◆ core start.rb:175   defines method
+
+◆ g2  class RootActivity : AppCompatActivity(), LoaderHost {
+└─ ▣ s-ambient  class RootActivity : AppCompatActivity(), LoaderHost {    link-only
+   └─ ∙ env  RootActivity.kt:845   no logic or wiring detected (uncertain)

@@ -1,0 +1,21 @@
+Seam · 5 hunks → 3 clusters · 3 seams · 2 cores  (roles: core 2  link 1  noise 2)
+◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
+
+◆ g1  api.py
+└─ ▣ s-rewire  api.py    link-only
+   ├─ ∙ env  api.py:1   (here: environment) references a core's symbol (wires it in)
+   └─ → link api.py:4   references a core's symbol (wires it in)
+
+◆ g2  charge
+└─ ▣ h4  charge    ⚠ untested · ⚠ isolated-core
+   ├─ ∙ env  payment.py:1   (here: environment) defines charge
+   └─ ◆ core payment.py:4   defines charge
+
+◆ g3  apply_discount
+└─ ▣ h5  apply_discount    ⚠ untested
+   ├─ → link payment.py:1   (here: link) defines charge
+   └─ ◆ core utils.py:2   defines apply_discount
+
+· Noise (2) — skip
+- format_only.py:1
+- helpers.py

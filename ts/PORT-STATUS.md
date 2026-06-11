@@ -1,0 +1,67 @@
+# TypeScript port — status
+
+Branch: `port/typescript`. Deterministic-first, test-driven. Each module is driven against
+the Python output as a **differential oracle** (`ts/test/oracle/`, regenerated from Python),
+so "ported" here means *verified byte-identical to Python on real diffs*, not just "compiles."
+
+Run: `cd ts && bun install && bun test` (50 tests, all green) · `bun run typecheck` (clean).
+
+## ✅ Done and verified (the whole deterministic classification pipeline)
+
+| TS module | Ports | Verified against |
+|---|---|---|
+| `src/diff/parser.ts` | `parser.py` (+ a hand-written unified-diff parser, no `unidiff` dep) | parser oracle on 6 diffs (id/path/change_type/section/role) |
+| `src/diff/noise_filter.ts` | `noise_filter.py` | same |
+| `src/diff/lang.ts` | `lang.py` regex primitives | via facts + symbol_edges |
+| `src/diff/facts.ts` | `facts.py` (HunkFacts IR, regex producer, all 3 providers, `new_side_lines`, `leading_ambient_lines`) | facts oracle byte-identical on 6 diffs + round-trip + external≡regex + merged override |
+| `src/diff/symbol_edges.ts` | `symbol_edges.py` | `extraction_test` ported as spec — 14/14 (external coupling, A→B rewire, span-segment, alias) |
+| `src/core/graph_ir.ts` | `connected_components` (rest of graph_ir pending) | via classifier |
+| `src/diff/classifier_det.ts` | **`classifier_det.py` in full** (roles, subject-wiring, reconcile, clustering, multi-core `merge_seams`, span/overlap placements) | **classified oracle byte-identical on all 6 diffs**, field-by-field over every hunk |
+
+**Bottom line:** `parse → noise → roles → wiring → reconcile → cluster → merge → spans`
+produces the *exact same labeled hunks* as Python `--classifier det`, including the 54-hunk
+cal.com diff (18 cores, multi-core seams, overlap placements).
+
+### Two faithful-port bugs the oracle caught (documented so they don't recur)
+- `"+- ".includes("")` is `true` in JS (empty string is a substring) → an empty diff line
+  picked `undefined`. Python `raw[:1] in "+- "` doesn't have this. Fixed with `slice(0,1)`.
+- Python `re` `\w` is **Unicode** by default (`Désactivé`, `Masqué` match whole); JS `\w` is
+  ASCII. `_IDENT`/`_CALL_ROOT`/`_JSX_TAG` now use `\p{L}\p{N}_` under the `u` flag.
+
+## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
+
+1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
+   `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`
+   (well-formedness flags), `emit_seams_json`, `_merged_diff`, blast-radius wiring.
+   Oracle: `*.seams.json` (6 cases + `sample`).
+2. **`subgroup.ts`** ← `src/diff/subgroup.py` (140): `subgroup_seams` (altitude mid-level).
+3. **`report_text.ts`** ← `src/diff/report_text.py` (241): `ascii` + `llm` renderers.
+   Oracle: `*.ascii.txt` (6 cases + `sample`). This is the first **runnable** milestone —
+   `seam --file sample.patch --classifier det --format ascii` should match the oracle.
+4. **`cli/decompose.ts`** ← `decompose.py` + `src/diff/run.py` (diff branch, det path first):
+   `--file/--git`, `--classifier det`, `--format ascii|llm`, `--emit-seams`, `--emit-hunks`,
+   `--dump-classified`/`--from-classified`. Then diff vs Python on `sample.patch`.
+
+## 🟡 Scaffolded later (need the interfaces, then validation — NOT a mechanical port)
+
+- **LLM passes** (`classifier.py` 949 lines, `engine.py` hybrid): behind an `LlmBackend`
+  interface (subprocess `claude`/`copilot` for headless; `vscode.lm` in-extension). The CODE
+  ports; **behavioral equivalence is stochastic** → validate via the harness with tolerance,
+  not byte-match. This is the part that needs your eyes.
+- **Codebase mode** (`src/codebase/*`, `src/core/resolve/*`): LSP client → `vscode-jsonrpc`
+  (headless) + the existing `resolver.ts` (in-editor). Tree-sitter facts → `web-tree-sitter`
+  (spike confirmed: pin `web-tree-sitter@^0.25`; `tree-sitter-wasms` covers all 12 grammars).
+- **HTML report** (`report_html.py` + jinja2): port the template; mechanical but tedious.
+- **eval/harness.py**: keep in Python, drive the compiled `seam` binary as a black box
+  (cheaper than re-porting 3.7k lines; keeps the existing golds as ground truth).
+
+## Known parity caveats to sweep when convenient
+- `_DEF_PATTERNS` name captures in `lang.ts` are still ASCII `[A-Za-z_]\w*` (the failing
+  fixtures only exercised `_IDENT`/calls). A Unicode *definition* name would mismatch Python;
+  Unicode-ify those captures when a fixture needs it.
+- JS `\b` is ASCII-boundary even under `/u` (Python's is Unicode-aware). Only matters at a
+  Unicode token boundary; current regexes anchor on ASCII keywords so it's not yet hit.
+
+## How the oracles are regenerated (when Python changes)
+See the inline `python - <<PY` snippets used to build `ts/test/oracle/*.{parsed,facts,classified,seams,ascii}.*`
+in the port commits. Re-run them after any change to the Python deterministic passes, then `bun test`.

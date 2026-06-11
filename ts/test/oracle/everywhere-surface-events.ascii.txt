@@ -1,0 +1,12 @@
+Seam · 3 hunks → 2 clusters · 2 seams · 2 cores  (roles: core 2  env 1)
+◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
+
+◆ g1  alive
+└─ ▣ h2  alive    ⚠ untested · ⚠ isolated-core
+   ├─ ∙ env  litergss_surface_jni.c:52   no logic or wiring detected (uncertain)
+   └─ ◆ core litergss_surface_jni.c:165   defines alive
+
+◆ g2  VirtualKeyboardListener
+└─ ▣ h3  VirtualKeyboardListener    ⚠ untested
+   ├─ → link litergss_surface_jni.c:276   (here: link) defines alive
+   └─ ◆ core NativeSurface.kt:64   defines VirtualKeyboardListener
