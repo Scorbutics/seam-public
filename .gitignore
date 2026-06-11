@@ -20,3 +20,6 @@ vscode-extension/node_modules/
 vscode-extension/out/
 vscode-extension/*.vsix
 eval/cases/repos.json
+
+# eval harness run-sets (regenerated on demand)
+eval/_runs/

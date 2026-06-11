@@ -91,6 +91,20 @@ def _resolve_facts_provider(args, case_stem: str, repos: dict):
     return ResolvedFactsProvider(RegexFactsProvider(), repo)
 
 
+def _generate_via_binary(case: Path, dest: Path, ts_cli: str, engine: str, model: str) -> None:
+    """Black-box generate: run an EXTERNAL classifier binary (e.g. the TypeScript CLI) and have it
+    write the labelled-hunks dump (`--dump-classified`) we score. The binary's dump must use the
+    same field names as `parser.hunks_to_json` (the TS port's `hunksToJson` does). This is how the
+    SAME golds gate a re-implementation of the engine — it stays a pure regression guard."""
+    import shlex
+    import subprocess
+    cmd = shlex.split(ts_cli) + ["--file", str(case), "--classifier", engine,
+                                 "--model", model, "--dump-classified", str(dest)]
+    proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise SystemExit(f"binary failed for {case.stem} (exit {proc.returncode}): {proc.stderr.strip()[:400]}")
+
+
 def generate(args) -> int:
     from src.diff import classifier, classifier_det, noise_filter, parser
     engine = classifier_det if args.engine == "det" else classifier
@@ -108,13 +122,16 @@ def generate(args) -> int:
             if dest.exists() and not args.force:
                 print(f"[skip] {case.stem} run {i} (cached)")
                 continue
-            hunks = parser.parse(case.read_text(encoding="utf-8"))
-            remaining = noise_filter.classify(hunks)
-            if fp is not None:
-                engine.classify(remaining, model=args.model, facts_provider=fp)
+            if args.ts_cli:                       # black-box: drive an external binary (the TS port)
+                _generate_via_binary(case, dest, args.ts_cli, args.engine, args.model)
             else:
-                engine.classify(remaining, model=args.model)
-            dest.write_text(parser.hunks_to_json(hunks), encoding="utf-8")
+                hunks = parser.parse(case.read_text(encoding="utf-8"))
+                remaining = noise_filter.classify(hunks)
+                if fp is not None:
+                    engine.classify(remaining, model=args.model, facts_provider=fp)
+                else:
+                    engine.classify(remaining, model=args.model)
+                dest.write_text(parser.hunks_to_json(hunks), encoding="utf-8")
             print(f"[ok]   {case.stem} run {i} -> {dest.relative_to(_ROOT)}")
     return 0
 
@@ -519,6 +536,10 @@ def main(argv=None) -> int:
                         "— needs that mapping; cases without one fall back to regex, unchanged)")
     g.add_argument("--resolver", choices=("det", "lsp", "auto"), default="det",
                    help="resolver for --facts-engine resolve (default det = the offline floor)")
+    g.add_argument("--ts-cli", help="BLACK-BOX: run this external classifier binary instead of the "
+                   "in-process Python engine, scoring its --dump-classified output (e.g. "
+                   "'bun ts/src/cli/decompose.ts' or a compiled 'dist/seam'). Gates a re-implementation "
+                   "(the TypeScript port) against the SAME golds.")
     g.set_defaults(func=generate)
 
     s = sub.add_parser("score", help="score cached runs (stability always; accuracy if gold exists)")

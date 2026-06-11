@@ -141,7 +141,15 @@ async function main(argv: string[]): Promise<number> {
       process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
       return 0;
     }
-    if (a.dumpClassified) writeFileSync(a.dumpClassified, hunksToJson(hunks));
+    if (a.dumpClassified) {
+      writeFileSync(a.dumpClassified, hunksToJson(hunks));
+      // Terminal when no render was asked for (format defaults to the un-ported html) — lets the
+      // eval harness drive the TS engine as a black box without a render mode.
+      if (!a.emitSeams && a.format !== "ascii" && a.format !== "llm") {
+        process.stdout.write(`Classified: ${a.dumpClassified}\n`);
+        return 0;
+      }
+    }
   }
 
   const counts = new Map<string, number>();
