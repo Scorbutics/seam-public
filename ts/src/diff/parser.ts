@@ -105,7 +105,9 @@ function changeType(pf: PatchedFile): string {
 }
 
 function splitFiles(diffText: string): PatchedFile[] {
-  const lines = diffText.split("\n");
+  // Universal-newline split (like Python splitlines / unidiff): a CRLF or lone CR diff is
+  // normalised to LF so the hunk text matches unidiff's `str(h)` byte-for-byte (LLM prompt parity).
+  const lines = diffText.split(/\r\n|\r|\n/);
   const files: PatchedFile[] = [];
   let cur: PatchedFile | null = null;
   let curHunk: { header: string; section: string; body: string[] } | null = null;
@@ -138,9 +140,10 @@ function splitFiles(diffText: string): PatchedFile[] {
       f.hunks.push(curHunk);
       continue;
     }
-    if (curHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ") || line === "")) {
-      // Skip the `\ No newline at end of file` marker.
-      if (line.startsWith("\\")) continue;
+    // Body lines incl. the `\ No newline at end of file` marker — unidiff keeps it in the hunk
+    // text, so we do too (byte-parity for the LLM prompts; facts ignore non-+ lines anyway).
+    if (curHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")
+                    || line === "" || line.startsWith("\\"))) {
       curHunk.body.push(line);
     }
   }

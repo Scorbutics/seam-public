@@ -1,0 +1,295 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Your ONLY job in this pass: GROUP the hunks into FUNCTIONAL CLUSTERS — each one a
+distinct PRODUCT INTENT (the "what are we building" of a coherent sub-change),
+using the whole diff as context. A diff often bundles several distinct product
+intents; each becomes one cluster. This is the COARSER of two grains of intent:
+clusters carry PRODUCT intent here, while the finer TECHNICAL intent of each
+individual seam (e.g. "introduce strategy pattern") is named in a separate pass —
+do NOT reach for that finer grain here. Grouping is GRAMMAR-driven (what wires to
+what), NOT topic similarity: put a link in the SAME cluster as the core it wires
+in — the joint and the thing it joins belong together. Give each cluster a stable
+id ("g1", "g2", ...) and a short product-intent label (<= 8 words). One product
+intent = one cluster, even if it spans several files.
+
+PREFER THE FEWEST CLUSTERS that still separate genuinely independent intents. Be
+COARSE, not fine:
+- Introducing one new thing and migrating several call-sites to it is ONE intent
+  (one core + its links across many files), NOT one cluster per call-site.
+- A helper/strategy that exists only to serve a new mechanism belongs in the SAME
+  cluster as that mechanism — even if it lives in a different file.
+- Split into separate clusters ONLY when two intents could ship in separate PRs
+  without depending on each other. If unsure, MERGE.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk:
+[{"id":"h1","group":"g1","intent":"add currency to checkout"},
+ {"id":"h2","group":"g1","intent":"add currency to checkout"}]
+Every hunk in the same group MUST repeat the same intent string.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -54,6 +54,28 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+     /** Continuous rotation on [gameStartIcon] while the start overlay is up. */
+     private var gameStartIconAnimator: android.animation.ObjectAnimator? = null
+ 
++    /** Posted on [showGameStartOverlay]; cancelled on [hideGameStartOverlay]. */
++    private val gameStartTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
++    private val gameStartTimeoutRunnable = Runnable {
++        android.util.Log.w(TAG, "game-start overlay timeout reached without sentinel — forcing hide")
++        hideGameStartOverlay()
++    }
++
++    /** File [start.rb] writes when PSDK's first LiteRGSS::DisplayWindow.new returns. */
++    private var gameReadyFile: java.io.File? = null
++    private val gameReadyPollHandler = android.os.Handler(android.os.Looper.getMainLooper())
++    private val gameReadyPollRunnable = object : Runnable {
++        override fun run() {
++            val f = gameReadyFile
++            if (f != null && f.exists()) {
++                android.util.Log.i(TAG, "game-ready file appeared at ${f.absolutePath} — hiding overlay")
++                hideGameStartOverlay()
++                return
++            }
++            gameReadyPollHandler.postDelayed(this, GAME_READY_POLL_INTERVAL_MS)
++        }
++    }
++
+     private lateinit var workloadController: RubyWorkloadController
+     private lateinit var systemUi: SystemUiPresenter
+     private lateinit var inputForwarder: GameInputForwarder
+
+--- HUNK h2 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -286,17 +308,12 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+         }
+         val workload = workloadController.currentWorkload() ?: return
+ 
+-        // Game workload's only sentinel of interest: the start overlay can
+-        // come down because Game.rb's first DisplayWindow just spun up.
+-        // start.rb's prepended GameDisplayReadySignal module emits this
+-        // exactly once per session; any further matches are ignored by
+-        // [hideGameStartOverlay]'s visibility guard.
+-        if (workload is RubyWorkload.Game) {
+-            if (logMessage.message.contains(GAME_DISPLAY_READY_SENTINEL)) {
+-                hideGameStartOverlay()
+-            }
+-            return
+-        }
++        // Game workloads don't drive any UI state from log messages anymore.
++        // The start-overlay-hide signal moved to a marker file the Ruby side
++        // writes (see [gameReadyFile] + the polling Handler) because Ruby
++        // logs from start.rb were not reaching this listener reliably on
++        // some hosts.
++        if (workload is RubyWorkload.Game) return
+         if (workload !is RubyWorkload.Loader) return
+ 
+         if (logMessage.message.contains(LOADER_READY_SENTINEL)) {
+
+--- HUNK h3 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -536,6 +553,27 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+             interpolator = android.view.animation.LinearInterpolator()
+             start()
+         }
++
++        // Defensive timeout. If start.rb's marker file never appears
++        // (script error before DisplayWindow.new, the wrapper code didn't
++        // catch the construction path for some reason, etc.) we still
++        // reveal the GL surface so the user sees whatever the game IS
++        // rendering. Long enough to cover a cold debug-uncompiled boot
++        // (PSDK's script load on PhysFS is ~10–25s on a mid-range device);
++        // the marker-file path normally pre-empts it.
++        gameStartTimeoutHandler.removeCallbacks(gameStartTimeoutRunnable)
++        gameStartTimeoutHandler.postDelayed(gameStartTimeoutRunnable, GAME_START_TIMEOUT_MS)
++
++        // Wipe any stale marker file from a prior run and start polling.
++        // The Ruby wrapper writes this once on first DisplayWindow.new;
++        // the poller hops the result back to UI thread via [hideGameStartOverlay].
++        val readyFile = gameReadyFile(executionLocation)
++        try {
++            if (readyFile.exists()) readyFile.delete()
++        } catch (_: Exception) { /* best-effort */ }
++        gameReadyFile = readyFile
++        gameReadyPollHandler.removeCallbacks(gameReadyPollRunnable)
++        gameReadyPollHandler.postDelayed(gameReadyPollRunnable, GAME_READY_POLL_INTERVAL_MS)
+     }
+ 
+     /**
+
+--- HUNK h4 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -549,6 +587,9 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+      */
+     private fun hideGameStartOverlay() {
+         runOnUiThread {
++            gameStartTimeoutHandler.removeCallbacks(gameStartTimeoutRunnable)
++            gameReadyPollHandler.removeCallbacks(gameReadyPollRunnable)
++            gameReadyFile = null
+             if (gameStartOverlay.visibility != View.VISIBLE) return@runOnUiThread
+             gameStartOverlay.animate()
+                 .alpha(0f)
+
+--- HUNK h5 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -562,9 +603,21 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+         }
+     }
+ 
++    /**
++     * Marker file [start.rb]'s LiteRGSS::DisplayWindow.new wrapper writes
++     * the moment PSDK's main window is constructed. Lives next to the
++     * other per-session log files so a single rm -rf on the execution
++     * dir cleans it up. The poller in [showGameStartOverlay] watches
++     * this path; deletion is deferred to [hideGameStartOverlay] so a
++     * subsequent start cycle starts from a clean slate.
++     */
++    private fun gameReadyFile(executionLocation: String): java.io.File =
++        java.io.File(executionLocation, ".game_ready")
++
+     /**
+      * Populate the env vars start.rb reads (RGSS_EXECUTION_LOCATION,
+-     * RGSS_LOG_FILE, RGSS_ERROR_LOG_FILE, RGSS_REMOTE_*_TOKEN, etc.).
++     * RGSS_LOG_FILE, RGSS_ERROR_LOG_FILE, RGSS_GAME_MODE,
++     * RGSS_GAME_READY_FILE, RGSS_REMOTE_*_TOKEN, etc.).
+      * Called from [startGame] right before the controller enqueues
+      * the game workload.
+      */
+
+--- HUNK h6 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -581,6 +634,7 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+         android.system.Os.setenv("RGSS_LOG_FILE", "$executionLocation/last_stdout.log", true)
+         android.system.Os.setenv("RGSS_ERROR_LOG_FILE", "$errorLogLocation/Error.log", true)
+         android.system.Os.setenv("RGSS_GAME_MODE", mode.envValue(), true)
++        android.system.Os.setenv("RGSS_GAME_READY_FILE", gameReadyFile(executionLocation).absolutePath, true)
+ 
+         try {
+             FileWriter("$executionLocation/last_stdout.log", false).flush()
+
+--- HUNK h7 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -772,16 +826,11 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+         /** Matches Loader::Splash::ICON_TAPPED_SENTINEL in loader/splash.rb verbatim. */
+         private const val LOADER_ICON_TAPPED_SENTINEL = "[loader-icon-tapped]"
+ 
+-        /**
+-         * Emitted by the [GameDisplayReadySignal] prepend installed in
+-         * start.rb the first time `LiteRGSS::DisplayWindow.new` returns
+-         * — i.e., the moment Game.rb's main window exists on the GL
+-         * surface. Cue for [hideGameStartOverlay].
+-         */
+-        private const val GAME_DISPLAY_READY_SENTINEL = "[game-display-ready]"
+-
+         private const val LOADER_FADE_IN_MS = 80L
+ 
++        /** Poll interval for [gameReadyFile]. Cheap stat call, 100ms feels instant. */
++        private const val GAME_READY_POLL_INTERVAL_MS = 100L
++
+         /**
+          * Window inside which a second BACK press is treated as
+          * "confirm quit". Toast LENGTH_SHORT is ~2s, so anything in
+
+--- HUNK h8 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -796,6 +845,15 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+         /** Fade-out duration for the start overlay when the game is ready. */
+         private const val GAME_START_FADE_MS = 180L
+ 
++        /**
++         * Force-hide the start overlay after this long without
++         * [GAME_DISPLAY_READY_SENTINEL]. Sized to a generous cold-boot
++         * worst case (PSDK script load on PhysFS in debug mode, no
++         * mega_script.deflate, mid-range device) plus headroom; the
++         * sentinel path takes precedence whenever it reaches us.
++         */
++        private const val GAME_START_TIMEOUT_MS = 30_000L
++
+         fun hubIntent(activity: AppCompatActivity): Intent =
+             Intent(activity, RootActivity::class.java).putExtra(EXTRA_TARGET, TARGET_HUB)
+
+--- HUNK h9 | file: app/src/main/ruby/start.rb | change: modify ---
+@@ -175,34 +175,63 @@ SafeRunner.run(
+   # window, so the Kotlin-side "starting…" overlay can fade out and
+   # reveal Game.rb's first frame.
+   #
+-  # Installed via Module#prepend on LiteRGSS::DisplayWindow rather than
+-  # by hooking PSDK directly — PSDK is end-user code we don't own, but
+-  # the LiteRGSS API is stable and PSDK necessarily constructs exactly
+-  # one DisplayWindow on boot (its Graphics module). The prepend wraps
+-  # `initialize`, calls super first (so a constructor failure does NOT
+-  # mis-fire the sentinel), then emits on first successful return.
++  # Implemented as a marker file written from inside a `.new` wrapper on
++  # LiteRGSS::DisplayWindow. The file path is the env var
++  # RGSS_GAME_READY_FILE that RootActivity sets on workload launch;
++  # RootActivity polls for it via Handler and fades the overlay out as
++  # soon as it appears.
+   #
+-  # The @@signaled class variable + the prepend module itself live above
+-  # the PSDKVMSnapshot baseline, so restore! reaps both at the end of
+-  # this session. Next session starts with no prepend and @@signaled
+-  # back to false — re-prepended cleanly on the next run.
++  # Why a file and not a log sentinel: the VMLogger/STDOUT pipeline
++  # delivers reliably for the loader workload but is silently dropped
++  # for the game workload on this host (observed: C-side LiteRGSS
++  # warnings reach the LogListener but Ruby-side puts/VMLogger.info do
++  # not). File-based sync sidesteps that entirely — and the
++  # mechanism is already proven by the wizard ↔ loader status file.
+   #
+-  # `ancestors.include?` guard is defensive against a restore that
+-  # somehow leaves the IClass in the chain (e.g., a native unprepend
+-  # failure logged but tolerated). Without it we'd double-prepend and
+-  # emit twice — harmless but noisy.
+-  unless LiteRGSS::DisplayWindow.ancestors.any? { |a| a.name == 'GameDisplayReadySignal' }
+-    module GameDisplayReadySignal
+-      @@signaled = false
+-      def initialize(*args, **kwargs)
+-        super
+-        unless @@signaled
+-          @@signaled = true
+-          VMLogger.info '[game-display-ready]' if defined?(VMLogger)
++  # Aliasing `.new` on the singleton class (rather than prepending on
++  # `initialize`) is dispatch-agnostic: `.new` is the public entry
++  # point regardless of how the C side wires up internals, so it works
++  # even if the litergss2 C code ever takes a `rb_class_new_instance`
++  # shortcut around Ruby-level method lookup.
++  #
++  # The signaled flag lives in @@__game_display_signaled on
++  # DisplayWindow itself; PSDKVMSnapshot.restore! reaps class variables
++  # added since baseline, so the flag resets cleanly between sessions.
++  ready_file_path = ENV['RGSS_GAME_READY_FILE']
++  if ready_file_path.nil? || ready_file_path.empty?
++    STDERR.puts '[start.rb] RGSS_GAME_READY_FILE not set; sentinel skipped'
++  elsif !defined?(LiteRGSS::DisplayWindow)
++    STDERR.puts '[start.rb] LiteRGSS::DisplayWindow not defined; sentinel skipped'
++  else
++    # Stale file from a prior session would tell the host the game is
++    # ready before this session has constructed anything. Wipe it before
++    # installing the wrapper.
++    File.delete(ready_file_path) rescue nil
++
++    if LiteRGSS::DisplayWindow.singleton_class.method_defined?(:__game_display_orig_new)
++      # Already installed in a prior session whose restore! didn't
++      # manage to strip the singleton alias (rare; native unprepend only
++      # touches IClass chains, not singleton-class method tables). Reset
++      # the flag and reuse the existing wrapper.
++      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_signaled, false)
++    else
++      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_signaled, false)
++      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_ready_path, ready_file_path)
++      LiteRGSS::DisplayWindow.singleton_class.send(:alias_method, :__game_display_orig_new, :new)
++      LiteRGSS::DisplayWindow.singleton_class.send(:define_method, :new) do |*args, &block|
++        instance = __game_display_orig_new(*args, &block)
++        unless class_variable_get(:@@__game_display_signaled)
++          class_variable_set(:@@__game_display_signaled, true)
++          path = class_variable_get(:@@__game_display_ready_path)
++          begin
++            File.write(path, "ready\n")
++          rescue StandardError => e
++            STDERR.puts "[start.rb] failed to write ready file #{path}: #{e.class}: #{e.message}"
++          end
+         end
++        instance
+       end
+     end
+-    LiteRGSS::DisplayWindow.prepend(GameDisplayReadySignal)
+   end
+ 
+   VMLogger.info "[start.rb] Loading Game.rb..."
+
+=== END HUNKS ===
+Return the JSON array now.
