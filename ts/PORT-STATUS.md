@@ -90,9 +90,21 @@ One deliberate difference: the role votes run **serially** here vs Python's conc
 `--classifier llm` is ~5 sequential calls (the default hybrid is only 2, so unaffected). Making the
 votes concurrent (async spawn instead of `spawnSync`) is a known perf-only follow-up.
 
-## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
+## ✅ Phase 5 — facts providers (better deterministic roles)
 
-### Phase 5 — facts providers (quality of the deterministic roles)
+- **5a — editor AST facts** (`MergedFactsProvider`): the CLI's `--facts` partial payloads (the
+  editor's DocumentSymbol `defines`/`enclosing`) overlay the regex base. The extension now feeds
+  these to the TS det/hybrid path via the TS `--emit-hunks` + `--facts` (same DocumentSymbols path
+  as the Python backend; `--emit-hunks` byte-identical). *Gate: partial-facts CLI parity vs Python.*
+- **5b — tree-sitter headless** (`facts_treesitter.ts` + `core/treesitter.ts`, `web-tree-sitter` +
+  `tree-sitter-wasms`): full-file AST masking of comments/strings, an async pre-pass producing a
+  facts payload the sync pipeline consumes. *Gate:* byte-identical to Python's
+  `tree_sitter_language_pack` producer on shared DictFileSource fixtures (incl. the multi-line
+  string-decoy masking WIN) **and** on a real working-tree git diff via `--facts-engine treesitter`.
+  The UTF-16-vs-byte masking offset difference is harmless (masked spans only feed
+  whitespace-insensitive regex checks). Pin: `web-tree-sitter@^0.25`.
+
+## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
    `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`

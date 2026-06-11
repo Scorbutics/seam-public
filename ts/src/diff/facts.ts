@@ -229,6 +229,44 @@ export function changed_newside(hunk: Hunk): [number, number, Map<number, string
   return [start, start + count, added];
 }
 
+// Python str.splitlines() — universal newlines, drops a single trailing-newline artifact.
+function splitlines(s: string): string[] {
+  const parts = s.split(/\r\n|\r|\n/);
+  if (parts.length && parts[parts.length - 1] === "") parts.pop();
+  return parts;
+}
+
+// Full-file facts for one hunk: slice the post-image RAW file + its comment/string-MASKED twin to
+// the hunk's changed new-side lines, then run the shared assembly. Returns null on misparse/desync/
+// misalignment (caller falls back). Port of facts.facts_for_hunk.
+export function facts_for_hunk(hunk: Hunk, rawContent: string, maskedContent: string, minAlignment = 0.8): HunkFacts | null {
+  const cn = changed_newside(hunk);
+  if (cn === null) return null;
+  const [start, end, added] = cn;
+  const clines = splitlines(rawContent);
+  const mlines = splitlines(maskedContent);
+  if (end - 1 > clines.length || clines.length !== mlines.length) return null;
+  let ok = 0, tot = 0;
+  for (const [lineno, txt] of added) {
+    if (lineno >= 1 && lineno <= clines.length) { tot += 1; if (clines[lineno - 1].trim() === txt.trim()) ok += 1; }
+  }
+  if (tot && ok / tot < minAlignment) return null;
+  const build = (lines: string[]): string => {
+    const out = [`@@ -0,0 +${start},${Math.max(0, end - start)} @@`];
+    for (let n = start; n < end; n++) if (n >= 1 && n <= lines.length) out.push((added.has(n) ? "+" : " ") + lines[n - 1]);
+    return out.join("\n");
+  };
+  return facts_from_texts(build(clines), build(mlines), hunk.file_path, hunk.section_header);
+}
+
+// --- file source (where a full-file producer reads post-image content) -------
+export interface FileSource { read(path: string): string | null; }
+
+export class DictFileSource implements FileSource {
+  constructor(private files: Record<string, string>) {}
+  read(path: string): string | null { return this.files[path] ?? null; }
+}
+
 // --- providers ---------------------------------------------------------------
 export interface FactsProvider {
   facts(hunks: Hunk[]): Map<string, HunkFacts>;

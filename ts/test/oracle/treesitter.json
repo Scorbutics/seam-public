@@ -1,0 +1,67 @@
+{
+  "py": {
+    "diff": "--- /dev/null\n+++ b/app/svc.py\n@@ -0,0 +1,8 @@\n+def handler(req):\n+    doc = \"\"\"\n+    if you return this for a while, switch context\n+    call ghostCall() and fakeDefine\n+    \"\"\"\n+    if req.ok:\n+        return realCall(req.id)\n+    return None\n",
+    "file": "app/svc.py",
+    "content": "def handler(req):\n    doc = \"\"\"\n    if you return this for a while, switch context\n    call ghostCall() and fakeDefine\n    \"\"\"\n    if req.ok:\n        return realCall(req.id)\n    return None\n",
+    "facts": {
+      "defines": [
+        "handler"
+      ],
+      "references": [
+        "None",
+        "call",
+        "context",
+        "doc",
+        "fakeDefine",
+        "ghostCall",
+        "handler",
+        "realCall",
+        "req",
+        "switch",
+        "while",
+        "you"
+      ],
+      "calls": [
+        "ghostCall",
+        "handler",
+        "realCall",
+        "req"
+      ],
+      "enclosing": [],
+      "decisions": 3,
+      "implements": [],
+      "is_test": false,
+      "is_sql": false,
+      "imports_only": false,
+      "type_decl_only": false,
+      "resolved_refs": {}
+    }
+  },
+  "clean": {
+    "diff": "--- /dev/null\n+++ b/app/clean.ts\n@@ -0,0 +1,6 @@\n+export function compute(a, b) {\n+  if (a > b) {\n+    return helperCall(a);\n+  }\n+  return b;\n+}\n",
+    "file": "app/clean.ts",
+    "content": "export function compute(a, b) {\n  if (a > b) {\n    return helperCall(a);\n  }\n  return b;\n}\n",
+    "facts": {
+      "defines": [
+        "compute"
+      ],
+      "references": [
+        "compute",
+        "helperCall"
+      ],
+      "calls": [
+        "compute",
+        "helperCall",
+        "if"
+      ],
+      "enclosing": [],
+      "decisions": 3,
+      "implements": [],
+      "is_test": false,
+      "is_sql": false,
+      "imports_only": false,
+      "type_decl_only": false,
+      "resolved_refs": {}
+    }
+  }
+}

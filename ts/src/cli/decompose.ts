@@ -24,7 +24,7 @@ interface Args {
   format: string; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
-  verbose: boolean;
+  factsEngine?: string; verbose: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -60,9 +60,9 @@ function parseArgs(argv: string[]): Args {
       case "--inject-llm": a.injectLlm = next(); break;
       case "--model": a.model = next(); break;
       case "--claude-bin": a.claudeBin = next(); break;
+      case "--facts-engine": a.factsEngine = next(); break;
       case "-v": case "--verbose": a.verbose = true; break;
-      case "--context-window": case "--resolver":
-      case "--facts-engine": case "-o": case "--out":
+      case "--context-window": case "--resolver": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
       case "--blast-radius": case "--open": case "--debug": break; // boolean, ignored on det path
       default:
@@ -74,7 +74,7 @@ function parseArgs(argv: string[]): Args {
 
 function err(msg: string): never { process.stderr.write(`error: ${msg}\n`); process.exit(2); }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
   reset_usage();
   let hunks: Hunk[];
@@ -108,9 +108,18 @@ function main(argv: string[]): number {
       const payload = JSON.parse(readFileSync(a.facts, "utf-8"));
       if (payload.partial) {
         // The editor's DocumentSymbol facts (defines/enclosing) overlaid on a base producer.
-        // Base = tree-sitter if a precomputed --facts-engine ran (Phase 5b); else regex.
         factsProvider = new MergedFactsProvider(new RegexFactsProvider(), payload);
       } else factsProvider = new ExternalFactsProvider(payload);
+    } else if (a.factsEngine === "treesitter") {
+      // Headless full-file AST facts (web-tree-sitter) — an async pre-pass producing a payload the
+      // sync pipeline consumes; per-hunk regex fallback for anything tree-sitter can't handle.
+      const ts = await import("../diff/facts_treesitter.js");
+      if (!ts.available()) process.stderr.write("warning: tree-sitter grammars not found; using regex facts\n");
+      else {
+        const work = hunks.filter((h) => h.role !== "noise");
+        const payload = await ts.computeTreeSitterFacts(work, new ts.RepoFileSource(a.repo));
+        factsProvider = new ExternalFactsProvider(payload);
+      }
     }
 
     // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's
@@ -155,4 +164,4 @@ function main(argv: string[]): number {
   err("HTML report output is not yet ported; use --format ascii|llm or --emit-seams (see ts/PORT-STATUS.md).");
 }
 
-process.exit(main(process.argv.slice(2)));
+main(process.argv.slice(2)).then((code) => process.exit(code));
