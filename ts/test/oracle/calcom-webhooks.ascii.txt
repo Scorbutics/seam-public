@@ -1,4 +1,4 @@
-Seam · 54 hunks → 16 clusters · 29 seams · 18 cores  (roles: core 18  link 9  env 27)
+Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 9  env 27)
 ◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
 
 ◆ g1  WebhookForm
@@ -107,26 +107,25 @@ Seam · 54 hunks → 16 clusters · 29 seams · 18 cores  (roles: core 18  link 
 │     ├─ → link webhooks-skeleton.tsx:6   wires: WebhookListItem, WebhookFormSkeleton, WebhooksHeader
 │     ├─ ∙ env  list-item.tsx:1   (here: environment) defines ListItem
 │     └─ ◆ core list-item.tsx:6   defines ListItem
-├─ ▸ DeleteWebhookDialog  (1 seam)
-│  └─ ▣ h25  DeleteWebhookDialog    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
-│     ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab
-│     ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookListItem, WebhookVersionCTA, WebhookFormSkeleton
-│     ├─ ∙ env  DeleteWebhookDialog.tsx:1   wires: WebhookForm
-│     └─ ◆ core DeleteWebhookDialog.tsx:23   defines DeleteWebhookDialog
-└─ ▸ housekeeping  (1 seam)
-   └─ ▣ s-ambient  ambient ripple    ⚠ delegated
-      └─ ∙ env  WebhookForm.tsx:337   wires: WebhookForm
+└─ ▸ webhooks  (2 seams)
+   ├─ ▣ h12  WebhookForm    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
+   │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookListItem, WebhookVersionCTA, DeleteWebhookDialog, WebhookFormSkeleton
+   │  ├─ ◆ core WebhookForm.tsx:315   defines WebhookForm
+   │  ├─ ∙ env  WebhookForm.tsx:337   no logic or wiring detected (uncertain)
+   │  ├─ ◆ core WebhookForm.tsx:358   defines WebhookForm
+   │  ├─ ◆ core WebhookForm.tsx:383   defines WebhookForm
+   │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookTestDisclosure, WebhookFormSkeleton, WebhookTestHeader
+   │  └─ ∙ env  DeleteWebhookDialog.tsx:1   wires: DeleteWebhookDialog
+   └─ ▣ h25  DeleteWebhookDialog    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
+      ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab
+      ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookListItem, WebhookVersionCTA, WebhookFormSkeleton
+      ├─ ∙ env  DeleteWebhookDialog.tsx:1   wires: WebhookForm
+      └─ ◆ core DeleteWebhookDialog.tsx:23   defines DeleteWebhookDialog
 
 ◆ g2  Providers
 └─ ▣ h4  Providers    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
    ├─ ∙ env  providers.tsx:3   imports wiring the change in
    └─ ◆ core providers.tsx:25   defines Providers
-
-◆ g3  WebhookForm
-└─ ▣ h12  WebhookForm    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
-   ├─ ◆ core WebhookForm.tsx:315   defines WebhookForm
-   ├─ ◆ core WebhookForm.tsx:358   defines WebhookForm
-   └─ ◆ core WebhookForm.tsx:383   defines WebhookForm
 
 ◆ g5  WebhookListItem
 └─ ▣ h16  WebhookListItem    ⚠ untested
@@ -152,30 +151,15 @@ Seam · 54 hunks → 16 clusters · 29 seams · 18 cores  (roles: core 18  link 
 
 ◆ g10  package.json
 └─ ▣ s-ambient  package.json    link-only
-   └─ ∙ env  package.json:10   no logic or wiring detected (uncertain)
-
-◆ g11  package.json
-└─ ▣ s-ambient  package.json    link-only
+   ├─ ∙ env  package.json:10   no logic or wiring detected (uncertain)
    └─ ∙ env  package.json:26   no logic or wiring detected (uncertain)
 
 ◆ g12  globals.css
 └─ ▣ s-ambient  globals.css    link-only
-   └─ ∙ env  globals.css:66   no logic or wiring detected (uncertain)
-
-◆ g13  globals.css
-└─ ▣ s-ambient  globals.css    link-only
-   └─ ∙ env  globals.css:91   no logic or wiring detected (uncertain)
-
-◆ g14  globals.css
-└─ ▣ s-ambient  globals.css    link-only
-   └─ ∙ env  globals.css:119   no logic or wiring detected (uncertain)
-
-◆ g15  globals.css
-└─ ▣ s-ambient  globals.css    link-only
-   └─ ∙ env  globals.css:151   no logic or wiring detected (uncertain)
-
-◆ g16  globals.css
-└─ ▣ s-ambient  globals.css    link-only
+   ├─ ∙ env  globals.css:66   no logic or wiring detected (uncertain)
+   ├─ ∙ env  globals.css:91   no logic or wiring detected (uncertain)
+   ├─ ∙ env  globals.css:119   no logic or wiring detected (uncertain)
+   ├─ ∙ env  globals.css:151   no logic or wiring detected (uncertain)
    └─ ∙ env  globals.css:187   no logic or wiring detected (uncertain)
 
 ◆ g17  common.json

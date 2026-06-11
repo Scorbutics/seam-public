@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../src/diff/parser.js";
 import * as noise from "../src/diff/noise_filter.js";
-import { classify } from "../src/diff/classifier_det.js";
+import { classify } from "../src/diff/engine.js";
 import { emit_seams_json } from "../src/diff/seams.js";
 import { render } from "../src/diff/report_text.js";
 
@@ -23,7 +23,7 @@ const cases: { name: string; path: string }[] = [
 function classified(path: string) {
   const hs = parse(readFileSync(path, "utf-8"));
   noise.classify(hs);
-  classify(hs);
+  classify(hs, { cluster: "det", roles: "det", wiring: "det" });
   return hs;
 }
 

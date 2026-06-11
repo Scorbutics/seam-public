@@ -75,6 +75,16 @@
           "default": "",
           "description": "Python interpreter to run the pipeline. Defaults to <toolPath>/.venv/bin/python."
         },
+        "seam.backend": {
+          "type": "string",
+          "enum": ["python", "ts"],
+          "enumDescriptions": [
+            "Default. The Python pipeline (decompose.py) — all engines (hybrid/det/llm).",
+            "The TypeScript port (ts/src/cli/decompose.ts via bun). DETERMINISTIC engine only so far — forces engine=det; no AST facts / blast-radius / LLM yet. See ts/PORT-STATUS.md."
+          ],
+          "default": "python",
+          "description": "Which pipeline implementation to run: 'python' (decompose.py, full features) or 'ts' (the TypeScript port — deterministic engine only, runs via bun, no Python needed)."
+        },
         "seam.engine": {
           "type": "string",
           "enum": ["hybrid", "det", "llm"],

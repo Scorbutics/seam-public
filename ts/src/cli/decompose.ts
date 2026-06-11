@@ -9,7 +9,8 @@ import { basename } from "node:path";
 import * as diff_source from "../diff/diff_source.js";
 import { parse, hunksToJson, hunksFromJson, type Hunk } from "../diff/parser.js";
 import * as noise from "../diff/noise_filter.js";
-import { assign_spans, classify } from "../diff/classifier_det.js";
+import { assign_spans } from "../diff/classifier_det.js";
+import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -100,7 +101,7 @@ function main(argv: string[]): number {
       if (!payload.partial) factsProvider = new ExternalFactsProvider(payload);
       // (MergedFactsProvider for partial payloads needs a tree-sitter base — not yet ported.)
     }
-    classify(hunks, { facts_provider: factsProvider });
+    engine.classify(hunks, { cluster: "det", roles: "det", wiring: "det", facts_provider: factsProvider, repo: a.repo });
     if (a.dumpClassified) writeFileSync(a.dumpClassified, hunksToJson(hunks));
   }
 

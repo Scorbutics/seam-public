@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../src/diff/parser.js";
 import * as noise from "../src/diff/noise_filter.js";
-import { classify } from "../src/diff/classifier_det.js";
+import { classify } from "../src/diff/engine.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const casesDir = join(__dir, "cases");
@@ -32,7 +32,7 @@ describe("classifier_det vs Python oracle (labeled hunks)", () => {
       const oracle = JSON.parse(readFileSync(join(oracleDir, `${name}.classified.json`), "utf-8"));
       const hs = parse(readFileSync(join(casesDir, `${name}.patch`), "utf-8"));
       noise.classify(hs);
-      classify(hs);
+      classify(hs, { cluster: "det", roles: "det", wiring: "det" });
       expect(hs.length).toBe(oracle.length);
       // Field-by-field over every hunk — surfaces the exact first divergence.
       hs.forEach((h, i) => {

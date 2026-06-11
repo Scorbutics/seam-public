@@ -271,6 +271,20 @@ export function assign_clusters(work: Hunk[], facts: Map<string, HunkFacts>): vo
   }
 }
 
+export function merge_clusters_by_intent(work: Hunk[]): void {
+  const rep = new Map<string, string>();
+  const remap = new Map<string, string>();
+  for (const h of work) {
+    const g = h.group;
+    if (!g || remap.has(g)) continue;
+    const key = (h.intent || "").trim().toLowerCase();
+    if (!key) { remap.set(g, g); continue; }
+    if (!rep.has(key)) rep.set(key, g);
+    remap.set(g, rep.get(key)!);
+  }
+  for (const h of work) if (h.group) h.group = remap.get(h.group) ?? h.group;
+}
+
 // --------------------------------------------------------------------------- spans / overlap
 function _locate(h: Hunk, targets: Map<string, Set<string>>, nmap: Map<number, number | null>,
                  seam_of: Map<string, string>): Map<string, [number, number]> {

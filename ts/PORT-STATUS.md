@@ -28,6 +28,21 @@ cal.com diff (18 cores, multi-core seams, overlap placements).
 - Python `re` `\w` is **Unicode** by default (`Désactivé`, `Masqué` match whole); JS `\w` is
   ASCII. `_IDENT`/`_CALL_ROOT`/`_JSX_TAG` now use `\p{L}\p{N}_` under the `u` flag.
 
+## ✅ Runnable + extension-wired (deterministic engine)
+
+- `seams.ts` / `subgroup.ts` / `report_text.ts` / `engine.ts` / `diff_source.ts` / `cli/decompose.ts`
+  ported. `emit_seams_json` + ascii/llm renderers verified byte-identical to Python on 6 cases +
+  sample.patch, AND the CLI verified identical to `decompose.py --classifier det` on 5 real
+  **git ranges** (`--emit-seams` and `--format ascii`).
+- **Integration gap caught by end-to-end testing:** the CLI runs through `engine.classify`
+  (which adds `merge_clusters_by_intent` after seam-merge), not the standalone
+  `classifier_det.classify`. `engine.ts` replicates the det path exactly; oracles regenerated
+  from `decompose.py` itself so the tests track real CLI behavior.
+- **Extension wired:** `seam.backend` setting (`python` | `ts`). With `ts`, `Seam: Review working
+  changes` spawns `bun ts/src/cli/decompose.ts --classifier det --emit-seams` instead of Python —
+  same `--emit-seams` contract, native renderer unchanged. TS backend forces engine=det (LLM/hybrid
+  still Python); no AST-facts/blast-radius yet (regex det is the verified path). Both projects tsc-clean.
+
 ## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,

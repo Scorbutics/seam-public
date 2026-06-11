@@ -472,6 +472,16 @@ function pythonPath(tool: string): string {
   const cfg = vscode.workspace.getConfiguration("seam").get<string>("python");
   return cfg && cfg.trim() ? cfg.trim() : path.join(tool, ".venv", "bin", "python");
 }
+// The TypeScript-port backend (seam.backend === "ts"): the bun runtime + the TS CLI entry.
+// bun is found on PATH or at the standard ~/.bun install; the CLI lives in the checkout under ts/.
+function bunPath(): string {
+  const home = process.env.HOME || process.env.USERPROFILE || "";
+  const candidate = path.join(home, ".bun", "bin", "bun");
+  return fs.existsSync(candidate) ? candidate : "bun"; // fall back to PATH lookup by spawn
+}
+function tsCliPath(tool: string): string {
+  return path.join(tool, "ts", "src", "cli", "decompose.ts");
+}
 
 async function reviewCommit() {
   const ref = await vscode.window.showInputBox({
@@ -593,20 +603,40 @@ async function runReview(range: string) {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  if (!fs.existsSync(path.join(tool, "decompose.py"))) {
-    vscode.window.showErrorMessage(
-      `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" to your ` +
-      `code-review-sort checkout (Settings → Seam).`);
-    return;
+  const backend = vscode.workspace.getConfiguration("seam").get<string>("backend") || "python";
+  const usingTs = backend === "ts";
+  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
+  // facts), "det" (fully deterministic, offline), or "llm" (all LLM). The TS backend implements
+  // only the deterministic engine so far (ts/PORT-STATUS.md), so it forces engine=det.
+  let engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+  let bun = "";
+  if (usingTs) {
+    if (!fs.existsSync(tsCliPath(tool))) {
+      vscode.window.showErrorMessage(
+        `Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your ` +
+        `code-review-sort checkout, or switch "seam.backend" to "python".`);
+      return;
+    }
+    bun = bunPath();
+    if (engine !== "det") {
+      vscode.window.showInformationMessage(
+        `Seam: the TS backend currently supports only the deterministic engine — using engine=det `
+        + `(was "${engine}"). Switch "seam.backend" to "python" for hybrid/llm.`);
+      engine = "det";
+    }
+  } else {
+    if (!fs.existsSync(path.join(tool, "decompose.py"))) {
+      vscode.window.showErrorMessage(
+        `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" to your ` +
+        `code-review-sort checkout (Settings → Seam).`);
+      return;
+    }
   }
   const py = pythonPath(tool);
-  if (!fs.existsSync(py)) {
+  if (!usingTs && !fs.existsSync(py)) {
     vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
     return;
   }
-  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
-  // facts), "det" (fully deterministic, offline), or "llm" (all LLM).
-  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
   // Codebase context (on by default): resolve the diff's references against the real repo so the
   // review shows blast radius (who outside the diff consumes a changed symbol). The LSP daemon stays
   // warm across reviews, so 'auto' (floor + LSP) is the right default here.
@@ -619,6 +649,23 @@ async function runReview(range: string) {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       let factsPath: string | undefined;
       try {
+        if (usingTs) {
+          // TS port (deterministic engine): same --emit-seams contract, run via bun. No AST
+          // facts / blast-radius / resolver yet — the det+regex path is the verified one.
+          const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot,
+                        "--classifier", "det", "--emit-seams", out];
+          await runPy(bun, args, tool, (m) => progress.report({ message: m }));
+          const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+          const ts = Date.now();
+          activateModel(parsed, repoRoot, range, ts);
+          extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
+          const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+          vscode.window.showInformationMessage(
+            `Seam (ts/det): ${parsed.clusters.length} clusters, ${n} seams.  ` +
+            `core=amber · link=blue · environment=gray · test=green · noise=faint`);
+          try { fs.unlinkSync(out); } catch { /* ignore */ }
+          return;
+        }
         const extra: string[] = [];
         if (engine === "llm") {
           extra.push("--classifier", "llm");
