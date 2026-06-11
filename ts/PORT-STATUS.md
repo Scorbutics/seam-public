@@ -104,7 +104,27 @@ votes concurrent (async spawn instead of `spawnSync`) is a known perf-only follo
   The UTF-16-vs-byte masking offset difference is harmless (masked spans only feed
   whitespace-insensitive regex checks). Pin: `web-tree-sitter@^0.25`.
 
-## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
+## ✅ Phase 6 — the eval harness gates the TS binary
+
+`eval/harness.py generate --ts-cli "<bun ts/src/cli/decompose.ts | dist/seam>"` drives the TS
+binary as a black box (its `--dump-classified` output is scored against the same `eval/gold/`).
+Verified: with both driven via their CLIs, the **TS-CLI reliability scorecard is byte-identical to
+the Python-CLI scorecard across all 6 cases** (role accuracy, cluster F1, wiring Fβ, health), and
+the regression gate passes. So the TS engine is regression-guarded by the same golds. (Note: the
+harness's *native* `--engine det` uses the standalone `classifier_det.classify`, which differs from
+the CLI engine path by `merge_clusters_by_intent` — always gate the TS port via `--ts-cli`.)
+
+---
+
+# ✅✅ Diff-mode port COMPLETE — the entire diff pipeline is on TypeScript, verified, and gated.
+
+What's done: parser · noise filter · deterministic classifier · all three LLM engines
+(det/hybrid/llm, cluster + role-voting + wiring) · seam assembly · ascii/llm renderers · CLI ·
+both facts producers (editor AST + headless tree-sitter) · eval-harness gate. Every step is
+byte-verified against Python (host-bus prompt/inject parity for LLM passes), live-confirmed with a
+real model, and the extension runs all of it natively via `seam.backend=ts`.
+
+## ⏭️ Remaining (deferred — not diff-mode)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
    `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`
