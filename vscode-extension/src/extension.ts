@@ -37,8 +37,13 @@ interface Unresolved { node: string; query: string; reason: string; }
 interface SeamEdge { from: string; to: string; provenance: string; }   // resolved seam-to-seam wiring (S1)
 interface GraphEdge { from: string; to: string; kind: string; provenance: string; line?: number; }   // the raw symbol→symbol graph (chain view); line = call-site in `from`'s file
 interface SeamContract { seamA: string; seamB: string; links: GraphEdge[]; blurry: boolean; }   // the symbols bridging two seams
+interface Usage {
+  calls: number; input_tokens: number; output_tokens: number;
+  total_tokens: number; cost_usd: number; duration_ms: number; backends: string[];
+}
 interface SeamModel {
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
+  usage?: Usage;     // tokens/cost of the LLM passes (claude backend only; absent for det/host runs)
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
   complete?: boolean; unresolved?: Unresolved[]; blindspots?: BlindSpot[]; seamEdges?: SeamEdge[];
   edges?: GraphEdge[];     // the directed call/dependency graph — for the chain view
@@ -507,6 +512,18 @@ function buildIndex() {
 }
 
 // Promisified execFile — reject carries the tool's stderr (the useful message).
+// Human suffix for a Seam info message: "  ·  9.2k tokens, $0.0123, 23s". Empty when no metered
+// LLM call ran (deterministic / host-served / copilot runs carry no usage).
+function usageNote(u?: Usage): string {
+  if (!u || !u.calls) return "";
+  const tok = u.total_tokens
+    ? `${(u.total_tokens / 1000).toFixed(1)}k tokens`
+    : `${u.calls} LLM call${u.calls === 1 ? "" : "s"}`;
+  const cost = u.cost_usd ? `, $${u.cost_usd.toFixed(4)}` : "";
+  const secs = u.duration_ms ? `, ${Math.round(u.duration_ms / 1000)}s` : "";
+  return `  ·  ${tok}${cost}${secs}`;
+}
+
 function execFileP(file: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
@@ -594,7 +611,7 @@ async function runReview(range: string) {
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
-          `Seam (${engine}): ${parsed.clusters.length} clusters, ${n} seams.  ` +
+          `Seam (${engine}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
           `core=amber · link=blue · environment=gray · test=green · noise=faint`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam failed: ${e instanceof Error ? e.message : e}`);
@@ -651,7 +668,7 @@ async function runScan(tool: string, py: string, scanArgs: string[], title: stri
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
-          `Seam (codebase): ${range} — ${parsed.clusters.length} cluster(s), ${n} seam(s).`);
+          `Seam (codebase): ${range} — ${parsed.clusters.length} cluster(s), ${n} seam(s).${usageNote(parsed.usage)}`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam codebase analysis failed: ${e instanceof Error ? e.message : e}`);
       } finally {

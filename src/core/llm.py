@@ -88,6 +88,74 @@ def get_host_bus() -> "HostBus | None":
     return _HOST_BUS
 
 
+# --- LLM usage metering (tokens / cost) — surfaced on a Seam action -----------------------------
+# The `claude -p` JSON envelope carries per-call usage; we accumulate it process-wide (reset per
+# run via reset_usage()) so the CLI summary and the VS Code message can show what a decomposition
+# cost. Retries count (they spend tokens). The copilot backend returns no usage block, and host-
+# served passes never reach a subprocess — both are simply not recorded, so the meter reflects only
+# what `claude -p` actually spent (a host/copilot run shows no usage rather than a misleading 0).
+class UsageMeter:
+    def __init__(self):
+        self.calls = 0
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cost_usd = 0.0
+        self.duration_ms = 0
+        self.backends: set[str] = set()
+
+    def record(self, kind: str, usage: dict, cost_usd, duration_ms) -> None:
+        self.calls += 1
+        self.backends.add(kind)
+        # `claude -p` reports prompt-cache tokens separately from `input_tokens`; fold them in so
+        # the input total reflects the real prompt size (cost_usd already accounts for them).
+        self.input_tokens += (int(usage.get("input_tokens") or 0)
+                              + int(usage.get("cache_read_input_tokens") or 0)
+                              + int(usage.get("cache_creation_input_tokens") or 0))
+        self.output_tokens += int(usage.get("output_tokens") or 0)
+        self.cost_usd += float(cost_usd or 0.0)
+        self.duration_ms += int(duration_ms or 0)
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.output_tokens
+
+    def as_dict(self) -> dict | None:
+        """JSON-serializable usage for the emitted model (None when no metered call ran)."""
+        if not self.calls:
+            return None
+        return {"calls": self.calls, "input_tokens": self.input_tokens,
+                "output_tokens": self.output_tokens, "total_tokens": self.total_tokens,
+                "cost_usd": round(self.cost_usd, 4), "duration_ms": self.duration_ms,
+                "backends": sorted(self.backends)}
+
+    def summary(self) -> str:
+        """One-line human summary for the CLI, e.g. '2 LLM calls · 9.2k tokens · $0.01 · 23s'."""
+        if not self.calls:
+            return ""
+        parts = [f"{self.calls} LLM call{'s' if self.calls != 1 else ''}"]
+        if self.total_tokens:
+            parts.append(f"{self.total_tokens / 1000:.1f}k tokens "
+                         f"(in {self.input_tokens / 1000:.1f}k / out {self.output_tokens / 1000:.1f}k)")
+        if self.cost_usd:
+            parts.append(f"${self.cost_usd:.4f}")
+        if self.duration_ms:
+            parts.append(f"{self.duration_ms / 1000:.0f}s")
+        return " · ".join(parts)
+
+
+_USAGE = UsageMeter()
+
+
+def reset_usage() -> None:
+    """Start a fresh per-run tally (call once at the top of a mode's run())."""
+    global _USAGE
+    _USAGE = UsageMeter()
+
+
+def get_usage() -> "UsageMeter":
+    return _USAGE
+
+
 def _locate_claude() -> str | None:
     """Find the `claude` executable: CLAUDE_BIN env → PATH → newest VSCode ext."""
     env = os.environ.get("CLAUDE_BIN")
@@ -227,8 +295,9 @@ def _run_claude(claude_bin: str, prompt: str, model: str, debug: bool = False,
         raise ClassifierError(f"claude CLI did not return JSON: {proc.stdout[:200]!r}") from exc
     if envelope.get("is_error"):
         raise ClassifierError(f"claude CLI reported error: {envelope.get('result')}")
+    usage = envelope.get("usage", {}) or {}
+    _USAGE.record("claude", usage, envelope.get("total_cost_usd"), envelope.get("duration_ms"))
     if debug:
-        usage = envelope.get("usage", {})
         _dbg(f"claude: model(s)={list((envelope.get('modelUsage') or {}).keys())} "
              f"think_budget={env.get('MAX_THINKING_TOKENS')} turns={envelope.get('num_turns')} "
              f"in={usage.get('input_tokens')} out={usage.get('output_tokens')} "

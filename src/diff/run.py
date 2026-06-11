@@ -18,6 +18,8 @@ class DiffMode:
         return True   # the fallback: --file / --git / --from-classified
 
     def run(self, args) -> int:
+        from src.core import llm as llm_mod
+        llm_mod.reset_usage()        # fresh per-run token/cost tally
         # Install the resolution strategy (det = the built-in floor, no override). Drives
         # --blast-radius and the resolved facts against the real repo. Process-wide; set once.
         if getattr(args, "resolver", "det") != "det":
@@ -129,7 +131,6 @@ class DiffMode:
             # Host-served LLM (Claude Code skill): route the LLM passes through the running session
             # / a spawned subagent instead of a `claude -p` subprocess. emit = record prompts only;
             # inject = return the subagent's replies. The deterministic passes still run normally.
-            from src.core import llm as llm_mod
             emit_prompts = getattr(args, "emit_prompts", None)
             inject_llm = getattr(args, "inject_llm", None)
             if emit_prompts:
@@ -178,10 +179,14 @@ class DiffMode:
         for h in hunks:
             counts[h.role] = counts.get(h.role, 0) + 1
         summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test", "noise"))
+        usage = llm_mod.get_usage()
+        usage_line = usage.summary()
         fmt = getattr(args, "format", "html")
         text_fmt = fmt in ("llm", "ascii")
         # Text formats are the payload (a skill captures stdout) — so the status line goes to stderr.
-        print(f"Decomposed {len(hunks)} hunks:  {summary}", file=sys.stderr if text_fmt else sys.stdout)
+        print(f"Decomposed {len(hunks)} hunks:  {summary}"
+              + (f"   [{usage_line}]" if usage_line else ""),
+              file=sys.stderr if text_fmt else sys.stdout)
 
         if text_fmt:
             from src.diff import report_text
@@ -192,10 +197,12 @@ class DiffMode:
         if args.emit_seams:
             # Native-rendering surface (VS Code extension): structured seam data, no HTML.
             # repo lets the renderer resolve local aliases against the actual files.
-            Path(args.emit_seams).write_text(
-                json.dumps(seams.emit_seams_json(hunks, repo=args.repo,
-                                                 blast_radius=getattr(args, "blast_radius", False))),
-                encoding="utf-8")
+            model = seams.emit_seams_json(hunks, repo=args.repo,
+                                          blast_radius=getattr(args, "blast_radius", False))
+            usage_d = usage.as_dict()
+            if usage_d:
+                model["usage"] = usage_d        # tokens/cost for the extension's info message
+            Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
             print(f"Seams: {args.emit_seams}")
             return 0
 

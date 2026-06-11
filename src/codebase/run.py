@@ -14,6 +14,8 @@ class CodebaseMode:
         return bool(args.graph or args.scan or args.expand_graph)
 
     def run(self, args) -> int:
+        from src.core import llm as llm_mod
+        llm_mod.reset_usage()        # fresh per-run token/cost tally (refine/relevance/discover/orchestrate)
         if getattr(args, "resolver", "det") != "det":    # install the resolution strategy (det is the default floor)
             from src.codebase import import_scan
             from src.core.resolve import resolver
@@ -86,6 +88,9 @@ class CodebaseMode:
                 if args.emit_graph:
                     Path(args.emit_graph).write_text(json.dumps(data), encoding="utf-8")
                 if args.emit_seams:
+                    usage_d = llm_mod.get_usage().as_dict()
+                    if usage_d:
+                        model["usage"] = usage_d
                     Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
                     print(f"Seams: {args.emit_seams}")
                 return 0
@@ -133,14 +138,19 @@ class CodebaseMode:
         for n in g.nodes.values():
             counts[n.role] = counts.get(n.role, 0) + 1
         summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test"))
+        usage_line = llm_mod.get_usage().summary()
         print(f"Decomposed anchor {g.anchor!r} ({len(g.nodes)} symbols, "
-              f"resolution={g.resolution_quality or '?'}):  {summary}")
+              f"resolution={g.resolution_quality or '?'}):  {summary}"
+              + (f"   [{usage_line}]" if usage_line else ""))
         if g.unresolved:
             print(f"  {len(g.unresolved)} unresolved (UNKNOWN, not 'no link'); "
                   f"{len(g.blindspots)} blind spot(s)")
         if args.emit_graph:        # the session ResolvedGraph (scanned/merged) — the extension keeps it to EXPAND
             Path(args.emit_graph).write_text(json.dumps(data), encoding="utf-8")
         if args.emit_seams:
+            usage_d = llm_mod.get_usage().as_dict()
+            if usage_d:
+                model["usage"] = usage_d
             Path(args.emit_seams).write_text(json.dumps(model), encoding="utf-8")
             print(f"Seams: {args.emit_seams}")
         return 0
