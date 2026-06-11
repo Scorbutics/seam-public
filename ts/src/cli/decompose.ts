@@ -16,13 +16,25 @@ import { render } from "../diff/report_text.js";
 import {
   changed_newside, ExternalFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
+import { HostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { readFileSync } from "node:fs";
 
 interface Args {
   file?: string; git?: string; fromClassified?: string; repo: string;
   format: string; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
+  emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   verbose: boolean;
+}
+
+// Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
+// the hybrid default (cluster=llm, roles=det, wiring=hybrid) — mirrors src/diff/run.py.
+function resolveEngines(a: Args): { cluster: string; roles: string; wiring: string } {
+  return {
+    cluster: a.cluster ?? a.classifier ?? "llm",
+    roles: a.roles ?? a.classifier ?? "det",
+    wiring: a.wiring ?? a.classifier ?? "hybrid",
+  };
 }
 
 function parseArgs(argv: string[]): Args {
@@ -44,10 +56,14 @@ function parseArgs(argv: string[]): Args {
       case "--emit-hunks": a.emitHunks = next(); break;
       case "--dump-classified": a.dumpClassified = next(); break;
       case "--facts": a.facts = next(); break;
+      case "--emit-prompts": a.emitPrompts = next(); break;
+      case "--inject-llm": a.injectLlm = next(); break;
+      case "--model": a.model = next(); break;
+      case "--claude-bin": a.claudeBin = next(); break;
       case "-v": case "--verbose": a.verbose = true; break;
-      case "--model": case "--claude-bin": case "--context-window": case "--resolver":
+      case "--context-window": case "--resolver":
       case "--facts-engine": case "-o": case "--out":
-        next(); break; // accepted-and-ignored on the det path
+        next(); break; // accepted-and-ignored on the ported paths
       case "--blast-radius": case "--open": case "--debug": break; // boolean, ignored on det path
       default:
         if (v.startsWith("-")) { process.stderr.write(`warning: unknown flag ignored: ${v}\n`); }
@@ -58,17 +74,9 @@ function parseArgs(argv: string[]): Args {
 
 function err(msg: string): never { process.stderr.write(`error: ${msg}\n`); process.exit(2); }
 
-// The det path is the only engine ported so far. Any LLM/hybrid request is rejected loudly.
-function requireDet(a: Args): void {
-  const engines = [a.classifier, a.cluster, a.roles, a.wiring].filter(Boolean) as string[];
-  if (engines.some((e) => e !== "det")) {
-    err("the TypeScript port currently implements only the deterministic engine. "
-      + "Re-run with --classifier det (LLM/hybrid passes are not yet ported — see ts/PORT-STATUS.md).");
-  }
-}
-
 function main(argv: string[]): number {
   const a = parseArgs(argv);
+  reset_usage();
   let hunks: Hunk[];
 
   if (a.fromClassified) {
@@ -76,7 +84,7 @@ function main(argv: string[]): number {
     if (!hunks.length) err("no hunks in classified file");
     if (!hunks.some((h) => h.placements.length)) assign_spans(hunks.filter((h) => h.role !== "noise"), a.repo);
   } else {
-    requireDet(a);
+    const eng = resolveEngines(a);
     let diffText: string;
     try { diffText = diff_source.get_diff({ file: a.file, git: a.git, repo: a.repo }); }
     catch (e) { err((e as Error).message); }
@@ -99,9 +107,28 @@ function main(argv: string[]): number {
     if (a.facts) {
       const payload = JSON.parse(readFileSync(a.facts, "utf-8"));
       if (!payload.partial) factsProvider = new ExternalFactsProvider(payload);
-      // (MergedFactsProvider for partial payloads needs a tree-sitter base — not yet ported.)
+      // (MergedFactsProvider for partial payloads needs a tree-sitter base — Phase 5.)
     }
-    engine.classify(hunks, { cluster: "det", roles: "det", wiring: "det", facts_provider: factsProvider, repo: a.repo });
+
+    // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's
+    // prompt and applies nothing; --inject-llm replays canned replies. Same contract as Python.
+    if (a.emitPrompts) set_host_bus(new HostBus());
+    else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
+    let recorded: HostBus["recorded"] | undefined;
+    try {
+      engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
+        facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin });
+    } catch (e) { err((e as Error).message); }
+    finally {
+      if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); }
+    }
+    if (a.emitPrompts) {
+      const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
+      writeFileSync(a.emitPrompts, JSON.stringify({ version: 1,
+        source: { git: a.git ?? null, file: a.file ?? null, repo: a.repo }, passes }, null, 2));
+      process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
+      return 0;
+    }
     if (a.dumpClassified) writeFileSync(a.dumpClassified, hunksToJson(hunks));
   }
 
@@ -114,7 +141,9 @@ function main(argv: string[]): number {
   if (textFmt) { process.stdout.write(render(hunks, { style: a.format, repo: a.repo })); return 0; }
 
   if (a.emitSeams) {
-    const model = emit_seams_json(hunks, a.repo);
+    const model: any = emit_seams_json(hunks, a.repo);
+    const usage = get_usage().as_dict();
+    if (usage) model.usage = usage;              // tokens/cost for the extension's info message
     writeFileSync(a.emitSeams, JSON.stringify(model));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
     return 0;

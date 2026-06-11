@@ -618,11 +618,13 @@ async function runReview(range: string) {
       return;
     }
     bun = bunPath();
-    if (engine !== "det") {
+    // The TS backend implements det + the DEFAULT hybrid (cluster=llm, roles=det, wiring=hybrid).
+    // The all-LLM roles/voting path (engine=llm) isn't ported yet, so it falls back to hybrid.
+    if (engine === "llm") {
       vscode.window.showInformationMessage(
-        `Seam: the TS backend currently supports only the deterministic engine — using engine=det `
-        + `(was "${engine}"). Switch "seam.backend" to "python" for hybrid/llm.`);
-      engine = "det";
+        `Seam: the TS backend doesn't implement the all-LLM engine yet — using hybrid `
+        + `(LLM clusters + deterministic roles). Switch "seam.backend" to "python" for engine=llm.`);
+      engine = "hybrid";
     }
   } else {
     if (!fs.existsSync(path.join(tool, "decompose.py"))) {
@@ -650,10 +652,14 @@ async function runReview(range: string) {
       let factsPath: string | undefined;
       try {
         if (usingTs) {
-          // TS port (deterministic engine): same --emit-seams contract, run via bun. No AST
-          // facts / blast-radius / resolver yet — the det+regex path is the verified one.
+          // TS port: same --emit-seams contract, run via bun. 'det' = fully offline; 'hybrid'
+          // (the default) = LLM clusters + deterministic roles/wiring (cluster + reconcile passes
+          // call the bundled claude). No AST facts / blast-radius yet — regex det floor underneath.
+          const engineArgs = engine === "det"
+            ? ["--classifier", "det"]
+            : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];
           const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot,
-                        "--classifier", "det", "--emit-seams", out];
+                        ...engineArgs, "--emit-seams", out];
           await runPy(bun, args, tool, (m) => progress.report({ message: m }));
           const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
           const ts = Date.now();
@@ -661,7 +667,7 @@ async function runReview(range: string) {
           extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
           const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
           vscode.window.showInformationMessage(
-            `Seam (ts/det): ${parsed.clusters.length} clusters, ${n} seams.  ` +
+            `Seam (ts/${engine}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
             `core=amber · link=blue · environment=gray · test=green · noise=faint`);
           try { fs.unlinkSync(out); } catch { /* ignore */ }
           return;
