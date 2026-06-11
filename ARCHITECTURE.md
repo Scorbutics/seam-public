@@ -211,7 +211,7 @@ So the **default diff run makes exactly 2 LLM calls**: `reconcile` then `cluster
 
 ### CODEBASE mode (`src/codebase/`)
 
-Default = the **deterministic floor** (anchor → footprint → intent floor); the LLM is off unless opted in. All calls are `thinking=0` via `llm.run_pass`.
+CLI default = the **deterministic floor** (anchor → footprint → intent floor): `--classifier` is unset, so `use_llm=False` and the LLM is off. **The VS Code extension opts in** — its codebase scan sends the `seam.engine` setting (default `hybrid`) as `--classifier hybrid` (`extension.ts:644`), and codebase mode treats `hybrid`≡`llm` (`use_llm = args.classifier in ("llm","hybrid")`, no per-pass split), so a default extension scan **does** run `seam-refine` (and `relevance` too, but only when an `--intent` is given). All calls are `thinking=0` via `llm.run_pass`.
 
 | pass (function) | site | `tag` | gated by | what it does |
 |---|---|---|---|---|
