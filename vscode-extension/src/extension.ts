@@ -618,14 +618,8 @@ async function runReview(range: string) {
       return;
     }
     bun = bunPath();
-    // The TS backend implements det + the DEFAULT hybrid (cluster=llm, roles=det, wiring=hybrid).
-    // The all-LLM roles/voting path (engine=llm) isn't ported yet, so it falls back to hybrid.
-    if (engine === "llm") {
-      vscode.window.showInformationMessage(
-        `Seam: the TS backend doesn't implement the all-LLM engine yet — using hybrid `
-        + `(LLM clusters + deterministic roles). Switch "seam.backend" to "python" for engine=llm.`);
-      engine = "hybrid";
-    }
+    // The TS backend implements all three engines now: det (offline), hybrid (the default —
+    // LLM clusters + deterministic roles + hybrid wiring), and llm (all-LLM with role voting).
   } else {
     if (!fs.existsSync(path.join(tool, "decompose.py"))) {
       vscode.window.showErrorMessage(
@@ -655,9 +649,9 @@ async function runReview(range: string) {
           // TS port: same --emit-seams contract, run via bun. 'det' = fully offline; 'hybrid'
           // (the default) = LLM clusters + deterministic roles/wiring (cluster + reconcile passes
           // call the bundled claude). No AST facts / blast-radius yet — regex det floor underneath.
-          const engineArgs = engine === "det"
-            ? ["--classifier", "det"]
-            : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];
+          const engineArgs = engine === "det" ? ["--classifier", "det"]
+            : engine === "llm" ? ["--classifier", "llm"]
+            : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid (default)
           const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot,
                         ...engineArgs, "--emit-seams", out];
           await runPy(bun, args, tool, (m) => progress.report({ message: m }));

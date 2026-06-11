@@ -1,0 +1,864 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: ext/LiteRGSS3/graphics/Shape.cpp | change: modify ---
+@@ -13,6 +13,7 @@
+   1|  #include "DrawableDisposable.h"
+   2|  #include "DisplayWindow.h"
+   3|  #include "Viewport.h"
+   4| +#include "window/FramedView.h"
+   5|  
+   6|  VALUE rb_cShape = Qnil;
+   7|  static ID rb_iShapeCircle = 0;
+
+--- HUNK h2 | file: ext/LiteRGSS3/graphics/Shape.cpp | change: modify ---
+@@ -84,18 +85,26 @@ VALUE rb_Shape_Initialize(int argc, VALUE *argv, VALUE self)
+   1|      if (window == nullptr) {
+   2|          rb_raise(rb_eRGSSError, "Shape.new requires an open DisplayWindow");
+   3|      }
+   4| -    // LiteRGSS2 accepted either a Viewport or the DisplayWindow as parent.
+   5| +    // LiteRGSS2 accepted Viewport, Window (FramedView) or DisplayWindow.
+   6|      const bool is_viewport = RTEST(viewport) && rb_obj_is_kind_of(viewport, rb_cViewport) == Qtrue;
+   7| +    const bool is_framed   = !is_viewport && RTEST(viewport) &&
+   8| +                             rb_obj_is_kind_of(viewport, rb_cFramedView) == Qtrue;
+   9|      if (is_viewport) {
+  10|          auto *vp = get_viewport(viewport);
+  11|          if (vp == nullptr || !vp->viewport) {
+  12|              rb_raise(rb_eRGSSError, "Shape.new viewport is not initialized");
+  13|          }
+  14|          s->shape = cgss::Shape::create(*vp->viewport, std::move(geometry));
+  15| +    } else if (is_framed) {
+  16| +        auto *fv = get_framed_view(viewport);
+  17| +        if (fv == nullptr || !fv->has_view) {
+  18| +            rb_raise(rb_eRGSSError, "Shape.new Window parent is not initialized");
+  19| +        }
+  20| +        s->shape = cgss::Shape::create(*fv->view, std::move(geometry));
+  21|      } else {
+  22|          s->shape = cgss::Shape::create(*window, std::move(geometry));
+  23|      }
+  24| -    if (!is_viewport) s->rViewport = Qnil;
+  25| +    if (!is_viewport && !is_framed) s->rViewport = Qnil;
+  26|      return self;
+  27|  }
+  28|  
+candidates: h4 (bool); h7 (bool); h9 (auto, bool); h10 (bool)
+
+--- HUNK h3 | file: ext/LiteRGSS3/graphics/Sprite.cpp | change: modify ---
+@@ -7,6 +7,7 @@
+   1|  #include "RubyValue.h"
+   2|  #include "../rbAdapter.h"
+   3|  #include "window/DisplayWindow.h"
+   4| +#include "window/FramedView.h"
+   5|  #include "Sprite.h"
+   6|  #include "Image.h"
+   7|  #include "Rect.h"
+
+--- HUNK h4 | file: ext/LiteRGSS3/graphics/Sprite.cpp | change: modify ---
+@@ -64,16 +65,18 @@ VALUE rb_Sprite_Initialize(int argc, VALUE *argv, VALUE self)
+   1|      rb_scan_args(argc, argv, "01", &parent);
+   2|      auto *s = get_sprite(self);
+   3|  
+   4| -    // Register into the parent View. LiteRGSS2 accepted either a Viewport
+   5| -    // (register in viewport's child stack) or the DisplayWindow itself
+   6| -    // (register at window level). PSDK uses the latter for ShaderedSprite —
+   7| -    // see Graphics.rb#freeze.
+   8| +    // Register into the parent View. LiteRGSS2 accepted Viewport, Window
+   9| +    // (FramedView) or the DisplayWindow as parent. PSDK uses Window as
+  10| +    // parent for in-dialog sprites (e.g. text_stack inside the message
+  11| +    // box) so sprite coords are local to the box.
+  12|      auto* window = get_active_display_window();
+  13|      if (window == nullptr) {
+  14|          rb_raise(rb_eRGSSError, "Sprite.new requires an open DisplayWindow");
+  15|      }
+  16|      const bool is_viewport = RTEST(parent) && rb_obj_is_kind_of(parent, rb_cViewport) == Qtrue;
+  17| -    s->rViewport = is_viewport ? parent : Qnil;
+  18| +    const bool is_framed   = !is_viewport && RTEST(parent) &&
+  19| +                             rb_obj_is_kind_of(parent, rb_cFramedView) == Qtrue;
+  20| +    s->rViewport = (is_viewport || is_framed) ? parent : Qnil;
+  21|  
+  22|      if (is_viewport) {
+  23|          auto *vp = get_viewport(parent);
+candidates: h2 (bool); h7 (bool); h9 (bool); h10 (bool)
+
+--- HUNK h5 | file: ext/LiteRGSS3/graphics/Sprite.cpp | change: modify ---
+@@ -81,6 +84,12 @@ VALUE rb_Sprite_Initialize(int argc, VALUE *argv, VALUE self)
+   1|              rb_raise(rb_eRGSSError, "Sprite.new viewport is not initialized");
+   2|          }
+   3|          s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*vp->viewport));
+   4| +    } else if (is_framed) {
+   5| +        auto *fv = get_framed_view(parent);
+   6| +        if (fv == nullptr || !fv->has_view) {
+   7| +            rb_raise(rb_eRGSSError, "Sprite.new Window parent is not initialized");
+   8| +        }
+   9| +        s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*fv->view));
+  10|      } else {
+  11|          s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*window));
+  12|      }
+candidates: h9 (auto)
+
+--- HUNK h6 | file: ext/LiteRGSS3/graphics/Text.cpp | change: modify ---
+@@ -15,6 +15,7 @@
+   1|  #include "Viewport.h"
+   2|  #include "Fonts.h"
+   3|  #include "DisplayWindow.h"
+   4| +#include "window/FramedView.h"
+   5|  
+   6|  VALUE rb_cText = Qnil;
+   7|  
+
+--- HUNK h7 | file: ext/LiteRGSS3/graphics/Text.cpp | change: modify ---
+@@ -52,18 +53,28 @@ VALUE rb_Text_Initialize(int argc, VALUE *argv, VALUE self)
+   1|      if (window == nullptr) {
+   2|          rb_raise(rb_eRGSSError, "Text.new requires an open DisplayWindow");
+   3|      }
+   4| -    // LiteRGSS2 accepted either a Viewport or the DisplayWindow as parent.
+   5| +    // LiteRGSS2 accepted Viewport, Window (FramedView) or DisplayWindow as
+   6| +    // parent. PSDK passes a Window for the message-box text stack so the
+   7| +    // text coords are local to the dialog box.
+   8|      const bool is_viewport = RTEST(viewport) && rb_obj_is_kind_of(viewport, rb_cViewport) == Qtrue;
+   9| +    const bool is_framed   = !is_viewport && RTEST(viewport) &&
+  10| +                             rb_obj_is_kind_of(viewport, rb_cFramedView) == Qtrue;
+  11|      if (is_viewport) {
+  12|          auto *vp = get_viewport(viewport);
+  13|          if (vp == nullptr || !vp->viewport) {
+  14|              rb_raise(rb_eRGSSError, "Text.new viewport is not initialized");
+  15|          }
+  16|          t->text = cgss::Text::create(*vp->viewport);
+  17| +    } else if (is_framed) {
+  18| +        auto *fv = get_framed_view(viewport);
+  19| +        if (fv == nullptr || !fv->has_view) {
+  20| +            rb_raise(rb_eRGSSError, "Text.new Window parent is not initialized");
+  21| +        }
+  22| +        t->text = cgss::Text::create(*fv->view);
+  23|      } else {
+  24|          t->text = cgss::Text::create(*window);
+  25|      }
+  26| -    t->rViewport = is_viewport ? viewport : Qnil;
+  27| +    t->rViewport = (is_viewport || is_framed) ? viewport : Qnil;
+  28|  
+  29|      rb_check_type(x, T_FIXNUM); t->rX = x;
+  30|      rb_check_type(y, T_FIXNUM); t->rY = y;
+candidates: h2 (bool); h4 (bool); h9 (auto, bool); h10 (bool)
+
+--- HUNK h8 | file: ext/LiteRGSS3/window/FramedView.cpp | change: modify ---
+@@ -1,12 +1,22 @@
+   1| -// LiteRGSS::Window — FramedView UI widget. State-only implementation; see
+   2| -// header for the cgss integration limitation.
+   3| +// LiteRGSS::Window — Ruby binding around cgss::FramedView. The native
+   4| +// FramedView is registered into the parent (Viewport or DisplayWindow)
+   5| +// at construction time and renders the 9-slice skin + cursor + pause
+   6| +// indicator automatically inside cgss::DisplayWindow::draw().
+   7|  
+   8|  #include "LiteRGSS.h"
+   9|  #include "RubyValue.h"
+  10|  #include "../rbAdapter.h"
+  11| +#include <LiteCGSS/Common/IntRect.h>
+  12|  #include <LiteCGSS/Common/NormalizeNumbers.h>
+  13| +#include <LiteCGSS/Views/DisplayWindow.h>
+  14| +#include <LiteCGSS/Views/Viewport.h>
+  15| +#include <array>
+  16|  #include "FramedView.h"
+  17| -#include "DrawableDisposable.h"
+  18| +#include "DisplayWindow.h"
+  19| +#include "../graphics/Image.h"
+  20| +#include "../graphics/Rect.h"
+  21| +#include "../graphics/Viewport.h"
+  22| +#include "../graphics/DrawableDisposable.h"
+  23|  
+  24|  VALUE rb_cFramedView = Qnil;
+  25|  
+
+--- HUNK h9 | file: ext/LiteRGSS3/window/FramedView.cpp | change: modify ---
+@@ -25,111 +35,433 @@ namespace rb {
+   1|      }
+   2|  }
+   3|  
+   4| -static FramedViewData *get_fv(VALUE self) { return rb::GetPtr<FramedViewData>(self); }
+   5| +FramedViewData *get_framed_view(VALUE self) { return rb::GetPtr<FramedViewData>(self); }
+   6|  
+   7| +// LiteRGSS2 ctor: Window.new(viewport_or_display_window). The arg is
+   8| +// optional in litergss3 — when absent we attach to the active display
+   9| +// window so old PSDK code that does `Window.new` keeps working.
+  10|  VALUE rb_FramedView_Initialize(int argc, VALUE *argv, VALUE self)
+  11|  {
+  12| -    VALUE viewport;
+  13| -    rb_scan_args(argc, argv, "01", &viewport);
+  14| -    get_fv(self)->rViewport = NIL_P(viewport) ? Qnil : viewport;
+  15| +    VALUE parent;
+  16| +    rb_scan_args(argc, argv, "01", &parent);
+  17| +
+  18| +    auto *f = get_framed_view(self);
+  19| +    auto *window = get_active_display_window();
+  20| +    if (window == nullptr) {
+  21| +        rb_raise(rb_eRGSSError, "Window.new requires an open DisplayWindow");
+  22| +    }
+  23| +
+  24| +    const bool is_viewport = RTEST(parent) && rb_obj_is_kind_of(parent, rb_cViewport) == Qtrue;
+  25| +    if (is_viewport) {
+  26| +        auto *vp = get_viewport(parent);
+  27| +        if (vp == nullptr || !vp->viewport) {
+  28| +            rb_raise(rb_eRGSSError, "Window.new viewport is not initialized");
+  29| +        }
+  30| +        f->view = std::make_unique<cgss::FramedView>(
+  31| +            vp->viewport->addView<cgss::FramedView>(vp->viewport->weak()));
+  32| +        f->rViewport = parent;
+  33| +    } else {
+  34| +        f->view = std::make_unique<cgss::FramedView>(
+  35| +            window->addView<cgss::FramedView>());
+  36| +        f->rViewport = Qnil;
+  37| +    }
+  38| +    f->has_view = true;
+  39| +    return self;
+  40| +}
+  41| +
+  42| +VALUE rb_FramedView_Dispose(VALUE self)
+  43| +{
+  44| +    auto *f = get_framed_view(self);
+  45| +    if (!f->disposed && f->has_view) {
+  46| +        f->view->detach();
+  47| +    }
+  48| +    f->disposed = true;
+  49| +    return self;
+  50| +}
+  51| +
+  52| +VALUE rb_FramedView_Disposed(VALUE self) { return get_framed_view(self)->disposed ? Qtrue : Qfalse; }
+  53| +
+  54| +VALUE rb_FramedView_Update(VALUE self)
+  55| +{
+  56| +    auto *f = get_framed_view(self);
+  57| +    if (f->has_view && !f->disposed) f->view->update();
+  58|      return self;
+  59|  }
+  60|  
+  61| -VALUE rb_FramedView_Dispose(VALUE self) { get_fv(self)->disposed = true; return self; }
+  62| -VALUE rb_FramedView_Disposed(VALUE self) { return get_fv(self)->disposed ? Qtrue : Qfalse; }
+  63| -VALUE rb_FramedView_Update(VALUE self) { return self; }
+  64| -VALUE rb_FramedView_SortZ(VALUE self) { return self; }
+  65| +VALUE rb_FramedView_SortZ(VALUE self)
+  66| +{
+  67| +    auto *f = get_framed_view(self);
+  68| +    if (f->has_view && !f->disposed) f->view->sortZ();
+  69| +    return self;
+  70| +}
+  71|  
+  72| -#define DEFINE_INT_ACCESSOR(field) \
+  73| -    VALUE rb_FramedView_get_##field(VALUE self) { return INT2NUM(get_fv(self)->field); } \
+  74| -    VALUE rb_FramedView_set_##field(VALUE self, VALUE val) { get_fv(self)->field = NUM2INT(val); return val; }
+  75| +// --- position / size / origin -----------------------------------------------
+  76|  
+  77| -DEFINE_INT_ACCESSOR(x)
+  78| -DEFINE_INT_ACCESSOR(y)
+  79| -DEFINE_INT_ACCESSOR(z)
+  80| -DEFINE_INT_ACCESSOR(width)
+  81| -DEFINE_INT_ACCESSOR(height)
+  82| -DEFINE_INT_ACCESSOR(ox)
+  83| -DEFINE_INT_ACCESSOR(oy)
+  84| -DEFINE_INT_ACCESSOR(pause_x)
+  85| -DEFINE_INT_ACCESSOR(pause_y)
+  86| +VALUE rb_FramedView_get_x(VALUE self) { return INT2NUM(get_framed_view(self)->x); }
+  87| +VALUE rb_FramedView_set_x(VALUE self, VALUE val)
+  88| +{
+  89| +    auto *f = get_framed_view(self);
+  90| +    f->x = NUM2INT(val);
+  91| +    if (f->has_view) f->view->move(static_cast<float>(f->x), static_cast<float>(f->y));
+  92| +    return val;
+  93| +}
+  94| +VALUE rb_FramedView_get_y(VALUE self) { return INT2NUM(get_framed_view(self)->y); }
+  95| +VALUE rb_FramedView_set_y(VALUE self, VALUE val)
+  96| +{
+  97| +    auto *f = get_framed_view(self);
+  98| +    f->y = NUM2INT(val);
+  99| +    if (f->has_view) f->view->move(static_cast<float>(f->x), static_cast<float>(f->y));
+ 100| +    return val;
+ 101| +}
+ 102| +VALUE rb_FramedView_setPosition(VALUE self, VALUE x, VALUE y)
+ 103| +{
+ 104| +    auto *f = get_framed_view(self);
+ 105| +    f->x = NUM2INT(x); f->y = NUM2INT(y);
+ 106| +    if (f->has_view) f->view->move(static_cast<float>(f->x), static_cast<float>(f->y));
+ 107| +    return self;
+ 108| +}
+ 109|  
+ 110| -#undef DEFINE_INT_ACCESSOR
+ 111| +VALUE rb_FramedView_get_width(VALUE self) { return INT2NUM(get_framed_view(self)->width); }
+ 112| +VALUE rb_FramedView_set_width(VALUE self, VALUE val)
+ 113| +{
+ 114| +    auto *f = get_framed_view(self);
+ 115| +    f->width = NUM2INT(val);
+ 116| +    if (f->has_view) f->view->resize(f->width, f->height);
+ 117| +    return val;
+ 118| +}
+ 119| +VALUE rb_FramedView_get_height(VALUE self) { return INT2NUM(get_framed_view(self)->height); }
+ 120| +VALUE rb_FramedView_set_height(VALUE self, VALUE val)
+ 121| +{
+ 122| +    auto *f = get_framed_view(self);
+ 123| +    f->height = NUM2INT(val);
+ 124| +    if (f->has_view) f->view->resize(f->width, f->height);
+ 125| +    return val;
+ 126| +}
+ 127| +VALUE rb_FramedView_setSize(VALUE self, VALUE w, VALUE h)
+ 128| +{
+ 129| +    auto *f = get_framed_view(self);
+ 130| +    f->width = NUM2INT(w); f->height = NUM2INT(h);
+ 131| +    if (f->has_view) f->view->resize(f->width, f->height);
+ 132| +    return self;
+ 133| +}
+ 134| +
+ 135| +VALUE rb_FramedView_get_ox(VALUE self) { return INT2NUM(get_framed_view(self)->ox); }
+ 136| +VALUE rb_FramedView_set_ox(VALUE self, VALUE val)
+ 137| +{
+ 138| +    auto *f = get_framed_view(self);
+ 139| +    f->ox = NUM2INT(val);
+ 140| +    if (f->has_view) f->view->moveOrigin(f->ox, f->oy);
+ 141| +    return val;
+ 142| +}
+ 143| +VALUE rb_FramedView_get_oy(VALUE self) { return INT2NUM(get_framed_view(self)->oy); }
+ 144| +VALUE rb_FramedView_set_oy(VALUE self, VALUE val)
+ 145| +{
+ 146| +    auto *f = get_framed_view(self);
+ 147| +    f->oy = NUM2INT(val);
+ 148| +    if (f->has_view) f->view->moveOrigin(f->ox, f->oy);
+ 149| +    return val;
+ 150| +}
+ 151| +VALUE rb_FramedView_setOrigin(VALUE self, VALUE x, VALUE y)
+ 152| +{
+ 153| +    auto *f = get_framed_view(self);
+ 154| +    f->ox = NUM2INT(x); f->oy = NUM2INT(y);
+ 155| +    if (f->has_view) f->view->moveOrigin(f->ox, f->oy);
+ 156| +    return self;
+ 157| +}
+ 158| +
+ 159| +VALUE rb_FramedView_get_z(VALUE self)
+ 160| +{
+ 161| +    auto *f = get_framed_view(self);
+ 162| +    return f->has_view ? LONG2NUM(f->view->getZ().z) : INT2NUM(0);
+ 163| +}
+ 164| +VALUE rb_FramedView_set_z(VALUE self, VALUE val)
+ 165| +{
+ 166| +    auto *f = get_framed_view(self);
+ 167| +    if (f->has_view) f->view->setZ(NUM2LONG(val));
+ 168| +    return val;
+ 169| +}
+ 170| +
+ 171| +// --- visibility / active / pause / lock / stretch ---------------------------
+ 172| +
+ 173| +VALUE rb_FramedView_get_visible(VALUE self)
+ 174| +{
+ 175| +    auto *f = get_framed_view(self);
+ 176| +    return (f->has_view && f->view->isVisible()) ? Qtrue : Qfalse;
+ 177| +}
+ 178| +VALUE rb_FramedView_set_visible(VALUE self, VALUE val)
+ 179| +{
+ 180| +    auto *f = get_framed_view(self);
+ 181| +    if (f->has_view) f->view->setVisible(RTEST(val));
+ 182| +    return val;
+ 183| +}
+ 184| +
+ 185| +VALUE rb_FramedView_get_active(VALUE self)
+ 186| +{
+ 187| +    auto *f = get_framed_view(self);
+ 188| +    return (f->has_view && f->view->isActive()) ? Qtrue : Qfalse;
+ 189| +}
+ 190| +VALUE rb_FramedView_set_active(VALUE self, VALUE val)
+ 191| +{
+ 192| +    auto *f = get_framed_view(self);
+ 193| +    if (f->has_view) f->view->active(RTEST(val));
+ 194| +    return val;
+ 195| +}
+ 196| +
+ 197| +VALUE rb_FramedView_get_pause(VALUE self)
+ 198| +{
+ 199| +    auto *f = get_framed_view(self);
+ 200| +    return (f->has_view && f->view->isPaused()) ? Qtrue : Qfalse;
+ 201| +}
+ 202| +VALUE rb_FramedView_set_pause(VALUE self, VALUE val)
+ 203| +{
+ 204| +    auto *f = get_framed_view(self);
+ 205| +    if (f->has_view) f->view->pause(RTEST(val));
+ 206| +    return val;
+ 207| +}
+ 208|  
+ 209| -#define DEFINE_OPACITY(field) \
+ 210| -    VALUE rb_FramedView_get_##field(VALUE self) { return INT2NUM(get_fv(self)->field); } \
+ 211| -    VALUE rb_FramedView_set_##field(VALUE self, VALUE val) \
+ 212| -    { \
+ 213| -        get_fv(self)->field = static_cast<uint8_t>(cgss::normalize_long(NUM2LONG(val), 0, 255)); \
+ 214| -        return val; \
+ 215| +VALUE rb_FramedView_get_pause_x(VALUE self)
+ 216| +{
+ 217| +    auto *f = get_framed_view(self);
+ 218| +    return f->has_view ? LONG2NUM(f->view->getPauseX()) : INT2NUM(0);
+ 219| +}
+ 220| +VALUE rb_FramedView_set_pause_x(VALUE self, VALUE val)
+ 221| +{
+ 222| +    auto *f = get_framed_view(self);
+ 223| +    if (f->has_view && !NIL_P(val)) {
+ 224| +        f->view->setPausePosition(static_cast<float>(NUM2LONG(val)),
+ 225| +                                  static_cast<float>(f->view->getPauseY()));
+ 226| +    }
+ 227| +    return val;
+ 228| +}
+ 229| +VALUE rb_FramedView_get_pause_y(VALUE self)
+ 230| +{
+ 231| +    auto *f = get_framed_view(self);
+ 232| +    return f->has_view ? LONG2NUM(f->view->getPauseY()) : INT2NUM(0);
+ 233| +}
+ 234| +VALUE rb_FramedView_set_pause_y(VALUE self, VALUE val)
+ 235| +{
+ 236| +    auto *f = get_framed_view(self);
+ 237| +    if (f->has_view && !NIL_P(val)) {
+ 238| +        f->view->setPausePosition(static_cast<float>(f->view->getPauseX()),
+ 239| +                                  static_cast<float>(NUM2LONG(val)));
+ 240|      }
+ 241| -DEFINE_OPACITY(opacity)
+ 242| -DEFINE_OPACITY(back_opacity)
+ 243| -DEFINE_OPACITY(contents_opacity)
+ 244| -#undef DEFINE_OPACITY
+ 245| +    return val;
+ 246| +}
+ 247|  
+ 248| -#define DEFINE_BOOL_ACCESSOR(field) \
+ 249| -    VALUE rb_FramedView_get_##field(VALUE self) { return get_fv(self)->field ? Qtrue : Qfalse; } \
+ 250| -    VALUE rb_FramedView_set_##field(VALUE self, VALUE val) { get_fv(self)->field = RTEST(val); return val; }
+ 251| +VALUE rb_FramedView_get_stretch(VALUE self)
+ 252| +{
+ 253| +    auto *f = get_framed_view(self);
+ 254| +    return (f->has_view && f->view->isStretched()) ? Qtrue : Qfalse;
+ 255| +}
+ 256| +VALUE rb_FramedView_set_stretch(VALUE self, VALUE val)
+ 257| +{
+ 258| +    auto *f = get_framed_view(self);
+ 259| +    if (f->has_view) f->view->stretch(RTEST(val));
+ 260| +    return val;
+ 261| +}
+ 262|  
+ 263| -DEFINE_BOOL_ACCESSOR(active)
+ 264| -DEFINE_BOOL_ACCESSOR(stretch)
+ 265| -DEFINE_BOOL_ACCESSOR(visible)
+ 266| +VALUE rb_FramedView_lock(VALUE self)
+ 267| +{
+ 268| +    auto *f = get_framed_view(self);
+ 269| +    if (f->has_view) f->view->lock();
+ 270| +    return self;
+ 271| +}
+ 272| +VALUE rb_FramedView_unlock(VALUE self)
+ 273| +{
+ 274| +    auto *f = get_framed_view(self);
+ 275| +    if (f->has_view) f->view->unlock();
+ 276| +    return self;
+ 277| +}
+ 278| +VALUE rb_FramedView_locked(VALUE self)
+ 279| +{
+ 280| +    auto *f = get_framed_view(self);
+ 281| +    return (f->has_view && f->view->isLocked()) ? Qtrue : Qfalse;
+ 282| +}
+ 283|  
+ 284| -#undef DEFINE_BOOL_ACCESSOR
+ 285| +// --- opacity ----------------------------------------------------------------
+ 286|  
+ 287| -VALUE rb_FramedView_get_pause(VALUE self) { return get_fv(self)->paused ? Qtrue : Qfalse; }
+ 288| -VALUE rb_FramedView_set_pause(VALUE self, VALUE val) { get_fv(self)->paused = RTEST(val); return val; }
+ 289| +VALUE rb_FramedView_get_opacity(VALUE self)
+ 290| +{
+ 291| +    auto *f = get_framed_view(self);
+ 292| +    return f->has_view ? INT2NUM(f->view->getOpacity()) : INT2NUM(255);
+ 293| +}
+ 294| +VALUE rb_FramedView_set_opacity(VALUE self, VALUE val)
+ 295| +{
+ 296| +    auto *f = get_framed_view(self);
+ 297| +    auto v = static_cast<uint8_t>(cgss::normalize_long(NUM2LONG(val), 0, 255));
+ 298| +    if (f->has_view) f->view->setOpacity(v);
+ 299| +    return val;
+ 300| +}
+ 301| +VALUE rb_FramedView_get_back_opacity(VALUE self)
+ 302| +{
+ 303| +    auto *f = get_framed_view(self);
+ 304| +    return f->has_view ? INT2NUM(f->view->getBackOpacity()) : INT2NUM(255);
+ 305| +}
+ 306| +VALUE rb_FramedView_set_back_opacity(VALUE self, VALUE val)
+ 307| +{
+ 308| +    auto *f = get_framed_view(self);
+ 309| +    auto v = static_cast<uint8_t>(cgss::normalize_long(NUM2LONG(val), 0, 255));
+ 310| +    if (f->has_view) f->view->setBackOpacity(v);
+ 311| +    return val;
+ 312| +}
+ 313| +VALUE rb_FramedView_get_contents_opacity(VALUE self)
+ 314| +{
+ 315| +    auto *f = get_framed_view(self);
+ 316| +    return f->has_view ? INT2NUM(f->view->getContentsOpacity()) : INT2NUM(255);
+ 317| +}
+ 318| +VALUE rb_FramedView_set_contents_opacity(VALUE self, VALUE val)
+ 319| +{
+ 320| +    auto *f = get_framed_view(self);
+ 321| +    auto v = static_cast<uint8_t>(cgss::normalize_long(NUM2LONG(val), 0, 255));
+ 322| +    if (f->has_view) f->view->setContentsOpacity(v);
+ 323| +    return val;
+ 324| +}
+ 325|  
+ 326| -VALUE rb_FramedView_setSize(VALUE self, VALUE w, VALUE h)
+ 327| +// --- skin / cursor / pause skin / window builder ----------------------------
+ 328| +
+ 329| +VALUE rb_FramedView_get_skin(VALUE self) { return get_framed_view(self)->rWindowskin; }
+ 330| +VALUE rb_FramedView_set_skin(VALUE self, VALUE val)
+ 331|  {
+ 332| -    auto *f = get_fv(self);
+ 333| -    f->width = NUM2INT(w); f->height = NUM2INT(h); return self;
+ 334| +    auto *f = get_framed_view(self);
+ 335| +    f->rWindowskin = val;
+ 336| +    if (!f->has_view) return val;
+ 337| +    if (NIL_P(val)) {
+ 338| +        f->view->setSkin(nullptr);
+ 339| +        return val;
+ 340| +    }
+ 341| +    if (rb_obj_is_kind_of(val, rb_cImage) != Qtrue) {
+ 342| +        rb_raise(rb_eRGSSError, "Window#windowskin= expects a Bitmap (Image).");
+ 343| +    }
+ 344| +    auto *img = get_image(val);
+ 345| +    if (!img->valid()) {
+ 346| +        f->view->setSkin(nullptr);
+ 347| +        return val;
+ 348| +    }
+ 349| +    f->view->setSkin(&image_acquire_texture(img));
+ 350| +    return val;
+ 351|  }
+ 352| -VALUE rb_FramedView_setPosition(VALUE self, VALUE x, VALUE y)
+ 353| +
+ 354| +VALUE rb_FramedView_get_cursorskin(VALUE self) { return get_framed_view(self)->rCursorskin; }
+ 355| +VALUE rb_FramedView_set_cursorskin(VALUE self, VALUE val)
+ 356|  {
+ 357| -    auto *f = get_fv(self);
+ 358| -    f->x = NUM2INT(x); f->y = NUM2INT(y); return self;
+ 359| +    auto *f = get_framed_view(self);
+ 360| +    f->rCursorskin = val;
+ 361| +    if (!f->has_view || NIL_P(val)) return val;
+ 362| +    if (rb_obj_is_kind_of(val, rb_cImage) != Qtrue) {
+ 363| +        rb_raise(rb_eRGSSError, "Window#cursorskin= expects a Bitmap (Image).");
+ 364| +    }
+ 365| +    auto *img = get_image(val);
+ 366| +    if (img->valid()) {
+ 367| +        f->view->setCursorSkin(image_acquire_texture(img));
+ 368| +    }
+ 369| +    return val;
+ 370|  }
+ 371| -VALUE rb_FramedView_setOrigin(VALUE self, VALUE x, VALUE y)
+ 372| +
+ 373| +VALUE rb_FramedView_get_pauseskin(VALUE self) { return get_framed_view(self)->rPauseskin; }
+ 374| +VALUE rb_FramedView_set_pauseskin(VALUE self, VALUE val)
+ 375|  {
+ 376| -    auto *f = get_fv(self);
+ 377| -    f->ox = NUM2INT(x); f->oy = NUM2INT(y); return self;
+ 378| +    auto *f = get_framed_view(self);
+ 379| +    f->rPauseskin = val;
+ 380| +    if (!f->has_view || NIL_P(val)) return val;
+ 381| +    if (rb_obj_is_kind_of(val, rb_cImage) != Qtrue) {
+ 382| +        rb_raise(rb_eRGSSError, "Window#pauseskin= expects a Bitmap (Image).");
+ 383| +    }
+ 384| +    auto *img = get_image(val);
+ 385| +    if (img->valid()) {
+ 386| +        f->view->setPauseSkin(image_acquire_texture(img));
+ 387| +    }
+ 388| +    return val;
+ 389|  }
+ 390|  
+ 391| -VALUE rb_FramedView_get_skin(VALUE self) { return get_fv(self)->rWindowskin; }
+ 392| -VALUE rb_FramedView_set_skin(VALUE self, VALUE val) { get_fv(self)->rWindowskin = val; return val; }
+ 393| -VALUE rb_FramedView_get_cursorskin(VALUE self) { return get_fv(self)->rCursorskin; }
+ 394| -VALUE rb_FramedView_set_cursorskin(VALUE self, VALUE val) { get_fv(self)->rCursorskin = val; return val; }
+ 395| -VALUE rb_FramedView_get_pauseskin(VALUE self) { return get_fv(self)->rPauseskin; }
+ 396| -VALUE rb_FramedView_set_pauseskin(VALUE self, VALUE val) { get_fv(self)->rPauseskin = val; return val; }
+ 397| -VALUE rb_FramedView_get_window_builder(VALUE self) { return get_fv(self)->rWindowBuilder; }
+ 398| -VALUE rb_FramedView_set_window_builder(VALUE self, VALUE val) { get_fv(self)->rWindowBuilder = val; return val; }
+ 399| -VALUE rb_FramedView_get_cursor_rect(VALUE self) { return get_fv(self)->rCursorRect; }
+ 400| -VALUE rb_FramedView_set_cursor_rect(VALUE self, VALUE val) { get_fv(self)->rCursorRect = val; return val; }
+ 401| +VALUE rb_FramedView_get_window_builder(VALUE self) { return get_framed_view(self)->rWindowBuilder; }
+ 402| +VALUE rb_FramedView_set_window_builder(VALUE self, VALUE val)
+ 403| +{
+ 404| +    auto *f = get_framed_view(self);
+ 405| +    Check_Type(val, T_ARRAY);
+ 406| +    const long len = RARRAY_LEN(val);
+ 407| +    if (len < 6) {
+ 408| +        rb_raise(rb_eArgError, "window_builder must have at least 6 integer entries.");
+ 409| +    }
+ 410| +    if (!f->has_view) {
+ 411| +        f->rWindowBuilder = val;
+ 412| +        return val;
+ 413| +    }
+ 414| +    if (len >= 8) {
+ 415| +        std::array<long, 8> wb{};
+ 416| +        for (long i = 0; i < 8; i++) wb[i] = NUM2LONG(rb_ary_entry(val, i));
+ 417| +        f->view->setBuilder(wb);
+ 418| +    } else {
+ 419| +        std::array<long, 6> wb{};
+ 420| +        for (long i = 0; i < 6; i++) wb[i] = NUM2LONG(rb_ary_entry(val, i));
+ 421| +        f->view->setBuilder(wb);
+ 422| +    }
+ 423| +    rb_obj_freeze(val);
+ 424| +    f->rWindowBuilder = val;
+ 425| +    return val;
+ 426| +}
+ 427|  
+ 428| -VALUE rb_FramedView_rect(VALUE self)
+ 429| +// cursor_rect: PSDK reads/writes a Rect. We bind the cgss IntRect of the
+ 430| +// FramedView to a Ruby Rect's RectData on first read so subsequent
+ 431| +// `window.cursor_rect.set(x, y, w, h)` mutations land on the FramedView.
+ 432| +VALUE rb_FramedView_get_cursor_rect(VALUE self)
+ 433|  {
+ 434| -    auto *f = get_fv(self);
+ 435| -    VALUE arr = rb_ary_new_capa(4);
+ 436| -    rb_ary_push(arr, INT2NUM(f->x));
+ 437| -    rb_ary_push(arr, INT2NUM(f->y));
+ 438| -    rb_ary_push(arr, INT2NUM(f->width));
+ 439| -    rb_ary_push(arr, INT2NUM(f->height));
+ 440| -    return arr;
+ 441| +    auto *f = get_framed_view(self);
+ 442| +    if (!NIL_P(f->rCursorRect)) return f->rCursorRect;
+ 443| +    if (!f->has_view) {
+ 444| +        VALUE args[4] = { INT2NUM(0), INT2NUM(0), INT2NUM(0), INT2NUM(0) };
+ 445| +        f->rCursorRect = rb_class_new_instance(4, args, rb_cRect);
+ 446| +        return f->rCursorRect;
+ 447| +    }
+ 448| +    const auto rect = f->view->getCursorRectangle();
+ 449| +    VALUE args[4] = { INT2NUM(rect.left), INT2NUM(rect.top),
+ 450| +                      INT2NUM(rect.width), INT2NUM(rect.height) };
+ 451| +    f->rCursorRect = rb_class_new_instance(4, args, rb_cRect);
+ 452| +    return f->rCursorRect;
+ 453|  }
+ 454|  
+ 455| -VALUE rb_FramedView_viewport(VALUE self) { return get_fv(self)->rViewport; }
+ 456| +VALUE rb_FramedView_set_cursor_rect(VALUE self, VALUE val)
+ 457| +{
+ 458| +    auto *f = get_framed_view(self);
+ 459| +    if (!f->has_view) return val;
+ 460| +    int rx = 0, ry = 0, rw = 0, rh = 0;
+ 461| +    if (rb_obj_is_kind_of(val, rb_cRect) == Qtrue) {
+ 462| +        const auto *r = get_rect_data(val);
+ 463| +        rx = r->x; ry = r->y; rw = r->width; rh = r->height;
+ 464| +    } else {
+ 465| +        Check_Type(val, T_ARRAY);
+ 466| +        rx = NUM2INT(rb_ary_entry(val, 0));
+ 467| +        ry = NUM2INT(rb_ary_entry(val, 1));
+ 468| +        rw = NUM2INT(rb_ary_entry(val, 2));
+ 469| +        rh = NUM2INT(rb_ary_entry(val, 3));
+ 470| +    }
+ 471| +    f->view->setCursorRectangle(cgss::IntRect{ rx, ry, rw, rh });
+ 472| +    // Cache a Ruby Rect so reads are stable.
+ 473| +    VALUE args[4] = { INT2NUM(rx), INT2NUM(ry), INT2NUM(rw), INT2NUM(rh) };
+ 474| +    f->rCursorRect = rb_class_new_instance(4, args, rb_cRect);
+ 475| +    return val;
+ 476| +}
+ 477|  
+ 478| -VALUE rb_FramedView_lock(VALUE self) { get_fv(self)->locked = true; return self; }
+ 479| -VALUE rb_FramedView_unlock(VALUE self) { get_fv(self)->locked = false; return self; }
+ 480| -VALUE rb_FramedView_locked(VALUE self) { return get_fv(self)->locked ? Qtrue : Qfalse; }
+ 481| -VALUE rb_FramedView_index(VALUE self) { (void)self; return INT2NUM(0); }
+ 482| +// --- queries ----------------------------------------------------------------
+ 483| +
+ 484| +VALUE rb_FramedView_rect(VALUE self)
+ 485| +{
+ 486| +    auto *f = get_framed_view(self);
+ 487| +    VALUE args[4] = { INT2NUM(f->x), INT2NUM(f->y),
+ 488| +                      INT2NUM(f->width), INT2NUM(f->height) };
+ 489| +    return rb_class_new_instance(4, args, rb_cRect);
+ 490| +}
+ 491| +
+ 492| +VALUE rb_FramedView_viewport(VALUE self) { return get_framed_view(self)->rViewport; }
+ 493| +VALUE rb_FramedView_index(VALUE self)
+ 494| +{
+ 495| +    auto *f = get_framed_view(self);
+ 496| +    return f->has_view ? ULONG2NUM(f->view->getZ().index) : INT2NUM(0);
+ 497| +}
+ 498|  
+ 499|  void Init_FramedView()
+ 500|  {
+ 501|      // Registers as `LiteRGSS::Window` — matches litergss2 PSDK API. The
+ 502| -    // host-window equivalent moved to `LiteRGSS::DisplayWindow` in this port.
+ 503| +    // host-window equivalent is `LiteRGSS::DisplayWindow` in this port.
+ 504|      rb_cFramedView = rb_define_class_under(rb_mLiteRGSS, "Window", rb_cDrawable);
+ 505|      rb_define_alloc_func(rb_cFramedView, rb::Alloc<FramedViewData>);
+ 506|  
+candidates: h2 (auto, bool); h4 (bool); h5 (auto); h7 (auto, bool); h10 (bool)
+
+--- HUNK h10 | file: ext/LiteRGSS3/window/FramedView.h | change: modify ---
+@@ -4,33 +4,34 @@
+   1|  #include "RubyValue.h"
+   2|  #include "../rbAdapter.h"
+   3|  
+   4| +#include <LiteCGSS/Views/FramedView.h>
+   5| +#include <memory>
+   6| +
+   7|  extern VALUE rb_cFramedView;
+   8|  void Init_FramedView();
+   9|  
+  10| -// LiteRGSS::Window — the FramedView-based UI widget (per-game-menu frame).
+  11| -// Distinct from LiteRGSS::DisplayWindow (the host OS window).
+  12| +// LiteRGSS::Window — backs PSDK's per-game-menu/dialog window. Wraps a
+  13| +// cgss::FramedView registered into either a parent cgss::Viewport or the
+  14| +// active cgss::DisplayWindow at construction time. Sprite/Text/Shape
+  15| +// instantiated with a Window as parent register into THIS FramedView's
+  16| +// child stack — that's how the dialog text gets offset to the box's
+  17| +// position and clipped to the box's bounds.
+  18|  //
+  19| -// Implementation note: cgss::FramedView requires MainEventDispatcher +
+  20| -// DisplayWindowUserData + DisplayWindowSettings, which litergss3's
+  21| -// DisplayWindow doesn't currently expose. This port stores the widget's
+  22| -// state on the Ruby side (skin, cursor rect, opacity, geometry) so the
+  23| -// API surface matches litergss2's Window — full cgss::FramedView wiring
+  24| -// folds in once DisplayWindow exposes the cgss event/window context.
+  25| +// Distinct from LiteRGSS::DisplayWindow (the host OS window).
+  26|  struct FramedViewData
+  27|  {
+  28| +    // The cgss FramedView. Move-assigned in initialize once the parent
+  29| +    // (Viewport or DisplayWindow) is known. has_view gates forwarding.
+  30| +    std::unique_ptr<cgss::FramedView> view;
+  31| +    bool has_view = false;
+  32| +    bool disposed = false;
+  33| +
+  34| +    // Cached Ruby-side state used as the source of truth for getters and
+  35| +    // for round-tripping back through Ruby (mirrors litergss2's
+  36| +    // FramedViewElement). Width/height also fall back to these for getters
+  37| +    // because cgss::FramedView only exposes float getters.
+  38|      int x = 0, y = 0, width = 0, height = 0;
+  39|      int ox = 0, oy = 0;
+  40| -    int z = 0;
+  41| -    int pause_x = 0, pause_y = 0;
+  42| -    uint8_t opacity = 255;
+  43| -    uint8_t back_opacity = 255;
+  44| -    uint8_t contents_opacity = 255;
+  45| -    bool active = false;
+  46| -    bool paused = false;
+  47| -    bool stretch = false;
+  48| -    bool visible = true;
+  49| -    bool locked = false;
+  50| -    bool disposed = false;
+  51|  
+  52|      VALUE rViewport = Qnil;
+  53|      VALUE rWindowskin = Qnil;
+candidates: h2 (bool); h4 (bool); h7 (bool); h9 (bool)
+
+--- HUNK h11 | file: ext/LiteRGSS3/window/FramedView.h | change: modify ---
+@@ -38,6 +39,10 @@ struct FramedViewData
+   1|      VALUE rPauseskin = Qnil;
+   2|      VALUE rWindowBuilder = Qnil;
+   3|      VALUE rCursorRect = Qnil;
+   4| +
+   5| +    ~FramedViewData() {
+   6| +        if (view && !disposed) view->detach();
+   7| +    }
+   8|  };
+   9|  
+  10|  // Forward-declare the Mark specialization so every TU that instantiates
+
+--- HUNK h12 | file: ext/LiteRGSS3/window/FramedView.h | change: modify ---
+@@ -46,4 +51,6 @@ namespace rb {
+   1|      template <> void Mark<FramedViewData>(void *ptr);
+   2|  }
+   3|  
+   4| +FramedViewData* get_framed_view(VALUE self);
+   5| +
+   6|  #endif
+
+=== END HUNKS ===
+Return the JSON array now.

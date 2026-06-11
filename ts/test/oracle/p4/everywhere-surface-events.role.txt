@@ -1,0 +1,443 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: cmake/litergss-app/dependencies/files/litergss_surface_jni.c | change: modify ---
+@@ -52,6 +52,24 @@ void cgss_android_inject_touch_move(int pointerId, float x, float y);
+   1|  void cgss_android_inject_touch_up(int pointerId, float x, float y);
+   2|  void cgss_android_request_host_surface_close(void);
+   3|  
+   4| +void cgss_android_inject_key_down(int androidKeyCode, int metaState, int repeatCount);
+   5| +void cgss_android_inject_key_up(int androidKeyCode, int metaState);
+   6| +void cgss_android_inject_text(unsigned int unicodeCodepoint);
+   7| +void cgss_android_inject_focus_gained(void);
+   8| +void cgss_android_inject_focus_lost(void);
+   9| +void cgss_android_inject_joystick_button(int deviceId, int androidKeyCode, int pressed);
+  10| +void cgss_android_inject_joystick_axis(int   deviceId,
+  11| +                                       float axisX,    float axisY,
+  12| +                                       float axisZ,    float axisRz,
+  13| +                                       float hatX,     float hatY,
+  14| +                                       float lTrigger, float rTrigger);
+  15| +void cgss_android_inject_joystick_connected(int deviceId);
+  16| +void cgss_android_inject_joystick_disconnected(int deviceId);
+  17| +
+  18| +typedef void (*cgss_android_virtual_keyboard_callback_t)(int show);
+  19| +void cgss_android_set_virtual_keyboard_callback(cgss_android_virtual_keyboard_callback_t cb);
+  20| +void cgss_android_request_virtual_keyboard(int show);
+  21| +
+  22|  /* Single live ANativeWindow*, mirroring the singleton model on the LiteCGSS
+  23|   * side. The reference is acquired by ANativeWindow_fromSurface (which
+  24|   * increments the refcount) and released here on detach / re-attach. */
+
+--- HUNK h2 | file: cmake/litergss-app/dependencies/files/litergss_surface_jni.c | change: modify ---
+@@ -147,3 +165,198 @@ Java_com_scorbutics_litergss_NativeSurface_requestClose(JNIEnv* env, jclass claz
+   1|      (void) clazz;
+   2|      cgss_android_request_host_surface_close();
+   3|  }
+   4| +
+   5| +/* ------------------------------------------------------------------
+   6| + * Hosted input injection: hardware keys, text, focus, gamepad. All
+   7| + * thin pass-throughs to cgss_android_inject_*; translation from
+   8| + * Android keycodes to sf::Keyboard / SFML joystick indices happens on
+   9| + * the SFML side (HostedAndroidWindow.cpp).
+  10| + * ------------------------------------------------------------------ */
+  11| +
+  12| +JNIEXPORT void JNICALL
+  13| +Java_com_scorbutics_litergss_NativeSurface_injectKeyDown(JNIEnv* env, jclass clazz,
+  14| +                                                          jint androidKeyCode,
+  15| +                                                          jint metaState,
+  16| +                                                          jint repeatCount)
+  17| +{
+  18| +    (void) env;
+  19| +    (void) clazz;
+  20| +    cgss_android_inject_key_down((int) androidKeyCode,
+  21| +                                 (int) metaState,
+  22| +                                 (int) repeatCount);
+  23| +}
+  24| +
+  25| +JNIEXPORT void JNICALL
+  26| +Java_com_scorbutics_litergss_NativeSurface_injectKeyUp(JNIEnv* env, jclass clazz,
+  27| +                                                        jint androidKeyCode,
+  28| +                                                        jint metaState)
+  29| +{
+  30| +    (void) env;
+  31| +    (void) clazz;
+  32| +    cgss_android_inject_key_up((int) androidKeyCode, (int) metaState);
+  33| +}
+  34| +
+  35| +JNIEXPORT void JNICALL
+  36| +Java_com_scorbutics_litergss_NativeSurface_injectText(JNIEnv* env, jclass clazz,
+  37| +                                                       jint unicodeCodepoint)
+  38| +{
+  39| +    (void) env;
+  40| +    (void) clazz;
+  41| +    cgss_android_inject_text((unsigned int) unicodeCodepoint);
+  42| +}
+  43| +
+  44| +JNIEXPORT void JNICALL
+  45| +Java_com_scorbutics_litergss_NativeSurface_injectFocusGained(JNIEnv* env, jclass clazz)
+  46| +{
+  47| +    (void) env;
+  48| +    (void) clazz;
+  49| +    cgss_android_inject_focus_gained();
+  50| +}
+  51| +
+  52| +JNIEXPORT void JNICALL
+  53| +Java_com_scorbutics_litergss_NativeSurface_injectFocusLost(JNIEnv* env, jclass clazz)
+  54| +{
+  55| +    (void) env;
+  56| +    (void) clazz;
+  57| +    cgss_android_inject_focus_lost();
+  58| +}
+  59| +
+  60| +JNIEXPORT void JNICALL
+  61| +Java_com_scorbutics_litergss_NativeSurface_injectJoystickButton(JNIEnv* env, jclass clazz,
+  62| +                                                                 jint deviceId,
+  63| +                                                                 jint androidKeyCode,
+  64| +                                                                 jboolean pressed)
+  65| +{
+  66| +    (void) env;
+  67| +    (void) clazz;
+  68| +    cgss_android_inject_joystick_button((int) deviceId,
+  69| +                                        (int) androidKeyCode,
+  70| +                                        pressed == JNI_TRUE ? 1 : 0);
+  71| +}
+  72| +
+  73| +JNIEXPORT void JNICALL
+  74| +Java_com_scorbutics_litergss_NativeSurface_injectJoystickAxis(JNIEnv* env, jclass clazz,
+  75| +                                                               jint deviceId,
+  76| +                                                               jfloat axisX,    jfloat axisY,
+  77| +                                                               jfloat axisZ,    jfloat axisRz,
+  78| +                                                               jfloat hatX,     jfloat hatY,
+  79| +                                                               jfloat lTrigger, jfloat rTrigger)
+  80| +{
+  81| +    (void) env;
+  82| +    (void) clazz;
+  83| +    cgss_android_inject_joystick_axis((int) deviceId,
+  84| +                                      (float) axisX,    (float) axisY,
+  85| +                                      (float) axisZ,    (float) axisRz,
+  86| +                                      (float) hatX,     (float) hatY,
+  87| +                                      (float) lTrigger, (float) rTrigger);
+  88| +}
+  89| +
+  90| +JNIEXPORT void JNICALL
+  91| +Java_com_scorbutics_litergss_NativeSurface_injectJoystickConnected(JNIEnv* env, jclass clazz,
+  92| +                                                                    jint deviceId)
+  93| +{
+  94| +    (void) env;
+  95| +    (void) clazz;
+  96| +    cgss_android_inject_joystick_connected((int) deviceId);
+  97| +}
+  98| +
+  99| +JNIEXPORT void JNICALL
+ 100| +Java_com_scorbutics_litergss_NativeSurface_injectJoystickDisconnected(JNIEnv* env, jclass clazz,
+ 101| +                                                                       jint deviceId)
+ 102| +{
+ 103| +    (void) env;
+ 104| +    (void) clazz;
+ 105| +    cgss_android_inject_joystick_disconnected((int) deviceId);
+ 106| +}
+ 107| +
+ 108| +/* ------------------------------------------------------------------
+ 109| + * IME bridge: native -> Java callback. Ruby (via cgss::android::
+ 110| + * requestVirtualKeyboard) calls into our static `g_virtualKeyboardThunk`,
+ 111| + * which uses the cached JavaVM to attach the current thread and invoke
+ 112| + * NativeSurface.dispatchVirtualKeyboardRequest(Boolean) on the Kotlin
+ 113| + * side. The Kotlin side fans out to the registered VirtualKeyboardListener.
+ 114| + *
+ 115| + * Threading: invoked from whichever thread calls requestVirtualKeyboard
+ 116| + * (typically the Ruby render thread). Listeners on the Java side that
+ 117| + * touch View state are responsible for hopping to the UI thread.
+ 118| + * ------------------------------------------------------------------ */
+ 119| +
+ 120| +static JavaVM*   g_jvm                       = NULL;
+ 121| +static jclass    g_nativeSurfaceClass        = NULL;  /* global ref */
+ 122| +static jmethodID g_dispatchVirtualKeyboardMid = NULL;
+ 123| +
+ 124| +JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved)
+ 125| +{
+ 126| +    (void) reserved;
+ 127| +    g_jvm = vm;
+ 128| +
+ 129| +    JNIEnv* env = NULL;
+ 130| +    if ((*vm)->GetEnv(vm, (void**) &env, JNI_VERSION_1_6) != JNI_OK || env == NULL) {
+ 131| +        /* Should never happen — caller is Android's ART. Without the JVM
+ 132| +         * pointer the IME callback can't function; return JNI_ERR so
+ 133| +         * System.loadLibrary fails loudly rather than silently leaving
+ 134| +         * the IME bridge dead. */
+ 135| +        return JNI_ERR;
+ 136| +    }
+ 137| +
+ 138| +    /* Resolve and pin a global ref to NativeSurface so it survives across
+ 139| +     * JNIEnv detaches. FindClass returns a local ref; NewGlobalRef
+ 140| +     * promotes it. */
+ 141| +    jclass local = (*env)->FindClass(env, "com/scorbutics/litergss/NativeSurface");
+ 142| +    if (local == NULL) return JNI_ERR;
+ 143| +    g_nativeSurfaceClass = (jclass) (*env)->NewGlobalRef(env, local);
+ 144| +    (*env)->DeleteLocalRef(env, local);
+ 145| +    if (g_nativeSurfaceClass == NULL) return JNI_ERR;
+ 146| +
+ 147| +    /* Resolve the static dispatch method. Method IDs are valid for the
+ 148| +     * class's lifetime; the global ref above keeps the class alive. */
+ 149| +    g_dispatchVirtualKeyboardMid = (*env)->GetStaticMethodID(
+ 150| +        env, g_nativeSurfaceClass, "dispatchVirtualKeyboardRequest", "(Z)V");
+ 151| +    if (g_dispatchVirtualKeyboardMid == NULL) return JNI_ERR;
+ 152| +
+ 153| +    return JNI_VERSION_1_6;
+ 154| +}
+ 155| +
+ 156| +static void virtual_keyboard_thunk(int show)
+ 157| +{
+ 158| +    if (g_jvm == NULL || g_nativeSurfaceClass == NULL || g_dispatchVirtualKeyboardMid == NULL) {
+ 159| +        return;
+ 160| +    }
+ 161| +
+ 162| +    JNIEnv* env = NULL;
+ 163| +    int     attached = 0;
+ 164| +    jint    rc = (*g_jvm)->GetEnv(g_jvm, (void**) &env, JNI_VERSION_1_6);
+ 165| +    if (rc == JNI_EDETACHED) {
+ 166| +        if ((*g_jvm)->AttachCurrentThread(g_jvm, &env, NULL) != JNI_OK) {
+ 167| +            return;
+ 168| +        }
+ 169| +        attached = 1;
+ 170| +    } else if (rc != JNI_OK || env == NULL) {
+ 171| +        return;
+ 172| +    }
+ 173| +
+ 174| +    (*env)->CallStaticVoidMethod(env, g_nativeSurfaceClass,
+ 175| +                                 g_dispatchVirtualKeyboardMid,
+ 176| +                                 show ? JNI_TRUE : JNI_FALSE);
+ 177| +
+ 178| +    /* Swallow any pending exception so it doesn't cascade across the
+ 179| +     * JNI boundary into native code that can't handle it. Listener
+ 180| +     * exceptions are programmer errors; just log and continue. */
+ 181| +    if ((*env)->ExceptionCheck(env)) {
+ 182| +        (*env)->ExceptionDescribe(env);
+ 183| +        (*env)->ExceptionClear(env);
+ 184| +    }
+ 185| +
+ 186| +    if (attached) {
+ 187| +        (*g_jvm)->DetachCurrentThread(g_jvm);
+ 188| +    }
+ 189| +}
+ 190| +
+ 191| +JNIEXPORT void JNICALL
+ 192| +Java_com_scorbutics_litergss_NativeSurface_nativeSetVirtualKeyboardCallback(JNIEnv* env, jclass clazz,
+ 193| +                                                                             jboolean armed)
+ 194| +{
+ 195| +    (void) env;
+ 196| +    (void) clazz;
+ 197| +    cgss_android_set_virtual_keyboard_callback(armed == JNI_TRUE ? virtual_keyboard_thunk : NULL);
+ 198| +}
+candidates: h3 (VirtualKeyboardListener, dispatchVirtualKeyboardRequest)
+
+--- HUNK h3 | file: kotlin/com/scorbutics/litergss/NativeSurface.kt | change: modify ---
+@@ -64,4 +64,102 @@ object NativeSurface {
+   1|  
+   2|      /** Forward an Android pointer-up event into SFML's queue. */
+   3|      @JvmStatic external fun injectTouchUp(pointerId: Int, x: Float, y: Float)
+   4| +
+   5| +    /**
+   6| +     * Forward a hardware key-down event.
+   7| +     *
+   8| +     * `androidKeyCode` is the raw [android.view.KeyEvent.keyCode], not a
+   9| +     * pre-translated SFML key — the native side reuses SFML's existing
+  10| +     * Android-to-SFML keycode table. `metaState` is
+  11| +     * [android.view.KeyEvent.metaState]. `repeatCount > 0` (OS auto-
+  12| +     * repeat) is silently dropped on the native side; consumers like PSDK
+  13| +     * run their own software repeat handler.
+  14| +     */
+  15| +    @JvmStatic external fun injectKeyDown(androidKeyCode: Int, metaState: Int, repeatCount: Int)
+  16| +
+  17| +    /** Forward a hardware key-up event. See [injectKeyDown] for argument semantics. */
+  18| +    @JvmStatic external fun injectKeyUp(androidKeyCode: Int, metaState: Int)
+  19| +
+  20| +    /**
+  21| +     * Forward a single Unicode codepoint as `sf::Event::TextEntered`.
+  22| +     *
+  23| +     * Use for both hardware-key text (host should call
+  24| +     * `KeyEvent.getUnicodeChar(metaState)` and forward the result) and
+  25| +     * soft-keyboard input (TextWatcher on a hidden EditText). Codepoint 0
+  26| +     * is a no-op on the native side.
+  27| +     */
+  28| +    @JvmStatic external fun injectText(unicodeCodepoint: Int)
+  29| +
+  30| +    /** Forward a `sf::Event::GainedFocus`. Required after resume — without it, PSDK's `Graphics.focus?` stays false and every `Input.*?` query returns false. */
+  31| +    @JvmStatic external fun injectFocusGained()
+  32| +
+  33| +    /** Forward a `sf::Event::LostFocus`. */
+  34| +    @JvmStatic external fun injectFocusLost()
+  35| +
+  36| +    /**
+  37| +     * Forward a gamepad button press/release.
+  38| +     *
+  39| +     * `androidKeyCode` must be one of the AKEYCODE_BUTTON_* / AKEYCODE_DPAD_*
+  40| +     * values that SFML's `androidJoystickKeyToIndex` recognises. Other
+  41| +     * keycodes are silently dropped.
+  42| +     */
+  43| +    @JvmStatic external fun injectJoystickButton(deviceId: Int, androidKeyCode: Int, pressed: Boolean)
+  44| +
+  45| +    /**
+  46| +     * Forward gamepad analog-axis state.
+  47| +     *
+  48| +     * Values are in Android's native [-1, 1] range; SFML scales them to
+  49| +     * [-100, 100] internally. Send all axes in one call — the SFML model
+  50| +     * tracks per-axis state and replaces it wholesale on each event.
+  51| +     */
+  52| +    @JvmStatic external fun injectJoystickAxis(
+  53| +        deviceId: Int,
+  54| +        axisX: Float, axisY: Float,
+  55| +        axisZ: Float, axisRz: Float,
+  56| +        hatX: Float,  hatY: Float,
+  57| +        lTrigger: Float, rTrigger: Float,
+  58| +    )
+  59| +
+  60| +    /** Forward a gamepad-connected event. */
+  61| +    @JvmStatic external fun injectJoystickConnected(deviceId: Int)
+  62| +
+  63| +    /** Forward a gamepad-disconnected event. */
+  64| +    @JvmStatic external fun injectJoystickDisconnected(deviceId: Int)
+  65| +
+  66| +    /**
+  67| +     * Listener invoked when native code requests the soft keyboard be
+  68| +     * shown or hidden. The host Activity registers one via
+  69| +     * [setVirtualKeyboardListener]; native code calls in via
+  70| +     * cgss::android::requestVirtualKeyboard (typically through a Ruby
+  71| +     * binding that opens / closes the IME).
+  72| +     *
+  73| +     * Threading: callback fires on whichever thread requested the
+  74| +     * keyboard (Ruby render thread in practice). Listeners that touch
+  75| +     * Android View state MUST hop to the UI thread themselves.
+  76| +     */
+  77| +    fun interface VirtualKeyboardListener {
+  78| +        fun onVirtualKeyboardRequested(show: Boolean)
+  79| +    }
+  80| +
+  81| +    @Volatile
+  82| +    private var virtualKeyboardListener: VirtualKeyboardListener? = null
+  83| +
+  84| +    /**
+  85| +     * Register (or clear, with null) the soft-keyboard request listener.
+  86| +     * Setting a listener arms the native callback; setting null disarms.
+  87| +     */
+  88| +    @JvmStatic
+  89| +    fun setVirtualKeyboardListener(listener: VirtualKeyboardListener?) {
+  90| +        virtualKeyboardListener = listener
+  91| +        nativeSetVirtualKeyboardCallback(listener != null)
+  92| +    }
+  93| +
+  94| +    /** JNI entry. Called by litergss_surface_jni.c via the registered callback. */
+  95| +    @JvmStatic
+  96| +    @Suppress("unused")
+  97| +    private fun dispatchVirtualKeyboardRequest(show: Boolean) {
+  98| +        virtualKeyboardListener?.onVirtualKeyboardRequested(show)
+  99| +    }
+ 100| +
+ 101| +    @JvmStatic private external fun nativeSetVirtualKeyboardCallback(armed: Boolean)
+ 102|  }
+candidates: h2 (VirtualKeyboardListener, dispatchVirtualKeyboardRequest)
+
+=== END HUNKS ===
+Return the JSON array now.

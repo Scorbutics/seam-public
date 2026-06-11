@@ -1,0 +1,3600 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: apps/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/[id]/loading.tsx | change: add ---
+@@ -0,0 +1,5 @@
+   1| +import { WebhookFormSkeleton } from "~/webhooks/views/webhook-form-skeleton";
+   2| +
+   3| +export default function Loading() {
+   4| +  return <WebhookFormSkeleton titleKey="edit_webhook" />;
+   5| +}
+candidates: h33 (WebhookFormSkeleton)
+
+--- HUNK h2 | file: apps/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/new/loading.tsx | change: modify ---
+@@ -1,5 +1,5 @@
+   1| -import { SkeletonLoader } from "~/webhooks/views/webhook-new-skeleton";
+   2| +import { WebhookFormSkeleton } from "~/webhooks/views/webhook-form-skeleton";
+   3|  
+   4|  export default function Loading() {
+   5| -  return <SkeletonLoader />;
+   6| +  return <WebhookFormSkeleton />;
+   7|  }
+candidates: h33 (WebhookFormSkeleton)
+
+--- HUNK h3 | file: apps/web/app/providers.tsx | change: modify ---
+@@ -3,6 +3,7 @@
+   1|  import { TrpcProvider } from "app/_trpc/trpc-provider";
+   2|  import { SessionProvider } from "next-auth/react";
+   3|  import CacheProvider from "react-inlinesvg/provider";
+   4| +import { ToastProvider } from "@coss/ui/components/toast";
+   5|  
+   6|  import { WebPushProvider } from "@calcom/web/modules/notifications/components/WebPushContext";
+   7|  import { NotificationSoundHandler } from "@calcom/web/components/notification-sound-handler";
+
+--- HUNK h4 | file: apps/web/app/providers.tsx | change: modify ---
+@@ -24,11 +25,13 @@ export function Providers({ isEmbed, children, country }: ProvidersProps) {
+   1|      <GeoProvider country={country}>
+   2|        <SessionProvider>
+   3|          <TrpcProvider>
+   4| -          {!isEmbed && !isBookingPage && <NotificationSoundHandler />}
+   5| -          {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}
+   6| -          <CacheProvider>
+   7| -            <WebPushProvider>{children}</WebPushProvider>
+   8| -          </CacheProvider>
+   9| +          <ToastProvider position="bottom-center">
+  10| +            {!isEmbed && !isBookingPage && <NotificationSoundHandler />}
+  11| +            {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}
+  12| +            <CacheProvider>
+  13| +              <WebPushProvider>{children}</WebPushProvider>
+  14| +            </CacheProvider>
+  15| +          </ToastProvider>
+  16|          </TrpcProvider>
+  17|        </SessionProvider>
+  18|      </GeoProvider>
+
+--- HUNK h5 | file: apps/web/modules/event-types/components/tabs/instant/InstantEventController.tsx | change: modify ---
+@@ -374,9 +374,8 @@ const InstantMeetingWebhooks = ({ eventType }: { eventType: EventTypeSetup }) =>
+   1|                        <WebhookListItem
+   2|                          key={webhook.id}
+   3|                          webhook={webhook}
+   4| -                        lastItem={webhooks.length === index + 1}
+   5|                          canEditWebhook={!webhookLockedStatus.disabled}
+   6| -                        onEditWebhook={() => {
+   7| +                        onEditWebhookAction={() => {
+   8|                            setEditModalOpen(true);
+   9|                            setWebhookToEdit(webhook);
+  10|                          }}
+
+--- HUNK h6 | file: apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx | change: modify ---
+@@ -1,25 +1,30 @@
+   1| -import Link from "next/link";
+   2| -import { useState } from "react";
+   3| -import { useFormContext } from "react-hook-form";
+   4| -
+   5| -import { Dialog } from "@calcom/features/components/controlled-dialog";
+   6|  import useLockedFieldsManager from "@calcom/features/ee/managed-event-types/hooks/useLockedFieldsManager";
+   7| -import type { FormValues, EventTypeSetupProps } from "@calcom/features/eventtypes/lib/types";
+   8| +import type { EventTypeSetupProps, FormValues } from "@calcom/features/eventtypes/lib/types";
+   9|  import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+  10|  import ServerTrans from "@calcom/lib/components/ServerTrans";
+  11| -import { APP_NAME } from "@calcom/lib/constants";
+  12| +import { APP_NAME, WEBAPP_URL } from "@calcom/lib/constants";
+  13|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+  14|  import { trpc } from "@calcom/trpc/react";
+  15|  import { Alert } from "@calcom/ui/components/alert";
+  16|  import { Button } from "@calcom/ui/components/button";
+  17| -import { DialogContent } from "@calcom/ui/components/dialog";
+  18|  import { EmptyScreen } from "@calcom/ui/components/empty-screen";
+  19|  import { showToast } from "@calcom/ui/components/toast";
+  20|  import { revalidateEventTypeEditPage } from "@calcom/web/app/(use-page-wrapper)/event-types/[type]/actions";
+  21| -
+  22| -import { WebhookForm } from "~/webhooks/components";
+  23| -import EventTypeWebhookListItem from "~/webhooks/components/EventTypeWebhookListItem";
+  24| +import { Card, CardPanel } from "@coss/ui/components/card";
+  25| +import { Dialog, DialogPanel, DialogPopup } from "@coss/ui/components/dialog";
+  26| +import {
+  27| +  AppHeader,
+  28| +  AppHeaderActions,
+  29| +  AppHeaderContent,
+  30| +  AppHeaderDescription,
+  31| +} from "@coss/ui/shared/app-header";
+  32| +import Link from "next/link";
+  33| +import { useState } from "react";
+  34| +import { useFormContext } from "react-hook-form";
+  35| +import { WebhookForm, WebhookListItem } from "~/webhooks/components";
+  36|  import type { TWebhook, WebhookFormSubmitData } from "~/webhooks/components/WebhookForm";
+  37| +import { WebhookVersionCTA } from "~/webhooks/components/WebhookVersionCTA";
+  38| +import { WebhookFormHeader } from "~/webhooks/views/webhook-form-header";
+  39|  
+  40|  export const EventWebhooksTab = ({ eventType }: Pick<EventTypeSetupProps, "eventType">) => {
+  41|    const { t } = useLocale();
+candidates: h23 (WebhookVersionCTA); h32 (WebhookFormHeader); h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h7 | file: apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx | change: modify ---
+@@ -90,6 +95,7 @@ export const EventWebhooksTab = ({ eventType }: Pick<EventTypeSetupProps, "event
+   1|        eventTypeId: eventType.id,
+   2|        time: values.time,
+   3|        timeUnit: values.timeUnit,
+   4| +      version: values.version,
+   5|      });
+   6|    };
+   7|  
+candidates: h23 (version)
+
+--- HUNK h8 | file: apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx | change: modify ---
+@@ -120,159 +126,182 @@ export const EventWebhooksTab = ({ eventType }: Pick<EventTypeSetupProps, "event
+   1|          <>
+   2|            <div>
+   3|              <div>
+   4| -              <>
+   5| -                {(isManagedEventType || isChildrenManagedEventType) && (
+   6| -                  <Alert
+   7| -                    severity={webhooksDisableProps.isLocked ? "neutral" : "info"}
+   8| -                    className="mb-2"
+   9| -                    title={
+  10| -                      <ServerTrans
+  11| -                        t={t}
+  12| -                        i18nKey={`${lockedText}_${isManagedEventType ? "for_members" : "by_team_admin"}`}
+  13| -                      />
+  14| -                    }
+  15| -                    actions={
+  16| -                      <div className="flex h-full items-center">{webhooksDisableProps.LockedIcon}</div>
+  17| -                    }
+  18| -                    message={
+  19| -                      <ServerTrans
+  20| -                        t={t}
+  21| -                        i18nKey={`webhooks_${lockedText}_${
+  22| -                          isManagedEventType ? "for_members" : "by_team_admin"
+  23| -                        }_description`}
+  24| -                      />
+  25| -                    }
+  26| -                  />
+  27| -                )}
+  28| -                {webhooks.length ? (
+  29| -                  <>
+  30| -                    <div className="border-subtle mb-2 rounded-md border p-8">
+  31| -                      <div className="flex justify-between">
+  32| -                        <div>
+  33| -                          <div className="text-default text-sm font-semibold">{t("webhooks")}</div>
+  34| -                          <p className="text-subtle wrap-break-word max-w-[280px] text-sm sm:max-w-[500px]">
+  35| -                            {t("add_webhook_description", { appName: APP_NAME })}
+  36| -                          </p>
+  37| -                        </div>
+  38| -                        {cannotEditWebhooks ? (
+  39| -                          <Button StartIcon="lock" color="secondary" disabled>
+  40| -                            {t("locked_by_team_admin")}
+  41| -                          </Button>
+  42| -                        ) : (
+  43| -                          <NewWebhookButton />
+  44| -                        )}
+  45| -                      </div>
+  46| +              {(isManagedEventType || isChildrenManagedEventType) && (
+  47| +                <Alert
+  48| +                  severity={webhooksDisableProps.isLocked ? "neutral" : "info"}
+  49| +                  className="mb-2"
+  50| +                  title={
+  51| +                    <ServerTrans
+  52| +                      t={t}
+  53| +                      i18nKey={`${lockedText}_${isManagedEventType ? "for_members" : "by_team_admin"}`}
+  54| +                    />
+  55| +                  }
+  56| +                  actions={<div className="flex h-full items-center">{webhooksDisableProps.LockedIcon}</div>}
+  57| +                  message={
+  58| +                    <ServerTrans
+  59| +                      t={t}
+  60| +                      i18nKey={`webhooks_${lockedText}_${
+  61| +                        isManagedEventType ? "for_members" : "by_team_admin"
+  62| +                      }_description`}
+  63| +                    />
+  64| +                  }
+  65| +                />
+  66| +              )}
+  67| +              {webhooks.length ? (
+  68| +                <>
+  69| +                  <AppHeader>
+  70| +                    <AppHeaderContent title={t("webhooks")}>
+  71| +                      <AppHeaderDescription>
+  72| +                        {t("add_webhook_description", { appName: APP_NAME })}
+  73| +                      </AppHeaderDescription>
+  74| +                    </AppHeaderContent>
+  75| +                    <AppHeaderActions>
+  76| +                      {cannotEditWebhooks ? (
+  77| +                        <Button StartIcon="lock" color="secondary" disabled>
+  78| +                          {t("locked_by_team_admin")}
+  79| +                        </Button>
+  80| +                      ) : (
+  81| +                        <NewWebhookButton />
+  82| +                      )}
+  83| +                    </AppHeaderActions>
+  84| +                  </AppHeader>
+  85|  
+  86| -                      <div className="border-subtle my-8 rounded-md border">
+  87| +                  <div className="mb-2 rounded-md border border-subtle p-8">
+  88| +                    <Card className="mb-4">
+  89| +                      <CardPanel className="p-0">
+  90|                          {webhooks.map((webhook, index) => {
+  91| +                          const readOnly = isChildrenManagedEventType && webhook.eventTypeId !== eventType.id;
+  92|                            return (
+  93| -                            <EventTypeWebhookListItem
+  94| +                            <WebhookListItem
+  95|                                key={webhook.id}
+  96|                                webhook={webhook}
+  97| -                              lastItem={webhooks.length === index + 1}
+  98| -                              onEditWebhook={() => {
+  99| +                              permissions={{
+ 100| +                                canEditWebhook: !readOnly,
+ 101| +                                canDeleteWebhook: !readOnly,
+ 102| +                              }}
+ 103| +                              onEditWebhookAction={() => {
+ 104|                                  setEditModalOpen(true);
+ 105|                                  setWebhookToEdit(webhook);
+ 106|                                }}
+ 107| -                              readOnly={isChildrenManagedEventType && webhook.eventTypeId !== eventType.id}
+ 108|                              />
+ 109|                            );
+ 110|                          })}
+ 111| -                      </div>
+ 112| +                      </CardPanel>
+ 113| +                    </Card>
+ 114|  
+ 115| -                      <p className="text-default text-sm font-normal">
+ 116| -                        <ServerTrans
+ 117| -                          t={t}
+ 118| -                          i18nKey="edit_or_manage_webhooks"
+ 119| -                          components={[
+ 120| -                            <Link
+ 121| -                              key="edit_or_manage_webhooks"
+ 122| -                              className="cursor-pointer font-semibold underline"
+ 123| -                              href="/settings/developer/webhooks">
+ 124| -                              webhooks settings
+ 125| -                            </Link>,
+ 126| -                          ]}
+ 127| -                        />
+ 128| -                      </p>
+ 129| -                    </div>
+ 130| -                  </>
+ 131| -                ) : (
+ 132| -                  <EmptyScreen
+ 133| -                    Icon="webhook"
+ 134| -                    headline={t("create_your_first_webhook")}
+ 135| -                    description={t("first_event_type_webhook_description")}
+ 136| -                    buttonRaw={
+ 137| -                      cannotEditWebhooks ? (
+ 138| -                        <Button StartIcon="lock" color="secondary" disabled>
+ 139| -                          {t("locked_by_team_admin")}
+ 140| -                        </Button>
+ 141| -                      ) : (
+ 142| -                        <NewWebhookButton />
+ 143| -                      )
+ 144| -                    }
+ 145| -                  />
+ 146| -                )}
+ 147| -              </>
+ 148| +                    <p className="font-normal text-default text-sm">
+ 149| +                      <ServerTrans
+ 150| +                        t={t}
+ 151| +                        i18nKey="edit_or_manage_webhooks"
+ 152| +                        components={[
+ 153| +                          <Link
+ 154| +                            key="edit_or_manage_webhooks"
+ 155| +                            className="cursor-pointer font-semibold underline"
+ 156| +                            href="/settings/developer/webhooks"
+ 157| +                          />,
+ 158| +                        ]}
+ 159| +                      />
+ 160| +                    </p>
+ 161| +                  </div>
+ 162| +                </>
+ 163| +              ) : (
+ 164| +                <EmptyScreen
+ 165| +                  Icon="webhook"
+ 166| +                  headline={t("create_your_first_webhook")}
+ 167| +                  description={t("first_event_type_webhook_description")}
+ 168| +                  buttonRaw={
+ 169| +                    cannotEditWebhooks ? (
+ 170| +                      <Button StartIcon="lock" color="secondary" disabled>
+ 171| +                        {t("locked_by_team_admin")}
+ 172| +                      </Button>
+ 173| +                    ) : (
+ 174| +                      <NewWebhookButton />
+ 175| +                    )
+ 176| +                  }
+ 177| +                />
+ 178| +              )}
+ 179|              </div>
+ 180|            </div>
+ 181|  
+ 182|            {/* New webhook dialog */}
+ 183| -          <Dialog open={createModalOpen} onOpenChange={(isOpen) => !isOpen && setCreateModalOpen(false)}>
+ 184| -            <DialogContent
+ 185| -              enableOverflow
+ 186| -              title={t("create_webhook")}
+ 187| -              description={t("create_webhook_team_event_type")}>
+ 188| -              <WebhookForm
+ 189| -                noRoutingFormTriggers={true}
+ 190| -                onSubmit={onCreateWebhook}
+ 191| -                onCancel={() => setCreateModalOpen(false)}
+ 192| -                apps={installedApps?.items.map((app) => app.slug)}
+ 193| -              />
+ 194| -            </DialogContent>
+ 195| +          <Dialog open={createModalOpen} onOpenChange={setCreateModalOpen}>
+ 196| +            <DialogPopup showCloseButton={false} className="max-w-3xl">
+ 197| +              <DialogPanel>
+ 198| +                <WebhookForm
+ 199| +                  noRoutingFormTriggers={true}
+ 200| +                  onSubmit={onCreateWebhook}
+ 201| +                  onCancel={() => setCreateModalOpen(false)}
+ 202| +                  apps={installedApps?.items.map((app) => app.slug)}
+ 203| +                  headerWrapper={(formMethods, children) => (
+ 204| +                    <>
+ 205| +                      <WebhookFormHeader
+ 206| +                        titleKey="create_webhook"
+ 207| +                        showBackButton={false}
+ 208| +                        CTA={<WebhookVersionCTA formMethods={formMethods} />}
+ 209| +                      />
+ 210| +                      {children}
+ 211| +                    </>
+ 212| +                  )}
+ 213| +                />
+ 214| +              </DialogPanel>
+ 215| +            </DialogPopup>
+ 216|            </Dialog>
+ 217|            {/* Edit webhook dialog */}
+ 218| -          <Dialog open={editModalOpen} onOpenChange={(isOpen) => !isOpen && setEditModalOpen(false)}>
+ 219| -            <DialogContent enableOverflow title={t("edit_webhook")}>
+ 220| -              <WebhookForm
+ 221| -                noRoutingFormTriggers={true}
+ 222| -                webhook={webhookToEdit}
+ 223| -                apps={installedApps?.items.map((app) => app.slug)}
+ 224| -                onCancel={() => setEditModalOpen(false)}
+ 225| -                onSubmit={(values: WebhookFormSubmitData) => {
+ 226| -                  if (
+ 227| -                    subscriberUrlReserved({
+ 228| -                      subscriberUrl: values.subscriberUrl,
+ 229| -                      id: webhookToEdit?.id,
+ 230| -                      webhooks,
+ 231| -                      eventTypeId: eventType.id,
+ 232| -                    })
+ 233| -                  ) {
+ 234| -                    showToast(t("webhook_subscriber_url_reserved"), "error");
+ 235| -                    return;
+ 236| -                  }
+ 237| +          <Dialog open={editModalOpen} onOpenChange={setEditModalOpen}>
+ 238| +            <DialogPopup showCloseButton={false} className="max-w-3xl">
+ 239| +              <DialogPanel>
+ 240| +                <WebhookForm
+ 241| +                  noRoutingFormTriggers={true}
+ 242| +                  webhook={webhookToEdit}
+ 243| +                  apps={installedApps?.items.map((app) => app.slug)}
+ 244| +                  onCancel={() => setEditModalOpen(false)}
+ 245| +                  headerWrapper={(formMethods, children) => (
+ 246| +                    <>
+ 247| +                      <WebhookFormHeader
+ 248| +                        titleKey="edit_webhook"
+ 249| +                        showBackButton={false}
+ 250| +                        CTA={<WebhookVersionCTA formMethods={formMethods} />}
+ 251| +                      />
+ 252| +                      {children}
+ 253| +                    </>
+ 254| +                  )}
+ 255| +                  onSubmit={(values: WebhookFormSubmitData) => {
+ 256| +                    if (
+ 257| +                      subscriberUrlReserved({
+ 258| +                        subscriberUrl: values.subscriberUrl,
+ 259| +                        id: webhookToEdit?.id,
+ 260| +                        webhooks,
+ 261| +                        eventTypeId: eventType.id,
+ 262| +                      })
+ 263| +                    ) {
+ 264| +                      showToast(t("webhook_subscriber_url_reserved"), "error");
+ 265| +                      return;
+ 266| +                    }
+ 267|  
+ 268| -                  if (values.changeSecret) {
+ 269| -                    values.secret = values.newSecret.length ? values.newSecret : null;
+ 270| -                  }
+ 271| +                    if (values.changeSecret) {
+ 272| +                      values.secret = values.newSecret.length ? values.newSecret : null;
+ 273| +                    }
+ 274|  
+ 275| -                  if (!values.payloadTemplate) {
+ 276| -                    values.payloadTemplate = null;
+ 277| -                  }
+ 278| +                    if (!values.payloadTemplate) {
+ 279| +                      values.payloadTemplate = null;
+ 280| +                    }
+ 281|  
+ 282| -                  editWebhookMutation.mutate({
+ 283| -                    id: webhookToEdit?.id || "",
+ 284| -                    subscriberUrl: values.subscriberUrl,
+ 285| -                    eventTriggers: values.eventTriggers,
+ 286| -                    active: values.active,
+ 287| -                    payloadTemplate: values.payloadTemplate,
+ 288| -                    secret: values.secret,
+ 289| -                    eventTypeId: webhookToEdit?.eventTypeId || undefined,
+ 290| -                    timeUnit: values.timeUnit,
+ 291| -                    time: values.time,
+ 292| -                  });
+ 293| -                }}
+ 294| -              />
+ 295| -            </DialogContent>
+ 296| +                    editWebhookMutation.mutate({
+ 297| +                      id: webhookToEdit?.id || "",
+ 298| +                      subscriberUrl: values.subscriberUrl,
+ 299| +                      eventTriggers: values.eventTriggers,
+ 300| +                      active: values.active,
+ 301| +                      payloadTemplate: values.payloadTemplate,
+ 302| +                      secret: values.secret,
+ 303| +                      eventTypeId: webhookToEdit?.eventTypeId || undefined,
+ 304| +                      timeUnit: values.timeUnit,
+ 305| +                      time: values.time,
+ 306| +                      version: values.version,
+ 307| +                    });
+ 308| +                  }}
+ 309| +                />
+ 310| +              </DialogPanel>
+ 311| +            </DialogPopup>
+ 312|            </Dialog>
+ 313|          </>
+ 314|        )}
+candidates: h9 (readOnly); h15 (readOnly); h23 (WebhookVersionCTA, version); h32 (WebhookFormHeader); h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h9 | file: apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx | change: modify ---
+@@ -1,35 +1,95 @@
+   1|  "use client";
+   2|  
+   3| -import { useRouter } from "next/navigation";
+   4| -
+   5|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+   6|  import { MembershipRole } from "@calcom/prisma/enums";
+   7| +import { trpc } from "@calcom/trpc/react";
+   8| +import { Avatar, AvatarFallback, AvatarImage } from "@coss/ui/components/avatar";
+   9| +import { Button } from "@coss/ui/components/button";
+  10| +import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "@coss/ui/components/menu";
+  11| +import { ChevronDownIcon, PlusIcon } from "lucide-react";
+  12| +import { useRouter } from "next/navigation";
+  13|  
+  14| -import { CreateButtonWithTeamsList } from "~/ee/teams/components/createButton/CreateButtonWithTeamsList";
+  15| +function getInitials(name: string): string {
+  16| +  return name
+  17| +    .split(" ")
+  18| +    .map((n) => n[0])
+  19| +    .join("")
+  20| +    .toUpperCase()
+  21| +    .slice(0, 2);
+  22| +}
+  23|  
+  24| -export const CreateNewWebhookButton = () => {
+  25| +export const CreateNewWebhookButton = ({ isEmptyState }: { isEmptyState?: boolean }) => {
+  26|    const router = useRouter();
+  27|    const { t } = useLocale();
+  28| -  const createFunction = (teamId?: number, platform?: boolean) => {
+  29| -    if (platform) {
+  30| -      router.push(`webhooks/new${platform ? `?platform=${platform}` : ""}`);
+  31| +
+  32| +  const query = trpc.viewer.loggedInViewerRouter.teamsAndUserProfilesQuery.useQuery({
+  33| +    includeOrg: true,
+  34| +    withPermission: {
+  35| +      permission: "webhook.create",
+  36| +      fallbackRoles: [MembershipRole.ADMIN, MembershipRole.OWNER],
+  37| +    },
+  38| +  });
+  39| +
+  40| +  if (!query.data) return null;
+  41| +
+  42| +  const options = query.data
+  43| +    .filter((profile) => !profile.readOnly)
+  44| +    .map((profile) => ({
+  45| +      teamId: profile.teamId,
+  46| +      label: profile.name || profile.slug,
+  47| +      image: profile.image,
+  48| +      slug: profile.slug,
+  49| +    }));
+  50| +
+  51| +  const handleSelect = (option: { teamId?: number | null; platform?: boolean }) => {
+  52| +    if (option.platform) {
+  53| +      router.push(`webhooks/new?platform=${option.platform}`);
+  54|      } else {
+  55| -      router.push(`webhooks/new${teamId ? `?teamId=${teamId}` : ""}`);
+  56| +      router.push(`webhooks/new${option.teamId ? `?teamId=${option.teamId}` : ""}`);
+  57|      }
+  58|    };
+  59|  
+  60| +  if (options.length <= 1) {
+  61| +    return (
+  62| +      <Button
+  63| +        data-testid="new_webhook"
+  64| +        onClick={() => handleSelect(options[0] || {})}
+  65| +        variant={isEmptyState ? "default" : "outline"}>
+  66| +        <PlusIcon aria-hidden="true" />
+  67| +        {t("new")}
+  68| +      </Button>
+  69| +    );
+  70| +  }
+  71| +
+  72|    return (
+  73| -    <CreateButtonWithTeamsList
+  74| -      color="secondary"
+  75| -      subtitle={t("create_for").toUpperCase()}
+  76| -      createFunction={createFunction}
+  77| -      data-testid="new_webhook"
+  78| -      includeOrg={true}
+  79| -      withPermission={{
+  80| -        permission: "webhook.create",
+  81| -        fallbackRoles: [MembershipRole.ADMIN, MembershipRole.OWNER],
+  82| -      }}
+  83| -    />
+  84| +    <Menu>
+  85| +      <MenuTrigger
+  86| +        render={<Button data-testid="new_webhook" variant={isEmptyState ? "default" : "outline"} />}>
+  87| +        {t("new")}
+  88| +        <ChevronDownIcon aria-hidden="true" />
+  89| +      </MenuTrigger>
+  90| +      <MenuPopup align={isEmptyState ? undefined : "end"}>
+  91| +        <MenuGroup>
+  92| +          <MenuGroupLabel>{t("create_for")}</MenuGroupLabel>
+  93| +          {options.map((option, idx) => (
+  94| +            <MenuItem
+  95| +              key={option.label}
+  96| +              data-testid={`option${option.teamId ? "-team" : ""}-${idx}`}
+  97| +              onClick={() => handleSelect(option)}>
+  98| +              <span className="flex items-center gap-2">
+  99| +                <Avatar className="size-5">
+ 100| +                  {option.image ? <AvatarImage alt={option.label || ""} src={option.image} /> : null}
+ 101| +                  <AvatarFallback className="text-[.625rem]">
+ 102| +                    {getInitials(option.label || "")}
+ 103| +                  </AvatarFallback>
+ 104| +                </Avatar>
+ 105| +                <span className="truncate">{option.label}</span>
+ 106| +              </span>
+ 107| +            </MenuItem>
+ 108| +          ))}
+ 109| +        </MenuGroup>
+ 110| +      </MenuPopup>
+ 111| +    </Menu>
+ 112|    );
+ 113|  };
+ 114|  
+candidates: h8 (readOnly); h17 (options); h26 (CreateNewWebhookButton); h44 (CreateNewWebhookButton)
+
+--- HUNK h10 | file: apps/web/modules/webhooks/components/EventTypeWebhookListItem.tsx | change: delete ---
+@@ -1,178 +0,0 @@
+   1| -"use client";
+   2| -
+   3| -import { useState } from "react";
+   4| -
+   5| -import { useLocale } from "@calcom/lib/hooks/useLocale";
+   6| -import type { WebhookTriggerEvents } from "@calcom/prisma/enums";
+   7| -import { trpc } from "@calcom/trpc/react";
+   8| -import classNames from "@calcom/ui/classNames";
+   9| -import { Badge } from "@calcom/ui/components/badge";
+  10| -import { Button } from "@calcom/ui/components/button";
+  11| -import {
+  12| -  Dropdown,
+  13| -  DropdownItem,
+  14| -  DropdownMenuContent,
+  15| -  DropdownMenuItem,
+  16| -  DropdownMenuSeparator,
+  17| -  DropdownMenuTrigger,
+  18| -} from "@calcom/ui/components/dropdown";
+  19| -import { Switch } from "@calcom/ui/components/form";
+  20| -import { showToast } from "@calcom/ui/components/toast";
+  21| -import { Tooltip } from "@calcom/ui/components/tooltip";
+  22| -import { revalidateEventTypeEditPage } from "@calcom/web/app/(use-page-wrapper)/event-types/[type]/actions";
+  23| -
+  24| -import { DeleteWebhookDialog } from "./dialogs/DeleteWebhookDialog";
+  25| -
+  26| -type WebhookProps = {
+  27| -  id: string;
+  28| -  subscriberUrl: string;
+  29| -  payloadTemplate: string | null;
+  30| -  active: boolean;
+  31| -  eventTriggers: WebhookTriggerEvents[];
+  32| -  secret: string | null;
+  33| -  eventTypeId: number | null;
+  34| -  teamId: number | null;
+  35| -};
+  36| -
+  37| -export default function EventTypeWebhookListItem(props: {
+  38| -  webhook: WebhookProps;
+  39| -  onEditWebhook: () => void;
+  40| -  lastItem: boolean;
+  41| -  readOnly?: boolean;
+  42| -}) {
+  43| -  const { t } = useLocale();
+  44| -  const utils = trpc.useUtils();
+  45| -  const { webhook } = props;
+  46| -  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  47| -
+  48| -  const deleteWebhook = trpc.viewer.webhook.delete.useMutation({
+  49| -    async onSuccess() {
+  50| -      if (webhook.eventTypeId) revalidateEventTypeEditPage(webhook.eventTypeId);
+  51| -      showToast(t("webhook_removed_successfully"), "success");
+  52| -      await utils.viewer.webhook.getByViewer.invalidate();
+  53| -      await utils.viewer.webhook.list.invalidate();
+  54| -      await utils.viewer.eventTypes.get.invalidate();
+  55| -      setDeleteDialogOpen(false);
+  56| -    },
+  57| -    onError() {
+  58| -      showToast(t("something_went_wrong"), "error");
+  59| -      setDeleteDialogOpen(false);
+  60| -    },
+  61| -  });
+  62| -  const toggleWebhook = trpc.viewer.webhook.edit.useMutation({
+  63| -    async onSuccess(data) {
+  64| -      if (webhook.eventTypeId) revalidateEventTypeEditPage(webhook.eventTypeId);
+  65| -      showToast(t(data?.active ? "enabled" : "disabled"), "success");
+  66| -      await utils.viewer.webhook.getByViewer.invalidate();
+  67| -      await utils.viewer.webhook.list.invalidate();
+  68| -      await utils.viewer.eventTypes.get.invalidate();
+  69| -    },
+  70| -  });
+  71| -
+  72| -  return (
+  73| -    <div
+  74| -      className={classNames(
+  75| -        "flex w-full justify-between p-4",
+  76| -        props.lastItem ? "" : "border-subtle border-b"
+  77| -      )}>
+  78| -      <div className="w-full truncate">
+  79| -        <div className="flex">
+  80| -          <Tooltip content={webhook.subscriberUrl}>
+  81| -            <p className="text-emphasis max-w-[600px] truncate text-sm font-medium">
+  82| -              {webhook.subscriberUrl}
+  83| -            </p>
+  84| -          </Tooltip>
+  85| -          {!!props.readOnly && (
+  86| -            <Badge variant="gray" className="ml-2 ">
+  87| -              {t("readonly")}
+  88| -            </Badge>
+  89| -          )}
+  90| -        </div>
+  91| -        <Tooltip content={t("triggers_when")}>
+  92| -          <div className="flex w-4/5 flex-wrap">
+  93| -            {webhook.eventTriggers.map((trigger) => (
+  94| -              <Badge
+  95| -                key={trigger}
+  96| -                className="mt-2.5 basis-1/5 ltr:mr-2 rtl:ml-2"
+  97| -                variant="gray"
+  98| -                startIcon="zap">
+  99| -                {t(`${trigger.toLowerCase()}`)}
+ 100| -              </Badge>
+ 101| -            ))}
+ 102| -          </div>
+ 103| -        </Tooltip>
+ 104| -      </div>
+ 105| -      {!props.readOnly && (
+ 106| -        <div className="ml-2 flex items-center space-x-4">
+ 107| -          <Switch
+ 108| -            defaultChecked={webhook.active}
+ 109| -            data-testid="webhook-switch"
+ 110| -            onCheckedChange={() =>
+ 111| -              toggleWebhook.mutate({
+ 112| -                id: webhook.id,
+ 113| -                active: !webhook.active,
+ 114| -                payloadTemplate: webhook.payloadTemplate,
+ 115| -                eventTypeId: webhook.eventTypeId || undefined,
+ 116| -              })
+ 117| -            }
+ 118| -          />
+ 119| -
+ 120| -          <Button
+ 121| -            className="hidden lg:flex"
+ 122| -            color="secondary"
+ 123| -            onClick={props.onEditWebhook}
+ 124| -            data-testid="webhook-edit-button">
+ 125| -            {t("edit")}
+ 126| -          </Button>
+ 127| -
+ 128| -          <Button
+ 129| -            className="hidden lg:flex"
+ 130| -            color="destructive"
+ 131| -            StartIcon="trash"
+ 132| -            variant="icon"
+ 133| -            data-testid="delete-webhook"
+ 134| -            onClick={() => setDeleteDialogOpen(true)}
+ 135| -            disabled={deleteWebhook.isPending}
+ 136| -          />
+ 137| -
+ 138| -          <Dropdown>
+ 139| -            <DropdownMenuTrigger asChild>
+ 140| -              <Button className="lg:hidden" StartIcon="ellipsis" variant="icon" color="secondary" />
+ 141| -            </DropdownMenuTrigger>
+ 142| -            <DropdownMenuContent>
+ 143| -              <DropdownMenuItem>
+ 144| -                <DropdownItem StartIcon="pencil" color="secondary" onClick={props.onEditWebhook}>
+ 145| -                  {t("edit")}
+ 146| -                </DropdownItem>
+ 147| -              </DropdownMenuItem>
+ 148| -              <DropdownMenuSeparator />
+ 149| -
+ 150| -              <DropdownMenuItem>
+ 151| -                <DropdownItem
+ 152| -                  StartIcon="trash"
+ 153| -                  color="destructive"
+ 154| -                  onClick={() => setDeleteDialogOpen(true)}
+ 155| -                  disabled={deleteWebhook.isPending}>
+ 156| -                  {t("delete")}
+ 157| -                </DropdownItem>
+ 158| -              </DropdownMenuItem>
+ 159| -            </DropdownMenuContent>
+ 160| -          </Dropdown>
+ 161| -        </div>
+ 162| -      )}
+ 163| -
+ 164| -      <DeleteWebhookDialog
+ 165| -        open={deleteDialogOpen}
+ 166| -        onOpenChange={setDeleteDialogOpen}
+ 167| -        isPending={deleteWebhook.isPending}
+ 168| -        onConfirm={() => {
+ 169| -          deleteWebhook.mutate({
+ 170| -            id: webhook.id,
+ 171| -            eventTypeId: webhook.eventTypeId || undefined,
+ 172| -            teamId: webhook.teamId || undefined,
+ 173| -          });
+ 174| -        }}
+ 175| -      />
+ 176| -    </div>
+ 177| -  );
+ 178| -}
+
+--- HUNK h11 | file: apps/web/modules/webhooks/components/WebhookForm.tsx | change: modify ---
+@@ -1,26 +1,40 @@
+   1|  "use client";
+   2|  
+   3| -import { useEffect, useState } from "react";
+   4| -import { Controller, useForm } from "react-hook-form";
+   5| -
+   6|  import SectionBottomActions from "@calcom/features/settings/SectionBottomActions";
+   7|  import customTemplate, { hasTemplateIntegration } from "@calcom/features/webhooks/lib/integrationTemplate";
+   8|  import { WebhookVersion } from "@calcom/features/webhooks/lib/interface/IWebhookRepository";
+   9| -import { WEBAPP_URL } from "@calcom/lib/constants";
+  10|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+  11|  import { TimeUnit, WebhookTriggerEvents } from "@calcom/prisma/enums";
+  12|  import type { RouterOutputs } from "@calcom/trpc/react";
+  13| -import { Button } from "@calcom/ui/components/button";
+  14| -import { Select } from "@calcom/ui/components/form";
+  15| -import { TextArea } from "@calcom/ui/components/form";
+  16| -import { ToggleGroup } from "@calcom/ui/components/form";
+  17|  import { Form } from "@calcom/ui/components/form";
+  18| -import { Label } from "@calcom/ui/components/form";
+  19| -import { TextField } from "@calcom/ui/components/form";
+  20| -import { Switch } from "@calcom/ui/components/form";
+  21| -
+  22| -import { TimeTimeUnitInput } from "~/ee/workflows/components/TimeTimeUnitInput";
+  23| -
+  24| +import { Button } from "@coss/ui/components/button";
+  25| +import { Card, CardFrame, CardFrameFooter, CardPanel } from "@coss/ui/components/card";
+  26| +import { Collapsible, CollapsiblePanel, CollapsibleTrigger } from "@coss/ui/components/collapsible";
+  27| +import {
+  28| +  Combobox,
+  29| +  ComboboxChip,
+  30| +  ComboboxChips,
+  31| +  ComboboxChipsInput,
+  32| +  ComboboxClear,
+  33| +  ComboboxEmpty,
+  34| +  ComboboxItem,
+  35| +  ComboboxList,
+  36| +  ComboboxPopup,
+  37| +  ComboboxValue,
+  38| +} from "@coss/ui/components/combobox";
+  39| +import { Field, FieldDescription, FieldError, FieldLabel } from "@coss/ui/components/field";
+  40| +import { Group, GroupSeparator } from "@coss/ui/components/group";
+  41| +import { Input } from "@coss/ui/components/input";
+  42| +import { NumberField, NumberFieldGroup, NumberFieldInput } from "@coss/ui/components/number-field";
+  43| +import { ScrollArea } from "@coss/ui/components/scroll-area";
+  44| +import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@coss/ui/components/select";
+  45| +import { Spinner } from "@coss/ui/components/spinner";
+  46| +import { Switch } from "@coss/ui/components/switch";
+  47| +import { Textarea } from "@coss/ui/components/textarea";
+  48| +import { ExternalLinkIcon, TrashIcon } from "lucide-react";
+  49| +import Link from "next/link";
+  50| +import { useEffect, useState } from "react";
+  51| +import { Controller, useForm } from "react-hook-form";
+  52|  import WebhookTestDisclosure from "./WebhookTestDisclosure";
+  53|  
+  54|  export type TWebhook = RouterOutputs["viewer"]["webhook"]["list"][number];
+
+--- HUNK h12 | file: apps/web/modules/webhooks/components/WebhookForm.tsx | change: modify ---
+@@ -301,13 +315,18 @@ const WebhookForm = (props: {
+   1|      },
+   2|    });
+   3|  
+   4| -  formMethods.register("version");
+   5| -
+   6|    const triggers = formMethods.watch("eventTriggers") || [];
+   7|    const subscriberUrl = formMethods.watch("subscriberUrl");
+   8|    const time = formMethods.watch("time");
+   9|    const timeUnit = formMethods.watch("timeUnit");
+  10|  
+  11| +  const TIME_UNITS = [TimeUnit.MINUTE, TimeUnit.HOUR, TimeUnit.DAY] as const;
+  12| +  const timeUnitItems = TIME_UNITS.map((unit) => ({
+  13| +    value: unit,
+  14| +    label: t(`${unit.toLowerCase()}_timeUnit`),
+  15| +  }));
+  16| +  const selectedTimeUnitItem = timeUnitItems.find((item) => item.value === timeUnit) ?? timeUnitItems[2];
+  17| +
+  18|    const isCreating = !props?.webhook?.id;
+  19|    const needsTime = triggers.some(
+  20|      (t) =>
+candidates: h15 (selectedTimeUnitItem, timeUnitItems)
+
+--- HUNK h13 | file: apps/web/modules/webhooks/components/WebhookForm.tsx | change: modify ---
+@@ -318,10 +337,6 @@ const WebhookForm = (props: {
+   1|    const hasUrl = !!subscriberUrl;
+   2|    const showTimeSection = needsTime;
+   3|  
+   4| -  const [useCustomTemplate, setUseCustomTemplate] = useState(
+   5| -    props?.webhook?.payloadTemplate !== undefined && props?.webhook?.payloadTemplate !== null
+   6| -  );
+   7| -
+   8|    function insertVariableIntoTemplate(current: string, name: string, value: string): string {
+   9|      try {
+  10|        const parsed = JSON.parse(current || "{}");
+
+--- HUNK h14 | file: apps/web/modules/webhooks/components/WebhookForm.tsx | change: modify ---
+@@ -343,6 +358,9 @@ const WebhookForm = (props: {
+   1|      }
+   2|    }
+   3|  
+   4| +  const [customPayloadOpen, setCustomPayloadOpen] = useState(
+   5| +    props?.webhook?.payloadTemplate !== undefined && props?.webhook?.payloadTemplate !== null
+   6| +  );
+   7|    const [showVariables, setShowVariables] = useState(false);
+   8|    const [newSecret, setNewSecret] = useState("");
+   9|    const [changeSecret, setChangeSecret] = useState<boolean>(false);
+
+--- HUNK h15 | file: apps/web/modules/webhooks/components/WebhookForm.tsx | change: modify ---
+@@ -365,274 +383,401 @@ const WebhookForm = (props: {
+   1|      }
+   2|    }, [changeSecret, formMethods]);
+   3|  
+   4| -  const formContent = (
+   5| -    <Form
+   6| -      form={formMethods}
+   7| -      handleSubmit={(values) => props.onSubmit({ ...values, changeSecret, newSecret })}>
+   8| -      <div className="border-subtle border p-6">
+   9| -        <Controller
+  10| -          name="subscriberUrl"
+  11| -          control={formMethods.control}
+  12| -          render={({ field: { value } }) => (
+  13| -            <>
+  14| -              <TextField
+  15| -                name="subscriberUrl"
+  16| -                label={t("subscriber_url")}
+  17| -                labelClassName="font-medium text-emphasis font-sm"
+  18| -                value={value}
+  19| -                required
+  20| -                type="url"
+  21| -                onChange={(e) => {
+  22| -                  formMethods.setValue("subscriberUrl", e?.target.value, { shouldDirty: true });
+  23| -                  if (hasTemplateIntegration({ url: e.target.value })) {
+  24| -                    setUseCustomTemplate(true);
+  25| -                    formMethods.setValue("payloadTemplate", customTemplate({ url: e.target.value }), {
+  26| +  const formFields = (
+  27| +    <div className="flex flex-col gap-6">
+  28| +      <Controller
+  29| +        name="subscriberUrl"
+  30| +        control={formMethods.control}
+  31| +        rules={{
+  32| +          required: t("subscriber_url_required", "Subscriber URL is required"),
+  33| +        }}
+  34| +        render={({
+  35| +          field: { ref, name, value, onBlur, onChange },
+  36| +          fieldState: { invalid, isTouched, isDirty, error },
+  37| +        }) => (
+  38| +          <Field name={name} invalid={invalid} touched={isTouched} dirty={isDirty}>
+  39| +            <FieldLabel>{t("subscriber_url")}</FieldLabel>
+  40| +            <Input
+  41| +              ref={ref}
+  42| +              placeholder="https://example.com/webhook"
+  43| +              type="url"
+  44| +              value={value}
+  45| +              required
+  46| +              onBlur={onBlur}
+  47| +              onValueChange={(urlValue) => {
+  48| +                onChange(urlValue);
+  49| +                if (urlValue && hasTemplateIntegration({ url: urlValue })) {
+  50| +                  setCustomPayloadOpen(true);
+  51| +                  formMethods.setValue("payloadTemplate", customTemplate({ url: urlValue }), {
+  52| +                    shouldDirty: true,
+  53| +                  });
+  54| +                }
+  55| +              }}
+  56| +            />
+  57| +            <FieldError match={!!error}>{error?.message}</FieldError>
+  58| +          </Field>
+  59| +        )}
+  60| +      />
+  61| +      <Controller
+  62| +        name="active"
+  63| +        control={formMethods.control}
+  64| +        render={({ field: { name, value, onChange }, fieldState: { invalid, isTouched, isDirty } }) => (
+  65| +          <Field name={name} invalid={invalid} touched={isTouched} dirty={isDirty}>
+  66| +            <FieldLabel>
+  67| +              <Switch checked={value} onCheckedChange={(checked) => onChange(checked)} />
+  68| +              {t("enable_webhook")}
+  69| +            </FieldLabel>
+  70| +          </Field>
+  71| +        )}
+  72| +      />
+  73| +      <Controller
+  74| +        name="eventTriggers"
+  75| +        control={formMethods.control}
+  76| +        render={({ field: { name, onChange, value }, fieldState: { invalid, isTouched, isDirty } }) => {
+  77| +          const selectedItems = translatedTriggerOptions.filter((option) => value.includes(option.value));
+  78| +          return (
+  79| +            <Field name={name} invalid={invalid} touched={isTouched} dirty={isDirty}>
+  80| +              <FieldLabel>{t("event_triggers")}</FieldLabel>
+  81| +              <Combobox
+  82| +                value={selectedItems}
+  83| +                onValueChange={(newValue) => {
+  84| +                  onChange(newValue.map((item) => item.value));
+  85| +                  const noShowWebhookTriggerExists = !!newValue.find(
+  86| +                    (trigger) =>
+  87| +                      trigger.value === WebhookTriggerEvents.AFTER_HOSTS_CAL_VIDEO_NO_SHOW ||
+  88| +                      trigger.value === WebhookTriggerEvents.AFTER_GUESTS_CAL_VIDEO_NO_SHOW
+  89| +                  );
+  90| +
+  91| +                  if (noShowWebhookTriggerExists) {
+  92| +                    formMethods.setValue("time", props.webhook?.time ?? 5, { shouldDirty: true });
+  93| +                    formMethods.setValue("timeUnit", props.webhook?.timeUnit ?? TimeUnit.MINUTE, {
+  94|                        shouldDirty: true,
+  95|                      });
+  96| +                  } else {
+  97| +                    formMethods.setValue("time", undefined, { shouldDirty: true });
+  98| +                    formMethods.setValue("timeUnit", undefined, { shouldDirty: true });
+  99|                    }
+ 100|                  }}
+ 101| -              />
+ 102| -            </>
+ 103| -          )}
+ 104| -        />
+ 105| +                items={translatedTriggerOptions}
+ 106| +                multiple>
+ 107| +                <ComboboxChips>
+ 108| +                  <ComboboxValue>
+ 109| +                    {(selectedValues: { value: WebhookTriggerEvents; label: string }[]) => (
+ 110| +                      <>
+ 111| +                        {selectedValues?.map((item) => (
+ 112| +                          <ComboboxChip
+ 113| +                            key={item.value}
+ 114| +                            removeProps={{ "aria-label": `${t("remove")} ${item.label}` }}>
+ 115| +                            {item.label}
+ 116| +                          </ComboboxChip>
+ 117| +                        ))}
+ 118| +                        <ComboboxChipsInput
+ 119| +                          aria-label={t("event_triggers")}
+ 120| +                          placeholder={
+ 121| +                            selectedValues.length > 0
+ 122| +                              ? undefined
+ 123| +                              : t("select_event_triggers", "Select event triggers…")
+ 124| +                          }
+ 125| +                        />
+ 126| +                      </>
+ 127| +                    )}
+ 128| +                  </ComboboxValue>
+ 129| +                </ComboboxChips>
+ 130| +                <ComboboxPopup>
+ 131| +                  <ComboboxEmpty>{t("no_options_available")}</ComboboxEmpty>
+ 132| +                  <ComboboxList>
+ 133| +                    {(item: { value: WebhookTriggerEvents; label: string }) => (
+ 134| +                      <ComboboxItem key={item.value} value={item}>
+ 135| +                        {item.label}
+ 136| +                      </ComboboxItem>
+ 137| +                    )}
+ 138| +                  </ComboboxList>
+ 139| +                </ComboboxPopup>
+ 140| +                <ComboboxClear render={<Button size="xs" variant="outline" />}>
+ 141| +                  <TrashIcon />
+ 142| +                  {t("clear_all_triggers", "Clear all triggers")}
+ 143| +                </ComboboxClear>
+ 144| +              </Combobox>
+ 145| +            </Field>
+ 146| +          );
+ 147| +        }}
+ 148| +      />
+ 149| +
+ 150| +      {showTimeSection && (
+ 151|          <Controller
+ 152| -          name="active"
+ 153| +          name="time"
+ 154|            control={formMethods.control}
+ 155| -          render={({ field: { value } }) => (
+ 156| -            <div className="font-sm text-emphasis mt-6 font-medium">
+ 157| -              <Switch
+ 158| -                label={t("enable_webhook")}
+ 159| -                checked={value}
+ 160| -                // defaultChecked={props?.webhook?.active ? props?.webhook?.active : true}
+ 161| -                onCheckedChange={(value) => {
+ 162| -                  formMethods.setValue("active", value, { shouldDirty: true });
+ 163| -                }}
+ 164| -              />
+ 165| -            </div>
+ 166| +          render={({
+ 167| +            field: { value: timeValue, onChange: onTimeChange },
+ 168| +            fieldState: { invalid: timeInvalid, isTouched: timeTouched, isDirty: timeDirty },
+ 169| +          }) => (
+ 170| +            <Controller
+ 171| +              name="timeUnit"
+ 172| +              control={formMethods.control}
+ 173| +              render={({
+ 174| +                field: { name, onChange: onTimeUnitChange },
+ 175| +                fieldState: { invalid, isTouched, isDirty },
+ 176| +              }) => (
+ 177| +                <Field
+ 178| +                  name={name}
+ 179| +                  invalid={invalid || timeInvalid}
+ 180| +                  touched={isTouched || timeTouched}
+ 181| +                  dirty={isDirty || timeDirty}>
+ 182| +                  <FieldLabel>{t("how_long_after_user_no_show_minutes")}</FieldLabel>
+ 183| +                  <Group aria-label={t("how_long_after_user_no_show_minutes")} className="w-full">
+ 184| +                    <NumberField
+ 185| +                      aria-label="Duration"
+ 186| +                      className="gap-0"
+ 187| +                      value={timeValue ?? 5}
+ 188| +                      min={0}
+ 189| +                      onValueChange={(newValue) => onTimeChange(newValue ?? 5)}
+ 190| +                      render={<NumberFieldGroup />}>
+ 191| +                      <NumberFieldInput className="text-left" />
+ 192| +                    </NumberField>
+ 193| +                    <GroupSeparator />
+ 194| +                    <Select
+ 195| +                      value={selectedTimeUnitItem}
+ 196| +                      onValueChange={(newValue) => {
+ 197| +                        if (!newValue) return;
+ 198| +                        onTimeUnitChange(newValue.value);
+ 199| +                      }}
+ 200| +                      items={timeUnitItems}>
+ 201| +                      <SelectTrigger className="w-fit min-w-none">
+ 202| +                        <SelectValue />
+ 203| +                      </SelectTrigger>
+ 204| +                      <SelectPopup>
+ 205| +                        {timeUnitItems.map((item) => (
+ 206| +                          <SelectItem key={item.value} value={item}>
+ 207| +                            {item.label}
+ 208| +                          </SelectItem>
+ 209| +                        ))}
+ 210| +                      </SelectPopup>
+ 211| +                    </Select>
+ 212| +                  </Group>
+ 213| +                </Field>
+ 214| +              )}
+ 215| +            />
+ 216|            )}
+ 217|          />
+ 218| -        <Controller
+ 219| -          name="eventTriggers"
+ 220| -          control={formMethods.control}
+ 221| -          render={({ field: { onChange, value } }) => {
+ 222| -            const selectValue = translatedTriggerOptions.filter((option) => value.includes(option.value));
+ 223| -            return (
+ 224| -              <div className="mt-6">
+ 225| -                <Label className="font-sm text-emphasis font-medium">
+ 226| -                  <>{t("event_triggers")}</>
+ 227| -                </Label>
+ 228| -                <Select
+ 229| -                  grow
+ 230| -                  options={translatedTriggerOptions}
+ 231| -                  isMulti
+ 232| -                  styles={{
+ 233| -                    indicatorsContainer: (base) =>
+ 234| -                      Object.assign({}, base, {
+ 235| -                        alignItems: "flex-start",
+ 236| -                      }),
+ 237| -                  }}
+ 238| -                  value={selectValue}
+ 239| -                  onChange={(event) => {
+ 240| -                    onChange(event.map((selection) => selection.value));
+ 241| -                    const noShowWebhookTriggerExists = !!event.find(
+ 242| -                      (trigger) =>
+ 243| -                        trigger.value === WebhookTriggerEvents.AFTER_HOSTS_CAL_VIDEO_NO_SHOW ||
+ 244| -                        trigger.value === WebhookTriggerEvents.AFTER_GUESTS_CAL_VIDEO_NO_SHOW
+ 245| -                    );
+ 246| -
+ 247| -                    if (noShowWebhookTriggerExists) {
+ 248| -                      formMethods.setValue("time", props.webhook?.time ?? 5, { shouldDirty: true });
+ 249| -                      formMethods.setValue("timeUnit", props.webhook?.timeUnit ?? TimeUnit.MINUTE, {
+ 250| -                        shouldDirty: true,
+ 251| -                      });
+ 252| -                    } else {
+ 253| -                      formMethods.setValue("time", undefined, { shouldDirty: true });
+ 254| -                      formMethods.setValue("timeUnit", undefined, { shouldDirty: true });
+ 255| -                    }
+ 256| -                  }}
+ 257| -                />
+ 258| -              </div>
+ 259| -            );
+ 260| -          }}
+ 261| -        />
+ 262| -
+ 263| -        {showTimeSection && (
+ 264| -          <div className="mt-5">
+ 265| -            <Label>{t("how_long_after_user_no_show_minutes")}</Label>
+ 266| -            <TimeTimeUnitInput disabled={false} defaultTime={5} />
+ 267| -          </div>
+ 268| -        )}
+ 269| -
+ 270| -        <Controller
+ 271| -          name="secret"
+ 272| -          control={formMethods.control}
+ 273| -          render={({ field: { value } }) => (
+ 274| -            <div className="mt-6">
+ 275| -              {!!hasSecretKey && !changeSecret && (
+ 276| -                <>
+ 277| -                  <Label className="font-sm text-emphasis font-medium">Secret</Label>
+ 278| -                  <div className="bg-default stack-y-0 rounded-md border-0 border-neutral-200 sm:mx-0 md:border">
+ 279| -                    <div className="text-emphasis rounded-sm border-b p-2 text-sm">
+ 280| -                      {t("forgotten_secret_description")}
+ 281| -                    </div>
+ 282| -                    <div className="p-2">
+ 283| -                      <Button
+ 284| -                        color="secondary"
+ 285| -                        type="button"
+ 286| -                        onClick={() => {
+ 287| -                          setChangeSecret(true);
+ 288| -                        }}>
+ 289| -                        {t("change_secret")}
+ 290| -                      </Button>
+ 291| -                    </div>
+ 292| -                  </div>
+ 293| -                </>
+ 294| -              )}
+ 295| -              {!!hasSecretKey && changeSecret && (
+ 296| -                <>
+ 297| -                  <TextField
+ 298| +      )}
+ 299| +
+ 300| +      <Controller
+ 301| +        name="secret"
+ 302| +        control={formMethods.control}
+ 303| +        render={({ field: { name, value, onChange }, fieldState: { invalid, isTouched, isDirty } }) => (
+ 304| +          <Field name={name} invalid={invalid} touched={isTouched} dirty={isDirty}>
+ 305| +            {hasSecretKey ? (
+ 306| +              <>
+ 307| +                <FieldLabel>{t("secret")}</FieldLabel>
+ 308| +                <div className="flex w-full gap-2">
+ 309| +                  <Input
+ 310|                      autoComplete="off"
+ 311| -                    label={t("secret")}
+ 312| -                    labelClassName="font-medium text-emphasis font-sm"
+ 313| -                    {...formMethods.register("secret")}
+ 314| -                    value={newSecret}
+ 315| -                    onChange={(event) => setNewSecret(event.currentTarget.value)}
+ 316| -                    type="text"
+ 317| -                    placeholder={t("leave_blank_to_remove_secret")}
+ 318| +                    type={changeSecret ? "text" : "password"}
+ 319| +                    value={changeSecret ? newSecret : "••••••••••••"}
+ 320| +                    readOnly={!changeSecret}
+ 321| +                    disabled={!changeSecret}
+ 322| +                    onValueChange={
+ 323| +                      changeSecret
+ 324| +                        ? (v) => {
+ 325| +                            setNewSecret(v);
+ 326| +                            onChange(v);
+ 327| +                          }
+ 328| +                        : undefined
+ 329| +                    }
+ 330| +                    placeholder={changeSecret ? t("leave_blank_to_remove_secret") : undefined}
+ 331| +                    className="flex-1"
+ 332|                    />
+ 333|                    <Button
+ 334| -                    color="secondary"
+ 335| -                    type="button"
+ 336| -                    className="py-1 text-xs"
+ 337| +                    variant="outline"
+ 338|                      onClick={() => {
+ 339| -                      setChangeSecret(false);
+ 340| +                      if (changeSecret) {
+ 341| +                        setChangeSecret(false);
+ 342| +                        setNewSecret("");
+ 343| +                      } else {
+ 344| +                        const currentSecret = value || props?.webhook?.secret || "";
+ 345| +                        setNewSecret(currentSecret);
+ 346| +                        setChangeSecret(true);
+ 347| +                      }
+ 348|                      }}>
+ 349| -                    {t("cancel")}
+ 350| +                    {changeSecret ? t("cancel") : t("edit")}
+ 351|                    </Button>
+ 352| -                </>
+ 353| -              )}
+ 354| -              {!hasSecretKey && (
+ 355| -                <TextField
+ 356| -                  name="secret"
+ 357| -                  label={t("secret")}
+ 358| -                  labelClassName="font-medium text-emphasis font-sm"
+ 359| -                  value={value ?? ""}
+ 360| -                  onChange={(e) => {
+ 361| -                    formMethods.setValue("secret", e?.target.value, { shouldDirty: true });
+ 362| -                  }}
+ 363| -                />
+ 364| -              )}
+ 365| -            </div>
+ 366| -          )}
+ 367| -        />
+ 368| -
+ 369| -        <Controller
+ 370| -          name="payloadTemplate"
+ 371| -          control={formMethods.control}
+ 372| -          render={({ field: { value } }) => (
+ 373| -            <>
+ 374| -              <Label className="font-sm text-emphasis mt-6">
+ 375| -                <>{t("payload_template")}</>
+ 376| -              </Label>
+ 377| -              <div className="mb-2">
+ 378| -                <ToggleGroup
+ 379| -                  onValueChange={(val) => {
+ 380| -                    if (val === "default") {
+ 381| -                      setUseCustomTemplate(false);
+ 382| -                      formMethods.setValue("payloadTemplate", undefined, { shouldDirty: true });
+ 383| -                    } else {
+ 384| -                      setUseCustomTemplate(true);
+ 385| +                </div>
+ 386| +                <FieldDescription>{t("forgotten_secret_description")}</FieldDescription>
+ 387| +              </>
+ 388| +            ) : (
+ 389| +              <>
+ 390| +                <FieldLabel>{t("secret")}</FieldLabel>
+ 391| +                <Input type="text" value={value ?? ""} onValueChange={onChange} />
+ 392| +              </>
+ 393| +            )}
+ 394| +          </Field>
+ 395| +        )}
+ 396| +      />
+ 397| +
+ 398| +      <Controller
+ 399| +        name="payloadTemplate"
+ 400| +        control={formMethods.control}
+ 401| +        render={({ field: { name, value, onChange }, fieldState: { invalid, isTouched, isDirty } }) => {
+ 402| +          // Flatten webhookVariables into a single array for payloadVariables
+ 403| +          const payloadVariables = webhookVariables.flatMap(({ variables }) =>
+ 404| +            variables.map(({ name: n, variable, description }) => ({
+ 405| +              name: n,
+ 406| +              variable: `{{${variable}}}`,
+ 407| +              description,
+ 408| +            }))
+ 409| +          );
+ 410| +
+ 411| +          return (
+ 412| +            <Collapsible onOpenChange={setCustomPayloadOpen} open={customPayloadOpen}>
+ 413| +              <Field name={name} invalid={invalid} touched={isTouched} dirty={isDirty}>
+ 414| +                <FieldLabel>
+ 415| +                  <CollapsibleTrigger
+ 416| +                    nativeButton={false}
+ 417| +                    render={
+ 418| +                      <Switch
+ 419| +                        checked={customPayloadOpen}
+ 420| +                        onCheckedChange={(checked) => {
+ 421| +                          setCustomPayloadOpen(checked);
+ 422| +                          if (!checked) onChange(undefined);
+ 423| +                        }}
+ 424| +                      />
+ 425|                      }
+ 426| -                  }}
+ 427| -                  value={useCustomTemplate ? "custom" : "default"}
+ 428| -                  options={[
+ 429| -                    { value: "default", label: t("default") },
+ 430| -                    { value: "custom", label: t("custom") },
+ 431| -                  ]}
+ 432| -                  isFullWidth={true}
+ 433| -                />
+ 434| -              </div>
+ 435| -              {useCustomTemplate && (
+ 436| -                <div className="stack-y-3">
+ 437| -                  <TextArea
+ 438| -                    name="customPayloadTemplate"
+ 439| -                    rows={8}
+ 440| +                  />
+ 441| +                  {t("custom_payload_template", "Custom Payload Template")}
+ 442| +                </FieldLabel>
+ 443| +              </Field>
+ 444| +              <CollapsiblePanel className="-mx-1">
+ 445| +                <div className="px-1 mt-4 flex flex-col items-start gap-2">
+ 446| +                  <Textarea
+ 447| +                    className="font-mono"
+ 448| +                    placeholder={"{\n  \n}"}
+ 449| +                    rows={4}
+ 450|                      value={value || ""}
+ 451| -                    placeholder={`{\n\n}`}
+ 452| -                    onChange={(e) =>
+ 453| -                      formMethods.setValue("payloadTemplate", e?.target.value, { shouldDirty: true })
+ 454| -                    }
+ 455| +                    onChange={(e) => onChange(e?.target?.value ?? "")}
+ 456|                    />
+ 457| -
+ 458| -                  <Button type="button" color="secondary" onClick={() => setShowVariables(!showVariables)}>
+ 459| -                    {showVariables ? t("webhook_hide_variables") : t("webhook_show_variable")}
+ 460| -                  </Button>
+ 461| -
+ 462| -                  {showVariables && (
+ 463| -                    <div className="border-muted max-h-80 overflow-y-auto rounded-md border p-3">
+ 464| -                      {webhookVariables.map(({ category, variables }) => (
+ 465| -                        <div key={category} className="mb-4">
+ 466| -                          <h4 className="mb-2 text-sm font-medium">{category}</h4>
+ 467| -                          <div className="stack-y-2">
+ 468| -                            {variables.map(({ name, variable, description }) => (
+ 469| -                              <div
+ 470| -                                key={name}
+ 471| -                                className="hover:bg-cal-muted cursor-pointer rounded p-2 text-sm transition-colors"
+ 472| -                                onClick={() => {
+ 473| -                                  const currentValue = formMethods.getValues("payloadTemplate") || "{}";
+ 474| -                                  const updatedValue = insertVariableIntoTemplate(
+ 475| -                                    currentValue,
+ 476| -                                    name,
+ 477| -                                    variable
+ 478| -                                  );
+ 479| -                                  formMethods.setValue("payloadTemplate", updatedValue, {
+ 480| -                                    shouldDirty: true,
+ 481| -                                  });
+ 482| -                                }}>
+ 483| -                                <div className="text-emphasis font-mono">{variable}</div>
+ 484| -                                <div className="text-muted mt-1 text-xs">{description}</div>
+ 485| -                              </div>
+ 486| -                            ))}
+ 487| -                          </div>
+ 488| +                  <Collapsible className="w-full" onOpenChange={setShowVariables} open={showVariables}>
+ 489| +                    <CollapsibleTrigger
+ 490| +                      render={
+ 491| +                        <Button size="sm" variant="outline">
+ 492| +                          {showVariables
+ 493| +                            ? t("webhook_hide_variables", "Hide available variables")
+ 494| +                            : t("webhook_show_variable", "Show available variables")}
+ 495| +                        </Button>
+ 496| +                      }
+ 497| +                    />
+ 498| +                    <CollapsiblePanel>
+ 499| +                      <ScrollArea
+ 500| +                        className="mt-4 h-64 rounded-lg border border-input"
+ 501| +                        scrollbarGutter
+ 502| +                        scrollFade>
+ 503| +                        <div className="p-2">
+ 504| +                          {webhookVariables.map(({ category, variables }) => (
+ 505| +                            <div key={category}>
+ 506| +                              <p className="my-1 px-[calc(--spacing(2)+1px)] font-medium text-sm">
+ 507| +                                {category}
+ 508| +                              </p>
+ 509| +                              <ul>
+ 510| +                                {variables.map(({ name, variable, description }) => (
+ 511| +                                  <li key={name}>
+ 512| +                                    <Button
+ 513| +                                      className="h-auto! w-full flex-col items-start gap-0.5 px-2 py-1.5 text-left"
+ 514| +                                      variant="ghost"
+ 515| +                                      onClick={() => {
+ 516| +                                        const currentValue = formMethods.getValues("payloadTemplate") || "{}";
+ 517| +                                        const updatedValue = insertVariableIntoTemplate(
+ 518| +                                          currentValue,
+ 519| +                                          name,
+ 520| +                                          variable
+ 521| +                                        );
+ 522| +                                        onChange(updatedValue);
+ 523| +                                      }}>
+ 524| +                                      <span className="font-mono text-xs">{variable}</span>
+ 525| +                                      <span className="font-normal text-muted-foreground text-xs">
+ 526| +                                        {description}
+ 527| +                                      </span>
+ 528| +                                    </Button>
+ 529| +                                  </li>
+ 530| +                                ))}
+ 531| +                              </ul>
+ 532| +                            </div>
+ 533| +                          ))}
+ 534|                          </div>
+ 535| -                      ))}
+ 536| -                    </div>
+ 537| -                  )}
+ 538| +                      </ScrollArea>
+ 539| +                    </CollapsiblePanel>
+ 540| +                  </Collapsible>
+ 541|                  </div>
+ 542| -              )}
+ 543| -            </>
+ 544| -          )}
+ 545| -        />
+ 546| -      </div>
+ 547| +              </CollapsiblePanel>
+ 548| +            </Collapsible>
+ 549| +          );
+ 550| +        }}
+ 551| +      />
+ 552| +    </div>
+ 553| +  );
+ 554| +
+ 555| +  const cancelButton = props.onCancel ? (
+ 556| +    <Button type="button" variant="ghost" onClick={props.onCancel}>
+ 557| +      {t("cancel")}
+ 558| +    </Button>
+ 559| +  ) : (
+ 560| +    <Button type="button" variant="ghost" render={<Link href="/settings/developer/webhooks" />}>
+ 561| +      {t("cancel")}
+ 562| +    </Button>
+ 563| +  );
+ 564| +
+ 565| +  const submitButton = (
+ 566| +    <Button
+ 567| +      type="submit"
+ 568| +      data-testid="create_webhook"
+ 569| +      disabled={!canSubmit || formMethods.formState.isSubmitting}>
+ 570| +      {formMethods.formState.isSubmitting && <Spinner className="absolute" />}
+ 571| +      <span className={formMethods.formState.isSubmitting ? "invisible" : undefined}>
+ 572| +        {props?.webhook?.id ? t("save") : t("create_webhook")}
+ 573| +      </span>
+ 574| +    </Button>
+ 575| +  );
+ 576| +
+ 577| +  if (props.headerWrapper) {
+ 578| +    const cardContent = (
+ 579| +      <CardFrame>
+ 580| +        <Card className="rounded-b-none!">
+ 581| +          <CardPanel>{formFields}</CardPanel>
+ 582| +        </Card>
+ 583| +        <CardFrameFooter className="flex justify-end gap-2">
+ 584| +          {cancelButton}
+ 585| +          {submitButton}
+ 586| +        </CardFrameFooter>
+ 587| +      </CardFrame>
+ 588| +    );
+ 589| +
+ 590| +    return (
+ 591| +      <Form
+ 592| +        form={formMethods}
+ 593| +        handleSubmit={(values) => props.onSubmit({ ...values, changeSecret, newSecret })}>
+ 594| +        {props.headerWrapper(
+ 595| +          formMethods,
+ 596| +          <div className="flex flex-col gap-4">
+ 597| +            {cardContent}
+ 598| +            <WebhookTestDisclosure />
+ 599| +          </div>
+ 600| +        )}
+ 601| +      </Form>
+ 602| +    );
+ 603| +  }
+ 604| +
+ 605| +  return (
+ 606| +    <Form
+ 607| +      form={formMethods}
+ 608| +      handleSubmit={(values) => props.onSubmit({ ...values, changeSecret, newSecret })}>
+ 609| +      {formFields}
+ 610|        <SectionBottomActions align="end" className="gap-2">
+ 611| -        <Button
+ 612| -          type="button"
+ 613| -          color="minimal"
+ 614| -          onClick={props.onCancel}
+ 615| -          {...(!props.onCancel ? { href: `${WEBAPP_URL}/settings/developer/webhooks` } : {})}>
+ 616| -          {t("cancel")}
+ 617| -        </Button>
+ 618| -        <Button
+ 619| -          type="submit"
+ 620| -          data-testid="create_webhook"
+ 621| -          disabled={!canSubmit}
+ 622| -          loading={formMethods.formState.isSubmitting}>
+ 623| -          {props?.webhook?.id ? t("save") : t("create_webhook")}
+ 624| -        </Button>
+ 625| +        {cancelButton}
+ 626| +        {submitButton}
+ 627|        </SectionBottomActions>
+ 628| -
+ 629|        <div className="mb-4 mt-6 rounded-md">
+ 630|          <WebhookTestDisclosure />
+ 631|        </div>
+ 632|      </Form>
+ 633|    );
+ 634| -
+ 635| -  // If headerWrapper is provided, wrap the form content with it
+ 636| -  if (props.headerWrapper) {
+ 637| -    return <>{props.headerWrapper(formMethods, formContent)}</>;
+ 638| -  }
+ 639| -
+ 640| -  return formContent;
+ 641|  };
+ 642|  
+ 643|  export default WebhookForm;
+candidates: h8 (readOnly); h12 (selectedTimeUnitItem, timeUnitItems)
+
+--- HUNK h16 | file: apps/web/modules/webhooks/components/WebhookListItem.tsx | change: modify ---
+@@ -1,39 +1,53 @@
+   1|  "use client";
+   2|  
+   3| -import Link from "next/link";
+   4| -import { useState } from "react";
+   5| -
+   6| -import { getWebhookVersionDocsUrl, getWebhookVersionLabel } from "@calcom/features/webhooks/lib/constants";
+   7| +import { getWebhookVersionLabel } from "@calcom/features/webhooks/lib/constants";
+   8|  import type { Webhook } from "@calcom/features/webhooks/lib/dto/types";
+   9|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+  10|  import { trpc } from "@calcom/trpc/react";
+  11| -import classNames from "@calcom/ui/classNames";
+  12| -import { Badge } from "@calcom/ui/components/badge";
+  13| -import { Button } from "@calcom/ui/components/button";
+  14| -import {
+  15| -  Dropdown,
+  16| -  DropdownItem,
+  17| -  DropdownMenuContent,
+  18| -  DropdownMenuItem,
+  19| -  DropdownMenuSeparator,
+  20| -  DropdownMenuTrigger,
+  21| -} from "@calcom/ui/components/dropdown";
+  22| -import { Switch } from "@calcom/ui/components/form";
+  23| -import { showToast } from "@calcom/ui/components/toast";
+  24| -import { Tooltip } from "@calcom/ui/components/tooltip";
+  25| -import { ExternalLinkIcon } from "@coss/ui/icons";
+  26|  import { revalidateEventTypeEditPage } from "@calcom/web/app/(use-page-wrapper)/event-types/[type]/actions";
+  27|  import { revalidateWebhooksList } from "@calcom/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/(with-loader)/actions";
+  28| -
+  29| +import { Badge } from "@coss/ui/components/badge";
+  30| +import { Button } from "@coss/ui/components/button";
+  31| +import {
+  32| +  Menu,
+  33| +  MenuCheckboxItem,
+  34| +  MenuGroup,
+  35| +  MenuItem,
+  36| +  MenuPopup,
+  37| +  MenuSeparator,
+  38| +  MenuTrigger,
+  39| +} from "@coss/ui/components/menu";
+  40| +import { Switch } from "@coss/ui/components/switch";
+  41| +import { toastManager } from "@coss/ui/components/toast";
+  42| +import {
+  43| +  Tooltip,
+  44| +  TooltipPopup,
+  45| +  TooltipProvider,
+  46| +  TooltipTrigger,
+  47| +} from "@coss/ui/components/tooltip";
+  48| +import { useIsMobile } from "@coss/ui/hooks/use-mobile";
+  49| +import {
+  50| +  ListItem,
+  51| +  ListItemActions,
+  52| +  ListItemBadges,
+  53| +  ListItemContent,
+  54| +  ListItemHeader,
+  55| +  ListItemTitle,
+  56| +  ListItemTitleLink,
+  57| +} from "@coss/ui/shared/list-item";
+  58| +import { EllipsisIcon, ExternalLinkIcon, PencilIcon, TrashIcon, WebhookIcon } from "@coss/ui/icons";
+  59| +import Link from "next/link";
+  60| +import { useEffect, useState } from "react";
+  61|  import { DeleteWebhookDialog } from "./dialogs/DeleteWebhookDialog";
+  62|  
+  63| -const MAX_BADGES_TWO_ROWS = 8; // Approximately 2 rows of badges
+  64| +const MAX_BADGES_TWO_ROWS = 7;
+  65|  
+  66|  export default function WebhookListItem(props: {
+  67|    webhook: Webhook;
+  68| +  profile?: { name: string | null; image?: string; slug?: string | null };
+  69|    canEditWebhook?: boolean;
+  70| -  onEditWebhook: () => void;
+  71| -  lastItem: boolean;
+  72| +  editHref?: string;
+  73| +  onEditWebhookAction?: () => void;
+  74|    permissions: {
+  75|      canEditWebhook?: boolean;
+  76|      canDeleteWebhook?: boolean;
+candidates: h17 (MAX_BADGES_TWO_ROWS); h48 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader, ListItemTitle, ListItemTitleLink)
+
+--- HUNK h17 | file: apps/web/modules/webhooks/components/WebhookListItem.tsx | change: modify ---
+@@ -42,168 +56,293 @@ export default function WebhookListItem(props: {
+   1|    const { t } = useLocale();
+   2|    const utils = trpc.useUtils();
+   3|    const { webhook } = props;
+   4| +  const [active, setActive] = useState(webhook.active);
+   5|    const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+   6| +  const [badgesExpanded, setBadgesExpanded] = useState(false);
+   7| +  const isMobile = useIsMobile();
+   8| +
+   9| +  useEffect(() => {
+  10| +    setActive(webhook.active);
+  11| +  }, [webhook.active]);
+  12|  
+  13|    const deleteWebhook = trpc.viewer.webhook.delete.useMutation({
+  14|      async onSuccess() {
+  15|        if (webhook.eventTypeId) revalidateEventTypeEditPage(webhook.eventTypeId);
+  16|        revalidateWebhooksList();
+  17| -      showToast(t("webhook_removed_successfully"), "success");
+  18| +      toastManager.add({ title: t("webhook_removed_successfully"), type: "success" });
+  19|        await utils.viewer.webhook.getByViewer.invalidate();
+  20|        await utils.viewer.webhook.list.invalidate();
+  21|        await utils.viewer.eventTypes.get.invalidate();
+  22|        setDeleteDialogOpen(false);
+  23|      },
+  24|      onError() {
+  25| -      showToast(t("something_went_wrong"), "error");
+  26| +      toastManager.add({ title: t("something_went_wrong"), type: "error" });
+  27|        setDeleteDialogOpen(false);
+  28|      },
+  29|    });
+  30|    const toggleWebhook = trpc.viewer.webhook.edit.useMutation({
+  31| -    async onSuccess(data) {
+  32| +    async onSuccess() {
+  33|        if (webhook.eventTypeId) revalidateEventTypeEditPage(webhook.eventTypeId);
+  34|        revalidateWebhooksList();
+  35| -      showToast(t(data?.active ? "enabled" : "disabled"), "success");
+  36| +      toastManager.add({ title: t("webhook_updated_successfully"), type: "success" });
+  37|        await utils.viewer.webhook.getByViewer.invalidate();
+  38|        await utils.viewer.webhook.list.invalidate();
+  39|        await utils.viewer.eventTypes.get.invalidate();
+  40|      },
+  41| +    onError() {
+  42| +      toastManager.add({ title: t("something_went_wrong"), type: "error" });
+  43| +    },
+  44|    });
+  45|  
+  46|    return (
+  47| -    <div
+  48| -      data-testid="webhook-list-item"
+  49| -      className={classNames(
+  50| -        "flex w-full justify-between p-4",
+  51| -        props.lastItem ? "" : "border-subtle border-b"
+  52| -      )}>
+  53| -      <div className="w-full truncate">
+  54| -        <div className="flex">
+  55| -          <Tooltip content={webhook.subscriberUrl}>
+  56| -            <p className="text-emphasis max-w-[600px] truncate text-sm font-medium">
+  57| -              {webhook.subscriberUrl}
+  58| -            </p>
+  59| -          </Tooltip>
+  60| -          {!props.permissions.canEditWebhook && (
+  61| -            <Badge variant="gray" className="ml-2 ">
+  62| -              {t("readonly")}
+  63| +    <ListItem data-testid="webhook-list-item" className="*:px-4">
+  64| +      <ListItemContent>
+  65| +        <ListItemHeader>
+  66| +          <div className="flex items-center gap-2">
+  67| +            {props.permissions.canEditWebhook && props.editHref ? (
+  68| +              <ListItemTitle data-testid="webhook-url" className="font-medium truncate">
+  69| +                <ListItemTitleLink href={props.editHref}>{webhook.subscriberUrl}</ListItemTitleLink>
+  70| +              </ListItemTitle>
+  71| +            ) : props.permissions.canEditWebhook && props.onEditWebhookAction ? (
+  72| +              <ListItemTitle data-testid="webhook-url" className="font-medium truncate">
+  73| +                <a
+  74| +                  className="before:absolute before:inset-0 cursor-pointer"
+  75| +                  data-slot="list-item-title-link"
+  76| +                  href="#"
+  77| +                  onClick={(e) => {
+  78| +                    e.preventDefault();
+  79| +                    props.onEditWebhookAction?.();
+  80| +                  }}>
+  81| +                  {webhook.subscriberUrl}
+  82| +                </a>
+  83| +              </ListItemTitle>
+  84| +            ) : (
+  85| +              <ListItemTitle data-testid="webhook-url" className="font-medium truncate">
+  86| +                {webhook.subscriberUrl}
+  87| +              </ListItemTitle>
+  88| +            )}
+  89| +            <div className="flex items-center gap-2">
+  90| +              {!props.permissions.canEditWebhook && <Badge variant="warning">{t("readonly")}</Badge>}
+  91| +              <div className="flex items-center">
+  92| +                <TooltipProvider delay={0}>
+  93| +                  <Tooltip>
+  94| +                    <TooltipTrigger
+  95| +                      className="after:absolute after:left-full after:h-full after:w-1"
+  96| +                      render={<Badge variant="info" />}>
+  97| +                      {getWebhookVersionLabel(webhook.version)}
+  98| +                    </TooltipTrigger>
+  99| +                    <TooltipPopup>{t("webhook_version")}</TooltipPopup>
+ 100| +                  </Tooltip>
+ 101| +                  <Tooltip>
+ 102| +                    <TooltipTrigger
+ 103| +                      render={
+ 104| +                        <a
+ 105| +                          className="relative flex h-5 items-center justify-center px-2 sm:h-4.5"
+ 106| +                          href={`https://cal.com/docs/developing/guides/automation/webhooks#${webhook.version}`}
+ 107| +                          rel="noopener noreferrer"
+ 108| +                          target="_blank"
+ 109| +                        />
+ 110| +                      }>
+ 111| +                      <span className="sr-only">{t("webhook_version_docs")}</span>
+ 112| +                      <ExternalLinkIcon aria-hidden="true" className="size-3.5 shrink-0 sm:size-3" />
+ 113| +                    </TooltipTrigger>
+ 114| +                    <TooltipPopup>
+ 115| +                      {t("webhook_version_docs", {
+ 116| +                        version: getWebhookVersionLabel(webhook.version),
+ 117| +                      })}
+ 118| +                    </TooltipPopup>
+ 119| +                  </Tooltip>
+ 120| +                </TooltipProvider>
+ 121| +              </div>
+ 122| +            </div>
+ 123| +          </div>
+ 124| +        </ListItemHeader>
+ 125| +        <ListItemBadges>
+ 126| +          {webhook.eventTriggers.slice(0, badgesExpanded ? undefined : MAX_BADGES_TWO_ROWS).map((trigger) => (
+ 127| +            <Badge key={trigger} variant="outline" className="pointer-events-none">
+ 128| +              <WebhookIcon />
+ 129| +              {t(`${trigger.toLowerCase()}`)}
+ 130| +            </Badge>
+ 131| +          ))}
+ 132| +          {!badgesExpanded && webhook.eventTriggers.length > MAX_BADGES_TWO_ROWS && (
+ 133| +            <Badge
+ 134| +              variant="outline"
+ 135| +              render={<button type="button" />}
+ 136| +              onClick={() => setBadgesExpanded(true)}>
+ 137| +              +{webhook.eventTriggers.length - MAX_BADGES_TWO_ROWS} {t("more")}
+ 138|              </Badge>
+ 139|            )}
+ 140| -          <Tooltip content={t("webhook_version")}>
+ 141| -            <div className="flex items-center">
+ 142| -              <Badge variant="blue" className="ml-2">
+ 143| -                {getWebhookVersionLabel(webhook.version)}
+ 144| -              </Badge>
+ 145| -            </div>
+ 146| -          </Tooltip>
+ 147| -          <Tooltip content={t("webhook_version_docs", { version: getWebhookVersionLabel(webhook.version) })}>
+ 148| -            <Link
+ 149| -              href={getWebhookVersionDocsUrl(webhook.version)}
+ 150| -              target="_blank"
+ 151| -              className="text-subtle hover:text-emphasis ml-1 flex items-center">
+ 152| -              <ExternalLinkIcon className="h-4 w-4" />
+ 153| -            </Link>
+ 154| -          </Tooltip>
+ 155| -        </div>
+ 156| -        <Tooltip content={t("triggers_when")}>
+ 157| -          <div className="flex w-4/5 flex-wrap">
+ 158| -            {webhook.eventTriggers.slice(0, MAX_BADGES_TWO_ROWS).map((trigger) => (
+ 159| -              <Badge
+ 160| -                key={trigger}
+ 161| -                className="mt-2.5 basis-1/5 ltr:mr-2 rtl:ml-2"
+ 162| -                variant="gray"
+ 163| -                startIcon="zap">
+ 164| -                {t(`${trigger.toLowerCase()}`)}
+ 165| -              </Badge>
+ 166| -            ))}
+ 167| -            {webhook.eventTriggers.length > MAX_BADGES_TWO_ROWS && (
+ 168| -              <Tooltip
+ 169| -                content={
+ 170| -                  <div className="flex flex-col gap-1 p-1">
+ 171| -                    {webhook.eventTriggers.slice(MAX_BADGES_TWO_ROWS).map((trigger) => (
+ 172| -                      <span key={trigger} className="text-xs">
+ 173| -                        {t(`${trigger.toLowerCase()}`)}
+ 174| -                      </span>
+ 175| -                    ))}
+ 176| -                  </div>
+ 177| -                }>
+ 178| -                <Badge className="mt-2.5 cursor-help ltr:mr-2 rtl:ml-2" variant="gray">
+ 179| -                  +{webhook.eventTriggers.length - MAX_BADGES_TWO_ROWS} {t("more")}
+ 180| -                </Badge>
+ 181| +        </ListItemBadges>
+ 182| +      </ListItemContent>
+ 183| +      <ListItemActions>
+ 184| +        {!isMobile && (
+ 185| +          <TooltipProvider delay={0}>
+ 186| +          <div className="flex items-center gap-4">
+ 187| +            {props.permissions.canEditWebhook ? (
+ 188| +              <Tooltip>
+ 189| +                <TooltipTrigger
+ 190| +                  render={
+ 191| +                    <Switch
+ 192| +                      checked={active}
+ 193| +                      data-testid="webhook-switch"
+ 194| +                      disabled={toggleWebhook.isPending}
+ 195| +                      onCheckedChange={(checked) => {
+ 196| +                        setActive(checked);
+ 197| +                        toggleWebhook.mutate({
+ 198| +                          id: webhook.id,
+ 199| +                          active: checked,
+ 200| +                          payloadTemplate: webhook.payloadTemplate,
+ 201| +                          eventTypeId: webhook.eventTypeId || undefined,
+ 202| +                        });
+ 203| +                      }}
+ 204| +                    />
+ 205| +                  }
+ 206| +                />
+ 207| +                <TooltipPopup sideOffset={11}>
+ 208| +                  {active ? t("disable_webhook") : t("enable_webhook")}
+ 209| +                </TooltipPopup>
+ 210|                </Tooltip>
+ 211| +            ) : (
+ 212| +              <Switch checked={active} disabled />
+ 213|              )}
+ 214| +            <div className="flex items-center gap-2">
+ 215| +              {props.permissions.canEditWebhook ? (
+ 216| +                props.editHref ? (
+ 217| +                  <Tooltip>
+ 218| +                    <TooltipTrigger
+ 219| +                      render={
+ 220| +                        <Button
+ 221| +                          aria-label={t("edit")}
+ 222| +                          data-testid="webhook-edit-button"
+ 223| +                          render={<Link href={props.editHref} />}
+ 224| +                          size="icon"
+ 225| +                          variant="outline"
+ 226| +                        >
+ 227| +                          <PencilIcon aria-hidden="true" />
+ 228| +                        </Button>
+ 229| +                      }
+ 230| +                    />
+ 231| +                    <TooltipPopup>{t("edit")}</TooltipPopup>
+ 232| +                  </Tooltip>
+ 233| +                ) : (
+ 234| +                  <Tooltip>
+ 235| +                    <TooltipTrigger
+ 236| +                      render={
+ 237| +                        <Button
+ 238| +                          aria-label={t("edit")}
+ 239| +                          data-testid="webhook-edit-button"
+ 240| +                          size="icon"
+ 241| +                          variant="outline"
+ 242| +                          onClick={props.onEditWebhookAction}
+ 243| +                        >
+ 244| +                          <PencilIcon aria-hidden="true" />
+ 245| +                        </Button>
+ 246| +                      }
+ 247| +                    />
+ 248| +                    <TooltipPopup>{t("edit")}</TooltipPopup>
+ 249| +                  </Tooltip>
+ 250| +                )
+ 251| +              ) : (
+ 252| +                <Button aria-label={t("edit")} disabled size="icon" variant="outline">
+ 253| +                  <PencilIcon aria-hidden="true" />
+ 254| +                </Button>
+ 255| +              )}
+ 256| +              {props.permissions.canDeleteWebhook ? (
+ 257| +                <Tooltip>
+ 258| +                  <TooltipTrigger
+ 259| +                    render={
+ 260| +                      <Button
+ 261| +                        aria-label={t("delete")}
+ 262| +                        data-testid="delete-webhook"
+ 263| +                        size="icon"
+ 264| +                        variant="destructive-outline"
+ 265| +                        onClick={() => setDeleteDialogOpen(true)}
+ 266| +                        disabled={deleteWebhook.isPending}
+ 267| +                      >
+ 268| +                        <TrashIcon aria-hidden="true" />
+ 269| +                      </Button>
+ 270| +                    }
+ 271| +                  />
+ 272| +                  <TooltipPopup>{t("delete")}</TooltipPopup>
+ 273| +                </Tooltip>
+ 274| +              ) : (
+ 275| +                <Button aria-label={t("delete")} disabled size="icon" variant="destructive-outline">
+ 276| +                  <TrashIcon aria-hidden="true" />
+ 277| +                </Button>
+ 278| +              )}
+ 279| +            </div>
+ 280|            </div>
+ 281| -        </Tooltip>
+ 282| -      </div>
+ 283| -      {(props.permissions.canEditWebhook || props.permissions.canDeleteWebhook) && (
+ 284| -        <div className="ml-2 flex items-center space-x-4">
+ 285| -          <Switch
+ 286| -            defaultChecked={webhook.active}
+ 287| -            data-testid="webhook-switch"
+ 288| -            disabled={!props.permissions.canEditWebhook}
+ 289| -            onCheckedChange={(checked) =>
+ 290| -              toggleWebhook.mutate({
+ 291| -                id: webhook.id,
+ 292| -                active: checked,
+ 293| -                payloadTemplate: webhook.payloadTemplate,
+ 294| -                eventTypeId: webhook.eventTypeId || undefined,
+ 295| -              })
+ 296| -            }
+ 297| -          />
+ 298| -
+ 299| -          {props.permissions.canEditWebhook && (
+ 300| -            <Button
+ 301| -              className="hidden lg:flex"
+ 302| -              color="secondary"
+ 303| -              onClick={props.onEditWebhook}
+ 304| -              data-testid="webhook-edit-button">
+ 305| -              {t("edit")}
+ 306| -            </Button>
+ 307| -          )}
+ 308| -
+ 309| -          {props.permissions.canDeleteWebhook && (
+ 310| -            <Button
+ 311| -              className="hidden lg:flex"
+ 312| -              color="destructive"
+ 313| -              StartIcon="trash"
+ 314| -              variant="icon"
+ 315| -              data-testid="delete-webhook"
+ 316| -              onClick={() => setDeleteDialogOpen(true)}
+ 317| -              disabled={deleteWebhook.isPending}
+ 318| -            />
+ 319| -          )}
+ 320| +          </TooltipProvider>
+ 321| +        )}
+ 322|  
+ 323| -          <Dropdown>
+ 324| -            <DropdownMenuTrigger asChild>
+ 325| -              <Button className="lg:hidden" StartIcon="ellipsis" variant="icon" color="secondary" />
+ 326| -            </DropdownMenuTrigger>
+ 327| -            <DropdownMenuContent>
+ 328| -              {props.permissions.canEditWebhook && (
+ 329| -                <DropdownMenuItem>
+ 330| -                  <DropdownItem StartIcon="pencil" color="secondary" onClick={props.onEditWebhook}>
+ 331| -                    {t("edit")}
+ 332| -                  </DropdownItem>
+ 333| -                </DropdownMenuItem>
+ 334| +        {isMobile && (
+ 335| +          <Menu>
+ 336| +            <MenuTrigger render={<Button aria-label={t("options")} size="icon" variant="outline" />}>
+ 337| +              <EllipsisIcon />
+ 338| +            </MenuTrigger>
+ 339| +            <MenuPopup align="end">
+ 340| +              {props.permissions.canEditWebhook ? (
+ 341| +                <MenuCheckboxItem
+ 342| +                  checked={active}
+ 343| +                  disabled={toggleWebhook.isPending}
+ 344| +                  onCheckedChange={(checked) => {
+ 345| +                    setActive(checked);
+ 346| +                    toggleWebhook.mutate({
+ 347| +                      id: webhook.id,
+ 348| +                      active: checked,
+ 349| +                      payloadTemplate: webhook.payloadTemplate,
+ 350| +                      eventTypeId: webhook.eventTypeId || undefined,
+ 351| +                    });
+ 352| +                  }}
+ 353| +                  variant="switch"
+ 354| +                >
+ 355| +                  {t("enable_webhook")}
+ 356| +                </MenuCheckboxItem>
+ 357| +              ) : (
+ 358| +                <MenuCheckboxItem defaultChecked={webhook.active} disabled variant="switch">
+ 359| +                  {t("enable_webhook")}
+ 360| +                </MenuCheckboxItem>
+ 361|                )}
+ 362| -
+ 363| -              <DropdownMenuSeparator />
+ 364| -
+ 365| -              {props.permissions.canDeleteWebhook && (
+ 366| -                <DropdownMenuItem>
+ 367| -                  <DropdownItem
+ 368| -                    StartIcon="trash"
+ 369| -                    color="destructive"
+ 370| +              <MenuSeparator />
+ 371| +              <MenuGroup>
+ 372| +                {props.permissions.canEditWebhook ? (
+ 373| +                  props.editHref ? (
+ 374| +                    <MenuItem render={<Link href={props.editHref} />}>
+ 375| +                      <PencilIcon />
+ 376| +                      {t("edit")}
+ 377| +                    </MenuItem>
+ 378| +                  ) : (
+ 379| +                    <MenuItem onClick={props.onEditWebhookAction}>
+ 380| +                      <PencilIcon />
+ 381| +                      {t("edit")}
+ 382| +                    </MenuItem>
+ 383| +                  )
+ 384| +                ) : (
+ 385| +                  <MenuItem disabled>
+ 386| +                    <PencilIcon />
+ 387| +                    {t("edit")}
+ 388| +                  </MenuItem>
+ 389| +                )}
+ 390| +                {props.permissions.canDeleteWebhook ? (
+ 391| +                  <MenuItem
+ 392| +                    variant="destructive"
+ 393|                      onClick={() => setDeleteDialogOpen(true)}
+ 394| -                    disabled={deleteWebhook.isPending}>
+ 395| +                    disabled={deleteWebhook.isPending}
+ 396| +                  >
+ 397| +                    <TrashIcon />
+ 398|                      {t("delete")}
+ 399| -                  </DropdownItem>
+ 400| -                </DropdownMenuItem>
+ 401| -              )}
+ 402| -            </DropdownMenuContent>
+ 403| -          </Dropdown>
+ 404| -        </div>
+ 405| -      )}
+ 406| -
+ 407| +                  </MenuItem>
+ 408| +                ) : (
+ 409| +                  <MenuItem variant="destructive" disabled>
+ 410| +                    <TrashIcon />
+ 411| +                    {t("delete")}
+ 412| +                  </MenuItem>
+ 413| +                )}
+ 414| +              </MenuGroup>
+ 415| +            </MenuPopup>
+ 416| +          </Menu>
+ 417| +        )}
+ 418| +      </ListItemActions>
+ 419|        <DeleteWebhookDialog
+ 420|          open={deleteDialogOpen}
+ 421|          onOpenChange={setDeleteDialogOpen}
+candidates: h9 (options); h16 (MAX_BADGES_TWO_ROWS); h23 (version); h48 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader, ListItemTitle, ListItemTitleLink)
+
+--- HUNK h18 | file: apps/web/modules/webhooks/components/WebhookListItem.tsx | change: modify ---
+@@ -216,6 +355,6 @@ export default function WebhookListItem(props: {
+   1|            });
+   2|          }}
+   3|        />
+   4| -    </div>
+   5| +    </ListItem>
+   6|    );
+   7|  }
+candidates: h48 (ListItem)
+
+--- HUNK h19 | file: apps/web/modules/webhooks/components/WebhookListItemSkeleton.tsx | change: delete ---
+@@ -1,19 +0,0 @@
+   1| -import { SkeletonText } from "@calcom/ui/components/skeleton";
+   2| -
+   3| -export default function WebhookListItemSkeleton() {
+   4| -  return (
+   5| -    <div className="flex w-full justify-between p-4">
+   6| -      <div>
+   7| -        <p className="text-emphasis text-sm font-medium">
+   8| -          <SkeletonText className="h-4 w-56" />
+   9| -        </p>
+  10| -        <div className="mt-2.5 w-max">
+  11| -          <SkeletonText className="h-5 w-28" />
+  12| -        </div>
+  13| -      </div>
+  14| -      <div className="flex items-center space-x-4">
+  15| -        <SkeletonText className="h-9 w-9" />
+  16| -      </div>
+  17| -    </div>
+  18| -  );
+  19| -}
+
+--- HUNK h20 | file: apps/web/modules/webhooks/components/WebhookListSkeleton.tsx | change: delete ---
+@@ -1,15 +0,0 @@
+   1| -import { SkeletonContainer } from "@calcom/ui/components/skeleton";
+   2| -
+   3| -import WebhookListItemSkeleton from "./WebhookListItemSkeleton";
+   4| -
+   5| -export default function WebhookListSkeleton() {
+   6| -  return (
+   7| -    <SkeletonContainer>
+   8| -      <div className="border-subtle divide-subtle mb-8 mt-6 divide-y rounded-md border">
+   9| -        <WebhookListItemSkeleton />
+  10| -        <WebhookListItemSkeleton />
+  11| -        <WebhookListItemSkeleton />
+  12| -      </div>
+  13| -    </SkeletonContainer>
+  14| -  );
+  15| -}
+
+--- HUNK h21 | file: apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx | change: modify ---
+@@ -1,14 +1,17 @@
+   1|  "use client";
+   2|  
+   3| -import { useWatch } from "react-hook-form";
+   4| -import { ZodError } from "zod";
+   5| -
+   6|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+   7|  import { trpc } from "@calcom/trpc/react";
+   8|  import { ZTestTriggerInputSchema } from "@calcom/trpc/server/routers/viewer/webhook/testTrigger.schema";
+   9| -import { Badge } from "@calcom/ui/components/badge";
+  10| -import { Button } from "@calcom/ui/components/button";
+  11| -import { showToast } from "@calcom/ui/components/toast";
+  12| +import { toastManager } from "@coss/ui/components/toast";
+  13| +import { Badge } from "@coss/ui/components/badge";
+  14| +import { Button } from "@coss/ui/components/button";
+  15| +import { Card, CardFrame, CardPanel } from "@coss/ui/components/card";
+  16| +import { Label } from "@coss/ui/components/label";
+  17| +import { ActivityIcon } from "lucide-react";
+  18| +import { useWatch } from "react-hook-form";
+  19| +import { ZodError } from "zod";
+  20| +import { WebhookTestHeader } from "../views/webhook-test-header";
+  21|  
+  22|  export default function WebhookTestDisclosure() {
+  23|    const [subscriberUrl, webhookSecret]: [string, string] = useWatch({ name: ["subscriberUrl", "secret"] });
+candidates: h40 (WebhookTestHeader)
+
+--- HUNK h22 | file: apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx | change: modify ---
+@@ -16,69 +19,65 @@ export default function WebhookTestDisclosure() {
+   1|    const { t } = useLocale();
+   2|    const mutation = trpc.viewer.webhook.testTrigger.useMutation({
+   3|      onError(err) {
+   4| -      showToast(err.message, "error");
+   5| +      toastManager.add({ title: err.message, type: "error" });
+   6|      },
+   7|    });
+   8|  
+   9|    return (
+  10| -    <>
+  11| -      <div className="border-subtle flex justify-between rounded-t-lg border p-6">
+  12| -        <div>
+  13| -          <p className="text-emphasis text-sm font-semibold leading-5">{t("webhook_test")}</p>
+  14| -          <p className="text-default text-sm">{t("test_webhook")}</p>
+  15| -        </div>
+  16| -        <Button
+  17| -          type="button"
+  18| -          color="secondary"
+  19| -          disabled={mutation.isPending || !subscriberUrl}
+  20| -          StartIcon="activity"
+  21| -          onClick={() => {
+  22| -            try {
+  23| -              ZTestTriggerInputSchema.parse({
+  24| -                url: subscriberUrl,
+  25| -                secret: webhookSecret,
+  26| -                type: "PING",
+  27| -                payloadTemplate,
+  28| -              });
+  29| -              mutation.mutate({ url: subscriberUrl, secret: webhookSecret, type: "PING", payloadTemplate });
+  30| -            } catch (error) {
+  31| -              //this catches invalid subscriberUrl before calling the mutation
+  32| -              if (error instanceof ZodError) {
+  33| -                const errorMessage = error.errors.map((e) => e.message).join(", ");
+  34| -                showToast(errorMessage, "error");
+  35| -              } else {
+  36| -                showToast(t("unexpected_error_try_again"), "error");
+  37| +    <CardFrame>
+  38| +      <WebhookTestHeader
+  39| +        actions={
+  40| +          <Button
+  41| +            type="button"
+  42| +            size="sm"
+  43| +            variant="outline"
+  44| +            disabled={mutation.isPending || !subscriberUrl}
+  45| +            onClick={() => {
+  46| +              try {
+  47| +                ZTestTriggerInputSchema.parse({
+  48| +                  url: subscriberUrl,
+  49| +                  secret: webhookSecret,
+  50| +                  type: "PING",
+  51| +                  payloadTemplate,
+  52| +                });
+  53| +                mutation.mutate({ url: subscriberUrl, secret: webhookSecret, type: "PING", payloadTemplate });
+  54| +              } catch (error) {
+  55| +                if (error instanceof ZodError) {
+  56| +                  const errorMessage = error.errors.map((e) => e.message).join(", ");
+  57| +                  toastManager.add({ title: errorMessage, type: "error" });
+  58| +                } else {
+  59| +                  toastManager.add({ title: t("unexpected_error_try_again"), type: "error" });
+  60| +                }
+  61|                }
+  62| -            }
+  63| -          }}>
+  64| -          {t("ping_test")}
+  65| -        </Button>
+  66| -      </div>
+  67| -      <div className="border-subtle stack-y-0 rounded-b-lg border border-t-0 px-6 py-8 sm:mx-0">
+  68| -        <div className="border-subtle flex justify-between rounded-t-lg border p-4">
+  69| -          <div className="flex items-center space-x-1">
+  70| -            <h3 className="text-emphasis self-center text-sm font-semibold leading-4">
+  71| -              {t("webhook_response")}
+  72| -            </h3>
+  73| -            {mutation.data && (
+  74| -              <Badge variant={mutation.data.ok ? "green" : "red"}>
+  75| -                {mutation.data.ok ? t("passed") : t("failed")}
+  76| -              </Badge>
+  77| -            )}
+  78| -          </div>
+  79| -        </div>
+  80| -        <div className="bg-cal-muted border-subtle rounded-b-lg border border-t-0 p-4 font-mono text-[13px] leading-4">
+  81| -          {!mutation.data && <p>{t("no_data_yet")}</p>}
+  82| -          {mutation.status === "success" && mutation.data && (
+  83| -            <div className="stack-y-2">
+  84| -              <div>
+  85| -                <span className="text-subtle">{t("status")}:</span>{" "}
+  86| -                <span className="text-emphasis">{mutation.data.status}</span>
+  87| -              </div>
+  88| +            }}>
+  89| +            <ActivityIcon />
+  90| +            {t("ping_test")}
+  91| +          </Button>
+  92| +        }
+  93| +      />
+  94| +      <Card>
+  95| +        <CardPanel>
+  96| +          <div className="flex flex-col gap-2">
+  97| +            <div className="flex items-center gap-2 min-h-5">
+  98| +              <Label render={<div />}>{t("webhook_response")}</Label>
+  99| +              {mutation.data && (
+ 100| +                <Badge variant={mutation.data.ok ? "success" : "error"}>
+ 101| +                  {mutation.data.ok ? t("passed") : t("failed")}
+ 102| +                </Badge>
+ 103| +              )}
+ 104|              </div>
+ 105| -          )}
+ 106| -        </div>
+ 107| -      </div>
+ 108| -    </>
+ 109| +            <div className="rounded-lg border p-4 font-mono text-sm">
+ 110| +              {!mutation.data && <p>{t("no_data_yet")}</p>}
+ 111| +              {mutation.status === "success" && mutation.data && (
+ 112| +                <div>
+ 113| +                  <span className="text-muted-foreground">{t("status")}:</span>{" "}
+ 114| +                  <span>{mutation.data.status}</span>
+ 115| +                </div>
+ 116| +              )}
+ 117| +            </div>
+ 118| +          </div>
+ 119| +        </CardPanel>
+ 120| +      </Card>
+ 121| +    </CardFrame>
+ 122|    );
+ 123|  }
+candidates: h40 (WebhookTestHeader)
+
+--- HUNK h23 | file: apps/web/modules/webhooks/components/WebhookVersionCTA.tsx | change: add ---
+@@ -0,0 +1,87 @@
+   1| +"use client";
+   2| +
+   3| +import {
+   4| +  getWebhookVersionDocsUrl,
+   5| +  getWebhookVersionLabel,
+   6| +  WEBHOOK_VERSION_OPTIONS,
+   7| +} from "@calcom/features/webhooks/lib/constants";
+   8| +import { useLocale } from "@calcom/lib/hooks/useLocale";
+   9| +import { Button } from "@coss/ui/components/button";
+  10| +import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@coss/ui/components/select";
+  11| +import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "@coss/ui/components/tooltip";
+  12| +import { ExternalLinkIcon } from "lucide-react";
+  13| +import Link from "next/link";
+  14| +import type { UseFormReturn } from "react-hook-form";
+  15| +import type { WebhookFormValues } from "./WebhookForm";
+  16| +
+  17| +const webhookVersionItems = WEBHOOK_VERSION_OPTIONS.map((option) => ({
+  18| +  value: option.value,
+  19| +  label: option.label,
+  20| +}));
+  21| +
+  22| +export function WebhookVersionCTA({ formMethods }: { formMethods: UseFormReturn<WebhookFormValues> }) {
+  23| +  const { t } = useLocale();
+  24| +  const version = formMethods.watch("version");
+  25| +  const selectedVersionItem =
+  26| +    webhookVersionItems.find((item) => item.value === version) ?? webhookVersionItems[0];
+  27| +
+  28| +  return (
+  29| +    <div className="flex items-center gap-1 self-center">
+  30| +      <TooltipProvider delay={0}>
+  31| +        <Tooltip>
+  32| +          <TooltipTrigger
+  33| +            render={
+  34| +              <div className="inline-flex">
+  35| +                <Select
+  36| +                  aria-label={t("webhook_version")}
+  37| +                  value={selectedVersionItem}
+  38| +                  onValueChange={(newValue) => {
+  39| +                    if (newValue) {
+  40| +                      formMethods.setValue("version", newValue.value, { shouldDirty: true });
+  41| +                    }
+  42| +                  }}
+  43| +                  items={webhookVersionItems}>
+  44| +                  <SelectTrigger size="sm" className="min-w-none">
+  45| +                    <SelectValue />
+  46| +                  </SelectTrigger>
+  47| +                  <SelectPopup>
+  48| +                    {webhookVersionItems.map((item) => (
+  49| +                      <SelectItem key={item.value} value={item}>
+  50| +                        {item.label}
+  51| +                      </SelectItem>
+  52| +                    ))}
+  53| +                  </SelectPopup>
+  54| +                </Select>
+  55| +              </div>
+  56| +            }
+  57| +          />
+  58| +          <TooltipPopup>{t("webhook_version")}</TooltipPopup>
+  59| +        </Tooltip>
+  60| +        <Tooltip>
+  61| +          <TooltipTrigger
+  62| +            render={
+  63| +              <Button
+  64| +                size="icon-sm"
+  65| +                variant="ghost"
+  66| +                render={
+  67| +                  <Link
+  68| +                    className="flex text-muted-foreground hover:text-foreground"
+  69| +                    href={getWebhookVersionDocsUrl(version)}
+  70| +                    target="_blank"
+  71| +                    rel="noopener noreferrer"
+  72| +                  />
+  73| +                }>
+  74| +                <ExternalLinkIcon />
+  75| +              </Button>
+  76| +            }
+  77| +          />
+  78| +          <TooltipPopup>
+  79| +            {t("webhook_version_docs", {
+  80| +              version: getWebhookVersionLabel(version),
+  81| +            })}
+  82| +          </TooltipPopup>
+  83| +        </Tooltip>
+  84| +      </TooltipProvider>
+  85| +    </div>
+  86| +  );
+  87| +}
+candidates: h6 (WebhookVersionCTA); h7 (version); h8 (WebhookVersionCTA, version); h17 (version); h27 (WebhookVersionCTA); h29 (WebhookVersionCTA); h35 (WebhookVersionCTA); h39 (WebhookVersionCTA)
+
+--- HUNK h24 | file: apps/web/modules/webhooks/components/dialogs/DeleteWebhookDialog.tsx | change: modify ---
+@@ -1,6 +1,16 @@
+   1|  import { APP_NAME } from "@calcom/lib/constants";
+   2|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+   3| -import { Dialog, ConfirmationDialogContent } from "@calcom/ui/components/dialog";
+   4| +import {
+   5| +  AlertDialog,
+   6| +  AlertDialogClose,
+   7| +  AlertDialogDescription,
+   8| +  AlertDialogFooter,
+   9| +  AlertDialogHeader,
+  10| +  AlertDialogPopup,
+  11| +  AlertDialogTitle,
+  12| +} from "@coss/ui/components/alert-dialog";
+  13| +import { Button } from "@coss/ui/components/button";
+  14| +import { Spinner } from "@coss/ui/components/spinner";
+  15|  
+  16|  interface DeleteWebhookDialogProps {
+  17|    open: boolean;
+
+--- HUNK h25 | file: apps/web/modules/webhooks/components/dialogs/DeleteWebhookDialog.tsx | change: modify ---
+@@ -13,19 +23,29 @@ export function DeleteWebhookDialog({ open, onOpenChange, onConfirm, isPending }
+   1|    const { t } = useLocale();
+   2|  
+   3|    return (
+   4| -    <Dialog open={open} onOpenChange={onOpenChange}>
+   5| -      <ConfirmationDialogContent
+   6| -        variety="danger"
+   7| -        title={t("delete_webhook")}
+   8| -        confirmBtnText={t("confirm_delete_webhook")}
+   9| -        loadingText={t("confirm_delete_webhook")}
+  10| -        isPending={isPending}
+  11| -        onConfirm={(e) => {
+  12| -          e.preventDefault();
+  13| -          onConfirm();
+  14| -        }}>
+  15| -        {t("delete_webhook_confirmation_message", { appName: APP_NAME })}
+  16| -      </ConfirmationDialogContent>
+  17| -    </Dialog>
+  18| +    <AlertDialog open={open} onOpenChange={onOpenChange}>
+  19| +      <AlertDialogPopup>
+  20| +        <AlertDialogHeader>
+  21| +          <AlertDialogTitle>{t("delete_webhook")}</AlertDialogTitle>
+  22| +          <AlertDialogDescription>
+  23| +            {t("delete_webhook_confirmation_message", { appName: APP_NAME })}
+  24| +          </AlertDialogDescription>
+  25| +        </AlertDialogHeader>
+  26| +        <AlertDialogFooter>
+  27| +          <AlertDialogClose render={<Button variant="ghost" />}>{t("cancel")}</AlertDialogClose>
+  28| +          <Button
+  29| +            data-testid="dialog-confirmation"
+  30| +            variant="destructive"
+  31| +            disabled={isPending}
+  32| +            onClick={onConfirm}
+  33| +          >
+  34| +            {isPending && <Spinner className="absolute" />}
+  35| +            <span className={isPending ? "invisible" : undefined}>
+  36| +              {t("confirm_delete_webhook")}
+  37| +            </span>
+  38| +          </Button>
+  39| +        </AlertDialogFooter>
+  40| +      </AlertDialogPopup>
+  41| +    </AlertDialog>
+  42|    );
+  43|  }
+
+--- HUNK h26 | file: apps/web/modules/webhooks/components/index.ts | change: modify ---
+@@ -1,6 +1,4 @@
+   1| +export { default as CreateNewWebhookButton } from "./CreateNewWebhookButton";
+   2|  export { default as WebhookForm } from "./WebhookForm";
+   3|  export { default as WebhookListItem } from "./WebhookListItem";
+   4| -export { default as WebhookListItemSkeleton } from "./WebhookListItemSkeleton";
+   5| -export { default as WebhookListSkeleton } from "./WebhookListSkeleton";
+   6|  export { default as WebhookTestDisclosure } from "./WebhookTestDisclosure";
+   7| -export { default as CreateNewWebhookButton } from "./CreateNewWebhookButton";
+candidates: h9 (CreateNewWebhookButton)
+
+--- HUNK h27 | file: apps/web/modules/webhooks/views/webhook-edit-view.tsx | change: modify ---
+@@ -1,29 +1,19 @@
+   1|  "use client";
+   2|  
+   3| -import Link from "next/link";
+   4| -import { useRouter } from "next/navigation";
+   5| -
+   6| -import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+   7| -import {
+   8| -  WEBHOOK_VERSION_OPTIONS,
+   9| -  getWebhookVersionLabel,
+  10| -  getWebhookVersionDocsUrl,
+  11| -} from "@calcom/features/webhooks/lib/constants";
+  12| +import { WEBHOOK_TRIGGER_EVENTS } from "@calcom/features/webhooks/lib/constants";
+  13|  import type { WebhookVersion } from "@calcom/features/webhooks/lib/interface/IWebhookRepository";
+  14|  import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+  15| -import { APP_NAME } from "@calcom/lib/constants";
+  16|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+  17|  import type { WebhookTriggerEvents } from "@calcom/prisma/enums";
+  18|  import { trpc } from "@calcom/trpc/react";
+  19| -import { Select } from "@calcom/ui/components/form";
+  20| -import { ExternalLinkIcon } from "@coss/ui/icons";
+  21| -import { SkeletonContainer } from "@calcom/ui/components/skeleton";
+  22| -import { showToast } from "@calcom/ui/components/toast";
+  23| -import { Tooltip } from "@calcom/ui/components/tooltip";
+  24|  import { revalidateWebhooksList } from "@calcom/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/(with-loader)/actions";
+  25| -
+  26| +import { toastManager } from "@coss/ui/components/toast";
+  27| +import { useRouter } from "next/navigation";
+  28|  import type { WebhookFormSubmitData } from "../components/WebhookForm";
+  29|  import WebhookForm from "../components/WebhookForm";
+  30| +import { WebhookVersionCTA } from "../components/WebhookVersionCTA";
+  31| +import { WebhookFormHeader } from "./webhook-form-header";
+  32| +import { WebhookFormSkeleton } from "./webhook-form-skeleton";
+  33|  
+  34|  type WebhookProps = {
+  35|    id: string;
+candidates: h23 (WebhookVersionCTA); h32 (WebhookFormHeader); h33 (WebhookFormSkeleton)
+
+--- HUNK h28 | file: apps/web/modules/webhooks/views/webhook-edit-view.tsx | change: modify ---
+@@ -40,7 +30,6 @@ type WebhookProps = {
+   1|  
+   2|  export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {
+   3|    const { t } = useLocale();
+   4| -  const utils = trpc.useUtils();
+   5|    const router = useRouter();
+   6|    const { data: installedApps, isPending } = trpc.viewer.apps.integrations.useQuery(
+   7|      { variant: "other", onlyInstalled: true },
+
+--- HUNK h29 | file: apps/web/modules/webhooks/views/webhook-edit-view.tsx | change: modify ---
+@@ -55,63 +44,27 @@ export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {
+   1|      enabled: !!webhook,
+   2|    });
+   3|    const editWebhookMutation = trpc.viewer.webhook.edit.useMutation({
+   4| -    async onSuccess() {
+   5| -      await utils.viewer.webhook.list.invalidate();
+   6| -      await utils.viewer.webhook.get.invalidate({ webhookId: webhook?.id });
+   7| -      showToast(t("webhook_updated_successfully"), "success");
+   8| -      revalidateWebhooksList();
+   9| +    onSuccess() {
+  10| +      toastManager.add({ title: t("webhook_updated_successfully"), type: "success" });
+  11|        router.push("/settings/developer/webhooks");
+  12| +      revalidateWebhooksList();
+  13|      },
+  14|      onError(error) {
+  15| -      showToast(`${error.message}`, "error");
+  16| +      toastManager.add({ title: error.message, type: "error" });
+  17|      },
+  18|    });
+  19|  
+  20| -  if (isPending || !webhook) return <SkeletonContainer />;
+  21| +  if (isPending || !webhook) return <WebhookFormSkeleton titleKey="edit_webhook" />;
+  22|  
+  23|    return (
+  24|      <WebhookForm
+  25|        noRoutingFormTriggers={false}
+  26|        webhook={webhook}
+  27|        headerWrapper={(formMethods, children) => (
+  28| -        <SettingsHeaderWithBackButton
+  29| -          title={t("edit_webhook")}
+  30| -          description={t("add_webhook_description", { appName: APP_NAME })}
+  31| -          borderInShellHeader={true}
+  32| -          CTA={
+  33| -            <div className="flex items-center gap-2">
+  34| -              <Tooltip content={t("webhook_version")}>
+  35| -                <div>
+  36| -                  <Select
+  37| -                    className="min-w-36"
+  38| -                    options={WEBHOOK_VERSION_OPTIONS}
+  39| -                    value={{
+  40| -                      value: formMethods.watch("version"),
+  41| -                      label: getWebhookVersionLabel(formMethods.watch("version")),
+  42| -                    }}
+  43| -                    onChange={(option) => {
+  44| -                      if (option) {
+  45| -                        formMethods.setValue("version", option.value, { shouldDirty: true });
+  46| -                      }
+  47| -                    }}
+  48| -                  />
+  49| -                </div>
+  50| -              </Tooltip>
+  51| -              <Tooltip
+  52| -                content={t("webhook_version_docs", {
+  53| -                  version: getWebhookVersionLabel(formMethods.watch("version")),
+  54| -                })}>
+  55| -                <Link
+  56| -                  href={getWebhookVersionDocsUrl(formMethods.watch("version"))}
+  57| -                  target="_blank"
+  58| -                  className="text-subtle hover:text-emphasis flex items-center">
+  59| -                  <ExternalLinkIcon className="h-4 w-4" />
+  60| -                </Link>
+  61| -              </Tooltip>
+  62| -            </div>
+  63| -          }>
+  64| +        <>
+  65| +          <WebhookFormHeader titleKey="edit_webhook" CTA={<WebhookVersionCTA formMethods={formMethods} />} />
+  66|            {children}
+  67| -        </SettingsHeaderWithBackButton>
+  68| +        </>
+  69|        )}
+  70|        onSubmit={(values: WebhookFormSubmitData) => {
+  71|          if (
+candidates: h23 (WebhookVersionCTA); h32 (WebhookFormHeader); h33 (WebhookFormSkeleton)
+
+--- HUNK h30 | file: apps/web/modules/webhooks/views/webhook-edit-view.tsx | change: modify ---
+@@ -124,7 +77,7 @@ export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {
+   1|              platform: webhook.platform ?? undefined,
+   2|            })
+   3|          ) {
+   4| -          showToast(t("webhook_subscriber_url_reserved"), "error");
+   5| +          toastManager.add({ title: t("webhook_subscriber_url_reserved"), type: "error" });
+   6|            return;
+   7|          }
+   8|  
+
+--- HUNK h31 | file: apps/web/modules/webhooks/views/webhook-edit-view.tsx | change: modify ---
+@@ -139,7 +92,9 @@ export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {
+   1|          editWebhookMutation.mutate({
+   2|            id: webhook.id,
+   3|            subscriberUrl: values.subscriberUrl,
+   4| -          eventTriggers: values.eventTriggers,
+   5| +          eventTriggers: values.eventTriggers.filter((trigger) =>
+   6| +            WEBHOOK_TRIGGER_EVENTS.includes(trigger as (typeof WEBHOOK_TRIGGER_EVENTS)[number])
+   7| +          ) as unknown as Parameters<typeof editWebhookMutation.mutate>[0]["eventTriggers"],
+   8|            active: values.active,
+   9|            payloadTemplate: values.payloadTemplate,
+  10|            secret: values.secret,
+
+--- HUNK h32 | file: apps/web/modules/webhooks/views/webhook-form-header.tsx | change: add ---
+@@ -0,0 +1,48 @@
+   1| +"use client";
+   2| +
+   3| +import { APP_NAME } from "@calcom/lib/constants";
+   4| +import { useLocale } from "@calcom/lib/hooks/useLocale";
+   5| +import { Button } from "@coss/ui/components/button";
+   6| +import {
+   7| +  AppHeader,
+   8| +  AppHeaderActions,
+   9| +  AppHeaderContent,
+  10| +  AppHeaderDescription,
+  11| +} from "@coss/ui/shared/app-header";
+  12| +import { ArrowLeftIcon } from "lucide-react";
+  13| +import Link from "next/link";
+  14| +import type { ReactNode } from "react";
+  15| +
+  16| +type WebhookFormHeaderProps = {
+  17| +  CTA?: ReactNode;
+  18| +  titleKey?: "add_webhook" | "edit_webhook" | "create_webhook";
+  19| +  showBackButton?: boolean;
+  20| +};
+  21| +
+  22| +export function WebhookFormHeader({
+  23| +  CTA,
+  24| +  titleKey = "add_webhook",
+  25| +  showBackButton = true,
+  26| +}: WebhookFormHeaderProps) {
+  27| +  const { t } = useLocale();
+  28| +
+  29| +  return (
+  30| +    <AppHeader>
+  31| +      <div className="flex min-w-0 items-start gap-3">
+  32| +        {showBackButton && (
+  33| +          <Button
+  34| +            aria-label={t("go_back")}
+  35| +            render={<Link href="/settings/developer/webhooks" />}
+  36| +            size="icon-sm"
+  37| +            variant="ghost">
+  38| +            <ArrowLeftIcon />
+  39| +          </Button>
+  40| +        )}
+  41| +        <AppHeaderContent title={t(titleKey)}>
+  42| +          <AppHeaderDescription>{t("add_webhook_description", { appName: APP_NAME })}</AppHeaderDescription>
+  43| +        </AppHeaderContent>
+  44| +      </div>
+  45| +      {CTA && <AppHeaderActions>{CTA}</AppHeaderActions>}
+  46| +    </AppHeader>
+  47| +  );
+  48| +}
+candidates: h6 (WebhookFormHeader); h8 (WebhookFormHeader); h27 (WebhookFormHeader); h29 (WebhookFormHeader); h33 (WebhookFormHeader); h35 (WebhookFormHeader); h39 (WebhookFormHeader); h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h33 | file: apps/web/modules/webhooks/views/webhook-form-skeleton.tsx | change: add ---
+@@ -0,0 +1,68 @@
+   1| +"use client";
+   2| +
+   3| +import { Card, CardFrame, CardFrameFooter, CardPanel } from "@coss/ui/components/card";
+   4| +import { Skeleton } from "@coss/ui/components/skeleton";
+   5| +import { WebhookFormHeader } from "./webhook-form-header";
+   6| +import { WebhookTestHeader } from "./webhook-test-header";
+   7| +
+   8| +type WebhookFormSkeletonProps = {
+   9| +  titleKey?: "add_webhook" | "edit_webhook";
+  10| +};
+  11| +
+  12| +export const WebhookFormSkeleton = ({ titleKey = "add_webhook" }: WebhookFormSkeletonProps = {}) => {
+  13| +  return (
+  14| +    <>
+  15| +      <WebhookFormHeader titleKey={titleKey} />
+  16| +      <div className="flex flex-col gap-4">
+  17| +        <CardFrame>
+  18| +          <Card className="rounded-b-none!">
+  19| +            <CardPanel>
+  20| +              <div className="flex flex-col gap-6">
+  21| +                <div className="flex flex-col gap-2">
+  22| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  23| +                  <Skeleton className="h-9 sm:h-8 w-full" />
+  24| +                </div>
+  25| +                <div className="flex items-center gap-2">
+  26| +                  <Skeleton className="h-5.5 sm:h-4.5 w-9.5 sm:w-7.5 rounded-full" />
+  27| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  28| +                </div>
+  29| +                <div className="flex flex-col gap-2">
+  30| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  31| +                  <Skeleton className="h-43 w-full" />
+  32| +                  <Skeleton className="h-6 w-32" />
+  33| +                </div>
+  34| +                <div className="flex flex-col gap-2">
+  35| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  36| +                  <Skeleton className="h-9 sm:h-8 w-full" />
+  37| +                </div>
+  38| +                <div className="flex flex-col gap-2">
+  39| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  40| +                  <Skeleton className="h-9 sm:h-8 w-full" />
+  41| +                </div>
+  42| +                <div className="flex items-center gap-2">
+  43| +                  <Skeleton className="h-5.5 sm:h-4.5 w-9.5 sm:w-7.5 rounded-full" />
+  44| +                  <Skeleton className="h-4.5 sm:h-4 w-28" />
+  45| +                </div>
+  46| +              </div>
+  47| +            </CardPanel>
+  48| +          </Card>
+  49| +          <CardFrameFooter className="flex items-center justify-end gap-4">
+  50| +            <Skeleton className="h-4 w-16" />
+  51| +            <Skeleton className="h-9 sm:h-8 w-32" />
+  52| +          </CardFrameFooter>
+  53| +        </CardFrame>
+  54| +        <CardFrame>
+  55| +          <WebhookTestHeader />
+  56| +          <Card>
+  57| +            <CardPanel>
+  58| +              <div className="flex flex-col gap-2">
+  59| +                <Skeleton className="h-4 my-0.5 w-28" />
+  60| +                <Skeleton className="h-13.5 w-full" />
+  61| +              </div>
+  62| +            </CardPanel>
+  63| +          </Card>
+  64| +        </CardFrame>
+  65| +      </div>
+  66| +    </>
+  67| +  );
+  68| +};
+candidates: h1 (WebhookFormSkeleton); h2 (WebhookFormSkeleton); h27 (WebhookFormSkeleton); h29 (WebhookFormSkeleton); h32 (WebhookFormHeader); h40 (WebhookTestHeader)
+
+--- HUNK h34 | file: apps/web/modules/webhooks/views/webhook-new-skeleton.tsx | change: delete ---
+@@ -1,24 +0,0 @@
+   1| -"use client";
+   2| -
+   3| -import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+   4| -import { APP_NAME } from "@calcom/lib/constants";
+   5| -import { useLocale } from "@calcom/lib/hooks/useLocale";
+   6| -import { SkeletonText, SkeletonContainer } from "@calcom/ui/components/skeleton";
+   7| -
+   8| -export const SkeletonLoader = () => {
+   9| -  const { t } = useLocale();
+  10| -
+  11| -  return (
+  12| -    <SettingsHeaderWithBackButton
+  13| -      title={t("add_webhook")}
+  14| -      description={t("add_webhook_description", { appName: APP_NAME })}
+  15| -      borderInShellHeader={true}>
+  16| -      <SkeletonContainer>
+  17| -        <div className="divide-subtle border-subtle stack-y-6 rounded-b-lg border border-t-0 px-6 py-4">
+  18| -          <SkeletonText className="h-8 w-full" />
+  19| -          <SkeletonText className="h-8 w-full" />
+  20| -        </div>
+  21| -      </SkeletonContainer>
+  22| -    </SettingsHeaderWithBackButton>
+  23| -  );
+  24| -};
+
+--- HUNK h35 | file: apps/web/modules/webhooks/views/webhook-new-view.tsx | change: modify ---
+@@ -1,29 +1,19 @@
+   1|  "use client";
+   2|  
+   3| -import { useSession } from "next-auth/react";
+   4| -import Link from "next/link";
+   5| -import { useRouter } from "next/navigation";
+   6| -
+   7| -import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+   8| -import {
+   9| -  WEBHOOK_VERSION_OPTIONS,
+  10| -  getWebhookVersionLabel,
+  11| -  getWebhookVersionDocsUrl,
+  12| -} from "@calcom/features/webhooks/lib/constants";
+  13| +import { WEBHOOK_TRIGGER_EVENTS } from "@calcom/features/webhooks/lib/constants";
+  14|  import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+  15| -import { APP_NAME } from "@calcom/lib/constants";
+  16|  import { useCompatSearchParams } from "@calcom/lib/hooks/useCompatSearchParams";
+  17|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+  18| -import { trpc } from "@calcom/trpc/react";
+  19|  import type { RouterOutputs } from "@calcom/trpc/react";
+  20| -import { Select } from "@calcom/ui/components/form";
+  21| -import { ExternalLinkIcon } from "@coss/ui/icons";
+  22| -import { showToast } from "@calcom/ui/components/toast";
+  23| -import { Tooltip } from "@calcom/ui/components/tooltip";
+  24| +import { trpc } from "@calcom/trpc/react";
+  25|  import { revalidateWebhooksList } from "@calcom/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/(with-loader)/actions";
+  26| -
+  27| +import { toastManager } from "@coss/ui/components/toast";
+  28| +import { useRouter } from "next/navigation";
+  29| +import { useSession } from "next-auth/react";
+  30|  import type { WebhookFormSubmitData } from "../components/WebhookForm";
+  31|  import WebhookForm from "../components/WebhookForm";
+  32| +import { WebhookVersionCTA } from "../components/WebhookVersionCTA";
+  33| +import { WebhookFormHeader } from "./webhook-form-header";
+  34|  
+  35|  type Props = {
+  36|    webhooks: RouterOutputs["viewer"]["webhook"]["list"];
+candidates: h23 (WebhookVersionCTA); h32 (WebhookFormHeader)
+
+--- HUNK h36 | file: apps/web/modules/webhooks/views/webhook-new-view.tsx | change: modify ---
+@@ -42,13 +32,13 @@ export const NewWebhookView = ({ webhooks, installedApps }: Props) => {
+   1|  
+   2|    const createWebhookMutation = trpc.viewer.webhook.create.useMutation({
+   3|      async onSuccess() {
+   4| -      showToast(t("webhook_created_successfully"), "success");
+   5| +      toastManager.add({ title: t("webhook_created_successfully"), type: "success" });
+   6|        await utils.viewer.webhook.list.invalidate();
+   7|        revalidateWebhooksList();
+   8|        router.push("/settings/developer/webhooks");
+   9|      },
+  10|      onError(error) {
+  11| -      showToast(`${error.message}`, "error");
+  12| +      toastManager.add({ title: error.message, type: "error" });
+  13|      },
+  14|    });
+  15|  
+
+--- HUNK h37 | file: apps/web/modules/webhooks/views/webhook-new-view.tsx | change: modify ---
+@@ -63,7 +53,7 @@ export const NewWebhookView = ({ webhooks, installedApps }: Props) => {
+   1|          platform,
+   2|        })
+   3|      ) {
+   4| -      showToast(t("webhook_subscriber_url_reserved"), "error");
+   5| +      toastManager.add({ title: t("webhook_subscriber_url_reserved"), type: "error" });
+   6|        return;
+   7|      }
+   8|  
+
+--- HUNK h38 | file: apps/web/modules/webhooks/views/webhook-new-view.tsx | change: modify ---
+@@ -73,7 +63,9 @@ export const NewWebhookView = ({ webhooks, installedApps }: Props) => {
+   1|  
+   2|      createWebhookMutation.mutate({
+   3|        subscriberUrl: values.subscriberUrl,
+   4| -      eventTriggers: values.eventTriggers,
+   5| +      eventTriggers: values.eventTriggers.filter((trigger) =>
+   6| +        WEBHOOK_TRIGGER_EVENTS.includes(trigger as (typeof WEBHOOK_TRIGGER_EVENTS)[number])
+   7| +      ) as unknown as Parameters<typeof createWebhookMutation.mutate>[0]["eventTriggers"],
+   8|        active: values.active,
+   9|        payloadTemplate: values.payloadTemplate,
+  10|        secret: values.secret,
+
+--- HUNK h39 | file: apps/web/modules/webhooks/views/webhook-new-view.tsx | change: modify ---
+@@ -91,44 +83,10 @@ export const NewWebhookView = ({ webhooks, installedApps }: Props) => {
+   1|        onSubmit={onCreateWebhook}
+   2|        apps={installedApps?.items.map((app) => app.slug)}
+   3|        headerWrapper={(formMethods, children) => (
+   4| -        <SettingsHeaderWithBackButton
+   5| -          title={t("add_webhook")}
+   6| -          description={t("add_webhook_description", { appName: APP_NAME })}
+   7| -          borderInShellHeader={true}
+   8| -          CTA={
+   9| -            <div className="flex items-center gap-2">
+  10| -              <Tooltip content={t("webhook_version")}>
+  11| -                <div>
+  12| -                  <Select
+  13| -                    className="min-w-36"
+  14| -                    options={WEBHOOK_VERSION_OPTIONS}
+  15| -                    value={{
+  16| -                      value: formMethods.watch("version"),
+  17| -                      label: getWebhookVersionLabel(formMethods.watch("version")),
+  18| -                    }}
+  19| -                    onChange={(option) => {
+  20| -                      if (option) {
+  21| -                        formMethods.setValue("version", option.value, { shouldDirty: true });
+  22| -                      }
+  23| -                    }}
+  24| -                  />
+  25| -                </div>
+  26| -              </Tooltip>
+  27| -              <Tooltip
+  28| -                content={t("webhook_version_docs", {
+  29| -                  version: getWebhookVersionLabel(formMethods.watch("version")),
+  30| -                })}>
+  31| -                <Link
+  32| -                  href={getWebhookVersionDocsUrl(formMethods.watch("version"))}
+  33| -                  target="_blank"
+  34| -                  className="text-subtle hover:text-emphasis flex items-center">
+  35| -                  <ExternalLinkIcon className="h-4 w-4" />
+  36| -                </Link>
+  37| -              </Tooltip>
+  38| -            </div>
+  39| -          }>
+  40| +        <>
+  41| +          <WebhookFormHeader CTA={<WebhookVersionCTA formMethods={formMethods} />} />
+  42|            {children}
+  43| -        </SettingsHeaderWithBackButton>
+  44| +        </>
+  45|        )}
+  46|      />
+  47|    );
+candidates: h23 (WebhookVersionCTA); h32 (WebhookFormHeader)
+
+--- HUNK h40 | file: apps/web/modules/webhooks/views/webhook-test-header.tsx | change: add ---
+@@ -0,0 +1,25 @@
+   1| +"use client";
+   2| +
+   3| +import { useLocale } from "@calcom/lib/hooks/useLocale";
+   4| +import {
+   5| +  CardFrameDescription,
+   6| +  CardFrameHeader,
+   7| +  CardFrameTitle,
+   8| +} from "@coss/ui/components/card";
+   9| +import type { ReactNode } from "react";
+  10| +
+  11| +export function WebhookTestHeader({ actions }: { actions?: ReactNode }) {
+  12| +  const { t } = useLocale();
+  13| +
+  14| +  return (
+  15| +    <CardFrameHeader>
+  16| +      <div className="flex items-center justify-between gap-4">
+  17| +        <div>
+  18| +          <CardFrameTitle>{t("webhook_test")}</CardFrameTitle>
+  19| +          <CardFrameDescription>{t("test_webhook")}</CardFrameDescription>
+  20| +        </div>
+  21| +        {actions}
+  22| +      </div>
+  23| +    </CardFrameHeader>
+  24| +  );
+  25| +}
+candidates: h21 (WebhookTestHeader); h22 (WebhookTestHeader); h33 (WebhookTestHeader)
+
+--- HUNK h41 | file: apps/web/modules/webhooks/views/webhooks-header.tsx | change: add ---
+@@ -0,0 +1,24 @@
+   1| +"use client";
+   2| +
+   3| +import { APP_NAME } from "@calcom/lib/constants";
+   4| +import { useLocale } from "@calcom/lib/hooks/useLocale";
+   5| +import {
+   6| +  AppHeader,
+   7| +  AppHeaderActions,
+   8| +  AppHeaderContent,
+   9| +  AppHeaderDescription,
+  10| +} from "@coss/ui/shared/app-header";
+  11| +import type { ReactNode } from "react";
+  12| +
+  13| +export function WebhooksHeader({ actions }: { actions?: ReactNode }) {
+  14| +  const { t } = useLocale();
+  15| +
+  16| +  return (
+  17| +    <AppHeader>
+  18| +      <AppHeaderContent title={t("webhooks")}>
+  19| +        <AppHeaderDescription>{t("add_webhook_description", { appName: APP_NAME })}</AppHeaderDescription>
+  20| +      </AppHeaderContent>
+  21| +      {actions ? <AppHeaderActions>{actions}</AppHeaderActions> : null}
+  22| +    </AppHeader>
+  23| +  );
+  24| +}
+candidates: h42 (WebhooksHeader); h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h42 | file: apps/web/modules/webhooks/views/webhooks-skeleton.tsx | change: modify ---
+@@ -1,24 +1,77 @@
+   1|  "use client";
+   2|  
+   3| -import SettingsHeader from "@calcom/features/settings/appDir/SettingsHeader";
+   4| -import { APP_NAME } from "@calcom/lib/constants";
+   5| -import { useLocale } from "@calcom/lib/hooks/useLocale";
+   6| -import { SkeletonText, SkeletonContainer } from "@calcom/ui/components/skeleton";
+   7| +import { Card, CardFrame, CardFrameHeader, CardPanel } from "@coss/ui/components/card";
+   8| +import { Skeleton } from "@coss/ui/components/skeleton";
+   9| +import {
+  10| +  ListItem,
+  11| +  ListItemActions,
+  12| +  ListItemBadges,
+  13| +  ListItemContent,
+  14| +  ListItemHeader,
+  15| +} from "@coss/ui/shared/list-item";
+  16| +import { WebhooksHeader } from "./webhooks-header";
+  17|  
+  18|  export const SkeletonLoader = () => {
+  19| -  const { t } = useLocale();
+  20|    return (
+  21| -    <SettingsHeader
+  22| -      title={t("webhooks")}
+  23| -      description={t("add_webhook_description", { appName: APP_NAME })}
+  24| -      borderInShellHeader={true}
+  25| -      CTA={null}>
+  26| -      <SkeletonContainer>
+  27| -        <div className="divide-subtle border-subtle stack-y-6 rounded-b-lg border border-t-0 px-6 py-4">
+  28| -          <SkeletonText className="h-8 w-full" />
+  29| -          <SkeletonText className="h-8 w-full" />
+  30| -        </div>
+  31| -      </SkeletonContainer>
+  32| -    </SettingsHeader>
+  33| +    <>
+  34| +      <WebhooksHeader />
+  35| +      <div className="flex flex-col gap-6">
+  36| +        <section>
+  37| +          <CardFrame>
+  38| +            <CardFrameHeader>
+  39| +              <div className="flex items-center gap-2">
+  40| +                <Skeleton className="size-5 shrink-0 rounded-full" />
+  41| +                <Skeleton className="h-4 w-24" />
+  42| +              </div>
+  43| +            </CardFrameHeader>
+  44| +            <Card>
+  45| +              <CardPanel className="p-0">
+  46| +                <WebhookListItemSkeleton />
+  47| +                <WebhookListItemSkeleton />
+  48| +                <WebhookListItemSkeleton />
+  49| +              </CardPanel>
+  50| +            </Card>
+  51| +          </CardFrame>
+  52| +        </section>
+  53| +      </div>
+  54| +    </>
+  55|    );
+  56|  };
+  57| +
+  58| +function WebhookListItemSkeleton() {
+  59| +  return (
+  60| +    <ListItem className="*:px-4">
+  61| +      <ListItemContent>
+  62| +        <ListItemHeader>
+  63| +          <div className="flex items-center gap-2">
+  64| +            <Skeleton className="my-0.5 h-5 w-full max-w-[70%] shrink-0 truncate sm:h-4" />
+  65| +            <div className="flex items-center gap-2">
+  66| +              <Skeleton className="h-5 w-16 shrink-0 sm:h-4.5" />
+  67| +            </div>
+  68| +          </div>
+  69| +        </ListItemHeader>
+  70| +        <ListItemBadges>
+  71| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  72| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  73| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  74| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  75| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  76| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  77| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  78| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  79| +          <Skeleton className="h-5.5 w-22 shrink-0 sm:h-4.5 sm:w-20" />
+  80| +        </ListItemBadges>
+  81| +      </ListItemContent>
+  82| +      <ListItemActions>
+  83| +        <div className="flex items-center gap-4 max-md:hidden">
+  84| +          <Skeleton className="h-4.5 w-7.5 rounded-full max-md:hidden" />
+  85| +          <div className="flex items-center gap-2">
+  86| +            <Skeleton className="size-9 shrink-0 sm:size-8" />
+  87| +            <Skeleton className="size-9 shrink-0 sm:size-8" />
+  88| +          </div>
+  89| +        </div>
+  90| +        <Skeleton className="size-9 shrink-0 sm:size-8 md:hidden" />
+  91| +      </ListItemActions>
+  92| +    </ListItem>
+  93| +  );
+  94| +}
+candidates: h41 (WebhooksHeader); h48 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader)
+
+--- HUNK h43 | file: apps/web/modules/webhooks/views/webhooks-view.tsx | change: modify ---
+@@ -4,11 +4,24 @@ import { useBookerUrl } from "@calcom/features/bookings/hooks/useBookerUrl";
+   1|  import { APP_NAME, WEBAPP_URL } from "@calcom/lib/constants";
+   2|  import { useLocale } from "@calcom/lib/hooks/useLocale";
+   3|  import type { RouterOutputs } from "@calcom/trpc/react";
+   4| -import { Avatar } from "@calcom/ui/components/avatar";
+   5| -import { EmptyScreen } from "@calcom/ui/components/empty-screen";
+   6| -import { Frame, FrameDescription, FrameHeader, FramePanel, FrameTitle } from "@coss/ui/components/frame";
+   7| +import { Avatar, AvatarImage } from "@coss/ui/components/avatar";
+   8| +import { Card, CardFrame, CardFrameHeader, CardPanel } from "@coss/ui/components/card";
+   9| +import {
+  10| +  Empty,
+  11| +  EmptyContent,
+  12| +  EmptyDescription,
+  13| +  EmptyHeader,
+  14| +  EmptyMedia,
+  15| +  EmptyTitle,
+  16| +} from "@coss/ui/components/empty";
+  17| +import {
+  18| +  AppHeader,
+  19| +  AppHeaderActions,
+  20| +  AppHeaderContent,
+  21| +  AppHeaderDescription,
+  22| +} from "@coss/ui/shared/app-header";
+  23| +import { WebhookIcon } from "lucide-react";
+  24|  import { useRouter } from "next/navigation";
+  25| -import React from "react";
+  26|  import { CreateNewWebhookButton, WebhookListItem } from "../components";
+  27|  
+  28|  type WebhooksByViewer = RouterOutputs["viewer"]["webhook"]["getByViewer"];
+candidates: h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h44 | file: apps/web/modules/webhooks/views/webhooks-view.tsx | change: modify ---
+@@ -28,66 +41,82 @@ const WebhooksView = ({ data }: Props) => {
+   1|  const WebhooksList = ({ webhooksByViewer }: { webhooksByViewer: WebhooksByViewer }) => {
+   2|    const { t } = useLocale();
+   3|    const router = useRouter();
+   4| -  const { profiles, webhookGroups } = webhooksByViewer;
+   5| +  const { webhookGroups } = webhooksByViewer;
+   6|    const bookerUrl = useBookerUrl();
+   7|  
+   8| -  const hasTeams = profiles && profiles.length > 1;
+   9| -
+  10|    return (
+  11| -    <Frame>
+  12| -      <FrameHeader className="mb-2 flex-row items-center justify-between">
+  13| -        <div>
+  14| -          <FrameTitle className="text-lg">{t("webhooks")}</FrameTitle>
+  15| -          <FrameDescription>{t("add_webhook_description", { appName: APP_NAME })}</FrameDescription>
+  16| -        </div>
+  17| -        <CreateNewWebhookButton />
+  18| -      </FrameHeader>
+  19| -      {webhookGroups.length ? (
+  20| -        <>
+  21| -          {webhookGroups.map((group) => (
+  22| -            <React.Fragment key={group.teamId}>
+  23| -              {hasTeams && (
+  24| -                <div className="mb-2 mt-4 flex items-center px-1">
+  25| -                  <Avatar
+  26| -                    alt={group.profile.image || ""}
+  27| -                    imageSrc={group.profile.image || `${bookerUrl}/${group.profile.name}/avatar.png`}
+  28| -                    size="md"
+  29| -                    className="inline-flex justify-center"
+  30| -                  />
+  31| -                  <div className="text-emphasis ml-2 flex grow items-center font-bold">
+  32| -                    {group.profile.name || ""}
+  33| -                  </div>
+  34| -                </div>
+  35| -              )}
+  36| -              {group.webhooks.map((webhook) => (
+  37| -                <FramePanel key={webhook.id} className="mt-2">
+  38| -                  <WebhookListItem
+  39| -                    webhook={webhook}
+  40| -                    lastItem={true}
+  41| -                    permissions={{
+  42| -                      canEditWebhook: group?.metadata?.canModify ?? false,
+  43| -                      canDeleteWebhook: group?.metadata?.canDelete ?? false,
+  44| -                    }}
+  45| -                    onEditWebhook={() =>
+  46| -                      router.push(`${WEBAPP_URL}/settings/developer/webhooks/${webhook.id}`)
+  47| -                    }
+  48| -                  />
+  49| -                </FramePanel>
+  50| -              ))}
+  51| -            </React.Fragment>
+  52| -          ))}
+  53| -        </>
+  54| -      ) : (
+  55| -        <FramePanel>
+  56| -          <EmptyScreen
+  57| -            Icon="link"
+  58| -            headline={t("create_your_first_webhook")}
+  59| -            description={t("create_your_first_webhook_description", { appName: APP_NAME })}
+  60| -            buttonRaw={<CreateNewWebhookButton />}
+  61| -          />
+  62| -        </FramePanel>
+  63| -      )}
+  64| -    </Frame>
+  65| +    <>
+  66| +      <AppHeader>
+  67| +        <AppHeaderContent title={t("webhooks")}>
+  68| +          <AppHeaderDescription>{t("add_webhook_description", { appName: APP_NAME })}</AppHeaderDescription>
+  69| +        </AppHeaderContent>
+  70| +        {webhookGroups.length > 0 && (
+  71| +          <AppHeaderActions>
+  72| +            <CreateNewWebhookButton />
+  73| +          </AppHeaderActions>
+  74| +        )}
+  75| +      </AppHeader>
+  76| +
+  77| +      <div className="flex flex-col gap-6">
+  78| +        {webhookGroups.length ? (
+  79| +          webhookGroups.map((group) => {
+  80| +            const userName = group.profile.name ?? group.profile.slug ?? "";
+  81| +            const userAvatar =
+  82| +              group.profile.image ??
+  83| +              (group.profile.slug ? `${bookerUrl}/${group.profile.slug}/avatar.png` : undefined);
+  84| +            return (
+  85| +              <section key={group.teamId ?? group.profile.slug ?? ""}>
+  86| +                <CardFrame>
+  87| +                  <CardFrameHeader>
+  88| +                    <div className="flex items-center gap-2">
+  89| +                      <Avatar className="size-5">
+  90| +                        {userAvatar ? <AvatarImage alt={userName} src={userAvatar} /> : null}
+  91| +                      </Avatar>
+  92| +                      <span className="font-medium text-sm">{userName}</span>
+  93| +                    </div>
+  94| +                  </CardFrameHeader>
+  95| +                  <Card>
+  96| +                    <CardPanel className="p-0">
+  97| +                      {[...group.webhooks]
+  98| +                        .sort((a, b) => a.id.localeCompare(b.id))
+  99| +                        .map((webhook) => (
+ 100| +                          <WebhookListItem
+ 101| +                            key={webhook.id}
+ 102| +                            webhook={webhook}
+ 103| +                            editHref={`${WEBAPP_URL}/settings/developer/webhooks/${webhook.id}`}
+ 104| +                            permissions={{
+ 105| +                              canEditWebhook: group?.metadata?.canModify ?? false,
+ 106| +                              canDeleteWebhook: group?.metadata?.canDelete ?? false,
+ 107| +                            }}
+ 108| +                            onEditWebhookAction={() =>
+ 109| +                              router.push(`${WEBAPP_URL}/settings/developer/webhooks/${webhook.id}`)
+ 110| +                            }
+ 111| +                          />
+ 112| +                        ))}
+ 113| +                    </CardPanel>
+ 114| +                  </Card>
+ 115| +                </CardFrame>
+ 116| +              </section>
+ 117| +            );
+ 118| +          })
+ 119| +        ) : (
+ 120| +          <Empty className="rounded-xl border border-dashed">
+ 121| +            <EmptyHeader>
+ 122| +              <EmptyMedia variant="icon">
+ 123| +                <WebhookIcon />
+ 124| +              </EmptyMedia>
+ 125| +              <EmptyTitle>{t("create_your_first_webhook")}</EmptyTitle>
+ 126| +              <EmptyDescription>
+ 127| +                {t("create_your_first_webhook_description", { appName: APP_NAME })}
+ 128| +              </EmptyDescription>
+ 129| +            </EmptyHeader>
+ 130| +            <EmptyContent>
+ 131| +              <CreateNewWebhookButton isEmptyState />
+ 132| +            </EmptyContent>
+ 133| +          </Empty>
+ 134| +        )}
+ 135| +      </div>
+ 136| +    </>
+ 137|    );
+ 138|  };
+ 139|  
+candidates: h9 (CreateNewWebhookButton); h47 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h45 | file: packages/coss-ui/package.json | change: modify ---
+@@ -10,7 +10,8 @@
+   1|      "./icons": "./src/icons.tsx",
+   2|      "./lib/*": "./src/lib/*.ts",
+   3|      "./components/*": "./src/components/*.tsx",
+   4| -    "./hooks/*": "./src/hooks/*.ts"
+   5| +    "./hooks/*": "./src/hooks/*.ts",
+   6| +    "./shared/*": "./src/shared/*.tsx"
+   7|    },
+   8|    "typesVersions": {
+   9|      "*": {
+
+--- HUNK h46 | file: packages/coss-ui/package.json | change: modify ---
+@@ -25,6 +26,9 @@
+   1|        ],
+   2|        "hooks/*": [
+   3|          "./src/hooks/*.ts"
+   4| +      ],
+   5| +      "shared/*": [
+   6| +        "./src/shared/*.tsx"
+   7|        ]
+   8|      }
+   9|    },
+
+--- HUNK h47 | file: packages/coss-ui/src/shared/app-header.tsx | change: add ---
+@@ -0,0 +1,29 @@
+   1| +import { cn } from "@coss/ui/lib/utils";
+   2| +
+   3| +function AppHeader({ className, ...props }: React.ComponentProps<"header">) {
+   4| +  return <header className={cn("mb-6 mt-2 flex items-center md:items-start justify-between gap-4", className)} {...props} />;
+   5| +}
+   6| +
+   7| +function AppHeaderContent({
+   8| +  children,
+   9| +  className,
+  10| +  title,
+  11| +  ...props
+  12| +}: React.ComponentProps<"div"> & { title: string }) {
+  13| +  return (
+  14| +    <div className={cn("flex flex-col gap-1", className)} {...props}>
+  15| +      <h1 className="font-heading font-semibold text-lg leading-none">{title}</h1>
+  16| +      {children}
+  17| +    </div>
+  18| +  );
+  19| +}
+  20| +
+  21| +function AppHeaderDescription({ className, ...props }: React.ComponentProps<"p">) {
+  22| +  return <p className={cn("text-muted-foreground text-sm max-md:hidden", className)} {...props} />;
+  23| +}
+  24| +
+  25| +function AppHeaderActions({ className, ...props }: React.ComponentProps<"div">) {
+  26| +  return <div className={cn("flex items-center gap-2", className)} {...props} />;
+  27| +}
+  28| +
+  29| +export { AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription };
+candidates: h6 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription); h8 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription); h32 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription); h41 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription); h43 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription); h44 (AppHeader, AppHeaderActions, AppHeaderContent, AppHeaderDescription)
+
+--- HUNK h48 | file: packages/coss-ui/src/shared/list-item.tsx | change: add ---
+@@ -0,0 +1,111 @@
+   1| +import { cn } from "@coss/ui/lib/utils";
+   2| +import type { ReactNode } from "react";
+   3| +import Link from "next/link";
+   4| +
+   5| +interface ListItemProps extends React.HTMLAttributes<HTMLDivElement> {
+   6| +  children: ReactNode;
+   7| +  className?: string;
+   8| +}
+   9| +
+  10| +function ListItem({ children, className, ...props }: ListItemProps) {
+  11| +  return (
+  12| +    <div
+  13| +      {...props}
+  14| +      className={cn(
+  15| +        "not-last:border-b bg-clip-padding transition-[background-color] first:rounded-t-[calc(var(--radius-xl)+1px)] last:rounded-b-[calc(var(--radius-xl)+1px)] has-[[data-slot=list-item-title]_a:hover]:z-1 has-[[data-slot=list-item-title]_a:hover]:bg-[color-mix(in_srgb,var(--card),var(--color-black)_2%)] dark:has-[[data-slot=list-item-title]_a:hover]:bg-[color-mix(in_srgb,var(--card),var(--color-white)_2%)]",
+  16| +        className
+  17| +      )}
+  18| +      data-slot="list-item">
+  19| +      <div className="relative flex items-center justify-between gap-4 px-6 py-4">{children}</div>
+  20| +    </div>
+  21| +  );
+  22| +}
+  23| +
+  24| +interface ListItemContentProps {
+  25| +  children: ReactNode;
+  26| +  className?: string;
+  27| +}
+  28| +
+  29| +function ListItemContent({ children, className }: ListItemContentProps) {
+  30| +  return <div className={cn("flex min-w-0 flex-1 flex-col gap-3", className)}>{children}</div>;
+  31| +}
+  32| +
+  33| +interface ListItemHeaderProps {
+  34| +  children: ReactNode;
+  35| +  className?: string;
+  36| +}
+  37| +
+  38| +function ListItemHeader({ children, className }: ListItemHeaderProps) {
+  39| +  return <div className={cn("flex flex-col gap-1", className)}>{children}</div>;
+  40| +}
+  41| +
+  42| +interface ListItemTitleProps {
+  43| +  children: ReactNode;
+  44| +  className?: string;
+  45| +}
+  46| +
+  47| +function ListItemTitle({ children, className }: ListItemTitleProps) {
+  48| +  return (
+  49| +    <h2 className={cn("font-semibold sm:text-sm", className)} data-slot="list-item-title">
+  50| +      {children}
+  51| +    </h2>
+  52| +  );
+  53| +}
+  54| +
+  55| +function ListItemTitleLink({ children, className, href }: ListItemTitleProps & { href: string }) {
+  56| +  return (
+  57| +    <Link className={cn("before:absolute before:inset-0", className)} data-slot="list-item-title-link" href={href}>
+  58| +      {children}
+  59| +    </Link>
+  60| +  );
+  61| +}
+  62| +
+  63| +interface ListItemDescriptionProps {
+  64| +  children: ReactNode;
+  65| +  className?: string;
+  66| +}
+  67| +
+  68| +function ListItemDescription({ children, className }: ListItemDescriptionProps) {
+  69| +  return (
+  70| +    <p className={cn("text-muted-foreground text-sm", className)} data-slot="list-item-description">
+  71| +      {children}
+  72| +    </p>
+  73| +  );
+  74| +}
+  75| +
+  76| +interface ListItemBadgesProps {
+  77| +  children: ReactNode;
+  78| +  className?: string;
+  79| +}
+  80| +
+  81| +function ListItemBadges({ children, className }: ListItemBadgesProps) {
+  82| +  return (
+  83| +    <div className={cn("flex flex-wrap items-center gap-2", className)} data-slot="list-item-badges">
+  84| +      {children}
+  85| +    </div>
+  86| +  );
+  87| +}
+  88| +
+  89| +interface ListItemActionsProps {
+  90| +  children: ReactNode;
+  91| +  className?: string;
+  92| +}
+  93| +
+  94| +function ListItemActions({ children, className }: ListItemActionsProps) {
+  95| +  return (
+  96| +    <div className={cn("relative flex items-center gap-4", className)} data-slot="list-item-actions">
+  97| +      {children}
+  98| +    </div>
+  99| +  );
+ 100| +}
+ 101| +
+ 102| +export {
+ 103| +  ListItem,
+ 104| +  ListItemActions,
+ 105| +  ListItemBadges,
+ 106| +  ListItemContent,
+ 107| +  ListItemDescription,
+ 108| +  ListItemHeader,
+ 109| +  ListItemTitle,
+ 110| +  ListItemTitleLink,
+ 111| +};
+candidates: h16 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader, ListItemTitle, ListItemTitleLink); h17 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader, ListItemTitle, ListItemTitleLink); h18 (ListItem); h42 (ListItem, ListItemActions, ListItemBadges, ListItemContent, ListItemHeader)
+
+--- HUNK h49 | file: packages/coss-ui/src/styles/globals.css | change: modify ---
+@@ -66,23 +66,23 @@
+   1|  :root {
+   2|    --radius: 0.625rem;
+   3|    --background: var(--color-white);
+   4| -  --foreground: var(--color-zinc-800);
+   5| +  --foreground: var(--color-neutral-800);
+   6|    --card: var(--color-white);
+   7| -  --card-foreground: var(--color-zinc-800);
+   8| +  --card-foreground: var(--color-neutral-800);
+   9|    --popover: var(--color-white);
+  10| -  --popover-foreground: var(--color-zinc-800);
+  11| -  --primary: var(--color-zinc-800);
+  12| -  --primary-foreground: var(--color-zinc-50);
+  13| +  --popover-foreground: var(--color-neutral-800);
+  14| +  --primary: var(--color-neutral-800);
+  15| +  --primary-foreground: var(--color-neutral-50);
+  16|    --secondary: --alpha(var(--color-black) / 4%);
+  17| -  --secondary-foreground: var(--color-zinc-800);
+  18| +  --secondary-foreground: var(--color-neutral-800);
+  19|    --muted: --alpha(var(--color-black) / 4%);
+  20|    --muted-foreground: color-mix(
+  21|      in srgb,
+  22| -    var(--color-zinc-500) 90%,
+  23| +    var(--color-neutral-500) 90%,
+  24|      var(--color-black)
+  25|    );
+  26|    --accent: --alpha(var(--color-black) / 4%);
+  27| -  --accent-foreground: var(--color-zinc-800);
+  28| +  --accent-foreground: var(--color-neutral-800);
+  29|    --destructive: var(--color-red-500);
+  30|    --destructive-foreground: var(--color-red-700);
+  31|    --info: var(--color-blue-500);
+
+--- HUNK h50 | file: packages/coss-ui/src/styles/globals.css | change: modify ---
+@@ -91,26 +91,26 @@
+   1|    --success-foreground: var(--color-emerald-700);
+   2|    --warning: var(--color-amber-500);
+   3|    --warning-foreground: var(--color-amber-700);
+   4| -  --border: --alpha(var(--color-black) / 12%);
+   5| -  --input: --alpha(var(--color-black) / 12%);
+   6| -  --ring: var(--color-zinc-400);
+   7| +  --border: --alpha(var(--color-black) / 8%);
+   8| +  --input: --alpha(var(--color-black) / 10%);
+   9| +  --ring: var(--color-neutral-400);
+  10|    --chart-1: var(--color-orange-600);
+  11|    --chart-2: var(--color-teal-600);
+  12|    --chart-3: var(--color-cyan-900);
+  13|    --chart-4: var(--color-amber-400);
+  14|    --chart-5: var(--color-amber-500);
+  15| -  --sidebar: var(--color-zinc-50);
+  16| +  --sidebar: var(--color-neutral-50);
+  17|    --sidebar-foreground: color-mix(
+  18|      in srgb,
+  19| -    var(--color-zinc-800) 64%,
+  20| +    var(--color-neutral-800) 64%,
+  21|      var(--sidebar)
+  22|    );
+  23| -  --sidebar-primary: var(--color-zinc-800);
+  24| -  --sidebar-primary-foreground: var(--color-zinc-50);
+  25| +  --sidebar-primary: var(--color-neutral-800);
+  26| +  --sidebar-primary-foreground: var(--color-neutral-50);
+  27|    --sidebar-accent: --alpha(var(--color-black) / 4%);
+  28| -  --sidebar-accent-foreground: var(--color-zinc-800);
+  29| -  --sidebar-border: --alpha(var(--color-black) / 12%);
+  30| -  --sidebar-ring: var(--color-zinc-400);
+  31| +  --sidebar-accent-foreground: var(--color-neutral-800);
+  32| +  --sidebar-border: --alpha(var(--color-black) / 6%);
+  33| +  --sidebar-ring: var(--color-neutral-400);
+  34|    --code: var(--color-white);
+  35|    --code-foreground: var(--foreground);
+  36|    --code-highlight: --alpha(var(--color-black) / 4%);
+
+--- HUNK h51 | file: packages/coss-ui/src/styles/globals.css | change: modify ---
+@@ -119,27 +119,31 @@
+   1|  .dark {
+   2|    --background: color-mix(
+   3|      in srgb,
+   4| -    var(--color-zinc-950) 98%,
+   5| +    var(--color-neutral-950) 96%,
+   6|      var(--color-white)
+   7|    );
+   8| -  --foreground: var(--color-zinc-200);
+   9| +  --foreground: var(--color-neutral-100);
+  10|    --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
+  11| -  --card-foreground: var(--color-zinc-200);
+  12| +  --card-foreground: var(--color-neutral-100);
+  13|    --popover: color-mix(in srgb, var(--background) 96%, var(--color-white));
+  14| -  --popover-foreground: var(--color-zinc-200);
+  15| -  --primary: var(--color-zinc-200);
+  16| -  --primary-foreground: var(--color-zinc-800);
+  17| -  --secondary: --alpha(var(--color-white) / 6%);
+  18| -  --secondary-foreground: var(--color-zinc-200);
+  19| -  --muted: --alpha(var(--color-white) / 6%);
+  20| +  --popover-foreground: var(--color-neutral-100);
+  21| +  --primary: var(--color-neutral-100);
+  22| +  --primary-foreground: var(--color-neutral-800);
+  23| +  --secondary: --alpha(var(--color-white) / 4%);
+  24| +  --secondary-foreground: var(--color-neutral-100);
+  25| +  --muted: --alpha(var(--color-white) / 4%);
+  26|    --muted-foreground: color-mix(
+  27|      in srgb,
+  28| -    var(--color-zinc-500) 90%,
+  29| +    var(--color-neutral-500) 90%,
+  30| +    var(--color-white)
+  31| +  );
+  32| +  --accent: --alpha(var(--color-white) / 4%);
+  33| +  --accent-foreground: var(--color-neutral-100);
+  34| +  --destructive: color-mix(
+  35| +    in srgb,
+  36| +    var(--color-red-500) 90%,
+  37|      var(--color-white)
+  38|    );
+  39| -  --accent: --alpha(var(--color-white) / 6%);
+  40| -  --accent-foreground: var(--color-zinc-200);
+  41| -  --destructive: var(--color-red-500);
+  42|    --destructive-foreground: var(--color-red-400);
+  43|    --info: var(--color-blue-500);
+  44|    --info-foreground: var(--color-blue-400);
+
+--- HUNK h52 | file: packages/coss-ui/src/styles/globals.css | change: modify ---
+@@ -147,29 +151,33 @@
+   1|    --success-foreground: var(--color-emerald-400);
+   2|    --warning: var(--color-amber-500);
+   3|    --warning-foreground: var(--color-amber-400);
+   4| -  --border: --alpha(var(--color-white) / 12%);
+   5| -  --input: --alpha(var(--color-white) / 12%);
+   6| -  --ring: var(--color-zinc-500);
+   7| +  --border: --alpha(var(--color-white) / 6%);
+   8| +  --input: --alpha(var(--color-white) / 8%);
+   9| +  --ring: var(--color-neutral-500);
+  10|    --chart-1: var(--color-blue-700);
+  11|    --chart-2: var(--color-emerald-500);
+  12|    --chart-3: var(--color-amber-500);
+  13|    --chart-4: var(--color-purple-500);
+  14|    --chart-5: var(--color-rose-500);
+  15| -  --sidebar: var(--color-zinc-950);
+  16| +  --sidebar: color-mix(
+  17| +    in srgb,
+  18| +    var(--color-neutral-950) 97%,
+  19| +    var(--color-white)
+  20| +  );
+  21|    --sidebar-foreground: color-mix(
+  22|      in srgb,
+  23| -    var(--color-zinc-200) 64%,
+  24| +    var(--color-neutral-100) 64%,
+  25|      var(--sidebar)
+  26|    );
+  27| -  --sidebar-primary: var(--color-zinc-200);
+  28| -  --sidebar-primary-foreground: var(--color-zinc-800);
+  29| -  --sidebar-accent: --alpha(var(--color-white) / 6%);
+  30| -  --sidebar-accent-foreground: var(--color-zinc-200);
+  31| -  --sidebar-border: --alpha(var(--color-white) / 12%);
+  32| -  --sidebar-ring: var(--color-zinc-400);
+  33| -  --code: color-mix(in srgb, var(--background) 96%, var(--color-white));
+  34| +  --sidebar-primary: var(--color-neutral-100);
+  35| +  --sidebar-primary-foreground: var(--color-neutral-800);
+  36| +  --sidebar-accent: --alpha(var(--color-white) / 4%);
+  37| +  --sidebar-accent-foreground: var(--color-neutral-100);
+  38| +  --sidebar-border: --alpha(var(--color-white) / 5%);
+  39| +  --sidebar-ring: var(--color-neutral-400);
+  40| +  --code: color-mix(in srgb, var(--background) 98%, var(--color-white));
+  41|    --code-foreground: var(--foreground);
+  42| -  --code-highlight: --alpha(var(--color-white) / 6%);
+  43| +  --code-highlight: --alpha(var(--color-white) / 4%);
+  44|  }
+  45|  
+  46|  @layer base {
+
+--- HUNK h53 | file: packages/coss-ui/src/styles/globals.css | change: modify ---
+@@ -179,5 +187,5 @@
+   1|  }
+   2|  
+   3|  .backdrop-blur-sm {
+   4| -  @apply backdrop-blur-none bg-neutral-800/70;
+   5| -}
+   6| +  @apply backdrop-blur-none bg-black/70;
+   7| +}
+   8| \ No newline at end of file
+
+--- HUNK h54 | file: packages/i18n/locales/en/common.json | change: modify ---
+@@ -2127,6 +2127,7 @@
+   1|    "triggers_when": "Triggers when",
+   2|    "test_webhook": "Please ping test before creating.",
+   3|    "enable_webhook": "Enable webhook",
+   4| +  "disable_webhook": "Disable webhook",
+   5|    "add_webhook": "Add webhook",
+   6|    "webhook_edited_successfully": "Webhook saved",
+   7|    "api_keys_description": "Generate API keys for accessing your own account",
+
+=== END HUNKS ===
+Return the JSON array now.

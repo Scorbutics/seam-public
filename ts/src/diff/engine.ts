@@ -1,7 +1,6 @@
-// Port of src/diff/engine.py — the per-pass classifier orchestrator. Ported paths so far:
-//   roles=det · cluster ∈ {det, llm} · wiring ∈ {det, hybrid}
-// (the extension default is cluster=llm, roles=det, wiring=hybrid). The remaining all-LLM roles
-// pass (Pass B voting) lands in Phase 4. Passes run in dependency order: roles → wiring → cluster.
+// Port of src/diff/engine.py — the per-pass classifier orchestrator. Full matrix ported:
+//   cluster ∈ {det, llm, hybrid} · roles ∈ {det, llm, hybrid} · wiring ∈ {det, llm, hybrid}
+// plus the optimized all-LLM path. Passes run in dependency order: roles → wiring → cluster.
 import * as det from "./classifier_det.js";
 import * as llm from "./classifier_llm.js";
 import { RegexFactsProvider, type FactsProvider, type HunkFacts } from "./facts.js";
@@ -9,46 +8,66 @@ import type { Hunk } from "./parser.js";
 import { intersect, sorted, union } from "../core/sets.js";
 
 export const DEFAULTS = { cluster: "llm", roles: "det", wiring: "hybrid" } as const;
+const ENGINES = ["llm", "det", "hybrid"];
 
 export function classify(hunks: Hunk[], opts: {
   cluster?: string; roles?: string; wiring?: string; facts_provider?: FactsProvider;
-  repo?: string; model?: string; claudeBin?: string | null;
+  repo?: string; model?: string; claudeBin?: string | null; roleVotes?: number;
 } = {}): void {
   const cluster = opts.cluster ?? "llm", roles = opts.roles ?? "det", wiring = opts.wiring ?? "hybrid";
-  if (roles !== "det" || !["det", "llm"].includes(cluster) || !["det", "hybrid"].includes(wiring)) {
-    throw new Error(`engine: ported paths are roles=det, cluster=det|llm, wiring=det|hybrid (got `
-      + `cluster=${cluster} roles=${roles} wiring=${wiring}). Remaining LLM passes are in progress `
-      + `— see ts/PORT-STATUS.md.`);
-  }
+  for (const [k, v] of Object.entries({ cluster, roles, wiring }))
+    if (!ENGINES.includes(v)) throw new Error(`engine: ${k} must be one of ${ENGINES.join("|")} (got ${v})`);
+  const llmOpts = { model: opts.model, claudeBin: opts.claudeBin };
+  // The classifier operates on NON-noise hunks (Python's run.py filters before engine.classify;
+  // here engine.classify is given the full array and filters itself, so the all-LLM path agrees).
   const work = hunks.filter((h) => h.role !== "noise");
   if (!work.length) return;
-  const facts = (opts.facts_provider ?? new RegexFactsProvider()).facts(work);
-  const llmOpts = { model: opts.model, claudeBin: opts.claudeBin };
 
-  det.assign_roles(work, facts);                 // ROLES (det)
+  // All-LLM → the optimized path (cluster + role-voting + wire), then the shared post-passes.
+  if (cluster === "llm" && roles === "llm" && wiring === "llm") {
+    llm.classify_all_llm(work, { ...llmOpts, roleVotes: opts.roleVotes });
+    det.merge_clusters_by_intent(work);
+    det.assign_spans(work, opts.repo);
+    return;
+  }
+  const needFacts = [cluster, roles, wiring].some((p) => p === "det" || p === "hybrid");
+  const facts = needFacts ? (opts.facts_provider ?? new RegexFactsProvider()).facts(work) : new Map<string, HunkFacts>();
 
-  // WIRING (reads roles). Seam MERGING is deferred until AFTER clustering (a thunk).
-  det.assign_wiring(work, facts);                // symbol candidates (the hint + grounding)
+  // ROLES
+  if (roles === "llm") llm.assign_roles(work, { ...llmOpts, roleVotes: opts.roleVotes });
+  else {
+    det.assign_roles(work, facts);
+    if (roles === "hybrid") llm.reconcile_roles_llm(work, llmOpts);   // LLM re-judges the uncertain
+  }
+
+  // WIRING (reads roles). Seam MERGING is deferred until after clustering (a thunk).
   let seamMerge: (() => void) | null = null;
-  if (wiring === "det") {
-    det.reconcile_wiring(work, facts);           // deterministic owned-prune
-    seamMerge = () => det.merge_seams(work);
+  if (wiring === "llm") {
+    llm.assign_wiring(work, llmOpts);                                  // Pass C (authoritative)
   } else {
-    seamMerge = hybridWiring(work, facts, llmOpts);
+    det.assign_wiring(work, facts);                                    // symbol candidates
+    if (wiring === "det") {
+      det.reconcile_wiring(work, facts);
+      seamMerge = () => det.merge_seams(work);
+    } else {
+      seamMerge = hybridWiring(work, facts, llmOpts);                  // LLM draw + det grounding
+    }
   }
 
   // CLUSTERS (reads the full wiring graph for det; independent for the LLM)
   if (cluster === "llm") llm.assign_clusters(work, llmOpts);
-  else det.assign_clusters(work, facts);
+  else {
+    det.assign_clusters(work, facts);
+    if (cluster === "hybrid") llm.label_clusters_llm(work, llmOpts);   // LLM prose labels over det groups
+  }
 
-  if (seamMerge) seamMerge();                    // collapse same-intent cores into multi-core seams
-  det.merge_clusters_by_intent(work);            // collapse same-intent clusters
-  det.assign_spans(work, opts.repo);             // per-seam overlap placements + header peel
+  if (seamMerge) seamMerge();
+  det.merge_clusters_by_intent(work);
+  det.assign_spans(work, opts.repo);
 }
 
 // The hybrid wiring (LLM-first): the LLM groups cores into seams + draws each edit's line by
-// meaning; determinism GROUNDS the draw (re-adds owned-symbol edges it missed) and prunes the
-// over-wired ungrounded ones. Returns the deferred apply_seam_groups thunk (or null when no cores).
+// meaning; determinism GROUNDS the draw and prunes the over-wired ungrounded ones.
 function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
                       llmOpts: { model?: string; claudeBin?: string | null }): (() => void) | null {
   const cores = new Map<string, Hunk>();
@@ -62,7 +81,7 @@ function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
   const anchors = det._anchors(work, facts, coreIds);
   for (const h of targets) {
     const line = drawn.get(h.id);
-    if (line === undefined) continue;            // LLM gave no list → keep det candidates
+    if (line === undefined) continue;
     const m = det._mentions(facts.get(h.id)!);
     const owned = new Set<string>();
     for (const c of cores.keys())

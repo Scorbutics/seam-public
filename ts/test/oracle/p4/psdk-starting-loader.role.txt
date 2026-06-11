@@ -1,0 +1,374 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -54,6 +54,28 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|      /** Continuous rotation on [gameStartIcon] while the start overlay is up. */
+   2|      private var gameStartIconAnimator: android.animation.ObjectAnimator? = null
+   3|  
+   4| +    /** Posted on [showGameStartOverlay]; cancelled on [hideGameStartOverlay]. */
+   5| +    private val gameStartTimeoutHandler = android.os.Handler(android.os.Looper.getMainLooper())
+   6| +    private val gameStartTimeoutRunnable = Runnable {
+   7| +        android.util.Log.w(TAG, "game-start overlay timeout reached without sentinel — forcing hide")
+   8| +        hideGameStartOverlay()
+   9| +    }
+  10| +
+  11| +    /** File [start.rb] writes when PSDK's first LiteRGSS::DisplayWindow.new returns. */
+  12| +    private var gameReadyFile: java.io.File? = null
+  13| +    private val gameReadyPollHandler = android.os.Handler(android.os.Looper.getMainLooper())
+  14| +    private val gameReadyPollRunnable = object : Runnable {
+  15| +        override fun run() {
+  16| +            val f = gameReadyFile
+  17| +            if (f != null && f.exists()) {
+  18| +                android.util.Log.i(TAG, "game-ready file appeared at ${f.absolutePath} — hiding overlay")
+  19| +                hideGameStartOverlay()
+  20| +                return
+  21| +            }
+  22| +            gameReadyPollHandler.postDelayed(this, GAME_READY_POLL_INTERVAL_MS)
+  23| +        }
+  24| +    }
+  25| +
+  26|      private lateinit var workloadController: RubyWorkloadController
+  27|      private lateinit var systemUi: SystemUiPresenter
+  28|      private lateinit var inputForwarder: GameInputForwarder
+candidates: h3 (gameReadyPollHandler, gameReadyPollRunnable, gameStartTimeoutHandler, gameStartTimeoutRunnable, run); h4 (gameReadyPollHandler, gameReadyPollRunnable, gameStartTimeoutHandler, gameStartTimeoutRunnable)
+
+--- HUNK h2 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -286,17 +308,12 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|          }
+   2|          val workload = workloadController.currentWorkload() ?: return
+   3|  
+   4| -        // Game workload's only sentinel of interest: the start overlay can
+   5| -        // come down because Game.rb's first DisplayWindow just spun up.
+   6| -        // start.rb's prepended GameDisplayReadySignal module emits this
+   7| -        // exactly once per session; any further matches are ignored by
+   8| -        // [hideGameStartOverlay]'s visibility guard.
+   9| -        if (workload is RubyWorkload.Game) {
+  10| -            if (logMessage.message.contains(GAME_DISPLAY_READY_SENTINEL)) {
+  11| -                hideGameStartOverlay()
+  12| -            }
+  13| -            return
+  14| -        }
+  15| +        // Game workloads don't drive any UI state from log messages anymore.
+  16| +        // The start-overlay-hide signal moved to a marker file the Ruby side
+  17| +        // writes (see [gameReadyFile] + the polling Handler) because Ruby
+  18| +        // logs from start.rb were not reaching this listener reliably on
+  19| +        // some hosts.
+  20| +        if (workload is RubyWorkload.Game) return
+  21|          if (workload !is RubyWorkload.Loader) return
+  22|  
+  23|          if (logMessage.message.contains(LOADER_READY_SENTINEL)) {
+
+--- HUNK h3 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -536,6 +553,27 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|              interpolator = android.view.animation.LinearInterpolator()
+   2|              start()
+   3|          }
+   4| +
+   5| +        // Defensive timeout. If start.rb's marker file never appears
+   6| +        // (script error before DisplayWindow.new, the wrapper code didn't
+   7| +        // catch the construction path for some reason, etc.) we still
+   8| +        // reveal the GL surface so the user sees whatever the game IS
+   9| +        // rendering. Long enough to cover a cold debug-uncompiled boot
+  10| +        // (PSDK's script load on PhysFS is ~10–25s on a mid-range device);
+  11| +        // the marker-file path normally pre-empts it.
+  12| +        gameStartTimeoutHandler.removeCallbacks(gameStartTimeoutRunnable)
+  13| +        gameStartTimeoutHandler.postDelayed(gameStartTimeoutRunnable, GAME_START_TIMEOUT_MS)
+  14| +
+  15| +        // Wipe any stale marker file from a prior run and start polling.
+  16| +        // The Ruby wrapper writes this once on first DisplayWindow.new;
+  17| +        // the poller hops the result back to UI thread via [hideGameStartOverlay].
+  18| +        val readyFile = gameReadyFile(executionLocation)
+  19| +        try {
+  20| +            if (readyFile.exists()) readyFile.delete()
+  21| +        } catch (_: Exception) { /* best-effort */ }
+  22| +        gameReadyFile = readyFile
+  23| +        gameReadyPollHandler.removeCallbacks(gameReadyPollRunnable)
+  24| +        gameReadyPollHandler.postDelayed(gameReadyPollRunnable, GAME_READY_POLL_INTERVAL_MS)
+  25|      }
+  26|  
+  27|      /**
+candidates: h1 (gameReadyPollHandler, gameReadyPollRunnable, gameStartTimeoutHandler, gameStartTimeoutRunnable, run)
+
+--- HUNK h4 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -549,6 +587,9 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|       */
+   2|      private fun hideGameStartOverlay() {
+   3|          runOnUiThread {
+   4| +            gameStartTimeoutHandler.removeCallbacks(gameStartTimeoutRunnable)
+   5| +            gameReadyPollHandler.removeCallbacks(gameReadyPollRunnable)
+   6| +            gameReadyFile = null
+   7|              if (gameStartOverlay.visibility != View.VISIBLE) return@runOnUiThread
+   8|              gameStartOverlay.animate()
+   9|                  .alpha(0f)
+candidates: h1 (gameReadyPollHandler, gameReadyPollRunnable, gameStartTimeoutHandler, gameStartTimeoutRunnable)
+
+--- HUNK h5 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -562,9 +603,21 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|          }
+   2|      }
+   3|  
+   4| +    /**
+   5| +     * Marker file [start.rb]'s LiteRGSS::DisplayWindow.new wrapper writes
+   6| +     * the moment PSDK's main window is constructed. Lives next to the
+   7| +     * other per-session log files so a single rm -rf on the execution
+   8| +     * dir cleans it up. The poller in [showGameStartOverlay] watches
+   9| +     * this path; deletion is deferred to [hideGameStartOverlay] so a
+  10| +     * subsequent start cycle starts from a clean slate.
+  11| +     */
+  12| +    private fun gameReadyFile(executionLocation: String): java.io.File =
+  13| +        java.io.File(executionLocation, ".game_ready")
+  14| +
+  15|      /**
+  16|       * Populate the env vars start.rb reads (RGSS_EXECUTION_LOCATION,
+  17| -     * RGSS_LOG_FILE, RGSS_ERROR_LOG_FILE, RGSS_REMOTE_*_TOKEN, etc.).
+  18| +     * RGSS_LOG_FILE, RGSS_ERROR_LOG_FILE, RGSS_GAME_MODE,
+  19| +     * RGSS_GAME_READY_FILE, RGSS_REMOTE_*_TOKEN, etc.).
+  20|       * Called from [startGame] right before the controller enqueues
+  21|       * the game workload.
+  22|       */
+
+--- HUNK h6 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -581,6 +634,7 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|          android.system.Os.setenv("RGSS_LOG_FILE", "$executionLocation/last_stdout.log", true)
+   2|          android.system.Os.setenv("RGSS_ERROR_LOG_FILE", "$errorLogLocation/Error.log", true)
+   3|          android.system.Os.setenv("RGSS_GAME_MODE", mode.envValue(), true)
+   4| +        android.system.Os.setenv("RGSS_GAME_READY_FILE", gameReadyFile(executionLocation).absolutePath, true)
+   5|  
+   6|          try {
+   7|              FileWriter("$executionLocation/last_stdout.log", false).flush()
+
+--- HUNK h7 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -772,16 +826,11 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|          /** Matches Loader::Splash::ICON_TAPPED_SENTINEL in loader/splash.rb verbatim. */
+   2|          private const val LOADER_ICON_TAPPED_SENTINEL = "[loader-icon-tapped]"
+   3|  
+   4| -        /**
+   5| -         * Emitted by the [GameDisplayReadySignal] prepend installed in
+   6| -         * start.rb the first time `LiteRGSS::DisplayWindow.new` returns
+   7| -         * — i.e., the moment Game.rb's main window exists on the GL
+   8| -         * surface. Cue for [hideGameStartOverlay].
+   9| -         */
+  10| -        private const val GAME_DISPLAY_READY_SENTINEL = "[game-display-ready]"
+  11| -
+  12|          private const val LOADER_FADE_IN_MS = 80L
+  13|  
+  14| +        /** Poll interval for [gameReadyFile]. Cheap stat call, 100ms feels instant. */
+  15| +        private const val GAME_READY_POLL_INTERVAL_MS = 100L
+  16| +
+  17|          /**
+  18|           * Window inside which a second BACK press is treated as
+  19|           * "confirm quit". Toast LENGTH_SHORT is ~2s, so anything in
+
+--- HUNK h8 | file: app/src/main/java/com/psdk/ui/RootActivity.kt | change: modify ---
+@@ -796,6 +845,15 @@ class RootActivity : AppCompatActivity(), LoaderHost {
+   1|          /** Fade-out duration for the start overlay when the game is ready. */
+   2|          private const val GAME_START_FADE_MS = 180L
+   3|  
+   4| +        /**
+   5| +         * Force-hide the start overlay after this long without
+   6| +         * [GAME_DISPLAY_READY_SENTINEL]. Sized to a generous cold-boot
+   7| +         * worst case (PSDK script load on PhysFS in debug mode, no
+   8| +         * mega_script.deflate, mid-range device) plus headroom; the
+   9| +         * sentinel path takes precedence whenever it reaches us.
+  10| +         */
+  11| +        private const val GAME_START_TIMEOUT_MS = 30_000L
+  12| +
+  13|          fun hubIntent(activity: AppCompatActivity): Intent =
+  14|              Intent(activity, RootActivity::class.java).putExtra(EXTRA_TARGET, TARGET_HUB)
+  15|  
+
+--- HUNK h9 | file: app/src/main/ruby/start.rb | change: modify ---
+@@ -175,34 +175,63 @@ SafeRunner.run(
+   1|    # window, so the Kotlin-side "starting…" overlay can fade out and
+   2|    # reveal Game.rb's first frame.
+   3|    #
+   4| -  # Installed via Module#prepend on LiteRGSS::DisplayWindow rather than
+   5| -  # by hooking PSDK directly — PSDK is end-user code we don't own, but
+   6| -  # the LiteRGSS API is stable and PSDK necessarily constructs exactly
+   7| -  # one DisplayWindow on boot (its Graphics module). The prepend wraps
+   8| -  # `initialize`, calls super first (so a constructor failure does NOT
+   9| -  # mis-fire the sentinel), then emits on first successful return.
+  10| +  # Implemented as a marker file written from inside a `.new` wrapper on
+  11| +  # LiteRGSS::DisplayWindow. The file path is the env var
+  12| +  # RGSS_GAME_READY_FILE that RootActivity sets on workload launch;
+  13| +  # RootActivity polls for it via Handler and fades the overlay out as
+  14| +  # soon as it appears.
+  15|    #
+  16| -  # The @@signaled class variable + the prepend module itself live above
+  17| -  # the PSDKVMSnapshot baseline, so restore! reaps both at the end of
+  18| -  # this session. Next session starts with no prepend and @@signaled
+  19| -  # back to false — re-prepended cleanly on the next run.
+  20| +  # Why a file and not a log sentinel: the VMLogger/STDOUT pipeline
+  21| +  # delivers reliably for the loader workload but is silently dropped
+  22| +  # for the game workload on this host (observed: C-side LiteRGSS
+  23| +  # warnings reach the LogListener but Ruby-side puts/VMLogger.info do
+  24| +  # not). File-based sync sidesteps that entirely — and the
+  25| +  # mechanism is already proven by the wizard ↔ loader status file.
+  26|    #
+  27| -  # `ancestors.include?` guard is defensive against a restore that
+  28| -  # somehow leaves the IClass in the chain (e.g., a native unprepend
+  29| -  # failure logged but tolerated). Without it we'd double-prepend and
+  30| -  # emit twice — harmless but noisy.
+  31| -  unless LiteRGSS::DisplayWindow.ancestors.any? { |a| a.name == 'GameDisplayReadySignal' }
+  32| -    module GameDisplayReadySignal
+  33| -      @@signaled = false
+  34| -      def initialize(*args, **kwargs)
+  35| -        super
+  36| -        unless @@signaled
+  37| -          @@signaled = true
+  38| -          VMLogger.info '[game-display-ready]' if defined?(VMLogger)
+  39| +  # Aliasing `.new` on the singleton class (rather than prepending on
+  40| +  # `initialize`) is dispatch-agnostic: `.new` is the public entry
+  41| +  # point regardless of how the C side wires up internals, so it works
+  42| +  # even if the litergss2 C code ever takes a `rb_class_new_instance`
+  43| +  # shortcut around Ruby-level method lookup.
+  44| +  #
+  45| +  # The signaled flag lives in @@__game_display_signaled on
+  46| +  # DisplayWindow itself; PSDKVMSnapshot.restore! reaps class variables
+  47| +  # added since baseline, so the flag resets cleanly between sessions.
+  48| +  ready_file_path = ENV['RGSS_GAME_READY_FILE']
+  49| +  if ready_file_path.nil? || ready_file_path.empty?
+  50| +    STDERR.puts '[start.rb] RGSS_GAME_READY_FILE not set; sentinel skipped'
+  51| +  elsif !defined?(LiteRGSS::DisplayWindow)
+  52| +    STDERR.puts '[start.rb] LiteRGSS::DisplayWindow not defined; sentinel skipped'
+  53| +  else
+  54| +    # Stale file from a prior session would tell the host the game is
+  55| +    # ready before this session has constructed anything. Wipe it before
+  56| +    # installing the wrapper.
+  57| +    File.delete(ready_file_path) rescue nil
+  58| +
+  59| +    if LiteRGSS::DisplayWindow.singleton_class.method_defined?(:__game_display_orig_new)
+  60| +      # Already installed in a prior session whose restore! didn't
+  61| +      # manage to strip the singleton alias (rare; native unprepend only
+  62| +      # touches IClass chains, not singleton-class method tables). Reset
+  63| +      # the flag and reuse the existing wrapper.
+  64| +      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_signaled, false)
+  65| +    else
+  66| +      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_signaled, false)
+  67| +      LiteRGSS::DisplayWindow.class_variable_set(:@@__game_display_ready_path, ready_file_path)
+  68| +      LiteRGSS::DisplayWindow.singleton_class.send(:alias_method, :__game_display_orig_new, :new)
+  69| +      LiteRGSS::DisplayWindow.singleton_class.send(:define_method, :new) do |*args, &block|
+  70| +        instance = __game_display_orig_new(*args, &block)
+  71| +        unless class_variable_get(:@@__game_display_signaled)
+  72| +          class_variable_set(:@@__game_display_signaled, true)
+  73| +          path = class_variable_get(:@@__game_display_ready_path)
+  74| +          begin
+  75| +            File.write(path, "ready\n")
+  76| +          rescue StandardError => e
+  77| +            STDERR.puts "[start.rb] failed to write ready file #{path}: #{e.class}: #{e.message}"
+  78| +          end
+  79|          end
+  80| +        instance
+  81|        end
+  82|      end
+  83| -    LiteRGSS::DisplayWindow.prepend(GameDisplayReadySignal)
+  84|    end
+  85|  
+  86|    VMLogger.info "[start.rb] Loading Game.rb..."
+
+=== END HUNKS ===
+Return the JSON array now.

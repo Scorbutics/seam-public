@@ -1,0 +1,32 @@
+You are WIRING a decomposed change. The roles are ALREADY decided — do NOT change
+them. Your ONLY job: for each NON-CORE hunk, list the CORE hunk id(s) it wires —
+its FULL FOOTPRINT (every core it connects to, supports, or tests).
+
+Wiring is TRACING, not guessing. Each non-core hunk lists symbol-grounded CANDIDATE
+cores (high precision: it shares a NEW symbol with that core). Use them as your
+FLOOR:
+  - CONFIRM candidates that carry the change's intent (wire them).
+  - PRUNE ambient candidates (a shared util used everywhere is NOT a wiring) — that
+    hunk may wire NOTHING.
+  - ADD core wirings you infer from the rationales (informal couplings the symbol
+    scan can't see).
+A hunk wires within its OWN cluster unless it genuinely bridges intents. A purely
+ambient hunk (supports the whole change, not any one core) has "wires":[].
+
+The CORES and rationales below are a COMPLETE summary of an already-finished role
+pass — you do NOT need the source diff, and you must NOT ask for it. Always return
+the JSON array, even if a hunk's footprint is uncertain (use [] when unsure).
+
+Return ONLY a JSON array, no prose, one object per NON-CORE hunk, wiring by CORE
+hunk id only:
+[{"id":"h1","wires":["h10","h14"]},{"id":"h8","wires":["h7"]},{"id":"h2","wires":[]}]
+
+=== CORES (each anchors a seam) ===
+  h2 [—] (cluster ?): core — substantial new behavioral logic
+  h3 [—] (cluster ?): core — defines logic other hunks depend on
+
+=== NON-CORE hunks to wire ===
+  h1 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+    candidate cores: (none — infer from rationale)
+
+Return the JSON array now (one object per NON-CORE hunk).
