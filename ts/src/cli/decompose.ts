@@ -14,7 +14,7 @@ import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { render } from "../diff/report_text.js";
 import {
-  changed_newside, ExternalFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
+  changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
 import { HostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { readFileSync } from "node:fs";
@@ -106,8 +106,11 @@ function main(argv: string[]): number {
     let factsProvider: FactsProvider | undefined;
     if (a.facts) {
       const payload = JSON.parse(readFileSync(a.facts, "utf-8"));
-      if (!payload.partial) factsProvider = new ExternalFactsProvider(payload);
-      // (MergedFactsProvider for partial payloads needs a tree-sitter base — Phase 5.)
+      if (payload.partial) {
+        // The editor's DocumentSymbol facts (defines/enclosing) overlaid on a base producer.
+        // Base = tree-sitter if a precomputed --facts-engine ran (Phase 5b); else regex.
+        factsProvider = new MergedFactsProvider(new RegexFactsProvider(), payload);
+      } else factsProvider = new ExternalFactsProvider(payload);
     }
 
     // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's

@@ -580,11 +580,12 @@ function runPy(file: string, args: string[], cwd: string,
 // (so facts are keyed by the SAME ids), compute defines/enclosing from the language
 // server, write the partial facts payload, and return its path (for `--facts`). Returns
 // undefined on any failure — the caller then runs deterministic with the regex base.
-async function buildAstFacts(py: string, tool: string, range: string): Promise<string | undefined> {
+// `emitHunks` runs the chosen backend's `--emit-hunks` into skelPath (Python or the TS CLI),
+// so the editor's DocumentSymbol facts are keyed by the SAME hunk ids either pipeline assigns.
+async function buildAstFacts(tool: string, emitHunks: (skelPath: string) => Promise<void>): Promise<string | undefined> {
   const skelPath = path.join(tool, `.seam-hunks-${Date.now()}.json`);
   try {
-    await execFileP(py, [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
-                         "--emit-hunks", skelPath], tool);
+    await emitHunks(skelPath);
     const skel = JSON.parse(fs.readFileSync(skelPath, "utf-8")).hunks as
       { id: string; file: string; start: number; end: number }[];
     const payload = await computeSymbolFacts(repoRoot, skel);
@@ -647,13 +648,19 @@ async function runReview(range: string) {
       try {
         if (usingTs) {
           // TS port: same --emit-seams contract, run via bun. 'det' = fully offline; 'hybrid'
-          // (the default) = LLM clusters + deterministic roles/wiring (cluster + reconcile passes
-          // call the bundled claude). No AST facts / blast-radius yet — regex det floor underneath.
+          // (the default) = LLM clusters + deterministic roles/wiring; 'llm' = all-LLM. The
+          // deterministic roles are fed the editor's AST facts (defines/enclosing) the same way
+          // the Python backend is — via --emit-hunks (TS) + --facts.
           const engineArgs = engine === "det" ? ["--classifier", "det"]
             : engine === "llm" ? ["--classifier", "llm"]
             : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid (default)
-          const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot,
-                        ...engineArgs, "--emit-seams", out];
+          if (engine !== "llm") {                  // det/hybrid use deterministic roles → AST facts help
+            progress.report({ message: "Computing code facts…" });
+            factsPath = await buildAstFacts(tool, (skel) => runPy(bun,
+              [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
+          }
+          const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
+                        ...(factsPath ? ["--facts", factsPath] : []), "--emit-seams", out];
           await runPy(bun, args, tool, (m) => progress.report({ message: m }));
           const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
           const ts = Date.now();
@@ -678,7 +685,8 @@ async function runReview(range: string) {
           extra.push("--cluster", det ? "det" : "llm", "--roles", "det",
                      "--wiring", det ? "det" : "hybrid");
           progress.report({ message: "Computing code facts…" });
-          factsPath = await buildAstFacts(py, tool, range);
+          factsPath = await buildAstFacts(tool, (skel) => execFileP(py,
+            [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
           if (factsPath) extra.push("--facts", factsPath);
         }
         if (resolver !== "det") extra.push("--resolver", resolver);
