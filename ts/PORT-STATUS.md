@@ -43,7 +43,44 @@ cal.com diff (18 cores, multi-core seams, overlap placements).
   same `--emit-seams` contract, native renderer unchanged. TS backend forces engine=det (LLM/hybrid
   still Python); no AST-facts/blast-radius yet (regex det is the verified path). Both projects tsc-clean.
 
+## ✅ LLM engines — the default hybrid is ported & extension-wired
+
+Verification method (since the model is stochastic): split each pass into **build-prompt →
+model-call → parse/merge**; byte-verify the deterministic 90% against Python via the
+`--emit-prompts`/`--inject-llm` **host-bus** contract. Same prompt in + same canned reply ⇒ same
+output; only the (provider-shared) model call is nondeterministic.
+
+- **`llm.ts`** (Phase 1) — backend resolution (host→claude→copilot, incl. `~/.vscode` ext glob),
+  `_run_claude`/`_run_copilot` subprocess, `HostBus`, `extractJsonArray`, usage meter. *Gate:
+  extractJsonArray vs Python on 8 tricky cases + HostBus contract.*
+- **Cluster pass (Pass A)** (Phase 2) — `classifier_llm.ts`. *Gate: prompt byte-parity +
+  inject-llm output parity, 7 cases each.*
+- **Hybrid wiring** (Phase 3) — `reconcile_llm` + `build_reconcile_prompt` + det
+  `apply_seam_groups`/`_overlap_subgroups` + `grounded_prune`; `engine.ts` `hybridWiring`. *Gate:
+  reconcile prompt parity + full hybrid inject parity, 7 cases each.*
+- **CLI + extension** — `--cluster/--roles/--wiring` + `--classifier` preset +
+  `--emit-prompts/--inject-llm`; `seam.backend=ts` now runs the **default hybrid**
+  (`cluster=llm, roles=det, wiring=hybrid` → the bundled claude serves the cluster + reconcile
+  passes). *Gate: CLI emit-prompts + inject-seams identical to Python on sample.patch.*
+
+Two more faithfulness fixes the strict prompt-parity forced (invisible to facts tests):
+the parser now keeps the `\ No newline` marker and **bounds each hunk body by its `@@` line
+counts** (like unidiff), and splits on **universal newlines** (CRLF). All re-verified against
+the det git-range oracle.
+
+**Only unverified-by-test bit:** the *real* `claude`/`copilot` subprocess call (structurally a
+faithful port of Python's; the inject path proves everything around it). Like the det extension,
+confirm with one live F5 run.
+
 ## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
+
+### Remaining LLM parity (Phase 4) — for `--classifier llm` and `--classifier hybrid`
+- **Pass B (seam+role)** — `_build_prompt` + `_parse_spans` + `assign_roles` with the **5-vote
+  medoid** self-consistency (`_aggregate_role_votes`). Same host-bus gating.
+- **Pass C (wiring)** — `_PROMPT_WIRE` + `_run_wire_pass` + `_reconcile_wires` +
+  `_merge_wiring_only_clusters` (the all-LLM `classify` path).
+- **hybrid roles/cluster** — `reconcile_roles_llm`, `label_clusters_llm`.
+This unlocks `--classifier llm` and `--classifier hybrid` (all-three-hybrid) in the extension.
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
    `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`
