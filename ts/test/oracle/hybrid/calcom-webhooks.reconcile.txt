@@ -1,0 +1,961 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h4  [providers.tsx]
+     <GeoProvider country={country}>
+       <SessionProvider>
+         <TrpcProvider>
+-          {!isEmbed && !isBookingPage && <NotificationSoundHandler />}
+-          {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}
+-          <CacheProvider>
+-            <WebPushProvider>{children}</WebPushProvider>
+-          </CacheProvider>
++          <ToastProvider position="bottom-center">
++            {!isEmbed && !isBookingPage && <NotificationSoundHandler />}
++            {/* @ts-expect-error FIXME remove this comment when upgrading typescript to v5 */}
++            <CacheProvider>
++              <WebPushProvider>{children}</WebPushProvider>
++            </CacheProvider>
+---
+CORE h8  [EventWebhooksTab.tsx]
+         <>
+           <div>
+             <div>
+-              <>
+-                {(isManagedEventType || isChildrenManagedEventType) && (
+-                  <Alert
+-                    severity={webhooksDisableProps.isLocked ? "neutral" : "info"}
+-                    className="mb-2"
+-                    title={
+-                      <ServerTrans
+-                        t={t}
+-                        i18nKey={`${lockedText}_${isManagedEventType ? "for_members" : "by_team_admin"}`}
+-                      />
+-                    }
+---
+CORE h9  [CreateNewWebhookButton.tsx]
+ "use client";
+ 
+-import { useRouter } from "next/navigation";
+-
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import { MembershipRole } from "@calcom/prisma/enums";
++import { trpc } from "@calcom/trpc/react";
++import { Avatar, AvatarFallback, AvatarImage } from "@coss/ui/components/avatar";
++import { Button } from "@coss/ui/components/button";
++import { Menu, MenuGroup, MenuGroupLabel, MenuItem, MenuPopup, MenuTrigger } from "@coss/ui/components/menu";
++import { ChevronDownIcon, PlusIcon } from "lucide-react";
++import { useRouter } from "next/navigation";
+ 
+-import { CreateButtonWithTeamsList } from "~/ee/teams/components/createButton/CreateButtonWithTeamsList";
+---
+CORE h12  [WebhookForm.tsx]
+     },
+   });
+ 
+-  formMethods.register("version");
+-
+   const triggers = formMethods.watch("eventTriggers") || [];
+   const subscriberUrl = formMethods.watch("subscriberUrl");
+   const time = formMethods.watch("time");
+   const timeUnit = formMethods.watch("timeUnit");
+ 
++  const TIME_UNITS = [TimeUnit.MINUTE, TimeUnit.HOUR, TimeUnit.DAY] as const;
++  const timeUnitItems = TIME_UNITS.map((unit) => ({
++    value: unit,
++    label: t(`${unit.toLowerCase()}_timeUnit`),
+---
+CORE h14  [WebhookForm.tsx]
+     }
+   }
+ 
++  const [customPayloadOpen, setCustomPayloadOpen] = useState(
++    props?.webhook?.payloadTemplate !== undefined && props?.webhook?.payloadTemplate !== null
++  );
+   const [showVariables, setShowVariables] = useState(false);
+   const [newSecret, setNewSecret] = useState("");
+   const [changeSecret, setChangeSecret] = useState<boolean>(false);
+---
+CORE h15  [WebhookForm.tsx]
+     }
+   }, [changeSecret, formMethods]);
+ 
+-  const formContent = (
+-    <Form
+-      form={formMethods}
+-      handleSubmit={(values) => props.onSubmit({ ...values, changeSecret, newSecret })}>
+-      <div className="border-subtle border p-6">
+-        <Controller
+-          name="subscriberUrl"
+-          control={formMethods.control}
+-          render={({ field: { value } }) => (
+-            <>
+-              <TextField
+---
+CORE h16  [WebhookListItem.tsx]
+ "use client";
+ 
+-import Link from "next/link";
+-import { useState } from "react";
+-
+-import { getWebhookVersionDocsUrl, getWebhookVersionLabel } from "@calcom/features/webhooks/lib/constants";
++import { getWebhookVersionLabel } from "@calcom/features/webhooks/lib/constants";
+ import type { Webhook } from "@calcom/features/webhooks/lib/dto/types";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import { trpc } from "@calcom/trpc/react";
+-import classNames from "@calcom/ui/classNames";
+-import { Badge } from "@calcom/ui/components/badge";
+-import { Button } from "@calcom/ui/components/button";
+-import {
+---
+CORE h17  [WebhookListItem.tsx]
+   const { t } = useLocale();
+   const utils = trpc.useUtils();
+   const { webhook } = props;
++  const [active, setActive] = useState(webhook.active);
+   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
++  const [badgesExpanded, setBadgesExpanded] = useState(false);
++  const isMobile = useIsMobile();
++
++  useEffect(() => {
++    setActive(webhook.active);
++  }, [webhook.active]);
+ 
+   const deleteWebhook = trpc.viewer.webhook.delete.useMutation({
+     async onSuccess() {
+---
+CORE h22  [WebhookTestDisclosure.tsx]
+   const { t } = useLocale();
+   const mutation = trpc.viewer.webhook.testTrigger.useMutation({
+     onError(err) {
+-      showToast(err.message, "error");
++      toastManager.add({ title: err.message, type: "error" });
+     },
+   });
+ 
+   return (
+-    <>
+-      <div className="border-subtle flex justify-between rounded-t-lg border p-6">
+-        <div>
+-          <p className="text-emphasis text-sm font-semibold leading-5">{t("webhook_test")}</p>
+-          <p className="text-default text-sm">{t("test_webhook")}</p>
+---
+CORE h23  [WebhookVersionCTA.tsx]
++"use client";
++
++import {
++  getWebhookVersionDocsUrl,
++  getWebhookVersionLabel,
++  WEBHOOK_VERSION_OPTIONS,
++} from "@calcom/features/webhooks/lib/constants";
++import { useLocale } from "@calcom/lib/hooks/useLocale";
++import { Button } from "@coss/ui/components/button";
++import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "@coss/ui/components/select";
++import { Tooltip, TooltipPopup, TooltipProvider, TooltipTrigger } from "@coss/ui/components/tooltip";
++import { ExternalLinkIcon } from "lucide-react";
++import Link from "next/link";
++import type { UseFormReturn } from "react-hook-form";
+---
+CORE h25  [DeleteWebhookDialog.tsx]
+   const { t } = useLocale();
+ 
+   return (
+-    <Dialog open={open} onOpenChange={onOpenChange}>
+-      <ConfirmationDialogContent
+-        variety="danger"
+-        title={t("delete_webhook")}
+-        confirmBtnText={t("confirm_delete_webhook")}
+-        loadingText={t("confirm_delete_webhook")}
+-        isPending={isPending}
+-        onConfirm={(e) => {
+-          e.preventDefault();
+-          onConfirm();
+-        }}>
+---
+CORE h32  [webhook-form-header.tsx]
++"use client";
++
++import { APP_NAME } from "@calcom/lib/constants";
++import { useLocale } from "@calcom/lib/hooks/useLocale";
++import { Button } from "@coss/ui/components/button";
++import {
++  AppHeader,
++  AppHeaderActions,
++  AppHeaderContent,
++  AppHeaderDescription,
++} from "@coss/ui/shared/app-header";
++import { ArrowLeftIcon } from "lucide-react";
++import Link from "next/link";
++import type { ReactNode } from "react";
+---
+CORE h33  [webhook-form-skeleton.tsx]
++"use client";
++
++import { Card, CardFrame, CardFrameFooter, CardPanel } from "@coss/ui/components/card";
++import { Skeleton } from "@coss/ui/components/skeleton";
++import { WebhookFormHeader } from "./webhook-form-header";
++import { WebhookTestHeader } from "./webhook-test-header";
++
++type WebhookFormSkeletonProps = {
++  titleKey?: "add_webhook" | "edit_webhook";
++};
++
++export const WebhookFormSkeleton = ({ titleKey = "add_webhook" }: WebhookFormSkeletonProps = {}) => {
++  return (
++    <>
+---
+CORE h40  [webhook-test-header.tsx]
++"use client";
++
++import { useLocale } from "@calcom/lib/hooks/useLocale";
++import {
++  CardFrameDescription,
++  CardFrameHeader,
++  CardFrameTitle,
++} from "@coss/ui/components/card";
++import type { ReactNode } from "react";
++
++export function WebhookTestHeader({ actions }: { actions?: ReactNode }) {
++  const { t } = useLocale();
++
++  return (
+---
+CORE h41  [webhooks-header.tsx]
++"use client";
++
++import { APP_NAME } from "@calcom/lib/constants";
++import { useLocale } from "@calcom/lib/hooks/useLocale";
++import {
++  AppHeader,
++  AppHeaderActions,
++  AppHeaderContent,
++  AppHeaderDescription,
++} from "@coss/ui/shared/app-header";
++import type { ReactNode } from "react";
++
++export function WebhooksHeader({ actions }: { actions?: ReactNode }) {
++  const { t } = useLocale();
+---
+CORE h44  [webhooks-view.tsx]
+ const WebhooksList = ({ webhooksByViewer }: { webhooksByViewer: WebhooksByViewer }) => {
+   const { t } = useLocale();
+   const router = useRouter();
+-  const { profiles, webhookGroups } = webhooksByViewer;
++  const { webhookGroups } = webhooksByViewer;
+   const bookerUrl = useBookerUrl();
+ 
+-  const hasTeams = profiles && profiles.length > 1;
+-
+   return (
+-    <Frame>
+-      <FrameHeader className="mb-2 flex-row items-center justify-between">
+-        <div>
+-          <FrameTitle className="text-lg">{t("webhooks")}</FrameTitle>
+---
+CORE h47  [app-header.tsx]
++import { cn } from "@coss/ui/lib/utils";
++
++function AppHeader({ className, ...props }: React.ComponentProps<"header">) {
++  return <header className={cn("mb-6 mt-2 flex items-center md:items-start justify-between gap-4", className)} {...props} />;
++}
++
++function AppHeaderContent({
++  children,
++  className,
++  title,
++  ...props
++}: React.ComponentProps<"div"> & { title: string }) {
++  return (
++    <div className={cn("flex flex-col gap-1", className)} {...props}>
+---
+CORE h48  [list-item.tsx]
++import { cn } from "@coss/ui/lib/utils";
++import type { ReactNode } from "react";
++import Link from "next/link";
++
++interface ListItemProps extends React.HTMLAttributes<HTMLDivElement> {
++  children: ReactNode;
++  className?: string;
++}
++
++function ListItem({ children, className, ...props }: ListItemProps) {
++  return (
++    <div
++      {...props}
++      className={cn(
+
+EDITS:
+EDIT h1  [loading.tsx]  role=link
++import { WebhookFormSkeleton } from "~/webhooks/views/webhook-form-skeleton";
++
++export default function Loading() {
++  return <WebhookFormSkeleton titleKey="edit_webhook" />;
++}
+  symbols suggest: h33="WebhookFormSkeleton"
+---
+EDIT h2  [loading.tsx]  role=link
+-import { SkeletonLoader } from "~/webhooks/views/webhook-new-skeleton";
++import { WebhookFormSkeleton } from "~/webhooks/views/webhook-form-skeleton";
+ 
+ export default function Loading() {
+-  return <SkeletonLoader />;
++  return <WebhookFormSkeleton />;
+ }
+  symbols suggest: h33="WebhookFormSkeleton"
+---
+EDIT h3  [providers.tsx]  role=environment
+ import { TrpcProvider } from "app/_trpc/trpc-provider";
+ import { SessionProvider } from "next-auth/react";
+ import CacheProvider from "react-inlinesvg/provider";
++import { ToastProvider } from "@coss/ui/components/toast";
+ 
+ import { WebPushProvider } from "@calcom/web/modules/notifications/components/WebPushContext";
+ import { NotificationSoundHandler } from "@calcom/web/components/notification-sound-handler";
+  symbols suggest: h4="Providers"
+---
+EDIT h5  [InstantEventController.tsx]  role=environment
+                       <WebhookListItem
+                         key={webhook.id}
+                         webhook={webhook}
+-                        lastItem={webhooks.length === index + 1}
+                         canEditWebhook={!webhookLockedStatus.disabled}
+-                        onEditWebhook={() => {
++                        onEditWebhookAction={() => {
+                           setEditModalOpen(true);
+                           setWebhookToEdit(webhook);
+                         }}
+  symbols suggest: h8="EventWebhooksTab"
+---
+EDIT h6  [EventWebhooksTab.tsx]  role=link
+-import Link from "next/link";
+-import { useState } from "react";
+-import { useFormContext } from "react-hook-form";
+-
+-import { Dialog } from "@calcom/features/components/controlled-dialog";
+ import useLockedFieldsManager from "@calcom/features/ee/managed-event-types/hooks/useLockedFieldsManager";
+-import type { FormValues, EventTypeSetupProps } from "@calcom/features/eventtypes/lib/types";
++import type { EventTypeSetupProps, FormValues } from "@calcom/features/eventtypes/lib/types";
+ import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+ import ServerTrans from "@calcom/lib/components/ServerTrans";
+-import { APP_NAME } from "@calcom/lib/constants";
++import { APP_NAME, WEBAPP_URL } from "@calcom/lib/constants";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import { trpc } from "@calcom/trpc/react";
+ import { Alert } from "@calcom/ui/components/alert";
+ import { Button } from "@calcom/ui/components/button";
+-import { DialogContent } from "@calcom/ui/components/dialog";
+ import { EmptyScreen } from "@calcom/ui/components/empty-screen";
+ import { showToast } from "@calcom/ui/components/toast";
+ import { revalidateEventTypeEditPage } from "@calcom/web/app/(use-page-wrapper)/event-types/[type]/actions";
+-
+-import { WebhookForm } from "~/webhooks/components";
+-import EventTypeWebhookListItem from "~/webhooks/components/EventTypeWebhookListItem";
++import { Card, CardPanel } from "@coss/ui/components/card";
+  symbols suggest: h23="WebhookVersionCTA", h25="DeleteWebhookDialog", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h41="WebhooksHeader", h44="WebhooksView", h47="AppHeader", h8="EventWebhooksTab"
+---
+EDIT h7  [EventWebhooksTab.tsx]  role=link
+       eventTypeId: eventType.id,
+       time: values.time,
+       timeUnit: values.timeUnit,
++      version: values.version,
+     });
+   };
+ 
+  symbols suggest: h8="EventWebhooksTab"
+---
+EDIT h10  [EventTypeWebhookListItem.tsx]  role=environment
+-"use client";
+-
+-import { useState } from "react";
+-
+-import { useLocale } from "@calcom/lib/hooks/useLocale";
+-import type { WebhookTriggerEvents } from "@calcom/prisma/enums";
+-import { trpc } from "@calcom/trpc/react";
+-import classNames from "@calcom/ui/classNames";
+-import { Badge } from "@calcom/ui/components/badge";
+-import { Button } from "@calcom/ui/components/button";
+-import {
+-  Dropdown,
+-  DropdownItem,
+-  DropdownMenuContent,
+-  DropdownMenuItem,
+-  DropdownMenuSeparator,
+-  DropdownMenuTrigger,
+-} from "@calcom/ui/components/dropdown";
+-import { Switch } from "@calcom/ui/components/form";
+-import { showToast } from "@calcom/ui/components/toast";
+-import { Tooltip } from "@calcom/ui/components/tooltip";
+-import { revalidateEventTypeEditPage } from "@calcom/web/app/(use-page-wrapper)/event-types/[type]/actions";
+-
+-import { DeleteWebhookDialog } from "./dialogs/DeleteWebhookDialog";
+  symbols suggest: h17="WebhookListItem", h22="WebhookTestDisclosure", h25="DeleteWebhookDialog", h8="EventWebhooksTab"
+---
+EDIT h11  [WebhookForm.tsx]  role=environment
+ "use client";
+ 
+-import { useEffect, useState } from "react";
+-import { Controller, useForm } from "react-hook-form";
+-
+ import SectionBottomActions from "@calcom/features/settings/SectionBottomActions";
+ import customTemplate, { hasTemplateIntegration } from "@calcom/features/webhooks/lib/integrationTemplate";
+ import { WebhookVersion } from "@calcom/features/webhooks/lib/interface/IWebhookRepository";
+-import { WEBAPP_URL } from "@calcom/lib/constants";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import { TimeUnit, WebhookTriggerEvents } from "@calcom/prisma/enums";
+ import type { RouterOutputs } from "@calcom/trpc/react";
+-import { Button } from "@calcom/ui/components/button";
+-import { Select } from "@calcom/ui/components/form";
+-import { TextArea } from "@calcom/ui/components/form";
+-import { ToggleGroup } from "@calcom/ui/components/form";
+ import { Form } from "@calcom/ui/components/form";
+-import { Label } from "@calcom/ui/components/form";
+-import { TextField } from "@calcom/ui/components/form";
+-import { Switch } from "@calcom/ui/components/form";
+-
+-import { TimeTimeUnitInput } from "~/ee/workflows/components/TimeTimeUnitInput";
+-
++import { Button } from "@coss/ui/components/button";
+  symbols suggest: h15="WebhookForm", h17="WebhookListItem", h23="WebhookVersionCTA", h25="DeleteWebhookDialog", h33="WebhookFormSkeleton"
+---
+EDIT h13  [WebhookForm.tsx]  role=environment
+   const hasUrl = !!subscriberUrl;
+   const showTimeSection = needsTime;
+ 
+-  const [useCustomTemplate, setUseCustomTemplate] = useState(
+-    props?.webhook?.payloadTemplate !== undefined && props?.webhook?.payloadTemplate !== null
+-  );
+-
+   function insertVariableIntoTemplate(current: string, name: string, value: string): string {
+     try {
+       const parsed = JSON.parse(current || "{}");
+  symbols suggest: h15="WebhookForm"
+---
+EDIT h18  [WebhookListItem.tsx]  role=link
+           });
+         }}
+       />
+-    </div>
++    </ListItem>
+   );
+ }
+  symbols suggest: h17="WebhookListItem", h48="ListItem"
+---
+EDIT h19  [WebhookListItemSkeleton.tsx]  role=environment
+-import { SkeletonText } from "@calcom/ui/components/skeleton";
+-
+-export default function WebhookListItemSkeleton() {
+-  return (
+-    <div className="flex w-full justify-between p-4">
+-      <div>
+-        <p className="text-emphasis text-sm font-medium">
+-          <SkeletonText className="h-4 w-56" />
+-        </p>
+-        <div className="mt-2.5 w-max">
+-          <SkeletonText className="h-5 w-28" />
+-        </div>
+-      </div>
+-      <div className="flex items-center space-x-4">
+-        <SkeletonText className="h-9 w-9" />
+-      </div>
+-    </div>
+-  );
+-}
+  symbols suggest: (none found)
+---
+EDIT h20  [WebhookListSkeleton.tsx]  role=environment
+-import { SkeletonContainer } from "@calcom/ui/components/skeleton";
+-
+-import WebhookListItemSkeleton from "./WebhookListItemSkeleton";
+-
+-export default function WebhookListSkeleton() {
+-  return (
+-    <SkeletonContainer>
+-      <div className="border-subtle divide-subtle mb-8 mt-6 divide-y rounded-md border">
+-        <WebhookListItemSkeleton />
+-        <WebhookListItemSkeleton />
+-        <WebhookListItemSkeleton />
+-      </div>
+-    </SkeletonContainer>
+-  );
+-}
+  symbols suggest: (none found)
+---
+EDIT h21  [WebhookTestDisclosure.tsx]  role=environment
+ "use client";
+ 
+-import { useWatch } from "react-hook-form";
+-import { ZodError } from "zod";
+-
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import { trpc } from "@calcom/trpc/react";
+ import { ZTestTriggerInputSchema } from "@calcom/trpc/server/routers/viewer/webhook/testTrigger.schema";
+-import { Badge } from "@calcom/ui/components/badge";
+-import { Button } from "@calcom/ui/components/button";
+-import { showToast } from "@calcom/ui/components/toast";
++import { toastManager } from "@coss/ui/components/toast";
++import { Badge } from "@coss/ui/components/badge";
++import { Button } from "@coss/ui/components/button";
++import { Card, CardFrame, CardPanel } from "@coss/ui/components/card";
++import { Label } from "@coss/ui/components/label";
++import { ActivityIcon } from "lucide-react";
++import { useWatch } from "react-hook-form";
++import { ZodError } from "zod";
++import { WebhookTestHeader } from "../views/webhook-test-header";
+ 
+ export default function WebhookTestDisclosure() {
+   const [subscriberUrl, webhookSecret]: [string, string] = useWatch({ name: ["subscriberUrl", "secret"] });
+  symbols suggest: h15="WebhookForm", h22="WebhookTestDisclosure", h33="WebhookFormSkeleton", h40="WebhookTestHeader"
+---
+EDIT h24  [DeleteWebhookDialog.tsx]  role=environment
+ import { APP_NAME } from "@calcom/lib/constants";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+-import { Dialog, ConfirmationDialogContent } from "@calcom/ui/components/dialog";
++import {
++  AlertDialog,
++  AlertDialogClose,
++  AlertDialogDescription,
++  AlertDialogFooter,
++  AlertDialogHeader,
++  AlertDialogPopup,
++  AlertDialogTitle,
++} from "@coss/ui/components/alert-dialog";
++import { Button } from "@coss/ui/components/button";
++import { Spinner } from "@coss/ui/components/spinner";
+ 
+ interface DeleteWebhookDialogProps {
+   open: boolean;
+  symbols suggest: h15="WebhookForm", h25="DeleteWebhookDialog"
+---
+EDIT h26  [index.ts]  role=environment
++export { default as CreateNewWebhookButton } from "./CreateNewWebhookButton";
+ export { default as WebhookForm } from "./WebhookForm";
+ export { default as WebhookListItem } from "./WebhookListItem";
+-export { default as WebhookListItemSkeleton } from "./WebhookListItemSkeleton";
+-export { default as WebhookListSkeleton } from "./WebhookListSkeleton";
+ export { default as WebhookTestDisclosure } from "./WebhookTestDisclosure";
+-export { default as CreateNewWebhookButton } from "./CreateNewWebhookButton";
+  symbols suggest: h44="WebhooksView", h9="CreateNewWebhookButton"
+---
+EDIT h27  [webhook-edit-view.tsx]  role=environment
+ "use client";
+ 
+-import Link from "next/link";
+-import { useRouter } from "next/navigation";
+-
+-import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+-import {
+-  WEBHOOK_VERSION_OPTIONS,
+-  getWebhookVersionLabel,
+-  getWebhookVersionDocsUrl,
+-} from "@calcom/features/webhooks/lib/constants";
++import { WEBHOOK_TRIGGER_EVENTS } from "@calcom/features/webhooks/lib/constants";
+ import type { WebhookVersion } from "@calcom/features/webhooks/lib/interface/IWebhookRepository";
+ import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+-import { APP_NAME } from "@calcom/lib/constants";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import type { WebhookTriggerEvents } from "@calcom/prisma/enums";
+ import { trpc } from "@calcom/trpc/react";
+-import { Select } from "@calcom/ui/components/form";
+-import { ExternalLinkIcon } from "@coss/ui/icons";
+-import { SkeletonContainer } from "@calcom/ui/components/skeleton";
+-import { showToast } from "@calcom/ui/components/toast";
+-import { Tooltip } from "@calcom/ui/components/tooltip";
+ import { revalidateWebhooksList } from "@calcom/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/(with-loader)/actions";
+  symbols suggest: h23="WebhookVersionCTA", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h8="EventWebhooksTab"
+---
+EDIT h28  [webhook-edit-view.tsx]  role=environment
+ 
+ export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {
+   const { t } = useLocale();
+-  const utils = trpc.useUtils();
+   const router = useRouter();
+   const { data: installedApps, isPending } = trpc.viewer.apps.integrations.useQuery(
+     { variant: "other", onlyInstalled: true },
+  symbols suggest: (none found)
+---
+EDIT h29  [webhook-edit-view.tsx]  role=link
+     enabled: !!webhook,
+   });
+   const editWebhookMutation = trpc.viewer.webhook.edit.useMutation({
+-    async onSuccess() {
+-      await utils.viewer.webhook.list.invalidate();
+-      await utils.viewer.webhook.get.invalidate({ webhookId: webhook?.id });
+-      showToast(t("webhook_updated_successfully"), "success");
+-      revalidateWebhooksList();
++    onSuccess() {
++      toastManager.add({ title: t("webhook_updated_successfully"), type: "success" });
+       router.push("/settings/developer/webhooks");
++      revalidateWebhooksList();
+     },
+     onError(error) {
+-      showToast(`${error.message}`, "error");
++      toastManager.add({ title: error.message, type: "error" });
+     },
+   });
+ 
+-  if (isPending || !webhook) return <SkeletonContainer />;
++  if (isPending || !webhook) return <WebhookFormSkeleton titleKey="edit_webhook" />;
+ 
+   return (
+     <WebhookForm
+  symbols suggest: h12="WebhookForm", h15="WebhookForm", h17="WebhookListItem", h22="WebhookTestDisclosure", h23="WebhookVersionCTA", h25="DeleteWebhookDialog", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h8="EventWebhooksTab"
+---
+EDIT h30  [webhook-edit-view.tsx]  role=environment
+             platform: webhook.platform ?? undefined,
+           })
+         ) {
+-          showToast(t("webhook_subscriber_url_reserved"), "error");
++          toastManager.add({ title: t("webhook_subscriber_url_reserved"), type: "error" });
+           return;
+         }
+ 
+  symbols suggest: h17="WebhookListItem", h22="WebhookTestDisclosure", h8="EventWebhooksTab"
+---
+EDIT h31  [webhook-edit-view.tsx]  role=environment
+         editWebhookMutation.mutate({
+           id: webhook.id,
+           subscriberUrl: values.subscriberUrl,
+-          eventTriggers: values.eventTriggers,
++          eventTriggers: values.eventTriggers.filter((trigger) =>
++            WEBHOOK_TRIGGER_EVENTS.includes(trigger as (typeof WEBHOOK_TRIGGER_EVENTS)[number])
++          ) as unknown as Parameters<typeof editWebhookMutation.mutate>[0]["eventTriggers"],
+           active: values.active,
+           payloadTemplate: values.payloadTemplate,
+           secret: values.secret,
+  symbols suggest: h8="EventWebhooksTab"
+---
+EDIT h34  [webhook-new-skeleton.tsx]  role=environment
+-"use client";
+-
+-import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+-import { APP_NAME } from "@calcom/lib/constants";
+-import { useLocale } from "@calcom/lib/hooks/useLocale";
+-import { SkeletonText, SkeletonContainer } from "@calcom/ui/components/skeleton";
+-
+-export const SkeletonLoader = () => {
+-  const { t } = useLocale();
+-
+-  return (
+-    <SettingsHeaderWithBackButton
+-      title={t("add_webhook")}
+-      description={t("add_webhook_description", { appName: APP_NAME })}
+-      borderInShellHeader={true}>
+-      <SkeletonContainer>
+-        <div className="divide-subtle border-subtle stack-y-6 rounded-b-lg border border-t-0 px-6 py-4">
+-          <SkeletonText className="h-8 w-full" />
+-          <SkeletonText className="h-8 w-full" />
+-        </div>
+-      </SkeletonContainer>
+-    </SettingsHeaderWithBackButton>
+-  );
+-};
+  symbols suggest: (none found)
+---
+EDIT h35  [webhook-new-view.tsx]  role=environment
+ "use client";
+ 
+-import { useSession } from "next-auth/react";
+-import Link from "next/link";
+-import { useRouter } from "next/navigation";
+-
+-import SettingsHeaderWithBackButton from "@calcom/features/settings/appDir/SettingsHeaderWithBackButton";
+-import {
+-  WEBHOOK_VERSION_OPTIONS,
+-  getWebhookVersionLabel,
+-  getWebhookVersionDocsUrl,
+-} from "@calcom/features/webhooks/lib/constants";
++import { WEBHOOK_TRIGGER_EVENTS } from "@calcom/features/webhooks/lib/constants";
+ import { subscriberUrlReserved } from "@calcom/features/webhooks/lib/subscriberUrlReserved";
+-import { APP_NAME } from "@calcom/lib/constants";
+ import { useCompatSearchParams } from "@calcom/lib/hooks/useCompatSearchParams";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+-import { trpc } from "@calcom/trpc/react";
+ import type { RouterOutputs } from "@calcom/trpc/react";
+-import { Select } from "@calcom/ui/components/form";
+-import { ExternalLinkIcon } from "@coss/ui/icons";
+-import { showToast } from "@calcom/ui/components/toast";
+-import { Tooltip } from "@calcom/ui/components/tooltip";
++import { trpc } from "@calcom/trpc/react";
+  symbols suggest: h23="WebhookVersionCTA", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h8="EventWebhooksTab"
+---
+EDIT h36  [webhook-new-view.tsx]  role=environment
+ 
+   const createWebhookMutation = trpc.viewer.webhook.create.useMutation({
+     async onSuccess() {
+-      showToast(t("webhook_created_successfully"), "success");
++      toastManager.add({ title: t("webhook_created_successfully"), type: "success" });
+       await utils.viewer.webhook.list.invalidate();
+       revalidateWebhooksList();
+       router.push("/settings/developer/webhooks");
+     },
+     onError(error) {
+-      showToast(`${error.message}`, "error");
++      toastManager.add({ title: error.message, type: "error" });
+     },
+   });
+ 
+  symbols suggest: h17="WebhookListItem", h22="WebhookTestDisclosure", h44="WebhooksView", h8="EventWebhooksTab"
+---
+EDIT h37  [webhook-new-view.tsx]  role=environment
+         platform,
+       })
+     ) {
+-      showToast(t("webhook_subscriber_url_reserved"), "error");
++      toastManager.add({ title: t("webhook_subscriber_url_reserved"), type: "error" });
+       return;
+     }
+ 
+  symbols suggest: h17="WebhookListItem", h22="WebhookTestDisclosure", h44="WebhooksView", h8="EventWebhooksTab"
+---
+EDIT h38  [webhook-new-view.tsx]  role=environment
+ 
+     createWebhookMutation.mutate({
+       subscriberUrl: values.subscriberUrl,
+-      eventTriggers: values.eventTriggers,
++      eventTriggers: values.eventTriggers.filter((trigger) =>
++        WEBHOOK_TRIGGER_EVENTS.includes(trigger as (typeof WEBHOOK_TRIGGER_EVENTS)[number])
++      ) as unknown as Parameters<typeof createWebhookMutation.mutate>[0]["eventTriggers"],
+       active: values.active,
+       payloadTemplate: values.payloadTemplate,
+       secret: values.secret,
+  symbols suggest: h44="WebhooksView"
+---
+EDIT h39  [webhook-new-view.tsx]  role=link
+       onSubmit={onCreateWebhook}
+       apps={installedApps?.items.map((app) => app.slug)}
+       headerWrapper={(formMethods, children) => (
+-        <SettingsHeaderWithBackButton
+-          title={t("add_webhook")}
+-          description={t("add_webhook_description", { appName: APP_NAME })}
+-          borderInShellHeader={true}
+-          CTA={
+-            <div className="flex items-center gap-2">
+-              <Tooltip content={t("webhook_version")}>
+-                <div>
+-                  <Select
+-                    className="min-w-36"
+-                    options={WEBHOOK_VERSION_OPTIONS}
+-                    value={{
+-                      value: formMethods.watch("version"),
+-                      label: getWebhookVersionLabel(formMethods.watch("version")),
+-                    }}
+-                    onChange={(option) => {
+-                      if (option) {
+-                        formMethods.setValue("version", option.value, { shouldDirty: true });
+-                      }
+-                    }}
+-                  />
+  symbols suggest: h12="WebhookForm", h15="WebhookForm", h23="WebhookVersionCTA", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h44="WebhooksView", h8="EventWebhooksTab"
+---
+EDIT h42  [webhooks-skeleton.tsx]  role=link
+ "use client";
+ 
+-import SettingsHeader from "@calcom/features/settings/appDir/SettingsHeader";
+-import { APP_NAME } from "@calcom/lib/constants";
+-import { useLocale } from "@calcom/lib/hooks/useLocale";
+-import { SkeletonText, SkeletonContainer } from "@calcom/ui/components/skeleton";
++import { Card, CardFrame, CardFrameHeader, CardPanel } from "@coss/ui/components/card";
++import { Skeleton } from "@coss/ui/components/skeleton";
++import {
++  ListItem,
++  ListItemActions,
++  ListItemBadges,
++  ListItemContent,
++  ListItemHeader,
++} from "@coss/ui/shared/list-item";
++import { WebhooksHeader } from "./webhooks-header";
+ 
+ export const SkeletonLoader = () => {
+-  const { t } = useLocale();
+   return (
+-    <SettingsHeader
+-      title={t("webhooks")}
+-      description={t("add_webhook_description", { appName: APP_NAME })}
+-      borderInShellHeader={true}
+  symbols suggest: h17="WebhookListItem", h33="WebhookFormSkeleton", h41="WebhooksHeader", h48="ListItem"
+---
+EDIT h43  [webhooks-view.tsx]  role=link
+ import { APP_NAME, WEBAPP_URL } from "@calcom/lib/constants";
+ import { useLocale } from "@calcom/lib/hooks/useLocale";
+ import type { RouterOutputs } from "@calcom/trpc/react";
+-import { Avatar } from "@calcom/ui/components/avatar";
+-import { EmptyScreen } from "@calcom/ui/components/empty-screen";
+-import { Frame, FrameDescription, FrameHeader, FramePanel, FrameTitle } from "@coss/ui/components/frame";
++import { Avatar, AvatarImage } from "@coss/ui/components/avatar";
++import { Card, CardFrame, CardFrameHeader, CardPanel } from "@coss/ui/components/card";
++import {
++  Empty,
++  EmptyContent,
++  EmptyDescription,
++  EmptyHeader,
++  EmptyMedia,
++  EmptyTitle,
++} from "@coss/ui/components/empty";
++import {
++  AppHeader,
++  AppHeaderActions,
++  AppHeaderContent,
++  AppHeaderDescription,
++} from "@coss/ui/shared/app-header";
++import { WebhookIcon } from "lucide-react";
+ import { useRouter } from "next/navigation";
+  symbols suggest: h17="WebhookListItem", h32="WebhookFormHeader", h41="WebhooksHeader", h44="WebhooksView", h47="AppHeader", h8="EventWebhooksTab", h9="CreateNewWebhookButton"
+---
+EDIT h45  [package.json]  role=environment
+     "./icons": "./src/icons.tsx",
+     "./lib/*": "./src/lib/*.ts",
+     "./components/*": "./src/components/*.tsx",
+-    "./hooks/*": "./src/hooks/*.ts"
++    "./hooks/*": "./src/hooks/*.ts",
++    "./shared/*": "./src/shared/*.tsx"
+   },
+   "typesVersions": {
+     "*": {
+  symbols suggest: (none found)
+---
+EDIT h46  [package.json]  role=environment
+       ],
+       "hooks/*": [
+         "./src/hooks/*.ts"
++      ],
++      "shared/*": [
++        "./src/shared/*.tsx"
+       ]
+     }
+   },
+  symbols suggest: (none found)
+---
+EDIT h49  [globals.css]  role=environment
+ :root {
+   --radius: 0.625rem;
+   --background: var(--color-white);
+-  --foreground: var(--color-zinc-800);
++  --foreground: var(--color-neutral-800);
+   --card: var(--color-white);
+-  --card-foreground: var(--color-zinc-800);
++  --card-foreground: var(--color-neutral-800);
+   --popover: var(--color-white);
+-  --popover-foreground: var(--color-zinc-800);
+-  --primary: var(--color-zinc-800);
+-  --primary-foreground: var(--color-zinc-50);
++  --popover-foreground: var(--color-neutral-800);
++  --primary: var(--color-neutral-800);
++  --primary-foreground: var(--color-neutral-50);
+   --secondary: --alpha(var(--color-black) / 4%);
+-  --secondary-foreground: var(--color-zinc-800);
++  --secondary-foreground: var(--color-neutral-800);
+   --muted: --alpha(var(--color-black) / 4%);
+   --muted-foreground: color-mix(
+     in srgb,
+-    var(--color-zinc-500) 90%,
++    var(--color-neutral-500) 90%,
+     var(--color-black)
+  symbols suggest: (none found)
+---
+EDIT h50  [globals.css]  role=environment
+   --success-foreground: var(--color-emerald-700);
+   --warning: var(--color-amber-500);
+   --warning-foreground: var(--color-amber-700);
+-  --border: --alpha(var(--color-black) / 12%);
+-  --input: --alpha(var(--color-black) / 12%);
+-  --ring: var(--color-zinc-400);
++  --border: --alpha(var(--color-black) / 8%);
++  --input: --alpha(var(--color-black) / 10%);
++  --ring: var(--color-neutral-400);
+   --chart-1: var(--color-orange-600);
+   --chart-2: var(--color-teal-600);
+   --chart-3: var(--color-cyan-900);
+   --chart-4: var(--color-amber-400);
+   --chart-5: var(--color-amber-500);
+-  --sidebar: var(--color-zinc-50);
++  --sidebar: var(--color-neutral-50);
+   --sidebar-foreground: color-mix(
+     in srgb,
+-    var(--color-zinc-800) 64%,
++    var(--color-neutral-800) 64%,
+     var(--sidebar)
+   );
+-  --sidebar-primary: var(--color-zinc-800);
+-  --sidebar-primary-foreground: var(--color-zinc-50);
+  symbols suggest: (none found)
+---
+EDIT h51  [globals.css]  role=environment
+ .dark {
+   --background: color-mix(
+     in srgb,
+-    var(--color-zinc-950) 98%,
++    var(--color-neutral-950) 96%,
+     var(--color-white)
+   );
+-  --foreground: var(--color-zinc-200);
++  --foreground: var(--color-neutral-100);
+   --card: color-mix(in srgb, var(--background) 98%, var(--color-white));
+-  --card-foreground: var(--color-zinc-200);
++  --card-foreground: var(--color-neutral-100);
+   --popover: color-mix(in srgb, var(--background) 96%, var(--color-white));
+-  --popover-foreground: var(--color-zinc-200);
+-  --primary: var(--color-zinc-200);
+-  --primary-foreground: var(--color-zinc-800);
+-  --secondary: --alpha(var(--color-white) / 6%);
+-  --secondary-foreground: var(--color-zinc-200);
+-  --muted: --alpha(var(--color-white) / 6%);
++  --popover-foreground: var(--color-neutral-100);
++  --primary: var(--color-neutral-100);
++  --primary-foreground: var(--color-neutral-800);
++  --secondary: --alpha(var(--color-white) / 4%);
++  --secondary-foreground: var(--color-neutral-100);
+  symbols suggest: (none found)
+---
+EDIT h52  [globals.css]  role=environment
+   --success-foreground: var(--color-emerald-400);
+   --warning: var(--color-amber-500);
+   --warning-foreground: var(--color-amber-400);
+-  --border: --alpha(var(--color-white) / 12%);
+-  --input: --alpha(var(--color-white) / 12%);
+-  --ring: var(--color-zinc-500);
++  --border: --alpha(var(--color-white) / 6%);
++  --input: --alpha(var(--color-white) / 8%);
++  --ring: var(--color-neutral-500);
+   --chart-1: var(--color-blue-700);
+   --chart-2: var(--color-emerald-500);
+   --chart-3: var(--color-amber-500);
+   --chart-4: var(--color-purple-500);
+   --chart-5: var(--color-rose-500);
+-  --sidebar: var(--color-zinc-950);
++  --sidebar: color-mix(
++    in srgb,
++    var(--color-neutral-950) 97%,
++    var(--color-white)
++  );
+   --sidebar-foreground: color-mix(
+     in srgb,
+-    var(--color-zinc-200) 64%,
++    var(--color-neutral-100) 64%,
+  symbols suggest: (none found)
+---
+EDIT h53  [globals.css]  role=environment
+ }
+ 
+ .backdrop-blur-sm {
+-  @apply backdrop-blur-none bg-neutral-800/70;
+-}
++  @apply backdrop-blur-none bg-black/70;
++}
+\ No newline at end of file
+  symbols suggest: (none found)
+---
+EDIT h54  [common.json]  role=environment
+   "triggers_when": "Triggers when",
+   "test_webhook": "Please ping test before creating.",
+   "enable_webhook": "Enable webhook",
++  "disable_webhook": "Disable webhook",
+   "add_webhook": "Add webhook",
+   "webhook_edited_successfully": "Webhook saved",
+   "api_keys_description": "Generate API keys for accessing your own account",
+  symbols suggest: (none found)
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

@@ -1,0 +1,44 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h4  [payment.py]
+-from src.utils import to_cents
++from src.utils import to_cents, apply_discount
+ 
+ 
+-def charge(order, gateway):
++def charge(order, gateway, currency="USD"):
+     total = sum(item.price for item in order.items)
+-    return gateway.charge(to_cents(total))
++    total = apply_discount(total, order.coupon)
++    return gateway.charge(to_cents(total), currency=currency)
+---
+CORE h5  [utils.py]
+     return int(amount * 100)
+ 
+ 
++def apply_discount(amount, coupon):
++    if not coupon:
++        return amount
++    return amount * (1 - coupon.rate)
++
++
+ def fmt(amount):
+     return f"${amount:.2f}"
+
+EDITS:
+EDIT h1  [api.py]  role=link
+ from src.payment import charge
+ 
+ 
+-def handle_checkout(order, gateway):
+-    return charge(order, gateway)
++def handle_checkout(order, gateway, currency="USD"):
++    return charge(order, gateway, currency=currency)
+  symbols suggest: (none found)
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

@@ -40,7 +40,7 @@ function normpath(p: string): string {
   return res === "" ? "." : (p.startsWith("/") ? "/" + res : res);
 }
 
-function _subject_ok(s: string): boolean {
+export function _subject_ok(s: string): boolean {
   return s.length >= 3 && !_STOP.has(s) && (hasUpper(s) || s.includes("_"));
 }
 
@@ -52,14 +52,14 @@ function _subjects(f: HunkFacts): Set<string> {
   return out;
 }
 
-function _mentions(f: HunkFacts): Set<string> {
+export function _mentions(f: HunkFacts): Set<string> {
   const out = new Set<string>(f.references);
   for (const s of f.calls) if (_subject_ok(s)) out.add(s);
   for (const s of f.enclosing) if (_subject_ok(s)) out.add(s);
   return out;
 }
 
-function _anchors(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>): Map<string, Set<string>> {
+export function _anchors(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>): Map<string, Set<string>> {
   const subj = new Map<string, Set<string>>();
   for (const h of work) subj.set(h.id, _subjects(facts.get(h.id)!));
   const freq = new Map<string, number>();
@@ -222,7 +222,7 @@ export function assign_wiring(work: Hunk[], facts: Map<string, HunkFacts>): void
   }
 }
 
-function _enclosing(c: Hunk): string {
+export function _enclosing(c: Hunk): string {
   return sectionDefSearch(c.section_header || "");
 }
 
@@ -268,6 +268,77 @@ export function assign_clusters(work: Hunk[], facts: Map<string, HunkFacts>): vo
     const intent = cs.length ? _primary_symbol(facts.get(rep.id)!, rep, distinctive)
       : (rep.section_header || (rep.file_path || "").split("/").pop() || rep.id);
     for (const h of hs) h.intent = intent;
+  }
+}
+
+function _overlap_subgroups(members: Hunk[], facts: Map<string, HunkFacts>): string[][] {
+  const footprint = (c: Hunk): Set<string> => {
+    const f = facts.get(c.id)!;
+    const out = new Set<string>();
+    const enc = _enclosing(c);
+    for (const s of union(f.defines, f.calls)) if (_subject_ok(s) && s !== enc) out.add(s);
+    return out;
+  };
+  const ids = members.map((c) => c.id);
+  const foot = new Map<string, Set<string>>();
+  for (const c of members) foot.set(c.id, footprint(c));
+  const parent = new Map(ids.map((i) => [i, i]));
+  const find = (x: string): string => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x)!)!); x = parent.get(x)!; } return x; };
+  for (let i = 0; i < ids.length; i++)
+    for (let j = i + 1; j < ids.length; j++)
+      if (intersect(foot.get(ids[i])!, foot.get(ids[j])!).size) parent.set(find(ids[i]), find(ids[j]));
+  const out = new Map<string, string[]>();
+  for (const i of ids) { const r = find(i); if (!out.has(r)) out.set(r, []); out.get(r)!.push(i); }
+  return [...out.values()];
+}
+
+// Merge cores into technical-intent seams for the hybrid path — union of det floor (same file +
+// enclosing, overlap-subpartitioned) + LLM grouping (same seam key OR same label). Port of
+// classifier_det.apply_seam_groups.
+export function apply_seam_groups(work: Hunk[], labels: Map<string, string>, groups: Map<string, string>,
+                                  useComponentFloor = true, facts?: Map<string, HunkFacts>): void {
+  const cores = work.filter((h) => h.role === "core");
+  const parent = new Map(cores.map((c) => [c.id, c.id]));
+  const find = (x: string): string => { while (parent.get(x) !== x) { parent.set(x, parent.get(parent.get(x)!)!); x = parent.get(x)!; } return x; };
+  const unite = (a: string, b: string) => { parent.set(find(a), find(b)); };
+
+  const compGroups: string[][] = [];
+  if (useComponentFloor) {
+    const byComp = new Map<string, Hunk[]>();
+    for (const c of cores) {
+      const enc = _enclosing(c);
+      if (enc) { const k = `${c.file_path} ${enc}`; if (!byComp.has(k)) byComp.set(k, []); byComp.get(k)!.push(c); }
+    }
+    for (const members of byComp.values()) {
+      if (!facts || members.length <= 1) compGroups.push(members.map((c) => c.id));
+      else compGroups.push(..._overlap_subgroups(members, facts));
+    }
+  }
+  const bykey = new Map<string, string[]>();
+  for (const c of cores) {
+    if (groups.get(c.id)) { const k = "k:" + groups.get(c.id); if (!bykey.has(k)) bykey.set(k, []); bykey.get(k)!.push(c.id); }
+    const lab = (labels.get(c.id) || "").trim().toLowerCase();
+    if (lab) { const k = "l:" + lab; if (!bykey.has(k)) bykey.set(k, []); bykey.get(k)!.push(c.id); }
+  }
+  for (const ids of [...compGroups, ...bykey.values()]) for (const x of ids.slice(1)) unite(ids[0], x);
+
+  const remap = new Map<string, string>();
+  const seamMembers = new Map<string, Hunk[]>();
+  for (const c of cores) { const r = find(c.id); if (!seamMembers.has(r)) seamMembers.set(r, []); seamMembers.get(r)!.push(c); }
+  for (const members of seamMembers.values()) {
+    members.sort((a, b) => hunkNum(a.id) - hunkNum(b.id));
+    const rep = members[0];
+    const distinct = new Set(members.map((c) => (labels.get(c.id) || "").trim().toLowerCase()).filter((l) => l));
+    const label = distinct.size > 1
+      ? (_enclosing(rep) || labels.get(rep.id) || rep.seam_label || rep.id)
+      : (labels.get(rep.id) || _enclosing(rep) || rep.seam_label || rep.id);
+    for (const c of members) { c.seam = rep.id; c.seam_label = label; c.group = rep.group; remap.set(c.id, rep.id); }
+  }
+  for (const h of work) {
+    if (h.role !== "core" && h.wires.length) {
+      h.wires = sorted(new Set(h.wires.map((w) => remap.get(w) ?? w)));
+      if (h.suggested_wires.length) h.suggested_wires = sorted(new Set(h.suggested_wires.map((w) => remap.get(w) ?? w)));
+    }
   }
 }
 

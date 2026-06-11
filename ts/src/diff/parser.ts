@@ -85,8 +85,10 @@ interface PatchedFile {
   isRename: boolean;
   isBinary: boolean;
   pathHint: string;     // fallback display path from the `diff --git` line
-  hunks: { header: string; section: string; body: string[] }[];
+  hunks: HunkAcc[];
 }
+interface HunkAcc { header: string; section: string; body: string[]; oldRem: number; newRem: number; }
+const hunkDone = (h: HunkAcc) => h.oldRem <= 0 && h.newRem <= 0;
 
 function displayPath(pf: PatchedFile): string {
   if (pf.targetFile && pf.targetFile !== "/dev/null")
@@ -110,7 +112,7 @@ function splitFiles(diffText: string): PatchedFile[] {
   const lines = diffText.split(/\r\n|\r|\n/);
   const files: PatchedFile[] = [];
   let cur: PatchedFile | null = null;
-  let curHunk: { header: string; section: string; body: string[] } | null = null;
+  let curHunk: HunkAcc | null = null;
 
   const startFile = (pathHint: string) => {
     cur = { sourceFile: "", targetFile: "", isRename: false, isBinary: false, pathHint, hunks: [] };
@@ -130,22 +132,33 @@ function splitFiles(diffText: string): PatchedFile[] {
       else continue;
     }
     const f = cur!;
-    if (line.startsWith("rename from ") || line.startsWith("rename to ")) { f.isRename = true; continue; }
-    if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) { f.isBinary = true; continue; }
+    // Inside an UNSATISFIED hunk, every line is a body line — bound by the @@ counts (like unidiff),
+    // so trailing/inter-hunk blank lines and the EOF newline artifact are never swept in. This must
+    // run BEFORE the file-header checks (an added line may literally start with "+++"/"---").
+    if (curHunk && !hunkDone(curHunk)) {
+      if (line.startsWith("\\")) { curHunk.body.push(line); continue; }   // no-newline marker — no count
+      const c = line[0];
+      curHunk.body.push(line);
+      if (c === "+") curHunk.newRem--;
+      else if (c === "-") curHunk.oldRem--;
+      else { curHunk.oldRem--; curHunk.newRem--; }                        // " " context, or blank line
+      continue;
+    }
+    // A `\ No newline at end of file` marker can trail a just-satisfied hunk — still part of it.
+    if (curHunk && line.startsWith("\\")) { curHunk.body.push(line); continue; }
+    if (line.startsWith("rename from ") || line.startsWith("rename to ")) { f.isRename = true; curHunk = null; continue; }
+    if (line.startsWith("Binary files ") || line.startsWith("GIT binary patch")) { f.isBinary = true; curHunk = null; continue; }
     if (line.startsWith("--- ")) { f.sourceFile = line.slice(4).trim(); curHunk = null; continue; }
     if (line.startsWith("+++ ")) { f.targetFile = line.slice(4).trim(); curHunk = null; continue; }
     if (line.startsWith("@@")) {
-      const m = line.match(/^@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@(.*)$/);
-      curHunk = { header: line, section: m ? m[1].trim() : "", body: [] };
+      const m = line.match(/^@@ -\d+(?:,(\d+))? \+\d+(?:,(\d+))? @@(.*)$/);
+      const oldRem = m && m[1] !== undefined ? parseInt(m[1], 10) : 1;
+      const newRem = m && m[2] !== undefined ? parseInt(m[2], 10) : 1;
+      curHunk = { header: line, section: m ? m[3].trim() : "", body: [], oldRem, newRem };
       f.hunks.push(curHunk);
       continue;
     }
-    // Body lines incl. the `\ No newline at end of file` marker — unidiff keeps it in the hunk
-    // text, so we do too (byte-parity for the LLM prompts; facts ignore non-+ lines anyway).
-    if (curHunk && (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")
-                    || line === "" || line.startsWith("\\"))) {
-      curHunk.body.push(line);
-    }
+    curHunk = null; // a satisfied hunk's trailing non-body line closes it
   }
   return files;
 }

@@ -64,6 +64,76 @@ export function build_cluster_prompt(hunks: Hunk[]): string {
   return parts.join("");
 }
 
+// --- hybrid wiring: the inverted reconcile (LLM groups cores into seams + draws each edit's line) ---
+const _RECONCILE_SNIPPET_LINES = 24;
+const _CORE_SNIPPET_LINES = 14;
+const baseName = (p: string) => p.split("/").pop() ?? p;
+
+function _reconcile_snippet(h: Hunk): string {
+  return h.text.split("\n").slice(1).slice(0, _RECONCILE_SNIPPET_LINES).join("\n");
+}
+function _core_snippet(h: Hunk): string {
+  return h.text.split("\n").slice(1).slice(0, _CORE_SNIPPET_LINES).join("\n");
+}
+
+export function build_reconcile_prompt(cores: Map<string, Hunk>, targets: Hunk[], hints: Map<string, string[]>): string {
+  const coreBlocks = [...cores.entries()]
+    .map(([cid, h]) => `CORE ${cid}  [${baseName(h.file_path)}]\n${_core_snippet(h)}`).join("\n---\n");
+  const editBlock = (h: Hunk): string => {
+    const hint = (hints.get(h.id) ?? []).filter((c) => cores.has(c))
+      .map((c) => `${c}="${cores.get(c)!.seam_label || c}"`).join(", ") || "(none found)";
+    return `EDIT ${h.id}  [${baseName(h.file_path)}]  role=${h.role}\n${_reconcile_snippet(h)}\n  symbols suggest: ${hint}`;
+  };
+  const editBlocks = targets.map(editBlock).join("\n---\n");
+  const task2 = targets.length
+    ? "TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY "
+      + "depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The "
+      + "'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the "
+      + "ones that are real couplings, DROP any it merely co-renders/co-imports a shared "
+      + "component with, and ADD any real coupling the scan missed. One, several, or NONE; "
+      + "choose only from the CORE ids.\n\n"
+    : "";
+  return (
+    "A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.\n\n"
+    + "TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical "
+    + "intent and may hold SEVERAL cores: cores that are the same logical change/feature "
+    + "(several hunks of one component, or a component + its skeleton/header) share one "
+    + '`seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what '
+    + 'the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct '
+    + "intents get distinct seam keys; don't over-merge unrelated cores.\n\n"
+    + task2
+    + `CORES:\n${coreBlocks}\n\n`
+    + (targets.length ? `EDITS:\n${editBlocks}\n\n` : "")
+    + 'Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}.'
+    + (targets.length ? ' Per EDIT: {"id":"h6","wires":["h8", …]}.' : "")
+  );
+}
+
+export interface ReconcileResult { labels: Map<string, string>; groups: Map<string, string>; drawn: Map<string, string[]>; }
+
+export function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], hints: Map<string, string[]>,
+                             opts: { model?: string; claudeBin?: string | null } = {}): ReconcileResult {
+  if (!cores.size) return { labels: new Map(), groups: new Map(), drawn: new Map() };
+  const [kind, binary] = resolve_backend(opts.claudeBin);
+  const prompt = build_reconcile_prompt(cores, targets, hints);
+  const out = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, "reconcile");
+  const labels = new Map<string, string>();
+  const groups = new Map<string, string>();
+  for (const [cid, o] of out) {
+    if (!cores.has(cid)) continue;
+    const lab = String(o.label ?? "").trim();
+    if (lab) labels.set(cid, lab);
+    const seam = String(o.seam ?? "").trim();
+    if (seam) groups.set(cid, seam);
+  }
+  const drawn = new Map<string, string[]>();
+  for (const h of targets) {
+    const o = out.get(h.id);
+    if (o && Array.isArray(o.wires)) drawn.set(h.id, o.wires.filter((c: string) => cores.has(c)));
+  }
+  return { labels, groups, drawn };
+}
+
 // LLM Pass A (cluster) only: fill group/intent (product intent). Mirrors classifier.assign_clusters.
 export function assign_clusters(hunks: Hunk[], opts: { model?: string; claudeBin?: string | null } = {}): void {
   if (!hunks.length) return;

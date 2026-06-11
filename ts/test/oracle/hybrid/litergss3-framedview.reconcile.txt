@@ -1,0 +1,192 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h2  [Shape.cpp]
+     if (window == nullptr) {
+         rb_raise(rb_eRGSSError, "Shape.new requires an open DisplayWindow");
+     }
+-    // LiteRGSS2 accepted either a Viewport or the DisplayWindow as parent.
++    // LiteRGSS2 accepted Viewport, Window (FramedView) or DisplayWindow.
+     const bool is_viewport = RTEST(viewport) && rb_obj_is_kind_of(viewport, rb_cViewport) == Qtrue;
++    const bool is_framed   = !is_viewport && RTEST(viewport) &&
++                             rb_obj_is_kind_of(viewport, rb_cFramedView) == Qtrue;
+     if (is_viewport) {
+         auto *vp = get_viewport(viewport);
+         if (vp == nullptr || !vp->viewport) {
+             rb_raise(rb_eRGSSError, "Shape.new viewport is not initialized");
+         }
+         s->shape = cgss::Shape::create(*vp->viewport, std::move(geometry));
+---
+CORE h4  [Sprite.cpp]
+     rb_scan_args(argc, argv, "01", &parent);
+     auto *s = get_sprite(self);
+ 
+-    // Register into the parent View. LiteRGSS2 accepted either a Viewport
+-    // (register in viewport's child stack) or the DisplayWindow itself
+-    // (register at window level). PSDK uses the latter for ShaderedSprite —
+-    // see Graphics.rb#freeze.
++    // Register into the parent View. LiteRGSS2 accepted Viewport, Window
++    // (FramedView) or the DisplayWindow as parent. PSDK uses Window as
++    // parent for in-dialog sprites (e.g. text_stack inside the message
++    // box) so sprite coords are local to the box.
+     auto* window = get_active_display_window();
+     if (window == nullptr) {
+         rb_raise(rb_eRGSSError, "Sprite.new requires an open DisplayWindow");
+---
+CORE h5  [Sprite.cpp]
+             rb_raise(rb_eRGSSError, "Sprite.new viewport is not initialized");
+         }
+         s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*vp->viewport));
++    } else if (is_framed) {
++        auto *fv = get_framed_view(parent);
++        if (fv == nullptr || !fv->has_view) {
++            rb_raise(rb_eRGSSError, "Sprite.new Window parent is not initialized");
++        }
++        s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*fv->view));
+     } else {
+         s->sprite = std::make_unique<cgss::Sprite>(cgss::Sprite::create(*window));
+     }
+---
+CORE h7  [Text.cpp]
+     if (window == nullptr) {
+         rb_raise(rb_eRGSSError, "Text.new requires an open DisplayWindow");
+     }
+-    // LiteRGSS2 accepted either a Viewport or the DisplayWindow as parent.
++    // LiteRGSS2 accepted Viewport, Window (FramedView) or DisplayWindow as
++    // parent. PSDK passes a Window for the message-box text stack so the
++    // text coords are local to the dialog box.
+     const bool is_viewport = RTEST(viewport) && rb_obj_is_kind_of(viewport, rb_cViewport) == Qtrue;
++    const bool is_framed   = !is_viewport && RTEST(viewport) &&
++                             rb_obj_is_kind_of(viewport, rb_cFramedView) == Qtrue;
+     if (is_viewport) {
+         auto *vp = get_viewport(viewport);
+         if (vp == nullptr || !vp->viewport) {
+             rb_raise(rb_eRGSSError, "Text.new viewport is not initialized");
+---
+CORE h9  [FramedView.cpp]
+     }
+ }
+ 
+-static FramedViewData *get_fv(VALUE self) { return rb::GetPtr<FramedViewData>(self); }
++FramedViewData *get_framed_view(VALUE self) { return rb::GetPtr<FramedViewData>(self); }
+ 
++// LiteRGSS2 ctor: Window.new(viewport_or_display_window). The arg is
++// optional in litergss3 — when absent we attach to the active display
++// window so old PSDK code that does `Window.new` keeps working.
+ VALUE rb_FramedView_Initialize(int argc, VALUE *argv, VALUE self)
+ {
+-    VALUE viewport;
+-    rb_scan_args(argc, argv, "01", &viewport);
+-    get_fv(self)->rViewport = NIL_P(viewport) ? Qnil : viewport;
+---
+CORE h11  [FramedView.h]
+     VALUE rPauseskin = Qnil;
+     VALUE rWindowBuilder = Qnil;
+     VALUE rCursorRect = Qnil;
++
++    ~FramedViewData() {
++        if (view && !disposed) view->detach();
++    }
+ };
+ 
+ // Forward-declare the Mark specialization so every TU that instantiates
+
+EDITS:
+EDIT h1  [Shape.cpp]  role=environment
+ #include "DrawableDisposable.h"
+ #include "DisplayWindow.h"
+ #include "Viewport.h"
++#include "window/FramedView.h"
+ 
+ VALUE rb_cShape = Qnil;
+ static ID rb_iShapeCircle = 0;
+  symbols suggest: (none found)
+---
+EDIT h3  [Sprite.cpp]  role=environment
+ #include "RubyValue.h"
+ #include "../rbAdapter.h"
+ #include "window/DisplayWindow.h"
++#include "window/FramedView.h"
+ #include "Sprite.h"
+ #include "Image.h"
+ #include "Rect.h"
+  symbols suggest: h4="bool", h5="Sprite", h9="auto"
+---
+EDIT h6  [Text.cpp]  role=environment
+ #include "Viewport.h"
+ #include "Fonts.h"
+ #include "DisplayWindow.h"
++#include "window/FramedView.h"
+ 
+ VALUE rb_cText = Qnil;
+ 
+  symbols suggest: (none found)
+---
+EDIT h8  [FramedView.cpp]  role=environment
+-// LiteRGSS::Window — FramedView UI widget. State-only implementation; see
+-// header for the cgss integration limitation.
++// LiteRGSS::Window — Ruby binding around cgss::FramedView. The native
++// FramedView is registered into the parent (Viewport or DisplayWindow)
++// at construction time and renders the 9-slice skin + cursor + pause
++// indicator automatically inside cgss::DisplayWindow::draw().
+ 
+ #include "LiteRGSS.h"
+ #include "RubyValue.h"
+ #include "../rbAdapter.h"
++#include <LiteCGSS/Common/IntRect.h>
+ #include <LiteCGSS/Common/NormalizeNumbers.h>
++#include <LiteCGSS/Views/DisplayWindow.h>
++#include <LiteCGSS/Views/Viewport.h>
++#include <array>
+ #include "FramedView.h"
+-#include "DrawableDisposable.h"
++#include "DisplayWindow.h"
++#include "../graphics/Image.h"
++#include "../graphics/Rect.h"
++#include "../graphics/Viewport.h"
++#include "../graphics/DrawableDisposable.h"
+ 
+ VALUE rb_cFramedView = Qnil;
+  symbols suggest: h2="bool", h7="bool", h9="auto"
+---
+EDIT h10  [FramedView.h]  role=link
+ #include "RubyValue.h"
+ #include "../rbAdapter.h"
+ 
++#include <LiteCGSS/Views/FramedView.h>
++#include <memory>
++
+ extern VALUE rb_cFramedView;
+ void Init_FramedView();
+ 
+-// LiteRGSS::Window — the FramedView-based UI widget (per-game-menu frame).
+-// Distinct from LiteRGSS::DisplayWindow (the host OS window).
++// LiteRGSS::Window — backs PSDK's per-game-menu/dialog window. Wraps a
++// cgss::FramedView registered into either a parent cgss::Viewport or the
++// active cgss::DisplayWindow at construction time. Sprite/Text/Shape
++// instantiated with a Window as parent register into THIS FramedView's
++// child stack — that's how the dialog text gets offset to the box's
++// position and clipped to the box's bounds.
+ //
+-// Implementation note: cgss::FramedView requires MainEventDispatcher +
+-// DisplayWindowUserData + DisplayWindowSettings, which litergss3's
+-// DisplayWindow doesn't currently expose. This port stores the widget's
+-// state on the Ruby side (skin, cursor rect, opacity, geometry) so the
+-// API surface matches litergss2's Window — full cgss::FramedView wiring
+-// folds in once DisplayWindow exposes the cgss event/window context.
+  symbols suggest: h2="bool", h4="bool", h5="Sprite", h7="bool", h9="auto"
+---
+EDIT h12  [FramedView.h]  role=environment
+     template <> void Mark<FramedViewData>(void *ptr);
+ }
+ 
++FramedViewData* get_framed_view(VALUE self);
++
+ #endif
+  symbols suggest: h11="FramedView", h2="bool", h4="bool", h5="Sprite", h7="bool", h9="auto"
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

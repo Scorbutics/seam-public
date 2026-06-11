@@ -1,0 +1,68 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h2  [litergss_surface_jni.c]
+     (void) clazz;
+     cgss_android_request_host_surface_close();
+ }
++
++/* ------------------------------------------------------------------
++ * Hosted input injection: hardware keys, text, focus, gamepad. All
++ * thin pass-throughs to cgss_android_inject_*; translation from
++ * Android keycodes to sf::Keyboard / SFML joystick indices happens on
++ * the SFML side (HostedAndroidWindow.cpp).
++ * ------------------------------------------------------------------ */
++
++JNIEXPORT void JNICALL
++Java_com_scorbutics_litergss_NativeSurface_injectKeyDown(JNIEnv* env, jclass clazz,
++                                                          jint androidKeyCode,
+---
+CORE h3  [NativeSurface.kt]
+ 
+     /** Forward an Android pointer-up event into SFML's queue. */
+     @JvmStatic external fun injectTouchUp(pointerId: Int, x: Float, y: Float)
++
++    /**
++     * Forward a hardware key-down event.
++     *
++     * `androidKeyCode` is the raw [android.view.KeyEvent.keyCode], not a
++     * pre-translated SFML key — the native side reuses SFML's existing
++     * Android-to-SFML keycode table. `metaState` is
++     * [android.view.KeyEvent.metaState]. `repeatCount > 0` (OS auto-
++     * repeat) is silently dropped on the native side; consumers like PSDK
++     * run their own software repeat handler.
++     */
+
+EDITS:
+EDIT h1  [litergss_surface_jni.c]  role=environment
+ void cgss_android_inject_touch_up(int pointerId, float x, float y);
+ void cgss_android_request_host_surface_close(void);
+ 
++void cgss_android_inject_key_down(int androidKeyCode, int metaState, int repeatCount);
++void cgss_android_inject_key_up(int androidKeyCode, int metaState);
++void cgss_android_inject_text(unsigned int unicodeCodepoint);
++void cgss_android_inject_focus_gained(void);
++void cgss_android_inject_focus_lost(void);
++void cgss_android_inject_joystick_button(int deviceId, int androidKeyCode, int pressed);
++void cgss_android_inject_joystick_axis(int   deviceId,
++                                       float axisX,    float axisY,
++                                       float axisZ,    float axisRz,
++                                       float hatX,     float hatY,
++                                       float lTrigger, float rTrigger);
++void cgss_android_inject_joystick_connected(int deviceId);
++void cgss_android_inject_joystick_disconnected(int deviceId);
++
++typedef void (*cgss_android_virtual_keyboard_callback_t)(int show);
++void cgss_android_set_virtual_keyboard_callback(cgss_android_virtual_keyboard_callback_t cb);
++void cgss_android_request_virtual_keyboard(int show);
++
+ /* Single live ANativeWindow*, mirroring the singleton model on the LiteCGSS
+  * side. The reference is acquired by ANativeWindow_fromSurface (which
+  * increments the refcount) and released here on detach / re-attach. */
+  symbols suggest: h2="alive"
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

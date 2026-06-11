@@ -1,0 +1,1 @@
+[{"id": "h2", "seam": "S1", "label": "seam h2"}, {"id": "h3", "seam": "S1", "label": "seam h3"}, {"id": "h1", "wires": ["h2", "h3"]}]
