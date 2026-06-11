@@ -3,7 +3,9 @@
   "version": "0.0.1",
   "description": "TypeScript port of Seam — review-by-intent diff decomposition. Deterministic core first; see PORT-STATUS.md.",
   "type": "module",
-  "bin": { "seam": "./src/cli/decompose.ts" },
+  "bin": {
+    "seam": "./src/cli/decompose.ts"
+  },
   "scripts": {
     "test": "bun test",
     "typecheck": "tsc --noEmit -p .",
@@ -14,6 +16,7 @@
     "tree-sitter-wasms": "^0.1.13"
   },
   "devDependencies": {
+    "@types/bun": "^1.3.14",
     "@types/node": "^20.0.0",
     "typescript": "^5.4.0"
   }

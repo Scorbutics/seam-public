@@ -194,6 +194,20 @@ export function extract(h: Hunk): HunkFacts {
   return facts_from_texts(h.text, _mask_code(h.text), h.file_path, h.section_header);
 }
 
+// Map each BODY line (1-based) to its NEW-side file line; removed (-) lines → null.
+export function new_side_lines(hunk: Hunk): Map<number, number | null> {
+  const first = hunk.text ? hunk.text.split("\n")[0] : "";
+  const m = first.match(/\+(\d+)/);
+  let cur = m ? parseInt(m[1], 10) : 1;
+  const out = new Map<number, number | null>();
+  hunk.text.split("\n").slice(1).forEach((raw, idx) => {
+    const i = idx + 1;
+    if (raw.startsWith("-")) out.set(i, null);
+    else { out.set(i, cur); cur += 1; }
+  });
+  return out;
+}
+
 // --- providers ---------------------------------------------------------------
 export interface FactsProvider {
   facts(hunks: Hunk[]): Map<string, HunkFacts>;

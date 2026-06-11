@@ -20,7 +20,7 @@ const _DEF_PATTERNS: RegExp[] = [
   /\balter\s+table\s+["`']?([A-Za-z_]\w*)/gi,
 ];
 
-const _STOP = new Set([
+export const _STOP = new Set([
   "return", "const", "function", "import", "export", "from", "this", "true",
   "false", "null", "void", "async", "await", "new", "class", "interface",
   "type", "enum", "public", "private", "protected", "static", "the", "and",
