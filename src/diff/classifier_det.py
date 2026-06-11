@@ -399,8 +399,40 @@ def _enclosing(c: Hunk) -> str:
     return m.group(1) if m else ""
 
 
+def _overlap_subgroups(members: list[Hunk], facts: dict[str, HunkFacts]) -> list[list[str]]:
+    """Partition same-component cores by SYMBOL OVERLAP. The component floor assumed 'same enclosing
+    component ⇒ one seam', which over-merges a big component whose hunks are genuinely DISTINCT
+    sub-intents (cal.com `WebhookForm` = time-unit / payload / content). Instead: two cores merge iff
+    their distinctive footprints (`defines ∪ calls`, minus the shared component name) intersect, via
+    connected components. Hunks touching the SAME symbols (one change over a few hunks — psdk
+    `RootActivity`) merge; disjoint sub-intents stay split. Stable (no LLM), so it doesn't depend on
+    label quality. Returns a list of id-groups."""
+    def footprint(c: Hunk) -> set[str]:
+        f = facts[c.id]
+        return {s for s in (f.defines | f.calls) if _subject_ok(s)} - {_enclosing(c)}
+    ids = [c.id for c in members]
+    foot = {c.id: footprint(c) for c in members}
+    parent = {i: i for i in ids}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for i in range(len(ids)):
+        for j in range(i + 1, len(ids)):
+            if foot[ids[i]] & foot[ids[j]]:
+                parent[find(ids[i])] = find(ids[j])
+    out: dict[str, list[str]] = {}
+    for i in ids:
+        out.setdefault(find(i), []).append(i)
+    return list(out.values())
+
+
 def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
-                      groups: dict[str, str]) -> None:
+                      groups: dict[str, str], use_component_floor: bool = True,
+                      facts: dict[str, HunkFacts] | None = None) -> None:
     """Merge cores into technical-intent seams for the hybrid path — the UNION of two signals
     so neither can over- or under-merge alone:
       - deterministic FLOOR: same file + same enclosing component (the LLM tends to under-merge
@@ -423,12 +455,22 @@ def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
     def union(a, b):
         parent[find(a)] = find(b)
 
-    # floor: same (file, enclosing component)
-    comp: dict[tuple, list[str]] = {}
-    for c in cores:
-        enc = _enclosing(c)
-        if enc:
-            comp.setdefault((c.file_path, enc), []).append(c.id)
+    # floor: same file + enclosing component — but SUB-PARTITIONED by symbol overlap so a big
+    # component's genuinely-distinct sub-intents stay split (see `_overlap_subgroups`). With no
+    # `facts` it degrades to the legacy 'merge all same-component'. `use_component_floor=False`
+    # drops the floor entirely (trust the LLM grouping alone).
+    comp_groups: list[list[str]] = []
+    if use_component_floor:
+        by_comp: dict[tuple, list[Hunk]] = {}
+        for c in cores:
+            enc = _enclosing(c)
+            if enc:
+                by_comp.setdefault((c.file_path, enc), []).append(c)
+        for members in by_comp.values():
+            if facts is None or len(members) <= 1:
+                comp_groups.append([c.id for c in members])          # legacy: all same-component
+            else:
+                comp_groups.extend(_overlap_subgroups(members, facts))  # disjointness-aware
     # LLM: same seam key OR same (normalised) label
     bykey: dict[str, list[str]] = {}
     for c in cores:
@@ -437,7 +479,7 @@ def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
         lab = (labels.get(c.id) or "").strip().lower()
         if lab:
             bykey.setdefault("l:" + lab, []).append(c.id)
-    for ids in (*comp.values(), *bykey.values()):
+    for ids in (*comp_groups, *bykey.values()):
         for x in ids[1:]:
             union(ids[0], x)
 
@@ -448,7 +490,15 @@ def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
     for root, members in seam_members.items():
         members.sort(key=lambda c: int(c.id[1:]) if c.id[1:].isdigit() else 0)
         rep = members[0]
-        label = labels.get(rep.id) or _enclosing(rep) or rep.seam_label or rep.id
+        # When a merge still spans cores the model labeled DIFFERENTLY (a big component whose
+        # sub-intents share enough symbols to merge), don't inherit one core's narrow sub-label —
+        # it mislabels the whole. Use the enclosing component, which is honest for the set.
+        distinct = {(labels.get(c.id) or "").strip().lower()
+                    for c in members if (labels.get(c.id) or "").strip()}
+        if len(distinct) > 1:
+            label = _enclosing(rep) or labels.get(rep.id) or rep.seam_label or rep.id
+        else:
+            label = labels.get(rep.id) or _enclosing(rep) or rep.seam_label or rep.id
         for c in members:
             c.seam = rep.id
             c.seam_label = label

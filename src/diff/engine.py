@@ -119,7 +119,9 @@ def classify(
                     h.wires = sorted(kept)
                     h.suggested_wires = sorted(suggested)
                 # Defer the LLM's intent-grouping merge until after clustering (see above).
-                _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups)
+                # `facts` enables the symbol-disjointness floor (a big component's distinct
+                # sub-intents stay split; same-symbol hunks merge).
+                _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups, facts=facts)
     # CLUSTERS (reads the FULL wiring graph for the deterministic engine; independent for the LLM)
     if cluster == "llm":
         classifier.assign_clusters(work, **llm)
