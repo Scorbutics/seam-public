@@ -126,6 +126,18 @@ class DiffMode:
                         print(f"[decompose] resolved facts (base={'treesitter' if ts.available() else 'regex'}, "
                               f"repo={args.repo}, resolver={args.resolver}): out-of-diff refs grounded to in-diff cores")
 
+            # Host-served LLM (Claude Code skill): route the LLM passes through the running session
+            # / a spawned subagent instead of a `claude -p` subprocess. emit = record prompts only;
+            # inject = return the subagent's replies. The deterministic passes still run normally.
+            from src.core import llm as llm_mod
+            emit_prompts = getattr(args, "emit_prompts", None)
+            inject_llm = getattr(args, "inject_llm", None)
+            if emit_prompts:
+                llm_mod.set_host_bus(llm_mod.HostBus())
+            elif inject_llm:
+                payload = json.loads(Path(inject_llm).read_text(encoding="utf-8"))
+                llm_mod.set_host_bus(llm_mod.HostBus(answers=payload.get("answers", {})))
+
             try:
                 engine_mod.classify(remaining, cluster=cluster, roles=roles, wiring=wiring,
                                     facts_provider=facts_provider, model=args.model,
@@ -135,6 +147,25 @@ class DiffMode:
             except classifier.ClassifierError as exc:
                 print(f"error: classification failed: {exc}", file=sys.stderr)
                 return 3
+            finally:
+                if emit_prompts or inject_llm:
+                    bus = llm_mod.get_host_bus()
+                    llm_mod.set_host_bus(None)
+
+            if emit_prompts:
+                # Phase 1: deterministic passes ran; the bus captured each LLM pass's prompt
+                # (it returned "[]" so nothing was applied). Persist the prompts and stop — a
+                # subagent answers them, then we re-run with --inject-llm.
+                passes = [{"tag": t, **rec} for t, rec in bus.recorded.items()]
+                Path(emit_prompts).write_text(json.dumps({
+                    "version": 1,
+                    "source": {"git": args.git, "file": args.file, "repo": args.repo},
+                    "passes": passes,
+                }, indent=2), encoding="utf-8")
+                print(f"Prompts: {emit_prompts} "
+                      f"({len(passes)} pass{'es' if len(passes) != 1 else ''}: "
+                      f"{', '.join(p['tag'] for p in passes) or 'none'})")
+                return 0
 
             if args.dump_classified:
                 Path(args.dump_classified).write_text(parser.hunks_to_json(hunks), encoding="utf-8")

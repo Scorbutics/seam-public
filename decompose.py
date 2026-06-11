@@ -120,6 +120,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--emit-seams", metavar="JSON",
                     help="write structured seam data (file + line range + role per hunk) "
                          "to this path for the VS Code extension; skips HTML rendering")
+    # Host-served LLM (Claude Code skill / spawned subagent serves the passes — no `claude` binary,
+    # no PATH). Two phases over the SAME deterministic pipeline: the prompts are pure functions of
+    # the det passes, so phase-2 rebuilds byte-identical prompts and the seeded answers line up.
+    ap.add_argument("--emit-prompts", metavar="JSON",
+                    help="DIFF mode: run the deterministic passes, then write the LLM passes' "
+                         "PROMPTS (cluster/reconcile) here instead of calling any LLM. A subagent "
+                         "answers them; feed the replies back with --inject-llm. Skips rendering.")
+    ap.add_argument("--inject-llm", metavar="JSON",
+                    help="DIFF mode: an --emit-prompts answers file {\"answers\":{tag:reply}}; the "
+                         "LLM passes return these replies instead of shelling out. Pair with "
+                         "--emit-seams / -o to render.")
     ap.add_argument("--blast-radius", action="store_true",
                     help="DIFF mode: with --repo, also attach each hunk's `consumers` — who "
                          "OUTSIDE the diff imports a symbol it defines (resolved/suggested), via "

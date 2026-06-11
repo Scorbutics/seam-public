@@ -53,6 +53,41 @@ class ClassifierError(RuntimeError):
     pass
 
 
+# --- Host-served LLM passes (a Claude Code skill / spawned subagent answers the prompt) --------
+# When a HostBus is installed, the LLM passes do NOT shell out to `claude -p`: each pass's prompt
+# is served by the bus instead. This removes the binary-discovery dependency entirely (no PATH, no
+# CLAUDE_BIN) — the running Claude Code session is the backend. Used in two phases, the SAME
+# deterministic pipeline runs both times (only the bus differs), so the prompt a subagent answers
+# in phase 1 is byte-identical to the one phase 2 rebuilds — see the invariant note in decompose.py:
+#   emit   — HostBus() with no answers: records every (tag, prompt) and returns "[]", so each pass
+#            applies nothing and the run finishes deterministically; we keep the recorded prompts.
+#   inject — HostBus(answers={tag: reply}): returns the subagent's reply for each tag.
+_HOST_BUS = None
+
+
+class HostBus:
+    """Routes the LLM passes through the host (the running agent / a spawned subagent) instead of
+    a `claude -p` subprocess. `answers` maps a pass tag ("cluster"/"reconcile"/…) to the model's
+    raw reply; an unseeded tag returns "[]" (emit phase records the prompt and applies nothing)."""
+
+    def __init__(self, answers: dict[str, str] | None = None):
+        self.answers = dict(answers or {})
+        self.recorded: dict[str, dict] = {}   # tag -> {"prompt","model","thinking"}, insertion order
+
+    def serve(self, tag: str, prompt: str, *, model: str, thinking: int | None) -> str:
+        self.recorded[tag] = {"prompt": prompt, "model": model, "thinking": thinking}
+        return self.answers.get(tag, "[]")
+
+
+def set_host_bus(bus: "HostBus | None") -> None:
+    global _HOST_BUS
+    _HOST_BUS = bus
+
+
+def get_host_bus() -> "HostBus | None":
+    return _HOST_BUS
+
+
 def _locate_claude() -> str | None:
     """Find the `claude` executable: CLAUDE_BIN env → PATH → newest VSCode ext."""
     env = os.environ.get("CLAUDE_BIN")
@@ -80,6 +115,8 @@ def resolve_backend(claude_override: str | None = None) -> tuple[str, str]:
     (kind, binary) where kind is "claude" or "copilot". An explicit
     --claude-bin forces Claude.
     """
+    if _HOST_BUS is not None:
+        return ("host", "")        # the running session / a subagent serves the pass — no binary
     if claude_override:
         if Path(claude_override).is_file():
             return ("claude", claude_override)
@@ -276,7 +313,9 @@ def _run_pass(kind: str, binary: str, prompt: str, model: str, *,
     last_err: Exception | None = None
     for attempt in (1, 2):
         try:
-            raw = _run_backend(kind, binary, prompt, model, debug, thinking)
+            raw = (_HOST_BUS.serve(tag, prompt, model=model, thinking=thinking)
+                   if _HOST_BUS is not None
+                   else _run_backend(kind, binary, prompt, model, debug, thinking))
             if debug:
                 _dbg(f"=== {tag} reply (attempt {attempt}, {len(raw)} chars) ===")
                 print(raw, file=sys.stderr)
