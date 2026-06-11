@@ -92,6 +92,22 @@
           "minimum": 1,
           "maximum": 4,
           "description": "Codebase mode (Analyze from anchor): how many call-graph hops to resolve outward from the anchor. Higher = more context but slower / larger (the anchor-bounded BFS depth)."
+        },
+        "seam.resolver": {
+          "type": "string",
+          "enum": ["det", "lsp", "auto"],
+          "enumDescriptions": [
+            "Deterministic floor only (relative + package + tsconfig paths). Offline, instant.",
+            "A real language server (go-to-definition). Cross-language, needs the toolchain.",
+            "Default. LSP with deterministic fallback — the warm daemon is reused across reviews."
+          ],
+          "default": "auto",
+          "description": "How a diff review resolves references against the repo (for blast radius). 'auto' (LSP + floor fallback), 'det' (offline floor), or 'lsp' (server only)."
+        },
+        "seam.blastRadius": {
+          "type": "boolean",
+          "default": true,
+          "description": "Diff review: show each changed symbol's blast radius — who OUTSIDE the diff imports it (resolved/suggested) — so the change is read in the context of the real codebase."
         }
       }
     }

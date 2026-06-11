@@ -95,6 +95,10 @@ class Hunk:
     # Per-seam sub-range attachments + the leading-ambient header peel — the renderer reads
     # these to split a hunk across seams (a core also wiring its siblings) instead of
     # recomputing. ADDITIVE to the flat fields, so the role/wiring golds are unaffected.
+    resolved_wires: list[str] = field(default_factory=list)
+    # Subset of `wires` drawn from a REAL resolved import (ResolvedFactsProvider), not the
+    # in-diff shared-symbol heuristic. `graph_ir.from_hunks` stamps these RESOLVED_FULL (the
+    # codebase confirms the edge) vs HEUR for the rest. Empty unless --resolver + --repo are set.
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""

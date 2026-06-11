@@ -73,36 +73,54 @@ def _load_jsonc(path: str) -> dict | None:
         return None
 
 
-_TS_ALIAS_CACHE: dict[str, tuple] = {}
+_TS_ALIAS_CACHE: dict[tuple, tuple] = {}
 
 
-def _tsconfig_aliases(repo: str) -> tuple:
-    """`compilerOptions.paths` aliases (e.g. `"@/*": ["./*"]`) → (pattern, replacements, base_dir)
-    rules. Follows one `extends`. Cached."""
-    if repo in _TS_ALIAS_CACHE:
-        return _TS_ALIAS_CACHE[repo]
-    rules: list[tuple] = []
+def _aliases_in_dir(repo: str, dir_rel: str) -> tuple | None:
+    """The `compilerOptions.paths` of the tsconfig/jsconfig in `dir_rel` (repo-relative), as
+    (pattern, replacements, base_dir_rel) rules. `base_dir_rel` is REPO-relative — the tsconfig's
+    own directory joined with its `baseUrl` — so a per-app `"~/*": ["modules/*"]` resolves against
+    that app's dir, not the repo root. Follows one `extends`. None if the dir has no `paths`."""
     for cfg in ("tsconfig.json", "jsconfig.json"):
-        data = _load_jsonc(os.path.join(repo, cfg))
+        data = _load_jsonc(os.path.join(repo, dir_rel, cfg))
         if not data:
             continue
         co = dict(data.get("compilerOptions") or {})
         paths = co.get("paths") or {}
         base = co.get("baseUrl") or "."
         if not paths and isinstance(data.get("extends"), str):
-            ext = _load_jsonc(os.path.normpath(os.path.join(repo, data["extends"])))
+            ext = _load_jsonc(os.path.normpath(os.path.join(repo, dir_rel, data["extends"])))
             if ext:
                 eco = ext.get("compilerOptions") or {}
                 paths = eco.get("paths") or {}
                 base = co.get("baseUrl") or eco.get("baseUrl") or "."
-        for pat, repls in paths.items():
-            if isinstance(repls, list):
-                rules.append((pat, tuple(repls), base))
+        rules = [(pat, tuple(repls), os.path.normpath(os.path.join(dir_rel, base)))
+                 for pat, repls in paths.items() if isinstance(repls, list)]
         if rules:
+            return tuple(rules)
+    return None
+
+
+def _tsconfig_aliases(repo: str, importing_file: str) -> tuple:
+    """The `paths` aliases governing `importing_file` — the NEAREST-ANCESTOR tsconfig/jsconfig with a
+    `paths` config, walking from the file's directory up to the repo root (a monorepo defines `~/*`,
+    `@/*` per app, not only at the root; tsc applies the nearest enclosing tsconfig). The repo-root
+    config is the final step of the walk. Cached per (repo, dir)."""
+    key = (repo, os.path.dirname(importing_file))
+    if key in _TS_ALIAS_CACHE:
+        return _TS_ALIAS_CACHE[key]
+    rules: tuple = ()
+    d = key[1]
+    while True:
+        got = _aliases_in_dir(repo, d)
+        if got:
+            rules = got
             break
-    out = tuple(rules)
-    _TS_ALIAS_CACHE[repo] = out
-    return out
+        if not d:                        # reached the repo root ("")
+            break
+        d = os.path.dirname(d)
+    _TS_ALIAS_CACHE[key] = rules
+    return rules
 
 
 def _resolve_file(repo: str, base_rel: str) -> str | None:
@@ -120,8 +138,8 @@ def _resolve_file(repo: str, base_rel: str) -> str | None:
     return None
 
 
-def _resolve_alias(repo: str, source: str) -> str | None:
-    for pat, repls, base in _tsconfig_aliases(repo):
+def _resolve_alias(repo: str, importing_file: str, source: str) -> str | None:
+    for pat, repls, base in _tsconfig_aliases(repo, importing_file):
         if "*" in pat:
             pre, _, suf = pat.partition("*")
             if source.startswith(pre) and source.endswith(suf):
@@ -148,7 +166,7 @@ def resolve_module(repo: str, importing_file: str, source: str, pkgs: dict[str, 
         if source == name or source.startswith(name + "/"):
             sub = source[len(name):].lstrip("/")
             return _resolve_file(repo, os.path.join(pkgs[name], sub) if sub else pkgs[name])
-    return _resolve_alias(repo, source)
+    return _resolve_alias(repo, importing_file, source)
 
 
 _PKG_CACHE: dict[str, dict[str, str]] = {}

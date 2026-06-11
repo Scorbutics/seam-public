@@ -8,6 +8,10 @@ import { VSCodeSymbolResolver, anchorSymbolAt, verifyMethodAttribution, MethodCa
 // --- the JSON contract emitted by `decompose.py --emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
 interface ExternalRef { symbol: string; source: string; }
+// Blast radius (diff mode): a file OUTSIDE the diff that imports a symbol THIS hunk defines.
+// "resolved" = the import resolves to the changed file (a real consumer); "suggested" = an
+// unresolvable but basename-matching import (a blind spot to verify, never asserted).
+interface Consumer { file: string; symbol: string; status: string; }
 // Model B: a PROPOSED behavioural partition of a core. The `ranges` are RESOLVED (real code
 // regions); the grouping is a *proposal* — rendered with a deliberately distinct affordance so
 // it never reads as verified structure (R-B3).
@@ -16,7 +20,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
 interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
@@ -545,6 +549,11 @@ async function runReview(range: string) {
   // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
   // facts), "det" (fully deterministic, offline), or "llm" (all LLM).
   const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+  // Codebase context (on by default): resolve the diff's references against the real repo so the
+  // review shows blast radius (who outside the diff consumes a changed symbol). The LSP daemon stays
+  // warm across reviews, so 'auto' (floor + LSP) is the right default here.
+  const resolver = vscode.workspace.getConfiguration("seam").get<string>("resolver") || "auto";
+  const blastRadius = vscode.workspace.getConfiguration("seam").get<boolean>("blastRadius") ?? true;
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…` },
@@ -566,6 +575,8 @@ async function runReview(range: string) {
           factsPath = await buildAstFacts(py, tool, range);
           if (factsPath) extra.push("--facts", factsPath);
         }
+        if (resolver !== "det") extra.push("--resolver", resolver);
+        if (blastRadius) extra.push("--blast-radius");
         const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
                       "--emit-seams", out, ...extra];
         await execFileP(py, args, tool);
@@ -1247,6 +1258,8 @@ type Node =
   // Model A: a contract member (prop/param) under a core hunk, and (A2) its feeders.
   | { kind: "contract"; hunk: SeamHunk; member: ContractMember }
   | { kind: "feed"; feed: ContractFeed; prop: string }
+  // Blast radius (diff mode): a consumer OUTSIDE the diff of a symbol this hunk defines.
+  | { kind: "consumer"; hunk: SeamHunk; consumer: Consumer }
   | { kind: "feedDef"; uri: vscode.Uri; line: number; value: string }   // A3: where a fed value is defined
   // S1: a resolved seam-to-seam wiring under a seam (the seam graph).
   | { kind: "seamLink"; toId: string; provenance: string }
@@ -1364,6 +1377,10 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       const drill: Node[] = [];
       for (const member of el.hunk.contract ?? []) drill.push({ kind: "contract", hunk: el.hunk, member });
       for (const sub of el.hunk.subcores ?? []) drill.push({ kind: "subcore", hunk: el.hunk, sub });
+      // Blast radius: who outside the diff consumes a symbol this hunk defines (resolved first).
+      const cons = [...(el.hunk.consumers ?? [])].sort((a, b) =>
+        (a.status === "resolved" ? 0 : 1) - (b.status === "resolved" ? 0 : 1));
+      for (const consumer of cons) drill.push({ kind: "consumer", hunk: el.hunk, consumer });
       if (drill.length) return drill;
       // Lazy Layer 2: resolve the hunk's external couplings only when it's expanded.
       const refs = el.hunk.externalRefs ?? [];
@@ -1570,6 +1587,21 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.command = { command: "seam.openSubcore", title: "Reveal proposed sub-core", arguments: [el.hunk, s] };
       return it;
     }
+    if (el.kind === "consumer") {
+      // Blast radius: a file outside the diff that imports a symbol this hunk defines. Resolved =
+      // confirmed consumer (green); suggested = unresolvable basename match, a blind spot (yellow).
+      const c = el.consumer;
+      const resolved = c.status === "resolved";
+      const it = new vscode.TreeItem(`⇲ ${path.basename(c.file)}`, vscode.TreeItemCollapsibleState.None);
+      it.description = `${resolved ? "uses" : "may use"} ${c.symbol}`;
+      it.tooltip = `${c.file}\n${resolved ? "RESOLVED consumer" : "SUGGESTED (unresolvable import; basename matches — verify)"}`
+        + `: imports ${c.symbol} (defined in this change).`;
+      it.iconPath = new vscode.ThemeIcon(resolved ? "references" : "question",
+        new vscode.ThemeColor(resolved ? "charts.green" : "charts.yellow"));
+      const uri = vscode.Uri.joinPath(vscode.workspace.workspaceFolders?.[0]?.uri ?? vscode.Uri.file("/"), c.file);
+      it.command = { command: "vscode.open", title: "Open consumer", arguments: [uri] };
+      return it;
+    }
     if (el.kind === "extTarget") {
       const t = el.target;
       const it = new vscode.TreeItem(`↳ ${t.symbol}`, vscode.TreeItemCollapsibleState.None);
@@ -1586,9 +1618,10 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const ext = extTag(h);
     const rw = rewireStr(h);
     const ncon = h.contract?.length ?? 0, nsub = h.subcores?.length ?? 0;
+    const ncons = h.consumers?.length ?? 0;   // blast radius: consumers outside the diff
     // in chain view a symbol expands to its edges (any node touching this id); otherwise to its drill-downs.
     const hasEdges = chainView && (model?.edges ?? []).some((e) => e.from === h.id || e.to === h.id);
-    const expandable = hasEdges || (!chainView && ((h.externalRefs && h.externalRefs.length) || nsub || ncon));
+    const expandable = hasEdges || (!chainView && ((h.externalRefs && h.externalRefs.length) || nsub || ncon || ncons));
     // Codebase mode: a depth-2 `environment` node is the BOUNDARY FRONTIER (a consumer-of-a-consumer
     // — it uses the footprint but serves a different intent). Render it distinctly: a hollow, muted,
     // ripples-outward look so it reads as "the edge of the footprint", not an in-footprint member.
@@ -1605,7 +1638,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
                   h.caller ? `↑ called by ${h.label}` : "", pv, rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
-                  nsub ? `${nsub} proposed sub-cores` : ""].filter(Boolean).join("  ·  ");
+                  nsub ? `${nsub} proposed sub-cores` : "",
+                  ncons ? `⇲ ${ncons} consumer${ncons > 1 ? "s" : ""} outside the diff` : ""]
+                  .filter(Boolean).join("  ·  ");
     if (desc) it.description = desc;
     it.tooltip = boundary
       ? `boundary frontier — a consumer of a consumer (depth-2). It uses this footprint but serves ` +

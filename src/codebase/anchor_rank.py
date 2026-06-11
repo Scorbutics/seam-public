@@ -106,8 +106,8 @@ def find_anchor_candidates(repo: str, keywords, *, limit: int = 300) -> list[dic
     {name, file, kind}. Offline, no language server. A cheap stem-substring prefilter keeps it to the
     files that could match (like the import scan). Methods aren't discovered — you anchor on the
     class/function and class-mode decomposes its methods."""
-    from .languages import SOURCE_EXTS as _EXTS
-    from .languages.base import SKIP_DIRS as _SKIP_DIRS
+    from ..core.resolve.languages import SOURCE_EXTS as _EXTS
+    from ..core.resolve.languages.base import SKIP_DIRS as _SKIP_DIRS
     repo = os.path.expanduser(repo)
     kstems = {_stem(k.lower()) for k in keywords if len(k) > 2}
     if not kstems:

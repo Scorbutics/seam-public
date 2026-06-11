@@ -22,8 +22,8 @@ def _by_file(consumers):
 
 def test_module_resolution_package_and_relative():
     # the deterministic floor lives in the TS provider now; the scan reaches it via languages.floor_resolve
-    from src.codebase import languages
-    from src.codebase.languages import typescript
+    from src.core.resolve import languages
+    from src.core.resolve.languages import typescript
     pkgs = typescript._pkg_map(REPO)
     assert pkgs.get("@demo/lib", "").replace("\\", "/") == "packages/lib"
     assert pkgs.get("@demo/web", "").replace("\\", "/") == "apps/web"

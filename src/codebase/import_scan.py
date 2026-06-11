@@ -21,115 +21,20 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from dataclasses import dataclass, field
 
-from . import languages, llm_discovery, string_coupling
+from . import llm_discovery, string_coupling
+from ..core.resolve import languages
 # Cross-language tree-sitter VOCABULARY lives in atoms (no raw grammar literals in this generic scan).
 from .atoms import (_CALL, _CLASS_KINDS, _EXPORT, _FUNCLIKE, _INSTANCE_BINDER, _INTERFACE,
                     _INTERFACE_MEMBER, _MEMBER, _MEMBER_NAME, _METHOD_KINDS, _NAME_KINDS, _NEW,
                     _TYPE_REF, _VAR_DECL, _VAR_DECLARATOR, _ANON_FUNC, _Ctx, available, lang_for)
-from .languages.base import SKIP_DIRS as _SKIP_DIRS         # shared walk skip-dirs (generic)
-from .languages import SOURCE_EXTS as _EXTS   # walk extensions: union of ALL providers (was hardcoded JS)
-# A consumer in a test file is VERIFICATION (the `test` role), not an in-footprint link or a
-# boundary intent — so it's separated out (mirrors resolver.ts TEST_PATH). Covers `*.test.ts` /
-# `*.spec.ts` and `tests/` `__tests__/` `spec/` dirs.
-_TEST_RE = re.compile(r"(\.(test|spec)\.[a-z]+$)|((^|/)(tests?|__tests__|spec)/)", re.I)
-
-
-def _kind_for(file: str, kind: str) -> str:
-    """A consumer node's kind, overriding to 'test' for test files (→ the `test` role)."""
-    return "test" if _TEST_RE.search(file.replace("\\", "/")) else kind
-
-
-
-
-# --------------------------------------------------------------------------- resolver injection (P0)
-# The scan resolves imports through `_resolve`, which uses the process's ACTIVE resolver (set by the
-# CLI's --resolver, e.g. an LspResolver) or, by default, the deterministic floor above. This is the
-# one seam where stack-specific resolution can be swapped for a real language server (see resolver.py).
-_ACTIVE_RESOLVER = None
-
-
-def set_resolver(r) -> None:
-    """Install the process-wide resolver (None ⇒ the deterministic floor). Set once by the CLI."""
-    global _ACTIVE_RESOLVER
-    _ACTIVE_RESOLVER = r
-
-
-def _resolve(repo: str, importing_file: str, source: str) -> str | None:
-    """A MODULE source → repo-relative file: the active resolver, else the per-language deterministic
-    floor (`languages.floor_resolve` — dispatches to the importing file's provider)."""
-    if _ACTIVE_RESOLVER is not None:
-        return _ACTIVE_RESOLVER.resolve_module(repo, importing_file, source)
-    return languages.floor_resolve(repo, importing_file, source)
-
-
-def _resolve_import(repo: str, importing_file: str, ref) -> tuple | None:
-    """An `ImportRef` → (repo-relative target file, def line | None), or None. A source-string import
-    (TS) resolves the MODULE path (its def line is found later via tree-sitter); a source-less import
-    (Python) resolves the SYMBOL at (line, col) via the LSP, which already yields (file, line)."""
-    if ref.source is not None:
-        f = _resolve(repo, importing_file, ref.source)
-        return (f, None) if f else None
-    r = _ACTIVE_RESOLVER
-    if r is not None and hasattr(r, "resolve_symbol"):
-        return r.resolve_symbol(repo, importing_file, ref.line, ref.col)   # (file, line) or None
-    return None
-
-
-# --------------------------------------------------------------------------- named-import scan
-@dataclass
-class Consumer:
-    file: str                  # repo-relative
-    local: str                 # local binding name (after `as`)
-    source: str                # import source as written
-    status: str                # "resolved" (module → anchor file) | "suggested" (basename only)
-
-
-def scan_consumers(repo: str, anchor_file: str, symbol: str) -> list[Consumer]:
-    """Files importing `symbol`, classified by how confidently the module is the anchor's:
-
-      - "resolved"  — the import path resolves to `anchor_file` (RESOLVED edge).
-      - "suggested" — the path is UNRESOLVABLE (alias we can't follow) but shares the anchor's
-                      basename ⇒ might be ours, can't confirm (SUGGESTED blind spot).
-
-    A path that resolves to a DIFFERENT file is a same-named OTHER symbol → EXCLUDED (a confirmed
-    true-negative, not a blind spot). A non-matching unresolvable path → excluded. Recall by
-    named imports; honesty by the resolved/suggested split."""
-    anchor_norm = os.path.normpath(anchor_file)
-    anchor_base = os.path.splitext(os.path.basename(anchor_file))[0]
-    anchor_abs = os.path.normpath(os.path.join(repo, anchor_file))
-    out: list[Consumer] = []
-    for root, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
-        for fn in files:
-            if not fn.endswith(_EXTS):
-                continue
-            path = os.path.join(root, fn)
-            if os.path.normpath(path) == anchor_abs:
-                continue
-            try:
-                text = open(path, encoding="utf-8", errors="ignore").read()
-            except OSError:
-                continue
-            if symbol not in text:
-                continue
-            rel = os.path.relpath(path, repo)
-            for ref in languages.parse_imports(rel, text):      # per-language import parsing
-                if ref.name != symbol:
-                    continue
-                target = _resolve_import(repo, rel, ref)        # module-path (TS) or symbol (Python)
-                if target is not None:
-                    if os.path.normpath(target[0]) == anchor_norm:
-                        out.append(Consumer(rel, ref.local, ref.source or "", "resolved"))
-                    # else: resolved to a DIFFERENT file → a same-named other symbol → exclude
-                elif ref.source and ref.source.rstrip("/").split("/")[-1] == anchor_base:
-                    out.append(Consumer(rel, ref.local, ref.source, "suggested"))   # unresolvable + basename
-                break
-    return out
-
-
+from ..core.resolve.languages.base import SKIP_DIRS as _SKIP_DIRS   # shared walk skip-dirs (generic)
+from ..core.resolve.languages import SOURCE_EXTS as _EXTS   # walk extensions: union of ALL providers
+# Consumer discovery + the resolver-injection seam now live in core.resolve.consumers (shared with
+# diff mode). Re-imported here so the graph builders below — and `import_scan.set_resolver` — keep
+# working unchanged.
+from ..core.resolve.consumers import (scan_consumers, scan_module_consumers, set_resolver,  # noqa: F401
+                                      _resolve_import, _kind_for)
 # --------------------------------------------------------------------------- tree-sitter symbols
 def _name_of(ctx: _Ctx, node) -> str | None:
     for c in ctx.children(node):
@@ -526,41 +431,6 @@ def _exported_members(ctx: _Ctx) -> list[tuple[str, str, int, int]]:
                         out.append((ctx.text(dch[0]), "function" if is_fn else "constant", *ctx.span(ch)))
     seen: set[str] = set()
     return [m for m in out if not (m[0] in seen or seen.add(m[0]))]
-
-
-def scan_module_consumers(repo: str, anchor_file: str, member_names: set[str]) -> list[tuple[str, dict[str, str]]]:
-    """One repo walk → [(consumer_file, {member → local binding})] for every file whose import of
-    one or more of `member_names` RESOLVES to `anchor_file`. Member co-occurrence (the §11.1 intent
-    signal) is read straight from these named imports — no call-site resolution needed."""
-    anchor_norm = os.path.normpath(anchor_file)
-    anchor_abs = os.path.normpath(os.path.join(repo, anchor_file))
-    out: list[tuple[str, dict[str, str]]] = []
-    for root, dirs, files in os.walk(repo):
-        dirs[:] = [d for d in dirs if d not in _SKIP_DIRS]
-        for fn in files:
-            if not fn.endswith(_EXTS):
-                continue
-            path = os.path.join(root, fn)
-            if os.path.normpath(path) == anchor_abs:
-                continue
-            try:
-                text = open(path, encoding="utf-8", errors="ignore").read()
-            except OSError:
-                continue
-            if not any(m in text for m in member_names):
-                continue
-            rel = os.path.relpath(path, repo)
-            used: dict[str, str] = {}
-            for ref in languages.parse_imports(rel, text):
-                if ref.name not in member_names:
-                    continue
-                target = _resolve_import(repo, rel, ref)
-                if target is None or target[0] is None or os.path.normpath(target[0]) != anchor_norm:
-                    continue
-                used.setdefault(ref.name, ref.local)
-            if used:
-                out.append((rel, used))
-    return out
 
 
 def build_module_graph(repo: str, anchor_file: str) -> dict:

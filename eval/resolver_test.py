@@ -10,8 +10,9 @@ import time
 
 import pytest
 
-from src.codebase import import_scan, resolver
-from src.codebase import languages
+from src.codebase import import_scan
+from src.core.resolve import resolver
+from src.core.resolve import languages
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "scan_repo")
 CHECKOUT, PKG = "apps/web/checkout.ts", "@demo/lib/payments"
@@ -23,7 +24,7 @@ def test_make_resolver_det_is_none():
 
 
 def test_make_resolver_lsp_and_auto():
-    from src.codebase.lsp.resolver import DaemonResolver
+    from src.core.resolve.lsp.resolver import DaemonResolver
     assert isinstance(resolver.make_resolver("lsp"), DaemonResolver)
     r = resolver.make_resolver("auto")
     assert isinstance(r, DaemonResolver) and r.fallback is True
@@ -51,20 +52,23 @@ def test_deterministic_resolver_matches_floor():
 
 
 def test_injection_point_uses_active_resolver():
+    # The injection seam now lives in core.resolve.consumers (shared with diff mode); import_scan
+    # re-exports set_resolver, so installing via either path drives the same active resolver.
+    from src.core.resolve import consumers
     class Stub:
         def resolve_module(self, repo, f, source):
             return "STUB"
     import_scan.set_resolver(Stub())
     try:
-        assert import_scan._resolve("r", "f", "s") == "STUB"
+        assert consumers._resolve("r", "f", "s") == "STUB"
     finally:
         import_scan.set_resolver(None)
     # default (no override) = the deterministic floor (via languages.floor_resolve)
-    assert import_scan._resolve(FIX, CHECKOUT, PKG).replace("\\", "/").endswith("payments.ts")
+    assert consumers._resolve(FIX, CHECKOUT, PKG).replace("\\", "/").endswith("payments.ts")
 
 
 def test_auto_falls_back_to_floor_when_no_server(monkeypatch):
-    from src.codebase.lsp.resolver import LspResolver
+    from src.core.resolve.lsp.resolver import LspResolver
     r = LspResolver(fallback=True)
     monkeypatch.setattr(r.pool, "client_for", lambda repo, f: (None, None, repo))   # no server
     got = r.resolve_module(FIX, CHECKOUT, PKG)
@@ -72,7 +76,7 @@ def test_auto_falls_back_to_floor_when_no_server(monkeypatch):
 
 
 def test_lsp_only_returns_none_without_server(monkeypatch):
-    from src.codebase.lsp.resolver import LspResolver
+    from src.core.resolve.lsp.resolver import LspResolver
     r = LspResolver(fallback=False)
     monkeypatch.setattr(r.pool, "client_for", lambda repo, f: (None, None, repo))
     assert r.resolve_module(FIX, CHECKOUT, PKG) is None   # lsp-only, no fallback → None
@@ -80,8 +84,8 @@ def test_lsp_only_returns_none_without_server(monkeypatch):
 
 def test_daemon_resolver_degrades_to_floor(monkeypatch):
     # daemon unreachable → in-process LSP (yields nothing here) → the deterministic floor answers
-    from src.codebase.lsp import daemon as dmod
-    from src.codebase.lsp.resolver import DaemonResolver
+    from src.core.resolve.lsp import daemon as dmod
+    from src.core.resolve.lsp.resolver import DaemonResolver
 
     def down(*a, **k):
         raise OSError("daemon down")
@@ -93,11 +97,36 @@ def test_daemon_resolver_degrades_to_floor(monkeypatch):
 
 
 def test_python_import_parser():
-    from src.codebase.languages import python
+    from src.core.resolve.languages import python
     src = "from .atoms import _Ctx, available as av\nimport os\nfrom x import *  # noqa\n"
     got = {n for n, _, _ in python.parse_imports(src)}
     assert {"_Ctx", "available", "os"} <= got     # named + `as`-original + module import
     assert "av" not in got and "*" not in got      # alias + star excluded
+
+
+def test_tsconfig_nearest_ancestor_alias(tmp_path):
+    """A per-app tsconfig `paths` alias (`~/*` → `modules/*`, baseUrl-relative to the APP dir) resolves
+    for files under that app — the monorepo case the repo-root-only read missed (Phase 2)."""
+    from src.core.resolve.languages import typescript as ts
+    repo = str(tmp_path)
+    (tmp_path / "apps" / "web" / "modules").mkdir(parents=True)
+    (tmp_path / "apps" / "web" / "views").mkdir(parents=True)
+    (tmp_path / "apps" / "web" / "modules" / "widget.tsx").write_text("export const Widget = 1;\n")
+    # per-app tsconfig: ~/* maps to modules/*, relative to apps/web (baseUrl ".")
+    (tmp_path / "apps" / "web" / "tsconfig.json").write_text(
+        '{"compilerOptions": {"baseUrl": ".", "paths": {"~/*": ["modules/*"]}}}\n')
+    # a DIFFERENT root alias that must NOT win for files under apps/web
+    (tmp_path / "tsconfig.json").write_text(
+        '{"compilerOptions": {"baseUrl": ".", "paths": {"@root/*": ["packages/*"]}}}\n')
+    ts._TS_ALIAS_CACHE.clear(); ts._PKG_CACHE.clear()
+
+    imp = "apps/web/views/page.tsx"
+    assert ts.floor_resolve(repo, imp, "~/widget") == os.path.join("apps", "web", "modules", "widget.tsx")
+    # the root alias still resolves (walk reaches the root config as its final step)
+    (tmp_path / "packages").mkdir()
+    (tmp_path / "packages" / "core.ts").write_text("export const c = 1;\n")
+    ts._TS_ALIAS_CACHE.clear()
+    assert ts.floor_resolve(repo, "main.ts", "@root/core") == os.path.join("packages", "core.ts")
 
 
 # --------------------------------------------------------------------------- gated integration (real LSP)
@@ -116,7 +145,7 @@ _PY_REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "fixtures", "
 def test_python_dependency_graph_via_lsp():
     # P2 DOWN — parse `from core import process, Engine` and resolve each via pyright go-to-def.
     from src.codebase import import_scan
-    from src.codebase.lsp.resolver import LspResolver
+    from src.core.resolve.lsp.resolver import LspResolver
     r = LspResolver(fallback=False)
     import_scan.set_resolver(r)
     try:
@@ -133,7 +162,7 @@ def test_python_dependency_graph_via_lsp():
 def test_python_consumers_graph_via_lsp():
     # P2 UP — who imports `process` (defined in core.py): app.py + admin.py, confirmed via pyright.
     from src.codebase import import_scan
-    from src.codebase.lsp.resolver import LspResolver
+    from src.core.resolve.lsp.resolver import LspResolver
     r = LspResolver(fallback=False)
     import_scan.set_resolver(r)
     try:
@@ -149,7 +178,7 @@ def test_python_consumers_graph_via_lsp():
 @pytest.mark.integration
 @pytest.mark.skipif(not _GATED, reason="integration: needs bun + ~/dev/private-app + its node_modules")
 def test_lsp_resolves_tsconfig_alias_real_server():
-    from src.codebase.lsp.resolver import LspResolver
+    from src.core.resolve.lsp.resolver import LspResolver
     r = LspResolver(fallback=False)
     try:
         f = "components/admin/payments-tab.tsx"
@@ -164,8 +193,8 @@ def test_lsp_resolves_tsconfig_alias_real_server():
 @pytest.mark.skipif(not _GATED, reason="integration: needs bun + ~/dev/private-app + its node_modules")
 def test_daemon_warm_servers_reused_across_invocations(tmp_path):
     # P4: the index is paid ONCE; a second (fresh) DaemonResolver hits the same warm daemon → fast.
-    from src.codebase.lsp import daemon as dmod
-    from src.codebase.lsp.resolver import DaemonResolver
+    from src.core.resolve.lsp import daemon as dmod
+    from src.core.resolve.lsp.resolver import DaemonResolver
     sock = str(tmp_path / "seam-lsp-test.sock")
     f = "components/admin/payments-tab.tsx"
     try:

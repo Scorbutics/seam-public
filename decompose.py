@@ -90,17 +90,19 @@ def main(argv: list[str] | None = None) -> int:
                          "overrides it). Omit for the default (cluster=llm, roles=det, wiring=hybrid); "
                          "use 'det' for fully offline (no LLM)")
     ap.add_argument("--resolver", choices=("det", "lsp", "auto"), default="det",
-                    help="how to resolve imports (codebase mode): 'det' = deterministic floor "
-                         "(relative+package+tsconfig paths, offline); 'lsp' = a real language server "
-                         "(go-to-definition, cross-language, needs the toolchain); 'auto' = LSP with "
-                         "deterministic fallback. See resolver-lsp-plan.md.")
+                    help="how to resolve imports (codebase mode, and diff mode's --blast-radius): "
+                         "'det' = deterministic floor (relative+package+tsconfig paths, offline); "
+                         "'lsp' = a real language server (go-to-definition, cross-language, needs the "
+                         "toolchain); 'auto' = LSP with deterministic fallback. See resolver-lsp-plan.md.")
     ap.add_argument("--facts", metavar="JSON",
                     help="external HunkFacts payload (e.g. AST facts the VS Code extension "
                          "computed) to drive the 'det' classifier; missing hunks fall back to regex")
-    ap.add_argument("--facts-engine", choices=("regex", "treesitter"), default="regex",
-                    help="syntax source for the 'det' classifier: 'regex' (default, fragment-based) "
-                         "or 'treesitter' (full-file AST via the working tree; falls back to regex "
-                         "per hunk when a file is unavailable/misaligned). Ignored if --facts is set")
+    ap.add_argument("--facts-engine", choices=("regex", "treesitter", "resolve"), default="regex",
+                    help="syntax source for the 'det' classifier: 'regex' (default, fragment-based); "
+                         "'treesitter' (full-file AST via the working tree; regex fallback per hunk); "
+                         "'resolve' (treesitter/regex base PLUS codebase-resolved references — wires a "
+                         "hunk to an in-diff core it reaches by a real import, via --resolver + --repo). "
+                         "Ignored if --facts is set")
     ap.add_argument("--emit-hunks", metavar="JSON",
                     help="parse only: emit the hunk skeleton (id, file, new-side start/end) so an "
                          "external producer (the VS Code extension) can compute facts keyed by the "
@@ -113,6 +115,10 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--emit-seams", metavar="JSON",
                     help="write structured seam data (file + line range + role per hunk) "
                          "to this path for the VS Code extension; skips HTML rendering")
+    ap.add_argument("--blast-radius", action="store_true",
+                    help="DIFF mode: with --repo, also attach each hunk's `consumers` — who "
+                         "OUTSIDE the diff imports a symbol it defines (resolved/suggested), via "
+                         "--resolver. The 'diff in the context of the codebase' impact surface.")
     ap.add_argument("-v", "--verbose", action="store_true")
     ap.add_argument("--debug", action="store_true",
                     help="print the model's raw reply + backend diagnostics to stderr, "

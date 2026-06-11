@@ -102,7 +102,10 @@ def classify(
                         continue                               # LLM gave no list → keep det candidates
                     m = classifier_det._mentions(facts[h.id])
                     owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
-                    h.wires = sorted(set(line) | owned)        # LLM line (primary) + det owned (grounding)
+                    # LLM line (primary) + det owned (grounding) + RESOLVED imports (ground truth,
+                    # set by the preceding det assign_wiring; never dropped by the LLM redraw).
+                    resolved = {c for c in getattr(h, "resolved_wires", ()) if c in cores}
+                    h.wires = sorted(set(line) | owned | resolved)
                 # Defer the LLM's intent-grouping merge until after clustering (see above).
                 _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups)
     # CLUSTERS (reads the FULL wiring graph for the deterministic engine; independent for the LLM)

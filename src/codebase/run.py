@@ -15,7 +15,8 @@ class CodebaseMode:
 
     def run(self, args) -> int:
         if getattr(args, "resolver", "det") != "det":    # install the resolution strategy (det is the default floor)
-            from src.codebase import import_scan, resolver
+            from src.codebase import import_scan
+            from src.core.resolve import resolver
             import_scan.set_resolver(resolver.make_resolver(args.resolver))
         # CODEBASE MODE — decompose a ResolvedGraph (plan §3). Entirely downstream of the FRONT:
         # the VSCode API never reaches here, only the JSON contract (constraint §4). No diff, no LLM.

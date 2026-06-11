@@ -63,16 +63,46 @@ def _cases(only: str | None) -> list[Path]:
     return cases
 
 
+def _repos() -> dict:
+    """Opt-in {case stem: repo path} from eval/cases/repos.json (absent ⇒ {}). Lets a case be
+    classified with its symbols resolved against the real checkout (--facts-engine resolve)."""
+    f = CASES_DIR / "repos.json"
+    if not f.exists():
+        return {}
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _resolve_facts_provider(args, case_stem: str, repos: dict):
+    """A ResolvedFactsProvider for this case when --facts-engine resolve AND the case has a repo;
+    else None (the engine's default RegexFactsProvider → byte-identical to the baseline)."""
+    if getattr(args, "facts_engine", "regex") != "resolve" or args.engine != "det":
+        return None
+    repo = repos.get(case_stem)
+    if not repo:
+        return None
+    from src.core.resolve import consumers, resolver
+    from src.diff.facts import RegexFactsProvider
+    from src.diff.facts_resolve import ResolvedFactsProvider
+    if getattr(args, "resolver", "det") != "det":
+        consumers.set_resolver(resolver.make_resolver(args.resolver))
+    return ResolvedFactsProvider(RegexFactsProvider(), repo)
+
+
 def generate(args) -> int:
     from src.diff import classifier, classifier_det, noise_filter, parser
     engine = classifier_det if args.engine == "det" else classifier
     # The deterministic engine is a pure function of the diff — N identical runs would
     # waste effort and the stability spread is trivially perfect, so cap it at 1.
     runs = 1 if args.engine == "det" else args.runs
+    repos = _repos()
     model_dir = RUNS_DIR / (args.label or args.model)
     for case in _cases(args.case):
         out_dir = model_dir / case.stem
         out_dir.mkdir(parents=True, exist_ok=True)
+        fp = _resolve_facts_provider(args, case.stem, repos)
         for i in range(1, runs + 1):
             dest = out_dir / f"run_{i}.json"
             if dest.exists() and not args.force:
@@ -80,7 +110,10 @@ def generate(args) -> int:
                 continue
             hunks = parser.parse(case.read_text(encoding="utf-8"))
             remaining = noise_filter.classify(hunks)
-            engine.classify(remaining, model=args.model)
+            if fp is not None:
+                engine.classify(remaining, model=args.model, facts_provider=fp)
+            else:
+                engine.classify(remaining, model=args.model)
             dest.write_text(parser.hunks_to_json(hunks), encoding="utf-8")
             print(f"[ok]   {case.stem} run {i} -> {dest.relative_to(_ROOT)}")
     return 0
@@ -480,6 +513,12 @@ def main(argv=None) -> int:
                    "prompt/config variants from colliding, e.g. --label haiku-sharp-roles")
     g.add_argument("--case", help="only this case (filename stem)")
     g.add_argument("--force", action="store_true", help="re-generate even if cached")
+    g.add_argument("--facts-engine", choices=("regex", "resolve"), default="regex",
+                   help="det engine only: 'regex' (default, the baseline) or 'resolve' (also "
+                        "ground out-of-diff refs against each case's repo from eval/cases/repos.json "
+                        "— needs that mapping; cases without one fall back to regex, unchanged)")
+    g.add_argument("--resolver", choices=("det", "lsp", "auto"), default="det",
+                   help="resolver for --facts-engine resolve (default det = the offline floor)")
     g.set_defaults(func=generate)
 
     s = sub.add_parser("score", help="score cached runs (stability always; accuracy if gold exists)")

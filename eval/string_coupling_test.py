@@ -11,7 +11,7 @@ import pytest
 
 from src.codebase import import_scan, string_coupling
 from src.codebase.atoms import available
-from src.codebase.languages.base import SKIP_DIRS
+from src.core.resolve.languages.base import SKIP_DIRS
 
 FIX = os.path.join(os.path.dirname(__file__), "fixtures", "dispatch_repo")
 _needs_ts = pytest.mark.skipif(not available(), reason="needs tree-sitter")

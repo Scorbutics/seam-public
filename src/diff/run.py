@@ -18,6 +18,11 @@ class DiffMode:
         return True   # the fallback: --file / --git / --from-classified
 
     def run(self, args) -> int:
+        # Install the resolution strategy (det = the built-in floor, no override). Drives
+        # --blast-radius and the resolved facts against the real repo. Process-wide; set once.
+        if getattr(args, "resolver", "det") != "det":
+            from src.core.resolve import consumers, resolver
+            consumers.set_resolver(resolver.make_resolver(args.resolver))
         if args.from_classified:
             # Reuse a previous classify pass — no diff parsing, no LLM. Lets the
             # renderer/template be iterated on against a fixed, real example.
@@ -109,6 +114,17 @@ class DiffMode:
                         if args.verbose:
                             print(f"[decompose] tree-sitter facts (full file, repo={args.repo}); "
                                   f"regex fallback per unavailable/misaligned hunk")
+                elif args.facts_engine == "resolve":
+                    # base facts (tree-sitter if available, else regex) PLUS codebase-resolved refs.
+                    from src.diff import facts_treesitter as ts
+                    from src.diff.facts_resolve import ResolvedFactsProvider
+                    base = facts_mod.RegexFactsProvider()
+                    if ts.available():
+                        base = ts.TreeSitterFactsProvider(facts_mod.RepoFileSource(args.repo))
+                    facts_provider = ResolvedFactsProvider(base, args.repo)
+                    if args.verbose:
+                        print(f"[decompose] resolved facts (base={'treesitter' if ts.available() else 'regex'}, "
+                              f"repo={args.repo}, resolver={args.resolver}): out-of-diff refs grounded to in-diff cores")
 
             try:
                 engine_mod.classify(remaining, cluster=cluster, roles=roles, wiring=wiring,
@@ -136,8 +152,10 @@ class DiffMode:
         if args.emit_seams:
             # Native-rendering surface (VS Code extension): structured seam data, no HTML.
             # repo lets the renderer resolve local aliases against the actual files.
-            Path(args.emit_seams).write_text(json.dumps(seams.emit_seams_json(hunks, repo=args.repo)),
-                                             encoding="utf-8")
+            Path(args.emit_seams).write_text(
+                json.dumps(seams.emit_seams_json(hunks, repo=args.repo,
+                                                 blast_radius=getattr(args, "blast_radius", False))),
+                encoding="utf-8")
             print(f"Seams: {args.emit_seams}")
             return 0
 

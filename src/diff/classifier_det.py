@@ -40,6 +40,7 @@ defines-logic core) ~1.0; an ambiguous fallback ~0.5 so it surfaces as "uncertai
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from collections import Counter
@@ -126,6 +127,25 @@ def _anchors(work: list[Hunk], facts: dict[str, HunkFacts],
     ambient_external = {s for s in external if freq.get(s, 0) >= _AMBIENT_EXTERNAL_MIN}
     return {cid: {s for s in subj[cid] if freq[s] <= cut and s not in ambient_external}
             for cid in cores}
+
+
+def _resolved_edges(work: list[Hunk], facts: dict[str, HunkFacts]) -> dict[str, set[str]]:
+    """{hid: set(target hunk_id)} — a hunk imports a symbol that RESOLVES (a real import, located
+    by the resolver) to a CHANGED FILE in this diff. A genuine cross-file coupling the in-diff
+    symbol grounding can't see: the symbol is defined in that file's UNCHANGED body, so it's in no
+    hunk's new-vocab and `candidate_wirings` never links them. We wire to the hunk(s) of the target
+    file. Purely ADDITIVE — empty unless a ResolvedFactsProvider filled `resolved_refs`, so a
+    regex/tree-sitter run is byte-identical to before."""
+    by_file: dict[str, list[str]] = {}
+    for d in work:
+        by_file.setdefault(os.path.normpath(d.file_path), []).append(d.id)
+    out: dict[str, set[str]] = {h.id: set() for h in work}
+    for h in work:
+        for _sym, tgt in facts[h.id].resolved_refs.items():
+            for did in by_file.get(os.path.normpath(tgt), ()):
+                if did != h.id:
+                    out[h.id].add(did)
+    return out
 
 
 def _subject_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
@@ -245,6 +265,13 @@ def assign_roles(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
             if sym in hdefs and sym in pure_refs.get(other, ()):
                 referenced.add(hid)
                 targets[other].add(hid)
+    # ADDITIVE codebase-grounded edges: a hunk importing from a CHANGED file (a real resolved
+    # import) USES that file's change → it reads as a LINK, recovering wiring the in-diff grounding
+    # missed. Conservative: we feed only the importer's `targets` (link recall), NOT `referenced`
+    # (we don't force-promote the target to core — its role stays its own facts' call). No-op when
+    # no resolved_refs were produced (regex/tree-sitter), so those runs are byte-identical.
+    for hid, definers in _resolved_edges(work, facts).items():
+        targets[hid] |= definers
 
     for h in work:
         f = facts[h.id]
@@ -297,13 +324,19 @@ def assign_wiring(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
     distinctive = _distinctive(work)
     cores = {h.id for h in work if h.role == "core"}
     wires_map = _subject_wiring(work, facts, cores)
+    res_edges = _resolved_edges(work, facts)              # codebase-grounded edges (additive)
     for h in work:
         if h.role == "core":
             h.seam = h.id
             h.seam_label = _primary_symbol(facts[h.id], h, distinctive)
             h.wires = []
+            h.resolved_wires = []
         else:
-            h.wires = wires_map[h.id]
+            # Resolved import to an in-diff core is ground truth — add it even if the in-diff
+            # grounding missed it; record the resolved subset so the IR can stamp it RESOLVED_FULL.
+            rwires = {c for c in res_edges[h.id] if c in cores and c != h.id}
+            h.wires = sorted(set(wires_map[h.id]) | rwires)
+            h.resolved_wires = sorted(rwires)
             h.seam = ""
             h.seam_label = ""
         h.spans = []

@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 
-from . import languages
+from ..core.resolve import languages
 from .atoms import _Ctx, _CALL, available, lang_for
 
 _NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{2,}$")   # a name-like literal (no spaces/paths/urls)

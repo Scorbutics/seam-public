@@ -432,7 +432,8 @@ def _aggregate_warnings(kinds: dict[str, int]) -> list[dict]:
     return out
 
 
-def emit_seams_json(hunks: list[Hunk], repo: str | None = None) -> dict:
+def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
+                    blast_radius: bool = False) -> dict:
     """Structured seam data for the VS Code extension (the native-rendering surface).
 
     The classification is the shared core; the extension consumes THIS instead of
@@ -440,8 +441,16 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None) -> dict:
     and a seam tree, with VS Code itself as the renderer. Same cluster/seam assembly
     the report uses (cross-cluster merge, link-only, synthetic seams), but reduced to
     each hunk's file + new-side line range + role. Tests and noise are separate
-    groups (skim posture)."""
+    groups (skim posture).
+
+    `blast_radius` (needs `repo`): also attach each hunk's `consumers` — who, OUTSIDE the
+    diff, imports a symbol this hunk defines (resolved/suggested). Additive; the field is
+    omitted entirely when off so the existing contract is unchanged."""
     from .symbol_edges import external_coupling, external_refs, rewire_pairs
+    cons = {}
+    if blast_radius and repo:
+        from .blast_radius import consumers_for
+        cons = consumers_for(hunks, repo)
     clusters, _ = _build_clusters(hunks, repo)
     # Per-hunk self-consistency confidence (share of votes agreeing on the shown
     # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
@@ -464,12 +473,15 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None) -> dict:
     rewire = {hid: r for hid, r in rewire_pairs(hunks).items() if r["removed"] and r["added"]}
 
     def _hunk(b: dict) -> dict:
-        return {"id": b["hid"], "file": b["file"], "start": b["start"],
-                "end": b["end"], "role": b["role"],
-                "confidence": conf.get(b["hid"], 1.0),
-                "external": ext.get(b["hid"], []),
-                "externalRefs": refs.get(b["hid"], []),
-                "rewire": rewire.get(b["hid"])}
+        d = {"id": b["hid"], "file": b["file"], "start": b["start"],
+             "end": b["end"], "role": b["role"],
+             "confidence": conf.get(b["hid"], 1.0),
+             "external": ext.get(b["hid"], []),
+             "externalRefs": refs.get(b["hid"], []),
+             "rewire": rewire.get(b["hid"])}
+        if cons:
+            d["consumers"] = cons.get(b["hid"], [])
+        return d
 
     out_clusters = []
     for ci, cl in enumerate(clusters):
@@ -489,10 +501,13 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None) -> dict:
 
     def _plain(h: Hunk) -> dict:
         start, end = _hunk_line_span(h)
-        return {"id": h.id, "file": h.file_path, "start": start, "end": end,
-                "role": h.role, "confidence": round(h.role_confidence, 2),
-                "external": ext.get(h.id, []), "externalRefs": refs.get(h.id, []),
-                "rewire": rewire.get(h.id)}
+        d = {"id": h.id, "file": h.file_path, "start": start, "end": end,
+             "role": h.role, "confidence": round(h.role_confidence, 2),
+             "external": ext.get(h.id, []), "externalRefs": refs.get(h.id, []),
+             "rewire": rewire.get(h.id)}
+        if cons:
+            d["consumers"] = cons.get(h.id, [])
+        return d
 
     return {
         "clusters": out_clusters,

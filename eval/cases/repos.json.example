@@ -1,0 +1,4 @@
+{
+  "_comment": "Opt-in map {case stem: absolute repo checkout path} for `harness.py generate --engine det --facts-engine resolve`. Copy to repos.json (gitignored / machine-specific) and fill paths to local checkouts. Cases without an entry fall back to regex facts (byte-identical to the baseline). Example:",
+  "calcom-webhooks": "/absolute/path/to/cal.com"
+}

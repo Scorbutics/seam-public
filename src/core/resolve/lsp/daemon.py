@@ -30,9 +30,16 @@ def default_socket() -> str:
     return os.path.join(base, f"seam-lsp-{os.getuid()}.sock")
 
 
+_DAEMON_MODULE = "src.core.resolve.lsp.daemon"
+
+
 def _pkg_cwd() -> str:
-    """The dir containing the `src` package, so a spawned `python -m src.lsp.daemon` resolves."""
-    return os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    """The dir containing the `src` package, so a spawned `python -m <_DAEMON_MODULE>` resolves.
+    This file is src/core/resolve/lsp/daemon.py → five dirnames up is the repo root (the `src` parent)."""
+    d = os.path.abspath(__file__)
+    for _ in range(5):
+        d = os.path.dirname(d)
+    return d
 
 
 # --------------------------------------------------------------------------- daemon side
@@ -105,7 +112,7 @@ def ensure_daemon(sock_path: str):
         return _connect(sock_path)
     except OSError:
         pass
-    subprocess.Popen([sys.executable, "-m", "src.lsp.daemon", sock_path], cwd=_pkg_cwd(),
+    subprocess.Popen([sys.executable, "-m", _DAEMON_MODULE, sock_path], cwd=_pkg_cwd(),
                      stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                      start_new_session=True)
     end = time.time() + _SPAWN_WAIT

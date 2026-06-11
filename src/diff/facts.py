@@ -126,6 +126,10 @@ class HunkFacts:
     is_sql: bool = False
     imports_only: bool = False                           # whole body is imports
     type_decl_only: bool = False                         # pure type/interface/enum, no logic
+    # {referenced symbol -> repo-relative file it RESOLVES to} — a symbol this hunk uses that is
+    # defined OUTSIDE the diff text but which the resolver located in the real repo (the "diff in
+    # the context of the codebase" fact). Filled only by ResolvedFactsProvider; empty = non-vote.
+    resolved_refs: dict = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         """Serialize to the wire contract (sets -> sorted lists, deterministic). This is
@@ -136,6 +140,7 @@ class HunkFacts:
             "decisions": self.decisions, "implements": sorted(self.implements),
             "is_test": self.is_test, "is_sql": self.is_sql,
             "imports_only": self.imports_only, "type_decl_only": self.type_decl_only,
+            "resolved_refs": dict(sorted(self.resolved_refs.items())),
         }
 
     @classmethod
@@ -149,6 +154,7 @@ class HunkFacts:
             is_test=bool(d.get("is_test", False)), is_sql=bool(d.get("is_sql", False)),
             imports_only=bool(d.get("imports_only", False)),
             type_decl_only=bool(d.get("type_decl_only", False)),
+            resolved_refs=dict(d.get("resolved_refs", {})),
         )
 
 

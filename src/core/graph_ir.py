@@ -225,9 +225,13 @@ def from_hunks(hunks, provenance: Provenance = Provenance.HEUR) -> Graph:
         )
     present = set(g.nodes)
     for h in hunks:
+        resolved = set(getattr(h, "resolved_wires", ()) or ())
         for t in (h.wires or []):
             if t in present:
-                g.edges.append(Edge(src=h.id, dst=t, kind="wires", provenance=provenance))
+                # A wire drawn from a REAL resolved import is RESOLVED_FULL (the codebase confirms
+                # it); the rest stay `provenance` (HEUR/LLM — the diff makes no completeness promise).
+                prov = Provenance.RESOLVED_FULL if t in resolved else provenance
+                g.edges.append(Edge(src=h.id, dst=t, kind="wires", provenance=prov))
     # seam co-membership: chain the cores sharing a seam id so the recomputed partition
     # matches the engine's group (which folds merge_seams' same-component grouping in).
     seam_cores: dict[str, list[str]] = {}

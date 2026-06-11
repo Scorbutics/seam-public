@@ -19,7 +19,7 @@ import os
 
 from ..core import llm
 from . import string_coupling
-from .languages.base import SKIP_DIRS
+from ..core.resolve.languages.base import SKIP_DIRS
 
 _PROMPT = """\
 You are analysing ONE function to find COUPLINGS to OTHER parts of this codebase that a static
