@@ -1,0 +1,86 @@
+[
+  {
+    "in": "[{\"id\":\"h1\",\"role\":\"core\"}]",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h1",
+        "role": "core"
+      }
+    ]
+  },
+  {
+    "in": "```json\n[{\"id\":\"h1\"}]\n```",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h1"
+      }
+    ]
+  },
+  {
+    "in": "```\n[{\"id\":\"h2\",\"x\":1}]\n```",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h2",
+        "x": 1
+      }
+    ]
+  },
+  {
+    "in": "Here is the answer:\n[{\"id\":\"h3\"}]\nDone.",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h3"
+      }
+    ]
+  },
+  {
+    "in": "[]\n[{\"id\":\"h4\",\"label\":\"real\"}]",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h4",
+        "label": "real"
+      }
+    ]
+  },
+  {
+    "in": "prose [{\"id\":\"h5\"}] more [{\"id\":\"h6\"}]",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h5"
+      }
+    ]
+  },
+  {
+    "in": "   [ {\"id\": \"h7\", \"wires\": [\"s1\",\"s2\"]} ]  ",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h7",
+        "wires": [
+          "s1",
+          "s2"
+        ]
+      }
+    ]
+  },
+  {
+    "in": "[{\"id\":\"h8\",\"intent\":\"Add toast\"},{\"id\":\"h9\",\"intent\":\"Wire it\"}]",
+    "ok": true,
+    "parsed": [
+      {
+        "id": "h8",
+        "intent": "Add toast"
+      },
+      {
+        "id": "h9",
+        "intent": "Wire it"
+      }
+    ]
+  }
+]
