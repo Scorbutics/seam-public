@@ -493,9 +493,11 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
             d["suggestedWires"] = sugg[b["hid"]]
         return d
 
+    from .subgroup import subgroup_seams
     out_clusters = []
     for ci, cl in enumerate(clusters):
-        out_clusters.append({
+        sub = subgroup_seams(cl["seams"])            # altitude mid-level (None on small/blob clusters)
+        entry = {
             "id": cl["id"],
             "intent": cl["intent"],
             "colorIndex": ci,
@@ -507,7 +509,10 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
                 "warnings": [w["kind"] for w in s["verification"]["warnings"]],
                 "hunks": [_hunk(b) for b in s["blocks"]],
             } for s in cl["seams"]],
-        })
+        }
+        if sub:                                      # the altitude overlay: a reviewer collapses/expands these
+            entry["subgroups"] = sub
+        out_clusters.append(entry)
 
     def _plain(h: Hunk) -> dict:
         start, end = _hunk_line_span(h)

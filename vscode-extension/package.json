@@ -108,6 +108,16 @@
           "type": "boolean",
           "default": true,
           "description": "Diff review: show each changed symbol's blast radius — who OUTSIDE the diff imports it (resolved/suggested) — so the change is read in the context of the real codebase."
+        },
+        "seam.defaultAltitude": {
+          "type": "string",
+          "enum": ["overview", "seams"],
+          "enumDescriptions": [
+            "Start with a big cluster's sub-groups COLLAPSED — review the few groups first, expand the one you want.",
+            "Start with sub-groups EXPANDED — go straight to the seams."
+          ],
+          "default": "overview",
+          "description": "Diff review: the starting altitude when a large cluster is split into structural sub-groups. 'overview' (collapsed) or 'seams' (expanded). Expand/collapse a group any time to zoom in/out."
         }
       }
     }

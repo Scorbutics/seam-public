@@ -22,7 +22,10 @@ interface ContractFeed { from: string; value: string; line: number; valLine?: nu
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
 interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
-interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; }
+// Altitude mid-level: a deterministic STRUCTURAL grouping of a big cluster's seams (by coupling +
+// directory), so the reviewer collapses/expands groups to zoom. Absent on small/tight clusters.
+interface SubGroup { label: string; seamIds: string[]; }
+interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; subgroups?: SubGroup[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
 // omits them, so all are optional). `resolutionQuality` drives the honesty banner, and
 // `unresolved`/`blindspots` are the UNKNOWN / statically-opaque overlays (plan §1/§2).
@@ -289,6 +292,11 @@ function onSelect(e: vscode.TreeViewSelectionChangeEvent<Node>) {
     focusIds = new Set(sel.seam.hunks.map(spanKey));
     focusLabel = sel.seam.label;
     if (canIsolate) { focusedSeamId = sel.seam.id; treeProvider.refresh(); }   // isolate this seam in the tree
+  } else if (sel.kind === "subgroup") {
+    // selecting a sub-group focuses ALL its seams' hunks (the altitude's mid-level highlight).
+    const ids = new Set(sel.group.seamIds);
+    focusIds = new Set(sel.cluster.seams.filter((s) => ids.has(s.id)).flatMap((s) => s.hunks.map(spanKey)));
+    focusLabel = sel.group.label;
   } else if (sel.kind === "cluster") {
     focusIds = new Set(sel.cluster.seams.flatMap((s) => s.hunks.map(spanKey)));
     focusLabel = sel.cluster.intent;
@@ -1244,6 +1252,7 @@ async function goToDef(t: ExternalTarget) {
 // --- the seam tree: clusters → seams → hunks → resolved external targets ---------
 type Node =
   | { kind: "cluster"; cluster: Cluster }
+  | { kind: "subgroup"; cluster: Cluster; group: SubGroup }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
   | { kind: "extTarget"; target: ExternalTarget }
@@ -1347,8 +1356,19 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // P2 #2: when a seam is focused, ISOLATE it — show only that seam (others discarded). Guarded:
       // if the focused id isn't in this model (e.g. it changed after an expand), fall back to all.
       const isolate = focusedSeamId && el.cluster.seams.some((s) => s.id === focusedSeamId);
-      const seams = isolate ? el.cluster.seams.filter((s) => s.id === focusedSeamId) : el.cluster.seams;
-      return seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+      if (isolate)
+        return el.cluster.seams.filter((s) => s.id === focusedSeamId)
+          .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+      // Altitude: a big cluster shows its SUB-GROUPS (collapsed by default = overview); expand one
+      // to drill into its seams. Small/tight clusters have no subgroups → seams directly.
+      if (el.cluster.subgroups?.length)
+        return el.cluster.subgroups.map((group) => ({ kind: "subgroup", cluster: el.cluster, group }));
+      return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+    }
+    if (el.kind === "subgroup") {
+      const ids = new Set(el.group.seamIds);
+      return el.cluster.seams.filter((s) => ids.has(s.id))
+        .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     }
     if (el.kind === "seam") {
       // the seam's resolved wiring (other seams it connects to) shows first, then its hunks.
@@ -1400,7 +1420,22 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     if (el.kind === "cluster") {
       const it = new vscode.TreeItem(el.cluster.intent, vscode.TreeItemCollapsibleState.Expanded);
       it.iconPath = new vscode.ThemeIcon("symbol-color");
-      it.description = `${el.cluster.seams.length} seams`;
+      const nsub = el.cluster.subgroups?.length ?? 0;
+      it.description = nsub ? `${nsub} groups · ${el.cluster.seams.length} seams` : `${el.cluster.seams.length} seams`;
+      return it;
+    }
+    if (el.kind === "subgroup") {
+      // ALTITUDE control: collapsed = overview (you see the few groups), expand = zoom into its seams.
+      // The default depth is a setting so a reviewer can start at "overview" or "seams".
+      const detail = (vscode.workspace.getConfiguration("seam").get<string>("defaultAltitude") || "overview") === "seams";
+      const it = new vscode.TreeItem(`▸ ${el.group.label}`,
+        detail ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      const n = el.group.seamIds.length;
+      it.description = `${n} seam${n !== 1 ? "s" : ""}`;
+      it.iconPath = new vscode.ThemeIcon("list-tree");
+      it.tooltip = "Sub-group — a structural grouping of this cluster's seams (by coupling & directory), "
+        + "not a claimed intent. Collapse for an overview; expand to review its seams.";
+      it.contextValue = "seam.subgroup";
       return it;
     }
     if (el.kind === "seam") {

@@ -16,6 +16,7 @@ from collections import Counter
 
 from . import seams
 from .parser import Hunk
+from .subgroup import subgroup_seams
 
 # Role glyphs (ascii style) and the fixed-width tag (both styles, so columns line up).
 _ROLE_GLYPH = {"core": "◆", "link": "→", "environment": "∙", "test": "✓", "noise": "·"}
@@ -125,22 +126,36 @@ _LEGEND_LLM = (
 )
 
 
+def _seam_md(s: dict, ctx: _Ctx, prefix: str) -> list[str]:
+    """One seam as markdown at the given heading level (### flat, #### under a sub-group)."""
+    flags = _seam_flags(s)
+    head = f"{prefix} {s['id']} · {s['label'] or s['id']}"
+    if flags:
+        head += " — " + " · ".join(flags)
+    lines = [head]
+    for b in s["blocks"]:
+        h = _block_hunk(b, ctx)
+        note = _note_for_block(b, h, ctx, s["id"])
+        line = f"- {_ROLE_TAG.get(b['role'], b['role']):<4}  {_loc_block(b, basename=False)}"
+        lines.append(line + (f"   {note}" if note else ""))
+    lines.append("")
+    return lines
+
+
 def _render_llm(hunks: list[Hunk], clusters: list[dict], ctx: _Ctx) -> str:
     out: list[str] = ["# Seam — diff decomposition", _counts(hunks, clusters), "", _LEGEND_LLM, ""]
     for cl in clusters:
         out.append(f"## {cl['id']} · {cl['intent']}")
-        for s in cl["seams"]:
-            flags = _seam_flags(s)
-            head = f"### {s['id']} · {s['label'] or s['id']}"
-            if flags:
-                head += " — " + " · ".join(flags)
-            out.append(head)
-            for b in s["blocks"]:
-                h = _block_hunk(b, ctx)
-                note = _note_for_block(b, h, ctx, s["id"])
-                line = f"- {_ROLE_TAG.get(b['role'], b['role']):<4}  {_loc_block(b, basename=False)}"
-                out.append(line + (f"   {note}" if note else ""))
-            out.append("")
+        sub = subgroup_seams(cl["seams"])            # altitude mid-level (None → render flat)
+        if sub:
+            by_id = {s["id"]: s for s in cl["seams"]}
+            for grp in sub:
+                out.append(f"### ▸ {grp['label']}  ({len(grp['seamIds'])} seam{"s" if len(grp["seamIds"])!=1 else ""})")
+                for sid in grp["seamIds"]:
+                    out.extend(_seam_md(by_id[sid], ctx, "####"))
+        else:
+            for s in cl["seams"]:
+                out.extend(_seam_md(s, ctx, "###"))
     _append_tests_noise(out, hunks, ctx, markdown=True)
     return "\n".join(out).rstrip() + "\n"
 
@@ -149,28 +164,42 @@ def _render_llm(hunks: list[Hunk], clusters: list[dict], ctx: _Ctx) -> str:
 _LEGEND_ASCII = "◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff"
 
 
+def _seam_ascii(s: dict, ctx: _Ctx, prefix: str, is_last: bool) -> list[str]:
+    """One seam as an ascii subtree, indented by `prefix` (so it can nest under a sub-group)."""
+    branch, cont = ("└─", "  ") if is_last else ("├─", "│ ")
+    flags = _seam_flags(s)
+    head = f"{prefix}{branch} ▣ {s['id']}  {s['label'] or s['id']}"
+    if flags:
+        head += "    " + " · ".join(flags)
+    lines = [head]
+    blocks = s["blocks"]
+    for bi, b in enumerate(blocks):
+        b_branch = "└─" if bi == len(blocks) - 1 else "├─"
+        h = _block_hunk(b, ctx)
+        glyph = _ROLE_GLYPH.get(b["role"], "·")
+        note = _note_for_block(b, h, ctx, s["id"])
+        lines.append(f"{prefix}{cont} {b_branch} {glyph} {_ROLE_TAG.get(b['role'], b['role'])} "
+                     f"{_loc_block(b, basename=True)}" + (f"   {note}" if note else ""))
+    return lines
+
+
 def _render_ascii(hunks: list[Hunk], clusters: list[dict], ctx: _Ctx) -> str:
     out: list[str] = [f"Seam · {_counts(hunks, clusters)}", _LEGEND_ASCII, ""]
-    for ci, cl in enumerate(clusters):
+    for cl in clusters:
         out.append(f"◆ {cl['id']}  {cl['intent']}")
-        seams_list = cl["seams"]
-        for si, s in enumerate(seams_list):
-            s_last = si == len(seams_list) - 1
-            s_branch, s_pipe = ("└─", "  ") if s_last else ("├─", "│ ")
-            flags = _seam_flags(s)
-            head = f"{s_branch} ▣ {s['id']}  {s['label'] or s['id']}"
-            if flags:
-                head += "    " + " · ".join(flags)
-            out.append(head)
-            blocks = s["blocks"]
-            for bi, b in enumerate(blocks):
-                b_last = bi == len(blocks) - 1
-                b_branch = "└─" if b_last else "├─"
-                h = _block_hunk(b, ctx)
-                glyph = _ROLE_GLYPH.get(b["role"], "·")
-                note = _note_for_block(b, h, ctx, s["id"])
-                out.append(f"{s_pipe} {b_branch} {glyph} {_ROLE_TAG.get(b['role'], b['role'])} "
-                           f"{_loc_block(b, basename=True)}" + (f"   {note}" if note else ""))
+        sub = subgroup_seams(cl["seams"])            # altitude mid-level (None → render flat)
+        if sub:
+            by_id = {s["id"]: s for s in cl["seams"]}
+            for gi, grp in enumerate(sub):
+                g_branch, g_cont = ("└─", "   ") if gi == len(sub) - 1 else ("├─", "│  ")
+                out.append(f"{g_branch} ▸ {grp['label']}  ({len(grp['seamIds'])} seam{"s" if len(grp["seamIds"])!=1 else ""})")
+                sids = grp["seamIds"]
+                for si, sid in enumerate(sids):
+                    out.extend(_seam_ascii(by_id[sid], ctx, g_cont, si == len(sids) - 1))
+        else:
+            seams_list = cl["seams"]
+            for si, s in enumerate(seams_list):
+                out.extend(_seam_ascii(s, ctx, "", si == len(seams_list) - 1))
         out.append("")
     _append_tests_noise(out, hunks, ctx, markdown=False)
     return "\n".join(out).rstrip() + "\n"
