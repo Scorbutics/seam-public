@@ -1,0 +1,20 @@
+{
+  "name": "seam-ts",
+  "version": "0.0.1",
+  "description": "TypeScript port of Seam — review-by-intent diff decomposition. Deterministic core first; see PORT-STATUS.md.",
+  "type": "module",
+  "bin": { "seam": "./src/cli/decompose.ts" },
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p .",
+    "build": "bun build src/cli/decompose.ts --compile --outfile dist/seam"
+  },
+  "dependencies": {
+    "web-tree-sitter": "^0.25.0",
+    "tree-sitter-wasms": "^0.1.13"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.4.0"
+  }
+}
