@@ -1,0 +1,26 @@
+[
+  {
+    "id": "h1",
+    "file_path": "cmake/litergss-app/dependencies/files/litergss_surface_jni.c",
+    "change_type": "modify",
+    "section_header": "void cgss_android_inject_touch_move(int pointerId, float x, float y);",
+    "role": null,
+    "text_sha": "3bf39dd71208370898974748923bf2fdba75ccb3"
+  },
+  {
+    "id": "h2",
+    "file_path": "cmake/litergss-app/dependencies/files/litergss_surface_jni.c",
+    "change_type": "modify",
+    "section_header": "Java_com_scorbutics_litergss_NativeSurface_requestClose(JNIEnv* env, jclass claz",
+    "role": null,
+    "text_sha": "87c12c6cb20c2e636e05df1ebf3e7d4664019574"
+  },
+  {
+    "id": "h3",
+    "file_path": "kotlin/com/scorbutics/litergss/NativeSurface.kt",
+    "change_type": "modify",
+    "section_header": "object NativeSurface {",
+    "role": null,
+    "text_sha": "a1605ebcb5a9010c6ffe517940df90e9e24d5d6a"
+  }
+]

@@ -1,0 +1,74 @@
+[
+  {
+    "id": "h1",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "1bcff25b999b19004fe2b6827f1e77f76a4b3220"
+  },
+  {
+    "id": "h2",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "5fa0f58a52df509f0172bbdd74c8aa70635ed015"
+  },
+  {
+    "id": "h3",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "4d98c8fb3989ce1975e8722540a4637d6997789d"
+  },
+  {
+    "id": "h4",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "a8f6483f7dc030d11d6746426aaa4f30d06a3f6e"
+  },
+  {
+    "id": "h5",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "92488c423ce1c1a9be99fa9874b86106def571ad"
+  },
+  {
+    "id": "h6",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "6c7866cbc1d909c84630e096a0031ced7e15a160"
+  },
+  {
+    "id": "h7",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "ed29152651b98a241754b41952926f4cd56f0d65"
+  },
+  {
+    "id": "h8",
+    "file_path": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+    "change_type": "modify",
+    "section_header": "class RootActivity : AppCompatActivity(), LoaderHost {",
+    "role": null,
+    "text_sha": "970ad4aa59b90601e6e18609d7b3c3b16520b89a"
+  },
+  {
+    "id": "h9",
+    "file_path": "app/src/main/ruby/start.rb",
+    "change_type": "modify",
+    "section_header": "SafeRunner.run(",
+    "role": null,
+    "text_sha": "134227c7df31e94ad1f60dc0bd02e0b15c3f4608"
+  }
+]

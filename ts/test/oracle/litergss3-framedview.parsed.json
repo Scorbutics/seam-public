@@ -1,0 +1,98 @@
+[
+  {
+    "id": "h1",
+    "file_path": "ext/LiteRGSS3/graphics/Shape.cpp",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "66710c3560d1418f08cfbee71705b101e4176c0d"
+  },
+  {
+    "id": "h2",
+    "file_path": "ext/LiteRGSS3/graphics/Shape.cpp",
+    "change_type": "modify",
+    "section_header": "VALUE rb_Shape_Initialize(int argc, VALUE *argv, VALUE self)",
+    "role": null,
+    "text_sha": "f56241f7c32f78280263e96aa7d0f0481e95f24a"
+  },
+  {
+    "id": "h3",
+    "file_path": "ext/LiteRGSS3/graphics/Sprite.cpp",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "d3195f3fd3b05cc50156baa84ffa29dfaa830b85"
+  },
+  {
+    "id": "h4",
+    "file_path": "ext/LiteRGSS3/graphics/Sprite.cpp",
+    "change_type": "modify",
+    "section_header": "VALUE rb_Sprite_Initialize(int argc, VALUE *argv, VALUE self)",
+    "role": null,
+    "text_sha": "e7604d4307d013da7847c7baa8d85c4b7ecf08b5"
+  },
+  {
+    "id": "h5",
+    "file_path": "ext/LiteRGSS3/graphics/Sprite.cpp",
+    "change_type": "modify",
+    "section_header": "VALUE rb_Sprite_Initialize(int argc, VALUE *argv, VALUE self)",
+    "role": null,
+    "text_sha": "47d6273d064f1f921b66fac758cf24a878652588"
+  },
+  {
+    "id": "h6",
+    "file_path": "ext/LiteRGSS3/graphics/Text.cpp",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "05adafd34f19481024afe28f5905c9e2b35e4007"
+  },
+  {
+    "id": "h7",
+    "file_path": "ext/LiteRGSS3/graphics/Text.cpp",
+    "change_type": "modify",
+    "section_header": "VALUE rb_Text_Initialize(int argc, VALUE *argv, VALUE self)",
+    "role": null,
+    "text_sha": "27d57612f62a0ad00737acdacbb1b7321e08d675"
+  },
+  {
+    "id": "h8",
+    "file_path": "ext/LiteRGSS3/window/FramedView.cpp",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "48e60aab455f43a76e95e2dae74b965e92643028"
+  },
+  {
+    "id": "h9",
+    "file_path": "ext/LiteRGSS3/window/FramedView.cpp",
+    "change_type": "modify",
+    "section_header": "namespace rb {",
+    "role": null,
+    "text_sha": "c26c6462d2b09ee835ce8c4b3bba2db3b14fdfde"
+  },
+  {
+    "id": "h10",
+    "file_path": "ext/LiteRGSS3/window/FramedView.h",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "d27df4ed2d51437cdfa25576f729d524d7d56ee8"
+  },
+  {
+    "id": "h11",
+    "file_path": "ext/LiteRGSS3/window/FramedView.h",
+    "change_type": "modify",
+    "section_header": "struct FramedViewData",
+    "role": null,
+    "text_sha": "67606b008212763ff4712b7569d37e32a87f0a91"
+  },
+  {
+    "id": "h12",
+    "file_path": "ext/LiteRGSS3/window/FramedView.h",
+    "change_type": "modify",
+    "section_header": "namespace rb {",
+    "role": null,
+    "text_sha": "db8749dbd81fbfbf206b0436a970d5cfcb6b36ed"
+  }
+]

@@ -5,6 +5,16 @@ import { findAll, findGroup1, sorted } from "../core/sets.js";
 
 export const FACTS_SCHEMA_VERSION = 1;
 
+// Python `raw[:1] in "+- "` / `raw[1:]` semantics — note `"+- ".includes("")` is true
+// (empty string is a substring), so an empty line strips to "" with marker "" (matching Python).
+function _markerOf(line: string): string {
+  const m = line.slice(0, 1);
+  return "+- ".includes(m) ? m : "";
+}
+function _stripMarker(line: string): string {
+  return "+- ".includes(line.slice(0, 1)) ? line.slice(1) : line;
+}
+
 // --- language surface patterns ----------------------------------------------
 const _LOGIC = /\b(if|else|for|while|switch|case|return|throw|try|catch|await|yield)\b|&&|\|\||[!=<>]=|\?\./;
 const _IMPORT_LINE = /^\s*(import\b|export\b.*\bfrom\b|from\b.+\bimport\b|export\s*\{)/;
@@ -28,7 +38,7 @@ export function leading_ambient_lines(hunk: Hunk): number {
   let k = 0;
   let saw_anchor = false;
   for (const raw of body) {
-    const stripped = "+- ".includes(raw[0] ?? "") ? raw.slice(1) : raw;
+    const stripped = _stripMarker(raw);
     if (!_is_ambient_line(stripped)) break;
     k += 1;
     const s = stripped.trim();
@@ -105,7 +115,7 @@ function _mask_code(text: string): string {
   const outLines: string[] = [];
   let inBlock = false;
   for (const raw of text.split("\n")) {
-    const marker = "+- ".includes(raw[0] ?? "") ? raw[0] : "";
+    const marker = _markerOf(raw);
     const s = raw.slice(marker.length);
     const masked: string[] = [];
     let i = 0;
@@ -147,7 +157,7 @@ function _substantive_lines(added: string): string[] {
 }
 
 function _body_lines(text: string): string[] {
-  return text.split("\n").slice(1).map((ln) => ("+- ".includes(ln[0] ?? "") ? ln.slice(1) : ln));
+  return text.split("\n").slice(1).map(_stripMarker);
 }
 
 export function facts_from_texts(
@@ -163,7 +173,7 @@ export function facts_from_texts(
     && _TYPE_DECL.test(m_added) && !_CODE_DEF.test(m_added);
   const is_test = _TEST_PATH.test(file_path || "")
     || (_TEST_MARKER.test(m_added) && !_CODE_DEF.test(m_added));
-  const implements = new Set(findGroup1(_IMPLEMENTS, m_body.join("\n")));
+  const impls = new Set(findGroup1(_IMPLEMENTS, m_body.join("\n")));
 
   const [defines, references] = _defs_refs(raw_text);
   const calls = new Set<string>();
@@ -174,7 +184,7 @@ export function facts_from_texts(
   const enclosing = new Set(findAll(_IDENT, section_header || ""));
 
   return mkFacts({
-    defines, references, calls, enclosing, decisions, implements,
+    defines, references, calls, enclosing, decisions, implements: impls,
     is_test, is_sql: (file_path || "").endsWith(".sql"),
     imports_only, type_decl_only,
   });

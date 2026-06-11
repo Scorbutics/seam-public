@@ -1,0 +1,434 @@
+[
+  {
+    "id": "h1",
+    "file_path": "apps/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/[id]/loading.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "77a823d6b35da7c029315606ed739fd81a4f926b"
+  },
+  {
+    "id": "h2",
+    "file_path": "apps/web/app/(use-page-wrapper)/settings/(settings-layout)/developer/webhooks/new/loading.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "a14746fb28adc96fd31e0a6a95c1156f39ced8eb"
+  },
+  {
+    "id": "h3",
+    "file_path": "apps/web/app/providers.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "459cbec7dcfd5836b3be18fc29a22921ed970567"
+  },
+  {
+    "id": "h4",
+    "file_path": "apps/web/app/providers.tsx",
+    "change_type": "modify",
+    "section_header": "export function Providers({ isEmbed, children, country }: ProvidersProps) {",
+    "role": null,
+    "text_sha": "f8630c16eb316fe75360a06d7ead47ab77f667f1"
+  },
+  {
+    "id": "h5",
+    "file_path": "apps/web/modules/event-types/components/tabs/instant/InstantEventController.tsx",
+    "change_type": "modify",
+    "section_header": "const InstantMeetingWebhooks = ({ eventType }: { eventType: EventTypeSetup }) =>",
+    "role": null,
+    "text_sha": "3f58d3940dfb451b9b578202642542284246170a"
+  },
+  {
+    "id": "h6",
+    "file_path": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "0223439a9b33f4596072228f6d91b84c31aed9d9"
+  },
+  {
+    "id": "h7",
+    "file_path": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
+    "change_type": "modify",
+    "section_header": "export const EventWebhooksTab = ({ eventType }: Pick<EventTypeSetupProps, \"event",
+    "role": null,
+    "text_sha": "56bbeebc1bb7d09b8c6a29f9be71c329bda8eba5"
+  },
+  {
+    "id": "h8",
+    "file_path": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
+    "change_type": "modify",
+    "section_header": "export const EventWebhooksTab = ({ eventType }: Pick<EventTypeSetupProps, \"event",
+    "role": null,
+    "text_sha": "510e7a4a6eeb1ebe7375d683fb5c6661bab3f9f4"
+  },
+  {
+    "id": "h9",
+    "file_path": "apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "8c20949fb6432bb28e51a5eae7a3e71484d2a77a"
+  },
+  {
+    "id": "h10",
+    "file_path": "apps/web/modules/webhooks/components/EventTypeWebhookListItem.tsx",
+    "change_type": "delete",
+    "section_header": "",
+    "role": null,
+    "text_sha": "bd8051e3478d475672740737e18cd312a594b925"
+  },
+  {
+    "id": "h11",
+    "file_path": "apps/web/modules/webhooks/components/WebhookForm.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "b27e3547e17b89a96a649066d9b1db64d036d80c"
+  },
+  {
+    "id": "h12",
+    "file_path": "apps/web/modules/webhooks/components/WebhookForm.tsx",
+    "change_type": "modify",
+    "section_header": "const WebhookForm = (props: {",
+    "role": null,
+    "text_sha": "6207587d7ae7e56497f4ac8d31d391a041de6e5c"
+  },
+  {
+    "id": "h13",
+    "file_path": "apps/web/modules/webhooks/components/WebhookForm.tsx",
+    "change_type": "modify",
+    "section_header": "const WebhookForm = (props: {",
+    "role": null,
+    "text_sha": "353a97a51a83980878085ec4a78cd083ecbe7166"
+  },
+  {
+    "id": "h14",
+    "file_path": "apps/web/modules/webhooks/components/WebhookForm.tsx",
+    "change_type": "modify",
+    "section_header": "const WebhookForm = (props: {",
+    "role": null,
+    "text_sha": "924d5f7f8d68bca036c5d471756b69fad1751629"
+  },
+  {
+    "id": "h15",
+    "file_path": "apps/web/modules/webhooks/components/WebhookForm.tsx",
+    "change_type": "modify",
+    "section_header": "const WebhookForm = (props: {",
+    "role": null,
+    "text_sha": "a98ed305b79bebbf671fa08102400a995d535e21"
+  },
+  {
+    "id": "h16",
+    "file_path": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "5377b2cc6216f300e8c71b28d28a2cf7901ee1cd"
+  },
+  {
+    "id": "h17",
+    "file_path": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+    "change_type": "modify",
+    "section_header": "export default function WebhookListItem(props: {",
+    "role": null,
+    "text_sha": "dc088d78cc83fbb414e0744986469f1b817f6a48"
+  },
+  {
+    "id": "h18",
+    "file_path": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+    "change_type": "modify",
+    "section_header": "export default function WebhookListItem(props: {",
+    "role": null,
+    "text_sha": "fe44ba9ada554faea1a0da4347e955a2a051367d"
+  },
+  {
+    "id": "h19",
+    "file_path": "apps/web/modules/webhooks/components/WebhookListItemSkeleton.tsx",
+    "change_type": "delete",
+    "section_header": "",
+    "role": null,
+    "text_sha": "b29d25fbc7d45efbc471b6ecb64317409d3d9edd"
+  },
+  {
+    "id": "h20",
+    "file_path": "apps/web/modules/webhooks/components/WebhookListSkeleton.tsx",
+    "change_type": "delete",
+    "section_header": "",
+    "role": null,
+    "text_sha": "12ebbdeb3da47df2738644f1bba87d87d9f51841"
+  },
+  {
+    "id": "h21",
+    "file_path": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "ea85d298abef2d13ef7bdd293d3aee8753d51e09"
+  },
+  {
+    "id": "h22",
+    "file_path": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
+    "change_type": "modify",
+    "section_header": "export default function WebhookTestDisclosure() {",
+    "role": null,
+    "text_sha": "3f8d7ba537a182878d7c4b3d3dd4778099c6e057"
+  },
+  {
+    "id": "h23",
+    "file_path": "apps/web/modules/webhooks/components/WebhookVersionCTA.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "f5ddc08f9130f6e24efe343e4d812197e4d5cb29"
+  },
+  {
+    "id": "h24",
+    "file_path": "apps/web/modules/webhooks/components/dialogs/DeleteWebhookDialog.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "9f6d8452d80453526736dd6f4ef738ebfa1a1cbe"
+  },
+  {
+    "id": "h25",
+    "file_path": "apps/web/modules/webhooks/components/dialogs/DeleteWebhookDialog.tsx",
+    "change_type": "modify",
+    "section_header": "export function DeleteWebhookDialog({ open, onOpenChange, onConfirm, isPending }",
+    "role": null,
+    "text_sha": "cd15307f51880a4a0fe85bb284e38884cac2b7e4"
+  },
+  {
+    "id": "h26",
+    "file_path": "apps/web/modules/webhooks/components/index.ts",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "c6abc3bbe64e5c085463a50b30cd18659af73680"
+  },
+  {
+    "id": "h27",
+    "file_path": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "085b114d93c59d6a215c24a0204c0fec0b98b464"
+  },
+  {
+    "id": "h28",
+    "file_path": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
+    "change_type": "modify",
+    "section_header": "type WebhookProps = {",
+    "role": null,
+    "text_sha": "3b3835cc6231a0f5b9c809c3ba215b014993db9c"
+  },
+  {
+    "id": "h29",
+    "file_path": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
+    "change_type": "modify",
+    "section_header": "export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {",
+    "role": null,
+    "text_sha": "13282a0229be658182098e69b1f0dfb01e10378c"
+  },
+  {
+    "id": "h30",
+    "file_path": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
+    "change_type": "modify",
+    "section_header": "export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {",
+    "role": null,
+    "text_sha": "29644409cb8f8007a7f13f01c0ed70ac38f4f805"
+  },
+  {
+    "id": "h31",
+    "file_path": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
+    "change_type": "modify",
+    "section_header": "export function EditWebhookView({ webhook }: { webhook?: WebhookProps }) {",
+    "role": null,
+    "text_sha": "de75b3276c9df7f452ffa64f50e9d2484366283e"
+  },
+  {
+    "id": "h32",
+    "file_path": "apps/web/modules/webhooks/views/webhook-form-header.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "8e6dbde570c45d436b5e5c9528661fbe9e8db121"
+  },
+  {
+    "id": "h33",
+    "file_path": "apps/web/modules/webhooks/views/webhook-form-skeleton.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "9ddd12d5405dfec28d52b229147a1f349153a779"
+  },
+  {
+    "id": "h34",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-skeleton.tsx",
+    "change_type": "delete",
+    "section_header": "",
+    "role": null,
+    "text_sha": "476ee9fdc444506912e1970e2265e1df8ac2b23c"
+  },
+  {
+    "id": "h35",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "a1e9d9cdcdb8f4e87e23ebaf906d082ddd8a4948"
+  },
+  {
+    "id": "h36",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
+    "change_type": "modify",
+    "section_header": "export const NewWebhookView = ({ webhooks, installedApps }: Props) => {",
+    "role": null,
+    "text_sha": "05669cbb92b9e88044f28e87f178a13bef3a7a97"
+  },
+  {
+    "id": "h37",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
+    "change_type": "modify",
+    "section_header": "export const NewWebhookView = ({ webhooks, installedApps }: Props) => {",
+    "role": null,
+    "text_sha": "835116ddfc60fecae4e0fa4ddeda4dc63c850833"
+  },
+  {
+    "id": "h38",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
+    "change_type": "modify",
+    "section_header": "export const NewWebhookView = ({ webhooks, installedApps }: Props) => {",
+    "role": null,
+    "text_sha": "9b605a7362617347c447483a8f8bb3adc82f8b4c"
+  },
+  {
+    "id": "h39",
+    "file_path": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
+    "change_type": "modify",
+    "section_header": "export const NewWebhookView = ({ webhooks, installedApps }: Props) => {",
+    "role": null,
+    "text_sha": "02174283e6697f526be463b9628c28bacf1fe106"
+  },
+  {
+    "id": "h40",
+    "file_path": "apps/web/modules/webhooks/views/webhook-test-header.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "3a5b313d7b2673babd7eefc342a3bfc32e8a7879"
+  },
+  {
+    "id": "h41",
+    "file_path": "apps/web/modules/webhooks/views/webhooks-header.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "fd6b6364dec5ba5534a3c363688f470f987e8748"
+  },
+  {
+    "id": "h42",
+    "file_path": "apps/web/modules/webhooks/views/webhooks-skeleton.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "ff6344e9c7f6c2275e82227708182bc429492a28"
+  },
+  {
+    "id": "h43",
+    "file_path": "apps/web/modules/webhooks/views/webhooks-view.tsx",
+    "change_type": "modify",
+    "section_header": "import { useBookerUrl } from \"@calcom/features/bookings/hooks/useBookerUrl\";",
+    "role": null,
+    "text_sha": "267094692fb62637bf89a84510f8fdab0b3ee41c"
+  },
+  {
+    "id": "h44",
+    "file_path": "apps/web/modules/webhooks/views/webhooks-view.tsx",
+    "change_type": "modify",
+    "section_header": "const WebhooksView = ({ data }: Props) => {",
+    "role": null,
+    "text_sha": "6b03aa457a581e25543adabe7311888070f458d2"
+  },
+  {
+    "id": "h45",
+    "file_path": "packages/coss-ui/package.json",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "ad0a4acbc8989900573670d283ae0aed7ca17b85"
+  },
+  {
+    "id": "h46",
+    "file_path": "packages/coss-ui/package.json",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "bab26d7ba5ca70341188b0f63066a9bfa6915973"
+  },
+  {
+    "id": "h47",
+    "file_path": "packages/coss-ui/src/shared/app-header.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "aa1fab1efc035bc469a7e65d0ac1a47443da346f"
+  },
+  {
+    "id": "h48",
+    "file_path": "packages/coss-ui/src/shared/list-item.tsx",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "71548c8c436da529c98d39a93620f5bd0821fedf"
+  },
+  {
+    "id": "h49",
+    "file_path": "packages/coss-ui/src/styles/globals.css",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "09fa4e186b9ea41cb0f412a00c85137e0116e062"
+  },
+  {
+    "id": "h50",
+    "file_path": "packages/coss-ui/src/styles/globals.css",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "5af81ace286aa3b1c3a2f37e34f23c1f118da001"
+  },
+  {
+    "id": "h51",
+    "file_path": "packages/coss-ui/src/styles/globals.css",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "0bc02480b6564493c9a058084ce43d6be2987033"
+  },
+  {
+    "id": "h52",
+    "file_path": "packages/coss-ui/src/styles/globals.css",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "bafee76be28e37875995de87414a510b7dceb925"
+  },
+  {
+    "id": "h53",
+    "file_path": "packages/coss-ui/src/styles/globals.css",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "568db62004d7720395fd42b73dd084b37fb2c832"
+  },
+  {
+    "id": "h54",
+    "file_path": "packages/i18n/locales/en/common.json",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "6054aa945cb28d08fe4c4b90294f3d0bf9df583f"
+  }
+]

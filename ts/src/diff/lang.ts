@@ -6,7 +6,9 @@
 import type { Hunk } from "./parser.js";
 import { difference, findAll, findGroup1 } from "../core/sets.js";
 
-export const _IDENT = /[A-Za-z_]\w{2,}/g; // >=3 chars cuts noise (id, db, ok, ...)
+// Python `re` `\w` is UNICODE by default (matches `Désactivé` whole); JS `\w` is ASCII-only.
+// `\p{L}\p{N}_` under the `u` flag reproduces Python's word-char class for identifiers.
+export const _IDENT = /[A-Za-z_][\p{L}\p{N}_]{2,}/gu; // >=3 chars cuts noise (id, db, ok, ...)
 
 const _DEF_PATTERNS: RegExp[] = [
   /\b(?:function|class|interface|type|enum)\s+([A-Za-z_]\w*)/g,
@@ -68,8 +70,9 @@ export function _diff_imports(hunks: Hunk[]): Map<string, string> {
 }
 
 // Salient "subject" of a line: the ROOT of a call/member expression and JSX tags.
-const _CALL_ROOT = /(?<![.\w$])([A-Za-z_$][\w$]*)\s*(?=[.(])/g;
-const _JSX_TAG = /<\/?\s*([A-Z][\w$]*)/g;
+// Unicode word class (see _IDENT) so accented call/JSX subjects (e.g. `Masqué`) match whole.
+const _CALL_ROOT = /(?<![.\p{L}\p{N}_$])([A-Za-z_$][\p{L}\p{N}_$]*)\s*(?=[.(])/gu;
+const _JSX_TAG = /<\/?\s*([A-Z][\p{L}\p{N}_$]*)/gu;
 
 function _meaningful(s: string): boolean {
   return s.length >= 3 && !_STOP.has(s) && (/[A-Z]/.test(s[0]) || /[A-Z]/.test(s.slice(1)));
