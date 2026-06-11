@@ -24,7 +24,7 @@ interface Args {
   format: string; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
-  factsEngine?: string; verbose: boolean;
+  factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -38,7 +38,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "html", verbose: false };
+  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -61,10 +61,12 @@ function parseArgs(argv: string[]): Args {
       case "--model": a.model = next(); break;
       case "--claude-bin": a.claudeBin = next(); break;
       case "--facts-engine": a.factsEngine = next(); break;
+      case "--resolver": a.resolver = next(); break;
+      case "--blast-radius": a.blastRadius = true; break;
       case "-v": case "--verbose": a.verbose = true; break;
-      case "--context-window": case "--resolver": case "-o": case "--out":
+      case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
-      case "--blast-radius": case "--open": case "--debug": break; // boolean, ignored on det path
+      case "--open": case "--debug": break; // boolean, ignored on the ported paths
       default:
         if (v.startsWith("-")) { process.stderr.write(`warning: unknown flag ignored: ${v}\n`); }
     }
@@ -85,6 +87,13 @@ async function main(argv: string[]): Promise<number> {
     if (!hunks.some((h) => h.placements.length)) assign_spans(hunks.filter((h) => h.role !== "noise"), a.repo);
   } else {
     const eng = resolveEngines(a);
+    // Install the resolution strategy (det = the built-in floor, no override). Drives --blast-radius
+    // and --facts-engine resolve against the real repo. Process-wide; set once.
+    if (a.resolver !== "det") {
+      const { make_resolver } = await import("../core/resolve/resolver.js");
+      const { set_resolver } = await import("../core/resolve/consumers.js");
+      try { set_resolver(await make_resolver(a.resolver)); } catch (e) { err((e as Error).message); }
+    }
     let diffText: string;
     try { diffText = diff_source.get_diff({ file: a.file, git: a.git, repo: a.repo }); }
     catch (e) { err((e as Error).message); }
@@ -120,6 +129,10 @@ async function main(argv: string[]): Promise<number> {
         const payload = await ts.computeTreeSitterFacts(work, new ts.RepoFileSource(a.repo));
         factsProvider = new ExternalFactsProvider(payload);
       }
+    } else if (a.factsEngine === "resolve") {
+      // base facts (regex) PLUS codebase-resolved out-of-diff refs grounded to in-diff cores.
+      const { ResolvedFactsProvider } = await import("../diff/facts_resolve.js");
+      factsProvider = new ResolvedFactsProvider(new RegexFactsProvider(), a.repo);
     }
 
     // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's
@@ -158,10 +171,10 @@ async function main(argv: string[]): Promise<number> {
   const textFmt = a.format === "llm" || a.format === "ascii";
   (textFmt ? process.stderr : process.stdout).write(`Decomposed ${hunks.length} hunks:  ${summary}\n`);
 
-  if (textFmt) { process.stdout.write(render(hunks, { style: a.format, repo: a.repo })); return 0; }
+  if (textFmt) { process.stdout.write(render(hunks, { style: a.format, repo: a.repo, blast_radius: a.blastRadius })); return 0; }
 
   if (a.emitSeams) {
-    const model: any = emit_seams_json(hunks, a.repo);
+    const model: any = emit_seams_json(hunks, a.repo, a.blastRadius);
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;              // tokens/cost for the extension's info message
     writeFileSync(a.emitSeams, JSON.stringify(model));

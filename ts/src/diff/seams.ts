@@ -3,6 +3,7 @@
 import type { Hunk } from "./parser.js";
 import { external_coupling, external_refs, rewire_pairs } from "./symbol_edges.js";
 import { subgroup_seams } from "./subgroup.js";
+import { consumers_for } from "./blast_radius.js";
 
 const _CLUSTER_ROLES = ["core", "link", "environment"] as const;
 export const UNCERTAIN_THRESHOLD = 0.6;
@@ -282,7 +283,8 @@ export function context_maps(hunks: Hunk[], repo?: string, blast_radius = false)
   for (const hid of relevant) { ext.set(hid, ext_all.get(hid)!); refs.set(hid, refs_all.get(hid) ?? []); }
   const rewire = new Map<string, any>();
   for (const [hid, r] of rewire_pairs(hunks)) if (r.removed.length && r.added.length) rewire.set(hid, r);
-  const cons = new Map<string, any[]>(); // blast_radius path (needs repo + resolver) — off by default
+  const cons = new Map<string, any[]>();
+  if (blast_radius && repo) for (const [hid, cs] of consumers_for(hunks, repo)) cons.set(hid, cs);
   return [conf, ext, refs, rewire, cons];
 }
 
