@@ -53,8 +53,10 @@ def classify(
         classifier.classify(hunks, model=model, claude_bin=claude_bin,
                             context_window=context_window, role_votes=role_votes,
                             verbose=verbose, debug=debug, debug_path=debug_path)
+        live = [h for h in hunks if h.role != "noise"]
+        classifier_det.merge_clusters_by_intent(live)   # collapse the LLM's duplicate-label clusters
         # Overlap placements are engine-agnostic (additive; never touch role/seam/wires).
-        classifier_det.assign_spans([h for h in hunks if h.role != "noise"], repo=repo)
+        classifier_det.assign_spans(live, repo=repo)
         return
 
     work = [h for h in hunks if h.role != "noise"]
@@ -96,16 +98,26 @@ def classify(
                 hints = {h.id: list(h.wires) for h in targets}
                 labels, groups, drawn = classifier.reconcile_llm(cores, targets, hints=hints, **llm)
                 anchors = classifier_det._anchors(work, facts, set(cores))
+                core_ids = set(cores)
                 for h in targets:
                     line = drawn.get(h.id)
                     if line is None:
                         continue                               # LLM gave no list → keep det candidates
                     m = classifier_det._mentions(facts[h.id])
+                    # STRICT grounding: `owned` = h references a symbol the core DEFINES (a real
+                    # def↔ref), plus RESOLVED imports (Phase 4). NOT the broad subject floor — that's
+                    # itself what hairballs on view files mentioning many component names.
                     owned = {c for c in cores if (anchors[c] & m) & facts[c].defines}
-                    # LLM line (primary) + det owned (grounding) + RESOLVED imports (ground truth,
-                    # set by the preceding det assign_wiring; never dropped by the LLM redraw).
                     resolved = {c for c in getattr(h, "resolved_wires", ()) if c in cores}
-                    h.wires = sorted(set(line) | owned | resolved)
+                    grounded = (owned | resolved) & core_ids
+                    drawn_set = (set(line) | owned | resolved) & core_ids
+                    # ADAPTIVE PER-NODE PRUNE: keep every LLM edge on a sparse node (implicit/border
+                    # couplings survive); on an OVER-wired node drop the ungrounded (topical) ones,
+                    # keeping the grounded — a hub with no grounding is left intact. The surviving
+                    # ungrounded edges are `suggested` (stamped LLM / rendered faint).
+                    kept, suggested = classifier_det.grounded_prune(drawn_set, grounded)
+                    h.wires = sorted(kept)
+                    h.suggested_wires = sorted(suggested)
                 # Defer the LLM's intent-grouping merge until after clustering (see above).
                 _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups)
     # CLUSTERS (reads the FULL wiring graph for the deterministic engine; independent for the LLM)
@@ -119,6 +131,10 @@ def classify(
     # SEAM MERGE (after clustering): collapse same-intent cores into multi-core seams.
     if _seam_merge is not None:
         _seam_merge()
+
+    # Collapse clusters the LLM gave the SAME intent label (e.g. one 'Update global styles' per CSS
+    # hunk) into one — a deterministic cleanup over `group`, no-op when labels are distinct.
+    classifier_det.merge_clusters_by_intent(work)
 
     # SPANS / OVERLAP (reads roles + wiring) — per-seam sub-range placements + header peel.
     # Engine-agnostic and additive, so it's part of the classified state for every combo.

@@ -147,7 +147,16 @@ class DiffMode:
         for h in hunks:
             counts[h.role] = counts.get(h.role, 0) + 1
         summary = "  ".join(f"{r}={counts.get(r, 0)}" for r in ("core", "link", "environment", "test", "noise"))
-        print(f"Decomposed {len(hunks)} hunks:  {summary}")
+        fmt = getattr(args, "format", "html")
+        text_fmt = fmt in ("llm", "ascii")
+        # Text formats are the payload (a skill captures stdout) — so the status line goes to stderr.
+        print(f"Decomposed {len(hunks)} hunks:  {summary}", file=sys.stderr if text_fmt else sys.stdout)
+
+        if text_fmt:
+            from src.diff import report_text
+            sys.stdout.write(report_text.render(hunks, style=fmt, repo=args.repo,
+                                                blast_radius=getattr(args, "blast_radius", False)))
+            return 0
 
         if args.emit_seams:
             # Native-rendering surface (VS Code extension): structured seam data, no HTML.

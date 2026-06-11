@@ -432,6 +432,34 @@ def _aggregate_warnings(kinds: dict[str, int]) -> list[dict]:
     return out
 
 
+def context_maps(hunks: list[Hunk], repo: str | None = None,
+                 blast_radius: bool = False) -> tuple[dict, dict, dict, dict, dict]:
+    """The per-hunk codebase-context overlays shared by every consumer (emit_seams_json,
+    the text renderers): (confidence, external-coupling roots, external refs, A→B rewire,
+    blast-radius consumers). Keyed by hunk id. Pure read over the classified hunks + repo.
+
+      - conf  : self-consistency confidence (split vote → "uncertain").
+      - ext   : module ROOTS a hunk wires to OUTSIDE the diff — only for UNWIRED link/env
+                hunks (so a blank "unwired link" reads as "→ @coss/ui", the §I boundary).
+      - refs  : the {symbol,source} pairs behind `ext` (for Layer-2 resolution).
+      - rewire: the crisp A→B swap read from the hunk's own -/+ lines (showToast→toastManager).
+      - cons  : who OUTSIDE the diff imports a symbol this hunk defines (needs repo + blast_radius)."""
+    from .symbol_edges import external_coupling, external_refs, rewire_pairs
+    conf = {h.id: round(h.role_confidence, 2) for h in hunks}
+    _ext_all = external_coupling(hunks)
+    _refs_all = external_refs(hunks)
+    _relevant = {h.id for h in hunks
+                 if h.role in ("link", "environment") and not h.wires and _ext_all.get(h.id)}
+    ext = {hid: _ext_all[hid] for hid in _relevant}            # roots, for the label
+    refs = {hid: _refs_all.get(hid, []) for hid in _relevant}  # {symbol,source}, for Layer 2 resolve
+    rewire = {hid: r for hid, r in rewire_pairs(hunks).items() if r["removed"] and r["added"]}
+    cons: dict = {}
+    if blast_radius and repo:
+        from .blast_radius import consumers_for
+        cons = consumers_for(hunks, repo)
+    return conf, ext, refs, rewire, cons
+
+
 def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
                     blast_radius: bool = False) -> dict:
     """Structured seam data for the VS Code extension (the native-rendering surface).
@@ -446,31 +474,11 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
     `blast_radius` (needs `repo`): also attach each hunk's `consumers` — who, OUTSIDE the
     diff, imports a symbol this hunk defines (resolved/suggested). Additive; the field is
     omitted entirely when off so the existing contract is unchanged."""
-    from .symbol_edges import external_coupling, external_refs, rewire_pairs
-    cons = {}
-    if blast_radius and repo:
-        from .blast_radius import consumers_for
-        cons = consumers_for(hunks, repo)
     clusters, _ = _build_clusters(hunks, repo)
-    # Per-hunk self-consistency confidence (share of votes agreeing on the shown
-    # role). The extension marks a hunk whose role vote was SPLIT as uncertain, so
-    # roles near the ~0.8 ceiling read as honest "maybe core/link", not as fact.
-    conf = {h.id: round(h.role_confidence, 2) for h in hunks}
-    # External coupling: module(s) a hunk wires to that live OUTSIDE the diff (an
-    # imported symbol defined nowhere in the change). Surfaced ONLY for UNWIRED
-    # link/environment hunks, so an otherwise-blank "unwired link" reads as
-    # "→ @coss/ui" — the §I "diff is not the codebase" boundary made legible. A
-    # hunk already wired to an in-diff core doesn't need it (and would just be noise).
-    _ext_all = external_coupling(hunks)
-    _refs_all = external_refs(hunks)
-    _relevant = {h.id for h in hunks
-                 if h.role in ("link", "environment") and not h.wires and _ext_all.get(h.id)}
-    ext = {hid: _ext_all[hid] for hid in _relevant}            # roots, for the label
-    refs = {hid: _refs_all.get(hid, []) for hid in _relevant}  # {symbol,source}, for Layer 2 resolve
-    # A->B rewire (Layer 1): the §I "re-routes A->B" swap read from the hunk's own
-    # -/+ lines (showToast -> toastManager). Only the crisp swaps survive; omitted
-    # when absent so the contract stays lean.
-    rewire = {hid: r for hid, r in rewire_pairs(hunks).items() if r["removed"] and r["added"]}
+    conf, ext, refs, rewire, cons = context_maps(hunks, repo, blast_radius)
+    # The faint (LLM-only, ungrounded) subset of each hunk's wiring — the extension renders these
+    # dimmed/dashed so implicit couplings read as "unverified", not as hard wires.
+    sugg = {h.id: list(h.suggested_wires) for h in hunks if getattr(h, "suggested_wires", None)}
 
     def _hunk(b: dict) -> dict:
         d = {"id": b["hid"], "file": b["file"], "start": b["start"],
@@ -481,6 +489,8 @@ def emit_seams_json(hunks: list[Hunk], repo: str | None = None,
              "rewire": rewire.get(b["hid"])}
         if cons:
             d["consumers"] = cons.get(b["hid"], [])
+        if b["hid"] in sugg:
+            d["suggestedWires"] = sugg[b["hid"]]
         return d
 
     out_clusters = []

@@ -195,6 +195,27 @@ def reconcile_wiring(work: list[Hunk], facts: dict[str, HunkFacts],
     return residual
 
 
+def grounded_prune(wires: set[str], grounded: set[str],
+                   gate: int = _RECONCILE_GATE) -> tuple[set[str], set[str]]:
+    """Adaptive over-wire reconcile for the HYBRID path (the det path has its own `reconcile_wiring`;
+    the hybrid path previously did none → it hairballed). Per node:
+
+      - within `gate` wires → KEEP everything, so the LLM's implicit/border couplings survive
+        (those ungrounded-but-real edges are the whole reason to run the LLM);
+      - OVER `gate` wires → drop the UNGROUNDED (LLM-only/topical) edges, keeping the grounded ones
+        (`grounded` = symbol-floor ∪ det-owned ∪ resolver-confirmed), so a saturated hub collapses
+        to what's actually verifiable;
+      - over `gate` but NO grounded edge at all → a legitimate barrel/header HUB (or pure topical):
+        left intact, never emptied (mirrors `reconcile_wiring`'s hub protection).
+
+    Returns (kept, suggested) where `suggested` = the surviving UNGROUNDED edges — stamp those LLM /
+    render faint ("the model thinks these couple — unverified"), so recall stays but honesty does too."""
+    kept = set(wires)
+    if len(kept) > gate and (kept & grounded):
+        kept &= grounded
+    return kept, (kept - grounded)
+
+
 _SECTION_DEF = re.compile(
     r"\b(?:function|class|interface|enum|const|let|var|val|def|fun)\s+([A-Za-z_]\w*)")
 
@@ -339,6 +360,7 @@ def assign_wiring(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:
             h.resolved_wires = sorted(rwires)
             h.seam = ""
             h.seam_label = ""
+        h.suggested_wires = []      # set by the hybrid per-node prune (engine); det wiring grounds all
         h.spans = []
 
 
@@ -435,6 +457,31 @@ def apply_seam_groups(work: list[Hunk], labels: dict[str, str],
     for h in work:
         if h.role != "core" and h.wires:
             h.wires = sorted({remap.get(w, w) for w in h.wires})
+            if h.suggested_wires:        # keep the faint/ungrounded subset in the same seam-id space
+                h.suggested_wires = sorted({remap.get(w, w) for w in h.suggested_wires})
+
+
+def merge_clusters_by_intent(work: list[Hunk]) -> None:
+    """Collapse clusters that share an IDENTICAL intent label into one. The LLM cluster pass often
+    emits several single-hunk clusters with the same label (one 'Update global styles' per CSS
+    hunk, one 'Update dependencies' per package.json line) — same product intent should read as ONE
+    cluster, not a wall of repeated headings. Keyed on the normalised (case/space-folded) label; the
+    first-appearing group id wins, so cluster order is preserved. No-op when labels are all distinct,
+    and empty-intent groups are left alone. A post-pass over `group` only — seams/wiring untouched."""
+    rep: dict[str, str] = {}            # normalised intent -> representative group id (first seen)
+    remap: dict[str, str] = {}
+    for h in work:
+        g = h.group
+        if not g or g in remap:
+            continue
+        key = (h.intent or "").strip().lower()
+        if not key:
+            remap[g] = g
+            continue
+        remap[g] = rep.setdefault(key, g)
+    for h in work:
+        if h.group:
+            h.group = remap.get(h.group, h.group)
 
 
 def assign_clusters(work: list[Hunk], facts: dict[str, HunkFacts]) -> None:

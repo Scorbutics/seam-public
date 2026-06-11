@@ -99,6 +99,10 @@ class Hunk:
     # Subset of `wires` drawn from a REAL resolved import (ResolvedFactsProvider), not the
     # in-diff shared-symbol heuristic. `graph_ir.from_hunks` stamps these RESOLVED_FULL (the
     # codebase confirms the edge) vs HEUR for the rest. Empty unless --resolver + --repo are set.
+    suggested_wires: list[str] = field(default_factory=list)
+    # Subset of `wires` the LLM drew but NOTHING grounds (no shared symbol / not resolver-confirmed)
+    # — an implicit/topical coupling kept on a SPARSE node (the hybrid per-node prune drops these on
+    # over-wired nodes). Rendered FAINT / stamped LLM: "the model thinks these couple — unverified".
 
     def header_line(self) -> str:
         """First line of the hunk (the @@ -.. +.. @@ marker)."""

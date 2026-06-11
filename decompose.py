@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
                          "record it as a SUGGESTED-crossing blind spot (an assumption, not resolved).")
     ap.add_argument("--repo", default=".", help="repo dir for --git (default: .)")
     ap.add_argument("-o", "--out", default="report.html", help="output HTML path")
+    ap.add_argument("--format", choices=("html", "llm", "ascii"), default="html",
+                    help="DIFF mode output: 'html' (default, the report); 'llm' (markdown for "
+                         "feeding a model — printed to stdout, skips HTML); 'ascii' (a box-drawing "
+                         "seam tree for the terminal — stdout). Pair with --blast-radius for the "
+                         "codebase-context (consumers outside the diff).")
     ap.add_argument("--dump-classified", metavar="JSON",
                     help="after classifying, also write the labeled hunks to JSON so the "
                          "report can later be regenerated with --from-classified (no LLM)")
