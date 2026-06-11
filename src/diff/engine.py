@@ -23,6 +23,8 @@ Passes run in DEPENDENCY ORDER — roles, then wiring (reads roles), then cluste
 """
 from __future__ import annotations
 
+from src.core import progress
+
 from . import classifier, classifier_det
 from .facts import FactsProvider, RegexFactsProvider
 from .parser import Hunk
@@ -50,6 +52,7 @@ def classify(
     """Run each pass on its selected engine, in dependency order, mutating `hunks`."""
     # All-LLM → the optimized concurrent path (cluster ∥ roles, then wiring).
     if cluster == roles == wiring == "llm":
+        progress.emit("Classifying roles, seams & intent with the LLM…")
         classifier.classify(hunks, model=model, claude_bin=claude_bin,
                             context_window=context_window, role_votes=role_votes,
                             verbose=verbose, debug=debug, debug_path=debug_path)
@@ -65,21 +68,25 @@ def classify(
 
     facts = None
     if any(p in ("det", "hybrid") for p in (cluster, roles, wiring)):
+        progress.emit("Reading code facts…")
         facts = (facts_provider or RegexFactsProvider()).facts(work)
     llm = dict(model=model, claude_bin=claude_bin, verbose=verbose, debug=debug, debug_path=debug_path)
 
     # ROLES
+    progress.emit("Classifying roles with the LLM…" if roles == "llm" else "Classifying roles…")
     if roles == "llm":
         classifier.assign_roles(work, role_votes=role_votes, **llm)
     else:
         classifier_det.assign_roles(work, facts)              # det base
         if roles == "hybrid":
+            progress.emit("Re-judging uncertain roles with the LLM…")
             classifier.reconcile_roles_llm(work, **llm)        # LLM re-judges the uncertain
     # WIRING (reads roles). Seam MERGING is deferred until AFTER clustering: clusters are
     # connected components over the FULL core-level wires, and merging collapses wires onto a
     # representative (which would fragment the cluster graph). So wiring sets core-level wires
     # here; `_seam_merge` (a thunk) is applied post-cluster.
     _seam_merge = None
+    progress.emit("Drawing seams with the LLM…" if wiring in ("llm", "hybrid") else "Wiring seams…")
     if wiring == "llm":
         classifier.assign_wiring(work, **llm)
     else:
@@ -123,6 +130,7 @@ def classify(
                 # sub-intents stay split; same-symbol hunks merge).
                 _seam_merge = lambda: classifier_det.apply_seam_groups(work, labels, groups, facts=facts)
     # CLUSTERS (reads the FULL wiring graph for the deterministic engine; independent for the LLM)
+    progress.emit("Grouping by intent with the LLM…" if cluster in ("llm", "hybrid") else "Grouping by intent…")
     if cluster == "llm":
         classifier.assign_clusters(work, **llm)
     else:
@@ -131,6 +139,7 @@ def classify(
             classifier.label_clusters_llm(work, **llm)         # LLM prose labels over det groups
 
     # SEAM MERGE (after clustering): collapse same-intent cores into multi-core seams.
+    progress.emit("Laying out seams…")
     if _seam_merge is not None:
         _seam_merge()
 

@@ -74,9 +74,11 @@ def auto_orchestrate(repo: str, anchor_file: str, symbol: str, intent: str, *, m
     `max_steps`. Returns (the grown ResolvedGraph, the move history). A move that would add more than
     `_MOVE_CAP` nodes (expanding a widely-used class) is SKIPPED — it floods the footprint instead of
     advancing the answer. Degrades to whatever it has grown if the LLM is unavailable / unusable."""
+    from src.core import progress
     data = import_scan.build_consumers_graph(repo, anchor_file, symbol)
     history: list[dict] = []
-    for _ in range(max_steps):
+    for _step in range(max_steps):
+        progress.emit(f"Growing the footprint with the LLM (step {_step + 1}/{max_steps})…")
         summary = _summary(data)
         try:
             out = llm.run_pass(_step_prompt(intent, summary), model=model, claude_bin=claude_bin,

@@ -18,7 +18,7 @@ class DiffMode:
         return True   # the fallback: --file / --git / --from-classified
 
     def run(self, args) -> int:
-        from src.core import llm as llm_mod
+        from src.core import llm as llm_mod, progress
         llm_mod.reset_usage()        # fresh per-run token/cost tally
         # Install the resolution strategy (det = the built-in floor, no override). Drives
         # --blast-radius and the resolved facts against the real repo. Process-wide; set once.
@@ -45,6 +45,7 @@ class DiffMode:
                 print(f"[decompose] loaded {len(hunks)} pre-classified hunks; skipping classifier")
             source_label = args.from_classified
         else:
+            progress.emit("Reading the diff…")
             try:
                 diff_text = diff_source.get_diff(file=args.file, git=args.git, repo=args.repo)
             except diff_source.DiffSourceError as exc:
@@ -71,6 +72,7 @@ class DiffMode:
                 print(f"Hunks: {args.emit_hunks}")
                 return 0
 
+            progress.emit("Filtering noise…")
             remaining = noise_filter.classify(hunks)
             noise_n = len(hunks) - len(remaining)
             if args.verbose:
@@ -197,6 +199,7 @@ class DiffMode:
         if args.emit_seams:
             # Native-rendering surface (VS Code extension): structured seam data, no HTML.
             # repo lets the renderer resolve local aliases against the actual files.
+            progress.emit("Building seam report…")
             model = seams.emit_seams_json(hunks, repo=args.repo,
                                           blast_radius=getattr(args, "blast_radius", False))
             usage_d = usage.as_dict()

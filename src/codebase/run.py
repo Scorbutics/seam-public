@@ -14,7 +14,7 @@ class CodebaseMode:
         return bool(args.graph or args.scan or args.expand_graph)
 
     def run(self, args) -> int:
-        from src.core import llm as llm_mod
+        from src.core import llm as llm_mod, progress
         llm_mod.reset_usage()        # fresh per-run token/cost tally (refine/relevance/discover/orchestrate)
         if getattr(args, "resolver", "det") != "det":    # install the resolution strategy (det is the default floor)
             from src.codebase import import_scan
@@ -31,6 +31,7 @@ class CodebaseMode:
                 print("error: --expand-graph requires --expand-file and --expand-symbol", file=sys.stderr)
                 return 2
             from src.codebase import expand, import_scan
+            progress.emit("Scanning the dependencies…" if args.down else "Scanning the consumers…")
             try:
                 base = json.loads(Path(args.expand_graph).read_text(encoding="utf-8"))
                 # The expanded node becomes a core either way. UP (default) = consumers (importers +
@@ -101,6 +102,8 @@ class CodebaseMode:
                 except (OSError, ValueError) as exc:
                     print(f"error: could not load attribution: {exc}", file=sys.stderr)
                     return 2
+            progress.emit(f"Scanning consumers of {args.symbol}…" if args.symbol
+                          else f"Scanning module {Path(args.anchor_file).name}…")
             try:
                 # --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites
                 # in one (a class still delegates to method mode internally, using `verified`). Omit

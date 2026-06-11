@@ -634,19 +634,26 @@ def decompose(g: Graph, repo: str | None = None, *, use_llm: bool = False, inten
     (a PROPOSED partition, seeded by the floor; degrades to the floor if no LLM). `intent` (the
     user's question, P1) fuses seam SELECTION into the refine pass — the matching seam is marked
     `selected` so the renderer can focus it (needs use_llm; ignored by the deterministic floor)."""
+    from src.core import progress
+    progress.emit("Classifying roles & grouping…")
     assign_roles(g)
     assign_clusters(g)
     if repo:
+        progress.emit("Detecting hidden couplings…")
         detect_dynamic_import_blindspots(g, repo)
         detect_subcores(g, repo)
         detect_contract(g, repo)
         detect_consumer_feeds(g, repo)          # A2: complete each prop thread with its feeders
+    progress.emit("Partitioning into seams…")
     seams = assign_intent_seams(g)              # F2: the deterministic intent floor (proposed)
     if use_llm:                                 # F4: the LLM refines/names the partition (proposed)
+        progress.emit("Refining seams with the LLM…")
         seams = refine_seams_llm(g, seams, intent=intent, model=model, claude_bin=claude_bin)
         if intent:                              # F5: mark-relevance — dim incidental wiring (additive)
+            progress.emit("Marking relevance with the LLM…")
             mark_relevance_llm(g, intent, model=model, claude_bin=claude_bin)
     seams = _extract_suggested_seams(g, seams)  # F6: a crossing (string-dispatch/assumed) → its OWN seam
+    progress.emit("Checking well-formedness…")
     health = wellformedness(g)
     return emit_seams(g, health, seams)
 

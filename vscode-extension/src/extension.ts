@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { execFile } from "child_process";
+import { execFile, spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
@@ -533,6 +533,39 @@ function execFileP(file: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
+// Marker the Python pipeline writes to stderr at each phase boundary (src/core/progress.py).
+// A long decompose spends ~2 min inside two LLM passes with no output, so we stream stderr,
+// strip this prefix, and surface the message live in the progress notification.
+const PROGRESS_PREFIX = "@@SEAM_PROGRESS@@";
+
+// Like execFileP but spawns so stderr can be read live: each PROGRESS_PREFIX line is handed to
+// `onProgress` as the next phase message. Still buffers stderr for the error message on failure.
+function runPy(file: string, args: string[], cwd: string,
+              onProgress?: (message: string) => void): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(file, args, { cwd });
+    let stderr = "";
+    let buf = "";
+    child.stdout.on("data", () => { /* drain (output is a tiny "Seams: path" line) */ });
+    child.stderr.on("data", (d: Buffer) => {
+      const text = d.toString();
+      stderr += text;
+      buf += text;
+      for (let nl = buf.indexOf("\n"); nl >= 0; nl = buf.indexOf("\n")) {
+        const line = buf.slice(0, nl);
+        buf = buf.slice(nl + 1);
+        const i = line.indexOf(PROGRESS_PREFIX);
+        if (i >= 0) onProgress?.(line.slice(i + PROGRESS_PREFIX.length).trim());
+      }
+    });
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(stderr.trim() || `decompose.py exited with code ${code}`));
+    });
+  });
+}
+
 // Engine "ast" (deterministic + VS Code AST facts): ask Python for the hunk skeleton
 // (so facts are keyed by the SAME ids), compute defines/enclosing from the language
 // server, write the partial facts payload, and return its path (for `--facts`). Returns
@@ -582,7 +615,7 @@ async function runReview(range: string) {
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…` },
-    async () => {
+    async (progress) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       let factsPath: string | undefined;
       try {
@@ -597,6 +630,7 @@ async function runReview(range: string) {
           const det = engine === "det";
           extra.push("--cluster", det ? "det" : "llm", "--roles", "det",
                      "--wiring", det ? "det" : "hybrid");
+          progress.report({ message: "Computing code facts…" });
           factsPath = await buildAstFacts(py, tool, range);
           if (factsPath) extra.push("--facts", factsPath);
         }
@@ -604,7 +638,7 @@ async function runReview(range: string) {
         if (blastRadius) extra.push("--blast-radius");
         const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
                       "--emit-seams", out, ...extra];
-        await execFileP(py, args, tool);
+        await runPy(py, args, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
@@ -654,13 +688,14 @@ function codebaseEnv(): { tool: string; py: string } | null {
 async function runScan(tool: string, py: string, scanArgs: string[], title: string, range: string) {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title },
-    async () => {
+    async (progress) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        await execFileP(py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
-                             ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out], tool);
+        await runPy(py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
+                         ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out],
+                    tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;                          // fresh analysis = new session to grow from
         const ts = Date.now();
@@ -717,7 +752,7 @@ async function runScanClass(tool: string, py: string,
                             anchor: { symbol: string; file: string }, depth: number, intent?: string) {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: resolving methods of ${anchor.symbol}…` },
-    async () => {
+    async (progress) => {
       const cand = path.join(tool, `.seam-cand-${Date.now()}.json`);
       const attr = path.join(tool, `.seam-attr-${Date.now()}.json`);
       const out = path.join(tool, `.seam-${Date.now()}.json`);
@@ -726,9 +761,11 @@ async function runScanClass(tool: string, py: string,
         const base = [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
                       "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
+        progress.report({ message: "Finding method call-sites…" });
         await execFileP(py, [...base, "--emit-candidates", cand], tool);
         const candidates = JSON.parse(fs.readFileSync(cand, "utf-8")) as MethodCandidate[];
         // phase 2 — LSP verify
+        progress.report({ message: "Verifying call-sites with the language server…" });
         const verified = await verifyMethodAttribution(new VSCodeSymbolResolver(), candidates, anchor.file, repoRoot);
         const scanArgs = ["--depth", String(depth)];
         if (intent) scanArgs.push("--intent", intent);
@@ -739,7 +776,8 @@ async function runScanClass(tool: string, py: string,
         }
         // phase 3 — decompose with the verified (or heuristic) attribution
         const graph = path.join(tool, SESSION_GRAPH);
-        await execFileP(py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out], tool);
+        await runPy(py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out],
+                    tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;
         const ts = Date.now();
@@ -797,7 +835,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
   const dir = down ? "dependencies of" : "consumers of";
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…` },
-    async () => {
+    async (progress) => {
       const out = path.join(env.tool, `.seam-${Date.now()}.json`);
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
@@ -808,7 +846,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
         if (down) args.push("--down");
         if (crossNote) args.push("--cross-from", crossNote);
         if (sessionIntent) args.push("--intent", sessionIntent);
-        await execFileP(env.py, args, env.tool);
+        await runPy(env.py, args, env.tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         const range = `expanded ${down ? "↓" : "+"}${symbol}`;
