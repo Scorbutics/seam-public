@@ -72,15 +72,27 @@ the det git-range oracle.
 faithful port of Python's; the inject path proves everything around it). Like the det extension,
 confirm with one live F5 run.
 
+## ✅ Full LLM parity (Phase 4) — `--classifier llm` + `--classifier hybrid` done
+
+The whole of `classifier.py` is ported. `classifier_llm.ts`: Pass B (`build_role_prompt`,
+`_parse_spans`/`_sync_flat_from_spans`, `aggregate_role_votes` = the 5-vote medoid, `assign_roles`),
+Pass C (`build_wire_prompt`, `run_wire_pass`, `assign_wiring`), `reconcile_wires`,
+`merge_wiring_only_clusters`, the hybrid helpers (`reconcile_roles_llm`, `label_clusters_llm`), and
+`classify_all_llm`. `engine.ts` runs the full **cluster × roles × wiring** matrix (det|llm|hybrid
+each) + the all-LLM shortcut. **Gate:** role + wire prompt byte-parity; `--classifier llm` AND
+`hybrid` inject-seams parity (7 cases each); `aggregate_role_votes` medoid vs Python on differing
+votes; CLI emit-prompts byte-identical (cluster/role.v1-3/wire). **Live-confirmed:** real-model
+runs of `--classifier llm` (5 calls) and the default hybrid (2 calls).
+
+The extension's `seam.engine` (det | hybrid | llm) now runs entirely on the TS backend.
+
+One deliberate difference: the role votes run **serially** here vs Python's concurrent threads, so
+`--classifier llm` is ~5 sequential calls (the default hybrid is only 2, so unaffected). Making the
+votes concurrent (async spawn instead of `spawnSync`) is a known perf-only follow-up.
+
 ## ⏭️ Next (ordered; oracles already captured in `ts/test/oracle/`)
 
-### Remaining LLM parity (Phase 4) — for `--classifier llm` and `--classifier hybrid`
-- **Pass B (seam+role)** — `_build_prompt` + `_parse_spans` + `assign_roles` with the **5-vote
-  medoid** self-consistency (`_aggregate_role_votes`). Same host-bus gating.
-- **Pass C (wiring)** — `_PROMPT_WIRE` + `_run_wire_pass` + `_reconcile_wires` +
-  `_merge_wiring_only_clusters` (the all-LLM `classify` path).
-- **hybrid roles/cluster** — `reconcile_roles_llm`, `label_clusters_llm`.
-This unlocks `--classifier llm` and `--classifier hybrid` (all-three-hybrid) in the extension.
+### Phase 5 — facts providers (quality of the deterministic roles)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
    `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`
