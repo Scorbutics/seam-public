@@ -39,10 +39,10 @@ flags belong to me?) and `run(args) -> int`. `decompose.py` is just argparse +
 `dispatch([CODEBASE_MODE, DIFF_MODE], args)` — codebase claims `--graph/--scan/--expand-graph`, diff
 is the `--file/--git/--from-classified` fallback. Each mode's pipeline lives in its folder's `run.py`.
 
-The rest of this document details **diff-mode** (§1–§9). Codebase-mode shares `core/graph_ir` (the IR),
-`core/llm`, and `core/treesitter`, but forks role assignment (anchor-relative BFS over a RESOLVED graph,
-not the `HunkFacts` ladder) — see `decomposition-model-and-mvp.md`, `intent-expansion-plan.md`, and
-`resolver-lsp-plan.md`.
+The rest of this document details **diff-mode** (§1–§9), except **§8.5 (LLM call sites)** which maps
+*both* modes. Codebase-mode shares `core/graph_ir` (the IR), `core/llm`, and `core/treesitter`, but
+forks role assignment (anchor-relative BFS over a RESOLVED graph, not the `HunkFacts` ladder) — see
+`decomposition-model-and-mvp.md`, `intent-expansion-plan.md`, and `resolver-lsp-plan.md`.
 
 ---
 
@@ -184,6 +184,43 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 - **`architecture_test.py`** — the loose-coupling guard (§0): an AST scan asserting `diff/*` and `codebase/*` never import each other and `core/*` imports neither. Fails if a cross-mode coupling creeps back.
 - **codebase-mode** — `codebase_test.py` (anchor-relative roles → seams, end-to-end on a fixture graph), `resolver_test.py` (the Resolver strategy + real-LSP integration, `-m integration`), `import_scan_test.py`, `expand_test.py`, `orchestrate_test.py`, `anchor_rank_test.py`. Integration tests that spin up real language servers are marked `@pytest.mark.integration` and **excluded from the default run** (`pytest.ini`: `addopts = -m "not integration"`) — run them explicitly with `pytest eval/ -m integration`.
 - **`gold/`** — hand-agreed labels (5 cases across C/C++/Kotlin+Ruby/TS+SQL). **`gold_candidates/`** — meaning-based candidates (LLM-first wiring dumps incl. cal.com) pending audit/promotion; the current wiring gold is symbol-derived and over-dense (private-app-boosters 41 edges/24 hunks), so it under-scores meaning-based wiring (rework in progress).
+
+---
+
+## 8.5 LLM call sites (both modes) — the complete map
+
+Every LLM call in the codebase funnels through `core/llm`: `resolve_backend()` (picks claude→copilot, or `("host","")` when a `HostBus` is installed) → `_run_pass()` (one pass, one retry, JSON-array parse) → `_run_backend()` → `_run_claude()` / `_run_copilot()` (the `subprocess.run` at `core/llm.py:~218`). Diff-mode passes call `_run_pass` directly (via `resolve_backend` per pass); codebase-mode passes call the thin `llm.run_pass(prompt, tag=…)` facade (`core/llm.py:349`) which wraps the same two. **One interception point covers everything** — installing a `HostBus` (`set_host_bus`) routes *all* of these through the running session / a subagent instead of a subprocess, in **both** modes, with no binary lookup (see `--emit-prompts`/`--inject-llm` and `.claude/skills/seam-review/`).
+
+`thinking` is the per-call `MAX_THINKING_TOKENS` budget (0 = off/fast; a positive int caps it; ON is reserved for grouping). Every codebase-mode pass degrades to the deterministic floor on `LLMError`.
+
+### DIFF mode (`src/diff/`)
+
+Passes run in order **roles → wiring → clusters → spans** (`engine.classify`). Default engine = `cluster=llm roles=det wiring=hybrid` (what the VS Code extension sends).
+
+| # | pass (function) | site | `tag` | thinking | in the **default**? |
+|---|---|---|---|---|---|
+| 1 | **wiring** reconcile — `classifier.reconcile_llm` | `classifier.py:715` | `reconcile` | 0 | ✅ **yes** (wiring=hybrid; only if ≥1 core) |
+| 2 | **cluster** — `classifier.assign_clusters` | `classifier.py:557` | `cluster` | 2048 | ✅ **yes** (cluster=llm) |
+| 3 | **roles** voting — `classifier.assign_roles` | `classifier.py:587` | `role` / `role.vN` | 0 | ❌ only if `roles=llm` (N-vote self-consistency) |
+| 4 | **roles** reconcile — `classifier.reconcile_roles_llm` | `classifier.py:755` | `reconcile-roles` | 0 | ❌ only if `roles=hybrid` (re-judges `<0.6`-confidence) |
+| 5 | **wiring** Pass C — `classifier.assign_wiring`→`_run_wire_pass` | `classifier.py:480` | `wire` | 0 | ❌ only if `wiring=llm` |
+| 6 | **cluster** labels — `classifier.label_clusters_llm` | `classifier.py:791` | `label-clusters` | 2048 | ❌ only if `cluster=hybrid` |
+| — | **all-LLM fast path** — `classifier.classify` (cluster ∥ roles, then wire) | `classifier.py:~848` | `cluster`,`role`,`wire` | mixed | ❌ only if `cluster=roles=wiring=llm` |
+
+So the **default diff run makes exactly 2 LLM calls**: `reconcile` then `cluster`. `roles`/spans are deterministic.
+
+### CODEBASE mode (`src/codebase/`)
+
+Default = the **deterministic floor** (anchor → footprint → intent floor); the LLM is off unless opted in. All calls are `thinking=0` via `llm.run_pass`.
+
+| pass (function) | site | `tag` | gated by | what it does |
+|---|---|---|---|---|
+| **seam refine** — `codebase.refine_seams_llm` | `codebase.py:364` | `seam-refine` | `use_llm` (`--classifier llm\|hybrid`) | F4: refines the deterministic floor into named technical-intent seams (a *proposed* partition over verified carriers; never invents an edge) |
+| **mark relevance** — `codebase.mark_relevance_llm` | `codebase.py:432` | `relevance` | `use_llm` **and** `--intent` | F5: tags each link on-the-answer-path vs incidental relative to the question (additive — dims, never drops) |
+| **residual discovery** — `llm_discovery.discover` | `llm_discovery.py:81` | `discover` | DOWN-expansion tier-3 path | proposes residual couplings the deterministic scan missed → SUGGESTED edges |
+| **auto-orchestrate** — `orchestrate.auto_orchestrate` | `orchestrate.py:82` | `orchestrate` | `--auto` (needs `--symbol`+`--intent`) | P5 loop (≤ `--max-steps`): the LLM picks the next node + direction to grow the footprint toward the intent |
+
+**The codebase invariant (`core/llm` docstring):** the LLM here only produces a *proposed partition / labels / suggestions* over **resolved** carriers — it never finds an atom or an edge (those are deterministically resolved), so a mis-frame can't make the map lie.
 
 ---
 
