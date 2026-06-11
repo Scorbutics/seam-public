@@ -208,6 +208,27 @@ export function new_side_lines(hunk: Hunk): Map<number, number | null> {
   return out;
 }
 
+const _HUNK_HEADER = /@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/;
+
+// (start, end_exclusive, {lineno: added_text}) over NEW-side line numbers. null for a
+// binary/contentless placeholder. Shared by the --emit-hunks skeleton.
+export function changed_newside(hunk: Hunk): [number, number, Map<number, string>] | null {
+  const lines = hunk.text.split("\n");
+  if (!lines.length) return null;
+  const m = lines[0].match(_HUNK_HEADER);
+  if (!m) return null;
+  const start = parseInt(m[1], 10);
+  const count = m[2] ? parseInt(m[2], 10) : 1;
+  const added = new Map<number, string>();
+  let ln = start;
+  for (const raw of lines.slice(1)) {
+    if (raw.startsWith("+") && !raw.startsWith("+++")) { added.set(ln, raw.slice(1)); ln += 1; }
+    else if (raw.startsWith("-") && !raw.startsWith("---")) { /* removed */ }
+    else ln += 1;
+  }
+  return [start, start + count, added];
+}
+
 // --- providers ---------------------------------------------------------------
 export interface FactsProvider {
   facts(hunks: Hunk[]): Map<string, HunkFacts>;
