@@ -489,6 +489,15 @@ function anchorRankInvocation(tool: string, py: string, args: string[]): [string
     ? [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]]
     : [py, ["-m", "src.codebase.anchor_rank", ...args]];
 }
+// decompose (codebase mode) invocation for the active backend: bun + the TS CLI, or python +
+// decompose.py. `args` are the CLI FLAGS (everything after the entry). Both entries take the same
+// flags verbatim (the TS CLI is a byte-for-byte port), so callers build one flag list.
+function decomposeInvocation(tool: string, py: string, args: string[]): [string, string[]] {
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  return usingTs
+    ? [bunPath(), [tsCliPath(tool), ...args]]
+    : [py, [path.join(tool, "decompose.py"), ...args]];
+}
 
 async function reviewCommit() {
   const ref = await vscode.window.showInputBox({
@@ -767,12 +776,10 @@ async function runScan(tool: string, py: string, scanArgs: string[], title: stri
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
-        // TS backend: the deterministic floor (the LLM intent-refine pass is not ported for codebase
-        // mode yet), via bun + the TS CLI. Python backend: decompose.py with the chosen engine.
-        const [bin, base] = usingTs
-          ? [bunPath(), [tsCliPath(tool), "--scan", "--repo", repoRoot, ...scanArgs, "--emit-graph", graph, "--emit-seams", out]]
-          : [py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]];
+        // Both backends take the same flags (the TS CLI is a byte-for-byte port and now implements
+        // the LLM intent-refine pass for codebase mode), so --classifier applies to either.
+        const [bin, base] = decomposeInvocation(tool, py,
+          ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
         await runPy(bin, base, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;                          // fresh analysis = new session to grow from
@@ -811,11 +818,10 @@ async function analyzeCodebase() {
   // depth 2 (default) adds the environment ripple = the boundary frontier (consumers-of-consumers).
   sessionIntent = "";                      // a cursor-anchored analysis has no question to focus on
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
-  if (anchor.kind === "class" && !usingTs) {
+  if (anchor.kind === "class") {
     // A class anchor splits by METHOD: the LSP verifies which method each consumer calls (the
-    // precision path), with the tree-sitter heuristic as the degrade fallback. (Python backend; the
-    // TS backend uses the tree-sitter instance-aware heuristic directly via the plain --scan path.)
+    // precision path), with the tree-sitter heuristic as the degrade fallback. Both backends emit
+    // candidates (--emit-candidates) and rebuild with the verified attribution (--attribution).
     await runScanClass(env.tool, env.py, anchor, depth);
   } else {
     await runScan(env.tool, env.py,
@@ -838,11 +844,10 @@ async function runScanClass(tool: string, py: string,
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        const base = [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
-                      "--anchor-file", anchor.file, "--symbol", anchor.symbol];
+        const base = ["--scan", "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
         progress.report({ message: "Finding method call-sites…" });
-        await execFileP(py, [...base, "--emit-candidates", cand], tool);
+        await execFileP(...decomposeInvocation(tool, py, [...base, "--emit-candidates", cand]), tool);
         const candidates = JSON.parse(fs.readFileSync(cand, "utf-8")) as MethodCandidate[];
         // phase 2 — LSP verify
         progress.report({ message: "Verifying call-sites with the language server…" });
@@ -856,8 +861,8 @@ async function runScanClass(tool: string, py: string,
         }
         // phase 3 — decompose with the verified (or heuristic) attribution
         const graph = path.join(tool, SESSION_GRAPH);
-        await runPy(py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out],
-                    tool, (m) => progress.report({ message: m }));
+        const [bin, args] = decomposeInvocation(tool, py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
+        await runPy(bin, args, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;
         const ts = Date.now();
@@ -920,13 +925,14 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         // read the session graph AND write the grown one back to it (decompose loads before writing)
-        const args = [path.join(env.tool, "decompose.py"), "--expand-graph", sessionGraph!, "--repo", repoRoot,
-                      "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
-                      "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
-        if (down) args.push("--down");
-        if (crossNote) args.push("--cross-from", crossNote);
-        if (sessionIntent) args.push("--intent", sessionIntent);
-        await runPy(env.py, args, env.tool, (m) => progress.report({ message: m }));
+        const flags = ["--expand-graph", sessionGraph!, "--repo", repoRoot,
+                       "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
+                       "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
+        if (down) flags.push("--down");
+        if (crossNote) flags.push("--cross-from", crossNote);
+        if (sessionIntent) flags.push("--intent", sessionIntent);
+        const [bin, args] = decomposeInvocation(env.tool, env.py, flags);
+        await runPy(bin, args, env.tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         const range = `expanded ${down ? "↓" : "+"}${symbol}`;
