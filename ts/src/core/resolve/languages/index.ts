@@ -42,3 +42,15 @@ export function parse_imports(file: string, text: string): ImportRef[] {
   const p = provider_for(file);
   return p?.imports ? p.imports(text) : [];
 }
+
+// True if `file`'s basename marks a module ENTRY in ANY language (TS index.*, Python __init__.py).
+export function is_module_entry(file: string): boolean {
+  const base = file.split("/").pop() ?? file;
+  return PROVIDERS.some((p) => p.moduleEntry && p.moduleEntry.test(base));
+}
+
+// The MAIN entrypoint line inside a module entry, via the file's language heuristic. 0 if none.
+export function entrypoint_line(file: string, ctx: any): number {
+  const p = provider_for(file);
+  return (p?.entrypoint ? p.entrypoint(ctx) : null) ?? 0;
+}

@@ -49,6 +49,12 @@ describe("import-scan vs Python", () => {
     expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
   });
 
+  test("DOWN with tier-2 string-dispatch coupling", async () => {
+    const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_dispatch.json"), "utf-8"));
+    const g = await build_dependency_graph(join(__dir, "fixtures", "dispatch-repo"), "src/dispatcher.ts", "dispatcher");
+    expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
+  });
+
   // End-to-end: scan → from_resolved_graph → decompose. The oracle is pinned with PYTHONHASHSEED=0
   // because the Python codebase decompose has set-order nondeterminism on complexity-tied carriers
   // (charge/refund here); the TS port is fully deterministic and matches the stable behaviour.

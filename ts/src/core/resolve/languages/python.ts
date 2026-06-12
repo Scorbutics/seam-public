@@ -35,6 +35,18 @@ function imports(text: string): ImportRef[] {
   return parse_imports(text).map(([name, line, col]) => ({ name, local: name, line, col, source: null }));
 }
 
+// Main entry inside a Python module: `if __name__ == '__main__':` → a top-level call → else the
+// first top-level statement that isn't a comment/import.
+function _entrypoint(ctx: any): number | null {
+  const top = ctx.children(ctx.root);
+  const main = top.find((n: any) => n.type === "if_statement" && ctx.text(n).slice(0, 80).includes("__main__"));
+  if (main) return ctx.span(main)[0];
+  const call = top.find((n: any) => n.type === "expression_statement" && ctx.children(n).length && ctx.children(n)[0].type.includes("call"));
+  if (call) return ctx.span(call)[0];
+  const real = top.find((n: any) => !["comment", "import_statement", "import_from_statement", "future_import_statement"].includes(n.type));
+  return real ? ctx.span(real)[0] : null;
+}
+
 export const PROVIDER: LanguageProvider = {
-  name: "python", extensions: [".py", ".pyi"], imports, moduleEntry: /^__init__\.py$/,
+  name: "python", extensions: [".py", ".pyi"], imports, moduleEntry: /^__init__\.py$/, entrypoint: _entrypoint,
 };

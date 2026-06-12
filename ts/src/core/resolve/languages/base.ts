@@ -25,4 +25,6 @@ export interface LanguageProvider {
   // the file's import statements → ImportRef[].
   imports?: (text: string) => ImportRef[];
   moduleEntry?: RegExp;  // basename regex marking a module entry (TS index.*, Python __init__.py)
+  // the MAIN-entry line inside a module entry (ctx = an atoms Ctx, duck-typed). null ⇒ can't decide.
+  entrypoint?: (ctx: any) => number | null;
 }

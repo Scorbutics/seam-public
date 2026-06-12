@@ -1,0 +1,56 @@
+{
+  "anchor": {
+    "file": "src/dispatcher.ts",
+    "id": "n1",
+    "range": [
+      0,
+      3
+    ],
+    "symbol": "dispatcher"
+  },
+  "anchors": [
+    "n1"
+  ],
+  "blindspots": [],
+  "complete": true,
+  "depth": 1,
+  "edges": [
+    {
+      "from": "n1",
+      "kind": "dispatch",
+      "line": 1,
+      "provenance": "RESOLVED_PARTIAL",
+      "to": "d1"
+    }
+  ],
+  "language": "typescript",
+  "nodes": [
+    {
+      "complexity": 4,
+      "enclosing": "",
+      "file": "src/dispatcher.ts",
+      "id": "n1",
+      "kind": "function",
+      "range": [
+        0,
+        3
+      ],
+      "symbol": "dispatcher"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/handlers/process-payment/index.ts",
+      "id": "d1",
+      "kind": "module",
+      "range": [
+        1,
+        1
+      ],
+      "symbol": "process-payment"
+    }
+  ],
+  "resolutionQuality": "FULL",
+  "unresolved": [],
+  "version": 1
+}
