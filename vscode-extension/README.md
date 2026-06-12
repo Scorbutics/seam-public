@@ -38,17 +38,27 @@ labelling each seam with that intent. That reasoning is done by an LLM, so an LL
 **required** for the real experience. Seam does **not** ship a model or take an API key — it borrows a
 CLI you already have. Provide **one** of:
 
-- **Claude Code** — the [Claude Code](https://www.anthropic.com/claude-code) VS Code extension (its
-  bundled `claude` binary is detected automatically) **or** the `claude` CLI on your `PATH`
-  (or `CLAUDE_BIN`). *Recommended — zero extra install if you already use Claude Code.*
-- **GitHub Copilot CLI** — the standalone `copilot` binary on your `PATH` (or `COPILOT_BIN`). Note:
-  the Copilot *VS Code extension* alone is not enough — it ships a completions language server, not a
-  promptable CLI. (A no-install path via VS Code's Language Model API is planned.)
+- **GitHub Copilot via VS Code** *(no install)* — set **`seam.llmBackend`** to `copilot` and Seam
+  borrows a chat model through VS Code's Language Model API (the same models Copilot Chat uses). No CLI,
+  no API key; VS Code asks once for consent. Picks the largest-context model available. *Easiest if you
+  already have Copilot.*
+- **Claude Code** *(`seam.llmBackend: cli`, the default)* — the
+  [Claude Code](https://www.anthropic.com/claude-code) VS Code extension (its bundled `claude` binary is
+  detected automatically) **or** the `claude` CLI on your `PATH` (or `CLAUDE_BIN`). Largest context
+  (≈200K), so best for very big diffs.
+- **GitHub Copilot CLI** *(`seam.llmBackend: cli`)* — the standalone `copilot` binary on your `PATH`
+  (or `COPILOT_BIN`). Note: the Copilot *VS Code extension* alone only satisfies the `copilot` backend
+  above, not this — as a CLI it ships a completions language server, not a promptable CLI.
 
 You must be signed in to whichever you choose; calls are metered against that subscription/plan.
 
 Then set **`seam.engine`** (Settings → search "Seam") to `hybrid` (LLM intent + deterministic
 roles/wiring — recommended) or `llm` (all passes by the LLM).
+
+> **Big diffs on the `copilot` backend:** VS Code models have a per-request input cap (gpt-4o ≈ 64K
+> tokens; a ~280 KB diff is the practical ceiling). Seam picks the largest-context model and pre-checks
+> each pass; if a change still doesn't fit it tells you to narrow the range or switch to `cli` (Claude
+> Code's ≈200K window). The `cli` backend has far more headroom.
 
 > **Offline fallback (`det`):** with no LLM backend, set `seam.engine` to `det` to still get a
 > decomposition — but the seam labels are **structural**, not product-intent, so you lose the core of

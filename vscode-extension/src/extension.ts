@@ -4,6 +4,7 @@ import * as path from "path";
 import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
 import { VSCodeSymbolResolver, anchorSymbolAt, verifyMethodAttribution, MethodCandidate } from "./resolver";
+import * as lm from "./lm";
 
 // --- the JSON contract emitted by the TS CLI `--emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
@@ -708,6 +709,52 @@ function runStreaming(file: string, args: string[], cwd: string,
   });
 }
 
+// One recorded LLM pass from the engine's `--emit-prompts` (see ts/src/core/llm.ts HostBus).
+interface RecordedPass { tag: string; prompt: string; model: string; thinking: number | null; }
+
+// Decompose by serving the engine's LLM passes from VS Code's own language model (the `copilot`
+// backend), instead of shelling a `claude`/`copilot` CLI. Same two-phase host-bus handshake the MCP
+// server uses (mcp/src/sampling.ts): emit-prompts → call the model per pass → inject-llm → emit-seams.
+// `baseArgs` select the input + engine (e.g. --git RANGE --repo R --cluster llm --roles det …) WITHOUT
+// any --emit-prompts/--inject-llm/--emit-seams. Throws an actionable error when no model is available
+// or a single pass exceeds the model's input window (the big-PR ceiling).
+async function decomposeViaVscodeLm(baseArgs: string[], out: string, run: string, cwd: string,
+                                    report: (m: string) => void, token: vscode.CancellationToken): Promise<void> {
+  const stamp = Date.now();
+  const promptsPath = path.join(cwd, `.seam-prompts-${stamp}.json`);
+  const answersPath = path.join(cwd, `.seam-answers-${stamp}.json`);
+  try {
+    report("Preparing LLM passes…");
+    await runStreaming(run, [...baseArgs, "--emit-prompts", promptsPath], cwd);
+    const passes: RecordedPass[] = JSON.parse(fs.readFileSync(promptsPath, "utf-8")).passes ?? [];
+    if (!passes.length) {                       // nothing LLM to serve (e.g. det) — straight through
+      await runStreaming(run, [...baseArgs, "--emit-seams", out], cwd, report);
+      return;
+    }
+    const picked = await lm.selectBestModel();
+    if (!picked)
+      throw new Error("No language model available through VS Code. Enable GitHub Copilot (or another "
+        + "Language Model provider), or set seam.llmBackend to \"cli\" to use a claude/copilot CLI.");
+    report(`Model: ${picked.name} (${(picked.maxInputTokens / 1000).toFixed(0)}K ctx)`);
+    const answers: Record<string, string> = {};
+    for (let i = 0; i < passes.length; i++) {
+      const p = passes[i];
+      const need = await lm.countTokens(picked, p.prompt, token);
+      if (need > picked.maxInputTokens)
+        throw new Error(`This change is too large for ${picked.name}: the “${p.tag}” pass needs `
+          + `~${(need / 1000).toFixed(0)}K tokens but the model allows ${(picked.maxInputTokens / 1000).toFixed(0)}K. `
+          + "Review a smaller range, or set seam.llmBackend=\"cli\" and use Claude Code (≈200K).");
+      report(`LLM pass ${i + 1}/${passes.length}: ${p.tag}…`);
+      answers[p.tag] = await lm.completeText(picked, p.prompt, token);   // sequential: passes can depend
+    }
+    fs.writeFileSync(answersPath, JSON.stringify({ answers }));
+    report("Building seams…");
+    await runStreaming(run, [...baseArgs, "--inject-llm", answersPath, "--emit-seams", out], cwd);
+  } finally {
+    for (const f of [promptsPath, answersPath]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
+  }
+}
+
 // Engine "ast" (deterministic + VS Code AST facts): ask the engine for the hunk skeleton
 // (so facts are keyed by the SAME ids), compute defines/enclosing from the language
 // server, write the partial facts payload, and return its path (for `--facts`). Returns
@@ -748,10 +795,14 @@ async function runReview(range: string) {
   // warm across reviews, so 'auto' (floor + LSP) is the right default here.
   const resolver = vscode.workspace.getConfiguration("seam").get<string>("resolver") || "det";
   const blastRadius = vscode.workspace.getConfiguration("seam").get<boolean>("blastRadius") ?? true;
+  // How LLM passes are served: "cli" (a claude/copilot CLI the engine locates) or "copilot" (borrow a
+  // model through VS Code's Language Model API — no install). Only matters when the engine runs LLM
+  // passes (hybrid/llm); 'det' needs no backend.
+  const backend = vscode.workspace.getConfiguration("seam").get<string>("llmBackend") || "cli";
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…` },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…`, cancellable: true },
+    async (progress, token) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       let factsPath: string | undefined;
       try {
@@ -768,19 +819,25 @@ async function runReview(range: string) {
         }
         // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
         // the headless language server (warm daemon) with the deterministic floor as fallback.
-        const args = [engineEntry("decompose"), "--git", range, "--repo", repoRoot, ...engineArgs,
-                      ...(factsPath ? ["--facts", factsPath] : []),
-                      ...(resolver !== "det" ? ["--resolver", resolver] : []),
-                      ...(blastRadius ? ["--blast-radius"] : []),
-                      "--emit-seams", out];
-        await runStreaming(run, args, tool, (m) => progress.report({ message: m }));
+        const baseArgs = [engineEntry("decompose"), "--git", range, "--repo", repoRoot, ...engineArgs,
+                          ...(factsPath ? ["--facts", factsPath] : []),
+                          ...(resolver !== "det" ? ["--resolver", resolver] : []),
+                          ...(blastRadius ? ["--blast-radius"] : [])];
+        const onProgress = (m: string) => progress.report({ message: m });
+        // 'copilot' backend serves the LLM passes through VS Code's model (two-phase host-bus). With no
+        // LLM passes (det) it falls through to a single emit-seams run, so the gate is engineMode.
+        if (engineMode !== "det" && backend === "copilot")
+          await decomposeViaVscodeLm(baseArgs, out, run, tool, onProgress, token);
+        else
+          await runStreaming(run, [...baseArgs, "--emit-seams", out], tool, onProgress);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+        const via = engineMode !== "det" && backend === "copilot" ? " · via Copilot" : "";
         vscode.window.showInformationMessage(
-          `Seam (${engineMode}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
+          `Seam (${engineMode}${via}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
           `core=amber · link=blue · environment=gray · test=green · noise=faint`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam failed: ${e instanceof Error ? e.message : e}`);

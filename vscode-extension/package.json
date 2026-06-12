@@ -14,7 +14,7 @@
     "url": "https://github.com/Scorbutics/seam/issues"
   },
   "engines": {
-    "vscode": "^1.84.0"
+    "vscode": "^1.90.0"
   },
   "categories": [
     "SCM Providers",
@@ -218,7 +218,20 @@
             "All passes by the LLM. Needs a `claude` CLI."
           ],
           "default": "hybrid",
-          "description": "How to decompose a diff: 'hybrid' (the default — LLM clusters + product-intent labels, with deterministic roles/wiring; needs a `claude` CLI), 'det' (fully offline, no LLM, zero setup — structural labels), or 'llm' (all LLM). Roles (core/link/environment/test/noise) are always deterministic except in 'llm'."
+          "description": "How to decompose a diff: 'hybrid' (the default — LLM clusters + product-intent labels, with deterministic roles/wiring), 'det' (fully offline, no LLM, zero setup — structural labels), or 'llm' (all LLM). The LLM passes run on the backend set by 'seam.llmBackend'. Roles (core/link/environment/test/noise) are always deterministic except in 'llm'."
+        },
+        "seam.llmBackend": {
+          "type": "string",
+          "enum": [
+            "cli",
+            "copilot"
+          ],
+          "enumDescriptions": [
+            "Default. Serve LLM passes via a `claude`/`copilot` CLI the engine locates (the Claude Code extension's bundled binary, `claude`/`copilot` on PATH, or CLAUDE_BIN/COPILOT_BIN).",
+            "Borrow a chat model through VS Code's Language Model API (e.g. GitHub Copilot) — no CLI install and no API key. Picks the largest-context model available; very large diffs may exceed its window (it will tell you to narrow the range or switch to 'cli')."
+          ],
+          "default": "cli",
+          "description": "How LLM passes (in 'hybrid'/'llm') are served: 'cli' (a claude/copilot CLI) or 'copilot' (borrow a model via VS Code's Language Model API — no install). Ignored when seam.engine is 'det'."
         },
         "seam.codebaseDepth": {
           "type": "number",
@@ -277,7 +290,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "@types/vscode": "^1.84.0",
+    "@types/vscode": "^1.90.0",
     "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.28.1",
     "typescript": "^5.4.0"
