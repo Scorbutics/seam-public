@@ -1,0 +1,12 @@
+{
+  "language": "typescript", "resolutionQuality": "FULL", "depth": 1, "complete": true,
+  "nodes": [
+    {"id": "Widget", "symbol": "Widget", "file": "src/Widget.tsx", "range": [0, 8], "kind": "function", "enclosing": "", "complexity": 6},
+    {"id": "App", "symbol": "App", "file": "src/App.tsx", "range": [1, 6], "kind": "function", "enclosing": "", "complexity": 3}
+  ],
+  "edges": [
+    {"from": "App", "to": "Widget", "kind": "call", "provenance": "RESOLVED_FULL", "line": 5}
+  ],
+  "anchor": {"id": "Widget", "symbol": "Widget", "file": "src/Widget.tsx"},
+  "anchors": ["Widget"], "blindspots": [], "unresolved": []
+}

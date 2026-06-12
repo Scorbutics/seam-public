@@ -1,7 +1,7 @@
 // Codebase C2 gate: the deterministic --graph decomposition (from_resolved_graph → decompose →
 // emit_seams) must be byte-identical to Python on a ResolvedGraph fixture (detect_* no-op, no LLM).
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { from_resolved_graph } from "../src/core/graph_ir.js";
@@ -18,11 +18,14 @@ const cases = readdirSync(fixturesDir)
 
 describe("codebase --graph decompose vs Python oracle", () => {
   for (const name of cases) {
-    test(name, () => {
+    test(name, async () => {
       const data = JSON.parse(readFileSync(join(fixturesDir, `${name}-graph.json`), "utf-8"));
-      const oracle = JSON.parse(readFileSync(join(oracleDir, `${name === "codebase" ? "codebase" : name}_seams.json`), "utf-8"));
+      const oracle = JSON.parse(readFileSync(join(oracleDir, `${name}_seams.json`), "utf-8"));
+      // If a <name>-repo fixture exists, run the detect_* passes against it (tree-sitter); else no repo.
+      const repoDir = join(fixturesDir, `${name}-repo`);
+      const repo = existsSync(repoDir) ? repoDir : undefined;
       const g = from_resolved_graph(data);
-      const model = decompose(g, {}); // no repo (detect_* no-op), no LLM — matches the oracle
+      const model = await decompose(g, { repo });
       expect(JSON.parse(JSON.stringify(model))).toEqual(oracle);
     });
   }
