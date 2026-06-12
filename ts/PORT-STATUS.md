@@ -4,7 +4,15 @@ Branch: `port/typescript`. Deterministic-first, test-driven. Each module is driv
 the Python output as a **differential oracle** (`ts/test/oracle/`, regenerated from Python),
 so "ported" here means *verified byte-identical to Python on real diffs*, not just "compiles."
 
-Run: `cd ts && bun install && bun test` (50 tests, all green) · `bun run typecheck` (clean).
+Run: `cd ts && bun install && bun test` (161 pass / 2 gated-skip) · `bun run typecheck` (clean).
+Real-LSP integration tests: `SEAM_LSP_IT=1 bun test test/resolver.test.ts`.
+
+**STATUS: the port is complete.** Diff mode (all engines, facts, renderers, CLI, harness,
+blast-radius) and codebase mode (graph model, decompose, import_scan, LLM passes, anchor_rank,
+expand, orchestrate, string_coupling, llm_discovery, headless LSP) are ported and verified; the
+VS Code extension runs both natively via `seam.backend=ts`. The HTML report is intentionally
+excluded (no longer used). The one documented divergence: diff-mode `--resolver lsp|auto` stays on
+the deterministic floor (the real LSP is active in codebase mode) — see the Headless LSP section.
 
 ## ✅ Done and verified (the whole deterministic classification pipeline)
 
@@ -135,14 +143,23 @@ real model, and the extension runs all of it natively via `seam.backend=ts`.
   three resolution modes (relative / tsconfig alias / package name) with the same-named decoy
   excluded; `--facts-engine resolve` identical.
 
-### Headless LSP (`--resolver lsp|auto`) — deliberately folded into codebase mode
-The floor is the right resolver for diff-mode blast-radius (node_modules/external are correctly
-excluded anyway; the floor covers relative/package/tsconfig). The headless LSP's precision pays off
-in **codebase mode**, and its async client clashes with the synchronous `_resolve` call deep in the
-pipeline — bridging that (worker+Atomics sync shim, or async emit-path refactor) is best done once,
-with codebase mode. Until then `lsp|auto` degrade to the floor (a stderr note), so nothing errors.
+### ✅ Headless LSP (`--resolver lsp|auto`) — ported (C6)
+The full LSP stack is ported under `core/resolve/lsp/`: `client` (generic JSON-RPC over stdio),
+`pool` (one warm server per language+project-root), `resolver` (`LspResolver` go-to-def on the module
+string + `DaemonResolver` persistent-daemon path), `daemon` (unix-socket daemon, idle TTL,
+connect-or-spawn). `ServerSpec` + `bun_x`/`system` + `spec_for_file`/`language_id_for`/`project_root`
+live in `languages/`; TS + Python carry LSP specs (minimal java/kotlin/ruby/c/cpp too).
+`make_resolver lsp|auto` → `DaemonResolver`.
 
-## Codebase mode — in progress
+The async-client-vs-sync-`_resolve` clash was resolved by an **async seam, scoped to codebase mode**:
+the `Resolver` interface is now async, and the codebase scan awaits it via `_resolve_a` /
+`_resolve_import_a`. **Diff mode keeps the SYNC floor-only `_resolve` / `_resolve_import`** — its
+long-standing stance (lsp|auto degrade to the floor for blast-radius, which the floor already serves)
+— so the diff classify/facts pipeline stays synchronous and byte-identical. *Gate:* 8 hermetic tests
+(always run) + 2 gated integration tests (`SEAM_LSP_IT=1`) driving a real typescript-language-server
+(relative-import resolve + node_modules boundary; daemon warm-reuse cold-4s→warm-18ms).
+
+## ✅ Codebase mode — COMPLETE
 
 - **C1** — `graph_ir` codebase model (`from_resolved_graph`, `wellformedness`, Node/Edge/Graph/Provenance). ✅
 - **C2** — `codebase.ts` deterministic decomposition (roles, clusters, intent-seam floor, suggested
@@ -151,44 +168,32 @@ with codebase mode. Until then `lsp|auto` degrade to the floor (a stderr note), 
 - **C3** — `atoms.ts` (web-tree-sitter substrate) + `detect_*` (subcores, contract+feeds, dynamic-
   import blindspots). `decompose` is async (awaits the tree-sitter passes when `--repo` is set).
   Byte-identical to Python on a TSX fixture repo exercising all four. ✅
-- **C4** — `import_scan` front. ⏳ **single-symbol** (`build_resolved_graph`), **class anchor**
-  (`build_class_graph` + per-method attribution via the instance-aware heuristic), and **module
-  anchor** (`build_module_graph` + co-occurrence) are ported & byte-identical to Python
-  (`test/import_scan.test.ts`). End-to-end scan→decompose→emit-seams verified for the class anchor.
-  Remaining: interface call-sites (`build_callsite_graph`), DOWN dependency graph
-  (`build_dependency_graph`), depth-2 ripple (`_depth2_ripple`), and the `--scan` CLI dispatch.
+- **C4** — `import_scan` front. ✅ single-symbol (`build_resolved_graph`), class anchor
+  (`build_class_graph` + per-method attribution), module anchor (`build_module_graph` +
+  co-occurrence), interface call-sites (`build_callsite_graph`), DOWN dependency graph
+  (`build_dependency_graph`), depth-2 ripple (`_depth2_ripple`) — byte-identical to Python
+  (`test/import_scan.test.ts`).
   *Note: the Python codebase decompose has set-order nondeterminism on complexity-tied carriers; the
   TS port is fully deterministic, so codebase decompose oracles are pinned with `PYTHONHASHSEED=0`.*
-- **C5** — `anchor_rank`, `expand`, `orchestrate`, `string_coupling`, `llm_discovery` + LLM refine/relevance.
-- **C6** — headless LSP resolver (worker+Atomics sync bridge) for `--resolver lsp|auto`.
-- Wire the codebase CLI dispatch (`--scan`/`--graph`/`--emit-graph`) + the extension's codebase commands.
+- **C5** — ✅ `anchor_rank`, `expand`, `orchestrate` (`--auto`), `string_coupling`, `llm_discovery`,
+  LLM refine/relevance, and the `--emit-candidates` / `--attribution` CLI flows. Gated by host-bus
+  prompt/inject parity + decompose oracles.
+- **C6** — ✅ headless LSP resolver (`--resolver lsp|auto`), async seam (see above).
+- ✅ Codebase CLI dispatch (`--scan`/`--graph`/`--expand-graph`/`--auto`/`--emit-graph`/`--emit-seams`)
+  + the extension's codebase commands route through the active backend (`decomposeInvocation`).
 
-## ⏭️ Remaining (deferred — not diff-mode)
+## ✅ Previously-deferred items — now done (or intentionally out of scope)
 
-1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
-   `_role_blocks`/`_span_map` (the block model the renderers consume), `_verify_pair`
-   (well-formedness flags), `emit_seams_json`, `_merged_diff`, blast-radius wiring.
-   Oracle: `*.seams.json` (6 cases + `sample`).
-2. **`subgroup.ts`** ← `src/diff/subgroup.py` (140): `subgroup_seams` (altitude mid-level).
-3. **`report_text.ts`** ← `src/diff/report_text.py` (241): `ascii` + `llm` renderers.
-   Oracle: `*.ascii.txt` (6 cases + `sample`). This is the first **runnable** milestone —
-   `seam --file sample.patch --classifier det --format ascii` should match the oracle.
-4. **`cli/decompose.ts`** ← `decompose.py` + `src/diff/run.py` (diff branch, det path first):
-   `--file/--git`, `--classifier det`, `--format ascii|llm`, `--emit-seams`, `--emit-hunks`,
-   `--dump-classified`/`--from-classified`. Then diff vs Python on `sample.patch`.
-
-## 🟡 Scaffolded later (need the interfaces, then validation — NOT a mechanical port)
-
-- **LLM passes** (`classifier.py` 949 lines, `engine.py` hybrid): behind an `LlmBackend`
-  interface (subprocess `claude`/`copilot` for headless; `vscode.lm` in-extension). The CODE
-  ports; **behavioral equivalence is stochastic** → validate via the harness with tolerance,
-  not byte-match. This is the part that needs your eyes.
-- **Codebase mode** (`src/codebase/*`, `src/core/resolve/*`): LSP client → `vscode-jsonrpc`
-  (headless) + the existing `resolver.ts` (in-editor). Tree-sitter facts → `web-tree-sitter`
-  (spike confirmed: pin `web-tree-sitter@^0.25`; `tree-sitter-wasms` covers all 12 grammars).
-- **HTML report** (`report_html.py` + jinja2): port the template; mechanical but tedious.
-- **eval/harness.py**: keep in Python, drive the compiled `seam` binary as a black box
-  (cheaper than re-porting 3.7k lines; keeps the existing golds as ground truth).
+- **`seams.ts` / `subgroup.ts` / `report_text.ts` / `cli/decompose.ts`** — all ported & verified
+  (`ascii`/`llm` renderers, `emit_seams_json`, `--file/--git`, `--classifier det|hybrid|llm`,
+  `--emit-seams`/`--emit-hunks`/`--dump-classified`/`--from-classified`). Runnable end-to-end.
+- **LLM passes** (`classifier.py`, `engine.py` hybrid) — ported behind the host-bus seam (subprocess
+  `claude` headless / in-extension `vscode.lm`); stochastic, so gated by **prompt+inject parity** (the
+  deterministic envelope), not byte-match of the model output.
+- **Codebase mode + `core/resolve/*`** — ported (incl. the headless LSP via the native Node LSP client,
+  not `vscode-jsonrpc`); tree-sitter facts via `web-tree-sitter@^0.25`.
+- **HTML report** — intentionally **excluded** (no longer used; the extension renders natively).
+- **eval/harness** — kept as a black-box differential oracle (Python generates, TS asserts identical).
 
 ## Known parity caveats to sweep when convenient
 - `_DEF_PATTERNS` name captures in `lang.ts` are still ASCII `[A-Za-z_]\w*` (the failing
