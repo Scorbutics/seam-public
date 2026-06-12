@@ -28,6 +28,8 @@ interface Args {
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
   emitGraph?: string; intent?: string;
+  expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
+  down: boolean; crossFrom?: string;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -41,7 +43,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1 };
+  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -73,6 +75,12 @@ function parseArgs(argv: string[]): Args {
       case "--depth": a.depth = parseInt(next() ?? "1", 10); break;
       case "--emit-graph": a.emitGraph = next(); break;
       case "--intent": a.intent = next(); break;
+      case "--expand-graph": a.expandGraph = next(); break;
+      case "--expand-file": a.expandFile = next(); break;
+      case "--expand-symbol": a.expandSymbol = next(); break;
+      case "--expand-line": a.expandLine = parseInt(next() ?? "0", 10); break;
+      case "--down": a.down = true; break;
+      case "--cross-from": a.crossFrom = next(); break;
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -99,8 +107,20 @@ async function runCodebase(a: Args): Promise<number> {
   const { from_resolved_graph } = await import("../core/graph_ir.js");
   const { decompose } = await import("../codebase/codebase.js");
 
+  const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";
   let data: any;
-  if (a.scan) {
+  if (a.expandGraph) {
+    if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
+    const { merge_resolved } = await import("../codebase/expand.js");
+    try {
+      const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
+      const add = a.down
+        ? await scan.build_dependency_graph(a.repo, a.expandFile!, a.expandSymbol!, { anchorLine: a.expandLine ?? null, useLlm: useLlm0, model: a.model, claudeBin: a.claudeBin })
+        : await scan.build_consumers_graph(a.repo, a.expandFile!, a.expandSymbol!, { depth: a.depth, anchorLine: a.expandLine ?? null });
+      data = merge_resolved(base, add, add.anchor?.id);
+      if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
+    } catch (e) { err(`expand failed: ${(e as Error).message}`); }
+  } else if (a.scan) {
     if (!a.anchorFile) err("--scan requires --anchor-file");
     try {
       data = a.symbol
@@ -132,6 +152,7 @@ async function runCodebase(a: Args): Promise<number> {
   const summary = ["core", "link", "environment", "test"].map((r) => `${r}=${counts.get(r) ?? 0}`).join("  ");
   process.stdout.write(`Decomposed anchor '${g.anchor}' (${g.nodes.size} symbols, resolution=${g.resolution_quality || "?"}):  ${summary}\n`);
 
+  if (a.expandGraph) model.autoGrown = true;        // a grown footprint — show the whole thing
   if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
@@ -144,7 +165,7 @@ async function runCodebase(a: Args): Promise<number> {
 
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
-  if (a.scan || a.graph) return runCodebase(a);   // codebase mode claims --scan / --graph
+  if (a.scan || a.graph || a.expandGraph) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph
   reset_usage();
   let hunks: Hunk[];
 
