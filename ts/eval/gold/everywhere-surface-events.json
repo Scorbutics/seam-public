@@ -1,0 +1,5 @@
+[
+  {"id":"h1","group":"g1","role":"environment","seam":"","wires":["s1"]},
+  {"id":"h2","group":"g1","role":"core","seam":"s1","seam_label":"jni event bridge"},
+  {"id":"h3","group":"g1","role":"link","wires":["s1"]}
+]
