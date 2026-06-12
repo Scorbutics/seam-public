@@ -7,7 +7,7 @@ so "ported" here means *verified byte-identical to Python on real diffs*, not ju
 Run: `cd ts && bun install && bun test` (161 pass / 2 gated-skip) · `bun run typecheck` (clean).
 Real-LSP integration tests: `SEAM_LSP_IT=1 bun test test/resolver.test.ts`.
 
-**STATUS: the port is complete and feature-1:1 with Python.** Diff mode (all engines, facts,
+**STATUS: the port is complete; Python has been DELETED — TypeScript is the sole implementation.** Diff mode (all engines, facts,
 renderers, CLI, harness, blast-radius) and codebase mode (graph model, decompose, import_scan, LLM
 passes, anchor_rank, expand, orchestrate, string_coupling, llm_discovery, headless LSP) are ported and
 verified; the VS Code extension runs both natively via `seam.backend=ts`. The HTML report is
