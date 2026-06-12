@@ -1,19 +1,22 @@
 // Port of src/core/resolve/languages/__init__.py — the language registry. The minimal providers
 // (c/cpp/java/kotlin/ruby) have no floor or import parser yet (LSP-only); they contribute their
 // extensions to SOURCE_EXTS. TS/Python carry the floor + import parsing.
-import { SKIP_DIRS, type ImportRef, type LanguageProvider } from "./base.js";
+import { existsSync } from "node:fs";
+import { dirname, join, resolve } from "node:path";
+import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec } from "./base.js";
 import { PROVIDER as TS } from "./typescript.js";
 import { PROVIDER as PY } from "./python.js";
 
-const minimal = (name: string, extensions: string[]): LanguageProvider => ({ name, extensions });
+// A minimal (LSP-only) provider: no floor / import parser, but a server spec so spec_for_file maps it.
+const minimal = (name: string, extensions: string[], lsp: ServerSpec): LanguageProvider => ({ name, extensions, lsp });
 
 export const PROVIDERS: LanguageProvider[] = [
   TS, PY,
-  minimal("java", [".java"]),
-  minimal("kotlin", [".kt", ".kts"]),
-  minimal("ruby", [".rb", ".rake"]),
-  minimal("c", [".c", ".h"]),
-  minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"]),
+  minimal("java", [".java"], { language: "java", command: system("jdtls"), languageId: "java", rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts", ".project"] }),
+  minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] }),
+  minimal("ruby", [".rb", ".rake"], { language: "ruby", command: system("ruby-lsp", "--stdio"), languageId: "ruby", rootMarkers: ["Gemfile", ".ruby-version"] }),
+  minimal("c", [".c", ".h"], { language: "c", command: system("clangd"), languageId: "c", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
+  minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"], { language: "cpp", command: system("clangd"), languageId: "cpp", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
 ];
 
 export { SKIP_DIRS };
@@ -35,6 +38,26 @@ export function endsWithSourceExt(file: string): boolean {
 export function floor_resolve(repo: string, importingFile: string, source: string): string | null {
   const p = provider_for(importingFile);
   return p?.resolve ? p.resolve(repo, importingFile, source) : null;
+}
+
+// --- LSP spec lookups (were lsp/registry.py) -----------------------------
+export function spec_for_file(file: string): ServerSpec | null {
+  return provider_for(file)?.lsp ?? null;
+}
+
+export function language_id_for(spec: ServerSpec, file: string): string {
+  return typeof spec.languageId === "function" ? spec.languageId(file) : spec.languageId;
+}
+
+// Nearest ancestor dir (within repo) holding a root marker; else the repo itself.
+export function project_root(repo: string, file: string, spec: ServerSpec): string {
+  const repoAbs = resolve(repo);
+  let d = dirname(join(repoAbs, file));
+  while (resolve(d).startsWith(repoAbs) && resolve(d) !== repoAbs) {
+    if ((spec.rootMarkers ?? []).some((m) => existsSync(join(d, m)))) return resolve(d);
+    d = dirname(d);
+  }
+  return repoAbs;
 }
 
 // the file's imports as ImportRefs, via its language provider.

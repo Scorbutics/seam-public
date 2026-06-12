@@ -9,26 +9,43 @@ import { floor_resolve, endsWithSourceExt, parse_imports, SKIP_DIRS } from "./la
 import { normpath, walk } from "./walk.js";
 
 // A resolver: resolve_module(repo, importingFile, source) → repo-relative file | null, and
-// optionally resolve_symbol(repo, importingFile, line, col) → [file, line] | null (LSP).
+// optionally resolve_symbol(repo, importingFile, line, col) → [file, line] | null (LSP). ASYNC —
+// a real language server is reached over a socket/subprocess (Node I/O is async). The deterministic
+// floor is sync; the async interface awaits trivially over it.
 export interface Resolver {
-  resolve_module(repo: string, importingFile: string, source: string): string | null;
-  resolve_symbol?(repo: string, importingFile: string, line: number, col: number): [string, number] | null;
+  resolve_module(repo: string, importingFile: string, source: string): Promise<string | null>;
+  resolve_symbol?(repo: string, importingFile: string, line: number, col: number): Promise<[string, number] | null>;
 }
 
 let _ACTIVE_RESOLVER: Resolver | null = null;
 export function set_resolver(r: Resolver | null): void { _ACTIVE_RESOLVER = r; }
+export function get_resolver(): Resolver | null { return _ACTIVE_RESOLVER; }
 
-// A MODULE source → repo-relative file: the active resolver, else the per-language deterministic floor.
+// SYNC floor-only — the DIFF-mode resolver (blast_radius, facts_resolve). The active LSP resolver is
+// async; diff mode stays on the deterministic floor (its long-standing stance: lsp|auto degrade to
+// the floor for blast-radius, which the floor already serves — relative/package/tsconfig). The real
+// LSP lands on the CODEBASE path (`_resolve_a`), where its precision pays off.
 export function _resolve(repo: string, importingFile: string, source: string): string | null {
-  if (_ACTIVE_RESOLVER) return _ACTIVE_RESOLVER.resolve_module(repo, importingFile, source);
   return floor_resolve(repo, importingFile, source);
 }
-
-// An ImportRef → [repo-relative target file, def line | null], or null. A source-string import (TS)
-// resolves the MODULE path; a source-less import (Python) resolves the SYMBOL via the LSP.
 export function _resolve_import(repo: string, importingFile: string, ref: ImportRef): [string | null, number | null] | null {
   if (ref.source !== null) {
     const f = _resolve(repo, importingFile, ref.source);
+    return f ? [f, null] : null;
+  }
+  return null;   // a source-less (Python) import needs the LSP — unavailable on the sync diff path
+}
+
+// ASYNC — the CODEBASE-scan resolver: the active LSP resolver (if installed via set_resolver), else
+// the deterministic floor. A source-string import (TS) resolves the MODULE path; a source-less import
+// (Python) resolves the SYMBOL via the LSP go-to-definition.
+export async function _resolve_a(repo: string, importingFile: string, source: string): Promise<string | null> {
+  if (_ACTIVE_RESOLVER) return _ACTIVE_RESOLVER.resolve_module(repo, importingFile, source);
+  return floor_resolve(repo, importingFile, source);
+}
+export async function _resolve_import_a(repo: string, importingFile: string, ref: ImportRef): Promise<[string | null, number | null] | null> {
+  if (ref.source !== null) {
+    const f = await _resolve_a(repo, importingFile, ref.source);
     return f ? [f, null] : null;
   }
   if (_ACTIVE_RESOLVER?.resolve_symbol) return _ACTIVE_RESOLVER.resolve_symbol(repo, importingFile, ref.line, ref.col);
@@ -48,7 +65,7 @@ export interface Consumer { file: string; local: string; source: string; status:
 // One repo walk → [consumer_file, {member → local}] for files whose import of one or more
 // `memberNames` resolves to `anchorFile` — member co-occurrence for module mode. Port of
 // consumers.scan_module_consumers.
-export function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): [string, Record<string, string>][] {
+export async function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): Promise<[string, Record<string, string>][]> {
   const anchorNorm = normpath(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
   const out: [string, Record<string, string>][] = [];
@@ -64,7 +81,7 @@ export function scan_module_consumers(repo: string, anchorFile: string, memberNa
       const used: Record<string, string> = {};
       for (const ref of parse_imports(rel, text)) {
         if (!memberNames.has(ref.name)) continue;
-        const target = _resolve_import(repo, rel, ref);
+        const target = await _resolve_import_a(repo, rel, ref);
         if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
         if (!(ref.name in used)) used[ref.name] = ref.local;
       }
@@ -76,7 +93,7 @@ export function scan_module_consumers(repo: string, anchorFile: string, memberNa
 
 // Files importing `symbol`, classified resolved (module → anchor file) vs suggested (basename-only).
 // Port of consumers.scan_consumers.
-export function scan_consumers(repo: string, anchorFile: string, symbol: string): Consumer[] {
+export async function scan_consumers(repo: string, anchorFile: string, symbol: string): Promise<Consumer[]> {
   const anchorNorm = normpath(anchorFile);
   const anchorBase = stem(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
@@ -92,7 +109,7 @@ export function scan_consumers(repo: string, anchorFile: string, symbol: string)
       const rel = relative(repo, path);
       for (const ref of parse_imports(rel, text)) {
         if (ref.name !== symbol) continue;
-        const target = _resolve_import(repo, rel, ref);
+        const target = await _resolve_import_a(repo, rel, ref);
         if (target !== null) {
           if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved" });
         } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {

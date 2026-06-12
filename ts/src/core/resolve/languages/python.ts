@@ -1,6 +1,6 @@
 // Port of src/core/resolve/languages/python.py — import discovery (bare `from .x import`). No
 // deterministic floor (resolve=undefined): resolution relies on the LSP (source=null ImportRefs).
-import type { ImportRef, LanguageProvider } from "./base.js";
+import { bun_x, type ImportRef, type LanguageProvider } from "./base.js";
 
 const _FROM_RE = /^\s*from\s+(\.*[\w.]*)\s+import\s+(.+)$/d;
 const _IMPORT_RE = /^\s*import\s+(.+)$/;
@@ -49,4 +49,12 @@ function _entrypoint(ctx: any): number | null {
 
 export const PROVIDER: LanguageProvider = {
   name: "python", extensions: [".py", ".pyi"], imports, moduleEntry: /^__init__\.py$/, entrypoint: _entrypoint,
+  lsp: {
+    language: "python",
+    command: bun_x("--package", "pyright", "pyright-langserver", "--stdio"),
+    languageId: "python",
+    rootMarkers: ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile"],
+    status: "scaffold",
+    notes: "Phase 2. pyright via bun x; venv detection (python.venvPath/pythonPath).",
+  },
 };
