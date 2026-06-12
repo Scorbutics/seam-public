@@ -142,6 +142,20 @@ in **codebase mode**, and its async client clashes with the synchronous `_resolv
 pipeline — bridging that (worker+Atomics sync shim, or async emit-path refactor) is best done once,
 with codebase mode. Until then `lsp|auto` degrade to the floor (a stderr note), so nothing errors.
 
+## Codebase mode — in progress
+
+- **C1** — `graph_ir` codebase model (`from_resolved_graph`, `wellformedness`, Node/Edge/Graph/Provenance). ✅
+- **C2** — `codebase.ts` deterministic decomposition (roles, clusters, intent-seam floor, suggested
+  seams, emit_seams + contracts). Byte-identical to Python on a scanned graph + a rich hand-authored
+  graph (co-occurrence, crossings, blindspots, test node, containment). ✅
+- **C3** — `atoms.ts` (web-tree-sitter substrate) + `detect_*` (subcores, contract+feeds, dynamic-
+  import blindspots). `decompose` is async (awaits the tree-sitter passes when `--repo` is set).
+  Byte-identical to Python on a TSX fixture repo exercising all four. ✅
+- **C4** — `import_scan` front (build_consumers/module/dependency/class graphs) + the `--scan` CLI. ⏳
+- **C5** — `anchor_rank`, `expand`, `orchestrate`, `string_coupling`, `llm_discovery` + LLM refine/relevance.
+- **C6** — headless LSP resolver (worker+Atomics sync bridge) for `--resolver lsp|auto`.
+- Wire the codebase CLI dispatch (`--scan`/`--graph`/`--emit-graph`) + the extension's codebase commands.
+
 ## ⏭️ Remaining (deferred — not diff-mode)
 
 1. **`seams.ts`** ← `src/diff/seams.py` (531 lines): `_build_clusters`, `context_maps`,
