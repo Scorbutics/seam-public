@@ -1,0 +1,70 @@
+{
+  "anchor": {
+    "file": "src/engine.ts",
+    "id": "n1",
+    "range": [
+      1,
+      1
+    ],
+    "symbol": "runWidget"
+  },
+  "blindspots": [],
+  "complete": true,
+  "depth": 1,
+  "edges": [
+    {
+      "from": "n2",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "n1"
+    },
+    {
+      "from": "n3",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "n1"
+    }
+  ],
+  "language": "typescript",
+  "nodes": [
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/engine.ts",
+      "id": "n1",
+      "kind": "function",
+      "range": [
+        1,
+        1
+      ],
+      "symbol": "runWidget"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/pkg-consumer.ts",
+      "id": "n2",
+      "kind": "module",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "pkg-consumer"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/sub/feature.ts",
+      "id": "n3",
+      "kind": "module",
+      "range": [
+        1,
+        1
+      ],
+      "symbol": "feature"
+    }
+  ],
+  "resolutionQuality": "FULL",
+  "unresolved": [],
+  "version": 1
+}

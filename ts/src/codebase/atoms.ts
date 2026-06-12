@@ -7,7 +7,7 @@ import { available as isAvailable, getParser, langForExt } from "../core/treesit
 const langForExtAtoms = langForExt;
 
 // --- per-grammar node-kind registry (concepts, never literal TSX kinds) ----------------------
-const _FUNCLIKE = new Set(["arrow_function", "function_declaration", "function_expression", "method_definition",
+export const _FUNCLIKE = new Set(["arrow_function", "function_declaration", "function_expression", "method_definition",
   "generator_function_declaration", "function_signature", "function_definition", "lambda_expression",
   "method_declaration", "constructor_declaration", "function_item", "closure_expression", "lambda", "function", "method"]);
 const _BODY = new Set(["statement_block", "compound_statement", "block", "constructor_body", "function_body", "do_block"]);
@@ -15,7 +15,24 @@ const _PARAM_LIST = new Set(["formal_parameters", "parameter_list", "parameters"
 const _PARAM_NODE = new Set(["required_parameter", "optional_parameter", "rest_pattern",
   "parameter_declaration", "optional_parameter_declaration", "formal_parameter", "spread_parameter",
   "receiver_parameter", "typed_parameter", "default_parameter", "typed_default_parameter", "parameter"]);
-const _CALL = new Set(["call_expression", "method_invocation", "call", "invocation_expression"]);
+export const _CALL = new Set(["call_expression", "method_invocation", "call", "invocation_expression"]);
+// class / member / instantiation vocabulary (shared with import_scan)
+export const _CLASS_KINDS = new Set(["class_declaration", "class_definition", "class_specifier", "struct_specifier"]);
+export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration"]);
+export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_identifier"]);
+export const _MEMBER = new Set(["member_expression", "attribute", "field_access", "selector_expression", "field_expression"]);
+export const _MEMBER_NAME = new Set(["property_identifier", "field_identifier"]);
+export const _NEW = new Set(["new_expression", "object_creation_expression"]);
+export const _TYPE_REF = new Set(["type_identifier"]);
+export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",
+  "public_field_definition", "field_definition", "property_signature"]);
+export const _VAR_DECL = new Set(["lexical_declaration", "variable_declaration"]);
+export const _INTERFACE = new Set(["interface_declaration"]);
+export const _INTERFACE_MEMBER = new Set(["method_signature", "property_signature", "abstract_method_signature"]);
+export const _EXPORT = new Set(["export_statement"]);
+export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
+export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
+export const available = isAvailable;
 
 export interface Atom { start: number; end: number; names: Set<string>; }
 export interface ContractMember { name: string; invoked: boolean; ranges: number[][]; }
@@ -25,7 +42,7 @@ export function lang_for(filePath: string): string | null {
   return langForExtAtoms(dot >= 0 ? filePath.slice(dot).toLowerCase() : "");
 }
 
-class Ctx {
+export class Ctx {
   constructor(public content: string, public root: any) {}
   ln(off: number): number { let c = 0; for (let i = 0; i < off && i < this.content.length; i++) if (this.content[i] === "\n") c++; return c; }
   span(n: any): [number, number] { return [this.ln(n.startIndex), this.ln(n.endIndex)]; }
@@ -39,7 +56,7 @@ class Ctx {
   }
 }
 
-async function makeCtx(content: string, grammar: string): Promise<Ctx | null> {
+export async function makeCtx(content: string, grammar: string): Promise<Ctx | null> {
   const parser = await getParser(grammar);
   if (!parser) return null;
   try { return new Ctx(content, parser.parse(content).rootNode); } catch { return null; }
