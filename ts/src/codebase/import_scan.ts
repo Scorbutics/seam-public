@@ -8,9 +8,9 @@ import { basename, join } from "node:path";
 import {
   type Ctx, makeCtx, available, lang_for,
   _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _CALL,
-  _MEMBER, _MEMBER_NAME, _NEW, _INSTANCE_BINDER, _TYPE_REF, _INTERFACE,
+  _MEMBER, _MEMBER_NAME, _NEW, _INSTANCE_BINDER, _TYPE_REF, _INTERFACE, _EXPORT, _VAR_DECL,
 } from "./atoms.js";
-import { scan_consumers, _kind_for } from "../core/resolve/consumers.js";
+import { scan_consumers, scan_module_consumers, _kind_for } from "../core/resolve/consumers.js";
 
 const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
@@ -143,6 +143,72 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
 export async function build_consumers_graph(repo: string, anchorFile: string, symbol: string,
     opts: { depth?: number; verified?: any; anchorLine?: number | null } = {}): Promise<any> {
   return build_resolved_graph(repo, anchorFile, symbol, opts);
+}
+
+// --------------------------------------------------------------------------- MULTI-MEMBER (module)
+function _exported_members(ctx: Ctx): Unit[] {
+  const out: Unit[] = [];
+  for (const es of ctx.collect(ctx.root, (k) => _EXPORT.has(k))) {
+    for (const ch of ctx.children(es)) {
+      const k = ch.type;
+      if (_FUNCLIKE.has(k) && !_ANON_FUNC.has(k)) { const nm = _name_of(ctx, ch); if (nm) { const [s, e] = ctx.span(ch); out.push([nm, "function", s, e]); } }
+      else if (_CLASS_KINDS.has(k)) { const nm = _name_of(ctx, ch); if (nm) { const [s, e] = ctx.span(ch); out.push([nm, "class", s, e]); } }
+      else if (_VAR_DECL.has(k)) {
+        for (const d of ctx.children(ch)) {
+          if (!_VAR_DECLARATOR.has(d.type)) continue;
+          const dch = ctx.children(d);
+          if (dch.length && _NAME_KINDS.has(dch[0].type)) {
+            const isFn = dch.some((c) => _FUNCLIKE.has(c.type));
+            const [s, e] = ctx.span(ch);
+            out.push([ctx.text(dch[0]), isFn ? "function" : "constant", s, e]);
+          }
+        }
+      }
+    }
+  }
+  const seen = new Set<string>();
+  return out.filter((m) => (seen.has(m[0]) ? false : (seen.add(m[0]), true)));
+}
+
+export async function build_module_graph(repo: string, anchorFile: string): Promise<any> {
+  repo = expanduser(repo);
+  const modName = stem(anchorFile);
+  const ar = _read(repo, anchorFile);
+  if (!ar || !available()) throw new Error(`cannot parse anchor module ${anchorFile}`);
+  const ctx = (await makeCtx(ar[0], ar[1]))!;
+  const members = _exported_members(ctx);
+  const mlen = (ar[0].match(/\n/g) ?? []).length;
+  const nodes: any[] = [{ id: "mod", symbol: modName, kind: "module", file: anchorFile, range: [0, mlen], enclosing: "", complexity: Math.max(1, mlen) }];
+  for (const [name, kind, s, e] of members) nodes.push({ id: name, symbol: name, kind, file: anchorFile, range: [s, e], enclosing: modName, complexity: Math.max(1, e - s + 1) });
+
+  const edges: any[] = [];
+  const memberNames = new Set(members.map((m) => m[0]));
+  let counter = 0;
+  for (const [cfile, used] of scan_module_consumers(repo, anchorFile, memberNames)) {
+    counter += 1;
+    let sym = stem(cfile), kind = "module", rng: number[] = [0, 0];
+    const rd = _read(repo, cfile);
+    if (rd) {
+      const cctx = await makeCtx(rd[0], rd[1]);
+      if (cctx) {
+        const units = _named_units(cctx);
+        let line: number | null = null;
+        for (const local of Object.values(used)) { const ul = _usage_lines(cctx, units, local); if (ul.length) { line = ul[0]; break; } }
+        const enc = line != null ? _enclosing(units, line) : null;
+        if (enc) { sym = enc[0]; kind = enc[1]; rng = [enc[2], enc[3]]; }
+      }
+    }
+    const cid = `c${counter}`;
+    nodes.push({ id: cid, symbol: sym, kind: _kind_for(cfile, kind), file: cfile, range: rng, enclosing: "", complexity: 1 });
+    for (const mname of Object.keys(used).sort()) edges.push({ from: cid, to: mname, kind: "reference", provenance: "RESOLVED_FULL" });
+  }
+  return {
+    version: 1,
+    anchor: { id: "mod", symbol: modName, file: anchorFile, range: [0, mlen] },
+    language: lang_for(anchorFile) ?? "",
+    resolutionQuality: "FULL", depth: 1, complete: true,
+    nodes, edges, blindspots: [], unresolved: [],
+  };
 }
 
 // --------------------------------------------------------------------------- CLASS method attribution

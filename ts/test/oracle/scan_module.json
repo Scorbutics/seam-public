@@ -1,0 +1,118 @@
+{
+  "anchor": {
+    "file": "src/engine.ts",
+    "id": "mod",
+    "range": [
+      0,
+      2
+    ],
+    "symbol": "engine"
+  },
+  "blindspots": [],
+  "complete": true,
+  "depth": 1,
+  "edges": [
+    {
+      "from": "c1",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "WidgetEngine"
+    },
+    {
+      "from": "c2",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "WidgetEngine"
+    },
+    {
+      "from": "c2",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "runWidget"
+    },
+    {
+      "from": "c3",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "runWidget"
+    }
+  ],
+  "language": "typescript",
+  "nodes": [
+    {
+      "complexity": 2,
+      "enclosing": "",
+      "file": "src/engine.ts",
+      "id": "mod",
+      "kind": "module",
+      "range": [
+        0,
+        2
+      ],
+      "symbol": "engine"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "engine",
+      "file": "src/engine.ts",
+      "id": "runWidget",
+      "kind": "function",
+      "range": [
+        1,
+        1
+      ],
+      "symbol": "runWidget"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "engine",
+      "file": "src/engine.ts",
+      "id": "WidgetEngine",
+      "kind": "class",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "WidgetEngine"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/app.ts",
+      "id": "c1",
+      "kind": "module",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "app"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/pkg-consumer.ts",
+      "id": "c2",
+      "kind": "module",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "pkg-consumer"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/sub/feature.ts",
+      "id": "c3",
+      "kind": "module",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "feature"
+    }
+  ],
+  "resolutionQuality": "FULL",
+  "unresolved": [],
+  "version": 1
+}

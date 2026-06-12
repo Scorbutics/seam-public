@@ -45,6 +45,35 @@ const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."
 
 export interface Consumer { file: string; local: string; source: string; status: string; }
 
+// One repo walk → [consumer_file, {member → local}] for files whose import of one or more
+// `memberNames` resolves to `anchorFile` — member co-occurrence for module mode. Port of
+// consumers.scan_module_consumers.
+export function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): [string, Record<string, string>][] {
+  const anchorNorm = normpath(anchorFile);
+  const anchorAbs = normpath(join(repo, anchorFile));
+  const out: [string, Record<string, string>][] = [];
+  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
+    for (const fn of files) {
+      if (!endsWithSourceExt(fn)) continue;
+      const path = join(dir, fn);
+      if (normpath(path) === anchorAbs) continue;
+      let text: string;
+      try { text = readFileSync(path, "utf-8"); } catch { continue; }
+      if (![...memberNames].some((m) => text.includes(m))) continue;
+      const rel = relative(repo, path);
+      const used: Record<string, string> = {};
+      for (const ref of parse_imports(rel, text)) {
+        if (!memberNames.has(ref.name)) continue;
+        const target = _resolve_import(repo, rel, ref);
+        if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
+        if (!(ref.name in used)) used[ref.name] = ref.local;
+      }
+      if (Object.keys(used).length) out.push([rel, used]);
+    }
+  }
+  return out;
+}
+
 // Files importing `symbol`, classified resolved (module → anchor file) vs suggested (basename-only).
 // Port of consumers.scan_consumers.
 export function scan_consumers(repo: string, anchorFile: string, symbol: string): Consumer[] {
