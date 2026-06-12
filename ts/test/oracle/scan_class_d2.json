@@ -1,0 +1,164 @@
+{
+  "anchor": {
+    "file": "src/payment/service.ts",
+    "id": "PaymentService",
+    "range": [
+      0,
+      5
+    ],
+    "symbol": "PaymentService"
+  },
+  "blindspots": [
+    {
+      "candidates": [],
+      "evidence": "1 of 3 methods have no traced consumer (unused, or used via an instance we couldn't trace): audit",
+      "mechanism": "untraced-or-unused-methods",
+      "node": "PaymentService"
+    },
+    {
+      "candidates": [],
+      "evidence": "1 consumer(s) import PaymentService as a RESOLVED reference but no method call could be attributed to an instance (factory/DI/dynamic): src/untraced.ts",
+      "mechanism": "method-unattributed-consumers",
+      "node": "PaymentService"
+    }
+  ],
+  "complete": true,
+  "depth": 2,
+  "edges": [
+    {
+      "from": "PaymentService.charge",
+      "kind": "contains",
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService"
+    },
+    {
+      "from": "PaymentService.refund",
+      "kind": "contains",
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService"
+    },
+    {
+      "from": "c1",
+      "kind": "reference",
+      "line": 3,
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService.charge"
+    },
+    {
+      "from": "c2",
+      "kind": "reference",
+      "line": 2,
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService.charge"
+    },
+    {
+      "from": "c2",
+      "kind": "reference",
+      "line": 3,
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService.refund"
+    },
+    {
+      "from": "c3",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService"
+    },
+    {
+      "from": "n4",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "c1"
+    }
+  ],
+  "language": "typescript",
+  "nodes": [
+    {
+      "complexity": 6,
+      "enclosing": "",
+      "file": "src/payment/service.ts",
+      "id": "PaymentService",
+      "kind": "class",
+      "range": [
+        0,
+        5
+      ],
+      "symbol": "PaymentService"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "PaymentService",
+      "file": "src/payment/service.ts",
+      "id": "PaymentService.charge",
+      "kind": "method",
+      "range": [
+        2,
+        2
+      ],
+      "symbol": "charge"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "PaymentService",
+      "file": "src/payment/service.ts",
+      "id": "PaymentService.refund",
+      "kind": "method",
+      "range": [
+        3,
+        3
+      ],
+      "symbol": "refund"
+    },
+    {
+      "complexity": 4,
+      "enclosing": "",
+      "file": "src/checkout.ts",
+      "id": "c1",
+      "kind": "function",
+      "range": [
+        1,
+        4
+      ],
+      "symbol": "checkout"
+    },
+    {
+      "complexity": 4,
+      "enclosing": "",
+      "file": "src/admin.ts",
+      "id": "c2",
+      "kind": "function",
+      "range": [
+        1,
+        4
+      ],
+      "symbol": "admin"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/untraced.ts",
+      "id": "c3",
+      "kind": "module",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "untraced"
+    },
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/page.ts",
+      "id": "n4",
+      "kind": "function",
+      "range": [
+        1,
+        1
+      ],
+      "symbol": "Page"
+    }
+  ],
+  "resolutionQuality": "FULL",
+  "unresolved": [],
+  "version": 1
+}

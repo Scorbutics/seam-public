@@ -25,6 +25,12 @@ describe("import-scan vs Python", () => {
     expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
   });
 
+  test("class anchor depth-2 ripple (consumers-of-consumers)", async () => {
+    const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_class_d2.json"), "utf-8"));
+    const g = await build_class_graph(join(__dir, "fixtures", "class-repo"), "src/payment/service.ts", "PaymentService", { depth: 2 });
+    expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
+  });
+
   test("module anchor — exported members + co-occurring consumers", async () => {
     const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_module.json"), "utf-8"));
     const g = await build_module_graph(repo, "src/engine.ts");
