@@ -728,6 +728,14 @@ function codebaseEnv(): { tool: string; py: string } | null {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return null; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  if (usingTs) {
+    if (!fs.existsSync(tsCliPath(tool))) {
+      vscode.window.showErrorMessage(`Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" or switch "seam.backend" to "python".`);
+      return null;
+    }
+    return { tool, py: "" };   // runScan resolves bun itself on the TS backend
+  }
   if (!fs.existsSync(path.join(tool, "decompose.py"))) {
     vscode.window.showErrorMessage(
       `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" (Settings → Seam).`);
@@ -752,9 +760,13 @@ async function runScan(tool: string, py: string, scanArgs: string[], title: stri
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        await runPy(py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot,
-                         ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out],
-                    tool, (m) => progress.report({ message: m }));
+        const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+        // TS backend: the deterministic floor (the LLM intent-refine pass is not ported for codebase
+        // mode yet), via bun + the TS CLI. Python backend: decompose.py with the chosen engine.
+        const [bin, base] = usingTs
+          ? [bunPath(), [tsCliPath(tool), "--scan", "--repo", repoRoot, ...scanArgs, "--emit-graph", graph, "--emit-seams", out]]
+          : [py, [path.join(tool, "decompose.py"), "--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]];
+        await runPy(bin, base, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;                          // fresh analysis = new session to grow from
         const ts = Date.now();
@@ -792,9 +804,11 @@ async function analyzeCodebase() {
   // depth 2 (default) adds the environment ripple = the boundary frontier (consumers-of-consumers).
   sessionIntent = "";                      // a cursor-anchored analysis has no question to focus on
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
-  if (anchor.kind === "class") {
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  if (anchor.kind === "class" && !usingTs) {
     // A class anchor splits by METHOD: the LSP verifies which method each consumer calls (the
-    // precision path), with the tree-sitter heuristic as the degrade fallback.
+    // precision path), with the tree-sitter heuristic as the degrade fallback. (Python backend; the
+    // TS backend uses the tree-sitter instance-aware heuristic directly via the plain --scan path.)
     await runScanClass(env.tool, env.py, anchor, depth);
   } else {
     await runScan(env.tool, env.py,
