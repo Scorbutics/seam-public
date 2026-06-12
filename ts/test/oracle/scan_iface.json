@@ -1,0 +1,61 @@
+{
+  "anchor": {
+    "file": "src/repo.ts",
+    "id": "n1",
+    "range": [
+      0,
+      0
+    ],
+    "symbol": "IRepo"
+  },
+  "anchors": [
+    "n1"
+  ],
+  "blindspots": [],
+  "complete": true,
+  "depth": 1,
+  "edges": [
+    {
+      "from": "n2",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "to": "n1"
+    },
+    {
+      "from": "n2",
+      "kind": "call",
+      "provenance": "RESOLVED_PARTIAL",
+      "to": "n1"
+    }
+  ],
+  "language": "typescript",
+  "nodes": [
+    {
+      "complexity": 1,
+      "enclosing": "",
+      "file": "src/repo.ts",
+      "id": "n1",
+      "kind": "symbol",
+      "range": [
+        0,
+        0
+      ],
+      "symbol": "IRepo"
+    },
+    {
+      "complexity": 4,
+      "enclosing": "",
+      "file": "src/service.ts",
+      "id": "n2",
+      "kind": "function",
+      "range": [
+        1,
+        4
+      ],
+      "symbol": "service"
+    }
+  ],
+  "resolutionQuality": "FULL",
+  "unresolved": [],
+  "version": 1
+}

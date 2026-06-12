@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build_class_graph, build_consumers_graph, build_module_graph, build_resolved_graph } from "../src/codebase/import_scan.js";
+import { build_class_graph, build_consumers_graph, build_dependency_graph, build_module_graph, build_resolved_graph } from "../src/codebase/import_scan.js";
 import { from_resolved_graph } from "../src/core/graph_ir.js";
 import { decompose } from "../src/codebase/codebase.js";
 
@@ -34,6 +34,18 @@ describe("import-scan vs Python", () => {
   test("module anchor — exported members + co-occurring consumers", async () => {
     const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_module.json"), "utf-8"));
     const g = await build_module_graph(repo, "src/engine.ts");
+    expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
+  });
+
+  test("interface anchor — call-site discovery (DI/abstraction)", async () => {
+    const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_iface.json"), "utf-8"));
+    const g = await build_consumers_graph(join(__dir, "fixtures", "iface-repo"), "src/repo.ts", "IRepo", { depth: 1 });
+    expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
+  });
+
+  test("DOWN dependency graph (what the anchor uses)", async () => {
+    const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_dep.json"), "utf-8"));
+    const g = await build_dependency_graph(join(__dir, "fixtures", "class-repo"), "src/checkout.ts", "checkout");
     expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
   });
 
