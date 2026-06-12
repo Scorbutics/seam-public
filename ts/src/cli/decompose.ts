@@ -45,7 +45,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4 };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4 };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -293,8 +293,8 @@ async function main(argv: string[]): Promise<number> {
     }
     if (a.dumpClassified) {
       writeFileSync(a.dumpClassified, hunksToJson(hunks));
-      // Terminal when no render was asked for (format defaults to the un-ported html) — lets the
-      // eval harness drive the TS engine as a black box without a render mode.
+      // Terminal when no render was asked for (format is the no-render default) — lets the eval
+      // harness drive the engine as a black box without a render mode.
       if (!a.emitSeams && a.format !== "ascii" && a.format !== "llm") {
         process.stdout.write(`Classified: ${a.dumpClassified}\n`);
         return 0;
@@ -319,7 +319,12 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  err("HTML report output is not yet ported; use --format ascii|llm or --emit-seams (see ts/PORT-STATUS.md).");
+  // The HTML report was intentionally removed (the VS Code extension renders natively). An explicit
+  // --format html is a clear error; the bare invocation (no format/emit/dump) falls back to the `llm`
+  // text report so the CLI always produces something useful.
+  if (a.format === "html") err("the HTML report has been removed; use --format ascii|llm or --emit-seams.");
+  process.stdout.write(await render(hunks, { style: "llm", repo: a.repo, blast_radius: a.blastRadius }));
+  return 0;
 }
 
 main(process.argv.slice(2)).then((code) => process.exit(code));

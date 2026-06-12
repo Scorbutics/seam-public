@@ -484,7 +484,7 @@ function tsCliPath(tool: string): string {
 }
 // anchor_rank invocation for the active backend: python -m src.codebase.anchor_rank, or the TS CLI.
 function anchorRankInvocation(tool: string, py: string, args: string[]): [string, string[]] {
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
   return usingTs
     ? [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]]
     : [py, ["-m", "src.codebase.anchor_rank", ...args]];
@@ -493,7 +493,7 @@ function anchorRankInvocation(tool: string, py: string, args: string[]): [string
 // decompose.py. `args` are the CLI FLAGS (everything after the entry). Both entries take the same
 // flags verbatim (the TS CLI is a byte-for-byte port), so callers build one flag list.
 function decomposeInvocation(tool: string, py: string, args: string[]): [string, string[]] {
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
   return usingTs
     ? [bunPath(), [tsCliPath(tool), ...args]]
     : [py, [path.join(tool, "decompose.py"), ...args]];
@@ -620,7 +620,7 @@ async function runReview(range: string) {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  const backend = vscode.workspace.getConfiguration("seam").get<string>("backend") || "python";
+  const backend = vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts";
   const usingTs = backend === "ts";
   // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
   // facts), "det" (fully deterministic, offline), or "llm" (all LLM). The TS backend implements
@@ -675,10 +675,12 @@ async function runReview(range: string) {
             factsPath = await buildAstFacts(tool, (skel) => runPy(bun,
               [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
           }
-          // Blast radius (who outside the diff consumes a changed symbol) via the deterministic
-          // resolver floor; --resolver lsp|auto degrades to the floor in the TS engine for now.
+          // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
+          // the headless language server (warm daemon) with the deterministic floor as fallback —
+          // ported, 1:1 with Python.
           const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
                         ...(factsPath ? ["--facts", factsPath] : []),
+                        ...(resolver !== "det" ? ["--resolver", resolver] : []),
                         ...(blastRadius ? ["--blast-radius"] : []),
                         "--emit-seams", out];
           await runPy(bun, args, tool, (m) => progress.report({ message: m }));
@@ -744,7 +746,7 @@ function codebaseEnv(): { tool: string; py: string } | null {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return null; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
   if (usingTs) {
     if (!fs.existsSync(tsCliPath(tool))) {
       vscode.window.showErrorMessage(`Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" or switch "seam.backend" to "python".`);

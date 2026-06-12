@@ -79,11 +79,11 @@
           "type": "string",
           "enum": ["python", "ts"],
           "enumDescriptions": [
-            "Default. The Python pipeline (decompose.py) — all engines (hybrid/det/llm).",
-            "The TypeScript port (ts/src/cli/decompose.ts via bun). DETERMINISTIC engine only so far — forces engine=det; no AST facts / blast-radius / LLM yet. See ts/PORT-STATUS.md."
+            "The Python pipeline (decompose.py). Legacy — kept for differential checks; the TS port is feature-1:1.",
+            "Default. The TypeScript port (ts/src/cli/decompose.ts via bun) — all engines (hybrid/det/llm), AST facts, blast-radius, and the headless LSP resolver. No Python needed. See ts/PORT-STATUS.md."
           ],
-          "default": "python",
-          "description": "Which pipeline implementation to run: 'python' (decompose.py, full features) or 'ts' (the TypeScript port — deterministic engine only, runs via bun, no Python needed)."
+          "default": "ts",
+          "description": "Which pipeline implementation to run: 'ts' (the TypeScript port, default — full features via bun, no Python needed) or 'python' (decompose.py, legacy)."
         },
         "seam.engine": {
           "type": "string",
