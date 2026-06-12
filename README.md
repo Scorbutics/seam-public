@@ -1,5 +1,11 @@
 # Seam — review by intent
 
+<p align="center">
+  <img src="seam.gif" alt="Seam decomposing a Flask pull request into review seams — one intent, five seams, tests to skim, docs to skip" width="100%">
+  <br>
+  <em>A real <a href="https://github.com/pallets/flask/pull/5736">Flask pull request (pallets/flask#5736)</a>, decomposed into seams — review the cores, skim the tests, skip the docs.</em>
+</p>
+
 Seam takes a real change and presents it **decomposed into seams** — units of *one intent*,
 each hunk labelled by role (**core / link / environment / test / noise**) with its wiring — so you
 review *by intent* instead of scrolling file-by-file. It works on a **diff** (what you changed) and
