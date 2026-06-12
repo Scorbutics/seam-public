@@ -13,6 +13,28 @@
           "warnings": [],
           "hunks": [
             {
+              "id": "h4",
+              "file": "src/payment.py",
+              "start": 1,
+              "end": 3,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h4",
+              "file": "src/payment.py",
+              "start": 4,
+              "end": 7,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
               "id": "h1",
               "file": "src/api.py",
               "start": 1,
@@ -45,28 +67,6 @@
                   "start": 4
                 }
               ]
-            },
-            {
-              "id": "h4",
-              "file": "src/payment.py",
-              "start": 1,
-              "end": 3,
-              "role": "environment",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "h4",
-              "file": "src/payment.py",
-              "start": 4,
-              "end": 7,
-              "role": "core",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
             },
             {
               "id": "h5",

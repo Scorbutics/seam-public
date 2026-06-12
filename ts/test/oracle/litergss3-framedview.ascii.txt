@@ -12,13 +12,13 @@ Seam · 12 hunks → 3 clusters · 8 seams · 6 cores  (roles: core 6  link 1  e
 │  ├─ → link FramedView.h:26   wires: bool, Sprite, bool, auto
 │  └─ ∙ env  FramedView.h:51   wires: FramedView, bool, Sprite, bool …
 ├─ ▣ h4  bool    ⚠ untested · ↔ h2,h5,h7,h9
-│  ├─ ∙ env  Sprite.cpp:7   wires: Sprite, auto
 │  ├─ ◆ core Sprite.cpp:65   defines bool  ·  ↻ Graphics → RTEST
+│  ├─ ∙ env  Sprite.cpp:7   wires: Sprite, auto
 │  ├─ → link FramedView.h:26   wires: bool, Sprite, bool, auto
 │  └─ ∙ env  FramedView.h:51   wires: FramedView, bool, Sprite, bool …
 ├─ ▣ h5  Sprite    ⚠ untested · ↔ h2,h4,h7,h9
-│  ├─ ∙ env  Sprite.cpp:7   wires: bool, auto
 │  ├─ ◆ core Sprite.cpp:84   defines Sprite
+│  ├─ ∙ env  Sprite.cpp:7   wires: bool, auto
 │  ├─ → link FramedView.h:4   wires: bool, bool, bool, auto
 │  └─ ∙ env  FramedView.h:51   wires: FramedView, bool, bool, bool …
 ├─ ▣ h7  bool    ⚠ untested · ↔ h2,h4,h5,h9
@@ -27,13 +27,13 @@ Seam · 12 hunks → 3 clusters · 8 seams · 6 cores  (roles: core 6  link 1  e
 │  ├─ → link FramedView.h:26   wires: bool, bool, Sprite, auto
 │  └─ ∙ env  FramedView.h:51   wires: FramedView, bool, bool, Sprite …
 ├─ ▣ h9  auto    ⚠ untested · ↔ h2,h4,h5,h7
+│  ├─ ◆ core FramedView.cpp:35   defines auto
 │  ├─ → link Shape.cpp:93   (here: link) defines bool
 │  ├─ ∙ env  Sprite.cpp:7   wires: bool, Sprite
 │  ├─ → link Sprite.cpp:66   (here: link) defines bool  ·  ↻ Graphics → RTEST
 │  ├─ → link Sprite.cpp:88   (here: link) defines Sprite
 │  ├─ → link Text.cpp:63   (here: link) defines bool
 │  ├─ ∙ env  FramedView.cpp:1   wires: bool, bool
-│  ├─ ◆ core FramedView.cpp:35   defines auto
 │  ├─ → link FramedView.h:26   wires: bool, bool, Sprite, bool
 │  └─ ∙ env  FramedView.h:51   wires: FramedView, bool, bool, Sprite …
 └─ ▣ h11  FramedView    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core

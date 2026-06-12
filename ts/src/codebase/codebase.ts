@@ -479,14 +479,13 @@ export function emit_seams(g: Graph, health: any, seams: Seam[]): any {
     return "RESOLVED_FULL";
   };
 
+  const fileLine = (a: any, b: any) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start);
   const outSeams: any[] = [];
   for (const s of seams) {
-    const ids = [...s.node_ids].sort((i, j) => {
-      const a = g.nodes.get(i)!, b = g.nodes.get(j)!;
-      return a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start;
-    });
+    const ids = [...s.node_ids].sort((i, j) => fileLine(g.nodes.get(i)!, g.nodes.get(j)!));
     const idset = new Set(ids);
     const hunks: any[] = ids.map((i) => _seam_hunk(g.nodes.get(i)!, g.nodes.get(i)!.role === "core" ? "RESOLVED_FULL" : provOf(i, idset)));
+    const callerDst = new Map<any, string>(); // a caller hunk wires the seam member it calls (edge dst)
     const seenC = new Set<string>();
     for (const e of g.resolved_edges()) {
       if (e.kind === "contains" || !idset.has(e.dst) || idset.has(e.src)) continue;
@@ -494,14 +493,50 @@ export function emit_seams(g: Graph, health: any, seams: Seam[]): any {
       if (!c || seenC.has(`${e.src} ${e.dst}`)) continue;
       seenC.add(`${e.src} ${e.dst}`);
       const cl = e.line && e.line > 0 ? e.line : c.start;
-      hunks.push({ id: `call:${e.src}:${e.dst}`, file: c.file, start: cl, end: cl, role: "link",
+      const ch = { id: `call:${e.src}:${e.dst}`, file: c.file, start: cl, end: cl, role: "link",
         confidence: 0.9, label: c.label, caller: true, provenance: e.provenance, relevant: c.relevant,
-        external: [], externalRefs: [], rewire: null });
+        external: [], externalRefs: [], rewire: null };
+      hunks.push(ch);
+      callerDst.set(ch, e.dst);
     }
+    // Core-grouped ordering (replaces the flat file/line sort): each core, then the members that wire
+    // it, so a link sits next to what it links. Wiring is the REAL resolved graph here — a member
+    // connected (either direction) to a core in this seam, and a caller to the core it calls. A
+    // multi-wired member lands under its earliest core; unwired members + ambient trail; a coreless
+    // seam has no anchor, so it stays pure file/line.
+    const corePresent = new Set(ids.filter((i) => g.nodes.get(i)!.role === "core"));
+    const memberCores = new Map<string, string[]>(); // seam member id → connected core ids (file/line)
+    for (const e of g.resolved_edges()) {
+      if (e.kind === "contains") continue;
+      for (const [m, c] of [[e.src, e.dst], [e.dst, e.src]] as [string, string][]) {
+        if (idset.has(m) && corePresent.has(c) && g.nodes.get(m)!.role !== "core") {
+          const arr = memberCores.get(m) ?? memberCores.set(m, []).get(m)!;
+          if (!arr.includes(c)) arr.push(c);
+        }
+      }
+    }
+    for (const arr of memberCores.values()) arr.sort((a, b) => fileLine(g.nodes.get(a)!, g.nodes.get(b)!));
+    const primaryCore = (h: any): string | null => {
+      if (h.role === "core") return null;
+      const dst = callerDst.get(h);
+      if (dst !== undefined) return corePresent.has(dst) ? dst : (memberCores.get(dst)?.[0] ?? null);
+      return memberCores.get(h.id)?.[0] ?? null;
+    };
+    const coreHunks = hunks.filter((h) => h.role === "core").sort(fileLine);
+    const childrenOf = new Map<string, any[]>(), trailing: any[] = [];
+    for (const h of hunks) {
+      if (h.role === "core") continue;
+      const pc = primaryCore(h);
+      if (pc) (childrenOf.get(pc) ?? childrenOf.set(pc, []).get(pc)!).push(h);
+      else trailing.push(h);
+    }
+    const ordered: any[] = [];
+    for (const ch of coreHunks) { ordered.push(ch); for (const k of (childrenOf.get(ch.id) ?? []).sort(fileLine)) ordered.push(k); }
+    for (const t of trailing.sort(fileLine)) ordered.push(t);
     const warns: string[] = [];
     for (const i of ids) for (const w of [...(seamWarnings.get(i) ?? []), ...(nodeWarnings.get(i) ?? [])]) if (!warns.includes(w)) warns.push(w);
     outSeams.push({ id: s.id, label: s.label, linkOnly: s.linkOnly, uncertain: false, warnings: warns,
-      hunks, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false });
+      hunks: ordered, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false });
   }
 
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";

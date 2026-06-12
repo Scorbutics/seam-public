@@ -24,6 +24,23 @@
               "rewire": null
             },
             {
+              "id": "h4",
+              "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+              "start": 587,
+              "end": 595,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
+                  "start": 54
+                }
+              ]
+            },
+            {
               "id": "h2",
               "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
               "start": 308,
@@ -44,23 +61,6 @@
               "external": [],
               "externalRefs": [],
               "rewire": null
-            },
-            {
-              "id": "h4",
-              "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
-              "start": 587,
-              "end": 595,
-              "role": "link",
-              "confidence": 0.8,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
-                  "start": 54
-                }
-              ]
             },
             {
               "id": "h5",
@@ -107,6 +107,17 @@
           ],
           "hunks": [
             {
+              "id": "h9",
+              "file": "app/src/main/ruby/start.rb",
+              "start": 175,
+              "end": 237,
+              "role": "core",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
               "id": "h5",
               "file": "app/src/main/java/com/psdk/ui/RootActivity.kt",
               "start": 603,
@@ -124,17 +135,6 @@
               "end": 836,
               "role": "environment",
               "confidence": 0.5,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "h9",
-              "file": "app/src/main/ruby/start.rb",
-              "start": 175,
-              "end": 237,
-              "role": "core",
-              "confidence": 0.7,
               "external": [],
               "externalRefs": [],
               "rewire": null

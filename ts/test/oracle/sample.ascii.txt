@@ -13,8 +13,8 @@ Seam · 5 hunks → 3 clusters · 3 seams · 2 cores  (roles: core 2  link 1  no
 
 ◆ g3  apply_discount
 └─ ▣ h5  apply_discount    ⚠ untested
-   ├─ → link payment.py:1   (here: link) defines charge
-   └─ ◆ core utils.py:2   defines apply_discount
+   ├─ ◆ core utils.py:2   defines apply_discount
+   └─ → link payment.py:1   (here: link) defines charge
 
 · Noise (2) — skip
 - format_only.py:1

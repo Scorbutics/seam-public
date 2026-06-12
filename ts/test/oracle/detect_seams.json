@@ -1,1 +1,195 @@
-{"clusters": [{"id": "g1", "intent": "Widget", "colorIndex": 0, "seams": [{"id": "Widget@App.tsx", "label": "Widget \u00b7 App.tsx", "linkOnly": false, "uncertain": false, "warnings": [], "hunks": [{"id": "App", "file": "src/App.tsx", "start": 1, "end": 6, "role": "link", "confidence": 0.9, "label": "App", "provenance": "RESOLVED_FULL", "relevant": true, "external": [], "externalRefs": [], "rewire": null}, {"id": "Widget", "file": "src/Widget.tsx", "start": 0, "end": 8, "role": "core", "confidence": 1.0, "label": "Widget", "provenance": "RESOLVED_FULL", "relevant": true, "external": [], "externalRefs": [], "rewire": null, "subcores": [{"id": "g1", "label": "onDelete", "ranges": [[1, 3]], "reads": ["onDelete"], "proposed": true}, {"id": "g2", "label": "console", "ranges": [[4, 6]], "reads": ["console", "log"], "proposed": true}], "contract": [{"name": "isLoading", "role": "environment", "ranges": [[7, 7]], "invoked": false, "feeds": [{"from": "src/App.tsx", "value": "busy", "line": 4, "valLine": 4, "valCol": 46}]}, {"name": "onDelete", "role": "link", "ranges": [[2, 2]], "invoked": true, "feeds": [{"from": "src/App.tsx", "value": "remove", "line": 4, "valLine": 4, "valCol": 27}]}, {"name": "title", "role": "environment", "ranges": [[2, 2], [5, 5], [7, 7]], "invoked": false, "feeds": [{"from": "src/App.tsx", "value": "\"hi\"", "line": 4, "valLine": 4, "valCol": 58}]}]}], "proposedBy": "floor", "selected": false, "suggested": false}]}], "tests": [], "noise": [], "mode": "codebase", "selectedSeam": "", "anchor": "Widget", "resolutionQuality": "FULL", "language": "typescript", "complete": true, "seamEdges": [], "edges": [{"from": "App", "to": "Widget", "kind": "call", "provenance": "RESOLVED_FULL", "line": 5}], "seamContracts": [], "blindspots": [{"node": "Widget", "mechanism": "dynamic-import", "evidence": "loaded via dynamic import in 1 place(s) \u2014 a string-path load the reference resolver can't see", "candidates": [{"symbol": "src/Loader.tsx:2", "provenance": "SUGGESTED"}]}], "unresolved": [], "health": {"cores": 1, "links": 1, "environment": 0, "isolated_cores": 0, "dangling_links": 0, "link_only": false, "unresolved": 0, "blindspots": 1}}
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "Widget",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "Widget@App.tsx",
+          "label": "Widget · App.tsx",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "Widget",
+              "file": "src/Widget.tsx",
+              "start": 0,
+              "end": 8,
+              "role": "core",
+              "confidence": 1,
+              "label": "Widget",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "subcores": [
+                {
+                  "id": "g1",
+                  "label": "onDelete",
+                  "ranges": [
+                    [
+                      1,
+                      3
+                    ]
+                  ],
+                  "reads": [
+                    "onDelete"
+                  ],
+                  "proposed": true
+                },
+                {
+                  "id": "g2",
+                  "label": "console",
+                  "ranges": [
+                    [
+                      4,
+                      6
+                    ]
+                  ],
+                  "reads": [
+                    "console",
+                    "log"
+                  ],
+                  "proposed": true
+                }
+              ],
+              "contract": [
+                {
+                  "name": "isLoading",
+                  "role": "environment",
+                  "ranges": [
+                    [
+                      7,
+                      7
+                    ]
+                  ],
+                  "invoked": false,
+                  "feeds": [
+                    {
+                      "from": "src/App.tsx",
+                      "value": "busy",
+                      "line": 4,
+                      "valLine": 4,
+                      "valCol": 46
+                    }
+                  ]
+                },
+                {
+                  "name": "onDelete",
+                  "role": "link",
+                  "ranges": [
+                    [
+                      2,
+                      2
+                    ]
+                  ],
+                  "invoked": true,
+                  "feeds": [
+                    {
+                      "from": "src/App.tsx",
+                      "value": "remove",
+                      "line": 4,
+                      "valLine": 4,
+                      "valCol": 27
+                    }
+                  ]
+                },
+                {
+                  "name": "title",
+                  "role": "environment",
+                  "ranges": [
+                    [
+                      2,
+                      2
+                    ],
+                    [
+                      5,
+                      5
+                    ],
+                    [
+                      7,
+                      7
+                    ]
+                  ],
+                  "invoked": false,
+                  "feeds": [
+                    {
+                      "from": "src/App.tsx",
+                      "value": "\"hi\"",
+                      "line": 4,
+                      "valLine": 4,
+                      "valCol": 58
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "App",
+              "file": "src/App.tsx",
+              "start": 1,
+              "end": 6,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "App",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ],
+          "proposedBy": "floor",
+          "selected": false,
+          "suggested": false
+        }
+      ]
+    }
+  ],
+  "tests": [],
+  "noise": [],
+  "mode": "codebase",
+  "selectedSeam": "",
+  "anchor": "Widget",
+  "resolutionQuality": "FULL",
+  "language": "typescript",
+  "complete": true,
+  "seamEdges": [],
+  "edges": [
+    {
+      "from": "App",
+      "to": "Widget",
+      "kind": "call",
+      "provenance": "RESOLVED_FULL",
+      "line": 5
+    }
+  ],
+  "seamContracts": [],
+  "blindspots": [
+    {
+      "node": "Widget",
+      "mechanism": "dynamic-import",
+      "evidence": "loaded via dynamic import in 1 place(s) — a string-path load the reference resolver can't see",
+      "candidates": [
+        {
+          "symbol": "src/Loader.tsx:2",
+          "provenance": "SUGGESTED"
+        }
+      ]
+    }
+  ],
+  "unresolved": [],
+  "health": {
+    "cores": 1,
+    "links": 1,
+    "environment": 0,
+    "isolated_cores": 0,
+    "dangling_links": 0,
+    "link_only": false,
+    "unresolved": 0,
+    "blindspots": 1
+  }
+}

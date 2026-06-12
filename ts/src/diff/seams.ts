@@ -120,14 +120,16 @@ function _role_blocks(hunks: Hunk[], keyPrefix: string, diffs: Map<string, strin
   return blocks;
 }
 
-// Intra-seam closeness ("wire-target pill"): in a MULTI-core seam, point each link block at the
-// specific core(s) whose distinctive symbols it references. Symbol-grounded and engine-agnostic.
-// Skipped for single-core seams (the pill would be redundant); a link with no symbol-grounded core
-// gets nothing — an honest "wires the seam, not a named core" rather than a guessed edge.
-function _attach_wire_targets(seam_hunks: Hunk[], blocks: Block[], role_for: Map<string, string>): void {
+// Intra-seam closeness: resolve, for each LINK in a multi-core seam, which core hunk(s) it wires —
+// by symbols DISTINCTIVE to one core (defined by exactly one core, so they identify it). Returns
+// linkHid → wired coreHids, cores ordered by (file, line). Drives BOTH the wire-target pill and the
+// core-grouped block ordering. Empty for single-core seams (no ambiguity) and for links with no
+// symbol-grounded core (an honest "wires the seam, not a named core" rather than a guessed edge).
+function _link_core_wiring(seam_hunks: Hunk[], role_for: Map<string, string>): Map<string, string[]> {
+  const out = new Map<string, string[]>();
   const effRole = (h: Hunk) => role_for.get(h.id) ?? h.role!;
   const cores = seam_hunks.filter((h) => effRole(h) === "core");
-  if (cores.length < 2) return; // no ambiguity to resolve — every link trivially wires the lone core
+  if (cores.length < 2) return out; // single core: every link trivially wires it — nothing to resolve
   const defs = new Map<string, Set<string>>();
   for (const c of cores) defs.set(c.id, _defs_refs(c.text)[0]);
   const freq = new Map<string, number>();
@@ -138,19 +140,71 @@ function _attach_wire_targets(seam_hunks: Hunk[], blocks: Block[], role_for: Map
     for (const s of d) if (freq.get(s) === 1) set.add(s); // a symbol defined by exactly one core IDs it
     if (set.size) distinctive.set(cid, set);
   }
-  if (!distinctive.size) return;
+  if (!distinctive.size) return out;
+  const coreLoc = new Map<string, [string, number]>();
+  for (const c of cores) coreLoc.set(c.id, [c.file_path, _hunk_start_line(c)]);
+  const byFileLine = (a: string, b: string) => {
+    const ka = coreLoc.get(a)!, kb = coreLoc.get(b)!;
+    return ka[0] < kb[0] ? -1 : ka[0] > kb[0] ? 1 : ka[1] - kb[1];
+  };
+  for (const h of seam_hunks) {
+    if (effRole(h) !== "link") continue;
+    const cids = [...segment_link_by_core(h, distinctive).keys()];
+    if (cids.length) out.set(h.id, cids.sort(byFileLine));
+  }
+  return out;
+}
+
+// The wire-target pill: stamp each wired link block with the (file, line) of the core(s) it wires.
+function _attach_wire_pills(blocks: Block[], wiring: Map<string, string[]>): void {
   const coreLoc = new Map<string, { file: string; start: number }>();
   for (const b of blocks) if (b.role === "core") coreLoc.set(b.hid, { file: b.file, start: b.start });
-  const byId = new Map<string, Hunk>();
-  for (const h of seam_hunks) byId.set(h.id, h);
   for (const b of blocks) {
     if (b.role !== "link") continue;
-    const lh = byId.get(b.hid);
-    if (!lh) continue;
-    const tgts = [...segment_link_by_core(lh, distinctive).keys()]
-      .map((cid) => coreLoc.get(cid)).filter(Boolean) as { file: string; start: number }[];
+    const tgts = (wiring.get(b.hid) ?? []).map((cid) => coreLoc.get(cid)).filter(Boolean) as { file: string; start: number }[];
     if (tgts.length) b.wires = tgts;
   }
+}
+
+// Core-grouped ordering (replaces the flat file/line sort): each core, then the links that wire it,
+// so a link sits next to what it links. A link wiring several cores lands under its EARLIEST one
+// (the pill still names the rest); links with no resolved core, and ambient env, trail in file/line
+// order. Coreless seams have no anchor, so they stay pure file/line. Operates at hunk granularity
+// (grouping blocks by hid) so an import-PEEL env sub-block always travels with its core/link sibling.
+function _order_blocks(blocks: Block[], wiring: Map<string, string[]>): Block[] {
+  const byHid = new Map<string, Block[]>();
+  const hidOrder: string[] = [];
+  for (const b of blocks) { if (!byHid.has(b.hid)) { byHid.set(b.hid, []); hidOrder.push(b.hid); } byHid.get(b.hid)!.push(b); }
+  const roleOf = (hid: string): string => {
+    const bs = byHid.get(hid)!;
+    return bs.some((b) => b.role === "core") ? "core" : bs.some((b) => b.role === "link") ? "link" : "environment";
+  };
+  const loc = (hid: string): [string, number] => {
+    const bs = byHid.get(hid)!;
+    const main = bs.find((b) => b.role !== "environment") ?? bs[0]; // the env-peel sub-block isn't the anchor
+    return [main.file, main.start];
+  };
+  const byFileLine = (a: string, b: string) => {
+    const ka = loc(a), kb = loc(b);
+    return ka[0] < kb[0] ? -1 : ka[0] > kb[0] ? 1 : ka[1] - kb[1];
+  };
+  const coreHids = hidOrder.filter((h) => roleOf(h) === "core").sort(byFileLine);
+  const corePresent = new Set(coreHids);
+  const childrenOf = new Map<string, string[]>(); // coreHid → its link hids
+  for (const h of hidOrder) {
+    if (roleOf(h) !== "link") continue;
+    const primary = (wiring.get(h) ?? []).find((c) => corePresent.has(c));
+    if (primary) (childrenOf.get(primary) ?? childrenOf.set(primary, []).get(primary)!).push(h);
+  }
+  const used = new Set<string>();
+  const out: Block[] = [];
+  const push = (hid: string) => { if (used.has(hid)) return; used.add(hid); out.push(...byHid.get(hid)!); };
+  for (const ch of coreHids) {
+    push(ch);
+    for (const k of (childrenOf.get(ch) ?? []).sort(byFileLine)) push(k);
+  }
+  for (const h of hidOrder.filter((x) => !used.has(x)).sort(byFileLine)) push(h); // unwired links + ambient env
+  return out;
 }
 
 function _verify_pair(hasCore: boolean, hasLink: boolean, corelessCluster = false): any {
@@ -256,8 +310,10 @@ export function _build_clusters(hunks: Hunk[], repo?: string): [ClusterDict[], M
     const seams: SeamDict[] = [];
     const cluster_kinds = new Map<string, number>();
     for (const [sid, label, seam_hunks, link_ids, role_for] of specs) {
-      const blocks = _role_blocks(seam_hunks, `${gid}-${sid}`, diffs, sid, span_map, role_for, core_span_map);
-      _attach_wire_targets(seam_hunks, blocks, role_for);
+      const raw_blocks = _role_blocks(seam_hunks, `${gid}-${sid}`, diffs, sid, span_map, role_for, core_span_map);
+      const wiring = _link_core_wiring(seam_hunks, role_for);
+      _attach_wire_pills(raw_blocks, wiring);
+      const blocks = _order_blocks(raw_blocks, wiring); // core-grouped: links next to what they wire
       const sHasCore = blocks.some((b) => b.role === "core");
       const sHasLink = blocks.some((b) => b.role === "link");
       const verification = _verify_pair(sHasCore, sHasLink, coreless);

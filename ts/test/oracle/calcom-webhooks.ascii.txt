@@ -4,9 +4,9 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 ◆ g1  WebhookForm
 ├─ ▸ webhooks  (12 seams)
 │  ├─ ▣ h8  EventWebhooksTab    ⚠ untested
+│  │  ├─ ◆ core EventWebhooksTab.tsx:126   defines EventWebhooksTab
 │  │  ├─ ∙ env  InstantEventController.tsx:374   no logic or wiring detected (uncertain)
 │  │  ├─ → link EventWebhooksTab.tsx:95   references a core's symbol (wires it in)
-│  │  ├─ ◆ core EventWebhooksTab.tsx:126   defines EventWebhooksTab
 │  │  ├─ → link CreateNewWebhookButton.tsx:36   (here: link) defines CreateNewWebhookButton
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, WebhookTestDisclosure, DeleteWebhookDialog
 │  │  ├─ → link WebhookForm.tsx:577   (here: link) defines WebhookForm
@@ -23,9 +23,9 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 │  │  ├─ ∙ env  index.ts:1   wires: WebhooksView
 │  │  └─ → link webhooks-view.tsx:55   (here: link) defines WebhooksView
 │  ├─ ▣ h17  WebhookListItem    ⚠ untested · ↔ h48,h33,h41
+│  │  ├─ ◆ core WebhookListItem.tsx:56   defines WebhookListItem
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookTestDisclosure, DeleteWebhookDialog, EventWebhooksTab
 │  │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookVersionCTA, DeleteWebhookDialog, WebhookFormSkeleton
-│  │  ├─ ◆ core WebhookListItem.tsx:56   defines WebhookListItem
 │  │  ├─ → link WebhookListItem.tsx:355   wires: ListItem
 │  │  ├─ ∙ env  webhook-edit-view.tsx:77   wires: WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookTestDisclosure, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
@@ -33,34 +33,36 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 │  │  ├─ ∙ env  webhooks-skeleton.tsx:1   (here: environment) wires: WebhookFormSkeleton, WebhooksHeader, ListItem
 │  │  └─ → link webhooks-skeleton.tsx:6   wires: WebhookFormSkeleton, WebhooksHeader, ListItem
 │  ├─ ▣ h22  WebhookTestDisclosure    ⚠ untested · ⚠ isolated-core
+│  │  ├─ ◆ core WebhookTestDisclosure.tsx:19   defines WebhookTestDisclosure
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, DeleteWebhookDialog, EventWebhooksTab
 │  │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookForm, WebhookFormSkeleton, WebhookTestHeader
-│  │  ├─ ◆ core WebhookTestDisclosure.tsx:19   defines WebhookTestDisclosure
 │  │  ├─ ∙ env  webhook-edit-view.tsx:77   wires: WebhookListItem, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  └─ ∙ env  webhook-new-view.tsx:53   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  ├─ ▣ h23  WebhookVersionCTA    ⚠ untested · ↔ h32,h47,h33,h9,h48
+│  │  ├─ ∙ env  WebhookVersionCTA.tsx:1   (here: environment) defines WebhookVersionCTA
+│  │  ├─ ◆ core WebhookVersionCTA.tsx:4   defines WebhookVersionCTA
 │  │  ├─ → link EventWebhooksTab.tsx:26   wires: WebhookFormHeader, AppHeader
 │  │  ├─ → link EventWebhooksTab.tsx:240   (here: link) defines EventWebhooksTab
 │  │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookListItem, DeleteWebhookDialog, WebhookFormSkeleton
 │  │  ├─ → link WebhookListItem.tsx:132   (here: link) defines WebhookListItem
-│  │  ├─ ∙ env  WebhookVersionCTA.tsx:1   (here: environment) defines WebhookVersionCTA
-│  │  ├─ ◆ core WebhookVersionCTA.tsx:4   defines WebhookVersionCTA
 │  │  ├─ ∙ env  webhook-edit-view.tsx:14   wires: WebhookFormHeader, WebhookFormSkeleton, EventWebhooksTab
 │  │  ├─ → link webhook-edit-view.tsx:64   wires: WebhookFormHeader, WebhookFormSkeleton
 │  │  ├─ ∙ env  webhook-new-view.tsx:15   wires: WebhookFormHeader, WebhookFormSkeleton, EventWebhooksTab
 │  │  └─ → link webhook-new-view.tsx:86   wires: WebhookFormHeader
 │  ├─ ▣ h32  WebhookFormHeader    ⚠ untested · ↔ h23,h47,h33,h40
+│  │  ├─ ∙ env  webhook-form-header.tsx:1   (here: environment) defines WebhookFormHeader
+│  │  ├─ ◆ core webhook-form-header.tsx:7   defines WebhookFormHeader
 │  │  ├─ → link EventWebhooksTab.tsx:27   wires: WebhookVersionCTA, AppHeader
 │  │  ├─ → link EventWebhooksTab.tsx:237   (here: link) defines EventWebhooksTab
 │  │  ├─ ∙ env  webhook-edit-view.tsx:15   wires: WebhookVersionCTA, WebhookFormSkeleton, EventWebhooksTab
 │  │  ├─ → link webhook-edit-view.tsx:65   wires: WebhookVersionCTA, WebhookFormSkeleton
-│  │  ├─ ∙ env  webhook-form-header.tsx:1   (here: environment) defines WebhookFormHeader
-│  │  ├─ ◆ core webhook-form-header.tsx:7   defines WebhookFormHeader
 │  │  ├─ → link webhook-form-skeleton.tsx:5   (here: link) defines WebhookFormSkeleton
 │  │  ├─ ∙ env  webhook-new-view.tsx:16   wires: WebhookVersionCTA, WebhookFormSkeleton, EventWebhooksTab
 │  │  └─ → link webhook-new-view.tsx:87   wires: WebhookVersionCTA
 │  ├─ ▣ h33  WebhookFormSkeleton    ⚠ untested · ↔ h23,h32,h17,h41,h48
+│  │  ├─ ∙ env  webhook-form-skeleton.tsx:1   (here: environment) defines WebhookFormSkeleton
+│  │  ├─ ◆ core webhook-form-skeleton.tsx:9   defines WebhookFormSkeleton
 │  │  ├─ ∙ env  loading.tsx:1   (here: environment) references a core's symbol (wires it in)
 │  │  ├─ → link loading.tsx:3   references a core's symbol (wires it in)
 │  │  ├─ ∙ env  loading.tsx:1   (here: environment) references a core's symbol (wires it in)  ·  ↻ SkeletonLoader → WebhookFormSkeleton
@@ -69,63 +71,61 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 │  │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookForm, WebhookTestDisclosure, WebhookTestHeader
 │  │  ├─ ∙ env  webhook-edit-view.tsx:16   wires: WebhookVersionCTA, WebhookFormHeader, EventWebhooksTab
 │  │  ├─ → link webhook-edit-view.tsx:57   wires: WebhookVersionCTA, WebhookFormHeader
-│  │  ├─ ∙ env  webhook-form-skeleton.tsx:1   (here: environment) defines WebhookFormSkeleton
-│  │  ├─ ◆ core webhook-form-skeleton.tsx:9   defines WebhookFormSkeleton
 │  │  ├─ ∙ env  webhook-new-view.tsx:1   wires: WebhookVersionCTA, WebhookFormHeader, EventWebhooksTab
 │  │  ├─ ∙ env  webhooks-skeleton.tsx:1   (here: environment) wires: WebhookListItem, WebhooksHeader, ListItem
 │  │  └─ → link webhooks-skeleton.tsx:6   wires: WebhookListItem, WebhooksHeader, ListItem
 │  ├─ ▣ h40  WebhookTestHeader    ⚠ untested · ↔ h32
+│  │  ├─ ∙ env  webhook-test-header.tsx:1   (here: environment) defines WebhookTestHeader
+│  │  ├─ ◆ core webhook-test-header.tsx:5   defines WebhookTestHeader
 │  │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookForm, WebhookTestDisclosure, WebhookFormSkeleton
 │  │  ├─ → link WebhookTestDisclosure.tsx:28   (here: link) defines WebhookTestDisclosure
-│  │  ├─ → link webhook-form-skeleton.tsx:6   (here: link) defines WebhookFormSkeleton
-│  │  ├─ ∙ env  webhook-test-header.tsx:1   (here: environment) defines WebhookTestHeader
-│  │  └─ ◆ core webhook-test-header.tsx:5   defines WebhookTestHeader
+│  │  └─ → link webhook-form-skeleton.tsx:6   (here: link) defines WebhookFormSkeleton
 │  ├─ ▣ h41  WebhooksHeader    ⚠ untested · ↔ h17,h33,h48
 │  │  ├─ ∙ env  webhooks-header.tsx:1   (here: environment) defines WebhooksHeader
 │  │  ├─ ◆ core webhooks-header.tsx:6   defines WebhooksHeader
 │  │  └─ → link webhooks-skeleton.tsx:12   wires: WebhookListItem, WebhookFormSkeleton, ListItem
 │  ├─ ▣ h44  WebhooksView    ⚠ untested · ⚠ isolated-core
+│  │  ├─ ◆ core webhooks-view.tsx:41   defines WebhooksView
 │  │  ├─ ∙ env  index.ts:1   wires: CreateNewWebhookButton
 │  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  ├─ ∙ env  webhook-new-view.tsx:53   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  ├─ ∙ env  webhook-new-view.tsx:63   no logic or wiring detected (uncertain)
-│  │  └─ ◆ core webhooks-view.tsx:41   defines WebhooksView
+│  │  └─ ∙ env  webhook-new-view.tsx:63   no logic or wiring detected (uncertain)
 │  ├─ ▣ h47  AppHeader    ⚠ untested · ↔ h23,h32,h9
+│  │  ├─ ∙ env  app-header.tsx:1   (here: environment) defines AppHeader
+│  │  ├─ ◆ core app-header.tsx:3   defines AppHeader
 │  │  ├─ → link EventWebhooksTab.tsx:16   wires: WebhookVersionCTA, WebhookFormHeader
 │  │  ├─ → link EventWebhooksTab.tsx:152   (here: link) defines EventWebhooksTab
 │  │  ├─ → link webhook-form-header.tsx:7   (here: link) defines WebhookFormHeader
 │  │  ├─ → link webhooks-header.tsx:6   (here: link) defines WebhooksHeader
 │  │  ├─ ∙ env  webhooks-view.tsx:4   (here: environment) references a core's symbol (wires it in)
 │  │  ├─ → link webhooks-view.tsx:10   references a core's symbol (wires it in)
-│  │  ├─ → link webhooks-view.tsx:49   (here: link) defines WebhooksView
-│  │  ├─ ∙ env  app-header.tsx:1   (here: environment) defines AppHeader
-│  │  └─ ◆ core app-header.tsx:3   defines AppHeader
+│  │  └─ → link webhooks-view.tsx:49   (here: link) defines WebhooksView
 │  └─ ▣ h48  ListItem    ⚠ untested · ↔ h17,h33,h41,h9,h23
+│     ├─ ∙ env  list-item.tsx:1   (here: environment) defines ListItem
+│     ├─ ◆ core list-item.tsx:6   defines ListItem
 │     ├─ → link WebhookListItem.tsx:30   (here: link) defines WebhookListItem
 │     ├─ → link WebhookListItem.tsx:98   (here: link) defines WebhookListItem
 │     ├─ → link WebhookListItem.tsx:355   wires: WebhookListItem
-│     ├─ → link webhooks-skeleton.tsx:6   wires: WebhookListItem, WebhookFormSkeleton, WebhooksHeader
-│     ├─ ∙ env  list-item.tsx:1   (here: environment) defines ListItem
-│     └─ ◆ core list-item.tsx:6   defines ListItem
+│     └─ → link webhooks-skeleton.tsx:6   wires: WebhookListItem, WebhookFormSkeleton, WebhooksHeader
 └─ ▸ webhooks  (2 seams)
    ├─ ▣ h12  WebhookForm    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
-   │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookListItem, WebhookVersionCTA, DeleteWebhookDialog, WebhookFormSkeleton
    │  ├─ ◆ core WebhookForm.tsx:315   defines WebhookForm
-   │  ├─ ∙ env  WebhookForm.tsx:337   no logic or wiring detected (uncertain)
    │  ├─ ◆ core WebhookForm.tsx:358   defines WebhookForm
    │  ├─ ◆ core WebhookForm.tsx:383   defines WebhookForm
+   │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookListItem, WebhookVersionCTA, DeleteWebhookDialog, WebhookFormSkeleton
+   │  ├─ ∙ env  WebhookForm.tsx:337   no logic or wiring detected (uncertain)
    │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookTestDisclosure, WebhookFormSkeleton, WebhookTestHeader
    │  └─ ∙ env  DeleteWebhookDialog.tsx:1   wires: DeleteWebhookDialog
    └─ ▣ h25  DeleteWebhookDialog    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
+      ├─ ◆ core DeleteWebhookDialog.tsx:23   defines DeleteWebhookDialog
       ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab
       ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookListItem, WebhookVersionCTA, WebhookFormSkeleton
-      ├─ ∙ env  DeleteWebhookDialog.tsx:1   wires: WebhookForm
-      └─ ◆ core DeleteWebhookDialog.tsx:23   defines DeleteWebhookDialog
+      └─ ∙ env  DeleteWebhookDialog.tsx:1   wires: WebhookForm
 
 ◆ g2  Providers
 └─ ▣ h4  Providers    ⚠ untested · ~ uncertain 50% · ⚠ isolated-core
-   ├─ ∙ env  providers.tsx:3   imports wiring the change in
-   └─ ◆ core providers.tsx:25   defines Providers
+   ├─ ◆ core providers.tsx:25   defines Providers
+   └─ ∙ env  providers.tsx:3   imports wiring the change in
 
 ◆ g5  WebhookListItem
 └─ ▣ h16  WebhookListItem    ⚠ untested

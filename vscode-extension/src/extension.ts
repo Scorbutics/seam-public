@@ -168,6 +168,10 @@ let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file �
 // Seam graph (S1): seam id → label, and seam id → its wired neighbours (resolved seam-to-seam).
 let seamLabel: Map<string, string> = new Map();
 let seamNeighbors: Map<string, { id: string; provenance: string }[]> = new Map();
+// The inter-seam CONTRACT, inlined: seam id → the contracts it participates in, keyed by the OTHER
+// seam (the partner). Lets a seam render its bridging symbols under its own connection rows instead
+// of in a detached bottom section. A contract is symmetric, so it indexes under both of its seams.
+let seamContractsByPartner: Map<string, Map<string, SeamContract>> = new Map();
 // Combo-keyed like decoSpine: one cached fill per role-combo ("core", "core|link", …), so any
 // given line is covered by exactly ONE background decoration → opacity is flat everywhere and
 // overlaps blend instead of stacking. Built lazily by fillFor; painted only on the focused seam.
@@ -592,11 +596,17 @@ function buildIndex() {
   fileIndex = new Map();
   seamLabel = new Map();
   seamNeighbors = new Map();
+  seamContractsByPartner = new Map();
   if (!model) return;
   for (const cl of model.clusters) for (const s of cl.seams) seamLabel.set(s.id, s.label);
   for (const e of model.seamEdges ?? []) {
     (seamNeighbors.get(e.from) ?? seamNeighbors.set(e.from, []).get(e.from)!).push({ id: e.to, provenance: e.provenance });
     (seamNeighbors.get(e.to) ?? seamNeighbors.set(e.to, []).get(e.to)!).push({ id: e.from, provenance: e.provenance });
+  }
+  // Index each contract under BOTH its seams (keyed by the partner), so either seam can inline it.
+  for (const c of model.seamContracts ?? []) {
+    (seamContractsByPartner.get(c.seamA) ?? seamContractsByPartner.set(c.seamA, new Map()).get(c.seamA)!).set(c.seamB, c);
+    (seamContractsByPartner.get(c.seamB) ?? seamContractsByPartner.set(c.seamB, new Map()).get(c.seamB)!).set(c.seamA, c);
   }
   const add = (e: IndexEntry) => {
     const list = fileIndex.get(e.hunk.file) ?? [];
@@ -1426,12 +1436,9 @@ type Node =
   // Chain view: one directed edge off a symbol — outgoing dep (→), incoming use (←), or a SUGGESTED
   // crossing (⧉). Carries the relation kind + provenance so the nature is visible.
   | { kind: "edge"; dir: "out" | "in" | "suggested"; toId?: string; targetLabel?: string; edgeKind: string; provenance: string }
-  // The inter-seam CONTRACT layer: the section, one seam-pair, one bridging link, and its two ends
-  // (the CALLER at the call-site, and the CALLEE at its definition) so both sides are reachable.
-  | { kind: "contracts" }
-  | { kind: "contractPair"; contract: SeamContract }
-  | { kind: "contractLink"; link: GraphEdge }
-  | { kind: "contractEnd"; side: "from" | "to"; link: GraphEdge };
+  // The inter-seam CONTRACT, marked ON a participating hunk: the SINGLE counterpart on the other side
+  // (the core a link reaches → outgoing; the link that reaches a core ← ingoing) — no duplicated pair.
+  | { kind: "contractCross"; link: GraphEdge; selfId: string };
 
 // A3: lazy cache of "where does this fed value come from" (one more hop up the chain).
 const feedDefCache = new Map<string, Promise<{ uri: vscode.Uri; line: number }[]>>();
@@ -1441,6 +1448,17 @@ function findHunkById(id: string): SeamHunk | undefined {
   if (!model) return undefined;
   for (const cl of model.clusters) for (const s of cl.seams) for (const h of s.hunks) if (h.id === id) return h;
   return model.tests.find((h) => h.id === id);
+}
+// The inter-seam contract, viewed FROM a hunk: the bridging links this hunk is an endpoint of (within
+// the contracts the given seam participates in), plus the partner seams on the other side. Drives the
+// inline "↔ <other seam>" marker on the code block itself, instead of a detached contract section.
+function hunkContract(seamId: string, hunkId: string): { links: GraphEdge[]; partners: Set<string> } {
+  const links: GraphEdge[] = [];
+  const partners = new Set<string>();
+  for (const [partnerId, contract] of seamContractsByPartner.get(seamId) ?? [])
+    for (const link of contract.links)
+      if (link.from === hunkId || link.to === hunkId) { links.push(link); partners.add(partnerId); }
+  return { links, partners };
 }
 const hasShadows = (m: SeamModel): boolean =>
   m.mode === "codebase" && !!((m.blindspots?.length ?? 0) + (m.unresolved?.length ?? 0));
@@ -1506,21 +1524,13 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     if (!model) return [];
     if (!el) {
       const roots: Node[] = model.clusters.map((cluster) => ({ kind: "cluster", cluster }));
-      // The inter-seam CONTRACT layer sits BETWEEN the seams and the blind spots — its own dedicated
-      // space (the symbols bridging seam pairs), so the boundary a reviewer must validate is explicit.
-      if (model.seamContracts?.length) roots.push({ kind: "contracts" });
+      // The inter-seam CONTRACT is no longer a dedicated section — each contract drills down INLINE
+      // under the connection rows of the two seams it bridges (see the "seam"/"seamLink" branches).
       // The blind-spot map sits at the TOP LEVEL, beside the seams, so "where I'm blind"
       // is as visible as "what I resolved" (the differentiator — never buried).
       if (hasShadows(model)) roots.push({ kind: "shadows" });
       return roots;
     }
-    if (el.kind === "contracts")
-      return (model.seamContracts ?? []).map((contract) => ({ kind: "contractPair", contract } as Node));
-    if (el.kind === "contractPair")
-      return el.contract.links.map((link) => ({ kind: "contractLink", link } as Node));
-    if (el.kind === "contractLink")
-      return [{ kind: "contractEnd", side: "from", link: el.link } as Node,
-              { kind: "contractEnd", side: "to", link: el.link } as Node];
     if (el.kind === "shadows") {
       const out: Node[] = (model.blindspots ?? []).map((bs) => ({ kind: "blindspot", bs } as Node));
       return out.concat((model.unresolved ?? []).map((ur) => ({ kind: "unknown", ur } as Node)));
@@ -1569,7 +1579,8 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
         .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     }
     if (el.kind === "seam") {
-      // the seam's resolved wiring (other seams it connects to) shows first, then its hunks.
+      // the seam's resolved wiring (other seams it connects to) shows first, then its hunks. The
+      // inter-seam CONTRACT is not a row here — it's marked on the participating hunks themselves.
       const links: Node[] = (seamNeighbors.get(el.seam.id) ?? [])
         .map((n) => ({ kind: "seamLink", toId: n.id, provenance: n.provenance } as Node));
       const hunks: Node[] = el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
@@ -1593,6 +1604,10 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // A core expands to its drill-downs: the CONTRACT members (Model A) and any proposed
       // behavioural sub-cores (Model B) — both are finer altitudes of the one core.
       const drill: Node[] = [];
+      // Inter-seam contract: the COUNTERPART this hunk reaches (or is reached by) shows FIRST — the
+      // boundary lives on the code block, and each row points only at its other end (no pair dup).
+      for (const link of hunkContract(el.seam.id, el.hunk.id).links)
+        drill.push({ kind: "contractCross", link, selfId: el.hunk.id });
       for (const member of el.hunk.contract ?? []) drill.push({ kind: "contract", hunk: el.hunk, member });
       for (const sub of el.hunk.subcores ?? []) drill.push({ kind: "subcore", hunk: el.hunk, sub });
       // Blast radius: who outside the diff consumes a symbol this hunk defines (resolved first).
@@ -1639,7 +1654,11 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     if (el.kind === "seam") {
       const h = seamHealth(el.seam);
       const counts = seamRoleCounts(el.seam);
-      const wired = seamNeighbors.get(el.seam.id)?.length ?? 0;
+      // Connections = the UNION of resolved seam-edges and shared contracts (a contract may exist
+      // without a seam-edge), so the ↔ badge counts every other seam this one actually touches.
+      const partnerIds = new Set<string>((seamNeighbors.get(el.seam.id) ?? []).map((n) => n.id));
+      for (const pid of seamContractsByPartner.get(el.seam.id)?.keys() ?? []) partnerIds.add(pid);
+      const wired = partnerIds.size;
       const it = new vscode.TreeItem(
         h.glyph ? `${h.glyph} ${el.seam.label}` : el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
       // Description = the seam's CHARACTER (role makeup) + how connected it is — risk lives in the
@@ -1684,61 +1703,25 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       if (target) it.command = { command: "seam.open", title: "Open", arguments: [target] };
       return it;
     }
-    if (el.kind === "contracts") {
-      const cs = model?.seamContracts ?? [];
-      const blurry = cs.filter((c) => c.blurry).length;
-      const it = new vscode.TreeItem("Seam contracts", vscode.TreeItemCollapsibleState.Expanded);
-      it.description = `${cs.length} between seams${blurry ? ` · ${blurry} blurry` : ""}`;
-      it.iconPath = new vscode.ThemeIcon("git-compare", blurry ? new vscode.ThemeColor("charts.yellow") : undefined);
-      it.tooltip = "The CONTRACT between seams — the symbols that bridge each pair of intents, and how " +
-        "solid the link is. A BLURRY contract (heuristic / assumed edges) is the boundary to eyeball.";
-      return it;
-    }
-    if (el.kind === "contractPair") {
-      const c = el.contract;
-      const a = seamLabel.get(c.seamA) ?? c.seamA, b = seamLabel.get(c.seamB) ?? c.seamB;
-      const it = new vscode.TreeItem(`${a}  ↔  ${b}`, vscode.TreeItemCollapsibleState.Expanded);
-      it.description = `${c.links.length} link${c.links.length > 1 ? "s" : ""}${c.blurry ? "  ·  ⚠ blurry" : ""}`;
-      it.iconPath = new vscode.ThemeIcon(c.blurry ? "warning" : "arrow-both",
-        new vscode.ThemeColor(c.blurry ? "charts.yellow" : "charts.green"));
-      it.tooltip = c.blurry
-        ? `"${a}" and "${b}" are linked by HEURISTIC/assumed edges — a blurry contract to validate.`
-        : `"${a}" and "${b}" are linked by resolved edges.`;
-      return it;
-    }
-    if (el.kind === "contractLink") {
-      // expandable to BOTH ends — the caller (call-site) and the callee (definition) — so you can see
-      // where one seam reaches into the other, not just the symbol's implementation.
+    if (el.kind === "contractCross") {
+      // The hunk's single counterpart across the seam boundary. If THIS hunk is the source (→ out),
+      // we point at the callee's definition; if it's the target (← in), at the exact call-site.
       const l = el.link;
-      const from = findHunkById(l.from), to = findHunkById(l.to);
+      const out = l.from === el.selfId;
+      const partner = findHunkById(out ? l.to : l.from);
       const partial = /PARTIAL/.test(l.provenance), suggested = /SUGGEST/i.test(l.provenance);
-      const it = new vscode.TreeItem(`${from?.label ?? l.from} → ${to?.label ?? l.to}`, vscode.TreeItemCollapsibleState.Collapsed);
-      it.description = `${l.kind} · ${suggested ? "SUGGESTED" : partial ? "RESOLVED (partial)" : "RESOLVED"}`;
-      it.iconPath = new vscode.ThemeIcon(suggested ? "lightbulb" : partial ? "kebab-horizontal" : "arrow-right",
+      const provLabel = suggested ? "SUGGESTED" : partial ? "RESOLVED (partial)" : "RESOLVED";
+      // outgoing → the counterpart's definition line; ingoing → the call-site line (l.line).
+      const line = out ? (partner?.start ?? 0) : (l.line && l.line > 0 ? l.line : (partner?.start ?? 0));
+      const it = new vscode.TreeItem(`${out ? "→" : "←"} ${partner?.label ?? (out ? l.to : l.from)}`,
+        vscode.TreeItemCollapsibleState.None);
+      it.description = `${partner ? partner.file.split("/").pop() + ":" + line : ""} · ${l.kind} · ${provLabel}`;
+      it.iconPath = new vscode.ThemeIcon(out ? "arrow-small-right" : "arrow-small-left",
         new vscode.ThemeColor(suggested ? "charts.yellow" : partial ? "charts.orange" : "charts.green"));
-      it.tooltip = `${from?.label ?? l.from} → ${to?.label ?? l.to}\nrelation: ${l.kind} · ${l.provenance}` +
-        "\nexpand to jump to the call-site (caller) or the definition (callee)";
-      return it;
-    }
-    if (el.kind === "contractEnd") {
-      const l = el.link;
-      const fromH = findHunkById(l.from), toH = findHunkById(l.to);
-      if (el.side === "from") {
-        // the CALLER side — jump to the exact call-site (call line in the caller's file) if known.
-        const line = l.line && l.line > 0 ? l.line : (fromH?.start ?? 0);
-        const it = new vscode.TreeItem(`← called from ${fromH?.label ?? l.from}`, vscode.TreeItemCollapsibleState.None);
-        it.description = fromH ? `${fromH.file.split("/").pop()}:${line}` : l.from;
-        it.iconPath = new vscode.ThemeIcon("arrow-small-left", new vscode.ThemeColor("charts.blue"));
-        it.tooltip = `where ${fromH?.label ?? l.from} calls ${toH?.label ?? l.to} (the seam boundary crossing)`;
-        if (fromH) it.command = { command: "seam.open", title: "Open call-site",
-          arguments: [{ ...fromH, start: line, end: line }] };
-        return it;
-      }
-      const it = new vscode.TreeItem(`→ ${toH?.label ?? l.to} (definition)`, vscode.TreeItemCollapsibleState.None);
-      it.description = toH ? `${toH.file.split("/").pop()}:${toH.start}` : l.to;
-      it.iconPath = new vscode.ThemeIcon("symbol-method", new vscode.ThemeColor("charts.green"));
-      it.tooltip = `the definition of ${toH?.label ?? l.to}`;
-      if (toH) it.command = { command: "seam.open", title: "Open definition", arguments: [toH] };
+      it.tooltip = out
+        ? `reaches ${partner?.label ?? l.to} (${partner?.file}:${line}) — the seam boundary this block crosses TO`
+        : `reached from ${partner?.label ?? l.from} (${partner?.file}:${line}) — where the other seam crosses INTO this block`;
+      if (partner) it.command = { command: "seam.open", title: "Open", arguments: [{ ...partner, start: line, end: line }] };
       return it;
     }
     if (el.kind === "shadows") {
@@ -1853,6 +1836,18 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return it;
     }
     const h = el.hunk;
+    // Inter-seam contract, marked ON the code block: which seam(s) on the other side, and the
+    // DIRECTION — → this block reaches OUT to a counterpart, ← it's reached INTO, ↔ both. The role
+    // icon is tinted by the contract's solidity so the boundary block "pops" in the seam.
+    const ct = hunkContract(el.seam.id, h.id);
+    const ctPartners = [...ct.partners].map((id) => seamLabel.get(id) ?? id);
+    const ctOut = ct.links.some((l) => l.from === h.id), ctIn = ct.links.some((l) => l.to === h.id);
+    const ctArrow = ctOut && ctIn ? "↔" : ctOut ? "→" : "←";
+    const ctTag = ct.links.length
+      ? `${ctArrow} ${ctPartners.length === 1 ? ctPartners[0] : ctPartners.length + " seams"}` : "";
+    const ctColor = !ct.links.length ? ""
+      : ct.links.some((l) => /SUGGEST/i.test(l.provenance)) ? "charts.yellow"
+      : ct.links.some((l) => /PARTIAL/.test(l.provenance)) ? "charts.orange" : "charts.green";
     const unc = isUncertain(h);
     const ext = extTag(h);
     const rw = rewireStr(h);
@@ -1860,7 +1855,7 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
     const ncons = h.consumers?.length ?? 0;   // blast radius: consumers outside the diff
     // in chain view a symbol expands to its edges (any node touching this id); otherwise to its drill-downs.
     const hasEdges = chainView && (model?.edges ?? []).some((e) => e.from === h.id || e.to === h.id);
-    const expandable = hasEdges || (!chainView && ((h.externalRefs && h.externalRefs.length) || nsub || ncon || ncons));
+    const expandable = hasEdges || (!chainView && ((h.externalRefs && h.externalRefs.length) || nsub || ncon || ncons || ct.links.length));
     // Codebase mode: a depth-2 `environment` node is the BOUNDARY FRONTIER (a consumer-of-a-consumer
     // — it uses the footprint but serves a different intent). Render it distinctly: a hollow, muted,
     // ripples-outward look so it reads as "the edge of the footprint", not an in-footprint member.
@@ -1874,7 +1869,7 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
     const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "",
-                  wireTargetTag(h),
+                  ctTag, wireTargetTag(h),
                   h.caller ? `↑ called by ${h.label}` : "", pv, rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",
@@ -1891,7 +1886,9 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
              : h.role) +
         ` — ${h.file}:${h.start}-${h.end}` +
         (rw ? `\nre-routes ${rw}` : "") +
-        (ext ? `\nwires outside the diff:${ext} (the §I boundary — go look there)` : "");
+        (ext ? `\nwires outside the diff:${ext} (the §I boundary — go look there)` : "") +
+        (ct.links.length ? `\n↔ inter-seam contract with ${ctPartners.join(", ")} — this block is a ` +
+          `boundary crossing (${ct.links.length} bridging link${ct.links.length > 1 ? "s" : ""}); expand for the call-site/definition` : "");
     it.iconPath = boundary
       ? new vscode.ThemeIcon("circle-large-outline", new vscode.ThemeColor("descriptionForeground"))
       : incidental
@@ -1899,6 +1896,8 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       : pv   // a string-dispatch (partial) / suggested crossing → tinted so it reads as "go verify"
       ? new vscode.ThemeIcon(ROLE_ICON[h.role] ?? "circle-small",
           new vscode.ThemeColor(/SUGGEST/i.test(h.provenance ?? "") ? "charts.yellow" : "charts.orange"))
+      : ctColor   // a contract endpoint → tint the role icon so the boundary block stands out
+      ? new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"), new vscode.ThemeColor(ctColor))
       : new vscode.ThemeIcon(unc ? "question" : (ROLE_ICON[h.role] ?? "circle-small"));
     it.command = { command: "seam.open", title: "Open", arguments: [h] };
     // P2/P3: a codebase-mode node can be EXPANDED — up (its consumers) or down (its dependencies).

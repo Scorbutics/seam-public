@@ -1,1 +1,164 @@
-{"clusters": [{"id": "g1", "intent": "product intent 1", "colorIndex": 0, "seams": [{"id": "h1", "label": "seam h1", "linkOnly": false, "uncertain": true, "warnings": [], "hunks": [{"id": "h1", "file": "ext/LiteRGSS3/graphics/Shape.cpp", "start": 13, "end": 19, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h2", "file": "ext/LiteRGSS3/graphics/Shape.cpp", "start": 85, "end": 110, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h3", "file": "ext/LiteRGSS3/graphics/Sprite.cpp", "start": 7, "end": 13, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h4", "file": "ext/LiteRGSS3/graphics/Sprite.cpp", "start": 65, "end": 82, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": {"removed": ["Graphics"], "added": ["RTEST"]}}, {"id": "h5", "file": "ext/LiteRGSS3/graphics/Sprite.cpp", "start": 84, "end": 95, "role": "core", "confidence": 0.7, "external": [], "externalRefs": [], "rewire": null}, {"id": "h6", "file": "ext/LiteRGSS3/graphics/Text.cpp", "start": 15, "end": 21, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h7", "file": "ext/LiteRGSS3/graphics/Text.cpp", "start": 53, "end": 80, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h8", "file": "ext/LiteRGSS3/window/FramedView.cpp", "start": 1, "end": 22, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h9", "file": "ext/LiteRGSS3/window/FramedView.cpp", "start": 35, "end": 467, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h10", "file": "ext/LiteRGSS3/window/FramedView.h", "start": 4, "end": 37, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null, "suggestedWires": ["h1"]}, {"id": "h11", "file": "ext/LiteRGSS3/window/FramedView.h", "start": 39, "end": 48, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h12", "file": "ext/LiteRGSS3/window/FramedView.h", "start": 51, "end": 56, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}]}]}], "tests": [], "noise": []}
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "product intent 1",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "h1",
+          "label": "seam h1",
+          "linkOnly": false,
+          "uncertain": true,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h1",
+              "file": "ext/LiteRGSS3/graphics/Shape.cpp",
+              "start": 13,
+              "end": 19,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h2",
+              "file": "ext/LiteRGSS3/graphics/Shape.cpp",
+              "start": 85,
+              "end": 110,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h3",
+              "file": "ext/LiteRGSS3/graphics/Sprite.cpp",
+              "start": 7,
+              "end": 13,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h4",
+              "file": "ext/LiteRGSS3/graphics/Sprite.cpp",
+              "start": 65,
+              "end": 82,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": {
+                "removed": [
+                  "Graphics"
+                ],
+                "added": [
+                  "RTEST"
+                ]
+              }
+            },
+            {
+              "id": "h5",
+              "file": "ext/LiteRGSS3/graphics/Sprite.cpp",
+              "start": 84,
+              "end": 95,
+              "role": "core",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h6",
+              "file": "ext/LiteRGSS3/graphics/Text.cpp",
+              "start": 15,
+              "end": 21,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h7",
+              "file": "ext/LiteRGSS3/graphics/Text.cpp",
+              "start": 53,
+              "end": 80,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h8",
+              "file": "ext/LiteRGSS3/window/FramedView.cpp",
+              "start": 1,
+              "end": 22,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h9",
+              "file": "ext/LiteRGSS3/window/FramedView.cpp",
+              "start": 35,
+              "end": 467,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h11",
+              "file": "ext/LiteRGSS3/window/FramedView.h",
+              "start": 39,
+              "end": 48,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h12",
+              "file": "ext/LiteRGSS3/window/FramedView.h",
+              "start": 51,
+              "end": 56,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h10",
+              "file": "ext/LiteRGSS3/window/FramedView.h",
+              "start": 4,
+              "end": 37,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h1"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tests": [],
+  "noise": []
+}

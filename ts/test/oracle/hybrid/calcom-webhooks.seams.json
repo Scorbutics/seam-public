@@ -87,27 +87,6 @@
           "warnings": [],
           "hunks": [
             {
-              "id": "h3",
-              "file": "apps/web/app/providers.tsx",
-              "start": 3,
-              "end": 9,
-              "role": "environment",
-              "confidence": 1,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
-            },
-            {
               "id": "h4",
               "file": "apps/web/app/providers.tsx",
               "start": 25,
@@ -161,6 +140,27 @@
                   "file": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
                   "start": 126
                 }
+              ]
+            },
+            {
+              "id": "h3",
+              "file": "apps/web/app/providers.tsx",
+              "start": 3,
+              "end": 9,
+              "role": "environment",
+              "confidence": 1,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h16",
+                "h22",
+                "h25",
+                "h33",
+                "h4",
+                "h41",
+                "h47",
+                "h9"
               ]
             }
           ]
@@ -298,24 +298,37 @@
               "rewire": null
             },
             {
-              "id": "h10",
-              "file": "apps/web/modules/webhooks/components/EventTypeWebhookListItem.tsx",
-              "start": 0,
-              "end": 0,
-              "role": "environment",
-              "confidence": 0.5,
+              "id": "h17",
+              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+              "start": 280,
+              "end": 280,
+              "role": "link",
+              "confidence": 0.7,
               "external": [],
               "externalRefs": [],
               "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
+              "wireTargets": [
+                {
+                  "file": "apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx",
+                  "start": 12
+                }
+              ]
+            },
+            {
+              "id": "h44",
+              "file": "apps/web/modules/webhooks/views/webhooks-view.tsx",
+              "start": 55,
+              "end": 114,
+              "role": "link",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx",
+                  "start": 12
+                }
               ]
             },
             {
@@ -352,37 +365,24 @@
               "rewire": null
             },
             {
-              "id": "h17",
-              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
-              "start": 280,
-              "end": 280,
-              "role": "link",
-              "confidence": 0.7,
+              "id": "h10",
+              "file": "apps/web/modules/webhooks/components/EventTypeWebhookListItem.tsx",
+              "start": 0,
+              "end": 0,
+              "role": "environment",
+              "confidence": 0.5,
               "external": [],
               "externalRefs": [],
               "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx",
-                  "start": 12
-                }
-              ]
-            },
-            {
-              "id": "h44",
-              "file": "apps/web/modules/webhooks/views/webhooks-view.tsx",
-              "start": 55,
-              "end": 114,
-              "role": "link",
-              "confidence": 0.7,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "apps/web/modules/webhooks/components/CreateNewWebhookButton.tsx",
-                  "start": 12
-                }
+              "suggestedWires": [
+                "h16",
+                "h22",
+                "h25",
+                "h33",
+                "h4",
+                "h41",
+                "h47",
+                "h9"
               ]
             }
           ]
@@ -612,6 +612,39 @@
           "warnings": [],
           "hunks": [
             {
+              "id": "h22",
+              "file": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
+              "start": 19,
+              "end": 83,
+              "role": "core",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h23",
+              "file": "apps/web/modules/webhooks/components/WebhookVersionCTA.tsx",
+              "start": 1,
+              "end": 3,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h23",
+              "file": "apps/web/modules/webhooks/components/WebhookVersionCTA.tsx",
+              "start": 4,
+              "end": 87,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
               "id": "h8",
               "file": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
               "start": 240,
@@ -644,39 +677,6 @@
                   "start": 4
                 }
               ]
-            },
-            {
-              "id": "h22",
-              "file": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
-              "start": 19,
-              "end": 83,
-              "role": "core",
-              "confidence": 0.7,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "h23",
-              "file": "apps/web/modules/webhooks/components/WebhookVersionCTA.tsx",
-              "start": 1,
-              "end": 3,
-              "role": "environment",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "h23",
-              "file": "apps/web/modules/webhooks/components/WebhookVersionCTA.tsx",
-              "start": 4,
-              "end": 87,
-              "role": "core",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
             }
           ]
         },
@@ -754,23 +754,6 @@
           "warnings": [],
           "hunks": [
             {
-              "id": "h8",
-              "file": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
-              "start": 237,
-              "end": 260,
-              "role": "link",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "apps/web/modules/webhooks/views/webhook-form-header.tsx",
-                  "start": 7
-                }
-              ]
-            },
-            {
               "id": "h25",
               "file": "apps/web/modules/webhooks/components/dialogs/DeleteWebhookDialog.tsx",
               "start": 23,
@@ -802,6 +785,23 @@
               "external": [],
               "externalRefs": [],
               "rewire": null
+            },
+            {
+              "id": "h8",
+              "file": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
+              "start": 237,
+              "end": 260,
+              "role": "link",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "apps/web/modules/webhooks/views/webhook-form-header.tsx",
+                  "start": 7
+                }
+              ]
             },
             {
               "id": "h33",
@@ -999,23 +999,6 @@
           "warnings": [],
           "hunks": [
             {
-              "id": "h22",
-              "file": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
-              "start": 28,
-              "end": 28,
-              "role": "link",
-              "confidence": 0.7,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "apps/web/modules/webhooks/views/webhook-test-header.tsx",
-                  "start": 5
-                }
-              ]
-            },
-            {
               "id": "h33",
               "file": "apps/web/modules/webhooks/views/webhook-form-skeleton.tsx",
               "start": 1,
@@ -1038,27 +1021,6 @@
               "rewire": null
             },
             {
-              "id": "h34",
-              "file": "apps/web/modules/webhooks/views/webhook-new-skeleton.tsx",
-              "start": 0,
-              "end": 0,
-              "role": "environment",
-              "confidence": 0.5,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
-            },
-            {
               "id": "h40",
               "file": "apps/web/modules/webhooks/views/webhook-test-header.tsx",
               "start": 1,
@@ -1079,6 +1041,44 @@
               "external": [],
               "externalRefs": [],
               "rewire": null
+            },
+            {
+              "id": "h22",
+              "file": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
+              "start": 28,
+              "end": 28,
+              "role": "link",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "apps/web/modules/webhooks/views/webhook-test-header.tsx",
+                  "start": 5
+                }
+              ]
+            },
+            {
+              "id": "h34",
+              "file": "apps/web/modules/webhooks/views/webhook-new-skeleton.tsx",
+              "start": 0,
+              "end": 0,
+              "role": "environment",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h16",
+                "h22",
+                "h25",
+                "h33",
+                "h4",
+                "h41",
+                "h47",
+                "h9"
+              ]
             }
           ]
         }
@@ -1417,6 +1417,28 @@
           "warnings": [],
           "hunks": [
             {
+              "id": "h47",
+              "file": "packages/coss-ui/src/shared/app-header.tsx",
+              "start": 1,
+              "end": 2,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h47",
+              "file": "packages/coss-ui/src/shared/app-header.tsx",
+              "start": 3,
+              "end": 29,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
               "id": "h8",
               "file": "apps/web/modules/event-types/components/tabs/webhooks/EventWebhooksTab.tsx",
               "start": 152,
@@ -1430,40 +1452,6 @@
                 {
                   "file": "packages/coss-ui/src/shared/app-header.tsx",
                   "start": 3
-                }
-              ]
-            },
-            {
-              "id": "h16",
-              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
-              "start": 30,
-              "end": 36,
-              "role": "link",
-              "confidence": 0.65,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "packages/coss-ui/src/shared/list-item.tsx",
-                  "start": 6
-                }
-              ]
-            },
-            {
-              "id": "h17",
-              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
-              "start": 98,
-              "end": 345,
-              "role": "link",
-              "confidence": 0.7,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "wireTargets": [
-                {
-                  "file": "packages/coss-ui/src/shared/list-item.tsx",
-                  "start": 6
                 }
               ]
             },
@@ -1519,28 +1507,6 @@
               ]
             },
             {
-              "id": "h47",
-              "file": "packages/coss-ui/src/shared/app-header.tsx",
-              "start": 1,
-              "end": 2,
-              "role": "environment",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "h47",
-              "file": "packages/coss-ui/src/shared/app-header.tsx",
-              "start": 3,
-              "end": 29,
-              "role": "core",
-              "confidence": 0.9,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
               "id": "h48",
               "file": "packages/coss-ui/src/shared/list-item.tsx",
               "start": 1,
@@ -1561,6 +1527,40 @@
               "external": [],
               "externalRefs": [],
               "rewire": null
+            },
+            {
+              "id": "h16",
+              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+              "start": 30,
+              "end": 36,
+              "role": "link",
+              "confidence": 0.65,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "packages/coss-ui/src/shared/list-item.tsx",
+                  "start": 6
+                }
+              ]
+            },
+            {
+              "id": "h17",
+              "file": "apps/web/modules/webhooks/components/WebhookListItem.tsx",
+              "start": 98,
+              "end": 345,
+              "role": "link",
+              "confidence": 0.7,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "wireTargets": [
+                {
+                  "file": "packages/coss-ui/src/shared/list-item.tsx",
+                  "start": 6
+                }
+              ]
             }
           ]
         }

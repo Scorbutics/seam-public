@@ -1,1 +1,145 @@
-{"clusters": [{"id": "g1", "intent": "api.py", "colorIndex": 0, "seams": [{"id": "s-rewire", "label": "api.py", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h1", "file": "src/api.py", "start": 1, "end": 3, "role": "environment", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h1", "file": "src/api.py", "start": 4, "end": 5, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g2", "intent": "charge", "colorIndex": 1, "seams": [{"id": "h4", "label": "charge", "linkOnly": false, "uncertain": false, "warnings": ["isolated-core"], "hunks": [{"id": "h4", "file": "src/payment.py", "start": 1, "end": 3, "role": "environment", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h4", "file": "src/payment.py", "start": 4, "end": 7, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g3", "intent": "apply_discount", "colorIndex": 2, "seams": [{"id": "h5", "label": "apply_discount", "linkOnly": false, "uncertain": false, "warnings": [], "hunks": [{"id": "h4", "file": "src/payment.py", "start": 1, "end": 6, "role": "link", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h5", "file": "src/utils.py", "start": 2, "end": 12, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}]}]}], "tests": [], "noise": [{"id": "h2", "file": "src/format_only.py", "start": 1, "end": 2, "role": "noise", "confidence": 1.0, "external": [], "externalRefs": [], "rewire": null}, {"id": "h3", "file": "src/helpers.py", "start": 0, "end": 0, "role": "noise", "confidence": 1.0, "external": [], "externalRefs": [], "rewire": null}]}
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "api.py",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "api.py",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h1",
+              "file": "src/api.py",
+              "start": 1,
+              "end": 3,
+              "role": "environment",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h1",
+              "file": "src/api.py",
+              "start": 4,
+              "end": 5,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "intent": "charge",
+      "colorIndex": 1,
+      "seams": [
+        {
+          "id": "h4",
+          "label": "charge",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [
+            "isolated-core"
+          ],
+          "hunks": [
+            {
+              "id": "h4",
+              "file": "src/payment.py",
+              "start": 1,
+              "end": 3,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h4",
+              "file": "src/payment.py",
+              "start": 4,
+              "end": 7,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "intent": "apply_discount",
+      "colorIndex": 2,
+      "seams": [
+        {
+          "id": "h5",
+          "label": "apply_discount",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h5",
+              "file": "src/utils.py",
+              "start": 2,
+              "end": 12,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h4",
+              "file": "src/payment.py",
+              "start": 1,
+              "end": 6,
+              "role": "link",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tests": [],
+  "noise": [
+    {
+      "id": "h2",
+      "file": "src/format_only.py",
+      "start": 1,
+      "end": 2,
+      "role": "noise",
+      "confidence": 1,
+      "external": [],
+      "externalRefs": [],
+      "rewire": null
+    },
+    {
+      "id": "h3",
+      "file": "src/helpers.py",
+      "start": 0,
+      "end": 0,
+      "role": "noise",
+      "confidence": 1,
+      "external": [],
+      "externalRefs": [],
+      "rewire": null
+    }
+  ]
+}
