@@ -1,0 +1,32 @@
+{
+  "language": "typescript",
+  "resolutionQuality": "FULL",
+  "depth": 1,
+  "complete": true,
+  "nodes": [
+    {"id": "PaymentService", "symbol": "PaymentService", "file": "src/payment/service.ts", "range": [10, 60], "kind": "class", "enclosing": "", "complexity": 5},
+    {"id": "charge", "symbol": "charge", "file": "src/payment/service.ts", "range": [15, 28], "kind": "method", "enclosing": "PaymentService", "complexity": 8},
+    {"id": "refund", "symbol": "refund", "file": "src/payment/service.ts", "range": [30, 42], "kind": "method", "enclosing": "PaymentService", "complexity": 6},
+    {"id": "CheckoutPage", "symbol": "CheckoutPage", "file": "src/modules/checkout/page.ts", "range": [1, 40], "kind": "function", "enclosing": "", "complexity": 3},
+    {"id": "RefundPage", "symbol": "RefundPage", "file": "src/modules/refunds/page.ts", "range": [1, 35], "kind": "function", "enclosing": "", "complexity": 3},
+    {"id": "AdminPanel", "symbol": "AdminPanel", "file": "src/modules/admin/panel.ts", "range": [1, 80], "kind": "function", "enclosing": "", "complexity": 4},
+    {"id": "processGateway", "symbol": "processGateway", "file": "src/gateway/stripe.ts", "range": [5, 25], "kind": "function", "enclosing": "", "complexity": 7},
+    {"id": "payment.test", "symbol": "paymentTest", "file": "src/payment/service.test.ts", "range": [1, 50], "kind": "test", "enclosing": "", "complexity": 2}
+  ],
+  "edges": [
+    {"from": "charge", "to": "PaymentService", "kind": "contains", "provenance": "RESOLVED_FULL", "line": 15},
+    {"from": "refund", "to": "PaymentService", "kind": "contains", "provenance": "RESOLVED_FULL", "line": 30},
+    {"from": "CheckoutPage", "to": "charge", "kind": "call", "provenance": "RESOLVED_FULL", "line": 12},
+    {"from": "RefundPage", "to": "refund", "kind": "call", "provenance": "RESOLVED_FULL", "line": 9},
+    {"from": "AdminPanel", "to": "charge", "kind": "call", "provenance": "RESOLVED_FULL", "line": 20},
+    {"from": "AdminPanel", "to": "refund", "kind": "call", "provenance": "RESOLVED_FULL", "line": 25},
+    {"from": "charge", "to": "processGateway", "kind": "dispatch", "provenance": "RESOLVED_PARTIAL", "line": 22},
+    {"from": "payment.test", "to": "charge", "kind": "call", "provenance": "RESOLVED_FULL", "line": 8}
+  ],
+  "anchor": {"id": "PaymentService", "symbol": "PaymentService", "file": "src/payment/service.ts"},
+  "anchors": ["PaymentService"],
+  "blindspots": [
+    {"node": "charge", "mechanism": "dynamic-import", "evidence": "import(`./plugins/${name}`)", "candidates": [{"symbol": "stripePlugin"}]}
+  ],
+  "unresolved": [{"node": "refund", "reason": "no_definition_provider"}]
+}
