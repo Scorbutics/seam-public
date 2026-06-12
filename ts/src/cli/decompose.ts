@@ -25,6 +25,9 @@ interface Args {
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
+  // codebase mode:
+  scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
+  emitGraph?: string; intent?: string;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -38,7 +41,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false };
+  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1 };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -63,6 +66,13 @@ function parseArgs(argv: string[]): Args {
       case "--facts-engine": a.factsEngine = next(); break;
       case "--resolver": a.resolver = next(); break;
       case "--blast-radius": a.blastRadius = true; break;
+      case "--scan": a.scan = true; break;
+      case "--graph": a.graph = next(); break;
+      case "--anchor-file": a.anchorFile = next(); break;
+      case "--symbol": a.symbol = next(); break;
+      case "--depth": a.depth = parseInt(next() ?? "1", 10); break;
+      case "--emit-graph": a.emitGraph = next(); break;
+      case "--intent": a.intent = next(); break;
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -76,8 +86,54 @@ function parseArgs(argv: string[]): Args {
 
 function err(msg: string): never { process.stderr.write(`error: ${msg}\n`); process.exit(2); }
 
+// Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
+// --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
+async function runCodebase(a: Args): Promise<number> {
+  reset_usage();
+  if (a.resolver !== "det") {
+    const { make_resolver } = await import("../core/resolve/resolver.js");
+    const { set_resolver } = await import("../core/resolve/consumers.js");
+    try { set_resolver(await make_resolver(a.resolver)); } catch (e) { err((e as Error).message); }
+  }
+  const scan = await import("../codebase/import_scan.js");
+  const { from_resolved_graph } = await import("../core/graph_ir.js");
+  const { decompose } = await import("../codebase/codebase.js");
+
+  let data: any;
+  if (a.scan) {
+    if (!a.anchorFile) err("--scan requires --anchor-file");
+    try {
+      data = a.symbol
+        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth })
+        : await scan.build_module_graph(a.repo, a.anchorFile!);
+    } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
+  } else {
+    try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }
+    catch (e) { err(`could not load resolved graph: ${(e as Error).message}`); }
+  }
+  const g = from_resolved_graph(data);
+  if (!g.nodes.size) err("resolved graph has no nodes");
+  const useLlm = a.classifier === "llm" || a.classifier === "hybrid";
+  const model: any = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
+
+  const counts = new Map<string, number>();
+  for (const n of g.nodes.values()) counts.set(n.role, (counts.get(n.role) ?? 0) + 1);
+  const summary = ["core", "link", "environment", "test"].map((r) => `${r}=${counts.get(r) ?? 0}`).join("  ");
+  process.stdout.write(`Decomposed anchor '${g.anchor}' (${g.nodes.size} symbols, resolution=${g.resolution_quality || "?"}):  ${summary}\n`);
+
+  if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
+  if (a.emitSeams) {
+    const usage = get_usage().as_dict();
+    if (usage) model.usage = usage;
+    writeFileSync(a.emitSeams, JSON.stringify(model));
+    process.stdout.write(`Seams: ${a.emitSeams}\n`);
+  }
+  return 0;
+}
+
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
+  if (a.scan || a.graph) return runCodebase(a);   // codebase mode claims --scan / --graph
   reset_usage();
   let hunks: Hunk[];
 
