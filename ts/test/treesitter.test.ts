@@ -32,7 +32,7 @@ describe("tree-sitter facts", () => {
   test("WIN: multi-line string decoys excluded from decisions", async () => {
     const o = oracle.py;
     const tf = await tsFacts(o.diff, { [o.file]: o.content });
-    const rf = factsToDict(new RegexFactsProvider().facts([hunk(o.diff)]).get(hunk(o.diff).id)!);
+    const rf = factsToDict((await new RegexFactsProvider().facts([hunk(o.diff)])).get(hunk(o.diff).id)!);
     expect(tf.decisions).toBe(3);                       // real: `if req.ok` + 2 returns
     expect(rf.decisions).toBeGreaterThan(tf.decisions); // regex also counts the string's decoys
   });
@@ -40,7 +40,7 @@ describe("tree-sitter facts", () => {
   test("ANCHOR: clean code ⇒ tree-sitter ≡ regex", async () => {
     const o = oracle.clean;
     const tf = await tsFacts(o.diff, { [o.file]: o.content });
-    const rf = factsToDict(new RegexFactsProvider().facts([hunk(o.diff)]).get(hunk(o.diff).id)!);
+    const rf = factsToDict((await new RegexFactsProvider().facts([hunk(o.diff)])).get(hunk(o.diff).id)!);
     expect(tf).toEqual(rf);
   });
 

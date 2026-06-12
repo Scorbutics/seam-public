@@ -17,8 +17,8 @@ export class ResolvedFactsProvider implements FactsProvider {
     this.base = base;
     this.repo = repo ? expanduser(repo) : null;
   }
-  facts(hunks: Hunk[]): Map<string, HunkFacts> {
-    const out = this.base.facts(hunks);
+  async facts(hunks: Hunk[]): Promise<Map<string, HunkFacts>> {
+    const out = await this.base.facts(hunks);
     if (!this.repo) return out;
     const refs = external_refs(hunks);
     for (const h of hunks) {
@@ -26,7 +26,7 @@ export class ResolvedFactsProvider implements FactsProvider {
       if (!hf) continue;
       const resolved: Record<string, string> = {};
       for (const r of refs.get(h.id) ?? []) {
-        const tgt = _resolve(this.repo, h.file_path, r.source);
+        const tgt = await _resolve(this.repo, h.file_path, r.source);
         if (tgt) resolved[r.symbol] = normpath(tgt);
       }
       if (Object.keys(resolved).length) hf.resolved_refs = resolved;

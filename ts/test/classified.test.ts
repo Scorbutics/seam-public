@@ -28,11 +28,11 @@ function project(h: any) {
 
 describe("classifier_det vs Python oracle (labeled hunks)", () => {
   for (const name of cases) {
-    test(name, () => {
+    test(name, async () => {
       const oracle = JSON.parse(readFileSync(join(oracleDir, `${name}.classified.json`), "utf-8"));
       const hs = parse(readFileSync(join(casesDir, `${name}.patch`), "utf-8"));
       noise.classify(hs);
-      classify(hs, { cluster: "det", roles: "det", wiring: "det" });
+      await classify(hs, { cluster: "det", roles: "det", wiring: "det" });
       expect(hs.length).toBe(oracle.length);
       // Field-by-field over every hunk — surfaces the exact first divergence.
       hs.forEach((h, i) => {

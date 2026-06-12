@@ -268,12 +268,14 @@ export class DictFileSource implements FileSource {
 }
 
 // --- providers ---------------------------------------------------------------
+// ASYNC: a provider may resolve refs through a real language server (ResolvedFactsProvider → the LSP
+// resolver, async I/O). Pure providers (regex/external/merged) await nothing and stay byte-identical.
 export interface FactsProvider {
-  facts(hunks: Hunk[]): Map<string, HunkFacts>;
+  facts(hunks: Hunk[]): Promise<Map<string, HunkFacts>>;
 }
 
 export class RegexFactsProvider implements FactsProvider {
-  facts(hunks: Hunk[]): Map<string, HunkFacts> {
+  async facts(hunks: Hunk[]): Promise<Map<string, HunkFacts>> {
     const out = new Map<string, HunkFacts>();
     for (const h of hunks) out.set(h.id, extract(h));
     return out;
@@ -287,7 +289,7 @@ export class ExternalFactsProvider implements FactsProvider {
     this.byId = (payload ?? {}).hunks ?? {};
     this.fallback = fallback ?? new RegexFactsProvider();
   }
-  facts(hunks: Hunk[]): Map<string, HunkFacts> {
+  async facts(hunks: Hunk[]): Promise<Map<string, HunkFacts>> {
     const out = new Map<string, HunkFacts>();
     const missing: Hunk[] = [];
     for (const h of hunks) {
@@ -295,7 +297,7 @@ export class ExternalFactsProvider implements FactsProvider {
       if (d === undefined) missing.push(h);
       else out.set(h.id, factsFromDict(d));
     }
-    if (missing.length) for (const [k, v] of this.fallback.facts(missing)) out.set(k, v);
+    if (missing.length) for (const [k, v] of await this.fallback.facts(missing)) out.set(k, v);
     return out;
   }
 }
@@ -311,8 +313,8 @@ export class MergedFactsProvider implements FactsProvider {
     this.fields = [...((payload ?? {}).fields ?? [])];
     this.byId = (payload ?? {}).hunks ?? {};
   }
-  facts(hunks: Hunk[]): Map<string, HunkFacts> {
-    const out = this.base.facts(hunks);
+  async facts(hunks: Hunk[]): Promise<Map<string, HunkFacts>> {
+    const out = await this.base.facts(hunks);
     for (const h of hunks) {
       const ov = this.byId[h.id];
       const hf = out.get(h.id);
@@ -328,9 +330,9 @@ export class MergedFactsProvider implements FactsProvider {
   }
 }
 
-export function facts_payload(hunks: Hunk[], provider?: FactsProvider): Record<string, unknown> {
+export async function facts_payload(hunks: Hunk[], provider?: FactsProvider): Promise<Record<string, unknown>> {
   provider = provider ?? new RegexFactsProvider();
-  const f = provider.facts(hunks);
+  const f = await provider.facts(hunks);
   const hunksObj: Record<string, unknown> = {};
   for (const [hid, hf] of f) hunksObj[hid] = factsToDict(hf);
   return { version: FACTS_SCHEMA_VERSION, hunks: hunksObj };

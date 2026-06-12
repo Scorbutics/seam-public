@@ -20,10 +20,10 @@ class Ctx {
   ) {}
 }
 
-export function render(hunks: Hunk[], opts: { style?: string; repo?: string; blast_radius?: boolean } = {}): string {
+export async function render(hunks: Hunk[], opts: { style?: string; repo?: string; blast_radius?: boolean } = {}): Promise<string> {
   const style = opts.style ?? "llm";
   const [clusters] = _build_clusters(hunks, opts.repo);
-  const [_conf, ext, _refs, rewire, cons] = context_maps(hunks, opts.repo, opts.blast_radius ?? false);
+  const [_conf, ext, _refs, rewire, cons] = await context_maps(hunks, opts.repo, opts.blast_radius ?? false);
   const by_id = new Map(hunks.map((h) => [h.id, h]));
   const seam_label = new Map<string, string>();
   for (const cl of clusters) for (const s of cl.seams) seam_label.set(s.id, s.label || s.id);

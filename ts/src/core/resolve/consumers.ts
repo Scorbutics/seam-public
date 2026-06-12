@@ -21,31 +21,20 @@ let _ACTIVE_RESOLVER: Resolver | null = null;
 export function set_resolver(r: Resolver | null): void { _ACTIVE_RESOLVER = r; }
 export function get_resolver(): Resolver | null { return _ACTIVE_RESOLVER; }
 
-// SYNC floor-only — the DIFF-mode resolver (blast_radius, facts_resolve). The active LSP resolver is
-// async; diff mode stays on the deterministic floor (its long-standing stance: lsp|auto degrade to
-// the floor for blast-radius, which the floor already serves — relative/package/tsconfig). The real
-// LSP lands on the CODEBASE path (`_resolve_a`), where its precision pays off.
-export function _resolve(repo: string, importingFile: string, source: string): string | null {
-  return floor_resolve(repo, importingFile, source);
-}
-export function _resolve_import(repo: string, importingFile: string, ref: ImportRef): [string | null, number | null] | null {
-  if (ref.source !== null) {
-    const f = _resolve(repo, importingFile, ref.source);
-    return f ? [f, null] : null;
-  }
-  return null;   // a source-less (Python) import needs the LSP — unavailable on the sync diff path
-}
-
-// ASYNC — the CODEBASE-scan resolver: the active LSP resolver (if installed via set_resolver), else
-// the deterministic floor. A source-string import (TS) resolves the MODULE path; a source-less import
-// (Python) resolves the SYMBOL via the LSP go-to-definition.
-export async function _resolve_a(repo: string, importingFile: string, source: string): Promise<string | null> {
+// A MODULE source → repo-relative file: the active resolver (LSP when installed via set_resolver),
+// else the per-language deterministic floor. ASYNC — the active resolver is a language server reached
+// over async I/O; the floor awaits trivially. Mirrors Python's single `_resolve` (its blocking I/O is
+// sync for free; ours is async). Used by BOTH diff (blast_radius, facts_resolve) and codebase scan.
+export async function _resolve(repo: string, importingFile: string, source: string): Promise<string | null> {
   if (_ACTIVE_RESOLVER) return _ACTIVE_RESOLVER.resolve_module(repo, importingFile, source);
   return floor_resolve(repo, importingFile, source);
 }
-export async function _resolve_import_a(repo: string, importingFile: string, ref: ImportRef): Promise<[string | null, number | null] | null> {
+
+// An ImportRef → [repo-relative target file, def line | null], or null. A source-string import (TS)
+// resolves the MODULE path; a source-less import (Python) resolves the SYMBOL via LSP go-to-definition.
+export async function _resolve_import(repo: string, importingFile: string, ref: ImportRef): Promise<[string | null, number | null] | null> {
   if (ref.source !== null) {
-    const f = await _resolve_a(repo, importingFile, ref.source);
+    const f = await _resolve(repo, importingFile, ref.source);
     return f ? [f, null] : null;
   }
   if (_ACTIVE_RESOLVER?.resolve_symbol) return _ACTIVE_RESOLVER.resolve_symbol(repo, importingFile, ref.line, ref.col);
@@ -81,7 +70,7 @@ export async function scan_module_consumers(repo: string, anchorFile: string, me
       const used: Record<string, string> = {};
       for (const ref of parse_imports(rel, text)) {
         if (!memberNames.has(ref.name)) continue;
-        const target = await _resolve_import_a(repo, rel, ref);
+        const target = await _resolve_import(repo, rel, ref);
         if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
         if (!(ref.name in used)) used[ref.name] = ref.local;
       }
@@ -109,7 +98,7 @@ export async function scan_consumers(repo: string, anchorFile: string, symbol: s
       const rel = relative(repo, path);
       for (const ref of parse_imports(rel, text)) {
         if (ref.name !== symbol) continue;
-        const target = await _resolve_import_a(repo, rel, ref);
+        const target = await _resolve_import(repo, rel, ref);
         if (target !== null) {
           if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved" });
         } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {

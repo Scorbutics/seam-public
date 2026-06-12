@@ -7,12 +7,13 @@ so "ported" here means *verified byte-identical to Python on real diffs*, not ju
 Run: `cd ts && bun install && bun test` (161 pass / 2 gated-skip) · `bun run typecheck` (clean).
 Real-LSP integration tests: `SEAM_LSP_IT=1 bun test test/resolver.test.ts`.
 
-**STATUS: the port is complete.** Diff mode (all engines, facts, renderers, CLI, harness,
-blast-radius) and codebase mode (graph model, decompose, import_scan, LLM passes, anchor_rank,
-expand, orchestrate, string_coupling, llm_discovery, headless LSP) are ported and verified; the
-VS Code extension runs both natively via `seam.backend=ts`. The HTML report is intentionally
-excluded (no longer used). The one documented divergence: diff-mode `--resolver lsp|auto` stays on
-the deterministic floor (the real LSP is active in codebase mode) — see the Headless LSP section.
+**STATUS: the port is complete and feature-1:1 with Python.** Diff mode (all engines, facts,
+renderers, CLI, harness, blast-radius) and codebase mode (graph model, decompose, import_scan, LLM
+passes, anchor_rank, expand, orchestrate, string_coupling, llm_discovery, headless LSP) are ported and
+verified; the VS Code extension runs both natively via `seam.backend=ts`. The HTML report is
+intentionally excluded (no longer used). The headless LSP (`--resolver lsp|auto`) is active in BOTH
+modes, exactly as in Python — verified byte-identical on a real `typescript-language-server` across
+det/lsp/auto (see the Headless LSP section).
 
 ## ✅ Done and verified (the whole deterministic classification pipeline)
 
@@ -151,13 +152,16 @@ connect-or-spawn). `ServerSpec` + `bun_x`/`system` + `spec_for_file`/`language_i
 live in `languages/`; TS + Python carry LSP specs (minimal java/kotlin/ruby/c/cpp too).
 `make_resolver lsp|auto` → `DaemonResolver`.
 
-The async-client-vs-sync-`_resolve` clash was resolved by an **async seam, scoped to codebase mode**:
-the `Resolver` interface is now async, and the codebase scan awaits it via `_resolve_a` /
-`_resolve_import_a`. **Diff mode keeps the SYNC floor-only `_resolve` / `_resolve_import`** — its
-long-standing stance (lsp|auto degrade to the floor for blast-radius, which the floor already serves)
-— so the diff classify/facts pipeline stays synchronous and byte-identical. *Gate:* 8 hermetic tests
-(always run) + 2 gated integration tests (`SEAM_LSP_IT=1`) driving a real typescript-language-server
-(relative-import resolve + node_modules boundary; daemon warm-reuse cold-4s→warm-18ms).
+The async-client-vs-sync-`_resolve` clash was resolved by making the resolver seam **async
+everywhere** — one `_resolve` / `_resolve_import` (async), `await`ed at exactly the call sites Python
+calls them, in BOTH modes. The async cascade is contained: `facts → engine.classify → blast_radius /
+seams / report → CLI` (the inner `det.assign_*` consume the already-built facts Map and stay sync).
+Awaiting previously-sync values is identity-preserving, so the whole pipeline stays byte-identical
+(the oracle suite is green through the cascade). *Gates:* 8 hermetic tests (always run) + 2 gated
+integration tests (`SEAM_LSP_IT=1`) driving a real typescript-language-server (relative-import resolve
++ node_modules boundary; daemon warm-reuse cold-4s→warm-18ms); and a Python-vs-TS differential on
+diff-mode `--blast-radius --resolver det|lsp|auto` — **byte-identical for all three** (the LSP gives a
+different, more precise consumer set than the floor, and Python + TS agree on it exactly).
 
 ## ✅ Codebase mode — COMPLETE
 

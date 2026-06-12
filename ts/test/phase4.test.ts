@@ -26,47 +26,47 @@ const cases = [...caseFiles.map((f) => ({ name: f.replace(/\.patch$/, ""), path:
 const load = (p: string): Hunk[] => { const hs = parse(readFileSync(p, "utf-8")); noise.classify(hs); return hs; };
 
 describe("role prompt (Pass B) byte-parity", () => {
-  for (const c of cases) test(c.name, () => {
+  for (const c of cases) test(c.name, async () => {
     const work = load(c.path).filter((h) => h.role !== "noise");
     expect(build_role_prompt(work)).toBe(readFileSync(join(p4, `${c.name}.role.txt`), "utf-8"));
   });
 });
 
 describe("wire prompt (Pass C) byte-parity", () => {
-  for (const c of cases) test(c.name, () => {
+  for (const c of cases) test(c.name, async () => {
     const work = load(c.path).filter((h) => h.role !== "noise");
-    det.assign_roles(work, new RegexFactsProvider().facts(work));   // wire prompt needs roles
+    det.assign_roles(work, await new RegexFactsProvider().facts(work));   // wire prompt needs roles
     expect(build_wire_prompt(work)).toBe(readFileSync(join(p4, `${c.name}.wire.txt`), "utf-8"));
   });
 });
 
 describe("--classifier llm inject parity", () => {
-  for (const c of cases) test(c.name, () => {
+  for (const c of cases) test(c.name, async () => {
     const answers = JSON.parse(readFileSync(join(p4, `${c.name}.llm.answers.json`), "utf-8")).answers;
     const oracle = JSON.parse(readFileSync(join(p4, `${c.name}.llm.seams.json`), "utf-8"));
     const hs = load(c.path);
     set_host_bus(new HostBus(answers));
-    try { classify(hs, { cluster: "llm", roles: "llm", wiring: "llm" }); }
+    try { await classify(hs, { cluster: "llm", roles: "llm", wiring: "llm" }); }
     finally { set_host_bus(null); }
-    expect(JSON.parse(JSON.stringify(emit_seams_json(hs)))).toEqual(oracle);
+    expect(JSON.parse(JSON.stringify(await emit_seams_json(hs)))).toEqual(oracle);
   });
 });
 
 describe("--classifier hybrid inject parity", () => {
-  for (const c of cases) test(c.name, () => {
+  for (const c of cases) test(c.name, async () => {
     const answers = JSON.parse(readFileSync(join(p4, `${c.name}.hybrid.answers.json`), "utf-8")).answers;
     const oracle = JSON.parse(readFileSync(join(p4, `${c.name}.hybrid.seams.json`), "utf-8"));
     const hs = load(c.path);
     set_host_bus(new HostBus(answers));
-    try { classify(hs, { cluster: "hybrid", roles: "hybrid", wiring: "hybrid" }); }
+    try { await classify(hs, { cluster: "hybrid", roles: "hybrid", wiring: "hybrid" }); }
     finally { set_host_bus(null); }
-    expect(JSON.parse(JSON.stringify(emit_seams_json(hs)))).toEqual(oracle);
+    expect(JSON.parse(JSON.stringify(await emit_seams_json(hs)))).toEqual(oracle);
   });
 });
 
 describe("aggregate_role_votes medoid vs Python", () => {
   const votes = JSON.parse(readFileSync(join(p4, "votes.json"), "utf-8"));
-  votes.forEach((v: any, i: number) => test(`case ${i}`, () => {
+  votes.forEach((v: any, i: number) => test(`case ${i}`, async () => {
     const runs = v.runs.map((r: any) => new Map<string, any>(Object.entries(r)));
     const [medoid, conf] = aggregate_role_votes(runs, v.ids);
     expect(Object.fromEntries(medoid)).toEqual(v.medoid);

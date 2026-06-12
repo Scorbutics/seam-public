@@ -270,8 +270,8 @@ export function _build_clusters(hunks: Hunk[], repo?: string): [ClusterDict[], M
   return [clusters, diffs];
 }
 
-export function context_maps(hunks: Hunk[], repo?: string, blast_radius = false):
-    [Map<string, number>, Map<string, string[]>, Map<string, any[]>, Map<string, any>, Map<string, any[]>] {
+export async function context_maps(hunks: Hunk[], repo?: string, blast_radius = false):
+    Promise<[Map<string, number>, Map<string, string[]>, Map<string, any[]>, Map<string, any>, Map<string, any[]>]> {
   const conf = new Map<string, number>();
   for (const h of hunks) conf.set(h.id, Math.round(h.role_confidence * 100) / 100);
   const ext_all = external_coupling(hunks);
@@ -284,13 +284,13 @@ export function context_maps(hunks: Hunk[], repo?: string, blast_radius = false)
   const rewire = new Map<string, any>();
   for (const [hid, r] of rewire_pairs(hunks)) if (r.removed.length && r.added.length) rewire.set(hid, r);
   const cons = new Map<string, any[]>();
-  if (blast_radius && repo) for (const [hid, cs] of consumers_for(hunks, repo)) cons.set(hid, cs);
+  if (blast_radius && repo) for (const [hid, cs] of await consumers_for(hunks, repo)) cons.set(hid, cs);
   return [conf, ext, refs, rewire, cons];
 }
 
-export function emit_seams_json(hunks: Hunk[], repo?: string, blast_radius = false): any {
+export async function emit_seams_json(hunks: Hunk[], repo?: string, blast_radius = false): Promise<any> {
   const [clusters] = _build_clusters(hunks, repo);
-  const [conf, ext, refs, rewire, cons] = context_maps(hunks, repo, blast_radius);
+  const [conf, ext, refs, rewire, cons] = await context_maps(hunks, repo, blast_radius);
   const sugg = new Map<string, string[]>();
   for (const h of hunks) if (h.suggested_wires?.length) sugg.set(h.id, [...h.suggested_wires]);
 

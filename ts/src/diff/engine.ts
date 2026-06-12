@@ -10,10 +10,10 @@ import { intersect, sorted, union } from "../core/sets.js";
 export const DEFAULTS = { cluster: "llm", roles: "det", wiring: "hybrid" } as const;
 const ENGINES = ["llm", "det", "hybrid"];
 
-export function classify(hunks: Hunk[], opts: {
+export async function classify(hunks: Hunk[], opts: {
   cluster?: string; roles?: string; wiring?: string; facts_provider?: FactsProvider;
   repo?: string; model?: string; claudeBin?: string | null; roleVotes?: number;
-} = {}): void {
+} = {}): Promise<void> {
   const cluster = opts.cluster ?? "llm", roles = opts.roles ?? "det", wiring = opts.wiring ?? "hybrid";
   for (const [k, v] of Object.entries({ cluster, roles, wiring }))
     if (!ENGINES.includes(v)) throw new Error(`engine: ${k} must be one of ${ENGINES.join("|")} (got ${v})`);
@@ -31,7 +31,7 @@ export function classify(hunks: Hunk[], opts: {
     return;
   }
   const needFacts = [cluster, roles, wiring].some((p) => p === "det" || p === "hybrid");
-  const facts = needFacts ? (opts.facts_provider ?? new RegexFactsProvider()).facts(work) : new Map<string, HunkFacts>();
+  const facts = needFacts ? await (opts.facts_provider ?? new RegexFactsProvider()).facts(work) : new Map<string, HunkFacts>();
 
   // ROLES
   if (roles === "llm") llm.assign_roles(work, { ...llmOpts, roleVotes: opts.roleVotes });

@@ -42,10 +42,10 @@ describe("parser + noise_filter vs Python oracle", () => {
 
 describe("regex facts vs Python oracle (byte-identical payload)", () => {
   for (const name of cases) {
-    test(name, () => {
+    test(name, async () => {
       const oracle = JSON.parse(readFileSync(join(oracleDir, `${name}.facts.json`), "utf-8"));
       const work = hunks(name).filter((h) => h.role !== "noise");
-      const payload = facts_payload(work, new RegexFactsProvider());
+      const payload = await facts_payload(work, new RegexFactsProvider());
       // sort_keys parity: compare via canonical JSON.
       expect(JSON.parse(JSON.stringify(payload))).toEqual(oracle);
     });
@@ -54,32 +54,32 @@ describe("regex facts vs Python oracle (byte-identical payload)", () => {
 
 describe("HunkFacts round-trip + provider equivalence", () => {
   for (const name of cases) {
-    test(`${name} round-trip`, () => {
+    test(`${name} round-trip`, async () => {
       const work = hunks(name).filter((h) => h.role !== "noise");
-      const f = new RegexFactsProvider().facts(work);
+      const f = await new RegexFactsProvider().facts(work);
       for (const hf of f.values()) expect(factsEqual(factsFromDict(factsToDict(hf)), hf)).toBe(true);
     });
 
-    test(`${name} external ≡ regex`, () => {
+    test(`${name} external ≡ regex`, async () => {
       const work = hunks(name).filter((h) => h.role !== "noise");
       const rp = new RegexFactsProvider();
-      const payload = facts_payload(work, rp);
+      const payload = await facts_payload(work, rp);
       expect((payload as any).version).toBe(FACTS_SCHEMA_VERSION);
       const ext = new ExternalFactsProvider(payload);
-      const f1 = rp.facts(work), f2 = ext.facts(work);
+      const f1 = await rp.facts(work), f2 = await ext.facts(work);
       for (const h of work) expect(factsEqual(f1.get(h.id)!, f2.get(h.id)!)).toBe(true);
     });
 
-    test(`${name} merged partial override`, () => {
+    test(`${name} merged partial override`, async () => {
       const work = hunks(name).filter((h) => h.role !== "noise");
       if (!work.length) return;
       const rp = new RegexFactsProvider();
-      const baseF = rp.facts(work);
+      const baseF = await rp.facts(work);
       const target = work[0].id;
       const other = work.length > 1 ? work[1].id : null;
       const mergePayload = { partial: true, fields: ["defines", "enclosing"],
         hunks: { [target]: { defines: ["SentinelDef"], enclosing: ["SentinelEnc"] } } };
-      const mf = new MergedFactsProvider(rp, mergePayload).facts(work);
+      const mf = await new MergedFactsProvider(rp, mergePayload).facts(work);
       expect([...mf.get(target)!.defines]).toEqual(["SentinelDef"]);
       expect([...mf.get(target)!.enclosing]).toEqual(["SentinelEnc"]);
       expect(mf.get(target)!.decisions).toBe(baseF.get(target)!.decisions);

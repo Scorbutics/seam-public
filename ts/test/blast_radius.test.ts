@@ -13,10 +13,10 @@ const repo = join(__dir, "fixtures", "br-repo");
 const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "blast_radius.json"), "utf-8"));
 
 describe("blast-radius vs Python oracle", () => {
-  test("relative + alias + package imports resolved; decoy excluded", () => {
+  test("relative + alias + package imports resolved; decoy excluded", async () => {
     const hs = parse(readFileSync(join(repo, "engine.patch"), "utf-8"));
     const got: Record<string, any> = {};
-    for (const [hid, cs] of consumers_for(hs, repo))
+    for (const [hid, cs] of await consumers_for(hs, repo))
       got[hid] = cs.map((c) => Object.entries(c).sort()).sort();   // order-independent, like the oracle
     expect(got).toEqual(oracle);
   });

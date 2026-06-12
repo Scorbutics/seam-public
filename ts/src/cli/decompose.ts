@@ -278,7 +278,7 @@ async function main(argv: string[]): Promise<number> {
     else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
     let recorded: HostBus["recorded"] | undefined;
     try {
-      engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
+      await engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
         facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin });
     } catch (e) { err((e as Error).message); }
     finally {
@@ -308,10 +308,10 @@ async function main(argv: string[]): Promise<number> {
   const textFmt = a.format === "llm" || a.format === "ascii";
   (textFmt ? process.stderr : process.stdout).write(`Decomposed ${hunks.length} hunks:  ${summary}\n`);
 
-  if (textFmt) { process.stdout.write(render(hunks, { style: a.format, repo: a.repo, blast_radius: a.blastRadius })); return 0; }
+  if (textFmt) { process.stdout.write(await render(hunks, { style: a.format, repo: a.repo, blast_radius: a.blastRadius })); return 0; }
 
   if (a.emitSeams) {
-    const model: any = emit_seams_json(hunks, a.repo, a.blastRadius);
+    const model: any = await emit_seams_json(hunks, a.repo, a.blastRadius);
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;              // tokens/cost for the extension's info message
     writeFileSync(a.emitSeams, JSON.stringify(model));

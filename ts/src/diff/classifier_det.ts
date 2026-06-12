@@ -419,10 +419,10 @@ export function assign_spans(work: Hunk[], repo?: string): void {
   }
 }
 
-export function classify(hunks: Hunk[], opts: { facts_provider?: FactsProvider } = {}): void {
+export async function classify(hunks: Hunk[], opts: { facts_provider?: FactsProvider } = {}): Promise<void> {
   const work = hunks.filter((h) => h.role !== "noise");
   if (!work.length) return;
-  const facts = (opts.facts_provider ?? new RegexFactsProvider()).facts(work);
+  const facts = await (opts.facts_provider ?? new RegexFactsProvider()).facts(work);
   assign_roles(work, facts);
   assign_wiring(work, facts);
   reconcile_wiring(work, facts);

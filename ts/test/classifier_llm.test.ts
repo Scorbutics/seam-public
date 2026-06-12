@@ -31,7 +31,7 @@ const workHunks = (path: string) => {
 
 describe("cluster prompt byte-parity vs Python", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const oracle = readFileSync(join(oracleDir, "prompts", `${c.name}.cluster.txt`), "utf-8");
       const work = workHunks(c.path).filter((h) => h.role !== "noise");
       expect(build_cluster_prompt(work)).toBe(oracle);
@@ -41,14 +41,14 @@ describe("cluster prompt byte-parity vs Python", () => {
 
 describe("cluster inject-llm parity vs Python", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const reply = readFileSync(join(oracleDir, "inject", `${c.name}.reply.json`), "utf-8");
       const oracle = JSON.parse(readFileSync(join(oracleDir, "inject", `${c.name}.seams.json`), "utf-8"));
       const hs = workHunks(c.path);
       set_host_bus(new HostBus({ cluster: reply }));
-      try { classify(hs, { cluster: "llm", roles: "det", wiring: "det" }); }
+      try { await classify(hs, { cluster: "llm", roles: "det", wiring: "det" }); }
       finally { set_host_bus(null); }
-      expect(JSON.parse(JSON.stringify(emit_seams_json(hs)))).toEqual(oracle);
+      expect(JSON.parse(JSON.stringify(await emit_seams_json(hs)))).toEqual(oracle);
     });
   }
 });

@@ -34,9 +34,9 @@ function loadWork(path: string): Hunk[] {
 
 describe("reconcile prompt byte-parity vs Python", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const work = loadWork(c.path).filter((h) => h.role !== "noise");
-      const facts = new RegexFactsProvider().facts(work);
+      const facts = await new RegexFactsProvider().facts(work);
       det.assign_roles(work, facts);          // reconcile prompt is built after the role pass
       const cores = new Map<string, Hunk>();
       for (const h of work) if (h.role === "core") cores.set(h.id, h);
@@ -52,15 +52,15 @@ describe("reconcile prompt byte-parity vs Python", () => {
 
 describe("hybrid inject-llm parity vs Python", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const cluster = readFileSync(join(oracleDir, `${c.name}.cluster.json`), "utf-8");
       const reconcile = readFileSync(join(oracleDir, `${c.name}.reconcile.json`), "utf-8");
       const oracle = JSON.parse(readFileSync(join(oracleDir, `${c.name}.seams.json`), "utf-8"));
       const hs = loadWork(c.path);
       set_host_bus(new HostBus({ cluster, reconcile }));
-      try { classify(hs, { cluster: "llm", roles: "det", wiring: "hybrid" }); }
+      try { await classify(hs, { cluster: "llm", roles: "det", wiring: "hybrid" }); }
       finally { set_host_bus(null); }
-      expect(JSON.parse(JSON.stringify(emit_seams_json(hs)))).toEqual(oracle);
+      expect(JSON.parse(JSON.stringify(await emit_seams_json(hs)))).toEqual(oracle);
     });
   }
 });

@@ -20,18 +20,18 @@ const cases: { name: string; path: string }[] = [
   { name: "sample", path: samplePatch },
 ];
 
-function classified(path: string) {
+async function classified(path: string) {
   const hs = parse(readFileSync(path, "utf-8"));
   noise.classify(hs);
-  classify(hs, { cluster: "det", roles: "det", wiring: "det" });
+  await classify(hs, { cluster: "det", roles: "det", wiring: "det" });
   return hs;
 }
 
 describe("emit_seams_json vs Python oracle", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const oracle = JSON.parse(readFileSync(join(oracleDir, `${c.name}.seams.json`), "utf-8"));
-      const got = JSON.parse(JSON.stringify(emit_seams_json(classified(c.path))));
+      const got = JSON.parse(JSON.stringify(await emit_seams_json(await classified(c.path))));
       expect(got).toEqual(oracle);
     });
   }
@@ -39,9 +39,9 @@ describe("emit_seams_json vs Python oracle", () => {
 
 describe("ascii renderer vs Python oracle", () => {
   for (const c of cases) {
-    test(c.name, () => {
+    test(c.name, async () => {
       const oracle = readFileSync(join(oracleDir, `${c.name}.ascii.txt`), "utf-8");
-      const got = render(classified(c.path), { style: "ascii" });
+      const got = await render(await classified(c.path), { style: "ascii" });
       expect(got).toBe(oracle);
     });
   }

@@ -8,7 +8,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { make_resolver, DeterministicResolver } from "../src/core/resolve/resolver.js";
-import { set_resolver, _resolve, _resolve_a, type Resolver } from "../src/core/resolve/consumers.js";
+import { set_resolver, _resolve, type Resolver } from "../src/core/resolve/consumers.js";
 import { spec_for_file, language_id_for } from "../src/core/resolve/languages/index.js";
 
 const FIX = "test/fixtures/scan-repo";
@@ -52,10 +52,9 @@ describe("resolver strategy — hermetic", () => {
   test("injection seam uses the active resolver (async)", async () => {
     const stub: Resolver = { async resolve_module() { return "STUB"; } };
     set_resolver(stub);
-    try { expect(await _resolve_a("r", "f", "s")).toBe("STUB"); }
+    try { expect(await _resolve("r", "f", "s")).toBe("STUB"); }
     finally { set_resolver(null); }
-    expect(endsPayments(await _resolve_a(FIX, CHECKOUT, PKG))).toBe(true);   // default = the floor
-    expect(endsPayments(_resolve(FIX, CHECKOUT, PKG))).toBe(true);          // sync diff seam = floor
+    expect(endsPayments(await _resolve(FIX, CHECKOUT, PKG))).toBe(true);    // default = the floor
   });
 
   test("auto falls back to the floor when no server", async () => {
