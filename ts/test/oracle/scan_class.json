@@ -40,23 +40,23 @@
     {
       "from": "c1",
       "kind": "reference",
-      "line": 3,
-      "provenance": "RESOLVED_FULL",
-      "to": "PaymentService.charge"
-    },
-    {
-      "from": "c2",
-      "kind": "reference",
       "line": 2,
       "provenance": "RESOLVED_FULL",
       "to": "PaymentService.charge"
     },
     {
-      "from": "c2",
+      "from": "c1",
       "kind": "reference",
       "line": 3,
       "provenance": "RESOLVED_FULL",
       "to": "PaymentService.refund"
+    },
+    {
+      "from": "c2",
+      "kind": "reference",
+      "line": 3,
+      "provenance": "RESOLVED_FULL",
+      "to": "PaymentService.charge"
     },
     {
       "from": "c3",
@@ -106,26 +106,26 @@
     {
       "complexity": 4,
       "enclosing": "",
-      "file": "src/checkout.ts",
+      "file": "src/admin.ts",
       "id": "c1",
       "kind": "function",
       "range": [
         1,
         4
       ],
-      "symbol": "checkout"
+      "symbol": "admin"
     },
     {
       "complexity": 4,
       "enclosing": "",
-      "file": "src/admin.ts",
+      "file": "src/checkout.ts",
       "id": "c2",
       "kind": "function",
       "range": [
         1,
         4
       ],
-      "symbol": "admin"
+      "symbol": "checkout"
     },
     {
       "complexity": 1,

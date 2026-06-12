@@ -1,0 +1,505 @@
+diff --git a/.changeset/heavy-beers-tickle.md b/.changeset/heavy-beers-tickle.md
+new file mode 100644
+index 000000000000..f6b19aa74b76
+--- /dev/null
++++ b/.changeset/heavy-beers-tickle.md
+@@ -0,0 +1,31 @@
++---
++"@astrojs/alpinejs": minor
++---
++
++Allows extending Alpine using the new `entrypoint` configuration
++
++You can extend Alpine by setting the `entrypoint` option to a root-relative import specifier (for example, `entrypoint: "/src/entrypoint"`).
++
++The default export of this file should be a function that accepts an Alpine instance prior to starting, allowing the use of custom directives, plugins and other customizations for advanced use cases.
++
++```js
++// astro.config.mjs
++import { defineConfig } from 'astro/config';
++import alpine from '@astrojs/alpinejs';
++
++export default defineConfig({
++  // ...
++  integrations: [alpine({ entrypoint: '/src/entrypoint' })],
++});
++```
++
++```js
++// src/entrypoint.ts
++import type { Alpine } from 'alpinejs'
++
++export default (Alpine: Alpine) => {
++    Alpine.directive('foo', el => {
++        el.textContent = 'bar';
++    })
++}
++```
+\ No newline at end of file
+diff --git a/packages/integrations/alpinejs/package.json b/packages/integrations/alpinejs/package.json
+index c6abdd6bd5ab..e81e42f0bcba 100644
+--- a/packages/integrations/alpinejs/package.json
++++ b/packages/integrations/alpinejs/package.json
+@@ -30,17 +30,20 @@
+   "scripts": {
+     "build": "astro-scripts build \"src/**/*.ts\" && tsc",
+     "build:ci": "astro-scripts build \"src/**/*.ts\"",
+-    "dev": "astro-scripts dev \"src/**/*.ts\""
++    "dev": "astro-scripts dev \"src/**/*.ts\"",
++    "test:e2e": "playwright test"
+   },
+   "peerDependencies": {
+     "@types/alpinejs": "^3.0.0",
+     "alpinejs": "^3.0.0"
+   },
+   "devDependencies": {
++    "@playwright/test": "1.40.0",
+     "astro": "workspace:*",
+-    "astro-scripts": "workspace:*"
++    "astro-scripts": "workspace:*",
++    "vite": "^5.0.10"
+   },
+   "publishConfig": {
+     "provenance": true
+   }
+-}
++}
+\ No newline at end of file
+diff --git a/packages/integrations/alpinejs/src/index.ts b/packages/integrations/alpinejs/src/index.ts
+index 4a296b8c1f50..a5f20aa67d80 100644
+--- a/packages/integrations/alpinejs/src/index.ts
++++ b/packages/integrations/alpinejs/src/index.ts
+@@ -1,16 +1,110 @@
+ import type { AstroIntegration } from 'astro';
++import type { Plugin } from 'vite';
++import { resolve } from 'node:path';
+ 
+-export default function createPlugin(): AstroIntegration {
++interface Options {
++	/**
++ 	*	You can extend Alpine by setting this option to a root-relative import specifier (for example, `entrypoint: "/src/entrypoint"`).
++	*
++	* The default export of this file should be a function that accepts an Alpine instance prior to starting, allowing the use of custom directives, plugins and other customizations for advanced use cases.
++	*
++	* ```js
++	* // astro.config.mjs
++	* import { defineConfig } from 'astro/config';
++	* import alpine from '@astrojs/alpinejs';
++	* 
++	* export default defineConfig({
++	*   // ...
++	*   integrations: [alpine({ entrypoint: '/src/entrypoint' })],
++	* });
++	* ```
++	*
++	* ```js
++	* // src/entrypoint.ts
++	* import type { Alpine } from 'alpinejs'
++	*
++	* export default (Alpine: Alpine) => {
++	*     Alpine.directive('foo', el => {
++	*         el.textContent = 'bar';
++	*     })
++	* }
++	* ```
++	*/
++	entrypoint?: string;
++}
++
++function virtualEntrypoint(options?: Options): Plugin {
++	const virtualModuleId = 'virtual:@astrojs/alpinejs/entrypoint';
++	const resolvedVirtualModuleId = '\0' + virtualModuleId;
++
++	let isBuild: boolean;
++	let root: string;
++	let entrypoint: string | undefined;
++
++	return {
++		name: '@astrojs/alpinejs/virtual-entrypoint',
++		config(_, { command }) {
++			isBuild = command === 'build';
++		},
++		configResolved(config) {
++			root = config.root;
++			if (options?.entrypoint) {
++				entrypoint = options.entrypoint.startsWith('.')
++					? resolve(root, options.entrypoint)
++					: options.entrypoint;
++			}
++		},
++		resolveId(id) {
++			if (id === virtualModuleId) {
++				return resolvedVirtualModuleId;
++			}
++		},
++		load(id) {
++			if (id === resolvedVirtualModuleId) {
++				if (entrypoint) {
++					return `\
++import * as mod from ${JSON.stringify(entrypoint)};
++						
++export const setup = (Alpine) => {
++	if ('default' in mod) {
++		mod.default(Alpine);
++	} else {
++		${
++			!isBuild
++				? `console.warn("[@astrojs/alpinejs] entrypoint \`" + ${JSON.stringify(
++						entrypoint
++					)} + "\` does not export a default function. Check out https://docs.astro.build/en/guides/integrations-guide/alpinejs/#entrypoint.");`
++				: ''
++		}
++	}
++}`;
++				}
++				return `export const setup = () => {};`;
++			}
++		},
++	};
++}
++
++export default function createPlugin(options?: Options): AstroIntegration {
+ 	return {
+ 		name: '@astrojs/alpinejs',
+ 		hooks: {
+-			'astro:config:setup': ({ injectScript }) => {
++			'astro:config:setup': ({ injectScript, updateConfig }) => {
+ 				// This gets injected into the user's page, so the import will pull
+ 				// from the project's version of Alpine.js in their package.json.
+ 				injectScript(
+ 					'page',
+-					`import Alpine from 'alpinejs'; window.Alpine = Alpine; Alpine.start();`
++					`import Alpine from 'alpinejs';
++import { setup } from 'virtual:@astrojs/alpinejs/entrypoint';
++setup(Alpine);
++window.Alpine = Alpine;
++Alpine.start();`
+ 				);
++				updateConfig({
++					vite: {
++						plugins: [virtualEntrypoint(options)],
++					},
++				});
+ 			},
+ 		},
+ 	};
+diff --git a/packages/integrations/alpinejs/test/basics.test.js b/packages/integrations/alpinejs/test/basics.test.js
+new file mode 100644
+index 000000000000..ae6a06a2353a
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/basics.test.js
+@@ -0,0 +1,13 @@
++import { expect } from '@playwright/test';
++import { prepareTestFactory } from './test-utils.js';
++
++const { test } = prepareTestFactory({ root: './fixtures/basics/' });
++
++test.describe('Basics', () => {
++	test('Alpine is working', async ({ page, astro }) => {
++		await page.goto(astro.resolveUrl('/'));
++
++		const el = page.locator("#foo")
++		expect(await el.textContent()).toBe('bar')
++	});
++});
+diff --git a/packages/integrations/alpinejs/test/directive.test.js b/packages/integrations/alpinejs/test/directive.test.js
+new file mode 100644
+index 000000000000..440e2a6b5bc2
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/directive.test.js
+@@ -0,0 +1,13 @@
++import { expect } from '@playwright/test';
++import { prepareTestFactory } from './test-utils.js';
++
++const { test } = prepareTestFactory({ root: './fixtures/basics/' });
++
++test.describe('Basics', () => {
++	test('Alpine is working', async ({ page, astro }) => {
++		await page.goto(astro.resolveUrl('/'));
++
++		const el = page.locator('#foo');
++		expect(await el.textContent()).toBe('bar');
++	});
++});
+diff --git a/packages/integrations/alpinejs/test/fixtures/basics/astro.config.mjs b/packages/integrations/alpinejs/test/fixtures/basics/astro.config.mjs
+new file mode 100644
+index 000000000000..9fcc100d959e
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/basics/astro.config.mjs
+@@ -0,0 +1,6 @@
++import { defineConfig } from 'astro/config';
++import alpine from '@astrojs/alpinejs';
++
++export default defineConfig({
++  integrations: [alpine()],
++})
+diff --git a/packages/integrations/alpinejs/test/fixtures/basics/package.json b/packages/integrations/alpinejs/test/fixtures/basics/package.json
+new file mode 100644
+index 000000000000..1e210ae67341
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/basics/package.json
+@@ -0,0 +1,11 @@
++{
++  "name": "@test/alpinejs-basics",
++  "version": "0.0.0",
++  "private": true,
++  "dependencies": {
++    "@astrojs/alpinejs": "workspace:*",
++    "@types/alpinejs": "^3.13.5",
++    "alpinejs": "^3.13.3",
++    "astro": "workspace:*"
++  }
++}
+diff --git a/packages/integrations/alpinejs/test/fixtures/basics/src/pages/index.astro b/packages/integrations/alpinejs/test/fixtures/basics/src/pages/index.astro
+new file mode 100644
+index 000000000000..6197e0c64224
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/basics/src/pages/index.astro
+@@ -0,0 +1,8 @@
++<html>
++	<head>
++		<title>Testing</title>
++	</head>
++	<body>
++		<div id="foo" x-data="{ foo: 'bar' }" x-text="foo"></div>
++	</body>
++</html>
+diff --git a/packages/integrations/alpinejs/test/fixtures/directive/astro.config.mjs b/packages/integrations/alpinejs/test/fixtures/directive/astro.config.mjs
+new file mode 100644
+index 000000000000..6c0266ab059e
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/directive/astro.config.mjs
+@@ -0,0 +1,8 @@
++import { defineConfig } from 'astro/config';
++import alpine from '@astrojs/alpinejs';
++
++export default defineConfig({
++  integrations: [alpine({
++    entrypoint: "./src/entrypoint.ts"
++  })],
++})
+diff --git a/packages/integrations/alpinejs/test/fixtures/directive/package.json b/packages/integrations/alpinejs/test/fixtures/directive/package.json
+new file mode 100644
+index 000000000000..258e2500e3d4
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/directive/package.json
+@@ -0,0 +1,11 @@
++{
++  "name": "@test/alpinejs-directive",
++  "version": "0.0.0",
++  "private": true,
++  "dependencies": {
++    "@astrojs/alpinejs": "workspace:*",
++    "@types/alpinejs": "^3.13.5",
++    "alpinejs": "^3.13.3",
++    "astro": "workspace:*"
++  }
++}
+diff --git a/packages/integrations/alpinejs/test/fixtures/directive/src/entrypoint.ts b/packages/integrations/alpinejs/test/fixtures/directive/src/entrypoint.ts
+new file mode 100644
+index 000000000000..7a49c044a5b0
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/directive/src/entrypoint.ts
+@@ -0,0 +1,7 @@
++import type { Alpine } from 'alpinejs'
++
++export default (Alpine: Alpine) => {
++    Alpine.directive('foo', el => {
++        el.textContent = 'bar';
++    })
++}
+\ No newline at end of file
+diff --git a/packages/integrations/alpinejs/test/fixtures/directive/src/pages/index.astro b/packages/integrations/alpinejs/test/fixtures/directive/src/pages/index.astro
+new file mode 100644
+index 000000000000..73753209a0e5
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/fixtures/directive/src/pages/index.astro
+@@ -0,0 +1,8 @@
++<html>
++	<head>
++		<title>Testing</title>
++	</head>
++	<body>
++		<div id="foo" x-data x-foo></div>
++	</body>
++</html>
+diff --git a/packages/integrations/alpinejs/test/test-utils.js b/packages/integrations/alpinejs/test/test-utils.js
+new file mode 100644
+index 000000000000..ac6b36ea022e
+--- /dev/null
++++ b/packages/integrations/alpinejs/test/test-utils.js
+@@ -0,0 +1,112 @@
++import { expect, test as testBase } from '@playwright/test';
++import fs from 'node:fs/promises';
++import path from 'node:path';
++import { fileURLToPath } from 'node:url';
++import { loadFixture as baseLoadFixture } from '../../../astro/test/test-utils.js';
++
++export const isWindows = process.platform === 'win32';
++
++// Get all test files in directory, assign unique port for each of them so they don't conflict
++const testFiles = await fs.readdir(new URL('.', import.meta.url));
++const testFileToPort = new Map();
++for (let i = 0; i < testFiles.length; i++) {
++	const file = testFiles[i];
++	if (file.endsWith('.test.js')) {
++		testFileToPort.set(file.slice(0, -8), 4000 + i);
++	}
++}
++
++export function loadFixture(inlineConfig) {
++	if (!inlineConfig?.root) throw new Error("Must provide { root: './fixtures/...' }");
++
++	// resolve the relative root (i.e. "./fixtures/tailwindcss") to a full filepath
++	// without this, the main `loadFixture` helper will resolve relative to `packages/astro/test`
++	return baseLoadFixture({
++		...inlineConfig,
++		root: fileURLToPath(new URL(inlineConfig.root, import.meta.url)),
++		server: {
++			port: testFileToPort.get(path.basename(inlineConfig.root)),
++		},
++	});
++}
++
++export function testFactory(inlineConfig) {
++	let fixture;
++
++	const test = testBase.extend({
++		astro: async ({}, use) => {
++			fixture = fixture || (await loadFixture(inlineConfig));
++			await use(fixture);
++		},
++	});
++
++	test.afterEach(() => {
++		fixture.resetAllFiles();
++	});
++
++	return test;
++}
++
++/**
++ *
++ * @param {string} page
++ * @returns {Promise<{message: string, hint: string, absoluteFileLocation: string, fileLocation: string}>}
++ */
++export async function getErrorOverlayContent(page) {
++	const overlay = await page.waitForSelector('vite-error-overlay', {
++		strict: true,
++		timeout: 10 * 1000,
++	});
++
++	expect(overlay).toBeTruthy();
++
++	const message = await overlay.$$eval('#message-content', (m) => m[0].textContent);
++	const hint = await overlay.$$eval('#hint-content', (m) => m[0].textContent);
++	const [absoluteFileLocation, fileLocation] = await overlay.$$eval('#code header h2', (m) => [
++		m[0].title,
++		m[0].textContent,
++	]);
++	return { message, hint, absoluteFileLocation, fileLocation };
++}
++
++/**
++ * Wait for `astro-island` that contains the `el` to hydrate
++ * @param {import('@playwright/test').Page} page
++ * @param {import('@playwright/test').Locator} el
++ */
++export async function waitForHydrate(page, el) {
++	const astroIsland = page.locator('astro-island', { has: el });
++	const astroIslandId = await astroIsland.last().getAttribute('uid');
++	await page.waitForFunction(
++		(selector) => document.querySelector(selector)?.hasAttribute('ssr') === false,
++		`astro-island[uid="${astroIslandId}"]`
++	);
++}
++
++/**
++ * Scroll to element manually without making sure the `el` is stable
++ * @param {import('@playwright/test').Locator} el
++ */
++export async function scrollToElement(el) {
++	await el.evaluate((node) => {
++		node.scrollIntoView({ behavior: 'auto' });
++	});
++}
++
++export function prepareTestFactory(opts) {
++	const test = testFactory(opts);
++
++	let devServer;
++
++	test.beforeAll(async ({ astro }) => {
++		devServer = await astro.startDevServer();
++	});
++
++	test.afterAll(async () => {
++		await devServer.stop();
++	});
++
++	return {
++		test,
++	};
++}
+diff --git a/pnpm-lock.yaml b/pnpm-lock.yaml
+index 38c3133136aa..4e6b7ac63db2 100644
+--- a/pnpm-lock.yaml
++++ b/pnpm-lock.yaml
+@@ -3781,12 +3781,48 @@ importers:
+ 
+   packages/integrations/alpinejs:
+     devDependencies:
++      '@playwright/test':
++        specifier: 1.40.0
++        version: 1.40.0
+       astro:
+         specifier: workspace:*
+         version: link:../../astro
+       astro-scripts:
+         specifier: workspace:*
+         version: link:../../../scripts
++      vite:
++        specifier: ^5.0.10
++        version: 5.0.12(@types/node@18.19.4)(sass@1.69.6)
++
++  packages/integrations/alpinejs/test/fixtures/basics:
++    dependencies:
++      '@astrojs/alpinejs':
++        specifier: workspace:*
++        version: link:../../..
++      '@types/alpinejs':
++        specifier: ^3.13.5
++        version: 3.13.5
++      alpinejs:
++        specifier: ^3.13.3
++        version: 3.13.3
++      astro:
++        specifier: workspace:*
++        version: link:../../../../../astro
++
++  packages/integrations/alpinejs/test/fixtures/directive:
++    dependencies:
++      '@astrojs/alpinejs':
++        specifier: workspace:*
++        version: link:../../..
++      '@types/alpinejs':
++        specifier: ^3.13.5
++        version: 3.13.5
++      alpinejs:
++        specifier: ^3.13.3
++        version: 3.13.3
++      astro:
++        specifier: workspace:*
++        version: link:../../../../../astro
+ 
+   packages/integrations/cloudflare: {}
+ 
+@@ -15596,7 +15632,7 @@ packages:
+       mlly: 1.4.2
+       pathe: 1.1.1
+       picocolors: 1.0.0
+-      vite: 5.0.10(@types/node@18.19.4)
++      vite: 5.0.12(@types/node@18.19.4)(sass@1.69.6)
+     transitivePeerDependencies:
+       - '@types/node'
+       - less

@@ -1,6 +1,8 @@
 // A repo directory walk that prunes SKIP_DIRS — the shared substrate for the package map and the
-// consumer/blast-radius scans (the os.walk equivalent). Order is not guaranteed to match Python's
-// os.walk, so callers that need determinism compare results as sets.
+// consumer/blast-radius scans (the os.walk equivalent). Entries are sorted so the traversal is
+// DETERMINISTIC across machines: raw readdir order varies by OS/filesystem (ext4 vs overlayfs,
+// Linux vs macOS), and downstream consumers assign positional graph ids in walk order — so an
+// unsorted walk makes the emitted graph (and the --emit-seams contract) differ machine-to-machine.
 import { readdirSync } from "node:fs";
 import { join, normalize } from "node:path";
 
@@ -15,11 +17,15 @@ export function* walk(root: string, skip: Set<string>): Generator<[string, strin
     const dir = stack.pop()!;
     let entries;
     try { entries = readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+    entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     const files: string[] = [];
+    const dirs: string[] = [];
     for (const e of entries) {
-      if (e.isDirectory()) { if (!skip.has(e.name)) stack.push(join(dir, e.name)); }
+      if (e.isDirectory()) { if (!skip.has(e.name)) dirs.push(join(dir, e.name)); }
       else files.push(e.name);
     }
+    // Files yielded in sorted order; dirs pushed reversed so the LIFO stack visits them ascending.
+    for (let i = dirs.length - 1; i >= 0; i--) stack.push(dirs[i]);
     yield [dir, files];
   }
 }

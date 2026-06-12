@@ -1,0 +1,30 @@
+# Clean-room build — proves Seam installs and runs from ZERO on a vanilla machine, following
+# only the documented one-liner. Nothing from the host leaks in: the build context excludes
+# every node_modules / dist / out via .dockerignore, so `make install` must fetch everything.
+#
+# Run it via:  make cleanroom   (or: bash scripts/cleanroom.sh)
+FROM debian:bookworm-slim
+
+# A bare box: just enough to install bun the documented way, plus make to drive the one-liner.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl unzip ca-certificates make \
+ && rm -rf /var/lib/apt/lists/*
+
+# Install bun exactly as https://bun.sh tells a new user to.
+RUN curl -fsSL https://bun.sh/install | bash
+ENV PATH="/root/.bun/bin:${PATH}"
+RUN bun --version
+
+WORKDIR /seam
+COPY . .
+
+# 1) The headline one-liner: fresh checkout → shippable .vsix.
+RUN make vsix
+
+# 2) The engine runs offline on a sample diff (no claude, no network, no API key).
+RUN make smoke
+
+# 3) The unit tests pass on the freshly-installed engine.
+RUN make test
+
+CMD ["bash", "-lc", "echo 'clean-room OK: make vsix + make smoke + make test all passed from zero'"]

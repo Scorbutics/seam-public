@@ -1,5 +1,7 @@
 # Seam — review by intent
 
+> **Stop scrolling diffs line-by-line. Review by intent, not by file.**
+
 <p align="center">
   <img src="seam.gif" alt="Seam decomposing a Flask pull request into review seams — one intent, five seams, tests to skim, docs to skip" width="100%">
   <br>
@@ -17,8 +19,8 @@ without the linear scroll fighting it. The human still trusts.
 
 The engine is a **stateless TypeScript library** (`ts/`). Every surface — the CLI, the VS Code
 extension, the MCP server, a future IntelliJ plugin — is a thin client over **one versioned JSON
-contract** (`--emit-seams`). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full model and
-[`decomposition-model-and-mvp.md`](decomposition-model-and-mvp.md) for the reasoning.
+contract** (`--emit-seams`). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full model and the
+reasoning.
 
 ## Two modes
 
@@ -44,8 +46,7 @@ as real.
 | **noise** | Renames, formatting, indentation | None — confirm it really is noise |
 
 The boundary that matters: **"decides an outcome" → core** vs **"connects/routes" → link**. See
-[`decomposition-model-and-mvp.md`](decomposition-model-and-mvp.md) §2 + §12 for the reasoning (and
-why `test` earned a role).
+[`ARCHITECTURE.md`](ARCHITECTURE.md) for the reasoning (and why `test` earned a role).
 
 A *seam* = one core (its own hunk id is the seam id) plus the links/env that reference it —
 **many-to-many** (a link can wire several cores). Per-seam **look-here flags** (never scores, just
@@ -110,15 +111,34 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 
 ## Install & run
 
-The engine is TypeScript on [**bun**](https://bun.sh) — no Python, no venv.
+The only prerequisite is [**bun**](https://bun.sh) — no Python, no venv, no `node`/`npm`. Install
+the deps once, then run from source:
 
 ```bash
-# from source
-bun ts/src/cli/decompose.ts --git main..HEAD --repo . --format ascii
+make install        # bun install in ts/ + vscode-extension/  (one time; the from-source
+                    # commands below need ts/'s deps present — this is that step)
 
-# or build one self-contained binary (~100MB, no checkout / no bun needed to run it)
-cd ts && bun run build          # → ts/dist/seam
-./ts/dist/seam --file change.patch --format ascii
+# from source, fully offline (det) — works immediately, no model, no API key
+bun ts/src/cli/decompose.ts --file sample.patch --classifier det --format ascii
+bun ts/src/cli/decompose.ts --git main..HEAD --repo . --classifier det --format ascii
+```
+
+**Build the VS Code extension `.vsix` — one command, from a fresh checkout:**
+
+```bash
+make vsix           # → vscode-extension/seam-<version>.vsix  (self-contained; bundles the engine)
+```
+
+Run bare `make` to list every target. `make ci` runs the full local gate (typecheck + unit tests +
+README-command audit + offline smoke over the sample diffs + the `.vsix` build); `make cleanroom`
+proves the whole thing installs and runs **from zero inside a vanilla Docker container** — the
+"works on a clean machine" check. See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist.
+
+You can also build a standalone CLI binary (no checkout / no bun needed to *run* it):
+
+```bash
+cd ts && bun run build          # → ts/dist/seam (~100MB)
+./ts/dist/seam --file ../sample.patch --classifier det --format ascii
 ```
 
 The **default (hybrid) uses the LLM for clustering**, so it needs a subscription-backed LLM CLI (no
@@ -129,36 +149,43 @@ wiring are deterministic and need nothing. For a **fully offline** run, use `--c
 
 ### Diff mode
 
-```bash
-# default HYBRID: LLM clusters + deterministic roles/wiring
-bun ts/src/cli/decompose.ts --file change.patch --format ascii
-bun ts/src/cli/decompose.ts --git main..HEAD --repo /path/to/repo --format ascii
+Every command below is copy-pasteable as-is against the checked-in `sample.patch` (CI runs them
+verbatim — see [`scripts/readme-audit.sh`](scripts/readme-audit.sh)):
 
-# fully offline — no LLM at all
-bun ts/src/cli/decompose.ts --file change.patch --classifier det --format ascii
+```bash
+# fully offline — no LLM at all (works on a bare machine)
+bun ts/src/cli/decompose.ts --file sample.patch --classifier det --format ascii
 
 # emit the JSON contract (what every client consumes)
-bun ts/src/cli/decompose.ts --file change.patch --emit-seams seams.json
+bun ts/src/cli/decompose.ts --file sample.patch --classifier det --emit-seams seams.json
 
-# full-file AST facts on the deterministic passes
-bun ts/src/cli/decompose.ts --git main..HEAD --repo . --facts-engine treesitter --format ascii
+# full-file tree-sitter AST facts on the deterministic passes
+bun ts/src/cli/decompose.ts --file sample.patch --classifier det --facts-engine treesitter --format ascii
 
-# mix per pass (deterministic everything except keep LLM wiring)
-bun ts/src/cli/decompose.ts --file change.patch --classifier det --wiring llm --format ascii
+# default HYBRID: LLM clusters + deterministic roles/wiring  (needs a `claude` CLI)
+bun ts/src/cli/decompose.ts --file sample.patch --format ascii
+bun ts/src/cli/decompose.ts --git main..HEAD --repo . --format ascii
+
+# mix per pass — deterministic everything except keep LLM wiring  (needs a `claude` CLI)
+bun ts/src/cli/decompose.ts --file sample.patch --classifier det --wiring llm --format ascii
 ```
+
+More varied real-world diffs (small bugfix, multi-file feature, mostly-tests, rename-heavy) are
+checked in under [`samples/`](samples/) — see [§Sample diffs](#sample-diffs).
 
 ### Codebase mode
 
 ```bash
 # anchor on a symbol → its intent footprint (consumers + deps), decomposed into seams
-bun ts/src/cli/decompose.ts --scan --repo . \
+bun ts/src/cli/decompose.ts --scan --repo . --classifier det \
     --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --emit-seams footprint.json
 
 # anchor on a whole module (all of a file's exports)
-bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts --emit-seams footprint.json
+bun ts/src/cli/decompose.ts --scan --repo . --classifier det \
+    --anchor-file ts/src/diff/seams.ts --emit-seams footprint.json
 
-# focus the footprint on a natural-language intent (hybrid/llm)
-bun ts/src/cli/decompose.ts --scan --repo . --anchor-file path/to/file.ts --symbol Foo \
+# focus the footprint on a natural-language intent  (needs a `claude` CLI)
+bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts --symbol emit_seams_json \
     --intent "rate-limit the public API" --emit-seams footprint.json
 ```
 
@@ -184,6 +211,30 @@ bun ts/src/cli/decompose.ts --from-classified samples/sample.classified.json --f
 Ready-made examples are checked in under [`samples/`](samples/) (`sample.classified.json` includes a
 shared link wiring two cores, so the many-to-many seam view is visible out of the box).
 
+### Sample diffs
+
+A handful of **real, merged open-source PR diffs** are checked in under [`samples/`](samples/) to
+show how the tool behaves on *different shapes* of change — not because they're all flattering, but
+so nothing surprises you. `make smoke` decomposes every one of them offline (`--classifier det`):
+
+| sample | source PR | shape | reads as |
+|---|---|---|---|
+| `requests-cookie-bugfix` | psf/requests#6356 | small focused bugfix | clean — 1 core / 1 link / 1 test |
+| `astro-multifile-feature` | withastro/astro#9751 | large multi-file (TS) | one core lifted out of 14 files; rest tests + config |
+| `flask-template-filter-feature` | pallets/flask#5736 | feature + wiring | showcase — each new filter lands as a tested seam |
+| `httpx-json-compact-tests` | encode/httpx#3367 | **mostly tests** | **0 cores** — see limits below |
+| `flask-drop-eol-python-refactor` | pallets/flask#5731 | **rename / deletion-heavy** | **~68% noise** — see limits below |
+| `calcom-webhooks` | cal.com | large tangled refactor | 54 hunks → 23 seams / 18 cores |
+
+Try any of them:
+
+```bash
+bun ts/src/cli/decompose.ts --file samples/flask-template-filter-feature.patch --classifier det --format ascii
+```
+
+The last two **degrade exactly as their shape predicts**, and that's documented honestly in
+[§Status & limits](#status--limits) rather than hidden.
+
 ## The VS Code extension (primary interactive surface)
 
 The extension ([`vscode-extension/`](vscode-extension/)) consumes `--emit-seams` and renders
@@ -197,6 +248,34 @@ feeds the engine **language-server AST facts** via `--facts external`.
 
 Run it: open `vscode-extension/` in VS Code and press **F5** (build with `bun run compile`; uses bun,
 not npm).
+
+### What the extension runs (engine modes)
+
+The extension exposes the engine through the **`seam.engine`** setting, and maps it to CLI flags —
+plus two enrichments only the editor can provide (the bare CLI on a loose patch gets neither):
+
+| `seam.engine` | flags the extension passes | needs |
+|---|---|---|
+| **`hybrid`** *(default)* | `--cluster llm --roles det --wiring hybrid` | a `claude` CLI (auto-detected from the Claude Code extension or PATH) |
+| **`det`** | `--classifier det` | nothing — fully offline, zero setup |
+| **`llm`** | `--classifier llm` | a `claude` CLI |
+
+In **`hybrid`** the LLM does **only** two things — **discovers/labels the clusters** and **names the
+seams** (the LLM half of `wiring=hybrid`, on top of a deterministic wiring floor). **Roles
+(core/link/environment/test/noise) stay 100% deterministic** — the LLM never classifies a role; only
+`llm` mode does. That's why det and hybrid produce identical role counts on the same diff.
+
+On top of those flags, for `det`/`hybrid` the extension feeds the engine the **editor's
+language-server AST facts** (`--emit-hunks` → compute defines/enclosing → `--facts <path>`) so the
+deterministic roles read a real AST instead of regex, and — when `seam.blastRadius` is on (default) —
+resolves each changed symbol's **blast radius** against the live repo (`--blast-radius`, with
+`--resolver det|lsp|auto`). So the extension's `hybrid` is *richer* than `--classifier hybrid` on a
+standalone patch: same LLM clustering + product-intent labels, but with editor AST facts and
+in-repo blast radius that a bare `--file <patch>` run can't supply.
+
+> The default is **`hybrid`** (best quality — needs a subscription-backed `claude` CLI, which the
+> Claude Code extension provides). With no `claude` available, switch to **`det`** for a fully offline
+> run — Settings → search "Seam" → **Seam: Engine**.
 
 ## The MCP server (any LLM can consult Seam)
 
@@ -256,5 +335,13 @@ Known limits:
 - **Codebase mode is bounded by static resolution.** Cross-language / string-dispatch / DI edges
   surface as `SUGGESTED`/`blindspots` to verify; a headless LSP resolver improves this where a
   language server exists.
+- **Test-only PRs have no core to anchor on.** On a change that's almost all tests plus one trivial
+  production line (e.g. `samples/httpx-json-compact-tests`), Seam reports **0 cores** and renders a
+  single link-only "ambient" seam with the tests grouped to skim — correct, but there's no
+  decision-bearing core to structure the review around.
+- **Deletion / config-heavy cleanups read thin.** On a rename-and-drop refactor (e.g.
+  `samples/flask-drop-eol-python-refactor`), ~**68% of hunks classify as noise** (CI, docs, lockfile,
+  `pyproject`) and the surviving seams are mostly link-only config blocks, so the review surface is
+  sparse and the one real code core lands with low (~50%) confidence.
 - **No GitHub PR ingestion yet**, no line-level roles, no chunking for very large diffs (the
   classifier warns near the context window, `--context-window`, default 200k).

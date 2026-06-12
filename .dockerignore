@@ -1,0 +1,15 @@
+# Keep the clean-room build context free of anything host-built, so `make install` inside the
+# container is forced to fetch/build everything from zero (that's the whole point of the test).
+**/node_modules
+ts/dist
+vscode-extension/out
+vscode-extension/*.vsix
+
+# Local caches / generated artifacts — irrelevant to a from-zero build, and big.
+.git
+__pycache__
+.pytest_cache
+**/_runs
+*.gif
+report*.html
+.seam-session-graph.json

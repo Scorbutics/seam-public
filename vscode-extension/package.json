@@ -213,12 +213,12 @@
             "llm"
           ],
           "enumDescriptions": [
-            "Default. Fully deterministic, offline — no LLM, zero setup (structural cluster labels instead of product-intent prose).",
-            "LLM clustering (product intent) + deterministic roles & wiring, fed AST facts from the editor's language server. Needs a `claude` CLI (e.g. the Claude Code extension) on the machine.",
+            "Fully deterministic, offline — no LLM, zero setup (structural cluster labels instead of product-intent prose). Use this if you have no `claude` CLI.",
+            "Default. LLM clustering (product-intent labels) + deterministic roles & wiring, fed AST facts from the editor's language server. Needs a `claude` CLI (e.g. the Claude Code extension) on the machine.",
             "All passes by the LLM. Needs a `claude` CLI."
           ],
-          "default": "det",
-          "description": "How to decompose a diff: 'det' (fully offline, no LLM — the default, works with zero setup), 'hybrid' (LLM clusters + deterministic roles/wiring — best quality; needs a `claude` CLI), or 'llm' (all LLM)."
+          "default": "hybrid",
+          "description": "How to decompose a diff: 'hybrid' (the default — LLM clusters + product-intent labels, with deterministic roles/wiring; needs a `claude` CLI), 'det' (fully offline, no LLM, zero setup — structural labels), or 'llm' (all LLM). Roles (core/link/environment/test/noise) are always deterministic except in 'llm'."
         },
         "seam.codebaseDepth": {
           "type": "number",

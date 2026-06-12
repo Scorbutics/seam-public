@@ -1,0 +1,46 @@
+# Green-gate CI (AI feedback, point 4): on every push/PR, a clean Ubuntu runner — itself a
+# "fresh machine" — installs from zero and runs the same checks `make ci` runs locally:
+# typecheck + unit tests, the README commands verbatim (offline subset; the model-backed ones
+# are skipped honestly since no `claude` CLI exists in CI), an offline smoke over every sample
+# diff, and finally a from-zero .vsix build (uploaded as an artifact).
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install deps (engine + extension)
+        run: make install
+
+      - name: Typecheck + unit tests
+        run: make test
+
+      - name: README command audit (offline subset, verbatim)
+        run: make readme-audit
+
+      - name: Offline smoke on every sample diff
+        run: make smoke
+
+      - name: Build the .vsix from zero
+        run: make vsix
+
+      - name: Upload the .vsix
+        uses: actions/upload-artifact@v4
+        with:
+          name: seam-vsix
+          path: vscode-extension/*.vsix

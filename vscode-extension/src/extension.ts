@@ -736,9 +736,10 @@ async function runReview(range: string) {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  // Engine: "det" (default — fully deterministic, offline, zero setup), "hybrid" (LLM clusters +
-  // deterministic roles/wiring, fed VS Code AST facts; needs a `claude` CLI), or "llm" (all LLM).
-  const engineMode = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
+  // Engine: "hybrid" (default — LLM clusters + product-intent labels, deterministic roles/wiring,
+  // fed VS Code AST facts; needs a `claude` CLI), "det" (fully deterministic, offline, zero setup),
+  // or "llm" (all LLM). Roles are deterministic in det/hybrid; only "llm" classifies roles by LLM.
+  const engineMode = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
   const missing = engineMissing();
   if (missing) { vscode.window.showErrorMessage(missing); return; }
   const run = engine().run;
@@ -818,7 +819,7 @@ async function runScan(tool: string, scanArgs: string[], title: string, range: s
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         const [bin, base] = decomposeInvocation(tool,
           ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
         await runStreaming(bin, base, tool, (m) => progress.report({ message: m }));
@@ -884,7 +885,7 @@ async function runScanClass(tool: string,
       const attr = path.join(tool, `.seam-attr-${Date.now()}.json`);
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         const base = ["--scan", "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
         progress.report({ message: "Finding method call-sites…" });
@@ -964,7 +965,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
     async (progress) => {
       const out = path.join(env.tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         // read the session graph AND write the grown one back to it (decompose loads before writing)
         const flags = ["--expand-graph", sessionGraph!, "--repo", repoRoot,
                        "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
