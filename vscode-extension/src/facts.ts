@@ -4,12 +4,12 @@ import * as path from "path";
 // --- the VS Code AST facts producer ------------------------------------------------
 // Contributes the facts the editor's language server gives RELIABLY and cross-language:
 // `defines` (symbols a hunk defines) and `enclosing` (the symbol it edits inside), read
-// from DocumentSymbols. The Python `MergedFactsProvider` overlays these on a base
+// from DocumentSymbols. The engine's `MergedFactsProvider` overlays these on a base
 // producer (tree-sitter/regex) that fills decisions/calls/etc. So this is a PARTIAL
 // payload — we only claim the fields we can resolve well, and leave the rest to the base.
 //
-// The contract is keyed by Python's hunk ids (from `decompose.py --emit-hunks`), so the
-// ids always match. Equivalence with the tree-sitter producer is checked on the Python
+// The contract is keyed by the engine's hunk ids (from the TS CLI `--emit-hunks`), so the
+// ids always match. Equivalence with the tree-sitter producer is checked on the engine's
 // side (assert_providers_equivalent); here we just emit the payload.
 
 interface HunkSkel { id: string; file: string; start: number; end: number; }
@@ -52,7 +52,7 @@ async function documentSymbols(uri: vscode.Uri): Promise<vscode.DocumentSymbol[]
 
 // Build the partial facts payload for the given hunks (grouped by file → one symbol query
 // per file). Best-effort: a file with no language server / no symbols contributes nothing
-// and the Python base provider fills it — no error, just graceful degradation.
+// and the engine's base provider fills it — no error, just graceful degradation.
 export async function computeSymbolFacts(repoRoot: string, hunks: HunkSkel[]): Promise<PartialFacts> {
   const out: PartialFacts = { version: 1, partial: true, fields: ["defines", "enclosing"], hunks: {} };
   const byFile = new Map<string, HunkSkel[]>();

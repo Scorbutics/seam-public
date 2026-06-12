@@ -1,6 +1,6 @@
 # Seam — VS Code extension (thin)
 
-A thin shell over the Seam Python pipeline. It does **not** render anything itself —
+A thin shell over the Seam engine (TypeScript, run via bun). It does **not** render anything itself —
 VS Code is the renderer:
 
 - **Seam colours on the diff** — per changed hunk, coloured by **role**
@@ -11,14 +11,15 @@ VS Code is the renderer:
 - **Seam tree** (activity-bar icon) — clusters → seams → hunks. Click a hunk to
   jump the editor to it (the "related code closer" navigation).
 
-The classification is the shared core: this consumes `decompose.py --emit-seams`
-(file + line range + role per hunk); the CLI consumes the same data to make HTML.
+The classification is the engine: this consumes the TS CLI `--emit-seams`
+(file + line range + role per hunk).
 
 ## Prerequisites
-- **bun** (dev toolchain only — the extension runs in VS Code's Node): `curl -fsSL https://bun.sh/install | bash`
+- **bun** (the engine runs via bun; the extension itself runs in VS Code's Node):
+  `curl -fsSL https://bun.sh/install | bash`
 - **VS Code**.
-- The Seam **Python pipeline working** — i.e. `code-review-sort/.venv` exists and
-  `decompose.py` runs (this extension just shells out to it).
+- The Seam **engine** — i.e. the `ts/` TypeScript engine in your `code-review-sort`
+  checkout (this extension shells out to `ts/src/cli/decompose.ts` via bun; no Python).
 
 ## Build
 ```bash
@@ -52,13 +53,14 @@ code --install-extension seam-0.0.1.vsix          # or: Extensions panel → "�
 Then reload VS Code; the **Seam** icon appears in every window.
 
 > **Important for the installed (.vsix) path:** the extension now lives under
-> `~/.vscode/extensions/…`, so it can't find `decompose.py` by itself. **Set
+> `~/.vscode/extensions/…`, so it can't find the `ts/` engine by itself. **Set
 > `seam.toolPath`** (Settings → search "Seam") to your `code-review-sort` checkout.
 > (Not needed in dev/F5 mode.)
 
 ## Settings
 - `seam.toolPath` — path to the `code-review-sort` checkout (auto in F5; **required** for .vsix).
-- `seam.python` — interpreter (defaults to `<toolPath>/.venv/bin/python`).
+- `seam.engine` — `hybrid` (default), `det` (offline), or `llm`.
+- `seam.resolver` — `auto` (default), `det`, or `lsp`. `seam.blastRadius` — on by default.
 
 ## Focus a seam (the point of the tool)
 **Select a seam in the tree → only that seam's hunks stay coloured; every other

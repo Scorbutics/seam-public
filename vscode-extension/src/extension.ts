@@ -5,7 +5,7 @@ import * as fs from "fs";
 import { computeSymbolFacts } from "./facts";
 import { VSCodeSymbolResolver, anchorSymbolAt, verifyMethodAttribution, MethodCandidate } from "./resolver";
 
-// --- the JSON contract emitted by `decompose.py --emit-seams` ---
+// --- the JSON contract emitted by the TS CLI `--emit-seams` ---
 interface Rewire { removed: string[]; added: string[]; }
 interface ExternalRef { symbol: string; source: string; }
 // Blast radius (diff mode): a file OUTSIDE the diff that imports a symbol THIS hunk defines.
@@ -463,17 +463,13 @@ function makeBorderDecoration(color: string, widthSpec: string): TDeco {
   });
 }
 
-// --- run the Python pipeline and load the seam model ---
+// --- run the engine and load the seam model ---
 function toolPath(): string {
   const cfg = vscode.workspace.getConfiguration("seam").get<string>("toolPath");
   return cfg && cfg.trim() ? cfg.trim() : path.resolve(__dirname, "..", "..");
 }
-function pythonPath(tool: string): string {
-  const cfg = vscode.workspace.getConfiguration("seam").get<string>("python");
-  return cfg && cfg.trim() ? cfg.trim() : path.join(tool, ".venv", "bin", "python");
-}
-// The TypeScript-port backend (seam.backend === "ts"): the bun runtime + the TS CLI entry.
-// bun is found on PATH or at the standard ~/.bun install; the CLI lives in the checkout under ts/.
+// The engine runs entirely in TypeScript: the bun runtime + the TS CLI entry. bun is found on PATH
+// or at the standard ~/.bun install; the CLI lives in the checkout under ts/.
 function bunPath(): string {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const candidate = path.join(home, ".bun", "bin", "bun");
@@ -482,21 +478,14 @@ function bunPath(): string {
 function tsCliPath(tool: string): string {
   return path.join(tool, "ts", "src", "cli", "decompose.ts");
 }
-// anchor_rank invocation for the active backend: python -m src.codebase.anchor_rank, or the TS CLI.
-function anchorRankInvocation(tool: string, py: string, args: string[]): [string, string[]] {
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
-  return usingTs
-    ? [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]]
-    : [py, ["-m", "src.codebase.anchor_rank", ...args]];
+// anchor_rank invocation: bun + the TS anchor_rank CLI.
+function anchorRankInvocation(tool: string, args: string[]): [string, string[]] {
+  return [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]];
 }
-// decompose (codebase mode) invocation for the active backend: bun + the TS CLI, or python +
-// decompose.py. `args` are the CLI FLAGS (everything after the entry). Both entries take the same
-// flags verbatim (the TS CLI is a byte-for-byte port), so callers build one flag list.
-function decomposeInvocation(tool: string, py: string, args: string[]): [string, string[]] {
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
-  return usingTs
-    ? [bunPath(), [tsCliPath(tool), ...args]]
-    : [py, [path.join(tool, "decompose.py"), ...args]];
+// decompose (codebase mode) invocation: bun + the TS CLI. `args` are the CLI FLAGS (everything after
+// the entry).
+function decomposeInvocation(tool: string, args: string[]): [string, string[]] {
+  return [bunPath(), [tsCliPath(tool), ...args]];
 }
 
 async function reviewCommit() {
@@ -559,14 +548,14 @@ function execFileP(file: string, args: string[], cwd: string): Promise<void> {
   });
 }
 
-// Marker the Python pipeline writes to stderr at each phase boundary (src/core/progress.py).
+// Marker the engine writes to stderr at each phase boundary (ts/src/core/progress.ts).
 // A long decompose spends ~2 min inside two LLM passes with no output, so we stream stderr,
 // strip this prefix, and surface the message live in the progress notification.
 const PROGRESS_PREFIX = "@@SEAM_PROGRESS@@";
 
 // Like execFileP but spawns so stderr can be read live: each PROGRESS_PREFIX line is handed to
 // `onProgress` as the next phase message. Still buffers stderr for the error message on failure.
-function runPy(file: string, args: string[], cwd: string,
+function runStreaming(file: string, args: string[], cwd: string,
               onProgress?: (message: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(file, args, { cwd });
@@ -587,16 +576,16 @@ function runPy(file: string, args: string[], cwd: string,
     child.on("error", reject);
     child.on("close", (code) => {
       if (code === 0) resolve();
-      else reject(new Error(stderr.trim() || `decompose.py exited with code ${code}`));
+      else reject(new Error(stderr.trim() || `the engine exited with code ${code}`));
     });
   });
 }
 
-// Engine "ast" (deterministic + VS Code AST facts): ask Python for the hunk skeleton
+// Engine "ast" (deterministic + VS Code AST facts): ask the engine for the hunk skeleton
 // (so facts are keyed by the SAME ids), compute defines/enclosing from the language
 // server, write the partial facts payload, and return its path (for `--facts`). Returns
 // undefined on any failure — the caller then runs deterministic with the regex base.
-// `emitHunks` runs the chosen backend's `--emit-hunks` into skelPath (Python or the TS CLI),
+// `emitHunks` runs the TS CLI `--emit-hunks` into skelPath,
 // so the editor's DocumentSymbol facts are keyed by the SAME hunk ids either pipeline assigns.
 async function buildAstFacts(tool: string, emitHunks: (skelPath: string) => Promise<void>): Promise<string | undefined> {
   const skelPath = path.join(tool, `.seam-hunks-${Date.now()}.json`);
@@ -620,36 +609,15 @@ async function runReview(range: string) {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  const backend = vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts";
-  const usingTs = backend === "ts";
-  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST
-  // facts), "det" (fully deterministic, offline), or "llm" (all LLM). The TS backend implements
-  // only the deterministic engine so far (ts/PORT-STATUS.md), so it forces engine=det.
-  let engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-  let bun = "";
-  if (usingTs) {
-    if (!fs.existsSync(tsCliPath(tool))) {
-      vscode.window.showErrorMessage(
-        `Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your ` +
-        `code-review-sort checkout, or switch "seam.backend" to "python".`);
-      return;
-    }
-    bun = bunPath();
-    // The TS backend implements all three engines now: det (offline), hybrid (the default —
-    // LLM clusters + deterministic roles + hybrid wiring), and llm (all-LLM with role voting).
-  } else {
-    if (!fs.existsSync(path.join(tool, "decompose.py"))) {
-      vscode.window.showErrorMessage(
-        `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" to your ` +
-        `code-review-sort checkout (Settings → Seam).`);
-      return;
-    }
-  }
-  const py = pythonPath(tool);
-  if (!usingTs && !fs.existsSync(py)) {
-    vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
+  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST facts),
+  // "det" (fully deterministic, offline), or "llm" (all LLM).
+  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+  if (!fs.existsSync(tsCliPath(tool))) {
+    vscode.window.showErrorMessage(
+      `Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your code-review-sort checkout.`);
     return;
   }
+  const bun = bunPath();
   // Codebase context (on by default): resolve the diff's references against the real repo so the
   // review shows blast radius (who outside the diff consumes a changed symbol). The LSP daemon stays
   // warm across reviews, so 'auto' (floor + LSP) is the right default here.
@@ -662,60 +630,25 @@ async function runReview(range: string) {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       let factsPath: string | undefined;
       try {
-        if (usingTs) {
-          // TS port: same --emit-seams contract, run via bun. 'det' = fully offline; 'hybrid'
-          // (the default) = LLM clusters + deterministic roles/wiring; 'llm' = all-LLM. The
-          // deterministic roles are fed the editor's AST facts (defines/enclosing) the same way
-          // the Python backend is — via --emit-hunks (TS) + --facts.
-          const engineArgs = engine === "det" ? ["--classifier", "det"]
-            : engine === "llm" ? ["--classifier", "llm"]
-            : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid (default)
-          if (engine !== "llm") {                  // det/hybrid use deterministic roles → AST facts help
-            progress.report({ message: "Computing code facts…" });
-            factsPath = await buildAstFacts(tool, (skel) => runPy(bun,
-              [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
-          }
-          // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
-          // the headless language server (warm daemon) with the deterministic floor as fallback —
-          // ported, 1:1 with Python.
-          const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
-                        ...(factsPath ? ["--facts", factsPath] : []),
-                        ...(resolver !== "det" ? ["--resolver", resolver] : []),
-                        ...(blastRadius ? ["--blast-radius"] : []),
-                        "--emit-seams", out];
-          await runPy(bun, args, tool, (m) => progress.report({ message: m }));
-          const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
-          const ts = Date.now();
-          activateModel(parsed, repoRoot, range, ts);
-          extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
-          const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
-          vscode.window.showInformationMessage(
-            `Seam (ts/${engine}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
-            `core=amber · link=blue · environment=gray · test=green · noise=faint`);
-          try { fs.unlinkSync(out); } catch { /* ignore */ }
-          return;
-        }
-        const extra: string[] = [];
-        if (engine === "llm") {
-          extra.push("--classifier", "llm");
-        } else {
-          // hybrid (default) or det: deterministic roles; cluster = LLM for hybrid, det for
-          // det. Wiring is 'hybrid' (det + LLM prune of over-wired containers) for the hybrid
-          // engine, 'det' for the offline engine. Feed the editor's AST facts to the det
-          // passes (missing facts → regex base, so no warning needed).
-          const det = engine === "det";
-          extra.push("--cluster", det ? "det" : "llm", "--roles", "det",
-                     "--wiring", det ? "det" : "hybrid");
+        // 'det' = fully offline; 'hybrid' (the default) = LLM clusters + deterministic roles/wiring;
+        // 'llm' = all-LLM. The deterministic roles are fed the editor's AST facts (defines/enclosing)
+        // via --emit-hunks + --facts.
+        const engineArgs = engine === "det" ? ["--classifier", "det"]
+          : engine === "llm" ? ["--classifier", "llm"]
+          : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid (default)
+        if (engine !== "llm") {                  // det/hybrid use deterministic roles → AST facts help
           progress.report({ message: "Computing code facts…" });
-          factsPath = await buildAstFacts(tool, (skel) => execFileP(py,
-            [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
-          if (factsPath) extra.push("--facts", factsPath);
+          factsPath = await buildAstFacts(tool, (skel) => runStreaming(bun,
+            [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
         }
-        if (resolver !== "det") extra.push("--resolver", resolver);
-        if (blastRadius) extra.push("--blast-radius");
-        const args = [path.join(tool, "decompose.py"), "--git", range, "--repo", repoRoot,
-                      "--emit-seams", out, ...extra];
-        await runPy(py, args, tool, (m) => progress.report({ message: m }));
+        // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
+        // the headless language server (warm daemon) with the deterministic floor as fallback.
+        const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
+                      ...(factsPath ? ["--facts", factsPath] : []),
+                      ...(resolver !== "det" ? ["--resolver", resolver] : []),
+                      ...(blastRadius ? ["--blast-radius"] : []),
+                      "--emit-seams", out];
+        await runStreaming(bun, args, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
@@ -735,42 +668,28 @@ async function runReview(range: string) {
 }
 
 // CODEBASE MODE (plan §3): decompose from an ANCHOR (a symbol, or a whole module) instead of a
-// diff. Consumer discovery is the deterministic import scan (`decompose.py --scan` — monorepo-safe,
+// diff. Consumer discovery is the deterministic import scan (the TS CLI `--scan` — monorepo-safe,
 // offline; LSP find-references is project-scoped/blind, see resolver.ts). The SAME native renderer
 // paints the SeamModel; the engine never sees `vscode` (constraint §4).
 
-// Shared env guard: workspace folder + decompose.py + python. Sets repoRoot; null (after an error
-// message) if anything is missing.
-function codebaseEnv(): { tool: string; py: string } | null {
+// Shared env guard: workspace folder + the TS CLI. Sets repoRoot; null (after an error message) if
+// anything is missing.
+function codebaseEnv(): { tool: string } | null {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return null; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "ts") === "ts";
-  if (usingTs) {
-    if (!fs.existsSync(tsCliPath(tool))) {
-      vscode.window.showErrorMessage(`Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" or switch "seam.backend" to "python".`);
-      return null;
-    }
-    return { tool, py: "" };   // runScan resolves bun itself on the TS backend
-  }
-  if (!fs.existsSync(path.join(tool, "decompose.py"))) {
-    vscode.window.showErrorMessage(
-      `Seam: decompose.py not found at "${tool}". Set "seam.toolPath" (Settings → Seam).`);
+  if (!fs.existsSync(tsCliPath(tool))) {
+    vscode.window.showErrorMessage(`Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your code-review-sort checkout.`);
     return null;
   }
-  const py = pythonPath(tool);
-  if (!fs.existsSync(py)) {
-    vscode.window.showErrorMessage(`Seam: Python not found at "${py}". Set "seam.python" or create the venv.`);
-    return null;
-  }
-  return { tool, py };
+  return { tool };
 }
 
-// Run `decompose.py --scan` with the given anchor args (single-symbol or whole-module) and paint
-// the result. --classifier (seam.engine) decides the partition: 'det' = floor only; 'hybrid'/'llm'
-// = LLM-refined intent labels (proposed).
-async function runScan(tool: string, py: string, scanArgs: string[], title: string, range: string) {
+// Run `--scan` with the given anchor args (single-symbol or whole-module) and paint the result.
+// --classifier (seam.engine) decides the partition: 'det' = floor only; 'hybrid'/'llm' = LLM-refined
+// intent labels (proposed).
+async function runScan(tool: string, scanArgs: string[], title: string, range: string) {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title },
     async (progress) => {
@@ -778,11 +697,9 @@ async function runScan(tool: string, py: string, scanArgs: string[], title: stri
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
         const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        // Both backends take the same flags (the TS CLI is a byte-for-byte port and now implements
-        // the LLM intent-refine pass for codebase mode), so --classifier applies to either.
-        const [bin, base] = decomposeInvocation(tool, py,
+        const [bin, base] = decomposeInvocation(tool,
           ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
-        await runPy(bin, base, tool, (m) => progress.report({ message: m }));
+        await runStreaming(bin, base, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;                          // fresh analysis = new session to grow from
         const ts = Date.now();
@@ -824,19 +741,19 @@ async function analyzeCodebase() {
     // A class anchor splits by METHOD: the LSP verifies which method each consumer calls (the
     // precision path), with the tree-sitter heuristic as the degrade fallback. Both backends emit
     // candidates (--emit-candidates) and rebuild with the verified attribution (--attribution).
-    await runScanClass(env.tool, env.py, anchor, depth);
+    await runScanClass(env.tool, anchor, depth);
   } else {
-    await runScan(env.tool, env.py,
+    await runScan(env.tool,
                   ["--anchor-file", anchor.file, "--symbol", anchor.symbol, "--depth", String(depth)],
                   `Seam: scanning consumers of ${anchor.symbol}…`, `anchor ${anchor.symbol}`);
   }
 }
 
-// CLASS anchor — the LSP-verified method-attribution flow (3 phases): (1) Python emits the method
+// CLASS anchor — the LSP-verified method-attribution flow (3 phases): (1) the engine emits the method
 // call-site candidates; (2) the LSP go-to-defs each to confirm it binds to the anchor class; (3)
-// Python rebuilds with the verified attribution (RESOLVED_FULL). If the LSP confirms nothing
+// the engine rebuilds with the verified attribution (RESOLVED_FULL). If the LSP confirms nothing
 // (no provider / mid-indexing), it falls back to the tree-sitter heuristic (RESOLVED_PARTIAL).
-async function runScanClass(tool: string, py: string,
+async function runScanClass(tool: string,
                             anchor: { symbol: string; file: string }, depth: number, intent?: string) {
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: resolving methods of ${anchor.symbol}…` },
@@ -849,7 +766,7 @@ async function runScanClass(tool: string, py: string,
         const base = ["--scan", "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
         progress.report({ message: "Finding method call-sites…" });
-        await execFileP(...decomposeInvocation(tool, py, [...base, "--emit-candidates", cand]), tool);
+        await execFileP(...decomposeInvocation(tool, [...base, "--emit-candidates", cand]), tool);
         const candidates = JSON.parse(fs.readFileSync(cand, "utf-8")) as MethodCandidate[];
         // phase 2 — LSP verify
         progress.report({ message: "Verifying call-sites with the language server…" });
@@ -863,8 +780,8 @@ async function runScanClass(tool: string, py: string,
         }
         // phase 3 — decompose with the verified (or heuristic) attribution
         const graph = path.join(tool, SESSION_GRAPH);
-        const [bin, args] = decomposeInvocation(tool, py, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
-        await runPy(bin, args, tool, (m) => progress.report({ message: m }));
+        const [bin, args] = decomposeInvocation(tool, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
+        await runStreaming(bin, args, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;
         const ts = Date.now();
@@ -886,7 +803,7 @@ async function runScanClass(tool: string, py: string,
 
 // MODULE anchor: the WHOLE active file — every export is a carrier, partitioned by member
 // co-occurrence (the §11.1 multi-member intent view). No symbol/cursor needed; omitting --symbol
-// puts decompose.py --scan into module mode.
+// puts the TS CLI --scan into module mode.
 async function analyzeModule() {
   const editor = vscode.window.activeTextEditor;
   if (!editor) { vscode.window.showErrorMessage("Seam: open the module file you want to analyse first."); return; }
@@ -895,7 +812,7 @@ async function analyzeModule() {
   const file = path.relative(repoRoot, editor.document.uri.fsPath).split(path.sep).join("/");
   const base = path.basename(file);
   sessionIntent = "";
-  await runScan(env.tool, env.py, ["--anchor-file", file],
+  await runScan(env.tool, ["--anchor-file", file],
                 `Seam: scanning module ${base}…`, `module ${base}`);
 }
 
@@ -933,8 +850,8 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
         if (down) flags.push("--down");
         if (crossNote) flags.push("--cross-from", crossNote);
         if (sessionIntent) flags.push("--intent", sessionIntent);
-        const [bin, args] = decomposeInvocation(env.tool, env.py, flags);
-        await runPy(bin, args, env.tool, (m) => progress.report({ message: m }));
+        const [bin, args] = decomposeInvocation(env.tool, flags);
+        await runStreaming(bin, args, env.tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         const range = `expanded ${down ? "↓" : "+"}${symbol}`;
@@ -980,7 +897,7 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
   let targets: Array<{ name: string; file: string; kind: string }> = [];
   const out = path.join(env.tool, `.seam-cross-${Date.now()}.json`);
   try {
-    await execFileP(...anchorRankInvocation(env.tool, env.py,
+    await execFileP(...anchorRankInvocation(env.tool,
       ["--crossings", "--intent", symbol, "--repo", repoRoot, "--exclude-file", h.file, "--out", out]), env.tool);
     targets = JSON.parse(fs.readFileSync(out, "utf-8"));
   } catch (e) {
@@ -1002,7 +919,7 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
   await expandFrom(synthetic, false, `crossed from ${symbol} → ${pick.t.name} (symbol-match assumption, unverified)`);
 }
 
-// FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → Python ranks them →
+// FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → the engine ranks them →
 // the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's
 // invariant: the guarantee attaches only AFTER confirmation, never from an unconfirmed match).
 async function analyzeFromIntent(auto = false) {
@@ -1020,13 +937,13 @@ async function analyzeFromIntent(auto = false) {
   const picked = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: finding anchors for “${intent}”…` },
     async (): Promise<{ symbol: string; file: string; kind: string } | undefined> => {
-      // Candidate discovery is a DETERMINISTIC repo scan (Python), not workspaceSymbol — the LSP
+      // Candidate discovery is a DETERMINISTIC repo scan, not workspaceSymbol — the LSP
       // workspace-symbol search is project-scoped / depends on what's loaded (the same flakiness we
       // pivoted off for find-references), so it would miss symbols in unopened files.
       const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
       let items: Array<{ name: string; file: string; kind: string; terms?: string[] }> = [];
       try {
-        await execFileP(...anchorRankInvocation(env.tool, env.py, ["--intent", intent, "--repo", repoRoot, "--out", ranked]), env.tool);
+        await execFileP(...anchorRankInvocation(env.tool, ["--intent", intent, "--repo", repoRoot, "--out", ranked]), env.tool);
         items = JSON.parse(fs.readFileSync(ranked, "utf-8"));
       } finally {
         try { fs.unlinkSync(ranked); } catch { /* ignore */ }
@@ -1052,14 +969,14 @@ async function analyzeFromIntent(auto = false) {
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
   if (auto) {
     // P5: the LLM grows the footprint toward the question (picks node + up/down each step), then focuses.
-    await runScan(env.tool, env.py,
+    await runScan(env.tool,
                   ["--anchor-file", picked.file, "--symbol", picked.symbol, "--intent", intent,
                    "--auto", "--max-steps", "3"],
                   `Seam: auto-growing the footprint for “${intent}”…`, `auto · ${picked.symbol}`);
   } else if (picked.kind === "class") {
-    await runScanClass(env.tool, env.py, picked, depth, intent);   // intent focuses the matching seam
+    await runScanClass(env.tool, picked, depth, intent);   // intent focuses the matching seam
   } else {
-    await runScan(env.tool, env.py,
+    await runScan(env.tool,
                   ["--anchor-file", picked.file, "--symbol", picked.symbol, "--depth", String(depth),
                    "--intent", intent],
                   `Seam: scanning consumers of ${picked.symbol}…`, `anchor ${picked.symbol}`);

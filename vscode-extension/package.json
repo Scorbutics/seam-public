@@ -1,7 +1,7 @@
 {
   "name": "seam",
   "displayName": "Seam — review by intent",
-  "description": "Decompose a diff into seams (core/link/environment/test/noise) and review by intent: seam colours on the native diff + a seam tree, powered by the Seam Python pipeline.",
+  "description": "Decompose a diff into seams (core/link/environment/test/noise) and review by intent: seam colours on the native diff + a seam tree, powered by the Seam engine (TypeScript).",
   "version": "0.0.1",
   "publisher": "seam-local",
   "engines": { "vscode": "^1.84.0" },
@@ -68,22 +68,7 @@
         "seam.toolPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the code-review-sort checkout (containing decompose.py and .venv). Defaults to a bundled path if empty."
-        },
-        "seam.python": {
-          "type": "string",
-          "default": "",
-          "description": "Python interpreter to run the pipeline. Defaults to <toolPath>/.venv/bin/python."
-        },
-        "seam.backend": {
-          "type": "string",
-          "enum": ["python", "ts"],
-          "enumDescriptions": [
-            "The Python pipeline (decompose.py). Legacy — kept for differential checks; the TS port is feature-1:1.",
-            "Default. The TypeScript port (ts/src/cli/decompose.ts via bun) — all engines (hybrid/det/llm), AST facts, blast-radius, and the headless LSP resolver. No Python needed. See ts/PORT-STATUS.md."
-          ],
-          "default": "ts",
-          "description": "Which pipeline implementation to run: 'ts' (the TypeScript port, default — full features via bun, no Python needed) or 'python' (decompose.py, legacy)."
+          "description": "Absolute path to the code-review-sort checkout (containing the ts/ engine). Defaults to a bundled path if empty."
         },
         "seam.engine": {
           "type": "string",

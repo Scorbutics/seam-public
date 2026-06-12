@@ -7,7 +7,7 @@ import * as path from "path";
 // This module is the codebase product's DETERMINISTIC backbone and the ONE place
 // the VSCode language API is touched. Decision D1/§4: resolution is sub-contracted
 // to the editor's language servers (tsserver, Pylance, rust-analyzer, …) via the
-// `vscode.execute*` commands. The rest of the system (the Python layers 3-6) never
+// `vscode.execute*` commands. The rest of the system (the engine's layers 3-6) never
 // sees `vscode` — it consumes only the `ResolvedGraph` JSON this file emits. Keep it
 // that way: nothing here may import decomposition logic, and nothing there may import
 // this. The JSON contract IS the abstraction boundary (constraint §4).
@@ -32,7 +32,7 @@ export type ResolutionQuality = "FULL" | "PARTIAL" | "HEURISTIC" | "NONE";
 
 // The resolver surface the BFS needs. VSCodeSymbolResolver is the first implementation;
 // a StackGraphsResolver / LspDirectResolver (standalone/CI) could implement the same
-// interface without touching the BFS or the Python layers (plan §4).
+// interface without touching the BFS or the engine's layers (plan §4).
 export interface SymbolResolver {
   documentSymbols(uri: vscode.Uri): Promise<ResolverResult<vscode.DocumentSymbol[]>>;
   prepareCallHierarchy(uri: vscode.Uri, pos: vscode.Position): Promise<ResolverResult<vscode.CallHierarchyItem[]>>;
@@ -365,7 +365,7 @@ export async function buildResolvedGraph(
 // that the language server answers reliably (unlike cross-project `references`, which is
 // project-scoped and monorepo-blind — memory: lsp-references-monorepo-blind). This is the LSP's
 // kept role once consumer DISCOVERY moves to the deterministic import scan: name the anchor, hand
-// (symbol, file) to the Python scan front. Returns null if no symbol resolves at the cursor.
+// (symbol, file) to the engine's scan front. Returns null if no symbol resolves at the cursor.
 export async function anchorSymbolAt(
   resolver: SymbolResolver, anchorUri: vscode.Uri, anchorPos: vscode.Position, repoRoot: string,
 ): Promise<{ symbol: string; file: string; range: [number, number]; kind: string } | null> {
@@ -382,7 +382,7 @@ export async function anchorSymbolAt(
            kind: SYMBOL_KIND_NAMES[sym.kind] ?? "symbol" };
 }
 
-// A method call-site the Python scan found (name matches an anchor-class method); the extension
+// A method call-site the engine's scan found (name matches an anchor-class method); the extension
 // go-to-defs it to confirm it really binds to the anchor class. Positions are 0-based.
 export interface MethodCandidate { file: string; line: number; col: number; method: string; }
 
