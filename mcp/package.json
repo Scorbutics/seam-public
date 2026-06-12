@@ -1,0 +1,22 @@
+{
+  "name": "seam-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Seam — lets any LLM agent consult Seam about a diff or an intent footprint over the --emit-seams JSON contract. Thin adapter over the stateless engine; no daemon.",
+  "type": "module",
+  "bin": {
+    "seam-mcp": "./src/server.ts"
+  },
+  "scripts": {
+    "start": "bun src/server.ts",
+    "typecheck": "tsc --noEmit -p .",
+    "build": "bun build src/server.ts --compile --outfile dist/seam-mcp"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.14",
+    "@types/node": "^25.9.3",
+    "typescript": "^6.0.3"
+  }
+}

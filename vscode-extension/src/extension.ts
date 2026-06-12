@@ -20,7 +20,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; wireTargets?: { file: string; start: number }[]; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
 // Altitude mid-level: a deterministic STRUCTURAL grouping of a big cluster's seams (by coupling +
 // directory), so the reviewer collapses/expands groups to zoom. Absent on small/tight clusters.
@@ -41,7 +41,12 @@ interface Usage {
   calls: number; input_tokens: number; output_tokens: number;
   total_tokens: number; cost_usd: number; duration_ms: number; backends: string[];
 }
+// The contract version the engine stamps onto every --emit-seams model (see ts/src/core/contract.ts
+// and docs/SEAM_JSON_CONTRACT.md). This client is built against this major; a higher major from a
+// newer engine means fields may have changed meaning, so we warn rather than silently mis-render.
+const SEAM_SCHEMA_VERSION = 1;
 interface SeamModel {
+  schemaVersion?: number;   // stamped by the engine; absent on pre-contract runs (treated as v1)
   clusters: Cluster[]; tests: SeamHunk[]; noise: SeamHunk[];
   usage?: Usage;     // tokens/cost of the LLM passes (claude backend only; absent for det/host runs)
   mode?: string; anchor?: string; resolutionQuality?: string; language?: string;
@@ -98,17 +103,57 @@ const hunkName = (h: SeamHunk): string => {
   const parts = h.file.split("/");
   return isModuleEntry(h) && parts.length > 1 ? `${parts[parts.length - 2]}/` : (parts.pop() ?? h.file);
 };
+// Wire-target pill (intra-seam closeness): in a MULTI-core seam, a link shows which core(s) it
+// wires — resolved by shared distinctive symbols. Targets are grouped by file so same-file cores
+// collapse to "role.service.ts:43, :79". Absent for single-core seams or symbol-less links.
+const wireTargetTag = (h: SeamHunk): string => {
+  const wt = h.wireTargets ?? [];
+  if (!wt.length) return "";
+  const byFile = new Map<string, number[]>();
+  for (const t of wt) {
+    const base = t.file.split("/").pop() ?? t.file;
+    (byFile.get(base) ?? byFile.set(base, []).get(base)!).push(t.start);
+  }
+  const parts = [...byFile].map(([base, lines]) => {
+    const ls = [...new Set(lines)].sort((a, z) => a - z);
+    return `${base}:${ls[0]}${ls.slice(1).map((l) => `, :${l}`).join("")}`;
+  });
+  return `→ ${parts.join("  ")}`;
+};
 // A non-FULL edge into this node — a string-dispatch heuristic (RESOLVED_PARTIAL) or an LLM/assumed
 // crossing (SUGGESTED): surface it so the node reads as a boundary to verify, not a hard import.
 const provTag = (h: SeamHunk): string =>
   /SUGGEST/i.test(h.provenance ?? "") ? "~ suggested" : /PARTIAL/.test(h.provenance ?? "") ? "↝ dispatch (partial)" : "";
-// Per-hunk role wash + a thinner, more-opaque outline (the border reads as the
-// hunk's boundary; the fill is lighter so code stays legible over it).
-const ROLE_BG_ALPHA = 0.19;      // line-background wash
-const ROLE_BORDER_ALPHA = 0.75;  // hunk outline (more opaque than the fill)
-function hexToRgba(hex: string, a: number): string {
-  const n = parseInt(hex.slice(1), 16);
-  return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${a})`;
+// Seam identity is carried by the OUTLINE (border) + the gutter bar; the wash is a
+// faint tint only — kept deliberately low so code stays legible and, crucially, so a
+// single layer is barely-there. Opacity must NEVER stack: every line is painted by at
+// most one fill decoration (see fillFor), so an overlap reads as one blended tint, not
+// two washes compositing into mud.
+// The role SPINE is the primary read: a calm, continuous bar in the gutter whose WIDTH
+// encodes review priority — core is loudest (the decisions you must understand), links are
+// quiet plumbing, noise is a hairline that recedes. Colour carries the role; weight carries
+// "how much should this draw the eye". Replaces the old per-hunk perimeter box (intrusive).
+const ROLE_WEIGHT: Record<string, number> = {
+  core: 4, link: 2.4, environment: 2.4, test: 2.4, noise: 1.2,
+};
+// The wash never carries the signal (the spine does) — it's a barely-there tint, painted
+// ONLY on the focused seam so a block reads as cohesive without flooding the editor. Single
+// layer, pre-blended, never stacked.
+const ROLE_BG_ALPHA = 0.05;
+// In focus, the OTHER seams' changed lines fade back (not hidden — still context) so the one
+// seam you're reading pops. A whisper of grey keeps them locatable.
+const DIM_OPACITY = "0.4";
+// Pre-blend several role colours into ONE rgba (average RGB, single alpha) so an overlap
+// line (e.g. core+link) gets a single blended fill — never two stacked washes. Mirrors the
+// split gutter bar's signal without the compositing that darkened overlaps.
+function blendRgba(hexes: string[], a: number): string {
+  let r = 0, g = 0, b = 0;
+  for (const hex of hexes) {
+    const n = parseInt(hex.slice(1), 16);
+    r += (n >> 16) & 255; g += (n >> 8) & 255; b += n & 255;
+  }
+  const k = Math.max(1, hexes.length);
+  return `rgba(${Math.round(r / k)},${Math.round(g / k)},${Math.round(b / k)},${a})`;
 }
 
 type TDeco = vscode.TextEditorDecorationType;
@@ -123,23 +168,20 @@ let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file �
 // Seam graph (S1): seam id → label, and seam id → its wired neighbours (resolved seam-to-seam).
 let seamLabel: Map<string, string> = new Map();
 let seamNeighbors: Map<string, { id: string; provenance: string }[]> = new Map();
-let seamBounds: Map<string, { firstKey: string; lastKey: string }> = new Map();  // seam → its global first/last span occurrence
-// Per role: a FILL (bg + gutter + ruler, all lines) and four position-specific
-// BORDER types so the outline is drawn only around the hunk's perimeter (top edge
-// on the first line, bottom on the last, sides throughout) — not a box per line.
-let decoFill: Record<string, TDeco> = {};
-// Per role: hunk-perimeter pieces (top/mid/bottom/single) + thick SEAM boundary
-// pieces (seamTop on the seam's first line, seamBottom on its last line).
-let decoBorder: Record<string, {
-  top: TDeco; mid: TDeco; bottom: TDeco; single: TDeco; seamTop: TDeco; seamBottom: TDeco;
-}> = {};
-// GUTTER bar, separate from the fill so it can represent OVERLAP. A line's meaning is
+// Combo-keyed like decoSpine: one cached fill per role-combo ("core", "core|link", …), so any
+// given line is covered by exactly ONE background decoration → opacity is flat everywhere and
+// overlaps blend instead of stacking. Built lazily by fillFor; painted only on the focused seam.
+let decoFill: Map<string, TDeco> = new Map();
+// The role SPINE: a continuous, weight-coded bar in the gutter — the PRIMARY role signal
+// (the per-hunk perimeter box was retired; it boxed the editor in). A line's meaning is
 // SEAM-DEPENDENT: the same lines can be `core` in their home seam AND `link` in a sibling
-// seam (a container rendering a sibling component). In show-all (no focused seam) such a
-// line carries >1 role, so its bar is SPLIT — one stripe per role — instead of an arbitrary
-// single colour winning. Keyed by the sorted role-combo ("core" or "core|link"), built
-// lazily; `gutterKeys` tracks them all so a re-paint can clear the stale ones first.
-let decoGutter: Map<string, TDeco> = new Map();
+// seam, so a line carrying >1 role gets a SPLIT spine (adjacent thin stripes) rather than an
+// arbitrary single colour winning. Keyed by the sorted role-combo ("core" or "core|link"),
+// built lazily; re-paint clears the stale combos first.
+let decoSpine: Map<string, TDeco> = new Map();
+// FOCUS dimming: the other seams' changed lines fade to DIM_OPACITY so the focused seam
+// reads. One shared type, re-targeted each paint.
+let decoDim: TDeco;
 // Model B: the PROPOSED sub-core overlay — deliberately DISTINCT from the solid role fills
 // (a dashed violet outline), so a proposed grouping reads as a proposal, never as verified
 // structure (R-B3). Painted only for the sub-core the user selects (opt-in), never in show-all.
@@ -183,22 +225,14 @@ function activateInner(context: vscode.ExtensionContext) {
   extContext = context;
   gutterDir = path.join(context.globalStorageUri.fsPath, "gutter");
   fs.mkdirSync(gutterDir, { recursive: true });
-  for (const role of ROLES) {
-    const color = ROLE_COLORS[role];
-    decoFill[role] = makeFillDecoration(color, role);
-    decoBorder[role] = {
-      top: makeBorderDecoration(color, "1px 1px 0 1px"),     // first line: top + sides
-      mid: makeBorderDecoration(color, "0 1px 0 1px"),       // interior: sides only
-      bottom: makeBorderDecoration(color, "0 1px 1px 1px"),  // last line: bottom + sides
-      single: makeBorderDecoration(color, "1px"),            // one-line hunk: full box
-      seamTop: makeBorderDecoration(color, "5px 0 0 0"),     // SEAM start: thick top
-      seamBottom: makeBorderDecoration(color, "0 0 5px 0"),  // SEAM end: thick bottom
-    };
-  }
+
+  // Other seams' changed lines fade behind the focused one (text + spine), never disappear.
+  decoDim = vscode.window.createTextEditorDecorationType({ opacity: DIM_OPACITY });
 
   decoProposed = vscode.window.createTextEditorDecorationType({
     border: "1px dashed rgba(163,113,247,0.9)",       // violet, dashed — "a proposal", not a fact
-    backgroundColor: "rgba(163,113,247,0.10)",
+    // Border-only on purpose: a background here would be a SECOND fill layer over the role
+    // wash and reintroduce the opacity stacking. The dashed outline alone reads as a proposal.
     isWholeLine: true,
     overviewRulerColor: "rgba(163,113,247,0.85)",
     overviewRulerLane: vscode.OverviewRulerLane.Center,
@@ -210,8 +244,11 @@ function activateInner(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     treeView,
     vscode.languages.registerCodeLensProvider([{ scheme: "file" }, { scheme: "git" }], lensProvider),
+    vscode.commands.registerCommand("seam.detangle", detangle),
+    vscode.commands.registerCommand("seam.mapIntent", mapIntent),
     vscode.commands.registerCommand("seam.review", () => runReview("HEAD")),
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
+    vscode.commands.registerCommand("seam.loadSeams", loadSeams),
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
     vscode.commands.registerCommand("seam.analyzeModule", analyzeModule),
     vscode.commands.registerCommand("seam.analyzeFromIntent", () => analyzeFromIntent(false)),
@@ -265,6 +302,9 @@ function rerender() {
   applyToVisible(vscode.window.visibleTextEditors);
   lensProvider?.refresh();
   updateBanner();
+  // The "Show all" eye is only inline while something is focused/isolated (gated by
+  // `seam.focused` in package.json) — so the toolbar shows it exactly when it's useful.
+  vscode.commands.executeCommand("setContext", "seam.focused", !!focusIds || !!focusedSeamId);
 }
 
 function focusSeamById(seamId: string) {
@@ -362,6 +402,11 @@ function updateBanner() {
 
 // Load a model into the view (tree + decorations + the "last run" message banner).
 function activateModel(m: SeamModel, root: string, range: string, ts: number) {
+  const v = m.schemaVersion ?? SEAM_SCHEMA_VERSION;   // pre-contract runs are v1
+  if (v > SEAM_SCHEMA_VERSION)
+    vscode.window.showWarningMessage(
+      `Seam: this engine emits contract v${v}, but the extension understands v${SEAM_SCHEMA_VERSION}. `
+      + `Some seams may render incorrectly — update the Seam extension.`);
   model = m;
   repoRoot = root;
   resolveCache.clear();       // a new run invalidates resolved external targets
@@ -375,6 +420,15 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   if (m.selectedSeam && !m.autoGrown) {
     const sel = m.clusters.flatMap((c) => c.seams).find((s) => s.id === m.selectedSeam);
     if (sel) { focusIds = new Set(sel.hunks.map(spanKey)); focusLabel = sel.label; focusedSeamId = sel.id; }
+  }
+  // Focus-first default: a multi-seam DIFF run leads INSIDE the first seam (editor shows one
+  // intent cleanly; the others dim) rather than the flat all-seams landscape. The tree still
+  // lists every seam — focusedSeamId stays null so it isn't narrowed — and the eye widens the
+  // editor to show-all. Codebase/intent/auto-grown runs keep their own framing above.
+  if (!focusIds && m.mode !== "codebase" && !m.autoGrown) {
+    const total = m.clusters.reduce((a, c) => a + c.seams.length, 0);
+    const lead = sortedSeams(m.clusters[0]?.seams ?? [])[0];   // == the top of the panel (risk-first)
+    if (total > 1 && lead) { focusIds = new Set(lead.hunks.map(spanKey)); focusLabel = lead.label; }
   }
   // Codebase mode leads with the HONESTY FRONTIER (plan §4): the probed resolution quality
   // and the size of the blind-spot map sit in the persistent banner, not just a toast.
@@ -392,6 +446,38 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   rerender();
 }
 
+// Render a pre-built `--emit-seams` JSON directly (no engine run, no LLM) — for demos,
+// recordings, and offline review of a stored decomposition. The seam file's hunk paths must
+// be RELATIVE to the open folder, so open the matching repo first. Reads `seam.demoSeamsFile`
+// if set, otherwise prompts. Activates and persists it like a normal run (restoreLast picks it up).
+async function loadSeams() {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) { vscode.window.showErrorMessage("Seam: open the repo the seams file refers to first."); return; }
+  let file = vscode.workspace.getConfiguration("seam").get<string>("demoSeamsFile") || "";
+  if (!file) {
+    const picked = await vscode.window.showOpenDialog({
+      canSelectMany: false, openLabel: "Load seams",
+      filters: { "Seam model": ["json"] },
+    });
+    if (!picked?.length) return;
+    file = picked[0].fsPath;
+  }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(file, "utf-8")) as SeamModel;
+    if (!parsed.clusters) throw new Error("not a seams model (no `clusters`)");
+    repoRoot = folder.uri.fsPath;
+    const ts = Date.now();
+    activateModel(parsed, repoRoot, path.basename(file), ts);
+    extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range: path.basename(file), ts } as SavedRun);
+    const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
+    vscode.window.showInformationMessage(
+      `Seam: loaded ${parsed.clusters.length} clusters, ${n} seams from ${path.basename(file)}.  ` +
+      `core=amber · link=blue · environment=gray · test=green · noise=faint`);
+  } catch (e) {
+    vscode.window.showErrorMessage(`Seam: could not load seams — ${e instanceof Error ? e.message : e}`);
+  }
+}
+
 function restoreLast() {
   const saved = extContext.workspaceState.get<SavedRun>(STATE_KEY);
   const folder = vscode.workspace.workspaceFolders?.[0];
@@ -401,66 +487,72 @@ function restoreLast() {
   }
 }
 
-// All decoration types for a role (fill + the four border pieces).
-function allDecos(role: string): TDeco[] {
-  const b = decoBorder[role];
-  return [decoFill[role], b?.top, b?.mid, b?.bottom, b?.single, b?.seamTop, b?.seamBottom]
-    .filter(Boolean) as TDeco[];
+// Every combo-keyed decoration (spine + fill) painted in any editor — the set a re-paint
+// or clear must wipe so stale combos vanish.
+function comboDecos(): TDeco[] {
+  return [...decoSpine.values(), ...decoFill.values()];
 }
 
 export function deactivate() {
   // Dispose decoration types only — do NOT wipe the persisted run (that's the cache).
-  for (const role of ROLES) allDecos(role).forEach((d) => d.dispose());
-  for (const d of decoGutter.values()) d.dispose();
-  decoGutter.clear();
+  comboDecos().forEach((d) => d.dispose());
+  decoSpine.clear();
+  decoFill.clear();
+  decoDim?.dispose();
   decoProposed?.dispose();
 }
 
-// FILL: background wash + scrollbar mark on every line of the hunk. The gutter BAR is a
-// separate decoration (see gutterFor) so an overlapping line can show a split bar.
-function makeFillDecoration(color: string, _key: string): TDeco {
-  return vscode.window.createTextEditorDecorationType({
-    overviewRulerColor: color,
-    overviewRulerLane: vscode.OverviewRulerLane.Left,
-    backgroundColor: hexToRgba(color, ROLE_BG_ALPHA),
-    isWholeLine: true,
-  });
-}
-
-// GUTTER bar for a set of roles. One role → a solid bar; several (an OVERLAP) → vertical
-// stripes, one per role, left→right in ROLES order (core amber, link blue, …) so the eye
-// reads "core that also links" directly off the gutter. Cached by combo key.
-function gutterFor(roles: string[]): TDeco {
+// FILL for a set of roles: a faint, PRE-BLENDED background + scrollbar mark, one cached
+// decoration per role-combo (exactly like spineFor). A line is painted by a single fillFor
+// decoration, so opacity is flat everywhere — an overlap (core+link) shows as one blended
+// tint, never two washes compositing. The SPINE (spineFor) carries the role; the fill just
+// hints at the block's extent, and only on the focused seam.
+function fillFor(roles: string[]): TDeco {
   const ordered = ROLES.filter((r) => roles.includes(r));
   const key = ordered.join("|") || "noise";
-  const hit = decoGutter.get(key);
+  const hit = decoFill.get(key);
   if (hit) return hit;
-  const n = Math.max(1, ordered.length);
-  const stripes = (ordered.length ? ordered : ["noise"]).map((r, i) => {
-    const w = 3 / n;
-    return `<rect x="${1.5 + i * w}" width="${w}" height="18" fill="${ROLE_COLORS[r] ?? "#c0c0c0"}"/>`;
+  const cols = (ordered.length ? ordered : ["noise"]).map((r) => ROLE_COLORS[r] ?? "#c0c0c0");
+  const deco = vscode.window.createTextEditorDecorationType({
+    overviewRulerColor: cols[0],
+    overviewRulerLane: vscode.OverviewRulerLane.Left,
+    backgroundColor: blendRgba(cols, ROLE_BG_ALPHA),
+    isWholeLine: true,
+  });
+  decoFill.set(key, deco);
+  return deco;
+}
+
+// SPINE for a set of roles: a continuous, weight-coded bar drawn full-height in the gutter so
+// consecutive lines tile into one unbroken rail. One role → a single bar whose WIDTH is the
+// role's review weight (core widest, noise a hairline). Several (an OVERLAP) → thin adjacent
+// stripes, left→right in ROLES order, so a line that is core in its home seam and link in a
+// sibling reads "core that also links" straight off the gutter. Cached by combo key.
+function spineFor(roles: string[]): TDeco {
+  const ordered = ROLES.filter((r) => roles.includes(r));
+  const key = ordered.join("|") || "noise";
+  const hit = decoSpine.get(key);
+  if (hit) return hit;
+  const list = ordered.length ? ordered : ["noise"];
+  const H = 18;            // = line height; full-height rects tile into a gapless rail
+  let x = 1;
+  const rects = list.map((r) => {
+    const w = list.length === 1 ? (ROLE_WEIGHT[r] ?? 2) : Math.max(1.4, 4.8 / list.length);
+    const op = r === "noise" ? 0.45 : 0.95;       // noise recedes
+    const rect = `<rect x="${x.toFixed(2)}" y="0" width="${w.toFixed(2)}" height="${H}" fill="${ROLE_COLORS[r] ?? "#c0c0c0"}" opacity="${op}"/>`;
+    x += w + (list.length > 1 ? 0.5 : 0);         // hairline gap only when stripes share the rail
+    return rect;
   }).join("");
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="6" height="18">${stripes}</svg>`;
-  const file = path.join(gutterDir, `bar-${key.replace(/\|/g, "_")}.svg`);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="8" height="${H}">${rects}</svg>`;
+  const file = path.join(gutterDir, `spine-${key.replace(/\|/g, "_")}.svg`);
   fs.writeFileSync(file, svg, "utf-8");
   const deco = vscode.window.createTextEditorDecorationType({
     gutterIconPath: vscode.Uri.file(file),
     gutterIconSize: "contain",
     isWholeLine: true,
   });
-  decoGutter.set(key, deco);
+  decoSpine.set(key, deco);
   return deco;
-}
-
-// BORDER: only the requested sides (CSS "top right bottom left"), so applying
-// top→first line, sides→all, bottom→last line outlines the whole hunk, not each line.
-function makeBorderDecoration(color: string, widthSpec: string): TDeco {
-  return vscode.window.createTextEditorDecorationType({
-    borderWidth: widthSpec,
-    borderStyle: "solid",
-    borderColor: hexToRgba(color, ROLE_BORDER_ALPHA),
-    isWholeLine: true,
-  });
 }
 
 // --- run the engine and load the seam model ---
@@ -498,7 +590,6 @@ async function reviewCommit() {
 
 function buildIndex() {
   fileIndex = new Map();
-  seamBounds = new Map();
   seamLabel = new Map();
   seamNeighbors = new Map();
   if (!model) return;
@@ -513,15 +604,8 @@ function buildIndex() {
     fileIndex.set(e.hunk.file, list);
   };
   for (const cl of model.clusters)
-    for (const s of cl.seams) {
-      // The seam's GLOBAL boundary (cross-file) = its first and last hunk in the
-      // order the seam lists them (same order shown in the tree). The thick top
-      // goes on the first hunk, the thick bottom on the last — wherever they live.
-      if (s.hunks.length) {
-        seamBounds.set(s.id, { firstKey: spanKey(s.hunks[0]), lastKey: spanKey(s.hunks[s.hunks.length - 1]) });
-      }
+    for (const s of cl.seams)
       for (const h of s.hunks) add({ hunk: h, seamId: s.id, seamLabel: s.label, intent: cl.intent });
-    }
   for (const h of model.tests) add({ hunk: h, seamId: "", seamLabel: "test", intent: "" });
   for (const h of model.noise) add({ hunk: h, seamId: "", seamLabel: "noise", intent: "" });
 }
@@ -984,6 +1068,34 @@ async function analyzeFromIntent(auto = false) {
 }
 const autoMapIntent = () => analyzeFromIntent(true);
 
+// The two top-level engines, each behind ONE toolbar button: a QuickPick picks the
+// seed so the title bar stays at three icons (detangle · map intent · clear) instead
+// of one-button-per-entry-point. Cursor/module seeding stays in the editor right-click,
+// where the cursor IS the context.
+async function detangle() {
+  const pick = await vscode.window.showQuickPick(
+    [
+      { id: "working", label: "$(git-commit) Working changes", description: "Decompose the working tree against HEAD" },
+      { id: "commit", label: "$(git-branch) A commit…", description: "Pick a commit or range to decompose" },
+    ],
+    { title: "Seam — detangle a diff", placeHolder: "What do you want to detangle?" },
+  );
+  if (!pick) return;
+  return pick.id === "working" ? runReview("HEAD") : reviewCommit();
+}
+
+async function mapIntent() {
+  const pick = await vscode.window.showQuickPick(
+    [
+      { id: "auto", label: "$(sparkle) Describe an intent (auto-grow)", description: "The LLM grows the footprint from your description" },
+      { id: "search", label: "$(search-fuzzy) Search for an anchor…", description: "Fuzzy-find a starting symbol, then map its footprint" },
+    ],
+    { title: "Seam — map an intent", placeHolder: "How do you want to seed the map?" },
+  );
+  if (!pick) return;
+  return analyzeFromIntent(pick.id === "auto");
+}
+
 // Repo-relative path IF this document is the MODIFIED (new) side we should decorate:
 // the working file (`file:`) or a diff's modified side (`git:` with empty ref =
 // index/working). Returns null for the diff's BASE side (a `git:` commit ref like
@@ -1003,75 +1115,53 @@ function modifiedRelPath(uri: vscode.Uri): string | null {
   return path.relative(repoRoot, fsPath).split(path.sep).join("/");
 }
 
-// --- decorations: paint each visible editor's changed lines with its ROLE colour ---
+// --- decorations: paint each visible editor's changed lines with a calm role SPINE ---
+// Show-all = the landscape: just the weight-coded spines, no wash, nothing dimmed. Focus = one
+// seam reads richly (spine + barely-there wash) while the OTHER seams' changed lines fade back.
 function applyDecorations(editor: vscode.TextEditor) {
   if (!model) return;
   const rel = modifiedRelPath(editor.document.uri);
   if (rel === null) return;
   const entries = fileIndex.get(rel) ?? [];
-  const fill: Record<string, vscode.Range[]> = {};
-  const top: Record<string, vscode.Range[]> = {};
-  const mid: Record<string, vscode.Range[]> = {};
-  const bottom: Record<string, vscode.Range[]> = {};
-  const single: Record<string, vscode.Range[]> = {};
-  for (const role of ROLES) { fill[role] = []; top[role] = []; mid[role] = []; bottom[role] = []; single[role] = []; }
   const line = (n: number) => new vscode.Range(n, 0, n, 0);
-  // Per editor line, the SET of roles covering it (across overlapping seam placements of
-  // the same hunk) — drives the gutter bar (split where >1 role) so overlap is visible.
+  // Per editor line, the SET of roles covering it (across overlapping placements) — drives the
+  // spine (split where >1 role). Only IN-FOCUS hunks contribute roles; out-of-focus changed
+  // lines are collected to dim instead.
   const lineRoles: Map<number, Set<string>> = new Map();
+  const dimLines = new Set<number>();
   for (const { hunk: h } of entries) {
-    if (focusIds && !focusIds.has(spanKey(h))) continue;   // focus: hide other seams/spans
-    const role = ROLES.includes(h.role) ? h.role : "noise";
+    const inFocus = !focusIds || focusIds.has(spanKey(h));
     const s = Math.max(0, h.start - 1);
     const e = Math.max(s, h.end - 1);
-    fill[role].push(new vscode.Range(s, 0, e, 0));    // wash on every line
-    for (let n = s; n <= e; n++) (lineRoles.get(n) ?? lineRoles.set(n, new Set()).get(n)!).add(role);
-    if (e === s) {
-      single[role].push(line(s));                     // one-line hunk: full box
+    if (inFocus) {
+      const role = ROLES.includes(h.role) ? h.role : "noise";
+      for (let n = s; n <= e; n++) (lineRoles.get(n) ?? lineRoles.set(n, new Set()).get(n)!).add(role);
     } else {
-      top[role].push(line(s));
-      bottom[role].push(line(e));
-      if (e > s + 1) mid[role].push(new vscode.Range(s + 1, 0, e - 1, 0));
+      for (let n = s; n <= e; n++) dimLines.add(n);
     }
   }
-  // GUTTER bars by role-combo: a line with one role gets a solid bar; an overlap line
-  // gets a split bar. Clear every previously-painted combo first so stale bars vanish.
+  for (const n of lineRoles.keys()) dimLines.delete(n);   // a focused line wins over a dimmed one
+
+  // SPINE (always) + FILL (focus only), both by role-combo: one spine per line (weight-coded;
+  // split on overlap) and, in focus, a single BLENDED wash per line (never stacked). Clear
+  // every previously-painted combo first so stale ones vanish on re-paint.
   const byCombo: Map<string, vscode.Range[]> = new Map();
   for (const [n, roles] of lineRoles) {
     const key = ROLES.filter((r) => roles.has(r)).join("|") || "noise";
     (byCombo.get(key) ?? byCombo.set(key, []).get(key)!).push(line(n));
   }
-  for (const deco of decoGutter.values()) editor.setDecorations(deco, []);
-  for (const [key, ranges] of byCombo) editor.setDecorations(gutterFor(key.split("|")), ranges);
-  // SEAM boundaries (CROSS-FILE): the thick top sits on the seam's GLOBAL first
-  // hunk and the thick bottom on its GLOBAL last hunk (seam-canonical order, same as
-  // the tree) — so a file only shows the bracket edge if it contains that boundary
-  // hunk; middle files get none.
-  const seamTop: Record<string, vscode.Range[]> = {};
-  const seamBottom: Record<string, vscode.Range[]> = {};
-  for (const role of ROLES) { seamTop[role] = []; seamBottom[role] = []; }
-  const roleOf = (h: SeamHunk) => (ROLES.includes(h.role) ? h.role : "noise");
-  // Only the FOCUSED seam gets a boundary bracket — in show-all, brackets from many
-  // (interleaving) seams would overlap; focus is where a single clean bracket reads.
-  if (focusIds) {
-    for (const e of entries) {
-      if (!focusIds.has(spanKey(e.hunk))) continue;
-      const b = e.seamId ? seamBounds.get(e.seamId) : undefined;
-      if (!b) continue;
-      if (spanKey(e.hunk) === b.firstKey) seamTop[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.start - 1)));
-      if (spanKey(e.hunk) === b.lastKey) seamBottom[roleOf(e.hunk)].push(line(Math.max(0, e.hunk.end - 1)));
-    }
+  for (const deco of decoSpine.values()) editor.setDecorations(deco, []);
+  for (const deco of decoFill.values()) editor.setDecorations(deco, []);
+  for (const [key, ranges] of byCombo) {
+    const roles = key.split("|");
+    editor.setDecorations(spineFor(roles), ranges);
+    if (focusIds) editor.setDecorations(fillFor(roles), ranges);   // wash: focused seam only
   }
+  // DIM the other seams' changed lines — fade the CODE (text range), not the spine, so they
+  // recede yet stay locatable. Clamp to the live document in case the file drifted from the run.
+  editor.setDecorations(decoDim,
+    focusIds ? [...dimLines].filter((n) => n < editor.document.lineCount).map((n) => editor.document.lineAt(n).range) : []);
 
-  for (const role of ROLES) {
-    editor.setDecorations(decoFill[role], fill[role]);
-    editor.setDecorations(decoBorder[role].top, top[role]);
-    editor.setDecorations(decoBorder[role].mid, mid[role]);
-    editor.setDecorations(decoBorder[role].bottom, bottom[role]);
-    editor.setDecorations(decoBorder[role].single, single[role]);
-    editor.setDecorations(decoBorder[role].seamTop, seamTop[role]);
-    editor.setDecorations(decoBorder[role].seamBottom, seamBottom[role]);
-  }
   // re-apply the selected proposed sub-core overlay (so it survives repaints / editor switches).
   editor.setDecorations(decoProposed,
     activeProposed && editor.document.uri.fsPath === activeProposed.filePath ? activeProposed.ranges : []);
@@ -1084,14 +1174,15 @@ function clearAll() {
   fileIndex = new Map();
   resolveCache.clear();
   for (const editor of vscode.window.visibleTextEditors) {
-    for (const role of ROLES) allDecos(role).forEach((d) => editor.setDecorations(d, []));
-    for (const d of decoGutter.values()) editor.setDecorations(d, []);
+    for (const d of comboDecos()) editor.setDecorations(d, []);
+    editor.setDecorations(decoDim, []);
   }
   clearProposed();
   treeProvider?.refresh();
   lensProvider?.refresh();
   if (treeView) treeView.message = undefined;
   vscode.commands.executeCommand("setContext", "seam.active", false);
+  vscode.commands.executeCommand("setContext", "seam.focused", false);
   extContext?.workspaceState.update(STATE_KEY, undefined);  // forget the cached run
 }
 
@@ -1358,6 +1449,53 @@ const ROLE_ICON: Record<string, string> = {
   core: "symbol-method", link: "link", environment: "symbol-field",
   test: "beaker", noise: "circle-slash",
 };
+// The seam panel reads like a MAP: each seam shows its HEALTH (what needs validating) and its
+// role MAKEUP (its character at a glance), and the riskiest seams float to the top. Monochrome
+// glyphs for the inline description (no per-char colour in a tree); colour lives on the icon
+// and in the Markdown tooltip's emoji micro-bar.
+const ROLE_MK: Record<string, string> = { core: "◆", link: "⇄", environment: "▦", test: "✓", noise: "·" };
+const ROLE_SQUARE: Record<string, string> = { core: "🟧", link: "🟦", environment: "⬜", test: "🟩" };
+
+interface SeamHealth { rank: number; glyph: string; tag: string; colorId?: string; }
+// One posture per seam, highest-priority-wins, ranked so sortedSeams surfaces "go verify this"
+// first. Mirrors the engine's warning kinds + the role-vote/crossing flags.
+function seamHealth(s: Seam): SeamHealth {
+  const w = new Set(s.warnings ?? []);
+  if (s.suggested) return { rank: 4, glyph: "↝", tag: "suggested seam — reached only across a heuristic crossing; verify it", colorId: "charts.orange" };
+  if (w.has("isolated-core")) return { rank: 3, glyph: "⚠", tag: "isolated core — no link in this seam; verify the consumer (elsewhere or outside the diff)", colorId: "charts.yellow" };
+  if (s.uncertain) return { rank: 2, glyph: "?", tag: "uncertain — the role vote was split; treat the roles as a maybe", colorId: "charts.yellow" };
+  if (w.has("dangling-link")) return { rank: 2, glyph: "⤳", tag: "dangling link — no core here; wires to something changed elsewhere", colorId: "charts.blue" };
+  if (s.linkOnly || w.has("delegated")) return { rank: 1, glyph: "◦", tag: "link-only / ambient — trust delegated to the consumer" };
+  return { rank: 0, glyph: "", tag: "" };
+}
+// Stable risk-first order (engine order breaks ties) — used for BOTH the tree and the
+// auto-focus pick so the focused seam == the top of the panel.
+function sortedSeams(seams: Seam[]): Seam[] {
+  return seams.map((s, i) => [s, i] as const)
+    .sort((a, b) => (seamHealth(b[0]).rank - seamHealth(a[0]).rank) || (a[1] - b[1]))
+    .map(([s]) => s);
+}
+function seamRoleCounts(s: Seam): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const h of s.hunks) {
+    const r = ROLES.includes(h.role) ? h.role : "noise";
+    m.set(r, (m.get(r) ?? 0) + 1);
+  }
+  return m;
+}
+// Compact "2◆ 3⇄ 1▦" for the tree description — noise omitted so it recedes (unless that's all).
+function makeupText(counts: Map<string, number>): string {
+  const signal = ROLES.filter((r) => r !== "noise" && counts.get(r));
+  const roles = signal.length ? signal : ROLES.filter((r) => counts.get(r));
+  return roles.map((r) => `${counts.get(r)}${ROLE_MK[r] ?? "·"}`).join(" ");
+}
+// A proportional colour bar (≤ ~12 cells) for the tooltip — the one place a tree can show colour.
+function makeupBar(counts: Map<string, number>): string {
+  const signal = ROLES.filter((r) => r !== "noise");
+  const total = signal.reduce((a, r) => a + (counts.get(r) ?? 0), 0);
+  if (!total) return "";
+  return signal.map((r) => (ROLE_SQUARE[r] ?? "").repeat(Math.round(((counts.get(r) ?? 0) / total) * 12))).join("");
+}
 
 class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
   private _onDidChange = new vscode.EventEmitter<void>();
@@ -1423,11 +1561,11 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // to drill into its seams. Small/tight clusters have no subgroups → seams directly.
       if (el.cluster.subgroups?.length)
         return el.cluster.subgroups.map((group) => ({ kind: "subgroup", cluster: el.cluster, group }));
-      return el.cluster.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+      return sortedSeams(el.cluster.seams).map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     }
     if (el.kind === "subgroup") {
       const ids = new Set(el.group.seamIds);
-      return el.cluster.seams.filter((s) => ids.has(s.id))
+      return sortedSeams(el.cluster.seams.filter((s) => ids.has(s.id)))
         .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     }
     if (el.kind === "seam") {
@@ -1499,18 +1637,24 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return it;
     }
     if (el.kind === "seam") {
-      const sug = el.seam.suggested === true;   // reached only across a heuristic crossing (string-dispatch/assumed)
-      const it = new vscode.TreeItem(sug ? `↝ ${el.seam.label}` : el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
+      const h = seamHealth(el.seam);
+      const counts = seamRoleCounts(el.seam);
       const wired = seamNeighbors.get(el.seam.id)?.length ?? 0;
-      it.description = [sug ? "suggested seam" : "", el.seam.linkOnly ? "link-only" : "",
-                        el.seam.uncertain ? "uncertain" : "", wired ? `↔ ${wired}` : ""].filter(Boolean).join(" · ");
-      it.iconPath = sug
-        ? new vscode.ThemeIcon("git-merge", new vscode.ThemeColor("charts.orange"))   // a boundary to verify
-        : new vscode.ThemeIcon(el.seam.uncertain ? "question" : "git-merge");
-      it.tooltip = sug
-        ? `A SUGGESTED seam — the other side of a boundary crossed by heuristic (a string-dispatch / `
-          + `assumed link, not a hard import). The chain reaches it, but go verify the crossing.`
-        : undefined;
+      const it = new vscode.TreeItem(
+        h.glyph ? `${h.glyph} ${el.seam.label}` : el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
+      // Description = the seam's CHARACTER (role makeup) + how connected it is — risk lives in the
+      // glyph + icon colour, not the text, so the line stays calm.
+      it.description = [makeupText(counts), wired ? `↔${wired}` : ""].filter(Boolean).join("  ·  ");
+      it.iconPath = new vscode.ThemeIcon(
+        el.seam.uncertain && !el.seam.suggested ? "question" : "git-merge",
+        h.colorId ? new vscode.ThemeColor(h.colorId) : undefined);
+      const md = new vscode.MarkdownString(`**${el.seam.label}**\n\n`);
+      if (h.tag) md.appendMarkdown(`${h.glyph} ${h.tag}\n\n`);
+      const bar = makeupBar(counts);
+      if (bar) md.appendMarkdown(`${bar}\n\n`);
+      const parts = ROLES.filter((r) => counts.get(r)).map((r) => `${counts.get(r)} ${r}`);
+      md.appendMarkdown(`${parts.join(" · ")} · ${el.seam.hunks.length} hunks${wired ? ` · ↔ ${wired} wired` : ""}`);
+      it.tooltip = md;
       return it;
     }
     if (el.kind === "seamLink") {
@@ -1730,6 +1874,7 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       expandable ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None);
     const nlink = h.contract?.filter((c) => c.role === "link").length ?? 0;
     const desc = [boundary ? "ripple · 1 hop out" : "", incidental ? "incidental" : "",
+                  wireTargetTag(h),
                   h.caller ? `↑ called by ${h.label}` : "", pv, rw ? `↻ ${rw}` : "",
                   unc ? `uncertain ${confPct(h)}%` : "",
                   ncon ? `contract: ${nlink} link/${ncon - nlink} data` : "",

@@ -1,66 +1,192 @@
 {
   "name": "seam",
-  "displayName": "Seam — review by intent",
+  "displayName": "Seam \u2014 review by intent",
   "description": "Decompose a diff into seams (core/link/environment/test/noise) and review by intent: seam colours on the native diff + a seam tree, powered by the Seam engine (TypeScript).",
   "version": "0.0.1",
   "publisher": "seam-local",
-  "engines": { "vscode": "^1.84.0" },
-  "categories": ["SCM Providers", "Visualization"],
+  "engines": {
+    "vscode": "^1.84.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Visualization"
+  ],
   "activationEvents": [],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "seam.review", "title": "Seam: Review working changes", "icon": "$(symbol-color)" },
-      { "command": "seam.reviewCommit", "title": "Seam: Review a commit…" },
-      { "command": "seam.analyzeCodebase", "title": "Seam: Analyze codebase from anchor (cursor)", "icon": "$(target)" },
-      { "command": "seam.analyzeModule", "title": "Seam: Analyze module (all exports of this file)", "icon": "$(symbol-namespace)" },
-      { "command": "seam.analyzeFromIntent", "title": "Seam: Find footprint by intent…", "icon": "$(search-fuzzy)" },
-      { "command": "seam.autoMapIntent", "title": "Seam: Auto-map intent (LLM grows the footprint)…", "icon": "$(sparkle)" },
-      { "command": "seam.expandNode", "title": "Seam: Expand → consumers (who uses this)", "icon": "$(arrow-up)" },
-      { "command": "seam.expandDown", "title": "Seam: Expand → dependencies (what this uses)", "icon": "$(arrow-down)" },
-      { "command": "seam.crossBoundary", "title": "Seam: Cross boundary (suggested impl)", "icon": "$(git-compare)" },
-      { "command": "seam.showAll", "title": "Seam: Show all seams", "icon": "$(eye)" },
-      { "command": "seam.toggleChain", "title": "Seam: Toggle chain view (symbol links + nature)", "icon": "$(type-hierarchy)" },
-      { "command": "seam.prev", "title": "Seam: Previous hunk", "icon": "$(arrow-up)" },
-      { "command": "seam.next", "title": "Seam: Next hunk", "icon": "$(arrow-down)" },
-      { "command": "seam.clear", "title": "Seam: Clear decorations", "icon": "$(clear-all)" }
+      {
+        "command": "seam.detangle",
+        "title": "Seam: Detangle a diff\u2026",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "seam.mapIntent",
+        "title": "Seam: Map an intent\u2026",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "seam.review",
+        "title": "Seam: Review working changes",
+        "icon": "$(symbol-color)"
+      },
+      {
+        "command": "seam.loadSeams",
+        "title": "Seam: Load seams from file (demo)",
+        "icon": "$(file-symlink-file)"
+      },
+      {
+        "command": "seam.reviewCommit",
+        "title": "Seam: Review a commit\u2026"
+      },
+      {
+        "command": "seam.analyzeCodebase",
+        "title": "Seam: Analyze codebase from anchor (cursor)",
+        "icon": "$(target)"
+      },
+      {
+        "command": "seam.analyzeModule",
+        "title": "Seam: Analyze module (all exports of this file)",
+        "icon": "$(symbol-namespace)"
+      },
+      {
+        "command": "seam.analyzeFromIntent",
+        "title": "Seam: Find footprint by intent\u2026",
+        "icon": "$(search-fuzzy)"
+      },
+      {
+        "command": "seam.autoMapIntent",
+        "title": "Seam: Auto-map intent (LLM grows the footprint)\u2026",
+        "icon": "$(sparkle)"
+      },
+      {
+        "command": "seam.expandNode",
+        "title": "Seam: Expand \u2192 consumers (who uses this)",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "seam.expandDown",
+        "title": "Seam: Expand \u2192 dependencies (what this uses)",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "seam.crossBoundary",
+        "title": "Seam: Cross boundary (suggested impl)",
+        "icon": "$(git-compare)"
+      },
+      {
+        "command": "seam.showAll",
+        "title": "Seam: Show all seams",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "seam.toggleChain",
+        "title": "Seam: Toggle chain view (symbol links + nature)",
+        "icon": "$(type-hierarchy)"
+      },
+      {
+        "command": "seam.prev",
+        "title": "Seam: Previous hunk",
+        "icon": "$(arrow-up)"
+      },
+      {
+        "command": "seam.next",
+        "title": "Seam: Next hunk",
+        "icon": "$(arrow-down)"
+      },
+      {
+        "command": "seam.clear",
+        "title": "Seam: Clear decorations",
+        "icon": "$(clear-all)"
+      }
     ],
     "viewsContainers": {
       "activitybar": [
-        { "id": "seam", "title": "Seam", "icon": "$(symbol-color)" }
+        {
+          "id": "seam",
+          "title": "Seam",
+          "icon": "$(symbol-color)"
+        }
       ]
     },
     "views": {
       "seam": [
-        { "id": "seam.tree", "name": "Seams", "icon": "$(symbol-color)" }
+        {
+          "id": "seam.tree",
+          "name": "Seams",
+          "icon": "$(symbol-color)"
+        }
       ]
     },
     "menus": {
       "view/title": [
-        { "command": "seam.review", "when": "view == seam.tree", "group": "navigation@1" },
-        { "command": "seam.analyzeCodebase", "when": "view == seam.tree", "group": "navigation@2" },
-        { "command": "seam.analyzeModule", "when": "view == seam.tree", "group": "navigation@2" },
-        { "command": "seam.analyzeFromIntent", "when": "view == seam.tree", "group": "navigation@2" },
-        { "command": "seam.autoMapIntent", "when": "view == seam.tree", "group": "navigation@2" },
-        { "command": "seam.prev", "when": "view == seam.tree", "group": "navigation@3" },
-        { "command": "seam.next", "when": "view == seam.tree", "group": "navigation@4" },
-        { "command": "seam.showAll", "when": "view == seam.tree", "group": "navigation@5" },
-        { "command": "seam.toggleChain", "when": "view == seam.tree", "group": "navigation@5" },
-        { "command": "seam.clear", "when": "view == seam.tree", "group": "navigation@6" }
+        {
+          "command": "seam.detangle",
+          "when": "view == seam.tree",
+          "group": "navigation@1"
+        },
+        {
+          "command": "seam.mapIntent",
+          "when": "view == seam.tree",
+          "group": "navigation@2"
+        },
+        {
+          "command": "seam.showAll",
+          "when": "view == seam.tree && seam.focused",
+          "group": "navigation@3"
+        },
+        {
+          "command": "seam.clear",
+          "when": "view == seam.tree",
+          "group": "navigation@4"
+        },
+        {
+          "command": "seam.toggleChain",
+          "when": "view == seam.tree",
+          "group": "1_view@1"
+        }
       ],
       "editor/context": [
-        { "command": "seam.analyzeCodebase", "when": "editorTextFocus", "group": "navigation@9" },
-        { "command": "seam.analyzeModule", "when": "editorTextFocus", "group": "navigation@9" }
+        {
+          "command": "seam.analyzeCodebase",
+          "when": "editorTextFocus",
+          "group": "navigation@9"
+        },
+        {
+          "command": "seam.analyzeModule",
+          "when": "editorTextFocus",
+          "group": "navigation@9"
+        }
       ],
       "view/item/context": [
-        { "command": "seam.expandNode", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@1" },
-        { "command": "seam.expandDown", "when": "view == seam.tree && viewItem == seamExpandable", "group": "inline@2" },
-        { "command": "seam.crossBoundary", "when": "view == seam.tree && viewItem == seamExpandable", "group": "crossing@1" }
+        {
+          "command": "seam.expandNode",
+          "when": "view == seam.tree && viewItem == seamExpandable",
+          "group": "inline@1"
+        },
+        {
+          "command": "seam.expandDown",
+          "when": "view == seam.tree && viewItem == seamExpandable",
+          "group": "inline@2"
+        },
+        {
+          "command": "seam.crossBoundary",
+          "when": "view == seam.tree && viewItem == seamExpandable",
+          "group": "crossing@1"
+        }
       ]
     },
     "keybindings": [
-      { "command": "seam.next", "key": "alt+]", "when": "seam.active" },
-      { "command": "seam.prev", "key": "alt+[", "when": "seam.active" }
+      {
+        "command": "seam.next",
+        "key": "alt+]",
+        "when": "seam.active"
+      },
+      {
+        "command": "seam.prev",
+        "key": "alt+[",
+        "when": "seam.active"
+      }
     ],
     "configuration": {
       "title": "Seam",
@@ -72,14 +198,18 @@
         },
         "seam.engine": {
           "type": "string",
-          "enum": ["hybrid", "det", "llm"],
+          "enum": [
+            "hybrid",
+            "det",
+            "llm"
+          ],
           "enumDescriptions": [
             "Default. LLM clustering (product intent) + deterministic roles & wiring, fed AST facts (defines/enclosing) from the editor's language server.",
-            "Fully deterministic, offline — no LLM at all (structural cluster labels instead of product-intent prose).",
+            "Fully deterministic, offline \u2014 no LLM at all (structural cluster labels instead of product-intent prose).",
             "All passes by the LLM."
           ],
           "default": "hybrid",
-          "description": "How to decompose a diff: 'hybrid' (LLM clusters + deterministic roles/wiring — best; needs a CLI for clustering), 'det' (fully offline, no LLM), or 'llm' (all LLM)."
+          "description": "How to decompose a diff: 'hybrid' (LLM clusters + deterministic roles/wiring \u2014 best; needs a CLI for clustering), 'det' (fully offline, no LLM), or 'llm' (all LLM)."
         },
         "seam.codebaseDepth": {
           "type": "number",
@@ -90,11 +220,15 @@
         },
         "seam.resolver": {
           "type": "string",
-          "enum": ["det", "lsp", "auto"],
+          "enum": [
+            "det",
+            "lsp",
+            "auto"
+          ],
           "enumDescriptions": [
             "Deterministic floor only (relative + package + tsconfig paths). Offline, instant.",
             "A real language server (go-to-definition). Cross-language, needs the toolchain.",
-            "Default. LSP with deterministic fallback — the warm daemon is reused across reviews."
+            "Default. LSP with deterministic fallback \u2014 the warm daemon is reused across reviews."
           ],
           "default": "auto",
           "description": "How a diff review resolves references against the repo (for blast radius). 'auto' (LSP + floor fallback), 'det' (offline floor), or 'lsp' (server only)."
@@ -102,17 +236,25 @@
         "seam.blastRadius": {
           "type": "boolean",
           "default": true,
-          "description": "Diff review: show each changed symbol's blast radius — who OUTSIDE the diff imports it (resolved/suggested) — so the change is read in the context of the real codebase."
+          "description": "Diff review: show each changed symbol's blast radius \u2014 who OUTSIDE the diff imports it (resolved/suggested) \u2014 so the change is read in the context of the real codebase."
         },
         "seam.defaultAltitude": {
           "type": "string",
-          "enum": ["overview", "seams"],
+          "enum": [
+            "overview",
+            "seams"
+          ],
           "enumDescriptions": [
-            "Start with a big cluster's sub-groups COLLAPSED — review the few groups first, expand the one you want.",
-            "Start with sub-groups EXPANDED — go straight to the seams."
+            "Start with a big cluster's sub-groups COLLAPSED \u2014 review the few groups first, expand the one you want.",
+            "Start with sub-groups EXPANDED \u2014 go straight to the seams."
           ],
           "default": "overview",
           "description": "Diff review: the starting altitude when a large cluster is split into structural sub-groups. 'overview' (collapsed) or 'seams' (expanded). Expand/collapse a group any time to zoom in/out."
+        },
+        "seam.demoSeamsFile": {
+          "type": "string",
+          "default": "",
+          "description": "Optional absolute path to a pre-built --emit-seams JSON. When set, 'Seam: Load seams from file' renders it directly (no engine run); leave empty to be prompted."
         }
       }
     }

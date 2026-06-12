@@ -1,26 +1,18 @@
 // Port of src/diff/seams.py — seam-assembly engine: classified hunks → intent clusters → seams.
 // Presentation-agnostic; consumed by emit_seams_json (the VS Code feed) and report_text.
 import type { Hunk } from "./parser.js";
-import { external_coupling, external_refs, rewire_pairs } from "./symbol_edges.js";
+import { external_coupling, external_refs, rewire_pairs, segment_link_by_core } from "./symbol_edges.js";
+import { _defs_refs } from "./lang.js";
 import { subgroup_seams } from "./subgroup.js";
 import { consumers_for } from "./blast_radius.js";
+import type { Block, SeamDict, ClusterDict } from "./seam_types.js";
 
 const _CLUSTER_ROLES = ["core", "link", "environment"] as const;
 export const UNCERTAIN_THRESHOLD = 0.6;
 
-export interface Block {
-  role: string; key: string; hid: string; file: string; start: number; end: number;
-  has_diff: boolean; items: any[]; files: string[]; whys: string[]; notes: string[]; count: number;
-}
-export interface SeamDict {
-  tested: boolean; untested: boolean; id: string; label: string; blocks: Block[];
-  has_core: boolean; has_link: boolean; verification: any; count: number; link_ids: string[];
-  uncertain: boolean; confidence: number; shares_with?: string[];
-}
-export interface ClusterDict {
-  id: string; intent: string; seams: SeamDict[]; n_seams: number;
-  role_pills: { role: string; count: number }[]; count: number; warnings: any[];
-}
+// Re-exported for back-compat: these shapes now live in seam_types.ts (the cycle break), but
+// downstream code historically imports them from here.
+export type { Block, SeamDict, ClusterDict } from "./seam_types.js";
 
 function _is_renderable(h: Hunk): boolean {
   return !h.is_binary && h.text.replace(/^\s+/, "").startsWith("@@");
@@ -128,6 +120,39 @@ function _role_blocks(hunks: Hunk[], keyPrefix: string, diffs: Map<string, strin
   return blocks;
 }
 
+// Intra-seam closeness ("wire-target pill"): in a MULTI-core seam, point each link block at the
+// specific core(s) whose distinctive symbols it references. Symbol-grounded and engine-agnostic.
+// Skipped for single-core seams (the pill would be redundant); a link with no symbol-grounded core
+// gets nothing — an honest "wires the seam, not a named core" rather than a guessed edge.
+function _attach_wire_targets(seam_hunks: Hunk[], blocks: Block[], role_for: Map<string, string>): void {
+  const effRole = (h: Hunk) => role_for.get(h.id) ?? h.role!;
+  const cores = seam_hunks.filter((h) => effRole(h) === "core");
+  if (cores.length < 2) return; // no ambiguity to resolve — every link trivially wires the lone core
+  const defs = new Map<string, Set<string>>();
+  for (const c of cores) defs.set(c.id, _defs_refs(c.text)[0]);
+  const freq = new Map<string, number>();
+  for (const d of defs.values()) for (const s of d) freq.set(s, (freq.get(s) ?? 0) + 1);
+  const distinctive = new Map<string, Set<string>>();
+  for (const [cid, d] of defs) {
+    const set = new Set<string>();
+    for (const s of d) if (freq.get(s) === 1) set.add(s); // a symbol defined by exactly one core IDs it
+    if (set.size) distinctive.set(cid, set);
+  }
+  if (!distinctive.size) return;
+  const coreLoc = new Map<string, { file: string; start: number }>();
+  for (const b of blocks) if (b.role === "core") coreLoc.set(b.hid, { file: b.file, start: b.start });
+  const byId = new Map<string, Hunk>();
+  for (const h of seam_hunks) byId.set(h.id, h);
+  for (const b of blocks) {
+    if (b.role !== "link") continue;
+    const lh = byId.get(b.hid);
+    if (!lh) continue;
+    const tgts = [...segment_link_by_core(lh, distinctive).keys()]
+      .map((cid) => coreLoc.get(cid)).filter(Boolean) as { file: string; start: number }[];
+    if (tgts.length) b.wires = tgts;
+  }
+}
+
 function _verify_pair(hasCore: boolean, hasLink: boolean, corelessCluster = false): any {
   if (corelessCluster) {
     const posture = hasLink
@@ -232,6 +257,7 @@ export function _build_clusters(hunks: Hunk[], repo?: string): [ClusterDict[], M
     const cluster_kinds = new Map<string, number>();
     for (const [sid, label, seam_hunks, link_ids, role_for] of specs) {
       const blocks = _role_blocks(seam_hunks, `${gid}-${sid}`, diffs, sid, span_map, role_for, core_span_map);
+      _attach_wire_targets(seam_hunks, blocks, role_for);
       const sHasCore = blocks.some((b) => b.role === "core");
       const sHasLink = blocks.some((b) => b.role === "link");
       const verification = _verify_pair(sHasCore, sHasLink, coreless);
@@ -302,6 +328,7 @@ export async function emit_seams_json(hunks: Hunk[], repo?: string, blast_radius
     };
     if (cons.size) d.consumers = cons.get(b.hid) ?? [];
     if (sugg.has(b.hid)) d.suggestedWires = sugg.get(b.hid);
+    if (b.wires?.length) d.wireTargets = b.wires; // intra-seam closeness: which core this link wires
     return d;
   };
 

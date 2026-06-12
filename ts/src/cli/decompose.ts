@@ -17,6 +17,7 @@ import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
 import { HostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
+import { stampSeamModel } from "../core/contract.js";
 import { emit } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
@@ -152,7 +153,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
-        writeFileSync(a.emitSeams, JSON.stringify(model2));
+        writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       }
       return 0;
@@ -206,7 +207,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
-    writeFileSync(a.emitSeams, JSON.stringify(model));
+    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -314,7 +315,7 @@ async function main(argv: string[]): Promise<number> {
     const model: any = await emit_seams_json(hunks, a.repo, a.blastRadius);
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;              // tokens/cost for the extension's info message
-    writeFileSync(a.emitSeams, JSON.stringify(model));
+    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
     return 0;
   }

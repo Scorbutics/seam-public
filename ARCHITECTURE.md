@@ -44,6 +44,26 @@ The rest of this document details **diff-mode** (§1–§9), except **§8.5 (LLM
 forks role assignment (anchor-relative BFS over a RESOLVED graph, not the `HunkFacts` ladder) — see
 `decomposition-model-and-mvp.md`, `intent-expansion-plan.md`, and `resolver-lsp-plan.md`.
 
+### Clients & the contract boundary
+
+The engine is a **stateless library/binary** (`ts/`). Every client is thin and talks to it only
+through the `--emit-seams` JSON — that JSON, not the code, is the product boundary:
+
+```
+        Seam engine (ts/) — stateless; emits the --emit-seams JSON (versioned)
+   ▲                  ▲                    ▲
+ CLI (ts/src/cli)   VS Code ext       MCP server (mcp/)   … IntelliJ (future)
+```
+
+- **Contract:** `ts/src/core/contract.ts` stamps `schemaVersion`; the shape is documented in
+  [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump; breaking
+  changes do, and clients warn on a higher major.
+- **Distribution:** [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — bun-from-source vs the
+  `bun build --compile` single binary, the tree-sitter-grammar caveat, and the host-bus LLM seam.
+- **MCP:** [`mcp/`](mcp/) exposes `decompose_diff` / `intent_footprint` to any agent. `det` is offline;
+  `hybrid`/`llm` borrow the **caller's** model via MCP sampling, mapped onto the `--emit-prompts` →
+  `--inject-llm` host-bus handshake (the same one the `seam-review` skill uses). **No daemon.**
+
 ---
 
 ## 1. Pipeline

@@ -1,7 +1,7 @@
 // Port of src/diff/subgroup.py — seam sub-grouping (the altitude mid-level between cluster
 // and seam). Deterministic affinity (shared links + directory proximity + label tokens),
 // average-linkage agglomeration, guarded so a small/tight cluster renders flat (returns null).
-import type { SeamDict } from "./seams.js";
+import type { SeamDict } from "./seam_types.js";
 
 const _MIN_SEAMS = 7;
 const _FLOOR = 1.0;
