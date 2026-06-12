@@ -482,6 +482,13 @@ function bunPath(): string {
 function tsCliPath(tool: string): string {
   return path.join(tool, "ts", "src", "cli", "decompose.ts");
 }
+// anchor_rank invocation for the active backend: python -m src.codebase.anchor_rank, or the TS CLI.
+function anchorRankInvocation(tool: string, py: string, args: string[]): [string, string[]] {
+  const usingTs = (vscode.workspace.getConfiguration("seam").get<string>("backend") || "python") === "ts";
+  return usingTs
+    ? [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]]
+    : [py, ["-m", "src.codebase.anchor_rank", ...args]];
+}
 
 async function reviewCommit() {
   const ref = await vscode.window.showInputBox({
@@ -965,8 +972,8 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
   let targets: Array<{ name: string; file: string; kind: string }> = [];
   const out = path.join(env.tool, `.seam-cross-${Date.now()}.json`);
   try {
-    await execFileP(env.py, ["-m", "src.codebase.anchor_rank", "--crossings", "--intent", symbol,
-                             "--repo", repoRoot, "--exclude-file", h.file, "--out", out], env.tool);
+    await execFileP(...anchorRankInvocation(env.tool, env.py,
+      ["--crossings", "--intent", symbol, "--repo", repoRoot, "--exclude-file", h.file, "--out", out]), env.tool);
     targets = JSON.parse(fs.readFileSync(out, "utf-8"));
   } catch (e) {
     vscode.window.showErrorMessage(`Seam: crossing search failed: ${e instanceof Error ? e.message : e}`);
@@ -1011,7 +1018,7 @@ async function analyzeFromIntent(auto = false) {
       const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
       let items: Array<{ name: string; file: string; kind: string; terms?: string[] }> = [];
       try {
-        await execFileP(env.py, ["-m", "src.codebase.anchor_rank", "--intent", intent, "--repo", repoRoot, "--out", ranked], env.tool);
+        await execFileP(...anchorRankInvocation(env.tool, env.py, ["--intent", intent, "--repo", repoRoot, "--out", ranked]), env.tool);
         items = JSON.parse(fs.readFileSync(ranked, "utf-8"));
       } finally {
         try { fs.unlinkSync(ranked); } catch { /* ignore */ }

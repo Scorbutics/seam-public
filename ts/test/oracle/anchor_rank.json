@@ -1,0 +1,12 @@
+[
+  {
+    "name": "PaymentService",
+    "file": "src/payment/service.ts",
+    "kind": "class",
+    "score": 7.5,
+    "terms": [
+      "payment",
+      "service"
+    ]
+  }
+]
