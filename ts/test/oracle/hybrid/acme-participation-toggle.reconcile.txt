@@ -1,0 +1,133 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h4  [social-network-setup-table.tsx]
+   availableTiers: Tier[]
+ ): TableState {
+   const state = createEmptyTableState(availableTiers)
++  // A platform's rows (one per tier) share the same link and is_active flag; a
++  // platform counts as ON if any of its rows is active.
++  const activeByPlatform: Partial<Record<Platform, boolean>> = {}
+   for (const sm of socialMedias) {
+     if (!(sm.platform in state)) continue
+     // Prefer stored username; fall back to parsing from the stored URL for backwards compat
+---
+CORE h5  [social-network-setup-table.tsx]
+       state[sm.platform].username = parsed.username
+       state[sm.platform].accountType = parsed.accountType
+     }
++    if (sm.is_active) activeByPlatform[sm.platform] = true
++    else if (activeByPlatform[sm.platform] === undefined) activeByPlatform[sm.platform] = false
+   }
+-  // Participation = "has a link": any network with a link participates at the
+-  // member's full billing level, regardless of which tiers the legacy rows held.
++  // A network spans the member's full billing level whenever it has a link
++  // (drives which tier rows exist); the ON/OFF toggle (is_active) is separate.
++  // Legacy rows had no toggle, so default ON when the flag is absent.
+   for (const platform of Object.keys(state) as Platform[]) {
+-    state[platform].tiers = state[platform].username.trim()
+-      ? allTiersEnabled(availableTiers)
+---
+CORE h6  [social-network-setup-table.tsx]
+   return parseUsernameFromUrl(platform, normalized)
+ }
+ 
++// --- Participation toggle ---
++
++interface ParticipationToggleProps {
++  platformName: string
++  enabled: boolean
++  /** Disabled until a link is present — a network can't be ON without one. */
++  hasLink: boolean
++  onToggle: (enabled: boolean) => void
++}
++
++function ParticipationToggle({ platformName, enabled, hasLink, onToggle }: ParticipationToggleProps) {
+---
+CORE h7  [social-network-setup-table.tsx]
+     } else {
+       next[platform] = { ...next[platform], username: rawValue }
+     }
+-    // Participation = "has a link": enable every available tier when a link is
+-    // present, clear them all when it's removed.
+-    next[platform].tiers = next[platform].username.trim()
+-      ? allTiersEnabled(availableTiers)
+-      : noTiersEnabled(availableTiers)
++    const hasLink = next[platform].username.trim().length > 0
++    // The link drives which tier rows exist; pasting a link defaults the network
++    // ON, clearing it turns the toggle off (a network can't be ON without a link).
++    next[platform].tiers = hasLink ? allTiersEnabled(availableTiers) : noTiersEnabled(availableTiers)
++    next[platform].enabled = hasLink
++    onChange(next)
+
+EDITS:
+EDIT h1  [social-network-setup-table.tsx]  role=environment
+ import React, { useState, useEffect, useRef } from "react"
+ import { Linkedin, Instagram, Facebook, Youtube, ExternalLink, Info, CheckCircle2, AlertCircle, X } from "lucide-react"
+ import { Input } from "@/components/ui/input"
++import { Switch } from "@/components/ui/switch"
+ import {
+   Popover,
+   PopoverContent,
+  symbols suggest: h6="ParticipationToggle"
+---
+EDIT h2  [social-network-setup-table.tsx]  role=environment
+   username: string
+   accountType: SocialMediaAccountType
+   /**
+-   * Which tiers this network participates in. Since the "Mise en relation" pivot
+-   * (LOT 1b) there is no per-network level: a network participates at the
+-   * member's full billing level whenever it has a link. This map is therefore
+-   * derived — all available tiers when a link is set, none otherwise — and kept
+-   * here only so {@link buildEntries} can still emit one row per (platform, tier).
++   * Per-network ON/OFF toggle. When OFF, the link is kept but the network is
++   * excluded from "mise en relation" (Connecter/Contacter). Persisted via
++   * `member_social_medias.is_active` — the scoring engine already skips inactive
++   * rows. A network can only be ON when it has a link.
++   */
++  enabled: boolean
++  /**
++   * Which tiers this network has rows for. Since the "Mise en relation" pivot
++   * (LOT 1b) there is no per-network level: a network spans the member's full
++   * billing level whenever it has a link. This map is therefore derived — all
++   * available tiers when a link is set, none otherwise — and kept here only so
++   * {@link buildEntries} can still emit one row per (platform, tier). Whether
++   * those rows are active is driven by {@link enabled}, not by this map.
+    */
+   tiers: Partial<Record<Tier, boolean>>
+ }
+  symbols suggest: h4="activeByPlatform"
+---
+EDIT h3  [social-network-setup-table.tsx]  role=environment
+       {
+         username: "",
+         accountType: "personal" as SocialMediaAccountType,
++        enabled: false,
+         tiers: noTiersEnabled(availableTiers),
+       },
+     ])
+  symbols suggest: h4="activeByPlatform", h5="hasLink", h7="SocialNetworkSetupTable"
+---
+EDIT h8  [social-network-setup-table.tsx]  role=link
+                 onUsernameChange={(u) => handleUsernameChange(id, u)}
+               />
+             </div>
++            {/* Toggle — desktop only (mobile shows it in the name row above) */}
++            <div className="hidden md:flex md:justify-end md:pl-4">
++              <ParticipationToggle
++                platformName={name}
++                enabled={row.enabled}
++                hasLink={hasLink}
++                onToggle={(enabled) => handleToggle(id, enabled)}
++              />
++            </div>
+           </div>
+         )
+       })}
+  symbols suggest: h5="hasLink", h6="ParticipationToggle", h7="SocialNetworkSetupTable"
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

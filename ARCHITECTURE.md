@@ -203,7 +203,7 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 - **`test_det_spans.py`** (pytest) — the spans/overlap + labelling unit suite.
 - **`architecture_test.py`** — the loose-coupling guard (§0): an AST scan asserting `diff/*` and `codebase/*` never import each other and `core/*` imports neither. Fails if a cross-mode coupling creeps back.
 - **codebase-mode** — `codebase_test.py` (anchor-relative roles → seams, end-to-end on a fixture graph), `resolver_test.py` (the Resolver strategy + real-LSP integration, `-m integration`), `import_scan_test.py`, `expand_test.py`, `orchestrate_test.py`, `anchor_rank_test.py`. Integration tests that spin up real language servers are marked `@pytest.mark.integration` and **excluded from the default run** (`pytest.ini`: `addopts = -m "not integration"`) — run them explicitly with `pytest eval/ -m integration`.
-- **`gold/`** — hand-agreed labels (5 cases across C/C++/Kotlin+Ruby/TS+SQL). **`gold_candidates/`** — meaning-based candidates (LLM-first wiring dumps incl. cal.com) pending audit/promotion; the current wiring gold is symbol-derived and over-dense (private-app-boosters 41 edges/24 hunks), so it under-scores meaning-based wiring (rework in progress).
+- **`gold/`** — hand-agreed labels (5 cases across C/C++/Kotlin+Ruby/TS+SQL). **`gold_candidates/`** — meaning-based candidates (LLM-first wiring dumps incl. cal.com) pending audit/promotion; the current wiring gold is symbol-derived and over-dense (acme-boosters 41 edges/24 hunks), so it under-scores meaning-based wiring (rework in progress).
 
 ---
 

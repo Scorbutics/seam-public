@@ -1,0 +1,694 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: supabase/functions/_shared/scoring/src/config.ts | change: modify ---
+@@ -1,5 +1,8 @@
+   1|  // Type definitions
+   2| -export type Platform = 'linkedin' | 'instagram' | 'facebook';
+   3| +// 'youtube' is a first-class platform but admin-gated in the profile UI (only
+   4| +// official/admin accounts set a YouTube URL). It is not part of the peer-matching
+   5| +// `enabledPlatforms`; it surfaces via LOT 6 boosters (and official accounts).
+   6| +export type Platform = 'linkedin' | 'instagram' | 'facebook' | 'youtube';
+   7|  export type Tier = 'BOOST' | 'BOOST_PLUS' | 'BOOST_MAX';
+   8|  export type BusinessCategory =
+   9|      | 'Tech/SaaS'
+candidates: h7 (platform); h12 (Platform); h14 (Platform, official, platform); h17 (official, platform); h22 (platform); h24 (platform)
+
+--- HUNK h2 | file: supabase/functions/_shared/scoring/src/inMemoryRepositories.ts | change: modify ---
+@@ -8,6 +8,8 @@ import type {
+   1|      WeeklyTaskRepository,
+   2|      SubscriptionRepository,
+   3|      MemberExclusionRepository,
+   4| +    BoosterRepository,
+   5| +    BoosterTarget,
+   6|      MissionEngineRepositories
+   7|  } from './repositories.ts';
+   8|  
+candidates: h7 (BoosterRepository, BoosterTarget); h12 (BoosterTarget)
+
+--- HUNK h3 | file: supabase/functions/_shared/scoring/src/inMemoryRepositories.ts | change: modify ---
+@@ -143,15 +145,27 @@ class InMemoryMemberExclusionRepository implements MemberExclusionRepository {
+   1|      }
+   2|  }
+   3|  
+   4| +class InMemoryBoosterRepository implements BoosterRepository {
+   5| +    constructor(private boosters: BoosterTarget[] = []) {}
+   6| +    async getActive(): Promise<BoosterTarget[]> {
+   7| +        return [...this.boosters];
+   8| +    }
+   9| +}
+  10| +
+  11|  /**
+  12| - * Creates in-memory repositories for the MissionEngine, pre-populated with the given members.
+  13| + * Creates in-memory repositories for the MissionEngine, pre-populated with the given
+  14| + * members and (optionally) boosters.
+  15|   */
+  16| -export function createMissionEngineInMemoryRepositories(members: Member[]): MissionEngineRepositories {
+  17| +export function createMissionEngineInMemoryRepositories(
+  18| +    members: Member[],
+  19| +    boosters: BoosterTarget[] = []
+  20| +): MissionEngineRepositories {
+  21|      return {
+  22|          member: new InMemoryMemberRepository(members),
+  23|          pairWeight: new InMemoryPairWeightRepository(),
+  24|          weeklyTask: new InMemoryWeeklyTaskRepository(),
+  25|          subscription: new InMemorySubscriptionRepository(),
+  26|          memberExclusion: new InMemoryMemberExclusionRepository(),
+  27| +        booster: new InMemoryBoosterRepository(boosters),
+  28|      };
+  29|  }
+candidates: h7 (BoosterRepository, BoosterTarget); h12 (BoosterTarget); h17 (createMissionEngineInMemoryRepositories, members); h24 (members)
+
+--- HUNK h4 | file: supabase/functions/_shared/scoring/src/model/member.ts | change: modify ---
+@@ -31,6 +31,8 @@ export class Member {
+   1|      /** Tracks consecutive weeks without engagement — triggers inactivity after the grace period. */
+   2|      consecutiveInactiveWeeks: number;
+   3|      isActive: boolean;
+   4| +    /** Official account (e.g. ACME): injected as a LOCKED action on shared networks, excluded from the peer pool. */
+   5| +    isOfficial: boolean;
+   6|      /** Week number when this member was created (0 = initial batch). */
+   7|      createdAt: number;
+   8|      /** Pending tier change, applied when `currentWeek >= effectiveWeek`. */
+
+--- HUNK h5 | file: supabase/functions/_shared/scoring/src/model/member.ts | change: modify ---
+@@ -55,6 +57,7 @@ export class Member {
+   1|          this.socialMedias = [];
+   2|          this.consecutiveInactiveWeeks = 0;
+   3|          this.isActive = true;
+   4| +        this.isOfficial = false;
+   5|          this.createdAt = 0;
+   6|          this.subscriptionStartedAt = null;
+   7|          this.tierChangeScheduled = null;
+
+--- HUNK h6 | file: supabase/functions/_shared/scoring/src/model/weeklyTask.ts | change: modify ---
+@@ -17,6 +17,10 @@ export interface TargetProfile {
+   1|      action?: string;
+   2|      /** How many times to perform the action per target (e.g. 3 for likes). */
+   3|      actionCount?: number;
+   4| +    /** LOT 6: official/booster target — always present, cannot be Masqué (only "Passer"). */
+   5| +    locked?: boolean;
+   6| +    /** LOT 6: set when this target comes from a booster (rendered in the "À la une" strip). */
+   7| +    boosterId?: string;
+   8|      /** Final composite score from the scoring pipeline (only present when explainability is on). */
+   9|      finalScore?: number;
+  10|      /** Per-scorer breakdown showing how the final score was computed. */
+candidates: h14 (official, target); h17 (official)
+
+--- HUNK h7 | file: supabase/functions/_shared/scoring/src/repositories.ts | change: modify ---
+@@ -83,6 +83,28 @@ export interface MemberExclusionRepository {
+   1|      getAll(): Promise<string[]>;
+   2|  }
+   3|  
+   4| +/**
+   5| + * A booster (LOT 6, mechanism B): a spotlighted member-network profile, enriched
+   6| + * with the referenced social-media profile + the active week window. end* null = permanent.
+   7| + */
+   8| +export interface BoosterTarget {
+   9| +    id: string;
+  10| +    memberSocialMediaId: string;
+  11| +    memberId: string;
+  12| +    platform: string;
+  13| +    profileUrl: string;
+  14| +    label: string | null;
+  15| +    startWeek: number | null;
+  16| +    startYear: number | null;
+  17| +    endWeek: number | null;
+  18| +    endYear: number | null;
+  19| +}
+  20| +
+  21| +export interface BoosterRepository {
+  22| +    /** Load all active boosters (week-window filtering is applied in the engine). */
+  23| +    getActive(): Promise<BoosterTarget[]>;
+  24| +}
+  25| +
+  26|  /** Repositories required by the MissionEngine (no group persistence needed). */
+  27|  export interface MissionEngineRepositories {
+  28|      member: MemberRepository;
+candidates: h1 (platform); h2 (BoosterRepository, BoosterTarget); h3 (BoosterRepository, BoosterTarget); h8 (BoosterRepository); h10 (member); h12 (BoosterTarget); h13 (BoosterTarget); h17 (engine); h22 (BoosterRepository, BoosterTarget)
+
+--- HUNK h8 | file: supabase/functions/_shared/scoring/src/repositories.ts | change: modify ---
+@@ -90,4 +112,5 @@ export interface MissionEngineRepositories {
+   1|      weeklyTask: WeeklyTaskRepository;
+   2|      subscription: SubscriptionRepository;
+   3|      memberExclusion: MemberExclusionRepository;
+   4| +    booster: BoosterRepository;
+   5|  }
+candidates: h7 (BoosterRepository)
+
+--- HUNK h9 | file: supabase/functions/_shared/scoring/src/services/engine.ts | change: modify ---
+@@ -105,6 +105,14 @@ export abstract class Engine<T extends BaseRunState> {
+   1|          return member.isActive && member.tier != null;
+   2|      }
+   3|  
+   4| +    /**
+   5| +     * Inject always-present "locked" targets for one recipient member after the peer
+   6| +     * passes (LOT 6: official accounts on shared networks + boosters on lacked ones).
+   7| +     * Default: no-op. Overridden by MissionEngine.
+   8| +     */
+   9| +    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  10| +    protected injectLockedActions(_state: T, _member: Member, _taskMap: Map<string, WeeklyTask>, _week: number): void { /* no-op */ }
+  11| +
+  12|      // ── Concrete methods ──
+  13|  
+  14|      /** Toggle per-scorer breakdown in all pass pipelines (for reporting / debugging). */
+candidates: h10 (member); h14 (official); h17 (official)
+
+--- HUNK h10 | file: supabase/functions/_shared/scoring/src/services/engine.ts | change: modify ---
+@@ -167,6 +175,15 @@ export abstract class Engine<T extends BaseRunState> {
+   1|              }
+   2|          }
+   3|  
+   4| +        // Locked injections (LOT 6): official accounts + boosters, per eligible
+   5| +        // recipient member. Official members never receive tasks themselves.
+   6| +        for (const member of state.members) {
+   7| +            if (member.isOfficial || !this.isEligible(member)) continue;
+   8| +            if (isPartialRun && !memberIds!.includes(member.id)) continue;
+   9| +            if (state.existingTaskMemberIds.has(member.id)) continue;
+  10| +            this.injectLockedActions(state, member, taskMap, week);
+  11| +        }
+  12| +
+  13|          await this.applyDeferredEffects(state);
+  14|          const tasks = Array.from(taskMap.values());
+  15|          await this.saveState(state, tasks);
+candidates: h7 (member); h9 (member); h11 (member); h14 (member, official); h17 (member, members, official, tasks); h23 (member); h24 (member, members)
+
+--- HUNK h11 | file: supabase/functions/_shared/scoring/src/services/engine.ts | change: modify ---
+@@ -248,6 +265,7 @@ export abstract class Engine<T extends BaseRunState> {
+   1|  
+   2|          for (const member of state.members) {
+   3|              if (!this.isEligible(member)) continue;
+   4| +            if (member.isOfficial) continue; // official accounts are injected, never peer-matched
+   5|  
+   6|              const seenPlatforms = new Set<string>();
+   7|              for (const sm of member.socialMedias) {
+candidates: h10 (member); h14 (official); h17 (official)
+
+--- HUNK h12 | file: supabase/functions/_shared/scoring/src/services/missionEngine.ts | change: modify ---
+@@ -1,14 +1,26 @@
+   1| -import { WeeklyTask } from '../model/weeklyTask.ts';
+   2| +import { WeeklyTask, type TargetProfile } from '../model/weeklyTask.ts';
+   3|  import { PairWeightStore } from '../model/pairWeight.ts';
+   4|  import { SubscriptionStore } from '../model/subscriptionStore.ts';
+   5|  import { MemberExclusionStore } from '../model/memberExclusionStore.ts';
+   6|  import { Member } from '../model/member.ts';
+   7|  import { MemberSocialMedia } from '../model/memberSocialMedia.ts';
+   8| -import { Config, CONFIG } from '../config.ts';
+   9| +import { Config, CONFIG, Platform } from '../config.ts';
+  10|  import { ScoringPipeline, type ScoredCandidate } from './scoringPipeline.ts';
+  11|  import { type ScoringContext } from './scorers/scorer.ts';
+  12| -import { MissionEngineRepositories } from '../repositories.ts';
+  13| +import { MissionEngineRepositories, type BoosterTarget } from '../repositories.ts';
+  14|  import { Engine, type BaseRunState, type EnginePass, type EngineCandidate } from './engine.ts';
+  15| +
+  16| +/** True when (year, week) ≤ (otherYear, otherWeek). */
+  17| +function weekTupleLE(year: number, week: number, otherYear: number, otherWeek: number): boolean {
+  18| +    return year < otherYear || (year === otherYear && week <= otherWeek);
+  19| +}
+  20| +
+  21| +/** A booster is active for a week when within its [start, end] window (null bounds = open). */
+  22| +function isBoosterActiveForWeek(b: BoosterTarget, week: number, year: number): boolean {
+  23| +    if (b.startYear != null && b.startWeek != null && !weekTupleLE(b.startYear, b.startWeek, year, week)) return false;
+  24| +    if (b.endYear != null && b.endWeek != null && !weekTupleLE(year, week, b.endYear, b.endWeek)) return false;
+  25| +    return true;
+  26| +}
+  27|  import {
+  28|      PlatformScorer,
+  29|      BusinessCategoryScorer,
+candidates: h1 (Platform); h2 (BoosterTarget); h3 (BoosterTarget); h7 (BoosterTarget); h13 (BoosterTarget); h14 (TargetProfile); h15 (isBoosterActiveForWeek); h22 (BoosterTarget)
+
+--- HUNK h13 | file: supabase/functions/_shared/scoring/src/services/missionEngine.ts | change: modify ---
+@@ -30,6 +42,10 @@ interface RunState extends BaseRunState {
+   1|      memberSocialMediaIndex: Map<string, MemberSocialMedia>;
+   2|      /** Pair weight increments deferred until after the loop to avoid intra-run bias. */
+   3|      pendingPairWeightIncrements: Array<[string, string]>;
+   4| +    /** Official (ACME) accounts — injected as locked actions on shared networks (LOT 6). */
+   5| +    officialMembers: Member[];
+   6| +    /** Boosters active for the current generation week — injected on lacked networks (LOT 6). */
+   7| +    activeBoosters: BoosterTarget[];
+   8|  }
+   9|  
+  10|  /**
+candidates: h7 (BoosterTarget); h12 (BoosterTarget); h15 (activeBoosters, officialMembers)
+
+--- HUNK h14 | file: supabase/functions/_shared/scoring/src/services/missionEngine.ts | change: modify ---
+@@ -192,6 +208,73 @@ export class MissionEngine extends Engine<RunState> {
+   1|          }
+   2|      }
+   3|  
+   4| +    /**
+   5| +     * LOT 6 — inject always-present locked targets for one recipient member:
+   6| +     *  A) official accounts (ACME) on networks the member SHARES with them — full
+   7| +     *     Connecter→Contacter (subscribe if not yet connected, contact after);
+   8| +     *  B) active boosters on networks the member LACKS — single Contacter spotlight.
+   9| +     * Both are `locked` (no Masquer; "Passer" still allowed) and bypass scoring/caps.
+  10| +     */
+  11| +    protected injectLockedActions(state: RunState, member: Member, taskMap: Map<string, WeeklyTask>, week: number): void {
+  12| +        const memberPlatforms = new Set<string>(
+  13| +            member.socialMedias.filter(sm => sm.isActive).map(sm => sm.platform)
+  14| +        );
+  15| +
+  16| +        const ensureTask = (): WeeklyTask => {
+  17| +            let task = taskMap.get(member.id);
+  18| +            if (!task) {
+  19| +                task = new WeeklyTask(member.id, week, state.year);
+  20| +                taskMap.set(member.id, task);
+  21| +            }
+  22| +            return task;
+  23| +        };
+  24| +        const appendTarget = (platform: string, pass: string, tp: TargetProfile): void => {
+  25| +            const task = ensureTask();
+  26| +            const key = `${platform}_${pass}`;
+  27| +            if (task.platformTasks[key]) task.platformTasks[key].targets.push(tp);
+  28| +            else task.addPlatformTask(platform as Platform, [tp], null, pass);
+  29| +        };
+  30| +
+  31| +        // A) Official accounts on SHARED networks.
+  32| +        for (const official of state.officialMembers) {
+  33| +            for (const osm of official.socialMedias) {
+  34| +                if (!osm.isActive || !memberPlatforms.has(osm.platform)) continue;
+  35| +                const connected = this.subscriptionStore.hasSubscribed(member.id, official.id, osm.platform);
+  36| +                const tp: TargetProfile = {
+  37| +                    memberSocialMediaId: osm.id,
+  38| +                    memberId: official.id,
+  39| +                    profileUrl: osm.profileUrl,
+  40| +                    action: connected ? 'contact' : 'subscription',
+  41| +                    actionCount: 1,
+  42| +                    locked: true,
+  43| +                };
+  44| +                const name = [official.firstName, official.lastName].filter(Boolean).join(' ');
+  45| +                if (name) tp.memberName = name;
+  46| +                if (official.company) tp.companyName = official.company;
+  47| +                appendTarget(osm.platform, connected ? CONTACT_PASS : CONNECT_PASS, tp);
+  48| +            }
+  49| +        }
+  50| +
+  51| +        // B) Boosters on LACKED networks (dedup: skip platforms the member is on).
+  52| +        for (const b of state.activeBoosters) {
+  53| +            if (memberPlatforms.has(b.platform) || b.memberId === member.id) continue;
+  54| +            const tp: TargetProfile = {
+  55| +                memberSocialMediaId: b.memberSocialMediaId,
+  56| +                memberId: b.memberId,
+  57| +                profileUrl: b.profileUrl,
+  58| +                action: 'contact',
+  59| +                actionCount: 1,
+  60| +                locked: true,
+  61| +                boosterId: b.id,
+  62| +            };
+  63| +            const target = state.memberLookup.get(b.memberId);
+  64| +            const name = b.label ?? (target ? [target.firstName, target.lastName].filter(Boolean).join(' ') : '');
+  65| +            if (name) tp.memberName = name;
+  66| +            if (target?.company) tp.companyName = target.company;
+  67| +            appendTarget(b.platform, CONTACT_PASS, tp);
+  68| +        }
+  69| +    }
+  70| +
+  71|      /** Build the scoring context shared by all scorers for a given source member. */
+  72|      protected buildBaseContext(
+  73|          state: RunState,
+candidates: h1 (Platform, official, platform); h6 (official, target); h9 (official); h10 (member, official); h11 (official); h12 (TargetProfile); h15 (activeBoosters, official, officialMembers); h17 (connected, contact, official, target, task); h24 (target, task)
+
+--- HUNK h15 | file: supabase/functions/_shared/scoring/src/services/missionEngine.ts | change: modify ---
+@@ -247,6 +330,11 @@ export class MissionEngine extends Engine<RunState> {
+   1|          this.subscriptionStore.setAll(await this.repositories.subscription.getAll());
+   2|          this.memberExclusionStore.setAll(await this.repositories.memberExclusion.getAll());
+   3|  
+   4| +        // LOT 6: official accounts (locked, shared networks) + boosters active this week (lacked networks).
+   5| +        const officialMembers = members.filter(m => m.isOfficial && m.isActive);
+   6| +        const activeBoosters = (await this.repositories.booster.getActive())
+   7| +            .filter(b => isBoosterActiveForWeek(b, week, year));
+   8| +
+   9|          // Build per-group inbound baseline from tasks already saved for this week,
+  10|          // and collect member IDs that already have persisted tasks (R-02 guard).
+  11|          this.inboundBaseline.clear();
+candidates: h12 (isBoosterActiveForWeek); h13 (activeBoosters, officialMembers); h14 (activeBoosters, official, officialMembers); h16 (activeBoosters, officialMembers); h17 (members, official); h24 (members)
+
+--- HUNK h16 | file: supabase/functions/_shared/scoring/src/services/missionEngine.ts | change: modify ---
+@@ -270,6 +358,8 @@ export class MissionEngine extends Engine<RunState> {
+   1|              memberLookup,
+   2|              memberSocialMediaIndex,
+   3|              pendingPairWeightIncrements: [],
+   4| +            officialMembers,
+   5| +            activeBoosters,
+   6|              week,
+   7|              year,
+   8|              existingTaskMemberIds,
+candidates: h15 (activeBoosters, officialMembers)
+
+--- HUNK h17 | file: supabase/functions/_shared/scoring/src/tests/unit/services/missionEngine.test.ts | change: modify ---
+@@ -339,3 +339,94 @@ describe('MissionEngine — action types', () => {
+   1|          expect(t0.platformTasks['linkedin_CONTACT'].targets[0].action).toBe('contact');
+   2|      });
+   3|  });
+   4| +
+   5| +describe('MissionEngine — LOT 6: official accounts (locked) + boosters', () => {
+   6| +    it('injects the official account as a LOCKED Connecter on shared networks and excludes it from the peer pool', async () => {
+   7| +        const members = createMembers(4, 'linkedin'); // m_linkedin_0..3
+   8| +        const acme = new Member('acme', 'BOOST', 'Tech/SaaS');
+   9| +        acme.addSocialMedia('linkedin', 'https://linkedin.com/acme');
+  10| +        acme.addSocialMedia('youtube', 'https://youtube.com/@acme');
+  11| +        acme.isOfficial = true;
+  12| +
+  13| +        const repos = createMissionEngineInMemoryRepositories([...members, acme]);
+  14| +        const engine = new MissionEngine(repos);
+  15| +        const tasks = await engine.generate(1);
+  16| +
+  17| +        // Official never gets its own task.
+  18| +        expect(tasks.find(t => t.memberId === 'acme')).toBeUndefined();
+  19| +
+  20| +        for (const m of members) {
+  21| +            const task = tasks.find(t => t.memberId === m.id)!;
+  22| +            const connect = task.platformTasks['linkedin_CONNECT'].targets;
+  23| +            // Locked official target present on the shared network (linkedin)…
+  24| +            const official = connect.find(t => t.memberId === 'acme');
+  25| +            expect(official).toBeDefined();
+  26| +            expect(official!.locked).toBe(true);
+  27| +            expect(official!.action).toBe('subscription');
+  28| +            // …and only once (not also injected as a random peer pick).
+  29| +            expect(connect.filter(t => t.memberId === 'acme').length).toBe(1);
+  30| +            // No youtube action (member doesn't share youtube with the official).
+  31| +            expect(task.platformTasks['youtube_CONNECT']).toBeUndefined();
+  32| +            expect(task.platformTasks['youtube_CONTACT']).toBeUndefined();
+  33| +        }
+  34| +    });
+  35| +
+  36| +    it('turns the official account into a locked Contacter once connected', async () => {
+  37| +        const members = createMembers(3, 'linkedin');
+  38| +        const acme = new Member('acme', 'BOOST', 'Tech/SaaS');
+  39| +        acme.addSocialMedia('linkedin', 'https://linkedin.com/acme');
+  40| +        acme.isOfficial = true;
+  41| +        const repos = createMissionEngineInMemoryRepositories([...members, acme]);
+  42| +        await repos.subscription.saveAll([`${members[0].id}:acme:linkedin`]);
+  43| +
+  44| +        const engine = new MissionEngine(repos);
+  45| +        const tasks = await engine.generate(1);
+  46| +        const t0 = tasks.find(t => t.memberId === members[0].id)!;
+  47| +
+  48| +        // m0 is connected → Contacter (locked), not Connecter.
+  49| +        expect((t0.platformTasks['linkedin_CONNECT']?.targets ?? []).some(t => t.memberId === 'acme')).toBe(false);
+  50| +        const contact = (t0.platformTasks['linkedin_CONTACT']?.targets ?? []).find(t => t.memberId === 'acme');
+  51| +        expect(contact).toBeDefined();
+  52| +        expect(contact!.action).toBe('contact');
+  53| +        expect(contact!.locked).toBe(true);
+  54| +    });
+  55| +
+  56| +    it('injects boosters only on networks the member LACKS (dedup)', async () => {
+  57| +        const members = createMembers(3, 'linkedin'); // linkedin-only members
+  58| +        const promoted = new Member('promo', 'BOOST', 'Tech/SaaS');
+  59| +        promoted.addSocialMedia('linkedin', 'https://linkedin.com/promo');
+  60| +        promoted.addSocialMedia('youtube', 'https://youtube.com/@promo');
+  61| +        const boosters = [
+  62| +            { id: 'b-yt', memberSocialMediaId: 'promo_youtube', memberId: 'promo', platform: 'youtube', profileUrl: 'https://youtube.com/@promo', label: null, startWeek: null, startYear: null, endWeek: null, endYear: null },
+  63| +            { id: 'b-li', memberSocialMediaId: 'promo_linkedin', memberId: 'promo', platform: 'linkedin', profileUrl: 'https://linkedin.com/promo', label: null, startWeek: null, startYear: null, endWeek: null, endYear: null },
+  64| +        ];
+  65| +        const repos = createMissionEngineInMemoryRepositories([...members, promoted], boosters);
+  66| +        const engine = new MissionEngine(repos);
+  67| +        const tasks = await engine.generate(1);
+  68| +
+  69| +        const t0 = tasks.find(t => t.memberId === members[0].id)!;
+  70| +        // YouTube booster injected (member lacks youtube)…
+  71| +        const yt = (t0.platformTasks['youtube_CONTACT']?.targets ?? []).find(t => t.boosterId === 'b-yt');
+  72| +        expect(yt).toBeDefined();
+  73| +        expect(yt!.action).toBe('contact');
+  74| +        expect(yt!.locked).toBe(true);
+  75| +        // …LinkedIn booster deduped out (member already has linkedin).
+  76| +        expect((t0.platformTasks['linkedin_CONTACT']?.targets ?? []).some(t => t.boosterId === 'b-li')).toBe(false);
+  77| +    });
+  78| +
+  79| +    it('skips boosters outside their active week window', async () => {
+  80| +        const members = createMembers(2, 'linkedin');
+  81| +        const promoted = new Member('promo', 'BOOST', 'Tech/SaaS');
+  82| +        promoted.addSocialMedia('youtube', 'https://youtube.com/@promo');
+  83| +        const boosters = [
+  84| +            // Window ended at week 1 of 2025 → not active for week 10/2026.
+  85| +            { id: 'b-old', memberSocialMediaId: 'promo_youtube', memberId: 'promo', platform: 'youtube', profileUrl: 'https://youtube.com/@promo', label: null, startWeek: null, startYear: null, endWeek: 1, endYear: 2025 },
+  86| +        ];
+  87| +        const repos = createMissionEngineInMemoryRepositories([...members, promoted], boosters);
+  88| +        const engine = new MissionEngine(repos);
+  89| +        const tasks = await engine.generate(10, undefined, 2026);
+  90| +
+  91| +        const t0 = tasks.find(t => t.memberId === members[0].id)!;
+  92| +        expect(t0.platformTasks['youtube_CONTACT']).toBeUndefined();
+  93| +    });
+  94| +});
+candidates: h1 (official, platform); h3 (createMissionEngineInMemoryRepositories, members); h6 (official); h7 (engine); h9 (official); h10 (member, members, official, tasks); h11 (official); h14 (connected, contact, official, target, task); h15 (members, official); h24 (engine, members, task, tasks)
+
+--- HUNK h18 | file: supabase/functions/generate-member-missions/index.ts | change: modify ---
+@@ -6,7 +6,8 @@ import {
+   1|      SupabasePairWeightRepository,
+   2|      SupabaseWeeklyTaskRepository,
+   3|      SupabaseSubscriptionRepository,
+   4| -    SupabaseMemberExclusionRepository
+   5| +    SupabaseMemberExclusionRepository,
+   6| +    SupabaseBoosterRepository
+   7|  } from "../scoring-cycle/repositories.ts"
+   8|  import { corsHeaders, handleCors } from "../_shared/cors.ts"
+   9|  import { getCurrentIsoWeek, getIsoWeekYear } from "../_shared/iso-week.ts"
+candidates: h22 (SupabaseBoosterRepository)
+
+--- HUNK h19 | file: supabase/functions/generate-member-missions/index.ts | change: modify ---
+@@ -65,6 +66,7 @@ Deno.serve(async (req: Request) => {
+   1|              weeklyTask: new SupabaseWeeklyTaskRepository(serviceClient),
+   2|              subscription: new SupabaseSubscriptionRepository(serviceClient),
+   3|              memberExclusion: new SupabaseMemberExclusionRepository(serviceClient),
+   4| +            booster: new SupabaseBoosterRepository(serviceClient),
+   5|          }
+   6|  
+   7|          // Check if member is temporarily paused
+candidates: h22 (SupabaseBoosterRepository)
+
+--- HUNK h20 | file: supabase/functions/scoring-cycle/index.ts | change: modify ---
+@@ -6,7 +6,8 @@ import {
+   1|      SupabasePairWeightRepository,
+   2|      SupabaseWeeklyTaskRepository,
+   3|      SupabaseSubscriptionRepository,
+   4| -    SupabaseMemberExclusionRepository
+   5| +    SupabaseMemberExclusionRepository,
+   6| +    SupabaseBoosterRepository
+   7|  } from "./repositories.ts"
+   8|  import { sendEmail } from "../_shared/email/mailer.ts"
+   9|  import { generateWeeklyMissionEmail } from "../_shared/email/templates.ts"
+candidates: h22 (SupabaseBoosterRepository)
+
+--- HUNK h21 | file: supabase/functions/scoring-cycle/index.ts | change: modify ---
+@@ -23,7 +24,8 @@ Deno.serve(withAdminAuth(async (req: Request, { serviceClient }: AdminAuthContex
+   1|          pairWeight: new SupabasePairWeightRepository(serviceClient),
+   2|          weeklyTask: new SupabaseWeeklyTaskRepository(serviceClient),
+   3|          subscription: new SupabaseSubscriptionRepository(serviceClient),
+   4| -        memberExclusion: new SupabaseMemberExclusionRepository(serviceClient)
+   5| +        memberExclusion: new SupabaseMemberExclusionRepository(serviceClient),
+   6| +        booster: new SupabaseBoosterRepository(serviceClient)
+   7|      }
+   8|  
+   9|      // Initialize Engine
+candidates: h22 (SupabaseBoosterRepository)
+
+--- HUNK h22 | file: supabase/functions/scoring-cycle/repositories.ts | change: modify ---
+@@ -9,9 +9,39 @@ import type {
+   1|      WeeklyTaskRepository,
+   2|      SubscriptionRepository,
+   3|      MemberExclusionRepository,
+   4| +    BoosterRepository,
+   5| +    BoosterTarget,
+   6|  } from "@scoring/repositories.ts";
+   7|  import type { WeightStats } from "@scoring/model/pairWeight.ts";
+   8|  
+   9| +/** LOT 6: loads active boosters joined with their referenced social-media profile. */
+  10| +export class SupabaseBoosterRepository implements BoosterRepository {
+  11| +    constructor(private supabase: any) { }
+  12| +
+  13| +    async getActive(): Promise<BoosterTarget[]> {
+  14| +        const { data, error } = await this.supabase
+  15| +            .from('boosters')
+  16| +            .select('id, label, start_week, start_year, end_week, end_year, member_social_medias!inner(id, member_id, platform, profile_url)')
+  17| +            .eq('is_active', true);
+  18| +        if (error) throw error;
+  19| +        return (data as any[]).map(row => {
+  20| +            const sm = row.member_social_medias;
+  21| +            return {
+  22| +                id: row.id,
+  23| +                memberSocialMediaId: sm.id,
+  24| +                memberId: sm.member_id,
+  25| +                platform: sm.platform,
+  26| +                profileUrl: sm.profile_url,
+  27| +                label: row.label ?? null,
+  28| +                startWeek: row.start_week ?? null,
+  29| +                startYear: row.start_year ?? null,
+  30| +                endWeek: row.end_week ?? null,
+  31| +                endYear: row.end_year ?? null,
+  32| +            } as BoosterTarget;
+  33| +        });
+  34| +    }
+  35| +}
+  36| +
+  37|  export class SupabaseMemberRepository implements MemberRepository {
+  38|      constructor(private supabase: any) { }
+  39|  
+candidates: h1 (platform); h7 (BoosterRepository, BoosterTarget); h12 (BoosterTarget); h18 (SupabaseBoosterRepository); h19 (SupabaseBoosterRepository); h20 (SupabaseBoosterRepository); h21 (SupabaseBoosterRepository)
+
+--- HUNK h23 | file: supabase/functions/scoring-cycle/repositories.ts | change: modify ---
+@@ -84,6 +114,7 @@ export class SupabaseMemberRepository implements MemberRepository {
+   1|      private mapToModel(row: any): Member {
+   2|          const member = new Member(row.id, row.tier as any, row.business_category as any);
+   3|          member.isActive = row.is_active;
+   4| +        member.isOfficial = row.is_official ?? false;
+   5|          member.firstName = row.first_name ?? undefined;
+   6|          member.lastName = row.last_name ?? undefined;
+   7|          member.company = row.company ?? undefined;
+candidates: h10 (member)
+
+--- HUNK h24 | file: supabase/migrations/20260602000067_official_accounts_and_boosters.sql | change: add ---
+@@ -0,0 +1,47 @@
+   1| +-- Migration 067: Official accounts (ACME) + boosters (LOT 6).
+   2| +-- Date: 2026-06-02
+   3| +-- Purpose: "Mise en relation" pivot, LOT 6 — two mechanisms:
+   4| +--   A) Official accounts: members flagged is_official are force-injected into every
+   5| +--      eligible member's weekly task as a LOCKED Connecter/Contacter target on the
+   6| +--      networks they share (handled in the scoring engine). Official members are
+   7| +--      kept out of the normal peer pool.
+   8| +--   B) Boosters: admin-managed, time-windowed spotlights of a member's network
+   9| +--      profile, injected for every member on platforms they LACK (single Contacter
+  10| +--      + NON). end_week NULL = permanent (e.g. the ACME headline).
+  11| +
+  12| +-- ── A) Official flag ────────────────────────────────────────────────────────
+  13| +ALTER TABLE members
+  14| +  ADD COLUMN IF NOT EXISTS is_official boolean NOT NULL DEFAULT false;
+  15| +
+  16| +COMMENT ON COLUMN members.is_official IS
+  17| +  'Official account (e.g. ACME). Injected as a LOCKED action on shared networks; '
+  18| +  'excluded from the normal peer candidate pool and never generates its own tasks.';
+  19| +
+  20| +-- ── B) Boosters ─────────────────────────────────────────────────────────────
+  21| +CREATE TABLE IF NOT EXISTS boosters (
+  22| +  id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  23| +  -- The member network profile to spotlight (carries platform + profile_url + owner).
+  24| +  member_social_media_id uuid NOT NULL REFERENCES member_social_medias(id) ON DELETE CASCADE,
+  25| +  label                  text,
+  26| +  -- Active window (ISO week). NULL start = active immediately; NULL end = permanent.
+  27| +  start_week             integer,
+  28| +  start_year             integer,
+  29| +  end_week               integer,
+  30| +  end_year               integer,
+  31| +  is_active              boolean NOT NULL DEFAULT true,
+  32| +  created_at             timestamptz NOT NULL DEFAULT now()
+  33| +);
+  34| +
+  35| +COMMENT ON TABLE boosters IS
+  36| +  'Admin-managed, time-windowed spotlights (LOT 6 mechanism B). Injected at generation '
+  37| +  'into every member''s weekly task on platforms they lack. end_year/end_week NULL = permanent.';
+  38| +
+  39| +CREATE INDEX IF NOT EXISTS idx_boosters_active ON boosters(is_active) WHERE is_active;
+  40| +
+  41| +ALTER TABLE boosters ENABLE ROW LEVEL SECURITY;
+  42| +
+  43| +-- Only admins manage boosters; the scoring engine reads them via the service role.
+  44| +CREATE POLICY "Admins manage boosters"
+  45| +  ON boosters FOR ALL
+  46| +  USING (is_admin())
+  47| +  WITH CHECK (is_admin());
+candidates: h1 (platform); h3 (members); h10 (member, members); h14 (target, task); h15 (members); h17 (engine, members, task, tasks)
+
+=== END HUNKS ===
+Return the JSON array now.

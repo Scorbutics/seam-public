@@ -1,0 +1,68 @@
+Seam · 24 hunks → 8 clusters · 10 seams · 4 cores  (roles: core 4  link 14  env 5  test 1)
+◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
+
+◆ g1  config.ts
+└─ ▣ s-ambient  config.ts    link-only
+   └─ ∙ env  config.ts:1   type/declaration only, no logic
+
+◆ g2  MissionEngine
+├─ ▣ h10  Engine    ⚠ untested · ↔ h14,h12
+│  ├─ ◆ core engine.ts:175   defines Engine
+│  ├─ → link engine.ts:105   wires: MissionEngine
+│  ├─ → link engine.ts:266   wires: MissionEngine
+│  ├─ → link missionEngine.ts:5   (here: link) defines BoosterTarget
+│  ├─ → link missionEngine.ts:42   wires: BoosterTarget, MissionEngine
+│  ├─ → link missionEngine.ts:212   (here: link) defines MissionEngine
+│  ├─ → link missionEngine.ts:339   (here: link) defines MissionEngine
+│  └─ → link missionEngine.ts:358   wires: MissionEngine
+├─ ▣ h12  BoosterTarget    ⚠ untested · ↔ h14,h10
+│  ├─ ∙ env  missionEngine.ts:1   (here: environment) defines BoosterTarget
+│  ├─ ◆ core missionEngine.ts:14   defines BoosterTarget
+│  ├─ → link inMemoryRepositories.ts:8   references a core's symbol (wires it in)
+│  ├─ → link inMemoryRepositories.ts:145   wires: MissionEngine
+│  ├─ → link weeklyTask.ts:17   references a core's symbol (wires it in)
+│  ├─ ∙ env  repositories.ts:83   wires: MissionEngine
+│  ├─ → link missionEngine.ts:42   wires: Engine, MissionEngine
+│  ├─ → link missionEngine.ts:231   (here: link) defines MissionEngine
+│  ├─ → link missionEngine.ts:336   (here: link) defines MissionEngine
+│  └─ → link repositories.ts:9   adapter implementing an interface (connects, not decides)
+└─ ▣ h14  MissionEngine    tested · ↔ h12,h10
+   ├─ ◆ core missionEngine.ts:208   defines MissionEngine
+   ├─ → link engine.ts:110   wires: Engine
+   ├─ → link engine.ts:178   (here: link) defines Engine
+   ├─ → link engine.ts:268   wires: Engine
+   ├─ ◆ core missionEngine.ts:330   defines MissionEngine
+   ├─ → link missionEngine.ts:42   wires: Engine, BoosterTarget
+   ├─ → link missionEngine.ts:358   wires: Engine
+   ├─ → link inMemoryRepositories.ts:145   wires: BoosterTarget
+   ├─ ∙ env  repositories.ts:83   wires: BoosterTarget
+   └─ ∙ env  20260602000067_official_accounts_and_boosters.sql:1   SQL schema/data migration (trust delegated)
+
+◆ g3  export class Member {
+└─ ▣ s-ambient  export class Member {    link-only
+   ├─ ∙ env  member.ts:31   no logic or wiring detected (uncertain)
+   └─ ∙ env  member.ts:57   no logic or wiring detected (uncertain)
+
+◆ g5  export interface MissionEngineRepositories {
+└─ ▣ s-rewire  export interface MissionEngineRepositories {    link-only
+   └─ → link repositories.ts:112   references a core's symbol (wires it in)
+
+◆ g6  import {
+└─ ▣ s-rewire  import {    link-only
+   ├─ → link index.ts:6   references a core's symbol (wires it in)
+   └─ → link index.ts:6   references a core's symbol (wires it in)
+
+◆ g7  Deno.serve(async (req: Request) => {
+└─ ▣ s-rewire  Deno.serve(async (req: Request) => {    link-only
+   └─ → link index.ts:66   references a core's symbol (wires it in)
+
+◆ g9  Deno.serve(withAdminAuth(async (req: Request, { serviceClient }: AdminAuthContex
+└─ ▣ s-rewire  Deno.serve(withAdminAuth(async (req: Request, { serviceClient }: AdminAuthContex    link-only
+   └─ → link index.ts:24   references a core's symbol (wires it in)
+
+◆ g10  export class SupabaseMemberRepository implements MemberRepository {
+└─ ▣ s-rewire  export class SupabaseMemberRepository implements MemberRepository {    link-only
+   └─ → link repositories.ts:114   references a core's symbol (wires it in)
+
+✓ Tests (1) — skim
+- missionEngine.test.ts:339   covers MissionEngine

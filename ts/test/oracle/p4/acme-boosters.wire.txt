@@ -1,0 +1,72 @@
+You are WIRING a decomposed change. The roles are ALREADY decided — do NOT change
+them. Your ONLY job: for each NON-CORE hunk, list the CORE hunk id(s) it wires —
+its FULL FOOTPRINT (every core it connects to, supports, or tests).
+
+Wiring is TRACING, not guessing. Each non-core hunk lists symbol-grounded CANDIDATE
+cores (high precision: it shares a NEW symbol with that core). Use them as your
+FLOOR:
+  - CONFIRM candidates that carry the change's intent (wire them).
+  - PRUNE ambient candidates (a shared util used everywhere is NOT a wiring) — that
+    hunk may wire NOTHING.
+  - ADD core wirings you infer from the rationales (informal couplings the symbol
+    scan can't see).
+A hunk wires within its OWN cluster unless it genuinely bridges intents. A purely
+ambient hunk (supports the whole change, not any one core) has "wires":[].
+
+The CORES and rationales below are a COMPLETE summary of an already-finished role
+pass — you do NOT need the source diff, and you must NOT ask for it. Always return
+the JSON array, even if a hunk's footprint is uncertain (use [] when unsure).
+
+Return ONLY a JSON array, no prose, one object per NON-CORE hunk, wiring by CORE
+hunk id only:
+[{"id":"h1","wires":["h10","h14"]},{"id":"h8","wires":["h7"]},{"id":"h2","wires":[]}]
+
+=== CORES (each anchors a seam) ===
+  h10 [—] (cluster ?): core — defines logic other hunks depend on
+  h12 [—] (cluster ?): core — defines logic other hunks depend on
+  h14 [—] (cluster ?): core — defines logic other hunks depend on
+  h15 [—] (cluster ?): core — defines logic other hunks depend on
+
+=== NON-CORE hunks to wire ===
+  h1 environment (cluster ?): environment — type/declaration only, no logic
+    candidate cores: h12, h14
+  h2 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h12
+  h3 link (cluster ?): link — adapter implementing an interface (connects, not decides)
+    candidate cores: h12
+  h4 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+    candidate cores: (none — infer from rationale)
+  h5 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+    candidate cores: (none — infer from rationale)
+  h6 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h14
+  h7 environment (cluster ?): environment — type/declaration only, no logic
+    candidate cores: h10, h12
+  h8 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: (none — infer from rationale)
+  h9 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h10, h14
+  h11 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h10, h14
+  h13 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h12, h15
+  h16 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h15
+  h17 test (cluster ?): test — verifies the change (path/framework markers)
+    candidate cores: h10, h14, h15
+  h18 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: (none — infer from rationale)
+  h19 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: (none — infer from rationale)
+  h20 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: (none — infer from rationale)
+  h21 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: (none — infer from rationale)
+  h22 link (cluster ?): link — adapter implementing an interface (connects, not decides)
+    candidate cores: h12
+  h23 link (cluster ?): link — references a core's symbol (wires it in)
+    candidate cores: h10
+  h24 environment (cluster ?): environment — SQL schema/data migration (trust delegated)
+    candidate cores: h10, h14, h15
+
+Return the JSON array now (one object per NON-CORE hunk).

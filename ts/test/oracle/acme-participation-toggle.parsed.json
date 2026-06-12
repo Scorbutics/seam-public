@@ -1,0 +1,66 @@
+[
+  {
+    "id": "h1",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "85540b4c13883f9dd2f7936e792b3fe6ec6125eb"
+  },
+  {
+    "id": "h2",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export interface PlatformTierState {",
+    "role": null,
+    "text_sha": "ec7c8f6a9ed2bb872c35a8a988f4af7d8539b055"
+  },
+  {
+    "id": "h3",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export function createEmptyTableState(availableTiers: Tier[]): TableState {",
+    "role": null,
+    "text_sha": "a6196035bcbb95a657ce60bae1e345979498b55c"
+  },
+  {
+    "id": "h4",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export function buildTableStateFromSocialMedias(",
+    "role": null,
+    "text_sha": "78b1e2cfb72e23b5ce4fa78ed63080b2261d0dc4"
+  },
+  {
+    "id": "h5",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export function buildTableStateFromSocialMedias(",
+    "role": null,
+    "text_sha": "62ed26f3ccbb668376bd3e1d7d48c60382d86466"
+  },
+  {
+    "id": "h6",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "function tryParseUrl(",
+    "role": null,
+    "text_sha": "e5e637743e7398aceb41d004b43f2c6f07929de9"
+  },
+  {
+    "id": "h7",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export function SocialNetworkSetupTable({",
+    "role": null,
+    "text_sha": "bb2f6acf7461610c6abf7c68876898462e64c703"
+  },
+  {
+    "id": "h8",
+    "file_path": "components/social-network-setup-table.tsx",
+    "change_type": "modify",
+    "section_header": "export function SocialNetworkSetupTable({",
+    "role": null,
+    "text_sha": "9e3d6059059a10e93e5963da760a5fe4cee42081"
+  }
+]

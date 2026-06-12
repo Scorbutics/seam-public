@@ -1,0 +1,317 @@
+You are a STRUCTURING tool for code review. You DECOMPOSE a diff. You do NOT
+review, judge, score, or comment on quality.
+
+Using the whole diff as context, SEAM and ROLE each hunk. You do NOT group hunks
+into intents — intent CLUSTERS are decided in a separate pass; here you only get
+the seams and roles right.
+
+1) SEAM the hunks into core↔link wirings. A seam is ONE core (the new/changed
+   thing) together with the link(s) that wire THAT core into the system. Cores are
+   ANCHORS; links POINT AT the cores they wire — BY HUNK ID. MANY-TO-MANY:
+   - A CORE hunk anchors its own seam. Give it a short `seam_label` (<= 6 words)
+     naming it. The core is identified by ITS OWN hunk id — do NOT invent seam ids.
+     Put `seam_label` ONLY on cores; a core does not list `wires`.
+   - Every LINK (and environment) hunk lists `wires`: the HUNK IDS of the CORE(S)
+     it wires (e.g. "wires":["h5","h12"]). List EVERY core it touches — its FULL
+     FOOTPRINT: a hunk supporting several cores names ALL of them. A truly dangling
+     link has "wires":[]. Reference cores by their GIVEN hunk id; never invent ids,
+     and only wire ids that are actually `core` hunks.
+
+   GROUNDING — wiring is TRACING (which symbol defined here is referenced there),
+   not guessing. Each hunk may carry a `candidates:` line listing other hunk ids it
+   mechanically SHARES A NEW SYMBOL with (one defines it, the other references it),
+   e.g. "candidates: h5 (BoosterRepository)". These are HIGH-PRECISION real
+   references — use them as your FLOOR: when a link references a CORE's new symbol,
+   that candidate IS a wiring (wire it). Two judgements remain YOURS:
+   (a) PRUNE ambient candidates — a shared util/import used everywhere is NOT
+       intent; that hunk is `environment` and may wire nothing. Keep only
+       candidates that carry the change's INTENT.
+   (b) ADD informal wirings the scan can't see — couplings by convention, not by a
+       shared symbol. Candidates are a FLOOR, never a ceiling.
+   Candidates pointing at non-core hunks just tell you those hunks relate; resolve
+   the actual `wires` to the CORE(s) in that neighbourhood.
+
+2) ROLE each hunk. `core` is the SCARCE, expensive role — DEFAULT to link or
+   environment and promote to core only when the hunk clears the bar below. A
+   typical change has only 1–3 cores (the genuinely new logic the change is ABOUT)
+   surrounded by MANY links/environment. If you find yourself marking most hunks
+   core, you are wrong — re-read.
+
+   - core: contains the new DECISION / ALGORITHM / behavioral logic that IS the
+     point of the change. Test: "if this hunk were subtly wrong, would the
+     FEATURE itself be wrong (not just disconnected)?" Only then is it core.
+     SIZE AND SHAPE DO NOT DECIDE ROLE: a one-line guard, a predicate, or a
+     helper-shaped function that encodes a new DECISION — computing WHEN, WHETHER,
+     or WHICH something happens (a rule/policy) — is CORE, even if tiny or
+     utility-looking. A new rule is core no matter how few lines it takes. A
+     constant or config value that DECIDES behavior (a threshold, limit, or policy
+     that changes what the code does) is also core, not passive data.
+   - link: exists to CONNECT the new thing to existing code — call sites, params
+     threaded across layers, signature/interface matches, AND adapter/repository
+     implementations that merely fulfill a contract (a DB query or in-memory store
+     that backs an interface is a LINK, not core — it APPLIES a rule defined
+     elsewhere). An adapter is core ONLY IF its query is the SOLE place a business
+     rule lives — the decision of which/when is expressed nowhere else. Registering
+     a new object into a parent is a link. A guard that merely ROUTES/DISPATCHES by type to wire a new thing
+     in is routing → link; but a guard that DECIDES a behavioral outcome is a
+     rule → core. The line is "decides an outcome" (core) vs "connects" (link).
+     A guard that ENFORCES A POLICY — excludes, filters, or decides eligibility
+     for a behavioral reason ("skip X", "only when Y") — is a rule → CORE, even
+     though it is shaped like a guard. Do not let the guard SHAPE pull it to link.
+   - test: code that VERIFIES the change (unit/integration tests, assertions,
+     fixtures, mocks for tests). A test COVERS the core(s) it exercises — it is
+     NOT the change and NOT a link. Put the HUNK ID(s) of the core(s) it covers in
+     `wires` (this is COVERAGE, not wiring). A test is `test` regardless of how
+     much logic it contains.
+   - environment: ambient SUPPORT, not logic — new type/interface/field
+     declarations, default-initializing a new field, imports/includes, globals,
+     PASSIVE config/data values (inputs CONSUMED by logic defined elsewhere),
+     shared utilities. It introduces NO new decision — only scaffolding or ripple.
+   - noise: formatting/indentation that slipped through — no logical effect.
+
+   Common mistakes to AVOID (these are NOT core): declaring a type/field/interface
+   (environment); importing the new module (environment); implementing a
+   repository/adapter that backs a contract (link); threading a parameter or
+   editing a call site (link); a constructor initializing a new field
+   (environment). Reserve core for the few hunks carrying the actual new logic.
+
+3) SPANS — when ONE hunk genuinely carries MORE THAN ONE role, split it INSIDE
+   the hunk instead of forcing a single label. The hunk's BODY lines are
+   gutter-numbered (e.g. "  3| +foo"); a span names a CONTIGUOUS line range in
+   that numbering. STRONG BIAS: do NOT split. Only emit spans when the roles
+   genuinely DIFFER — never to chop one role into pieces. AT MOST ONE `core` span
+   per hunk; do not invent extra cores just to split. A hunk that is one role
+   end-to-end has NO spans (use the flat role).
+   IMPORTANT: do NOT let leading import/include/require lines decide a hunk's
+   role. When a hunk starts with imports but then adds new LOGIC, the imports are
+   environment and the LOGIC keeps its own role — emit spans (imports = environment,
+   the logic = its real role, often core). Never label the whole hunk environment
+   or link just because it opens with imports.
+
+Return ONLY a JSON array, no prose, no markdown fences. One object per hunk. Do
+NOT emit group/intent — those are derived from your wiring.
+A MONO-ROLE hunk: a core names itself (seam_label, no wires); a link/environment
+lists the core HUNK IDS it wires:
+[{"id":"h1","role":"core","seam_label":"currency gateway","rationale":"<=12 words"},
+ {"id":"h2","role":"link","wires":["h1"],"rationale":"<=12 words"}]
+A FUSED hunk: omit the top-level role and give `spans` (line ranges over the
+gutter numbering); a core span names itself by the hunk's own id:
+[{"id":"h3","spans":[
+    {"role":"environment","lines":"1-4","rationale":"new imports for gateway"},
+    {"role":"core","lines":"5-19","seam_label":"currency gateway","rationale":"new conversion logic"}]}]
+Wire links to cores BY HUNK ID (a link wiring the core in h3 lists "wires":["h3"]).
+The rationale is a STRUCTURING note, never a quality judgement.
+
+=== HUNKS ===
+
+--- HUNK h1 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -3,6 +3,7 @@
+   1|  import React, { useState, useEffect, useRef } from "react"
+   2|  import { Linkedin, Instagram, Facebook, Youtube, ExternalLink, Info, CheckCircle2, AlertCircle, X } from "lucide-react"
+   3|  import { Input } from "@/components/ui/input"
+   4| +import { Switch } from "@/components/ui/switch"
+   5|  import {
+   6|    Popover,
+   7|    PopoverContent,
+
+--- HUNK h2 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -18,11 +19,19 @@ export interface PlatformTierState {
+   1|    username: string
+   2|    accountType: SocialMediaAccountType
+   3|    /**
+   4| -   * Which tiers this network participates in. Since the "Mise en relation" pivot
+   5| -   * (LOT 1b) there is no per-network level: a network participates at the
+   6| -   * member's full billing level whenever it has a link. This map is therefore
+   7| -   * derived — all available tiers when a link is set, none otherwise — and kept
+   8| -   * here only so {@link buildEntries} can still emit one row per (platform, tier).
+   9| +   * Per-network ON/OFF toggle. When OFF, the link is kept but the network is
+  10| +   * excluded from "mise en relation" (Connecter/Contacter). Persisted via
+  11| +   * `member_social_medias.is_active` — the scoring engine already skips inactive
+  12| +   * rows. A network can only be ON when it has a link.
+  13| +   */
+  14| +  enabled: boolean
+  15| +  /**
+  16| +   * Which tiers this network has rows for. Since the "Mise en relation" pivot
+  17| +   * (LOT 1b) there is no per-network level: a network spans the member's full
+  18| +   * billing level whenever it has a link. This map is therefore derived — all
+  19| +   * available tiers when a link is set, none otherwise — and kept here only so
+  20| +   * {@link buildEntries} can still emit one row per (platform, tier). Whether
+  21| +   * those rows are active is driven by {@link enabled}, not by this map.
+  22|     */
+  23|    tiers: Partial<Record<Tier, boolean>>
+  24|  }
+
+--- HUNK h3 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -89,6 +98,7 @@ export function createEmptyTableState(availableTiers: Tier[]): TableState {
+   1|        {
+   2|          username: "",
+   3|          accountType: "personal" as SocialMediaAccountType,
+   4| +        enabled: false,
+   5|          tiers: noTiersEnabled(availableTiers),
+   6|        },
+   7|      ])
+
+--- HUNK h4 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -100,6 +110,9 @@ export function buildTableStateFromSocialMedias(
+   1|    availableTiers: Tier[]
+   2|  ): TableState {
+   3|    const state = createEmptyTableState(availableTiers)
+   4| +  // A platform's rows (one per tier) share the same link and is_active flag; a
+   5| +  // platform counts as ON if any of its rows is active.
+   6| +  const activeByPlatform: Partial<Record<Platform, boolean>> = {}
+   7|    for (const sm of socialMedias) {
+   8|      if (!(sm.platform in state)) continue
+   9|      // Prefer stored username; fall back to parsing from the stored URL for backwards compat
+candidates: h5 (activeByPlatform)
+
+--- HUNK h5 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -111,13 +124,16 @@ export function buildTableStateFromSocialMedias(
+   1|        state[sm.platform].username = parsed.username
+   2|        state[sm.platform].accountType = parsed.accountType
+   3|      }
+   4| +    if (sm.is_active) activeByPlatform[sm.platform] = true
+   5| +    else if (activeByPlatform[sm.platform] === undefined) activeByPlatform[sm.platform] = false
+   6|    }
+   7| -  // Participation = "has a link": any network with a link participates at the
+   8| -  // member's full billing level, regardless of which tiers the legacy rows held.
+   9| +  // A network spans the member's full billing level whenever it has a link
+  10| +  // (drives which tier rows exist); the ON/OFF toggle (is_active) is separate.
+  11| +  // Legacy rows had no toggle, so default ON when the flag is absent.
+  12|    for (const platform of Object.keys(state) as Platform[]) {
+  13| -    state[platform].tiers = state[platform].username.trim()
+  14| -      ? allTiersEnabled(availableTiers)
+  15| -      : noTiersEnabled(availableTiers)
+  16| +    const hasLink = state[platform].username.trim().length > 0
+  17| +    state[platform].tiers = hasLink ? allTiersEnabled(availableTiers) : noTiersEnabled(availableTiers)
+  18| +    state[platform].enabled = hasLink && (activeByPlatform[platform] ?? true)
+  19|    }
+  20|    return state
+  21|  }
+candidates: h4 (activeByPlatform); h6 (hasLink); h7 (hasLink); h8 (hasLink)
+
+--- HUNK h6 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -321,6 +337,32 @@ function tryParseUrl(
+   1|    return parseUsernameFromUrl(platform, normalized)
+   2|  }
+   3|  
+   4| +// --- Participation toggle ---
+   5| +
+   6| +interface ParticipationToggleProps {
+   7| +  platformName: string
+   8| +  enabled: boolean
+   9| +  /** Disabled until a link is present — a network can't be ON without one. */
+  10| +  hasLink: boolean
+  11| +  onToggle: (enabled: boolean) => void
+  12| +}
+  13| +
+  14| +function ParticipationToggle({ platformName, enabled, hasLink, onToggle }: ParticipationToggleProps) {
+  15| +  return (
+  16| +    <div className="flex items-center gap-2">
+  17| +      <Switch
+  18| +        checked={enabled}
+  19| +        disabled={!hasLink}
+  20| +        onCheckedChange={onToggle}
+  21| +        aria-label={`Activer la mise en relation pour ${platformName}`}
+  22| +      />
+  23| +      <span className={`text-xs font-medium ${enabled ? "text-foreground" : "text-muted-foreground"}`}>
+  24| +        {enabled ? "Activé" : "Désactivé"}
+  25| +      </span>
+  26| +    </div>
+  27| +  )
+  28| +}
+  29| +
+  30|  // --- Component ---
+  31|  
+  32|  interface SocialNetworkSetupTableProps {
+candidates: h5 (hasLink); h7 (ParticipationToggle, hasLink); h8 (ParticipationToggle)
+
+--- HUNK h7 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -347,34 +389,54 @@ export function SocialNetworkSetupTable({
+   1|      } else {
+   2|        next[platform] = { ...next[platform], username: rawValue }
+   3|      }
+   4| -    // Participation = "has a link": enable every available tier when a link is
+   5| -    // present, clear them all when it's removed.
+   6| -    next[platform].tiers = next[platform].username.trim()
+   7| -      ? allTiersEnabled(availableTiers)
+   8| -      : noTiersEnabled(availableTiers)
+   9| +    const hasLink = next[platform].username.trim().length > 0
+  10| +    // The link drives which tier rows exist; pasting a link defaults the network
+  11| +    // ON, clearing it turns the toggle off (a network can't be ON without a link).
+  12| +    next[platform].tiers = hasLink ? allTiersEnabled(availableTiers) : noTiersEnabled(availableTiers)
+  13| +    next[platform].enabled = hasLink
+  14| +    onChange(next)
+  15| +  }
+  16| +
+  17| +  function handleToggle(platform: Platform, enabled: boolean) {
+  18| +    const next = { ...value }
+  19| +    next[platform] = { ...next[platform], enabled }
+  20|      onChange(next)
+  21|    }
+  22|  
+  23|    return (
+  24|      <div className="flex flex-col gap-3 md:gap-0">
+  25|        {/* Header — desktop only. The link column is labelled by each field
+  26| -          (with its info bubble), so the header only names the network column. */}
+  27| -      <div className="hidden md:grid md:grid-cols-[160px_1fr] pb-3">
+  28| +          (with its info bubble), so the header names the network and toggle columns. */}
+  29| +      <div className="hidden md:grid md:grid-cols-[160px_1fr_140px] pb-3">
+  30|          <span className="text-sm font-medium text-muted-foreground">Réseau social</span>
+  31| +        <span />
+  32| +        <span className="text-sm font-medium text-muted-foreground text-right">Mise en relation</span>
+  33|        </div>
+  34|  
+  35|        {/* Rows — card on mobile, grid row on desktop */}
+  36|        {visiblePlatforms.map(({ id, name, icon }, rowIndex) => {
+  37|          const row = value[id]
+  38|          const isLast = rowIndex === visiblePlatforms.length - 1
+  39| +        const hasLink = row.username.trim().length > 0
+  40|          return (
+  41|            <div
+  42|              key={id}
+  43| -            className={`flex flex-col gap-3 rounded-xl border border-border/60 p-4 md:grid md:grid-cols-[160px_1fr] md:gap-0 md:rounded-none md:border-x-0 md:border-t-0 md:p-0 md:py-3 ${isLast ? "md:border-b-0" : ""}`}
+  44| +            className={`flex flex-col gap-3 rounded-xl border border-border/60 p-4 md:grid md:grid-cols-[160px_1fr_140px] md:items-center md:gap-0 md:rounded-none md:border-x-0 md:border-t-0 md:p-0 md:py-3 ${isLast ? "md:border-b-0" : ""}`}
+  45|            >
+  46| -            <div className="flex items-center gap-2 text-sm font-medium">
+  47| -              <span className="text-muted-foreground">{icon}</span>
+  48| -              {name}
+  49| +            {/* Network name — on mobile the toggle rides on the right of this row */}
+  50| +            <div className="flex items-center justify-between gap-2 text-sm font-medium md:justify-start">
+  51| +              <span className="flex items-center gap-2">
+  52| +                <span className="text-muted-foreground">{icon}</span>
+  53| +                {name}
+  54| +              </span>
+  55| +              <div className="md:hidden">
+  56| +                <ParticipationToggle
+  57| +                  platformName={name}
+  58| +                  enabled={row.enabled}
+  59| +                  hasLink={hasLink}
+  60| +                  onToggle={(enabled) => handleToggle(id, enabled)}
+  61| +                />
+  62| +              </div>
+  63|              </div>
+  64|              <div className="flex flex-col gap-2 md:px-4 min-w-0">
+  65|                <UsernameField
+candidates: h5 (hasLink); h6 (ParticipationToggle, hasLink); h8 (handleToggle, hasLink)
+
+--- HUNK h8 | file: components/social-network-setup-table.tsx | change: modify ---
+@@ -385,6 +447,15 @@ export function SocialNetworkSetupTable({
+   1|                  onUsernameChange={(u) => handleUsernameChange(id, u)}
+   2|                />
+   3|              </div>
+   4| +            {/* Toggle — desktop only (mobile shows it in the name row above) */}
+   5| +            <div className="hidden md:flex md:justify-end md:pl-4">
+   6| +              <ParticipationToggle
+   7| +                platformName={name}
+   8| +                enabled={row.enabled}
+   9| +                hasLink={hasLink}
+  10| +                onToggle={(enabled) => handleToggle(id, enabled)}
+  11| +              />
+  12| +            </div>
+  13|            </div>
+  14|          )
+  15|        })}
+candidates: h5 (hasLink); h6 (ParticipationToggle); h7 (handleToggle, hasLink)
+
+=== END HUNKS ===
+Return the JSON array now.

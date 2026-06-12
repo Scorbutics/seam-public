@@ -1,0 +1,10 @@
+[
+ {"id":"h1","group":"g1","intent":"per-network participation toggle","role":"environment","wires":["s2"],"rationale":"import Switch (import statement = environment)"},
+ {"id":"h2","group":"g1","intent":"per-network participation toggle","role":"environment","wires":["s1"],"rationale":"adds enabled field to PlatformTierState (field declaration; comment describes behavior, code is a decl)"},
+ {"id":"h3","group":"g1","intent":"per-network participation toggle","role":"environment","wires":["s1"],"rationale":"default-initializes enabled=false (passive init)"},
+ {"id":"h4","group":"g1","intent":"per-network participation toggle","role":"core","seam":"s1","seam_label":"derive network enabled state","rationale":"derives per-platform active state from is_active rows"},
+ {"id":"h5","group":"g1","intent":"per-network participation toggle","role":"core","seam":"s1","seam_label":"derive network enabled state","rationale":"ON rule: enabled = hasLink && active (default ON)"},
+ {"id":"h6","group":"g1","intent":"per-network participation toggle","role":"core","seam":"s2","seam_label":"ParticipationToggle component","spans":[{"role":"environment","lines":"4-13","rationale":"section comment + interface declaration"},{"role":"core","lines":"14-28","seam":"s2","seam_label":"ParticipationToggle component","rationale":"toggle component with disabled={!hasLink} rule"}],"rationale":"new toggle component: interface=env span, function=core span"},
+ {"id":"h7","group":"g1","intent":"per-network participation toggle","role":"core","seam":"s1","seam_label":"derive network enabled state","rationale":"enabled=hasLink rule in handlers (link defaults network ON)"},
+ {"id":"h8","group":"g1","intent":"per-network participation toggle","role":"link","wires":["s2"],"rationale":"mounts <ParticipationToggle> into the table rows (wiring)"}
+]

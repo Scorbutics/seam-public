@@ -1,0 +1,5 @@
+--- a/src/engine.ts
++++ b/src/engine.ts
+@@ -0,0 +1,2 @@
++export class WidgetEngine {}
++export function runWidget() { return 1; }

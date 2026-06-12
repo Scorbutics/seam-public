@@ -1,0 +1,377 @@
+A diff is decomposed into CORES (units of new logic) and EDITS that wire into them.
+
+TASK 1 — group the CORES into SEAMS by TECHNICAL INTENT. A seam is ONE technical intent and may hold SEVERAL cores: cores that are the same logical change/feature (several hunks of one component, or a component + its skeleton/header) share one `seam` key. Give each core that seam key plus a short seam `label` (3-6 words: what the seam DOES, e.g. "webhook form", "loading skeletons") — NOT a symbol name. Distinct intents get distinct seam keys; don't over-merge unrelated cores.
+
+TASK 2 — for each EDIT, draw its true dependency line: which CORES does it ACTUALLY depend on — calls, modifies, is configured/typed by, or routes to — BY MEANING? The 'symbols suggest' line is a HINT from a crude symbol scan, NOT the answer: confirm the ones that are real couplings, DROP any it merely co-renders/co-imports a shared component with, and ADD any real coupling the scan missed. One, several, or NONE; choose only from the CORE ids.
+
+CORES:
+CORE h10  [engine.ts]
+             }
+         }
+ 
++        // Locked injections (LOT 6): official accounts + boosters, per eligible
++        // recipient member. Official members never receive tasks themselves.
++        for (const member of state.members) {
++            if (member.isOfficial || !this.isEligible(member)) continue;
++            if (isPartialRun && !memberIds!.includes(member.id)) continue;
++            if (state.existingTaskMemberIds.has(member.id)) continue;
++            this.injectLockedActions(state, member, taskMap, week);
++        }
++
+         await this.applyDeferredEffects(state);
+         const tasks = Array.from(taskMap.values());
+---
+CORE h12  [missionEngine.ts]
+-import { WeeklyTask } from '../model/weeklyTask.ts';
++import { WeeklyTask, type TargetProfile } from '../model/weeklyTask.ts';
+ import { PairWeightStore } from '../model/pairWeight.ts';
+ import { SubscriptionStore } from '../model/subscriptionStore.ts';
+ import { MemberExclusionStore } from '../model/memberExclusionStore.ts';
+ import { Member } from '../model/member.ts';
+ import { MemberSocialMedia } from '../model/memberSocialMedia.ts';
+-import { Config, CONFIG } from '../config.ts';
++import { Config, CONFIG, Platform } from '../config.ts';
+ import { ScoringPipeline, type ScoredCandidate } from './scoringPipeline.ts';
+ import { type ScoringContext } from './scorers/scorer.ts';
+-import { MissionEngineRepositories } from '../repositories.ts';
++import { MissionEngineRepositories, type BoosterTarget } from '../repositories.ts';
+ import { Engine, type BaseRunState, type EnginePass, type EngineCandidate } from './engine.ts';
+---
+CORE h14  [missionEngine.ts]
+         }
+     }
+ 
++    /**
++     * LOT 6 — inject always-present locked targets for one recipient member:
++     *  A) official accounts (ACME) on networks the member SHARES with them — full
++     *     Connecter→Contacter (subscribe if not yet connected, contact after);
++     *  B) active boosters on networks the member LACKS — single Contacter spotlight.
++     * Both are `locked` (no Masquer; "Passer" still allowed) and bypass scoring/caps.
++     */
++    protected injectLockedActions(state: RunState, member: Member, taskMap: Map<string, WeeklyTask>, week: number): void {
++        const memberPlatforms = new Set<string>(
++            member.socialMedias.filter(sm => sm.isActive).map(sm => sm.platform)
++        );
+---
+CORE h15  [missionEngine.ts]
+         this.subscriptionStore.setAll(await this.repositories.subscription.getAll());
+         this.memberExclusionStore.setAll(await this.repositories.memberExclusion.getAll());
+ 
++        // LOT 6: official accounts (locked, shared networks) + boosters active this week (lacked networks).
++        const officialMembers = members.filter(m => m.isOfficial && m.isActive);
++        const activeBoosters = (await this.repositories.booster.getActive())
++            .filter(b => isBoosterActiveForWeek(b, week, year));
++
+         // Build per-group inbound baseline from tasks already saved for this week,
+         // and collect member IDs that already have persisted tasks (R-02 guard).
+         this.inboundBaseline.clear();
+
+EDITS:
+EDIT h1  [config.ts]  role=environment
+ // Type definitions
+-export type Platform = 'linkedin' | 'instagram' | 'facebook';
++// 'youtube' is a first-class platform but admin-gated in the profile UI (only
++// official/admin accounts set a YouTube URL). It is not part of the peer-matching
++// `enabledPlatforms`; it surfaces via LOT 6 boosters (and official accounts).
++export type Platform = 'linkedin' | 'instagram' | 'facebook' | 'youtube';
+ export type Tier = 'BOOST' | 'BOOST_PLUS' | 'BOOST_MAX';
+ export type BusinessCategory =
+     | 'Tech/SaaS'
+  symbols suggest: (none found)
+---
+EDIT h2  [inMemoryRepositories.ts]  role=link
+     WeeklyTaskRepository,
+     SubscriptionRepository,
+     MemberExclusionRepository,
++    BoosterRepository,
++    BoosterTarget,
+     MissionEngineRepositories
+ } from './repositories.ts';
+ 
+  symbols suggest: h12="BoosterTarget"
+---
+EDIT h3  [inMemoryRepositories.ts]  role=link
+     }
+ }
+ 
++class InMemoryBoosterRepository implements BoosterRepository {
++    constructor(private boosters: BoosterTarget[] = []) {}
++    async getActive(): Promise<BoosterTarget[]> {
++        return [...this.boosters];
++    }
++}
++
+ /**
+- * Creates in-memory repositories for the MissionEngine, pre-populated with the given members.
++ * Creates in-memory repositories for the MissionEngine, pre-populated with the given
++ * members and (optionally) boosters.
+  */
+-export function createMissionEngineInMemoryRepositories(members: Member[]): MissionEngineRepositories {
++export function createMissionEngineInMemoryRepositories(
++    members: Member[],
++    boosters: BoosterTarget[] = []
++): MissionEngineRepositories {
+     return {
+         member: new InMemoryMemberRepository(members),
+         pairWeight: new InMemoryPairWeightRepository(),
+         weeklyTask: new InMemoryWeeklyTaskRepository(),
+  symbols suggest: h12="BoosterTarget", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h4  [member.ts]  role=environment
+     /** Tracks consecutive weeks without engagement — triggers inactivity after the grace period. */
+     consecutiveInactiveWeeks: number;
+     isActive: boolean;
++    /** Official account (e.g. ACME): injected as a LOCKED action on shared networks, excluded from the peer pool. */
++    isOfficial: boolean;
+     /** Week number when this member was created (0 = initial batch). */
+     createdAt: number;
+     /** Pending tier change, applied when `currentWeek >= effectiveWeek`. */
+  symbols suggest: (none found)
+---
+EDIT h5  [member.ts]  role=environment
+         this.socialMedias = [];
+         this.consecutiveInactiveWeeks = 0;
+         this.isActive = true;
++        this.isOfficial = false;
+         this.createdAt = 0;
+         this.subscriptionStartedAt = null;
+         this.tierChangeScheduled = null;
+  symbols suggest: (none found)
+---
+EDIT h6  [weeklyTask.ts]  role=link
+     action?: string;
+     /** How many times to perform the action per target (e.g. 3 for likes). */
+     actionCount?: number;
++    /** LOT 6: official/booster target — always present, cannot be Masqué (only "Passer"). */
++    locked?: boolean;
++    /** LOT 6: set when this target comes from a booster (rendered in the "À la une" strip). */
++    boosterId?: string;
+     /** Final composite score from the scoring pipeline (only present when explainability is on). */
+     finalScore?: number;
+     /** Per-scorer breakdown showing how the final score was computed. */
+  symbols suggest: h12="BoosterTarget"
+---
+EDIT h7  [repositories.ts]  role=environment
+     getAll(): Promise<string[]>;
+ }
+ 
++/**
++ * A booster (LOT 6, mechanism B): a spotlighted member-network profile, enriched
++ * with the referenced social-media profile + the active week window. end* null = permanent.
++ */
++export interface BoosterTarget {
++    id: string;
++    memberSocialMediaId: string;
++    memberId: string;
++    platform: string;
++    profileUrl: string;
++    label: string | null;
++    startWeek: number | null;
++    startYear: number | null;
++    endWeek: number | null;
++    endYear: number | null;
++}
++
++export interface BoosterRepository {
++    /** Load all active boosters (week-window filtering is applied in the engine). */
++    getActive(): Promise<BoosterTarget[]>;
++}
+  symbols suggest: h12="BoosterTarget", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h8  [repositories.ts]  role=link
+     weeklyTask: WeeklyTaskRepository;
+     subscription: SubscriptionRepository;
+     memberExclusion: MemberExclusionRepository;
++    booster: BoosterRepository;
+ }
+  symbols suggest: (none found)
+---
+EDIT h9  [engine.ts]  role=link
+         return member.isActive && member.tier != null;
+     }
+ 
++    /**
++     * Inject always-present "locked" targets for one recipient member after the peer
++     * passes (LOT 6: official accounts on shared networks + boosters on lacked ones).
++     * Default: no-op. Overridden by MissionEngine.
++     */
++    // eslint-disable-next-line @typescript-eslint/no-unused-vars
++    protected injectLockedActions(_state: T, _member: Member, _taskMap: Map<string, WeeklyTask>, _week: number): void { /* no-op */ }
++
+     // ── Concrete methods ──
+ 
+     /** Toggle per-scorer breakdown in all pass pipelines (for reporting / debugging). */
+  symbols suggest: h10="Engine", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h11  [engine.ts]  role=link
+ 
+         for (const member of state.members) {
+             if (!this.isEligible(member)) continue;
++            if (member.isOfficial) continue; // official accounts are injected, never peer-matched
+ 
+             const seenPlatforms = new Set<string>();
+             for (const sm of member.socialMedias) {
+  symbols suggest: h10="Engine", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h13  [missionEngine.ts]  role=link
+     memberSocialMediaIndex: Map<string, MemberSocialMedia>;
+     /** Pair weight increments deferred until after the loop to avoid intra-run bias. */
+     pendingPairWeightIncrements: Array<[string, string]>;
++    /** Official (ACME) accounts — injected as locked actions on shared networks (LOT 6). */
++    officialMembers: Member[];
++    /** Boosters active for the current generation week — injected on lacked networks (LOT 6). */
++    activeBoosters: BoosterTarget[];
+ }
+ 
+ /**
+  symbols suggest: h10="Engine", h12="BoosterTarget", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h16  [missionEngine.ts]  role=link
+             memberLookup,
+             memberSocialMediaIndex,
+             pendingPairWeightIncrements: [],
++            officialMembers,
++            activeBoosters,
+             week,
+             year,
+             existingTaskMemberIds,
+  symbols suggest: h10="Engine", h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h17  [missionEngine.test.ts]  role=test
+         expect(t0.platformTasks['linkedin_CONTACT'].targets[0].action).toBe('contact');
+     });
+ });
++
++describe('MissionEngine — LOT 6: official accounts (locked) + boosters', () => {
++    it('injects the official account as a LOCKED Connecter on shared networks and excludes it from the peer pool', async () => {
++        const members = createMembers(4, 'linkedin'); // m_linkedin_0..3
++        const acme = new Member('acme', 'BOOST', 'Tech/SaaS');
++        acme.addSocialMedia('linkedin', 'https://linkedin.com/acme');
++        acme.addSocialMedia('youtube', 'https://youtube.com/@acme');
++        acme.isOfficial = true;
++
++        const repos = createMissionEngineInMemoryRepositories([...members, acme]);
++        const engine = new MissionEngine(repos);
++        const tasks = await engine.generate(1);
++
++        // Official never gets its own task.
++        expect(tasks.find(t => t.memberId === 'acme')).toBeUndefined();
++
++        for (const m of members) {
++            const task = tasks.find(t => t.memberId === m.id)!;
++            const connect = task.platformTasks['linkedin_CONNECT'].targets;
++            // Locked official target present on the shared network (linkedin)…
++            const official = connect.find(t => t.memberId === 'acme');
+  symbols suggest: h14="MissionEngine", h15="MissionEngine"
+---
+EDIT h18  [index.ts]  role=link
+     SupabasePairWeightRepository,
+     SupabaseWeeklyTaskRepository,
+     SupabaseSubscriptionRepository,
+-    SupabaseMemberExclusionRepository
++    SupabaseMemberExclusionRepository,
++    SupabaseBoosterRepository
+ } from "../scoring-cycle/repositories.ts"
+ import { corsHeaders, handleCors } from "../_shared/cors.ts"
+ import { getCurrentIsoWeek, getIsoWeekYear } from "../_shared/iso-week.ts"
+  symbols suggest: (none found)
+---
+EDIT h19  [index.ts]  role=link
+             weeklyTask: new SupabaseWeeklyTaskRepository(serviceClient),
+             subscription: new SupabaseSubscriptionRepository(serviceClient),
+             memberExclusion: new SupabaseMemberExclusionRepository(serviceClient),
++            booster: new SupabaseBoosterRepository(serviceClient),
+         }
+ 
+         // Check if member is temporarily paused
+  symbols suggest: (none found)
+---
+EDIT h20  [index.ts]  role=link
+     SupabasePairWeightRepository,
+     SupabaseWeeklyTaskRepository,
+     SupabaseSubscriptionRepository,
+-    SupabaseMemberExclusionRepository
++    SupabaseMemberExclusionRepository,
++    SupabaseBoosterRepository
+ } from "./repositories.ts"
+ import { sendEmail } from "../_shared/email/mailer.ts"
+ import { generateWeeklyMissionEmail } from "../_shared/email/templates.ts"
+  symbols suggest: (none found)
+---
+EDIT h21  [index.ts]  role=link
+         pairWeight: new SupabasePairWeightRepository(serviceClient),
+         weeklyTask: new SupabaseWeeklyTaskRepository(serviceClient),
+         subscription: new SupabaseSubscriptionRepository(serviceClient),
+-        memberExclusion: new SupabaseMemberExclusionRepository(serviceClient)
++        memberExclusion: new SupabaseMemberExclusionRepository(serviceClient),
++        booster: new SupabaseBoosterRepository(serviceClient)
+     }
+ 
+     // Initialize Engine
+  symbols suggest: (none found)
+---
+EDIT h22  [repositories.ts]  role=link
+     WeeklyTaskRepository,
+     SubscriptionRepository,
+     MemberExclusionRepository,
++    BoosterRepository,
++    BoosterTarget,
+ } from "@scoring/repositories.ts";
+ import type { WeightStats } from "@scoring/model/pairWeight.ts";
+ 
++/** LOT 6: loads active boosters joined with their referenced social-media profile. */
++export class SupabaseBoosterRepository implements BoosterRepository {
++    constructor(private supabase: any) { }
++
++    async getActive(): Promise<BoosterTarget[]> {
++        const { data, error } = await this.supabase
++            .from('boosters')
++            .select('id, label, start_week, start_year, end_week, end_year, member_social_medias!inner(id, member_id, platform, profile_url)')
++            .eq('is_active', true);
++        if (error) throw error;
++        return (data as any[]).map(row => {
++            const sm = row.member_social_medias;
++            return {
++                id: row.id,
++                memberSocialMediaId: sm.id,
++                memberId: sm.member_id,
+  symbols suggest: h12="BoosterTarget"
+---
+EDIT h23  [repositories.ts]  role=link
+     private mapToModel(row: any): Member {
+         const member = new Member(row.id, row.tier as any, row.business_category as any);
+         member.isActive = row.is_active;
++        member.isOfficial = row.is_official ?? false;
+         member.firstName = row.first_name ?? undefined;
+         member.lastName = row.last_name ?? undefined;
+         member.company = row.company ?? undefined;
+  symbols suggest: (none found)
+---
+EDIT h24  [20260602000067_official_accounts_and_boosters.sql]  role=environment
++-- Migration 067: Official accounts (ACME) + boosters (LOT 6).
++-- Date: 2026-06-02
++-- Purpose: "Mise en relation" pivot, LOT 6 — two mechanisms:
++--   A) Official accounts: members flagged is_official are force-injected into every
++--      eligible member's weekly task as a LOCKED Connecter/Contacter target on the
++--      networks they share (handled in the scoring engine). Official members are
++--      kept out of the normal peer pool.
++--   B) Boosters: admin-managed, time-windowed spotlights of a member's network
++--      profile, injected for every member on platforms they LACK (single Contacter
++--      + NON). end_week NULL = permanent (e.g. the ACME headline).
++
++-- ── A) Official flag ────────────────────────────────────────────────────────
++ALTER TABLE members
++  ADD COLUMN IF NOT EXISTS is_official boolean NOT NULL DEFAULT false;
++
++COMMENT ON COLUMN members.is_official IS
++  'Official account (e.g. ACME). Injected as a LOCKED action on shared networks; '
++  'excluded from the normal peer candidate pool and never generates its own tasks.';
++
++-- ── B) Boosters ─────────────────────────────────────────────────────────────
++CREATE TABLE IF NOT EXISTS boosters (
++  id                     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
++  -- The member network profile to spotlight (carries platform + profile_url + owner).
++  member_social_media_id uuid NOT NULL REFERENCES member_social_medias(id) ON DELETE CASCADE,
+  symbols suggest: h14="MissionEngine"
+
+Output ONLY a JSON array. Per CORE: {"id":"h8","seam":"S1","label":"…"}. Per EDIT: {"id":"h6","wires":["h8", …]}.

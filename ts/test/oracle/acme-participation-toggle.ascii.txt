@@ -1,0 +1,19 @@
+Seam · 8 hunks → 1 clusters · 3 seams · 4 cores  (roles: core 4  link 1  env 3)
+◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
+
+◆ g1  hasLink
+├─ ▣ h4  activeByPlatform    ⚠ untested · ↔ h6,h7
+│  ├─ ◆ core social-network-setup-table.tsx:110   defines activeByPlatform
+│  ├─ ◆ core social-network-setup-table.tsx:124   defines activeByPlatform
+│  ├─ → link social-network-setup-table.tsx:447   wires: ParticipationToggle, SocialNetworkSetupTable
+│  ├─ ∙ env  social-network-setup-table.tsx:19   no logic or wiring detected (uncertain)
+│  └─ ∙ env  social-network-setup-table.tsx:98   wires: SocialNetworkSetupTable
+├─ ▣ h6  ParticipationToggle    ⚠ untested · ↔ h4,h7
+│  ├─ ◆ core social-network-setup-table.tsx:337   defines ParticipationToggle
+│  ├─ ∙ env  social-network-setup-table.tsx:3   imports wiring the change in
+│  ├─ → link social-network-setup-table.tsx:433   (here: link) defines SocialNetworkSetupTable
+│  └─ → link social-network-setup-table.tsx:452   wires: activeByPlatform, SocialNetworkSetupTable
+└─ ▣ h7  SocialNetworkSetupTable    ⚠ untested · ↔ h4,h6
+   ├─ ◆ core social-network-setup-table.tsx:389   defines SocialNetworkSetupTable
+   ├─ ∙ env  social-network-setup-table.tsx:98   wires: activeByPlatform
+   └─ → link social-network-setup-table.tsx:455   wires: activeByPlatform, ParticipationToggle

@@ -1,0 +1,177 @@
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "intent g1",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "s-ambient",
+          "label": "intent g1",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h1",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 3,
+              "end": 9,
+              "role": "environment",
+              "confidence": 1,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h4",
+                "h6"
+              ]
+            },
+            {
+              "id": "h2",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 19,
+              "end": 37,
+              "role": "environment",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h4",
+                "h6"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "intent": "intent g2",
+      "colorIndex": 1,
+      "seams": [
+        {
+          "id": "h4",
+          "label": "buildTableStateFromSocialMedias",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [
+            "isolated-core"
+          ],
+          "hunks": [
+            {
+              "id": "h4",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 110,
+              "end": 118,
+              "role": "core",
+              "confidence": 0.65,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h5",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 124,
+              "end": 139,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h3",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 98,
+              "end": 104,
+              "role": "environment",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h4",
+                "h6"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "intent": "intent g3",
+      "colorIndex": 2,
+      "seams": [
+        {
+          "id": "h6",
+          "label": "tryParseUrl",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [
+            "isolated-core"
+          ],
+          "hunks": [
+            {
+              "id": "h6",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 337,
+              "end": 368,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h7",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 389,
+              "end": 442,
+              "role": "core",
+              "confidence": 0.65,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g4",
+      "intent": "intent g4",
+      "colorIndex": 3,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "intent g4",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h8",
+              "file": "components/social-network-setup-table.tsx",
+              "start": 447,
+              "end": 461,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "suggestedWires": [
+                "h4"
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tests": [],
+  "noise": []
+}

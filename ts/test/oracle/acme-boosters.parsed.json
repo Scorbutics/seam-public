@@ -1,0 +1,194 @@
+[
+  {
+    "id": "h1",
+    "file_path": "supabase/functions/_shared/scoring/src/config.ts",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "14a0be8cc5bc9684a111a061971d0c1283c40acf"
+  },
+  {
+    "id": "h2",
+    "file_path": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts",
+    "change_type": "modify",
+    "section_header": "import type {",
+    "role": null,
+    "text_sha": "344eee2210401f4dacb23751afe398af13303ad8"
+  },
+  {
+    "id": "h3",
+    "file_path": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts",
+    "change_type": "modify",
+    "section_header": "class InMemoryMemberExclusionRepository implements MemberExclusionRepository {",
+    "role": null,
+    "text_sha": "a1e44646d162ea4da85927ca037afd859d8b1e30"
+  },
+  {
+    "id": "h4",
+    "file_path": "supabase/functions/_shared/scoring/src/model/member.ts",
+    "change_type": "modify",
+    "section_header": "export class Member {",
+    "role": null,
+    "text_sha": "cf473592692aee17f508484788237475c37dda89"
+  },
+  {
+    "id": "h5",
+    "file_path": "supabase/functions/_shared/scoring/src/model/member.ts",
+    "change_type": "modify",
+    "section_header": "export class Member {",
+    "role": null,
+    "text_sha": "2ecefe5e4ea54558e82af43d95b2f15dfe4f3f49"
+  },
+  {
+    "id": "h6",
+    "file_path": "supabase/functions/_shared/scoring/src/model/weeklyTask.ts",
+    "change_type": "modify",
+    "section_header": "export interface TargetProfile {",
+    "role": null,
+    "text_sha": "72b52d23c55c6ef7d3eb555903390795a5003341"
+  },
+  {
+    "id": "h7",
+    "file_path": "supabase/functions/_shared/scoring/src/repositories.ts",
+    "change_type": "modify",
+    "section_header": "export interface MemberExclusionRepository {",
+    "role": null,
+    "text_sha": "7d77dbfa28c878be3a985c1ae93d80a4ef1ebc06"
+  },
+  {
+    "id": "h8",
+    "file_path": "supabase/functions/_shared/scoring/src/repositories.ts",
+    "change_type": "modify",
+    "section_header": "export interface MissionEngineRepositories {",
+    "role": null,
+    "text_sha": "b376d912699d58382c1d0f3b28b24a4d4aec4c2f"
+  },
+  {
+    "id": "h9",
+    "file_path": "supabase/functions/_shared/scoring/src/services/engine.ts",
+    "change_type": "modify",
+    "section_header": "export abstract class Engine<T extends BaseRunState> {",
+    "role": null,
+    "text_sha": "d2b628335018b709052e9b699df1ab56497d0353"
+  },
+  {
+    "id": "h10",
+    "file_path": "supabase/functions/_shared/scoring/src/services/engine.ts",
+    "change_type": "modify",
+    "section_header": "export abstract class Engine<T extends BaseRunState> {",
+    "role": null,
+    "text_sha": "c10475a3f0feb66e398e229639e3300a88e1a9f5"
+  },
+  {
+    "id": "h11",
+    "file_path": "supabase/functions/_shared/scoring/src/services/engine.ts",
+    "change_type": "modify",
+    "section_header": "export abstract class Engine<T extends BaseRunState> {",
+    "role": null,
+    "text_sha": "b8b2e07670926da0ee883f97dd7e0c73a792a60a"
+  },
+  {
+    "id": "h12",
+    "file_path": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+    "change_type": "modify",
+    "section_header": "",
+    "role": null,
+    "text_sha": "a30c22d7e83af342a31d7744ec3444950c43c59b"
+  },
+  {
+    "id": "h13",
+    "file_path": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+    "change_type": "modify",
+    "section_header": "interface RunState extends BaseRunState {",
+    "role": null,
+    "text_sha": "df6a27ac64b4a2aa611ec248e5824b8040a14e5f"
+  },
+  {
+    "id": "h14",
+    "file_path": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+    "change_type": "modify",
+    "section_header": "export class MissionEngine extends Engine<RunState> {",
+    "role": null,
+    "text_sha": "031e6a6faf824a3fd94572988ade2f927463c565"
+  },
+  {
+    "id": "h15",
+    "file_path": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+    "change_type": "modify",
+    "section_header": "export class MissionEngine extends Engine<RunState> {",
+    "role": null,
+    "text_sha": "c94c6edaaf550c25f702ef13a96d2f40979e5369"
+  },
+  {
+    "id": "h16",
+    "file_path": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+    "change_type": "modify",
+    "section_header": "export class MissionEngine extends Engine<RunState> {",
+    "role": null,
+    "text_sha": "6c6af7265d3a9ba5e2917c24ed0ba7cbd8d2e7e4"
+  },
+  {
+    "id": "h17",
+    "file_path": "supabase/functions/_shared/scoring/src/tests/unit/services/missionEngine.test.ts",
+    "change_type": "modify",
+    "section_header": "describe('MissionEngine \u2014 action types', () => {",
+    "role": null,
+    "text_sha": "69e6698724f9ebf7752d1da70cdf1b8c8ce571cb"
+  },
+  {
+    "id": "h18",
+    "file_path": "supabase/functions/generate-member-missions/index.ts",
+    "change_type": "modify",
+    "section_header": "import {",
+    "role": null,
+    "text_sha": "39ce84b15931e0c14ab7063e95d5f99a2434f7d8"
+  },
+  {
+    "id": "h19",
+    "file_path": "supabase/functions/generate-member-missions/index.ts",
+    "change_type": "modify",
+    "section_header": "Deno.serve(async (req: Request) => {",
+    "role": null,
+    "text_sha": "33c12aa38529d4daacf1b0e6593a1aefb705cf8e"
+  },
+  {
+    "id": "h20",
+    "file_path": "supabase/functions/scoring-cycle/index.ts",
+    "change_type": "modify",
+    "section_header": "import {",
+    "role": null,
+    "text_sha": "0a67eddd45931447b524dd12dcf32c6183ba8a83"
+  },
+  {
+    "id": "h21",
+    "file_path": "supabase/functions/scoring-cycle/index.ts",
+    "change_type": "modify",
+    "section_header": "Deno.serve(withAdminAuth(async (req: Request, { serviceClient }: AdminAuthContex",
+    "role": null,
+    "text_sha": "949a5e153b9c4d2997364a16916d02556691aae5"
+  },
+  {
+    "id": "h22",
+    "file_path": "supabase/functions/scoring-cycle/repositories.ts",
+    "change_type": "modify",
+    "section_header": "import type {",
+    "role": null,
+    "text_sha": "35dd92c7225e89b12bcb870cd633b8464bd94404"
+  },
+  {
+    "id": "h23",
+    "file_path": "supabase/functions/scoring-cycle/repositories.ts",
+    "change_type": "modify",
+    "section_header": "export class SupabaseMemberRepository implements MemberRepository {",
+    "role": null,
+    "text_sha": "5979f655fbf3cbc7654f3f13d25316716a14dba1"
+  },
+  {
+    "id": "h24",
+    "file_path": "supabase/migrations/20260602000067_official_accounts_and_boosters.sql",
+    "change_type": "add",
+    "section_header": "",
+    "role": null,
+    "text_sha": "867f3bbb052ed9a3fc1be5260d49911959248656"
+  }
+]

@@ -8,11 +8,13 @@ report*.html
 *.reply.txt
 .seam-session-graph.json
 
-# diffs fed to the tool (keep the sample fixture, the curated demo samples, and eval cases)
+# diffs fed to the tool (keep the sample fixture, the curated demo samples, eval cases, and TS test fixtures)
 *.patch
 !sample.patch
 !samples/*.patch
 !eval/cases/*.patch
+!ts/test/cases/*.patch
+!ts/test/fixtures/**/*.patch
 
 # eval harness: cached LLM generations are reproducible, don't track them
 eval/_runs/
