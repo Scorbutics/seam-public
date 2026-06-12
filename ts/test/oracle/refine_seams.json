@@ -1,0 +1,270 @@
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "PaymentService",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "PaymentService.charge",
+          "label": "process charges",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "c2",
+              "file": "src/admin.ts",
+              "start": 1,
+              "end": 4,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "admin",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "c1",
+              "file": "src/checkout.ts",
+              "start": 1,
+              "end": 4,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "checkout",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "PaymentService",
+              "file": "src/payment/service.ts",
+              "start": 0,
+              "end": 5,
+              "role": "core",
+              "confidence": 1.0,
+              "label": "PaymentService",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "PaymentService.charge",
+              "file": "src/payment/service.ts",
+              "start": 2,
+              "end": 2,
+              "role": "core",
+              "confidence": 1.0,
+              "label": "charge",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "c3",
+              "file": "src/untraced.ts",
+              "start": 0,
+              "end": 0,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "untraced",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ],
+          "proposedBy": "llm",
+          "selected": false,
+          "suggested": false
+        },
+        {
+          "id": "PaymentService.refund",
+          "label": "handle refunds",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "c2",
+              "file": "src/admin.ts",
+              "start": 1,
+              "end": 4,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "admin",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "PaymentService",
+              "file": "src/payment/service.ts",
+              "start": 0,
+              "end": 5,
+              "role": "core",
+              "confidence": 1.0,
+              "label": "PaymentService",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "PaymentService.refund",
+              "file": "src/payment/service.ts",
+              "start": 3,
+              "end": 3,
+              "role": "core",
+              "confidence": 1.0,
+              "label": "refund",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "call:c3:PaymentService",
+              "file": "src/untraced.ts",
+              "start": 0,
+              "end": 0,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "untraced",
+              "caller": true,
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ],
+          "proposedBy": "llm",
+          "selected": false,
+          "suggested": false
+        }
+      ]
+    }
+  ],
+  "tests": [],
+  "noise": [],
+  "mode": "codebase",
+  "selectedSeam": "",
+  "anchor": "PaymentService",
+  "resolutionQuality": "FULL",
+  "language": "typescript",
+  "complete": true,
+  "seamEdges": [],
+  "edges": [
+    {
+      "from": "PaymentService.charge",
+      "to": "PaymentService",
+      "kind": "contains",
+      "provenance": "RESOLVED_FULL",
+      "line": 0
+    },
+    {
+      "from": "PaymentService.refund",
+      "to": "PaymentService",
+      "kind": "contains",
+      "provenance": "RESOLVED_FULL",
+      "line": 0
+    },
+    {
+      "from": "c1",
+      "to": "PaymentService.charge",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "line": 3
+    },
+    {
+      "from": "c2",
+      "to": "PaymentService.charge",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "line": 2
+    },
+    {
+      "from": "c2",
+      "to": "PaymentService.refund",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "line": 3
+    },
+    {
+      "from": "c3",
+      "to": "PaymentService",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "line": 0
+    }
+  ],
+  "seamContracts": [
+    {
+      "seamA": "PaymentService.charge",
+      "seamB": "PaymentService.refund",
+      "links": [
+        {
+          "from": "c2",
+          "to": "PaymentService.charge",
+          "kind": "reference",
+          "provenance": "RESOLVED_FULL",
+          "line": 2
+        },
+        {
+          "from": "c2",
+          "to": "PaymentService.refund",
+          "kind": "reference",
+          "provenance": "RESOLVED_FULL",
+          "line": 3
+        },
+        {
+          "from": "c3",
+          "to": "PaymentService",
+          "kind": "reference",
+          "provenance": "RESOLVED_FULL",
+          "line": 0
+        }
+      ],
+      "blurry": false
+    }
+  ],
+  "blindspots": [
+    {
+      "node": "PaymentService",
+      "mechanism": "untraced-or-unused-methods",
+      "evidence": "1 of 3 methods have no traced consumer (unused, or used via an instance we couldn't trace): audit",
+      "candidates": []
+    },
+    {
+      "node": "PaymentService",
+      "mechanism": "method-unattributed-consumers",
+      "evidence": "1 consumer(s) import PaymentService as a RESOLVED reference but no method call could be attributed to an instance (factory/DI/dynamic): src/untraced.ts",
+      "candidates": []
+    }
+  ],
+  "unresolved": [],
+  "health": {
+    "cores": 3,
+    "links": 3,
+    "environment": 0,
+    "isolated_cores": 0,
+    "dangling_links": 0,
+    "link_only": false,
+    "unresolved": 0,
+    "blindspots": 2
+  }
+}

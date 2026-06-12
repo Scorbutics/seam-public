@@ -181,6 +181,108 @@ export function assign_intent_seams(g: Graph): Seam[] {
   return _sweep_leftovers(g, seams, adj);
 }
 
+// --------------------------------------------------------------------------- F4: LLM refine / relevance
+import { run_pass, ClassifierError as LLMError } from "../core/llm.js";
+
+function _build_refine_prompt(g: Graph, members: Node[], floorOf: Map<string, string>, uses: Map<string, string[]>, intent?: string): string {
+  const anchorSym = g.nodes.has(g.anchor) ? g.nodes.get(g.anchor)!.label : g.anchor;
+  const lines = [
+    `A code symbol \`${anchorSym}\` has these MEMBERS (carriers). Group them into technical-intent`,
+    "SEAMS (one or more members that serve the same purpose) and NAME each intent (3-6 words).",
+    "A deterministic FLOOR grouping is given as a starting point — keep it unless the big picture",
+    "says merge or split. Use ONLY the member ids listed; invent nothing.",
+    "",
+    "MEMBERS (id [floor-group]: symbol):",
+  ];
+  for (const m of members) lines.push(`  ${m.id} [${floorOf.get(m.id) ?? "?"}]: ${m.label}`);
+  lines.push("\nCONSUMERS (who uses which members — members used together suggest one intent):");
+  for (const [cid, used] of uses) if (used.length) lines.push(`  ${g.nodes.get(cid)!.label} → ${used.join(", ")}`);
+  if (intent) {
+    lines.push(`\nThe user is asking: "${intent}". On the members of the ONE seam that best answers that question, set "match": true (leave it false/absent on all others).`);
+    lines.push("\nOutput ONLY a JSON array, one object per MEMBER:");
+    lines.push('[{"id":"<member id>","seam":"S1","label":"<intent name>","match":false}]');
+  } else {
+    lines.push("\nOutput ONLY a JSON array, one object per MEMBER:");
+    lines.push('[{"id":"<member id>","seam":"S1","label":"<intent name>"}]');
+  }
+  return lines.join("\n");
+}
+
+export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: string; model?: string; claudeBin?: string | null } = {}): Seam[] {
+  const anchor = g.anchor;
+  const anchorNode = g.nodes.get(anchor);
+  if (!anchorNode) return floorSeams;
+  const members = [...g.nodes.values()].filter((n) => n.role === "core" && n.id !== anchor && n.enclosing === anchorNode.label);
+  if (members.length < 2) return floorSeams;
+  const consumers = [...g.nodes.values()].filter((n) => n.role === "link");
+  const adj = undirected_adjacency(g.resolved_edges());
+  const cset = new Set(members.map((m) => m.id));
+  const uses = new Map<string, string[]>(consumers.map((c) => [c.id, [...inter(cset, adj.get(c.id) ?? new Set())].sort()]));
+  const floorOf = new Map<string, string>();
+  for (const s of floorSeams) for (const nid of s.node_ids) if (cset.has(nid)) floorOf.set(nid, s.id);
+
+  let out: Map<string, any>;
+  try { out = run_pass(_build_refine_prompt(g, members, floorOf, uses, opts.intent), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-refine" }); }
+  catch (e) { if (e instanceof LLMError) return floorSeams; throw e; }
+
+  const grouping = new Map<string, string>();
+  const labels = new Map<string, string>();
+  const matchVotes = new Map<string, number>();
+  for (const [cid, obj] of out) {
+    if (cset.has(cid) && obj && typeof obj === "object") {
+      const sk = String(obj.seam ?? "").trim();
+      if (sk) {
+        grouping.set(cid, sk);
+        const lab = String(obj.label ?? "").trim();
+        if (lab && !labels.has(sk)) labels.set(sk, lab);
+        if (opts.intent && [true, "true", "True", 1].includes(obj.match)) matchVotes.set(sk, (matchVotes.get(sk) ?? 0) + 1);
+      }
+    }
+  }
+  if (!grouping.size) return floorSeams;
+  for (const m of members) if (!grouping.has(m.id)) grouping.set(m.id, floorOf.get(m.id) ?? m.id);
+  let selectedSk: string | null = null, best = -1;
+  for (const [sk, v] of matchVotes) if (v > best) { best = v; selectedSk = sk; }
+
+  const bySeam = new Map<string, string[]>();
+  for (const [cid, sk] of grouping) { if (!bySeam.has(sk)) bySeam.set(sk, []); bySeam.get(sk)!.push(cid); }
+  const seams: Seam[] = [];
+  for (const [sk, cids] of bySeam) {
+    const cs = new Set(cids);
+    const cons = consumers.filter((c) => inter(cs, new Set(uses.get(c.id))).size).map((c) => c.id);
+    const rep = maxBy(cids.map((c) => g.nodes.get(c)!), (n) => n.complexity);
+    const seam = _mk_seam(rep.id, labels.get(sk) || rep.label, [anchor, ...[...cids].sort(), ...cons], false, "llm");
+    if (sk === selectedSk) seam.selected = true;
+    seams.push(seam);
+  }
+  return _sweep_leftovers(g, seams, adj);
+}
+
+function _relevance_prompt(intent: string, cores: Node[], links: Node[]): string {
+  const lines = [`A developer is mapping the code that answers: "${intent}".`, "", "FOCUS — the core code this question is about:"];
+  for (const n of cores.slice(0, 30)) lines.push(`  ${n.label}  (${n.file})`);
+  lines.push("", "CANDIDATE WIRING — code reached while mapping the question. For EACH, decide if it is ON",
+    "the path to answering it (relevant), or INCIDENTAL — connected but not part of the answer",
+    "(session/auth setup, logging, config, generic utilities, an unrelated sibling import):");
+  for (const n of links) lines.push(`  ${n.id}: ${n.label}  (${n.file})`);
+  lines.push("", "Default to relevant when unsure; mark incidental ONLY when clearly off the answer path.",
+    "Output ONLY a JSON array, one object per candidate:", '[{"id":"<id>","relevant":true|false}]');
+  return lines.join("\n");
+}
+
+export function mark_relevance_llm(g: Graph, intent: string, opts: { model?: string; claudeBin?: string | null } = {}): void {
+  const links = [...g.nodes.values()].filter((n) => n.role === "link");
+  if (!intent || !links.length) return;
+  const cores = [...g.nodes.values()].filter((n) => n.role === "core");
+  let out: Map<string, any>;
+  try { out = run_pass(_relevance_prompt(intent, cores, links), { model: opts.model, claudeBin: opts.claudeBin, tag: "relevance" }); }
+  catch (e) { if (e instanceof LLMError) return; throw e; }
+  for (const n of links) {
+    const obj = out.get(n.id);
+    if (obj && typeof obj === "object" && [false, "false", "False", 0].includes(obj.relevant)) n.relevant = false;
+  }
+}
+
 // --------------------------------------------------------------------------- detect_* (C3)
 import { walk as repoWalk } from "../core/resolve/walk.js";
 const _DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
@@ -319,7 +421,10 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
     await detect_consumer_feeds(g, opts.repo);
   }
   let seams = assign_intent_seams(g);
-  // LLM refine/relevance (use_llm) land in C5.
+  if (opts.useLlm) {                                  // F4: the LLM refines/names the partition (proposed)
+    seams = refine_seams_llm(g, seams, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin });
+    if (opts.intent) mark_relevance_llm(g, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
+  }
   seams = _extract_suggested_seams(g, seams);
   const health = wellformedness(g);
   return emit_seams(g, health, seams);

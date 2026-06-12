@@ -114,7 +114,18 @@ async function runCodebase(a: Args): Promise<number> {
   const g = from_resolved_graph(data);
   if (!g.nodes.size) err("resolved graph has no nodes");
   const useLlm = a.classifier === "llm" || a.classifier === "hybrid";
-  const model: any = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
+  // Host-served LLM (skill / verification): same emit-prompts/inject-llm contract as diff mode.
+  if (a.emitPrompts) set_host_bus(new HostBus());
+  else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
+  let model: any, recorded: HostBus["recorded"] | undefined;
+  try { model = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin }); }
+  finally { if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); } }
+  if (a.emitPrompts) {
+    const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
+    writeFileSync(a.emitPrompts, JSON.stringify({ version: 1, source: { scan: a.scan, graph: a.graph ?? null, repo: a.repo }, passes }, null, 2));
+    process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
+    return 0;
+  }
 
   const counts = new Map<string, number>();
   for (const n of g.nodes.values()) counts.set(n.role, (counts.get(n.role) ?? 0) + 1);
