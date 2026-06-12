@@ -151,7 +151,14 @@ with codebase mode. Until then `lsp|auto` degrade to the floor (a stderr note), 
 - **C3** — `atoms.ts` (web-tree-sitter substrate) + `detect_*` (subcores, contract+feeds, dynamic-
   import blindspots). `decompose` is async (awaits the tree-sitter passes when `--repo` is set).
   Byte-identical to Python on a TSX fixture repo exercising all four. ✅
-- **C4** — `import_scan` front (build_consumers/module/dependency/class graphs) + the `--scan` CLI. ⏳
+- **C4** — `import_scan` front. ⏳ **single-symbol** (`build_resolved_graph`), **class anchor**
+  (`build_class_graph` + per-method attribution via the instance-aware heuristic), and **module
+  anchor** (`build_module_graph` + co-occurrence) are ported & byte-identical to Python
+  (`test/import_scan.test.ts`). End-to-end scan→decompose→emit-seams verified for the class anchor.
+  Remaining: interface call-sites (`build_callsite_graph`), DOWN dependency graph
+  (`build_dependency_graph`), depth-2 ripple (`_depth2_ripple`), and the `--scan` CLI dispatch.
+  *Note: the Python codebase decompose has set-order nondeterminism on complexity-tied carriers; the
+  TS port is fully deterministic, so codebase decompose oracles are pinned with `PYTHONHASHSEED=0`.*
 - **C5** — `anchor_rank`, `expand`, `orchestrate`, `string_coupling`, `llm_discovery` + LLM refine/relevance.
 - **C6** — headless LSP resolver (worker+Atomics sync bridge) for `--resolver lsp|auto`.
 - Wire the codebase CLI dispatch (`--scan`/`--graph`/`--emit-graph`) + the extension's codebase commands.
