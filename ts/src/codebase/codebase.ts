@@ -76,7 +76,7 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
-function _is_crossing(e: Edge): boolean {
+export function _is_crossing(e: Edge): boolean {
   return e.kind === "dispatch" || e.provenance === Provenance.SUGGESTED;
 }
 

@@ -1,0 +1,20 @@
+A developer asks: "q". You are GROWING a code footprint to answer it.
+
+Current footprint (symbol — role — file):
+  a — core — a.ts
+  b — link — b.ts   ⤳ SUGGESTED CROSSING
+
+Pick ONE node to expand toward the answer, and a DIRECTION:
+  up   = its CONSUMERS (who uses it: callers, controllers, handlers, tests)
+  down = its DEPENDENCIES (what it uses: services, repositories, db)
+Pick the single move that best advances toward answering the question. Prefer nodes whose
+role/area is on the path to the answer. Set done=true once the footprint already covers the
+answer — do NOT over-expand.
+
+A ⤳ SUGGESTED CROSSING is the OTHER SIDE of a boundary the chain reached by heuristic — a
+string-dispatch to an edge function, an HTTP route, a job/queue handler. That is OFTEN where
+the real work happens. If a crossing is on the path to the answer, PREFER expanding it (down)
+over staying on the near side — following it is exactly how the chain reaches the processing.
+
+Output ONLY a JSON array with exactly ONE object (use a symbol from the list verbatim):
+[{"id":"step","node":"<symbol>","direction":"up|down","done":false}]

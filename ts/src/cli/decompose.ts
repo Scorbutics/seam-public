@@ -17,6 +17,7 @@ import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
 import { HostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
+import { emit } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 interface Args {
@@ -30,6 +31,7 @@ interface Args {
   emitGraph?: string; intent?: string;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
+  emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -43,7 +45,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false };
+  const a: Args = { repo: ".", format: "html", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4 };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -81,6 +83,10 @@ function parseArgs(argv: string[]): Args {
       case "--expand-line": a.expandLine = parseInt(next() ?? "0", 10); break;
       case "--down": a.down = true; break;
       case "--cross-from": a.crossFrom = next(); break;
+      case "--emit-candidates": a.emitCandidates = next(); break;
+      case "--attribution": a.attribution = next(); break;
+      case "--auto": a.auto = true; break;
+      case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -122,9 +128,46 @@ async function runCodebase(a: Args): Promise<number> {
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
   } else if (a.scan) {
     if (!a.anchorFile) err("--scan requires --anchor-file");
+    // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
+    // them, then re-invokes with --attribution).
+    if (a.emitCandidates) {
+      if (!a.symbol) err("--emit-candidates needs --symbol (a class anchor)");
+      const cands = await scan.class_call_candidates(a.repo, a.anchorFile!, a.symbol!);
+      writeFileSync(a.emitCandidates, JSON.stringify(cands));
+      process.stdout.write(`Candidates: ${a.emitCandidates}  (${cands.length} call-site(s))\n`);
+      return 0;
+    }
+    if (a.auto) {
+      // P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
+      if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
+      const { auto_orchestrate } = await import("../codebase/orchestrate.js");
+      let hist: any[];
+      try { [data, hist] = await auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin }); }
+      catch (e) { err(`auto-orchestration failed: ${(e as Error).message}`); }
+      process.stdout.write(`[auto] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.direction}:${h.node}(+${h.added})`).join(", ") || "none") + "\n");
+      const g2 = from_resolved_graph(data);
+      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
+      model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
+      if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
+      if (a.emitSeams) {
+        const usage = get_usage().as_dict();
+        if (usage) model2.usage = usage;
+        writeFileSync(a.emitSeams, JSON.stringify(model2));
+        process.stdout.write(`Seams: ${a.emitSeams}\n`);
+      }
+      return 0;
+    }
+    let verified: any = null;
+    if (a.attribution) {
+      try { verified = JSON.parse(readFileSync(a.attribution, "utf-8")); }
+      catch (e) { err(`could not load attribution: ${(e as Error).message}`); }
+    }
+    emit(a.symbol ? `Scanning consumers of ${a.symbol}…` : `Scanning module ${basename(a.anchorFile!)}…`);
     try {
+      // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
+      // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
       data = a.symbol
-        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth })
+        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified })
         : await scan.build_module_graph(a.repo, a.anchorFile!);
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
@@ -150,7 +193,13 @@ async function runCodebase(a: Args): Promise<number> {
   const counts = new Map<string, number>();
   for (const n of g.nodes.values()) counts.set(n.role, (counts.get(n.role) ?? 0) + 1);
   const summary = ["core", "link", "environment", "test"].map((r) => `${r}=${counts.get(r) ?? 0}`).join("  ");
-  process.stdout.write(`Decomposed anchor '${g.anchor}' (${g.nodes.size} symbols, resolution=${g.resolution_quality || "?"}):  ${summary}\n`);
+  const usageLine = get_usage().summary();
+  process.stdout.write(`Decomposed anchor '${g.anchor}' (${g.nodes.size} symbols, resolution=${g.resolution_quality || "?"}):  ${summary}`
+    + (usageLine ? `   [${usageLine}]` : "") + "\n");
+  if (g.unresolved.length) {
+    process.stdout.write(`  ${g.unresolved.length} unresolved (UNKNOWN, not 'no link'); `
+      + `${g.blindspots.length} blind spot(s)\n`);
+  }
 
   if (a.expandGraph) model.autoGrown = true;        // a grown footprint — show the whole thing
   if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
