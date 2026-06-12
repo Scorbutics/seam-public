@@ -564,24 +564,57 @@ function toolPath(): string {
   const cfg = vscode.workspace.getConfiguration("seam").get<string>("toolPath");
   return cfg && cfg.trim() ? cfg.trim() : path.resolve(__dirname, "..", "..");
 }
-// The engine runs entirely in TypeScript: the bun runtime + the TS CLI entry. bun is found on PATH
-// or at the standard ~/.bun install; the CLI lives in the checkout under ts/.
+// Engine launcher. Two modes:
+//  • bundled (default): the engine is shipped inside the extension as esbuild CJS bundles under
+//    out/engine/. We run them with VS Code's OWN Node (process.execPath + ELECTRON_RUN_AS_NODE=1) —
+//    so a published .vsix needs neither a `bun` runtime nor the source checkout.
+//  • dev: when `seam.toolPath` points at a code-review-sort checkout, run the TS source under `bun`
+//    (the F5 / iterate-on-the-engine workflow). bun resolves .ts directly.
+// The grammar pack (codebase mode) ships next to the bundle and is located via SEAM_WASM_DIR.
 function bunPath(): string {
   const home = process.env.HOME || process.env.USERPROFILE || "";
   const candidate = path.join(home, ".bun", "bin", "bun");
   return fs.existsSync(candidate) ? candidate : "bun"; // fall back to PATH lookup by spawn
 }
-function tsCliPath(tool: string): string {
-  return path.join(tool, "ts", "src", "cli", "decompose.ts");
+interface Engine { run: string; entryDir: string; wasmDir: string; ext: ".ts" | ".cjs"; dev: boolean; }
+function engine(): Engine {
+  const cfg = vscode.workspace.getConfiguration("seam").get<string>("toolPath");
+  if (cfg && cfg.trim()) {
+    const tool = cfg.trim();
+    return { run: bunPath(), entryDir: path.join(tool, "ts", "src", "cli"),
+             wasmDir: path.join(tool, "ts", "node_modules", "tree-sitter-wasms", "out"),
+             ext: ".ts", dev: true };
+  }
+  const eng = path.join(__dirname, "engine");
+  return { run: process.execPath, entryDir: eng, wasmDir: path.join(eng, "wasm"), ext: ".cjs", dev: false };
 }
-// anchor_rank invocation: bun + the TS anchor_rank CLI.
-function anchorRankInvocation(tool: string, args: string[]): [string, string[]] {
-  return [bunPath(), [path.join(tool, "ts", "src", "cli", "anchor_rank.ts"), ...args]];
+function engineEntry(name: "decompose" | "anchor_rank"): string {
+  const e = engine();
+  return path.join(e.entryDir, `${name}${e.ext}`);
 }
-// decompose (codebase mode) invocation: bun + the TS CLI. `args` are the CLI FLAGS (everything after
-// the entry).
-function decomposeInvocation(tool: string, args: string[]): [string, string[]] {
-  return [bunPath(), [tsCliPath(tool), ...args]];
+// Spawn env for every engine call: point tree-sitter at the shipped grammar pack and, in bundled
+// mode, make VS Code's Electron binary behave as plain Node.
+function engineEnv(): NodeJS.ProcessEnv {
+  const e = engine();
+  const env: NodeJS.ProcessEnv = { ...process.env, SEAM_WASM_DIR: e.wasmDir };
+  if (!e.dev) env.ELECTRON_RUN_AS_NODE = "1";
+  return env;
+}
+// Friendly guard: the bundled engine missing means a broken build; in dev mode it means a bad toolPath.
+function engineMissing(): string | null {
+  const entry = engineEntry("decompose");
+  if (fs.existsSync(entry)) return null;
+  return engine().dev
+    ? `Seam: engine not found at "${entry}". Check "seam.toolPath" (must be your code-review-sort checkout).`
+    : `Seam: bundled engine missing at "${entry}". The extension build is incomplete — reinstall the .vsix.`;
+}
+// anchor_rank invocation. `args` are the CLI flags.
+function anchorRankInvocation(_tool: string, args: string[]): [string, string[]] {
+  return [engine().run, [engineEntry("anchor_rank"), ...args]];
+}
+// decompose invocation (diff + codebase mode). `args` are the CLI flags (everything after the entry).
+function decomposeInvocation(_tool: string, args: string[]): [string, string[]] {
+  return [engine().run, [engineEntry("decompose"), ...args]];
 }
 
 async function reviewCommit() {
@@ -635,7 +668,7 @@ function usageNote(u?: Usage): string {
 
 function execFileP(file: string, args: string[], cwd: string): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
+    execFile(file, args, { cwd, env: engineEnv(), maxBuffer: 64 * 1024 * 1024 }, (err, _stdout, stderr) => {
       if (err) reject(new Error(stderr || err.message));
       else resolve();
     });
@@ -652,7 +685,7 @@ const PROGRESS_PREFIX = "@@SEAM_PROGRESS@@";
 function runStreaming(file: string, args: string[], cwd: string,
               onProgress?: (message: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(file, args, { cwd });
+    const child = spawn(file, args, { cwd, env: engineEnv() });
     let stderr = "";
     let buf = "";
     child.stdout.on("data", () => { /* drain (output is a tiny "Seams: path" line) */ });
@@ -703,19 +736,16 @@ async function runReview(range: string) {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  // Engine: "hybrid" (default — LLM clusters + deterministic roles/wiring, fed VS Code AST facts),
-  // "det" (fully deterministic, offline), or "llm" (all LLM).
-  const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-  if (!fs.existsSync(tsCliPath(tool))) {
-    vscode.window.showErrorMessage(
-      `Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your code-review-sort checkout.`);
-    return;
-  }
-  const bun = bunPath();
+  // Engine: "det" (default — fully deterministic, offline, zero setup), "hybrid" (LLM clusters +
+  // deterministic roles/wiring, fed VS Code AST facts; needs a `claude` CLI), or "llm" (all LLM).
+  const engineMode = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
+  const missing = engineMissing();
+  if (missing) { vscode.window.showErrorMessage(missing); return; }
+  const run = engine().run;
   // Codebase context (on by default): resolve the diff's references against the real repo so the
   // review shows blast radius (who outside the diff consumes a changed symbol). The LSP daemon stays
   // warm across reviews, so 'auto' (floor + LSP) is the right default here.
-  const resolver = vscode.workspace.getConfiguration("seam").get<string>("resolver") || "auto";
+  const resolver = vscode.workspace.getConfiguration("seam").get<string>("resolver") || "det";
   const blastRadius = vscode.workspace.getConfiguration("seam").get<boolean>("blastRadius") ?? true;
 
   await vscode.window.withProgress(
@@ -727,29 +757,29 @@ async function runReview(range: string) {
         // 'det' = fully offline; 'hybrid' (the default) = LLM clusters + deterministic roles/wiring;
         // 'llm' = all-LLM. The deterministic roles are fed the editor's AST facts (defines/enclosing)
         // via --emit-hunks + --facts.
-        const engineArgs = engine === "det" ? ["--classifier", "det"]
-          : engine === "llm" ? ["--classifier", "llm"]
-          : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid (default)
-        if (engine !== "llm") {                  // det/hybrid use deterministic roles → AST facts help
+        const engineArgs = engineMode === "det" ? ["--classifier", "det"]
+          : engineMode === "llm" ? ["--classifier", "llm"]
+          : ["--cluster", "llm", "--roles", "det", "--wiring", "hybrid"];   // hybrid
+        if (engineMode !== "llm") {               // det/hybrid use deterministic roles → AST facts help
           progress.report({ message: "Computing code facts…" });
-          factsPath = await buildAstFacts(tool, (skel) => runStreaming(bun,
-            [tsCliPath(tool), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
+          factsPath = await buildAstFacts(tool, (skel) => runStreaming(run,
+            [engineEntry("decompose"), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
         }
         // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
         // the headless language server (warm daemon) with the deterministic floor as fallback.
-        const args = [tsCliPath(tool), "--git", range, "--repo", repoRoot, ...engineArgs,
+        const args = [engineEntry("decompose"), "--git", range, "--repo", repoRoot, ...engineArgs,
                       ...(factsPath ? ["--facts", factsPath] : []),
                       ...(resolver !== "det" ? ["--resolver", resolver] : []),
                       ...(blastRadius ? ["--blast-radius"] : []),
                       "--emit-seams", out];
-        await runStreaming(bun, args, tool, (m) => progress.report({ message: m }));
+        await runStreaming(run, args, tool, (m) => progress.report({ message: m }));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
-          `Seam (${engine}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
+          `Seam (${engineMode}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
           `core=amber · link=blue · environment=gray · test=green · noise=faint`);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam failed: ${e instanceof Error ? e.message : e}`);
@@ -773,10 +803,8 @@ function codebaseEnv(): { tool: string } | null {
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return null; }
   repoRoot = folder.uri.fsPath;
   const tool = toolPath();
-  if (!fs.existsSync(tsCliPath(tool))) {
-    vscode.window.showErrorMessage(`Seam: TS CLI not found at "${tsCliPath(tool)}". Set "seam.toolPath" to your code-review-sort checkout.`);
-    return null;
-  }
+  const missing = engineMissing();
+  if (missing) { vscode.window.showErrorMessage(missing); return null; }
   return { tool };
 }
 
@@ -790,7 +818,7 @@ async function runScan(tool: string, scanArgs: string[], title: string, range: s
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
         const [bin, base] = decomposeInvocation(tool,
           ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
         await runStreaming(bin, base, tool, (m) => progress.report({ message: m }));
@@ -856,7 +884,7 @@ async function runScanClass(tool: string,
       const attr = path.join(tool, `.seam-attr-${Date.now()}.json`);
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
         const base = ["--scan", "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
         progress.report({ message: "Finding method call-sites…" });
@@ -936,7 +964,7 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
     async (progress) => {
       const out = path.join(env.tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "det";
         // read the session graph AND write the grown one back to it (decompose loads before writing)
         const flags = ["--expand-graph", sessionGraph!, "--repo", repoRoot,
                        "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),

@@ -1,8 +1,15 @@
-src/**
 .vscode/**
+.gitignore
+src/**
+build.mjs
 **/*.ts
 **/*.map
 tsconfig.json
 bun.lock
+bun.lockb
+*.vsix
+**/.DS_Store
+# Drop the dev toolchain (esbuild, vsce, typescript) at the package root, but KEEP the engine's
+# bundled runtime deps under out/engine/node_modules (web-tree-sitter, for codebase mode).
 node_modules/**
-**/*.vsix
+!out/engine/**

@@ -16,7 +16,14 @@ const _LANG_BY_EXT: Record<string, string> = {
 // grammar name -> tree-sitter-wasms file stem (only csharp differs).
 const _WASM_NAME: Record<string, string> = { csharp: "c_sharp" };
 
-const WASM_DIR = fileURLToPath(new URL("../../node_modules/tree-sitter-wasms/out/", import.meta.url));
+// Grammar pack location. When the engine is bundled into the VS Code extension (esbuild → a single
+// CJS file), `import.meta.url` points at the bundle, not this source, so the relative path breaks.
+// The extension copies the wasm pack next to the bundle and passes its absolute path via
+// SEAM_WASM_DIR. Falling back to the source-relative path keeps `bun` dev runs working unchanged.
+const _ENV_WASM_DIR = process.env.SEAM_WASM_DIR;
+const WASM_DIR = _ENV_WASM_DIR
+  ? (_ENV_WASM_DIR.endsWith("/") ? _ENV_WASM_DIR : _ENV_WASM_DIR + "/")
+  : fileURLToPath(new URL("../../node_modules/tree-sitter-wasms/out/", import.meta.url));
 
 export function langForExt(ext: string): string | null { return _LANG_BY_EXT[ext.toLowerCase()] ?? null; }
 

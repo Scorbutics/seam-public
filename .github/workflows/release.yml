@@ -1,0 +1,52 @@
+# Build the Seam VS Code extension into a self-contained .vsix and attach it to a GitHub Release.
+# Triggers on a pushed tag like `v0.1.0`, or manually (workflow_dispatch) for a dry-run build.
+#
+# The .vsix bundles the TypeScript engine (esbuild) + tree-sitter grammars, so it needs no runtime
+# checkout. CI must `bun install` in ts/ (build.mjs copies web-tree-sitter + the WASM pack from
+# ts/node_modules) and in vscode-extension/ (esbuild, vsce, typescript).
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create the Release and upload the .vsix
+
+jobs:
+  vsix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install engine deps (web-tree-sitter + WASM grammars)
+        working-directory: ts
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Install extension toolchain
+        working-directory: vscode-extension
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Build + package .vsix
+        working-directory: vscode-extension
+        run: bun run package
+
+      - name: Upload .vsix as a build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: seam-vsix
+          path: vscode-extension/*.vsix
+
+      - name: Attach .vsix to the GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: vscode-extension/*.vsix
+          generate_release_notes: true
+          prerelease: true   # experimental — not a stable release

@@ -1,9 +1,18 @@
 {
   "name": "seam",
-  "displayName": "Seam \u2014 review by intent",
+  "displayName": "Seam — review by intent",
   "description": "Decompose a diff into seams (core/link/environment/test/noise) and review by intent: seam colours on the native diff + a seam tree, powered by the Seam engine (TypeScript).",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "seam-local",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Scorbutics/seam.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Scorbutics/seam/issues"
+  },
   "engines": {
     "vscode": "^1.84.0"
   },
@@ -17,12 +26,12 @@
     "commands": [
       {
         "command": "seam.detangle",
-        "title": "Seam: Detangle a diff\u2026",
+        "title": "Seam: Detangle a diff…",
         "icon": "$(symbol-color)"
       },
       {
         "command": "seam.mapIntent",
-        "title": "Seam: Map an intent\u2026",
+        "title": "Seam: Map an intent…",
         "icon": "$(sparkle)"
       },
       {
@@ -37,7 +46,7 @@
       },
       {
         "command": "seam.reviewCommit",
-        "title": "Seam: Review a commit\u2026"
+        "title": "Seam: Review a commit…"
       },
       {
         "command": "seam.analyzeCodebase",
@@ -51,22 +60,22 @@
       },
       {
         "command": "seam.analyzeFromIntent",
-        "title": "Seam: Find footprint by intent\u2026",
+        "title": "Seam: Find footprint by intent…",
         "icon": "$(search-fuzzy)"
       },
       {
         "command": "seam.autoMapIntent",
-        "title": "Seam: Auto-map intent (LLM grows the footprint)\u2026",
+        "title": "Seam: Auto-map intent (LLM grows the footprint)…",
         "icon": "$(sparkle)"
       },
       {
         "command": "seam.expandNode",
-        "title": "Seam: Expand \u2192 consumers (who uses this)",
+        "title": "Seam: Expand → consumers (who uses this)",
         "icon": "$(arrow-up)"
       },
       {
         "command": "seam.expandDown",
-        "title": "Seam: Expand \u2192 dependencies (what this uses)",
+        "title": "Seam: Expand → dependencies (what this uses)",
         "icon": "$(arrow-down)"
       },
       {
@@ -194,22 +203,22 @@
         "seam.toolPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the code-review-sort checkout (containing the ts/ engine). Defaults to a bundled path if empty."
+          "description": "Dev only. Absolute path to a code-review-sort checkout (containing the ts/ engine), run under `bun`. Leave EMPTY to use the engine bundled inside the extension (no checkout, no bun needed)."
         },
         "seam.engine": {
           "type": "string",
           "enum": [
-            "hybrid",
             "det",
+            "hybrid",
             "llm"
           ],
           "enumDescriptions": [
-            "Default. LLM clustering (product intent) + deterministic roles & wiring, fed AST facts (defines/enclosing) from the editor's language server.",
-            "Fully deterministic, offline \u2014 no LLM at all (structural cluster labels instead of product-intent prose).",
-            "All passes by the LLM."
+            "Default. Fully deterministic, offline — no LLM, zero setup (structural cluster labels instead of product-intent prose).",
+            "LLM clustering (product intent) + deterministic roles & wiring, fed AST facts from the editor's language server. Needs a `claude` CLI (e.g. the Claude Code extension) on the machine.",
+            "All passes by the LLM. Needs a `claude` CLI."
           ],
-          "default": "hybrid",
-          "description": "How to decompose a diff: 'hybrid' (LLM clusters + deterministic roles/wiring \u2014 best; needs a CLI for clustering), 'det' (fully offline, no LLM), or 'llm' (all LLM)."
+          "default": "det",
+          "description": "How to decompose a diff: 'det' (fully offline, no LLM — the default, works with zero setup), 'hybrid' (LLM clusters + deterministic roles/wiring — best quality; needs a `claude` CLI), or 'llm' (all LLM)."
         },
         "seam.codebaseDepth": {
           "type": "number",
@@ -226,17 +235,17 @@
             "auto"
           ],
           "enumDescriptions": [
-            "Deterministic floor only (relative + package + tsconfig paths). Offline, instant.",
-            "A real language server (go-to-definition). Cross-language, needs the toolchain.",
-            "Default. LSP with deterministic fallback \u2014 the warm daemon is reused across reviews."
+            "Default. Deterministic floor only (relative + package + tsconfig paths). Offline, instant, no toolchain.",
+            "A real language server (go-to-definition). Cross-language, needs the toolchain AND a code-review-sort checkout (LSP daemon is not bundled).",
+            "LSP with deterministic fallback — the warm daemon is reused across reviews. Needs a checkout (see 'lsp')."
           ],
-          "default": "auto",
-          "description": "How a diff review resolves references against the repo (for blast radius). 'auto' (LSP + floor fallback), 'det' (offline floor), or 'lsp' (server only)."
+          "default": "det",
+          "description": "How a diff review resolves references against the repo (for blast radius). 'det' (offline floor — the default), 'lsp' (server only) or 'auto' (LSP + floor fallback). Note: 'lsp'/'auto' require the dev checkout via seam.toolPath; the bundled extension is offline-only."
         },
         "seam.blastRadius": {
           "type": "boolean",
           "default": true,
-          "description": "Diff review: show each changed symbol's blast radius \u2014 who OUTSIDE the diff imports it (resolved/suggested) \u2014 so the change is read in the context of the real codebase."
+          "description": "Diff review: show each changed symbol's blast radius — who OUTSIDE the diff imports it (resolved/suggested) — so the change is read in the context of the real codebase."
         },
         "seam.defaultAltitude": {
           "type": "string",
@@ -245,8 +254,8 @@
             "seams"
           ],
           "enumDescriptions": [
-            "Start with a big cluster's sub-groups COLLAPSED \u2014 review the few groups first, expand the one you want.",
-            "Start with sub-groups EXPANDED \u2014 go straight to the seams."
+            "Start with a big cluster's sub-groups COLLAPSED — review the few groups first, expand the one you want.",
+            "Start with sub-groups EXPANDED — go straight to the seams."
           ],
           "default": "overview",
           "description": "Diff review: the starting altitude when a large cluster is split into structural sub-groups. 'overview' (collapsed) or 'seams' (expanded). Expand/collapse a group any time to zoom in/out."
@@ -261,11 +270,16 @@
   },
   "scripts": {
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "build:engine": "bun build.mjs",
+    "build": "bun run compile && bun run build:engine",
+    "package": "bun run build && vsce package --no-dependencies"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.84.0",
+    "@vscode/vsce": "^3.9.2",
+    "esbuild": "^0.28.1",
     "typescript": "^5.4.0"
   }
 }

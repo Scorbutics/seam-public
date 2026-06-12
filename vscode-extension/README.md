@@ -1,7 +1,11 @@
-# Seam — VS Code extension (thin)
+# Seam — review by intent (VS Code extension)
 
-A thin shell over the Seam engine (TypeScript, run via bun). It does **not** render anything itself —
-VS Code is the renderer:
+> **Experimental.** Distributed as a `.vsix` (GitHub Releases), **not** on the Marketplace yet.
+
+Seam decomposes a diff (or a slice of a codebase) into **seams** — groups of changes that share one
+technical intent — and paints them natively in VS Code so you review one intent at a time. The
+TypeScript engine is **bundled inside the extension**: no separate checkout, no `bun`, no API key —
+the default `det` mode runs fully offline. VS Code is the renderer:
 
 - **Seam colours on the diff** — per changed hunk, coloured by **role**
   (core=amber · link=blue · environment=gray · test=green · noise=faint): a gutter
@@ -11,56 +15,44 @@ VS Code is the renderer:
 - **Seam tree** (activity-bar icon) — clusters → seams → hunks. Click a hunk to
   jump the editor to it (the "related code closer" navigation).
 
-The classification is the engine: this consumes the TS CLI `--emit-seams`
-(file + line range + role per hunk).
+The classification is the engine: a `--emit-seams` model (file + line range + role per hunk) that
+the extension renders natively. The engine ships **inside** the `.vsix` (esbuild bundle), run with
+VS Code's own Node — so installing the `.vsix` is all a user needs.
 
-## Prerequisites
-- **bun** (the engine runs via bun; the extension itself runs in VS Code's Node):
-  `curl -fsSL https://bun.sh/install | bash`
-- **VS Code**.
-- The Seam **engine** — i.e. the `ts/` TypeScript engine in your `code-review-sort`
-  checkout (this extension shells out to `ts/src/cli/decompose.ts` via bun; no Python).
+## Install (try it)
+1. Download `seam-<version>.vsix` from the [Releases](https://github.com/Scorbutics/seam/releases) page.
+2. Install it:
+   ```bash
+   code --install-extension seam-<version>.vsix
+   ```
+   …or in VS Code: **Extensions** panel → **⋯** menu → **Install from VSIX…**
+3. Reload. Open any git repo, click the **Seam** icon in the activity bar → **Review working changes**
+   (or `Cmd/Ctrl+Shift+P` → *Seam: Review working changes*).
 
-## Build
+No `bun`, no checkout, no API key. The default `det` engine is fully offline.
+
+### Optional: better labels with an LLM
+`det` gives structural seam labels. For LLM-written *product-intent* labels, set **`seam.engine`** to
+`hybrid` (Settings → search "Seam"). That needs a `claude` CLI on the machine — the
+[Claude Code](https://www.anthropic.com/claude-code) VS Code extension's bundled binary is detected
+automatically, or put `claude` on your `PATH`.
+
+## Settings
+- `seam.engine` — `det` (default, offline), `hybrid` (LLM labels; needs `claude`), or `llm`.
+- `seam.resolver` — `det` (default, offline). `lsp`/`auto` need a dev checkout (see below).
+- `seam.blastRadius` — on by default.
+- `seam.toolPath` — **dev only**: point at a `code-review-sort` checkout to run the engine from
+  source under `bun` instead of the bundle (enables the `lsp`/`auto` resolver and the F5 workflow).
+
+## Build / develop
 ```bash
 cd vscode-extension
 bun install
-bun run compile          # tsc -p ./ → out/extension.js   (bun run watch to auto-rebuild)
+bun run build      # tsc (extension) + esbuild (engine → out/engine/*.cjs) + copy WASM grammars
+bun run package    # → seam-<version>.vsix
 ```
-
-## Run it — two ways
-
-### A) Dev mode (F5) — use this while iterating on the look
-1. In VS Code: **File → Open Folder…** → select this `vscode-extension` folder.
-2. Press **F5** (Run → Start Debugging). A `.vscode/launch.json` is included, so this
-   compiles and launches a second window — the **Extension Development Host** — with
-   Seam loaded. (If the pre-launch compile fails, run `bun run compile` once manually.)
-3. In that second window: **File → Open Folder…** → the repo you want to review.
-4. Click the **Seam** icon in the activity bar (left rail) → press the
-   **Review working changes** title button — or `Cmd/Ctrl+Shift+P` →
-   *Seam: Review working changes* (or *Seam: Review a commit…*).
-5. The tree fills with clusters → seams → hunks. Open a changed file (or its SCM
-   diff) to see the gutter bars + scrollbar marks; click a hunk in the tree to jump.
-
-In dev mode `seam.toolPath` **auto-resolves** to this checkout, so no config needed.
-
-### B) Install permanently (.vsix) — once the look is right
-```bash
-bun run compile
-bunx @vscode/vsce package --no-dependencies      # → seam-0.0.1.vsix
-code --install-extension seam-0.0.1.vsix          # or: Extensions panel → "…" → Install from VSIX…
-```
-Then reload VS Code; the **Seam** icon appears in every window.
-
-> **Important for the installed (.vsix) path:** the extension now lives under
-> `~/.vscode/extensions/…`, so it can't find the `ts/` engine by itself. **Set
-> `seam.toolPath`** (Settings → search "Seam") to your `code-review-sort` checkout.
-> (Not needed in dev/F5 mode.)
-
-## Settings
-- `seam.toolPath` — path to the `code-review-sort` checkout (auto in F5; **required** for .vsix).
-- `seam.engine` — `hybrid` (default), `det` (offline), or `llm`.
-- `seam.resolver` — `auto` (default), `det`, or `lsp`. `seam.blastRadius` — on by default.
+Dev loop: **F5** (Run → Start Debugging) launches an Extension Development Host. With `seam.toolPath`
+set to your checkout, the engine runs from source under `bun` (no rebuild of the bundle needed).
 
 ## Focus a seam (the point of the tool)
 **Select a seam in the tree → only that seam's hunks stay coloured; every other
