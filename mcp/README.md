@@ -54,7 +54,7 @@ error telling you to use `det`. No nested `claude -p`, no API key — it reuses 
 It runs over the engine's **interactive bridge**: the server spawns the engine with `--llm-bridge DIR`,
 and the engine drops one request file per pass and blocks while the server samples the client's model
 and writes the answer back. Unlike the older batch handshake (`--emit-prompts` → answer-all →
-`--inject-llm`, still used by the `seam-review` skill), an interactive round-trip can drive **in-loop**
+`--inject-llm`, still used by the `seam` skill), an interactive round-trip can drive **in-loop**
 features where the next prompt depends on the previous answer — which is exactly what `grow_intent`'s
 orchestration needs. Implementation: [`src/sampling.ts`](src/sampling.ts), engine side
 [`InteractiveHostBus`](../ts/src/core/llm.ts).

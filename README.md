@@ -92,10 +92,10 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 `--emit-seams` JSON, *not the code*, is the product boundary, so clients evolve independently:
 
 ```
-        Seam engine (ts/) — stateless; emits the versioned --emit-seams JSON
-   ▲                ▲                  ▲                       ▲
- CLI            VS Code ext        MCP server            IntelliJ (planned)
-(ts/src/cli)   (native render)    (mcp/ — any LLM)
+            Seam engine (ts/) — stateless; emits the versioned --emit-seams JSON
+   ▲             ▲               ▲                ▲                    ▲
+ CLI         VS Code ext     MCP server     Claude skill        IntelliJ (planned)
+(ts/src/cli) (native render) (mcp/ any LLM) (.claude/skills/seam)
 ```
 
 - **Contract** — `ts/src/core/contract.ts` stamps `schemaVersion`; the full shape is in
@@ -107,7 +107,7 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 - **The LLM seam** — `det` runs fully offline. For `hybrid`/`llm`, the engine either spawns a
   subscription-backed CLI (`claude`/`copilot`, no API key) **or** hands its prompts back to a host
   that already has a model, via the host-bus contract (`--emit-prompts` → answer → `--inject-llm`).
-  That seam is what lets the `seam-review` skill and the MCP server **borrow the caller's model**.
+  That seam is what lets the `seam` Claude skill and the MCP server **borrow the caller's model**.
 
 ## Install & run
 
@@ -293,6 +293,22 @@ bun mcp/src/server.ts          # stdio MCP server
 ```
 
 See [`mcp/README.md`](mcp/README.md) for the tool schemas and `.mcp.json` registration.
+
+## The Claude skill (run Seam inside Claude Code)
+
+[`.claude/skills/seam/`](.claude/skills/seam/SKILL.md) bundles Seam as a Claude Code **skill** so you
+can decompose **inside a session** with no `claude` binary, no PATH, no API key — the engine's LLM
+passes are **served by the running session** via spawned subagents (the host-bus contract again, with
+a subagent standing in for the MCP server's sampling). It covers **both** modes:
+
+- **Diff review** — *"review by seam"*, *"decompose this diff"* → emit prompts → subagent per pass →
+  inject → render.
+- **Codebase intent discovery** — *"where does X live"*, *"map the footprint of X"* → a deterministic
+  static footprint, or an LLM-grown one (`--auto`) driven over the interactive `--llm-bridge`.
+
+It auto-triggers on those phrasings, or invoke it explicitly with `/seam`. This is the zero-setup path
+when there's no model CLI on PATH; if `claude` *is* available, plain `decompose.ts … --emit-seams`
+also works.
 
 ## Reliability harness (`ts/eval/`)
 

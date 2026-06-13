@@ -54,7 +54,7 @@ seam … --classifier hybrid --emit-prompts prompts.json     # phase 1: record p
 seam … --classifier hybrid --inject-llm answers.json --emit-seams seams.json   # phase 2: replay
 ```
 
-This is how the `seam-review` skill borrows the live session's model, and how the MCP server maps
+This is how the `seam` skill borrows the live session's model, and how the MCP server maps
 LLM passes onto MCP **sampling** — no second model, no API key, uses the caller's LLM. See
 [`mcp/README.md`](../mcp/README.md).
 

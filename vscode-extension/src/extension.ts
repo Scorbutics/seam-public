@@ -1125,9 +1125,62 @@ async function crossBoundary(node?: { hunk?: SeamHunk }) {
   await expandFrom(synthetic, false, `crossed from ${symbol} → ${pick.t.name} (symbol-match assumption, unverified)`);
 }
 
-// FUZZY ENTRY RAMP (plan P3): describe an intent → workspaceSymbol candidates → the engine ranks them →
-// the user CONFIRMS one → the deterministic footprint attaches to the confirmed anchor (the brief's
-// invariant: the guarantee attaches only AFTER confirmation, never from an unconfirmed match).
+// LLM capability probe, cached per session. Runs `anchor_rank --llm-probe`, which makes NO LLM call
+// (it only checks for a resolvable claude/copilot binary). Gates the "Search with the LLM…" item and
+// the empty-result auto-fallback so neither is ever a dead end on a pure-offline install.
+let llmProbeCache: boolean | undefined;
+async function llmAvailable(env: { tool: string }): Promise<boolean> {
+  if (llmProbeCache !== undefined) return llmProbeCache;
+  const out = path.join(env.tool, `.seam-llmprobe-${Date.now()}.json`);
+  try {
+    await execFileP(...anchorRankInvocation(env.tool, ["--llm-probe", "--out", out]), env.tool);
+    llmProbeCache = JSON.parse(fs.readFileSync(out, "utf-8"))?.llm === true;
+  } catch { llmProbeCache = false; } finally {
+    try { fs.unlinkSync(out); } catch { /* ignore */ }
+  }
+  return llmProbeCache;
+}
+
+type AnchorItem = { name: string; file: string; kind: string; terms?: string[] };
+// The deterministic anchor ranker, optionally widened by LLM query-expansion (`--llm-expand`:
+// the LLM proposes extra keywords, still grounded by the deterministic repo scan).
+async function rankAnchors(env: { tool: string }, intent: string, llm: boolean): Promise<AnchorItem[]> {
+  const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
+  try {
+    const args = ["--intent", intent, "--repo", repoRoot, "--out", ranked];
+    if (llm) args.push("--llm-expand");
+    await execFileP(...anchorRankInvocation(env.tool, args), env.tool);
+    return JSON.parse(fs.readFileSync(ranked, "utf-8"));
+  } finally {
+    try { fs.unlinkSync(ranked); } catch { /* ignore */ }
+  }
+}
+
+// Sentinel: the user chose the "Search with the LLM…" item instead of a concrete anchor.
+const LLM_RESEARCH = Symbol("llm-research");
+type PickedAnchor = { symbol: string; file: string; kind: string };
+async function pickAnchor(items: AnchorItem[], intent: string, offerLlm: boolean):
+    Promise<PickedAnchor | typeof LLM_RESEARCH | undefined> {
+  type Pick = vscode.QuickPickItem & { anchor?: PickedAnchor; research?: boolean };
+  const picks: Pick[] = items.map((c) => ({
+    label: c.name,
+    description: c.kind,
+    detail: c.file + (c.terms?.length ? `   · matched: ${c.terms.join(", ")}` : ""),
+    anchor: { symbol: c.name, file: c.file, kind: c.kind },
+  }));
+  // The LLM escape hatch sits LAST so the best deterministic candidate stays the default selection.
+  if (offerLlm) picks.push({ label: "$(sparkle) Search with the LLM…", description: "Expand the intent with the LLM and re-search", research: true });
+  const pick = await vscode.window.showQuickPick(picks, {
+    title: `Anchors for “${intent}” — pick one to map its footprint`, matchOnDetail: true, ignoreFocusOut: true,
+  });
+  if (!pick) return undefined;
+  return pick.research ? LLM_RESEARCH : pick.anchor;
+}
+
+// FUZZY ENTRY RAMP (plan P3): describe an intent → deterministic repo-scan candidates → the engine
+// ranks them (optionally widened by LLM query-expansion) → the user CONFIRMS one → the deterministic
+// footprint attaches to the confirmed anchor (the brief's invariant: the guarantee attaches only
+// AFTER confirmation, never from an unconfirmed match).
 async function analyzeFromIntent(auto = false) {
   const env = codebaseEnv();
   if (!env) return;
@@ -1140,34 +1193,34 @@ async function analyzeFromIntent(auto = false) {
   if (!intent || !intent.trim()) return;
   sessionIntent = intent;                  // persist the question so expansions re-focus the answer
 
+  const noMatch = () => vscode.window.showWarningMessage(`Seam: no anchors matched “${intent}”. Try a keyword that appears in the code.`);
+  const hasLlm = await llmAvailable(env);   // probe once (no LLM call) — gates the fallback + the LLM item
   const picked = await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: finding anchors for “${intent}”…` },
-    async (): Promise<{ symbol: string; file: string; kind: string } | undefined> => {
+    async (progress): Promise<PickedAnchor | undefined> => {
       // Candidate discovery is a DETERMINISTIC repo scan, not workspaceSymbol — the LSP
       // workspace-symbol search is project-scoped / depends on what's loaded (the same flakiness we
       // pivoted off for find-references), so it would miss symbols in unopened files.
-      const ranked = path.join(env.tool, `.seam-rank-${Date.now()}.json`);
-      let items: Array<{ name: string; file: string; kind: string; terms?: string[] }> = [];
-      try {
-        await execFileP(...anchorRankInvocation(env.tool, ["--intent", intent, "--repo", repoRoot, "--out", ranked]), env.tool);
-        items = JSON.parse(fs.readFileSync(ranked, "utf-8"));
-      } finally {
-        try { fs.unlinkSync(ranked); } catch { /* ignore */ }
-      }
+      let items = await rankAnchors(env, intent, false);
       if (!items.length) {
-        vscode.window.showWarningMessage(`Seam: no anchors matched “${intent}”. Try a keyword that appears in the code.`);
-        return undefined;
+        // Empty is a CRISP signal (stems matched nothing) → auto-fall back to LLM query-expansion
+        // when a backend exists. The fuzzier weak-but-nonempty case is the manual item in pickAnchor.
+        if (hasLlm) {
+          progress.report({ message: "no static match — asking the LLM…" });
+          items = await rankAnchors(env, intent, true);
+        }
+        if (!items.length) { noMatch(); return undefined; }
       }
-      const pick = await vscode.window.showQuickPick(
-        items.map((c) => ({
-          label: c.name,
-          description: c.kind,
-          detail: c.file + (c.terms?.length ? `   · matched: ${c.terms.join(", ")}` : ""),
-          anchor: { symbol: c.name, file: c.file, kind: c.kind },
-        })),
-        { title: `Anchors for “${intent}” — pick one to map its footprint`, matchOnDetail: true, ignoreFocusOut: true },
-      );
-      return pick?.anchor;
+      let anchor = await pickAnchor(items, intent, hasLlm);
+      if (anchor === LLM_RESEARCH) {
+        // User judged the static candidates wrong → widen with the LLM, then re-pick. No LLM item the
+        // second time (it already ran), so there's no re-search loop.
+        progress.report({ message: "searching with the LLM…" });
+        const widened = await rankAnchors(env, intent, true);
+        if (!widened.length) { noMatch(); return undefined; }
+        anchor = await pickAnchor(widened, intent, false);
+      }
+      return anchor === LLM_RESEARCH ? undefined : anchor;
     },
   );
   if (!picked) return;

@@ -62,7 +62,7 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
   `bun build --compile` single binary, the tree-sitter-grammar caveat, and the host-bus LLM seam.
 - **MCP:** [`mcp/`](mcp/) exposes `decompose_diff` / `intent_footprint` to any agent. `det` is offline;
   `hybrid`/`llm` borrow the **caller's** model via MCP sampling, mapped onto the `--emit-prompts` →
-  `--inject-llm` host-bus handshake (the same one the `seam-review` skill uses). **No daemon.**
+  `--inject-llm` host-bus handshake (the same one the `seam` skill uses). **No daemon.**
 
 ---
 
@@ -209,7 +209,7 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 
 ## 8.5 LLM call sites (both modes) — the complete map
 
-Every LLM call in the codebase funnels through `core/llm`: `resolve_backend()` (picks claude→copilot, or `("host","")` when a `HostBus` is installed) → `_run_pass()` (one pass, one retry, JSON-array parse) → `_run_backend()` → `_run_claude()` / `_run_copilot()` (the `subprocess.run` at `core/llm.py:~218`). Diff-mode passes call `_run_pass` directly (via `resolve_backend` per pass); codebase-mode passes call the thin `llm.run_pass(prompt, tag=…)` facade (`core/llm.py:349`) which wraps the same two. **One interception point covers everything** — installing a `HostBus` (`set_host_bus`) routes *all* of these through the running session / a subagent instead of a subprocess, in **both** modes, with no binary lookup (see `--emit-prompts`/`--inject-llm` and `.claude/skills/seam-review/`).
+Every LLM call in the codebase funnels through `core/llm`: `resolve_backend()` (picks claude→copilot, or `("host","")` when a `HostBus` is installed) → `_run_pass()` (one pass, one retry, JSON-array parse) → `_run_backend()` → `_run_claude()` / `_run_copilot()` (the `subprocess.run` at `core/llm.py:~218`). Diff-mode passes call `_run_pass` directly (via `resolve_backend` per pass); codebase-mode passes call the thin `llm.run_pass(prompt, tag=…)` facade (`core/llm.py:349`) which wraps the same two. **One interception point covers everything** — installing a `HostBus` (`set_host_bus`) routes *all* of these through the running session / a subagent instead of a subprocess, in **both** modes, with no binary lookup (see `--emit-prompts`/`--inject-llm` and `.claude/skills/seam/`).
 
 `thinking` is the per-call `MAX_THINKING_TOKENS` budget (0 = off/fast; a positive int caps it; ON is reserved for grouping). Every codebase-mode pass degrades to the deterministic floor on `LLMError`.
 

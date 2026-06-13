@@ -16,3 +16,24 @@ describe("anchor_rank vs Python", () => {
     expect(JSON.parse(JSON.stringify(ranked))).toEqual(oracle);
   });
 });
+
+describe("rank_anchors extraTerms (LLM query-expansion vocabulary)", () => {
+  // The literal intent shares no stem with SlotReservationGuard; the LLM-expanded term "reservation"
+  // is what lets it rank and explain itself, instead of being dropped by the zero-match filter.
+  const cands = [
+    { name: "SlotReservationGuard", file: "src/svc/guard.ts", kind: "class" },
+    { name: "UnrelatedHelper", file: "src/util/misc.ts", kind: "class" },
+  ];
+
+  test("without extraTerms the synonym-only match is unranked", () => {
+    const ranked = rank_anchors("prevent double booking", cands);
+    // No intent stem hits either name → falls back to the full pool with empty terms.
+    expect(ranked.every((c: any) => c.terms.length === 0)).toBe(true);
+  });
+
+  test("an extra term ranks the candidate first and surfaces the matched term", () => {
+    const ranked = rank_anchors("prevent double booking", cands, 12, ["reservation"]);
+    expect(ranked[0].name).toBe("SlotReservationGuard");
+    expect(ranked[0].terms).toContain("reservation");
+  });
+});

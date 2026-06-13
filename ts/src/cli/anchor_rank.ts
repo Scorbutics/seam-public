@@ -3,6 +3,8 @@
 // (or emit SUGGESTED boundary crossings for a symbol). Mirrors `python -m src.codebase.anchor_rank`.
 import { readFileSync, writeFileSync } from "node:fs";
 import { find_anchor_candidates, rank_anchors, suggest_crossings, _content_words } from "../codebase/anchor_rank.js";
+import { expand_intent_terms } from "../codebase/intent_expand.js";
+import { available } from "../core/llm.js";
 
 function main(argv: string[]): number {
   const a: any = {};
@@ -12,8 +14,18 @@ function main(argv: string[]): number {
     else if (v === "--repo") a.repo = argv[++i];
     else if (v === "--candidates") a.candidates = argv[++i];
     else if (v === "--crossings") a.crossings = true;
+    else if (v === "--llm-expand") a.llmExpand = true;
+    else if (v === "--llm-probe") a.llmProbe = true;
     else if (v === "--exclude-file") a.excludeFile = argv[++i];
     else if (v === "--out") a.out = argv[++i];
+  }
+
+  // Capability probe for the client (no LLM call): is an LLM backend resolvable at all? The client
+  // hides the "Search with the LLM…" affordance when not, so it never offers a dead button.
+  if (a.llmProbe) {
+    const text = JSON.stringify({ llm: available() });
+    if (a.out) writeFileSync(a.out, text); else process.stdout.write(text + "\n");
+    return 0;
   }
   if (!a.intent) { process.stderr.write("error: --intent required\n"); return 2; }
 
@@ -25,11 +37,18 @@ function main(argv: string[]): number {
     else process.stdout.write(text + "\n");
     return 0;
   }
+  // --llm-expand: the LLM proposes extra keywords from the intent; they widen the deterministic
+  // candidate scan AND join the ranking vocabulary. Every proposal is grounded by the scan, so junk
+  // terms simply find nothing. Empty (graceful) when no LLM backend is available.
+  const extra = a.llmExpand ? expand_intent_terms(a.intent) : [];
   let cands: any[];
-  if (a.repo) cands = find_anchor_candidates(a.repo, [..._content_words(a.intent)].sort());
+  if (a.repo) {
+    const keywords = [...new Set([..._content_words(a.intent), ...extra])].sort();
+    cands = find_anchor_candidates(a.repo, keywords);
+  }
   else if (a.candidates) { try { cands = JSON.parse(readFileSync(a.candidates, "utf-8")); } catch (e) { process.stderr.write(`error: could not load candidates: ${(e as Error).message}\n`); return 2; } }
   else { process.stderr.write("error: pass --repo (scan) or --candidates (pre-gathered)\n"); return 2; }
-  const ranked = rank_anchors(a.intent, cands);
+  const ranked = rank_anchors(a.intent, cands, 12, extra);
   const text = JSON.stringify(ranked, null, 2);
   if (a.out) { writeFileSync(a.out, text); process.stdout.write(`Ranked: ${a.out}  (${ranked.length} candidate(s))\n`); }
   else process.stdout.write(text + "\n");
