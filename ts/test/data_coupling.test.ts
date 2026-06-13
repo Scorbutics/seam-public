@@ -62,6 +62,67 @@ describe("shared-key (data-flow) coupling", () => {
     expect(readerSyms).toEqual(["paymentHistory", "showInvoice"]);
   });
 
+  // The cross-language raw-SQL adapter: SQL DML text is uniform across host languages, so one scan
+  // covers JDBC/libpq/sqlite/raw queries in Java/C/C++/Ruby/TS — emitting the same `db-table` key.
+  test("raw-SQL adapter classifies DML cross-language (Java/C/Ruby filenames)", () => {
+    expect(scan_file_keys("Dao.java", `String q = "INSERT INTO payments (id) VALUES (?)";`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    expect(scan_file_keys("db.c", `sqlite3_exec(db, "DELETE FROM payments WHERE id=1", 0,0,0);`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    expect(scan_file_keys("m.rb", `Payment.find_by_sql("SELECT * FROM payments WHERE id = ?")`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: false }]);
+    expect(scan_file_keys("u.java", `em.createQuery("UPDATE payments SET amount = :a")`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    // schema-qualified + quoted identifiers normalize to the bare table name
+    expect(scan_file_keys("x.c", `"INSERT INTO public.payments(id) VALUES(1)"`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    expect(scan_file_keys("x.c", "\"SELECT id FROM `payments`\"")).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: false }]);
+  });
+
+  test("raw-SQL adapter does NOT false-match a JS `import … from \"mod\"` (needs SELECT)", () => {
+    expect(scan_file_keys("a.ts", `export { x } from "./helpers";\nimport y from "lib";`)).toEqual([]);
+  });
+
+  test("cross-stack: a Supabase read and a raw-SQL write on the SAME table share one db-table key", () => {
+    const hits = scan_file_keys("mixed.ts", `client.from('payments').select('*');\nconst q = "INSERT INTO payments (id) VALUES (1)";`);
+    expect(hits).toContainEqual({ kind: "db-table", value: "payments", line: 0, produces: false }); // Supabase builder → read
+    expect(hits).toContainEqual({ kind: "db-table", value: "payments", line: 1, produces: true });  // raw SQL → write
+  });
+
+  test("a raw-SQL writer couples to the Supabase readers of the same table (cross-stack, end-to-end)", async () => {
+    const g = await build_dependency_graph(repo, "src/backend/sql_report.ts", "archivePayment");
+    const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
+    expect(tbl).toBeDefined(); // detected purely from the raw INSERT — no Supabase builder in this file
+    const readerSyms = g.edges.filter((e: any) => e.from === tbl.id && e.kind === "db-read")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).symbol).sort();
+    expect(readerSyms).toEqual(["paymentHistory", "showInvoice"]);
+  });
+
+  // Tier-1 convention adapters: table identity is a model/codegen constant, not a string literal.
+  test("ActiveRecord (Ruby): Model.<method> → tableized model, AR-distinctive methods only", () => {
+    expect(scan_file_keys("m.rb", `Payment.where(active: true)`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: false }]);
+    expect(scan_file_keys("m.rb", `Payment.create!(amount: 1)`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    expect(scan_file_keys("m.rb", `UserProfile.find_each { |u| }`)).toEqual([{ kind: "db-table", value: "user_profiles", line: 0, produces: false }]);
+    expect(scan_file_keys("m.rb", `Category.where(id: 1)`)).toEqual([{ kind: "db-table", value: "categories", line: 0, produces: false }]); // y→ies
+    // ambiguous `Const.method` on non-models must NOT match (find/delete/parse excluded)
+    expect(scan_file_keys("m.rb", `File.delete(path)\nJSON.parse(s)\nUser.find(1)`)).toEqual([]);
+    // gated to .rb — the same text in a .ts file is not ActiveRecord
+    expect(scan_file_keys("a.ts", `Payment.where(active: true)`)).toEqual([]);
+  });
+
+  test("jOOQ (Java): insertInto/selectFrom/update(CONST) → lowercased table constant", () => {
+    expect(scan_file_keys("Dao.java", `dsl.insertInto(PAYMENTS).values(1)`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    expect(scan_file_keys("Dao.java", `dsl.selectFrom(Tables.PAYMENTS).fetch()`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: false }]);
+    expect(scan_file_keys("Dao.java", `dsl.update(PAYMENTS).set(F, v)`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: true }]);
+    // ambiguous `.update(lowercaseArg)` (e.g. MessageDigest) must NOT match
+    expect(scan_file_keys("C.java", `messageDigest.update(bytes)`)).toEqual([]);
+  });
+
+  test("cross-LANGUAGE coupling: a Ruby AR reader couples to the SQL/Supabase writers of the table", async () => {
+    const xrepo = join(__dir, "fixtures", "xlang-repo");
+    const g = await build_dependency_graph(xrepo, "src/writer.ts", "archivePayment"); // raw-SQL writer of `payments`
+    const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
+    const readerFiles = g.edges.filter((e: any) => e.from === tbl.id && e.kind === "db-read")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file).sort();
+    expect(readerFiles).toContain("app/reports.rb");    // Ruby ActiveRecord reader, found cross-language
+    expect(readerFiles).toContain("src/invoice.ts");    // TS Supabase reader — coupled to a SQL writer
+  });
+
   test("--no-data-coupling disables the boundary entirely", async () => {
     const g = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment", { dataCoupling: false });
     expect(g.nodes.some((n: any) => n.kind === "table")).toBe(false);
