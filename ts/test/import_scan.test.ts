@@ -43,6 +43,27 @@ describe("import-scan vs Python", () => {
     expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
   });
 
+  // METHOD anchor: a base-class method called via a subclass instance (DI/polymorphism). The import-
+  // scan front sees ZERO (methods are not import bindings); the call-site pass recovers the callers.
+  // Inheritance-narrowing then promotes calls whose receiver resolves to the owner or a subclass to
+  // RESOLVED_FULL, while a same-named call on an unrelated class stays RESOLVED_PARTIAL. Regression
+  // for the silent-zero gap on `engine.generate()`.
+  test("method anchor — inheritance-narrowed call-site discovery (Engine.generate)", async () => {
+    const repoDir = join(__dir, "fixtures", "method-repo");
+    const g = await build_consumers_graph(repoDir, "src/engine.ts", "generate", { depth: 1 });
+    const edgeFor = (sym: string) => {
+      const n = g.nodes.find((x: any) => x.symbol === sym);
+      return n && g.edges.find((e: any) => e.from === n.id && e.to === "n1");
+    };
+    // Anchor reads as its owning (abstract) class.
+    expect(g.nodes[0]).toMatchObject({ id: "n1", symbol: "generate", kind: "method", enclosing: "Engine" });
+    // Subclass instance (typed) → FULL; transitive subclass via `new` → FULL.
+    expect(edgeFor("run")).toMatchObject({ kind: "call", provenance: "RESOLVED_FULL" });
+    expect(edgeFor("runDeep")).toMatchObject({ kind: "call", provenance: "RESOLVED_FULL" });
+    // Same-named method on an UNRELATED class → stays PARTIAL (not falsely asserted as a consumer).
+    expect(edgeFor("makeReport")).toMatchObject({ kind: "call", provenance: "RESOLVED_PARTIAL" });
+  });
+
   test("DOWN dependency graph (what the anchor uses)", async () => {
     const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_dep.json"), "utf-8"));
     const g = await build_dependency_graph(join(__dir, "fixtures", "class-repo"), "src/checkout.ts", "checkout");
@@ -53,6 +74,35 @@ describe("import-scan vs Python", () => {
     const oracle = JSON.parse(readFileSync(join(__dir, "oracle", "scan_dispatch.json"), "utf-8"));
     const g = await build_dependency_graph(join(__dir, "fixtures", "dispatch-repo"), "src/dispatcher.ts", "dispatcher");
     expect(JSON.parse(JSON.stringify(g))).toEqual(oracle);
+  });
+
+  // Intra-file caller: a private helper called only by a same-file dispatcher has NO import edge and
+  // is skipped by the cross-file consumer scan — without the intra-file pass it grows to nothing.
+  test("intra-file caller of a private helper (fromStripe → enrich)", async () => {
+    const repoDir = join(__dir, "fixtures", "intrafile-repo");
+    const g = await build_resolved_graph(repoDir, "src/phase.ts", "fromStripe", { depth: 1 });
+    const caller = g.nodes.find((n: any) => n.symbol === "enrich");
+    expect(caller).toBeDefined();
+    expect(caller.file).toBe("src/phase.ts");
+    expect(g.edges).toContainEqual({ from: caller.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
+    // And it lands as a `link` (a consumer adjacent to the core), not environment.
+    const model = await decompose(from_resolved_graph(g), { repo: repoDir });
+    const hunks = model.clusters.flatMap((c: any) => c.seams).flatMap((s: any) => s.hunks);
+    expect(hunks.find((h: any) => h.label === "enrich")?.role).toBe("link");
+  });
+
+  // Intra-file NON-call reference: a same-file function that references `symbol` without calling it
+  // (callback / dispatch-table / alias) is a heuristic name match, surfaced as a RESOLVED_PARTIAL
+  // link — distinct from the deterministic FULL call edge, which is never downgraded.
+  test("intra-file non-call reference is RESOLVED_PARTIAL (fromStripe ↦ register)", async () => {
+    const repoDir = join(__dir, "fixtures", "intrafile-repo");
+    const g = await build_resolved_graph(repoDir, "src/phase.ts", "fromStripe", { depth: 1 });
+    const reg = g.nodes.find((n: any) => n.symbol === "register");
+    expect(reg).toBeDefined();
+    expect(g.edges).toContainEqual({ from: reg.id, to: "n1", kind: "reference", provenance: "RESOLVED_PARTIAL" });
+    // The direct caller stays deterministic (FULL), not downgraded by the weaker reference pass.
+    const enrich = g.nodes.find((n: any) => n.symbol === "enrich");
+    expect(g.edges).toContainEqual({ from: enrich.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
   });
 
   // End-to-end: scan → from_resolved_graph → decompose. The oracle is pinned with PYTHONHASHSEED=0

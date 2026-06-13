@@ -17,7 +17,7 @@ const _PARAM_NODE = new Set(["required_parameter", "optional_parameter", "rest_p
   "receiver_parameter", "typed_parameter", "default_parameter", "typed_default_parameter", "parameter"]);
 export const _CALL = new Set(["call_expression", "method_invocation", "call", "invocation_expression"]);
 // class / member / instantiation vocabulary (shared with import_scan)
-export const _CLASS_KINDS = new Set(["class_declaration", "class_definition", "class_specifier", "struct_specifier"]);
+export const _CLASS_KINDS = new Set(["class_declaration", "abstract_class_declaration", "class_definition", "class_specifier", "struct_specifier"]);
 export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration"]);
 export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_identifier"]);
 export const _MEMBER = new Set(["member_expression", "attribute", "field_access", "selector_expression", "field_expression"]);
@@ -29,6 +29,11 @@ export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parame
 export const _VAR_DECL = new Set(["lexical_declaration", "variable_declaration"]);
 export const _INTERFACE = new Set(["interface_declaration"]);
 export const _INTERFACE_MEMBER = new Set(["method_signature", "property_signature", "abstract_method_signature"]);
+// The `extends`-bases clause of a class, cross-language: TS extends_clause, Java superclass, Python
+// argument_list. We read its DIRECT name children only (so a base's generic args / an implements
+// clause are not mistaken for bases). _BASE_NAME = the kinds a base reference can take.
+export const _HERITAGE = new Set(["extends_clause", "superclass", "base_class_clause", "argument_list", "extends_interfaces"]);
+export const _BASE_NAME = new Set(["identifier", "type_identifier", "member_expression", "scoped_identifier", "scoped_type_identifier"]);
 export const _EXPORT = new Set(["export_statement"]);
 export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
 export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
