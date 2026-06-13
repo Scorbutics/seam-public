@@ -98,6 +98,22 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
   const anchorNorm = normpath(anchorFile);
   const boundaryOf = new Map<string, string>();   // `${kind} ${value}` → boundary node id (one per key)
 
+  // RELEVANCE prior for the capped fan: a complement that sits on the OTHER side of SEVERAL of the
+  // anchor's keys is coupled through more than one data channel, so it's on-intent (e.g. a file that
+  // writes BOTH `payments` and `members` in the payment flow); one sharing only a hub key (`members`)
+  // is generic noise. Score = number of distinct anchor keys whose complement side names the file.
+  // Cheap & deterministic — reuses the index already built; demotes hub-table crowds below the cap.
+  const coFile = new Map<string, number>();
+  for (const a of accs.values()) {
+    const e = index.get(ikey(a.kind, a.value));
+    const seen = new Set<string>();
+    for (const c of (a.produces ? e?.consumers : e?.producers) ?? []) {
+      if (normpath(c.file) === anchorNorm || seen.has(c.file)) continue;
+      seen.add(c.file);
+      coFile.set(c.file, (coFile.get(c.file) ?? 0) + 1);
+    }
+  }
+
   for (const a of [...accs.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
     const kk = kindOf(a.kind);
     const entry = index.get(ikey(a.kind, a.value));
@@ -118,7 +134,11 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
       nodes.push({ id: tid, symbol: a.value, kind: kk.nodeKind, file: anchorFile, range: [a.line, a.line], enclosing: "", complexity: 1 });
     }
     edges.push({ from: anchorId, to: tid, kind: a.produces ? kk.produceEdge : kk.consumeEdge, provenance: "RESOLVED_PARTIAL", line: a.line });
-    const complements = [...byFile.entries()].sort((x, y) => (x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1]));
+    const complements = [...byFile.entries()].sort((x, y) => {
+      const sx = coFile.get(x[0]) ?? 0, sy = coFile.get(y[0]) ?? 0;
+      if (sx !== sy) return sy - sx;   // higher cross-key co-occurrence first (relevance-ranked cap)
+      return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1];   // then stable file/line
+    });
     for (const [file, line] of complements.slice(0, READER_CAP)) {
       const u = await complement_unit(repo, file, line);
       counter += 1;
