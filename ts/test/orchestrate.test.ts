@@ -32,4 +32,31 @@ describe("codebase auto-orchestrate (host-bus inject) vs Python", () => {
     ];
     expect(_step_prompt("q", summary)).toBe(golden);
   });
+
+  // Robustness: a weak model can fixate on the (already-expanded) anchor every step. The grow must
+  // NOT die on that no-op — the engine advances the frontier deterministically (climb the nearest
+  // unexpanded consumer), so a→b→c still grows two hops even though the model only ever says "a up".
+  test("frontier fallback climbs the chain when the model only re-picks the anchor", async () => {
+    const chain = join("test", "fixtures", "chain-repo");
+    set_host_bus(new HostBus({ orchestrate: '[{"id":"step","node":"a","direction":"up","done":false}]' }));
+    let data: any, hist: any[];
+    try { [data, hist] = await auto_orchestrate(chain, "src/a.ts", "a", "how is a used", { maxSteps: 3 }); }
+    finally { set_host_bus(null); }
+    const syms = new Set(data.nodes.map((n: any) => n.symbol));
+    expect(syms.has("b")).toBe(true);   // 1st fallback hop
+    expect(syms.has("c")).toBe(true);   // 2nd fallback hop — the grow did NOT stop after the 1st no-op
+    // the substituted moves are recorded honestly as auto-advances, not as the model's "a up" pick
+    expect(hist.some((h) => h.auto && h.node === "b")).toBe(true);
+  });
+
+  test("_step_prompt annotates already-expanded moves and steers away from them", () => {
+    const summary = [
+      { id: "n1", symbol: "a", role: "core", file: "a.ts", crossing: false },
+      { id: "n2", symbol: "b", role: "link", file: "b.ts", crossing: false },
+    ];
+    const p = _step_prompt("q", summary, new Set(["a up"]));
+    expect(p).toContain("a — core — a.ts   [already expanded up]");
+    expect(p).toContain("picking that same"); // the steer-away guidance block is present
+    expect(p).not.toContain("b — link — b.ts   [already expanded"); // un-expanded node carries no tag
+  });
 });

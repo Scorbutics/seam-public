@@ -23,17 +23,24 @@ export function _summary(data: any): any[] {
   }));
 }
 
-export function _step_prompt(intent: string, summary: any[]): string {
+// `expanded` holds the moves already followed, keyed `${symbol} ${up|down}`. Annotating them in
+// the prompt stops the LLM re-picking a node+direction that can only yield what's already on screen
+// (the dominant wasted move: re-expanding the anchor, whose consumers the seed already pulled in).
+export function _step_prompt(intent: string, summary: any[], expanded: Set<string> = new Set()): string {
   const lines = [
     `A developer asks: "${intent}". You are GROWING a code footprint to answer it.`,
     "",
     "Current footprint (symbol — role — file):",
   ];
   let has_crossing = false;
+  let has_expanded = false;
   for (const n of summary.slice(0, 45)) {
     const tag = n.crossing ? "   ⤳ SUGGESTED CROSSING" : "";
     has_crossing = has_crossing || Boolean(n.crossing);
-    lines.push(`  ${n.symbol} — ${n.role} — ${n.file}${tag}`);
+    const up = expanded.has(`${n.symbol} up`), down = expanded.has(`${n.symbol} down`);
+    const exp = up && down ? "   [already expanded up+down]" : up ? "   [already expanded up]" : down ? "   [already expanded down]" : "";
+    has_expanded = has_expanded || Boolean(exp);
+    lines.push(`  ${n.symbol} — ${n.role} — ${n.file}${tag}${exp}`);
   }
   lines.push(
     "",
@@ -44,6 +51,14 @@ export function _step_prompt(intent: string, summary: any[]): string {
     "role/area is on the path to the answer. Set done=true once the footprint already covers the",
     "answer — do NOT over-expand.",
   );
+  if (has_expanded) {
+    lines.push(
+      "",
+      "A node marked [already expanded …] has had that direction FULLY followed — picking that same",
+      "node+direction again yields NOTHING new. Pick a DIFFERENT node, or a direction not yet expanded",
+      "(e.g. a freshly-added consumer's own consumers), or set done=true if the footprint already answers.",
+    );
+  }
   if (has_crossing) {
     lines.push(
       "",
@@ -73,19 +88,43 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
   const model = opts.model ?? "claude-haiku-4-5";
   let data: any = await build_consumers_graph(repo, anchorFile, symbol);
   const history: any[] = [];
+  // Moves already followed, keyed `${symbol} ${up|down}`. The seed = build_consumers_graph already
+  // expanded the ANCHOR's consumers, so its `up` starts expanded (re-picking it was the #1 wasted
+  // move). A no-op move no longer ends the grow — we skip it and bail only once genuinely stuck, so
+  // one bad pick can't strand the footprint short of the answer.
+  const expanded = new Set<string>([`${symbol} up`]);
+  const MAX_CONSEC_NOOP = 2;
+  let consecNoop = 0;
   for (let _step = 0; _step < maxSteps; _step++) {
     emit(`Growing the footprint with the LLM (step ${_step + 1}/${maxSteps})…`);
     const summary = _summary(data);
     let out: Map<string, any>;
-    try { out = run_pass(_step_prompt(intent, summary), { model, claudeBin: opts.claudeBin, tag: "orchestrate" }); }
+    try { out = run_pass(_step_prompt(intent, summary, expanded), { model, claudeBin: opts.claudeBin, tag: "orchestrate" }); }
     catch (e) { if (e instanceof LLMError) break; throw e; }
     let dec: any = out.get("step");
     if (dec === undefined) for (const v of out.values()) { if (v && typeof v === "object") { dec = v; break; } }
     if (!dec || typeof dec !== "object" || [true, "true", "True"].includes(dec.done)) break;
-    const node_sym = String(dec.node ?? "").trim();
-    const direction = String(dec.direction ?? "up").trim().toLowerCase().startsWith("d") ? "down" : "up";
-    const chosen = summary.find((n) => n.symbol === node_sym);
+    let node_sym = String(dec.node ?? "").trim();
+    let direction = String(dec.direction ?? "up").trim().toLowerCase().startsWith("d") ? "down" : "up";
+    let chosen = summary.find((n) => n.symbol === node_sym);
     if (!chosen) break;
+    let moveKey = `${node_sym} ${direction}`;
+    let auto = false;
+    // The LLM re-picked an already-followed move (a guaranteed no-op — weak models fixate on the
+    // anchor even when it's marked expanded). Rather than waste the step or stall, ADVANCE THE
+    // FRONTIER deterministically: climb the nearest not-yet-expanded consumer (up), toward the
+    // controller/handler/entrypoint that answers "how is X created". Only when no frontier remains
+    // is the grow genuinely stuck — then skip and bail after MAX_CONSEC_NOOP.
+    if (expanded.has(moveKey)) {
+      const fb = summary.find((n) => n.role !== "core" && !expanded.has(`${n.symbol} up`));
+      if (!fb) {
+        history.push({ node: node_sym, direction, added: 0, skipped: "already expanded" });
+        if (++consecNoop >= MAX_CONSEC_NOOP) break;
+        continue;
+      }
+      chosen = fb; node_sym = fb.symbol; direction = "up"; moveKey = `${fb.symbol} up`; auto = true;
+    }
+    expanded.add(moveKey);
     const nd = data.nodes.find((x: any) => x.id === chosen.id);
     if (!nd) break;
     const line = (nd.range ?? [0])[0];
@@ -100,14 +139,19 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const new_nodes = add.nodes.filter((n: any) => !have.has(_key(n))).length;
     if (new_nodes > _MOVE_CAP) {
-      history.push({ node: node_sym, direction, added: 0, skipped: `too broad (+${new_nodes})` });
+      history.push({ node: node_sym, direction, added: 0, skipped: `too broad (+${new_nodes})`, ...(auto ? { auto: true } : {}) });
+      if (++consecNoop >= MAX_CONSEC_NOOP) break;
       continue;
     }
     const before = data.nodes.length;
     // the expanded node becomes a core; DOWN deps ride in as links adjacent to it.
     data = merge_resolved(data, add, add.anchor?.id);
-    history.push({ node: node_sym, direction, added: data.nodes.length - before });
-    if (history[history.length - 1].added === 0) break;   // the move reached nothing new (a dead-end)
+    const added = data.nodes.length - before;
+    history.push({ node: node_sym, direction, added, ...(auto ? { auto: true } : {}) });
+    // a dead-end for THIS node+direction (now marked expanded) — don't end the whole grow on it; let
+    // the LLM try a different node, stopping only once it's stuck for MAX_CONSEC_NOOP moves running.
+    if (added === 0) { if (++consecNoop >= MAX_CONSEC_NOOP) break; continue; }
+    consecNoop = 0;
   }
   return [data, history];
 }
