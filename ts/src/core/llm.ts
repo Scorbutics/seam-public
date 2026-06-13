@@ -3,7 +3,7 @@
 // mode knowledge. The CLI subprocess backend is what lets the TS port be byte-verified against
 // Python via the host-bus contract (the same prompt both phases rebuild).
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -35,6 +35,37 @@ export class HostBus {
   serve(tag: string, prompt: string, model: string, thinking: number | null): string {
     this.recorded.set(tag, { prompt, model, thinking });
     return this.answers[tag] ?? "[]";
+  }
+}
+
+// An INTERACTIVE host bus. Where HostBus records every pass for one later batch (emit-prompts →
+// answer-all → inject-llm), this serves each pass synchronously over a filesystem channel: write a
+// request, BLOCK until the host writes the answer, return it. That on-demand round-trip is what lets
+// an in-the-loop feature — auto-orchestration, where step N's prompt depends on step N-1's answer —
+// be driven by an MCP client's own model via sampling. run_pass is synchronous, and the child has
+// nothing else to do but await this answer, so the wait is a synchronous Atomics poll.
+export class InteractiveHostBus extends HostBus {
+  private dir: string;
+  private seq = 0;
+  private waitMs: number;
+  constructor(dir: string, waitMs = 300_000) { super(); this.dir = dir; this.waitMs = waitMs; mkdirSync(dir, { recursive: true }); }
+  serve(tag: string, prompt: string, model: string, thinking: number | null): string {
+    const n = this.seq++;
+    const reqTmp = join(this.dir, `req-${n}.tmp`);
+    const reqPath = join(this.dir, `req-${n}.json`);
+    const respPath = join(this.dir, `resp-${n}.json`);
+    writeFileSync(reqTmp, JSON.stringify({ seq: n, tag, prompt, model, thinking }));
+    renameSync(reqTmp, reqPath);   // atomic publish — the host never reads a half-written request
+    const sleeper = new Int32Array(new SharedArrayBuffer(4));
+    const deadline = Date.now() + this.waitMs;
+    while (!existsSync(respPath)) {
+      if (Date.now() > deadline) return "[]";   // host gone/stuck → degrade like an unavailable model
+      Atomics.wait(sleeper, 0, 0, 50);          // block ~50ms between polls (no busy-spin)
+    }
+    let text = "[]";
+    try { text = JSON.parse(readFileSync(respPath, "utf-8")).text ?? "[]"; } catch { /* keep [] */ }
+    try { unlinkSync(reqPath); unlinkSync(respPath); } catch { /* ignore */ }
+    return text;
   }
 }
 

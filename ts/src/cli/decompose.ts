@@ -16,7 +16,7 @@ import { render } from "../diff/report_text.js";
 import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
-import { HostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
+import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
 import { emit } from "../core/progress.js";
 import { readFileSync } from "node:fs";
@@ -33,6 +33,7 @@ interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
+  llmBridge?: string;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -88,6 +89,7 @@ function parseArgs(argv: string[]): Args {
       case "--attribution": a.attribution = next(); break;
       case "--auto": a.auto = true; break;
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
+      case "--llm-bridge": a.llmBridge = next(); break;
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -215,6 +217,10 @@ async function runCodebase(a: Args): Promise<number> {
 
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
+  // --llm-bridge installs an INTERACTIVE host bus (process-wide) so every LLM pass — including the
+  // in-the-loop auto-orchestration moves — is served on demand by a host (the MCP server's sampling).
+  // Covers BOTH modes, so it must be set before dispatch and before any mode's own host-bus handling.
+  if (a.llmBridge) set_host_bus(new InteractiveHostBus(a.llmBridge));
   if (a.scan || a.graph || a.expandGraph) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph
   reset_usage();
   let hunks: Hunk[];

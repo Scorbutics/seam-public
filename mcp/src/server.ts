@@ -11,7 +11,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { join } from "node:path";
 import { EngineError, readJson, runEngine, withScratch, writeText } from "./engine.js";
-import { decomposeWithSampling } from "./sampling.js";
+import { runEngineWithBridge } from "./sampling.js";
 
 const ENGINE = z.enum(["det", "hybrid", "llm"]).default("det")
   .describe("det = offline, no LLM (default, recommended). hybrid/llm borrow YOUR model via MCP sampling.");
@@ -49,15 +49,16 @@ function errReply(e: unknown) {
   return { isError: true, content: [{ type: "text" as const, text: msg }] };
 }
 
+// One path for every engine: write the seam model to a scratch file and reply with it. `det` runs the
+// engine offline in one shot; `hybrid`/`llm` run it over the interactive bridge so its LLM passes are
+// served by the caller's own model via sampling.
 async function decompose(server: McpServer, baseFlags: string[], engine: string) {
   return withScratch(async (scratch) => {
-    if (engine === "det") {
-      const out = join(scratch, "seams.json");
-      runEngine([...baseFlags, "--classifier", "det", "--emit-seams", out]);
-      return reply(readJson(out));
-    }
-    const { model } = await decomposeWithSampling(server, [...baseFlags, "--classifier", engine], scratch);
-    return reply(model);
+    const out = join(scratch, "seams.json");
+    const flags = [...baseFlags, "--classifier", engine, "--emit-seams", out];
+    if (engine === "det") runEngine(flags);
+    else await runEngineWithBridge(server, flags, scratch);
+    return reply(readJson(out));
   });
 }
 
@@ -121,6 +122,38 @@ server.registerTool("intent_footprint", {
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth)];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
+    return await decompose(server, base, engine);
+  } catch (e) { return errReply(e); }
+});
+
+// Auto-grow: the LLM-in-the-loop counterpart to intent_footprint. Where intent_footprint takes ONE
+// static scan, this LOOPS — the model repeatedly picks the next node/direction to follow toward the
+// question, the engine expands the footprint, and it decomposes the grown result. Every move + the
+// final decomposition are served by YOUR model via sampling, so it is LLM-only (no `det`).
+const LLM_ENGINE = z.enum(["hybrid", "llm"]).default("hybrid")
+  .describe("LLM engine, served by YOUR model via sampling. 'det' is not valid for auto-grow.");
+
+server.registerTool("grow_intent", {
+  title: "Grow an intent footprint across a codebase (LLM-directed)",
+  description:
+    "Answer a question about a codebase by GROWING a footprint toward it: seed from an anchor symbol, "
+    + "then let the model iteratively choose the next consumer (up) or dependency (down) to follow until "
+    + "the footprint covers the answer, and decompose the result into seams. This is Seam's "
+    + "auto-orchestration loop — the model directs every move, served by YOUR model via MCP sampling "
+    + "(no nested CLI, no API key). Needs a sampling-capable client. For a single non-iterative scan, "
+    + "use `intent_footprint` instead.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file holding the anchor symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The anchor symbol to seed the footprint from."),
+    intent: z.string().describe("The natural-language question to grow the footprint toward."),
+    maxSteps: z.number().int().min(1).max(8).default(4).describe("Maximum number of grow moves the model may make."),
+    engine: LLM_ENGINE,
+  },
+}, async ({ repo, anchorFile, symbol, intent, maxSteps, engine }) => {
+  try {
+    const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
+      "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps)];
     return await decompose(server, base, engine);
   } catch (e) { return errReply(e); }
 });

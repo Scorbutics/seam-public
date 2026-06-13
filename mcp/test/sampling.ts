@@ -1,8 +1,8 @@
-// Proves the host-bus ↔ MCP sampling bridge end-to-end, WITHOUT a real LLM. The mock client declares
-// the sampling capability and answers each createMessage by reading the pass's prompt and returning a
-// valid reply — for the `label-clusters` pass it tags each group with a DISTINCTIVE "sampled-…" label
-// so we can assert the client's model actually drove the engine output (not a silent det fallback).
-// The full two-phase flow runs deterministically: emit-prompts → sampling → inject-llm → emit-seams.
+// Proves the interactive host-bus ↔ MCP sampling bridge end-to-end, WITHOUT a real LLM. The mock
+// client declares the sampling capability and answers each createMessage by reading the pass's prompt
+// and returning a valid reply — for the cluster pass it tags each group with a DISTINCTIVE "sampled-…"
+// label so we can assert the client's model actually drove the engine output (not a silent det
+// fallback). The engine runs with --llm-bridge and is served each pass on demand over the bridge.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { CreateMessageRequestSchema } from "@modelcontextprotocol/sdk/types.js";

@@ -755,6 +755,32 @@ async function decomposeViaVscodeLm(baseArgs: string[], out: string, run: string
   }
 }
 
+function llmBackend(): string {
+  return vscode.workspace.getConfiguration("seam").get<string>("llmBackend") || "cli";
+}
+
+// The single entry point both diff and codebase mode use to run a decomposition. `flags` are all engine
+// flags EXCEPT --emit-seams (added here → `out`); they MAY include --emit-graph (codebase mode — phase 2
+// writes both). When the engine runs LLM passes (`useLlm`) and the `copilot` backend is selected, this
+// serves those passes through VS Code's model (two-phase host-bus); otherwise one CLI run that locates a
+// claude/copilot binary. `hostBusable=false` forces the CLI even under copilot — for invocations whose
+// LLM work happens OUTSIDE the single host-bus pass (e.g. --auto's multi-step orchestration), which the
+// one-shot --emit-prompts/--inject-llm handshake cannot capture.
+async function runDecompose(flags: string[], out: string, useLlm: boolean, cwd: string,
+                            report: (m: string) => void, token: vscode.CancellationToken,
+                            hostBusable = true): Promise<void> {
+  const run = engine().run;
+  const baseArgs = [engineEntry("decompose"), ...flags];
+  if (useLlm && llmBackend() === "copilot") {
+    if (!hostBusable)
+      throw new Error("This command makes multi-step LLM calls that VS Code's language model can't serve "
+        + "in one pass. Set seam.llmBackend to \"cli\" (Claude Code / copilot CLI), or seam.engine to \"det\".");
+    await decomposeViaVscodeLm(baseArgs, out, run, cwd, report, token);
+  } else {
+    await runStreaming(run, [...baseArgs, "--emit-seams", out], cwd, report);
+  }
+}
+
 // Engine "ast" (deterministic + VS Code AST facts): ask the engine for the hunk skeleton
 // (so facts are keyed by the SAME ids), compute defines/enclosing from the language
 // server, write the partial facts payload, and return its path (for `--facts`). Returns
@@ -819,17 +845,12 @@ async function runReview(range: string) {
         }
         // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
         // the headless language server (warm daemon) with the deterministic floor as fallback.
-        const baseArgs = [engineEntry("decompose"), "--git", range, "--repo", repoRoot, ...engineArgs,
-                          ...(factsPath ? ["--facts", factsPath] : []),
-                          ...(resolver !== "det" ? ["--resolver", resolver] : []),
-                          ...(blastRadius ? ["--blast-radius"] : [])];
-        const onProgress = (m: string) => progress.report({ message: m });
-        // 'copilot' backend serves the LLM passes through VS Code's model (two-phase host-bus). With no
-        // LLM passes (det) it falls through to a single emit-seams run, so the gate is engineMode.
-        if (engineMode !== "det" && backend === "copilot")
-          await decomposeViaVscodeLm(baseArgs, out, run, tool, onProgress, token);
-        else
-          await runStreaming(run, [...baseArgs, "--emit-seams", out], tool, onProgress);
+        const flags = ["--git", range, "--repo", repoRoot, ...engineArgs,
+                       ...(factsPath ? ["--facts", factsPath] : []),
+                       ...(resolver !== "det" ? ["--resolver", resolver] : []),
+                       ...(blastRadius ? ["--blast-radius"] : [])];
+        // copilot backend serves the LLM passes through VS Code's model; det/cli run as one CLI call.
+        await runDecompose(flags, out, engineMode !== "det", tool, (m) => progress.report({ message: m }), token);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
@@ -871,15 +892,17 @@ function codebaseEnv(): { tool: string } | null {
 // intent labels (proposed).
 async function runScan(tool: string, scanArgs: string[], title: string, range: string) {
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title, cancellable: true },
+    async (progress, token) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        const [bin, base] = decomposeInvocation(tool,
-          ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
-        await runStreaming(bin, base, tool, (m) => progress.report({ message: m }));
+        const engineCfg = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        // --auto orchestrates multiple LLM steps outside the host-bus pass → it can't be served via
+        // vscode.lm; force the CLI for it (hostBusable=false).
+        const flags = ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engineCfg, "--emit-graph", graph];
+        await runDecompose(flags, out, engineCfg !== "det", tool,
+          (m) => progress.report({ message: m }), token, !scanArgs.includes("--auto"));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;                          // fresh analysis = new session to grow from
         const ts = Date.now();
@@ -936,13 +959,13 @@ async function analyzeCodebase() {
 async function runScanClass(tool: string,
                             anchor: { symbol: string; file: string }, depth: number, intent?: string) {
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Seam: resolving methods of ${anchor.symbol}…` },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title: `Seam: resolving methods of ${anchor.symbol}…`, cancellable: true },
+    async (progress, token) => {
       const cand = path.join(tool, `.seam-cand-${Date.now()}.json`);
       const attr = path.join(tool, `.seam-attr-${Date.now()}.json`);
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const engineCfg = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         const base = ["--scan", "--repo", repoRoot, "--anchor-file", anchor.file, "--symbol", anchor.symbol];
         // phase 1 — candidates
         progress.report({ message: "Finding method call-sites…" });
@@ -960,8 +983,8 @@ async function runScanClass(tool: string,
         }
         // phase 3 — decompose with the verified (or heuristic) attribution
         const graph = path.join(tool, SESSION_GRAPH);
-        const [bin, args] = decomposeInvocation(tool, [...base, ...scanArgs, "--classifier", engine, "--emit-graph", graph, "--emit-seams", out]);
-        await runStreaming(bin, args, tool, (m) => progress.report({ message: m }));
+        await runDecompose([...base, ...scanArgs, "--classifier", engineCfg, "--emit-graph", graph],
+          out, engineCfg !== "det", tool, (m) => progress.report({ message: m }), token);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         sessionGraph = graph;
         const ts = Date.now();
@@ -1018,20 +1041,23 @@ async function expandFrom(node: { hunk?: SeamHunk } | undefined, down: boolean, 
   const before = nodeCount(model);
   const dir = down ? "dependencies of" : "consumers of";
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…` },
-    async (progress) => {
+    { location: vscode.ProgressLocation.Notification, title: `Seam: expanding to the ${dir} ${symbol}…`, cancellable: true },
+    async (progress, token) => {
       const out = path.join(env.tool, `.seam-${Date.now()}.json`);
       try {
-        const engine = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+        const engineCfg = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
         // read the session graph AND write the grown one back to it (decompose loads before writing)
         const flags = ["--expand-graph", sessionGraph!, "--repo", repoRoot,
                        "--expand-file", h.file, "--expand-symbol", symbol, "--expand-line", String(h.start),
-                       "--depth", String(depth), "--classifier", engine, "--emit-graph", sessionGraph!, "--emit-seams", out];
+                       "--depth", String(depth), "--classifier", engineCfg, "--emit-graph", sessionGraph!];
         if (down) flags.push("--down");
         if (crossNote) flags.push("--cross-from", crossNote);
         if (sessionIntent) flags.push("--intent", sessionIntent);
-        const [bin, args] = decomposeInvocation(env.tool, flags);
-        await runStreaming(bin, args, env.tool, (m) => progress.report({ message: m }));
+        // NB: expand DOWN (dependencies) discovers the graph with an LLM call that runs OUTSIDE the
+        // host-bus pass, so under the copilot backend that step still needs a CLI; expand UP (consumers)
+        // is fully served via vscode.lm.
+        await runDecompose(flags, out, engineCfg !== "det", env.tool,
+          (m) => progress.report({ message: m }), token);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
         const ts = Date.now();
         const range = `expanded ${down ? "↓" : "+"}${symbol}`;

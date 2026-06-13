@@ -60,6 +60,11 @@ roles/wiring — recommended) or `llm` (all passes by the LLM).
 > each pass; if a change still doesn't fit it tells you to narrow the range or switch to `cli` (Claude
 > Code's ≈200K window). The `cli` backend has far more headroom.
 
+The `copilot` backend also serves **codebase mode** (Analyze from anchor/module/class, Expand). Two
+operations stay on the `cli` backend because their LLM work happens across multiple steps that VS Code's
+model can't serve in one pass: **Auto-map intent** (it tells you to switch to `cli`) and the dependency
+discovery in **Expand → dependencies** (Expand → consumers is fine).
+
 > **Offline fallback (`det`):** with no LLM backend, set `seam.engine` to `det` to still get a
 > decomposition — but the seam labels are **structural**, not product-intent, so you lose the core of
 > what Seam is for. Treat it as a degraded mode, not the default experience.
