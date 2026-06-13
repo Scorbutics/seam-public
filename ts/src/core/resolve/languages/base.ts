@@ -9,6 +9,11 @@ export const SKIP_DIRS = new Set([
   "target", "vendor", ".gradle", "__pycache__",
 ]);
 
+// One query-builder TABLE access — `client.from('table').verb(...)` — the SYNTACTIC shape in a given
+// language (the verb is the raw chained method). LANGUAGE-specific (how the chain is written); a
+// FRAMEWORK adapter (codebase/coupling/adapters) decides which verbs are writes vs reads.
+export interface TableAccess { table: string; verb: string; line: number }
+
 // One imported symbol — the uniform unit the generic scan consumes. `source` set ⇒ resolve the
 // MODULE path (TS); `source` null ⇒ resolve the SYMBOL at (line,col) via the LSP (Python).
 export interface ImportRef {
@@ -39,6 +44,9 @@ export interface LanguageProvider {
   resolve?: (repo: string, importingFile: string, source: string) => string | null;
   // the file's import statements → ImportRef[].
   imports?: (text: string) => ImportRef[];
+  // query-builder table accesses (`.from('t').verb`) in THIS language's syntax → raw {table, verb, line}.
+  // The verb classification (write vs read) is the framework adapter's job, not the language's.
+  tableAccess?: (text: string) => TableAccess[];
   moduleEntry?: RegExp;  // basename regex marking a module entry (TS index.*, Python __init__.py)
   // the MAIN-entry line inside a module entry (ctx = an atoms Ctx, duck-typed). null ⇒ can't decide.
   entrypoint?: (ctx: any) => number | null;

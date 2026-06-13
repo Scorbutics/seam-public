@@ -51,6 +51,51 @@ function _ground(repo: string, target: string, entryIndex: Map<string, string[]>
   return matches.length ? matches[0] : null;
 }
 
+// Tier-3, SHARED-KEY front-end: the LLM names data-flow KEYS this function produces/consumes (DB
+// tables, queue/topic/event names, route paths) — cross-framework, where the deterministic adapters
+// (Supabase regex etc.) are blind. Each proposal grounds through the coupling shared_key_index, so
+// the LLM and the regex floor feed the SAME boundary machinery. Returns {kind, value, produces}.
+function buildKeyPrompt(file: string, snippet: string): string {
+  return `You are analysing ONE function for DATA-FLOW couplings carried by a SHARED KEY — an identifier
+it shares with OTHER files that no import or call connects: a DB table, a queue/topic name, an event
+name, a cache key, an HTTP route path. NOT ordinary imports/calls.
+
+FUNCTION (file: ${file}):
+${snippet}
+
+For each shared key with CONCRETE textual evidence above, give:
+  kind  — one of: db-table | queue | event | route | cache | key
+  value — the literal name (the table/topic/event/route string)
+  role  — "produces" if this function WRITES/EMITS/HANDLES it, "consumes" if it READS/SUBSCRIBES to it
+Do NOT invent keys — only ones literally present. A wrong guess is worse than silence.
+
+Return a JSON array, one object per key (empty array if none):
+[{"id":"k1","kind":"db-table","value":"payments","role":"produces"}]
+`;
+}
+
+export function discover_keys(repo: string, anchorFile: string, fileText: string, lo: number, hi: number,
+    opts: { model?: string; claudeBin?: string | null } = {}): { kind: string; value: string; produces: boolean }[] {
+  const snippet = fileText.split("\n").slice(lo, hi + 1).join("\n").slice(0, 4000);
+  if (!snippet.trim()) return [];
+  let out: Map<string, any>;
+  try { out = run_pass(buildKeyPrompt(anchorFile, snippet), { model: opts.model, claudeBin: opts.claudeBin, tag: "discover-keys" }); }
+  catch (e) { if (e instanceof LLMError) return []; throw e; }
+  const keys: { kind: string; value: string; produces: boolean }[] = [];
+  const seen = new Set<string>();
+  for (const obj of out.values()) {
+    if (!obj || typeof obj !== "object") continue;
+    const kind = String(obj.kind ?? "").trim(), value = String(obj.value ?? "").trim();
+    if (!kind || !value) continue;
+    const produces = String(obj.role ?? "").trim().toLowerCase().startsWith("produc");
+    const k = `${kind} ${value} ${produces}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    keys.push({ kind, value, produces });
+  }
+  return keys;
+}
+
 export function discover(repo: string, anchorFile: string, fileText: string, lo: number, hi: number,
     resolvedFiles: string[], opts: { model?: string; claudeBin?: string | null } = {}): any[] {
   const snippet = fileText.split("\n").slice(lo, hi + 1).join("\n").slice(0, 4000);

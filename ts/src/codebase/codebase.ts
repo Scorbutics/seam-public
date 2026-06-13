@@ -76,8 +76,13 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
+import { KEY_EDGE_KINDS } from "./coupling/index.js";
+// Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
+// plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
+// newly-registered key kind becomes a crossing automatically.
+const _CROSSING_KINDS = new Set(["dispatch", ...KEY_EDGE_KINDS]);
 export function _is_crossing(e: Edge): boolean {
-  return e.kind === "dispatch" || e.provenance === Provenance.SUGGESTED;
+  return _CROSSING_KINDS.has(e.kind) || e.provenance === Provenance.SUGGESTED;
 }
 
 function _hard_reachable(g: Graph): Set<string> {

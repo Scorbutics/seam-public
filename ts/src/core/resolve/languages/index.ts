@@ -3,7 +3,8 @@
 // extensions to SOURCE_EXTS. TS/Python carry the floor + import parsing.
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec } from "./base.js";
+import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec, type TableAccess } from "./base.js";
+export type { TableAccess };
 import { PROVIDER as TS } from "./typescript.js";
 import { PROVIDER as PY } from "./python.js";
 
@@ -64,6 +65,13 @@ export function project_root(repo: string, file: string, spec: ServerSpec): stri
 export function parse_imports(file: string, text: string): ImportRef[] {
   const p = provider_for(file);
   return p?.imports ? p.imports(text) : [];
+}
+
+// the file's query-builder table accesses (`.from('t').verb`), via its language provider. [] if the
+// language has no such syntax (the framework adapter then classifies the verbs).
+export function table_access(file: string, text: string): TableAccess[] {
+  const p = provider_for(file);
+  return p?.tableAccess ? p.tableAccess(text) : [];
 }
 
 // True if `file`'s basename marks a module ENTRY in ANY language (TS index.*, Python __init__.py).

@@ -83,10 +83,11 @@ const _MOVE_CAP = 30;   // a single move adding more than this is "too broad" (a
 // nodes is SKIPPED — it floods the footprint instead of advancing the answer. Degrades to whatever
 // it has grown if the LLM is unavailable / unusable.
 export async function auto_orchestrate(repo: string, anchorFile: string, symbol: string, intent: string,
-    opts: { maxSteps?: number; model?: string; claudeBin?: string | null } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; model?: string; claudeBin?: string | null; dataCoupling?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 4;
   const model = opts.model ?? "claude-haiku-4-5";
-  let data: any = await build_consumers_graph(repo, anchorFile, symbol);
+  const dataCoupling = opts.dataCoupling;
+  let data: any = await build_consumers_graph(repo, anchorFile, symbol, { dataCoupling });
   const history: any[] = [];
   // Moves already followed, keyed `${symbol} ${up|down}`. The seed = build_consumers_graph already
   // expanded the ANCHOR's consumers, so its `up` starts expanded (re-picking it was the #1 wasted
@@ -131,8 +132,8 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     let add: any;
     try {
       add = direction === "down"
-        ? await build_dependency_graph(repo, nd.file, nd.symbol, { anchorLine: line })
-        : await build_consumers_graph(repo, nd.file, nd.symbol, { anchorLine: line });
+        ? await build_dependency_graph(repo, nd.file, nd.symbol, { anchorLine: line, dataCoupling })
+        : await build_consumers_graph(repo, nd.file, nd.symbol, { anchorLine: line, dataCoupling });
     } catch { break; }
     // a move that would flood the footprint (a widely-used class' consumers) doesn't advance the
     // answer — skip it and let the LLM try elsewhere, rather than drowning the intent in noise.
