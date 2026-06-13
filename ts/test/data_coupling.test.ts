@@ -53,7 +53,7 @@ describe("shared-key (data-flow) coupling", () => {
     // proposes the db-table key; it grounds via the index (which knows the Supabase readers).
     set_host_bus(new HostBus({ "discover": "[]", "discover-keys": '[{"id":"k1","kind":"db-table","value":"payments","role":"produces"}]' }));
     let g: any;
-    try { g = await build_dependency_graph(repo, "src/backend/prisma_persist.ts", "prismaPersist", { useLlm: true }); }
+    try { g = await build_dependency_graph(repo, "src/backend/prisma_persist.ts", "prismaPersist", { dataCouplingLlm: true }); }
     finally { set_host_bus(null); }
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined(); // surfaced PURELY from the LLM proposal + the shared index

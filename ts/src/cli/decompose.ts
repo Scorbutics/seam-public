@@ -33,7 +33,7 @@ interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
-  llmBridge?: string; dataCoupling: boolean;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -47,7 +47,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -91,6 +91,9 @@ function parseArgs(argv: string[]): Args {
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--no-data-coupling": a.dataCoupling = false; break;
+      // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
+      // llm=floor + the LLM shared-key front-end (cross-framework key proposals).
+      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; break; }
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -125,8 +128,8 @@ async function runCodebase(a: Args): Promise<number> {
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
       const add = a.down
-        ? await scan.build_dependency_graph(a.repo, a.expandFile!, a.expandSymbol!, { anchorLine: a.expandLine ?? null, useLlm: useLlm0, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling })
-        : await scan.build_consumers_graph(a.repo, a.expandFile!, a.expandSymbol!, { depth: a.depth, anchorLine: a.expandLine ?? null, dataCoupling: a.dataCoupling });
+        ? await scan.build_dependency_graph(a.repo, a.expandFile!, a.expandSymbol!, { anchorLine: a.expandLine ?? null, useLlm: useLlm0, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm })
+        : await scan.build_consumers_graph(a.repo, a.expandFile!, a.expandSymbol!, { depth: a.depth, anchorLine: a.expandLine ?? null, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
       data = merge_resolved(base, add, add.anchor?.id);
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
@@ -146,7 +149,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
       const { auto_orchestrate } = await import("../codebase/orchestrate.js");
       let hist: any[];
-      try { [data, hist] = await auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling }); }
+      try { [data, hist] = await auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm }); }
       catch (e) { err(`auto-orchestration failed: ${(e as Error).message}`); }
       process.stdout.write(`[auto] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.direction}:${h.node}(+${h.added})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
@@ -171,7 +174,7 @@ async function runCodebase(a: Args): Promise<number> {
       // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
       // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
       data = a.symbol
-        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling })
+        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
         : await scan.build_module_graph(a.repo, a.anchorFile!);
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
