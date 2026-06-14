@@ -13,6 +13,8 @@ import { difference, findAll, findGroup1, intersect, sorted, union } from "../co
 
 const _LOGIC_CORE_THRESHOLD = 2;
 const _AMBIENT_EXTERNAL_MIN = 3;
+const _COIMPORT_MIN = 2;          // external import referenced by ≥N hunks ⇒ shared building block, not a coupling
+const _COIMPORT_DOMINANCE = 8;    // …but only strip when MANY such shared imports exist (design-system migration fingerprint)
 const _RECONCILE_GATE = 4;
 
 const _CONF_TEST = 1.0, _CONF_ENV_IMPORT = 1.0, _CONF_ENV_DECL = 0.85, _CONF_ENV_SQL = 0.9;
@@ -76,6 +78,25 @@ export function _anchors(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set
     out.set(cid, set);
   }
   return out;
+}
+
+// External imports REFERENCED by ≥_COIMPORT_MIN hunks are shared building blocks (e.g. a design-
+// system component everyone imports), not couplings — on a re-skin they dominate the candidate
+// signal. Used ONLY to clean the LLM wiring SEED (the hybrid reconcile hint); det clustering and
+// grounding read the raw wiring graph and are deliberately left untouched. In-diff definitions are
+// never returned (they are real couplings); single-use externals are spared.
+export function coimport_externals(work: Hunk[], facts: Map<string, HunkFacts>): Set<string> {
+  const new_vocab = work.length ? union(...work.map((h) => facts.get(h.id)!.defines)) : new Set<string>();
+  const external = difference(new Set(_diff_imports(work).keys()), new_vocab);
+  const refFreq = new Map<string, number>();
+  for (const h of work) for (const s of facts.get(h.id)!.references)
+    if (external.has(s)) refFreq.set(s, (refFreq.get(s) ?? 0) + 1);
+  const out = new Set<string>();
+  for (const s of external) if ((refFreq.get(s) ?? 0) >= _COIMPORT_MIN) out.add(s);
+  // Density gate: only treat co-imports as noise when MANY shared externals exist (a design-system
+  // migration). Below the threshold a diff's few shared imports may be real couplings, and the
+  // harness showed unconditional stripping over-prunes them — so leave small/clean diffs untouched.
+  return out.size >= _COIMPORT_DOMINANCE ? out : new Set<string>();
 }
 
 function _resolved_edges(work: Hunk[], facts: Map<string, HunkFacts>): Map<string, Set<string>> {

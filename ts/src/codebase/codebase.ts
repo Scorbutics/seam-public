@@ -263,29 +263,64 @@ export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: 
   return _sweep_leftovers(g, seams, adj);
 }
 
-function _relevance_prompt(intent: string, cores: Node[], links: Node[]): string {
-  const lines = [`A developer is mapping the code that answers: "${intent}".`, "", "FOCUS — the core code this question is about:"];
-  for (const n of cores.slice(0, 30)) lines.push(`  ${n.label}  (${n.file})`);
-  lines.push("", "CANDIDATE WIRING — code reached while mapping the question. For EACH, decide if it is ON",
-    "the path to answering it (relevant), or INCIDENTAL — connected but not part of the answer",
-    "(session/auth setup, logging, config, generic utilities, an unrelated sibling import):");
-  for (const n of links) lines.push(`  ${n.id}: ${n.label}  (${n.file})`);
-  lines.push("", "Default to relevant when unsure; mark incidental ONLY when clearly off the answer path.",
-    "Output ONLY a JSON array, one object per candidate:", '[{"id":"<id>","relevant":true|false}]');
-  return lines.join("\n");
-}
-
-export function mark_relevance_llm(g: Graph, intent: string, opts: { model?: string; claudeBin?: string | null } = {}): void {
-  const links = [...g.nodes.values()].filter((n) => n.role === "link");
-  if (!intent || !links.length) return;
-  const cores = [...g.nodes.values()].filter((n) => n.role === "core");
-  let out: Map<string, any>;
-  try { out = run_pass(_relevance_prompt(intent, cores, links), { model: opts.model, claudeBin: opts.claudeBin, tag: "relevance" }); }
-  catch (e) { if (e instanceof LLMError) return; throw e; }
-  for (const n of links) {
-    const obj = out.get(n.id);
-    if (obj && typeof obj === "object" && [false, "false", "False", 0].includes(obj.relevant)) n.relevant = false;
+// One intent-aware pass over the FINAL seams — INCLUDING the grown-consumer and data-coupling seams
+// that refine_seams_llm (intra-anchor members only) and mark_relevance_llm (link nodes only) never
+// reach for a function anchor. Per seam it (1) NAMES the technical intent in 3-6 words (replacing the
+// mechanical floor label = a raw table/handler symbol), (2) marks a seam INCIDENTAL when it's coupled
+// but a different concern (a sibling entity's CRUD bundled on the same page) so the default view dims
+// it without dropping it, and (3) votes the single seam that best ANSWERS the question into focus.
+// Supersedes the link-only mark_relevance_llm — one run_pass call, so the generation stays ceiling-safe.
+export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: string,
+    opts: { model?: string; claudeBin?: string | null } = {}): void {
+  // Include SUGGESTED seams — in codebase mode those ARE the grown-consumer + data-coupling crossing
+  // seams (reached only via SUGGESTED edges), exactly the ones carrying mechanical labels and the most
+  // likely to be off-intent. Excluding them is what left `members`/`GET`/`POST` unnamed and undimmed.
+  const ranked = seams.filter((s) => s.node_ids.length);
+  if (ranked.length < 2) return;
+  const rep = (s: Seam) => maxBy(s.node_ids.map((i) => g.nodes.get(i)!).filter(Boolean), (n) => n.complexity);
+  const lines = [`A developer is mapping the code that answers: "${intent}".`, "",
+    "Here are candidate SEAMS — each a group of related code reached while mapping that question.",
+    "For EACH seam decide three things:",
+    " - label: 3-6 words naming what this seam DOES (its technical intent — NOT a file or symbol name)",
+    " - relevant: true if it is ON the path to answering the question; false if it is connected but a",
+    "   DIFFERENT concern (a sibling entity's CRUD, auth/session/logging/config, a generic utility)",
+    " - answers: true for the SINGLE seam that best answers the question, false for the rest (at most one true)",
+    ""];
+  for (const s of ranked) {
+    const r = rep(s); if (!r) continue;
+    const others = s.node_ids.map((i) => g.nodes.get(i)!).filter((n) => n && n !== r).slice(0, 3).map((n) => n.label).filter(Boolean);
+    lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}`);
   }
+  lines.push("", "Default relevant=true when unsure; mark incidental ONLY when clearly a different concern.",
+    "Output ONLY a JSON array, one object per seam:",
+    '[{"id":"<seam id>","label":"<3-6 words>","relevant":true|false,"answers":true|false}]');
+
+  let out: Map<string, any>;
+  try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-intent" }); }
+  catch (e) { if (e instanceof LLMError) return; throw e; }
+
+  // Relabel + collect verdicts; pick the single best "answers" seam (highest-complexity rep breaks ties).
+  const incidental = new Set<string>();
+  let answer: { id: string; cx: number } | null = null;
+  for (const s of ranked) {
+    const o = out.get(s.id);
+    if (!o || typeof o !== "object") continue;
+    const lab = String(o.label ?? "").trim();
+    if (lab) s.label = lab;
+    if ([false, "false", "False", 0].includes(o.relevant)) incidental.add(s.id);
+    if ([true, "true", "True", 1].includes(o.answers)) {
+      const cx = rep(s)?.complexity ?? 1;
+      if (!answer || cx > answer.cx) answer = { id: s.id, cx };
+    }
+  }
+  // Dim incidental seams (keep visible) — but never dim a node that ALSO lives in a relevant seam.
+  const keep = new Set<string>();
+  for (const s of ranked) if (!incidental.has(s.id)) for (const nid of s.node_ids) keep.add(nid);
+  for (const s of ranked) if (incidental.has(s.id)) for (const nid of s.node_ids) {
+    if (keep.has(nid)) continue;
+    const n = g.nodes.get(nid); if (n) n.relevant = false;
+  }
+  if (answer) for (const s of seams) s.selected = s.id === answer.id;
 }
 
 // --------------------------------------------------------------------------- detect_* (C3)
@@ -428,9 +463,11 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   let seams = assign_intent_seams(g);
   if (opts.useLlm) {                                  // F4: the LLM refines/names the partition (proposed)
     seams = refine_seams_llm(g, seams, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin });
-    if (opts.intent) mark_relevance_llm(g, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
   }
   seams = _extract_suggested_seams(g, seams);
+  // Intent pass over the FINAL seams (grown + data-coupling included): names them, dims off-intent
+  // concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
+  if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
   const health = wellformedness(g);
   return emit_seams(g, health, seams);
 }

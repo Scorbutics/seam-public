@@ -75,10 +75,21 @@ function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
   const targets = work.filter((h) => h.role !== "core");
   if (!cores.size) return null;
   const coreIds = new Set(cores.keys());
-  const hints = new Map<string, string[]>();
-  for (const h of targets) hints.set(h.id, [...h.wires]);
-  const { labels, groups, drawn } = llm.reconcile_llm(cores, targets, hints, llmOpts);
   const anchors = det._anchors(work, facts, coreIds);
+  // Clean the LLM wiring SEED of co-import noise: drop a candidate core from an edit's hint when the
+  // only symbols linking the two are shared design-system imports (referenced by ≥2 hunks). This
+  // biases the seed, not the answer — the LLM still re-adds real couplings from meaning, and det
+  // clustering/grounding (which read h.wires) are untouched. Big win on re-skins, no-op on logic.
+  const coimp = det.coimport_externals(work, facts);
+  const hints = new Map<string, string[]>();
+  for (const h of targets) {
+    const m = det._mentions(facts.get(h.id)!);
+    hints.set(h.id, [...h.wires].filter((c) => {
+      const ov = [...(anchors.get(c) ?? new Set<string>())].filter((s) => m.has(s));
+      return ov.length === 0 || ov.some((s) => !coimp.has(s));
+    }));
+  }
+  const { labels, groups, drawn } = llm.reconcile_llm(cores, targets, hints, llmOpts);
   for (const h of targets) {
     const line = drawn.get(h.id);
     if (line === undefined) continue;
