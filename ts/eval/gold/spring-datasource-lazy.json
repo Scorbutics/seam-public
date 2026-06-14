@@ -1,0 +1,12 @@
+[
+  {"id":"h1","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"link","wires":["s1"],"rationale":"DataSourceBuilder.derivedFrom drops its inline unwrap and delegates to DataSourceUnwrapper.unwrapRoot"},
+  {"id":"h2","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"core","seam":"s1","seam_label":"unwrapRoot: recursive DataSource unwrap","rationale":"new unwrapRoot — recursively unwraps delegating + AOP-proxy + java.sql.Wrapper layers to the root DataSource"},
+  {"id":"h3","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"core","seam":"s1","seam_label":"unwrapRoot: recursive DataSource unwrap","rationale":"new safeUnwrap(DataSource) helper used by unwrapRoot for the java.sql.Wrapper layer"},
+  {"id":"h4","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"DataSourceBuilderTests: derivedFrom imports / setup"},
+  {"id":"h5","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"DataSourceBuilderTests: setup"},
+  {"id":"h6","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"DataSourceBuilderTests: derivedFrom now unwraps to the root datasource"},
+  {"id":"h7","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"DataSourceUnwrapperTests: covers unwrapRoot across the layer types"},
+  {"id":"h8","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"LiquibaseAutoConfigurationTests: consumer-module test adjusted for the new unwrap behaviour"},
+  {"id":"h9","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"LiquibaseAutoConfigurationTests: consumer-module test adjusted"},
+  {"id":"h10","group":"g1","intent":"centralize DataSource root-unwrapping (delegating/proxy/wrapper layers)","role":"test","wires":["s1"],"rationale":"LiquibaseAutoConfigurationTests: consumer-module test adjusted"}
+]

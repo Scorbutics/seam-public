@@ -1,0 +1,18 @@
+[
+  {"id":"h1","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"CanvasItem.xml — documents the new oversampling_with_scale property"},
+  {"id":"h2","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"CanvasItem.xml — documents the OversamplingWithScale enum values"},
+  {"id":"h3","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"link","wires":["s1"],"rationale":"theme_editor_preview.cpp — editor consumer opts the preview into oversampling-with-scale"},
+  {"id":"h4","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"canvas_item.cpp — #include dpi_texture.h for the scaling-level refcount"},
+  {"id":"h5","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"core","seam":"s1","seam_label":"oversampling-with-scale on CanvasItem","rationale":"redraw path: computes override×viewport oversampling and ref/unref the oversampling+DPI scaling levels"},
+  {"id":"h6","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"core","seam":"s1","seam_label":"oversampling-with-scale on CanvasItem","rationale":"_is_oversampling_with_scale (recursive parent resolution) + _update_oversampling helpers"},
+  {"id":"h7","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"link","wires":["s1"],"rationale":"ENTER_TREE: invokes _update_oversampling so the level is set on entry"},
+  {"id":"h8","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"core","seam":"s1","seam_label":"oversampling-with-scale on CanvasItem","rationale":"hide/exit: unreferences the cached oversampling level and resets the cache (lifecycle cleanup)"},
+  {"id":"h9","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"link","wires":["s1"],"rationale":"_notify_transform: invokes _update_oversampling so a scale change re-derives the level"},
+  {"id":"h10","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"_bind_methods — binds set/get_oversampling_with_scale"},
+  {"id":"h11","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"_bind_methods — registers the oversampling_with_scale property"},
+  {"id":"h12","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"_bind_methods — binds the OversamplingWithScale enum constants"},
+  {"id":"h13","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"canvas_item.h — new member fields (override, cache, with-scale mode)"},
+  {"id":"h14","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"canvas_item.h — declarations for the oversampling helpers"},
+  {"id":"h15","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"canvas_item.h — public set/get_oversampling_with_scale declarations"},
+  {"id":"h16","group":"g1","intent":"auto-adjust oversampling with canvas item scale","role":"environment","wires":["s1"],"rationale":"canvas_item.h — OversamplingWithScale enum declaration"}
+]
