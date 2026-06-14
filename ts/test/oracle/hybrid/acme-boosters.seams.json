@@ -467,8 +467,7 @@
               "externalRefs": [],
               "rewire": null,
               "suggestedWires": [
-                "h10",
-                "h14"
+                "h10"
               ],
               "wireTargets": [
                 {
@@ -519,8 +518,7 @@
               "externalRefs": [],
               "rewire": null,
               "suggestedWires": [
-                "h10",
-                "h14"
+                "h10"
               ]
             }
           ]

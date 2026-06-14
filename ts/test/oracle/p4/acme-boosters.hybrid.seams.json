@@ -1,1 +1,460 @@
-{"clusters": [{"id": "g1", "intent": "product intent 1", "colorIndex": 0, "seams": [{"id": "s-ambient", "label": "product intent 1", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h1", "file": "supabase/functions/_shared/scoring/src/config.ts", "start": 1, "end": 8, "role": "environment", "confidence": 0.85, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g2", "intent": "product intent 2", "colorIndex": 1, "seams": [{"id": "s-rewire", "label": "product intent 2", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h2", "file": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts", "start": 8, "end": 15, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h3", "file": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts", "start": 145, "end": 171, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h6", "file": "supabase/functions/_shared/scoring/src/model/weeklyTask.ts", "start": 17, "end": 26, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h7", "file": "supabase/functions/_shared/scoring/src/repositories.ts", "start": 83, "end": 110, "role": "environment", "confidence": 0.85, "external": [], "externalRefs": [], "rewire": null}, {"id": "h13", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 42, "end": 51, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h16", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 358, "end": 365, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}, {"id": "h22", "file": "supabase/functions/scoring-cycle/repositories.ts", "start": 9, "end": 47, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g3", "intent": "product intent 3", "colorIndex": 2, "seams": [{"id": "h4", "label": "Member", "linkOnly": false, "uncertain": true, "warnings": ["isolated-core"], "hunks": [{"id": "h4", "file": "supabase/functions/_shared/scoring/src/model/member.ts", "start": 31, "end": 38, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h5", "file": "supabase/functions/_shared/scoring/src/model/member.ts", "start": 57, "end": 63, "role": "core", "confidence": 0.5, "external": [], "externalRefs": [], "rewire": null}, {"id": "h10", "file": "supabase/functions/_shared/scoring/src/services/engine.ts", "start": 175, "end": 189, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h12", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 1, "end": 13, "role": "environment", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h12", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 14, "end": 26, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h14", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 208, "end": 280, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}, {"id": "h15", "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts", "start": 330, "end": 340, "role": "core", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g5", "intent": "product intent 5", "colorIndex": 3, "seams": [{"id": "s-rewire", "label": "product intent 5", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h8", "file": "supabase/functions/_shared/scoring/src/repositories.ts", "start": 112, "end": 116, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g6", "intent": "product intent 6", "colorIndex": 4, "seams": [{"id": "s-rewire", "label": "product intent 6", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h9", "file": "supabase/functions/_shared/scoring/src/services/engine.ts", "start": 105, "end": 118, "role": "link", "confidence": 0.8, "external": ["../model/weeklyTask.ts"], "externalRefs": [{"symbol": "WeeklyTask", "source": "../model/weeklyTask.ts"}], "rewire": null}]}]}, {"id": "g8", "intent": "product intent 8", "colorIndex": 5, "seams": [{"id": "s-rewire", "label": "product intent 8", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h11", "file": "supabase/functions/_shared/scoring/src/services/engine.ts", "start": 265, "end": 271, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g11", "intent": "product intent 11", "colorIndex": 6, "seams": [{"id": "s-rewire", "label": "product intent 11", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h18", "file": "supabase/functions/generate-member-missions/index.ts", "start": 6, "end": 13, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g12", "intent": "product intent 12", "colorIndex": 7, "seams": [{"id": "s-rewire", "label": "product intent 12", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h19", "file": "supabase/functions/generate-member-missions/index.ts", "start": 66, "end": 72, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g13", "intent": "product intent 13", "colorIndex": 8, "seams": [{"id": "s-rewire", "label": "product intent 13", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h20", "file": "supabase/functions/scoring-cycle/index.ts", "start": 6, "end": 13, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g14", "intent": "product intent 14", "colorIndex": 9, "seams": [{"id": "s-rewire", "label": "product intent 14", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h21", "file": "supabase/functions/scoring-cycle/index.ts", "start": 24, "end": 31, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g15", "intent": "export class SupabaseMemberRepository implements MemberRepository {", "colorIndex": 10, "seams": [{"id": "s-rewire", "label": "export class SupabaseMemberRepository implements MemberRepository {", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h23", "file": "supabase/functions/scoring-cycle/repositories.ts", "start": 114, "end": 120, "role": "link", "confidence": 0.8, "external": [], "externalRefs": [], "rewire": null}]}]}, {"id": "g16", "intent": "20260602000067_official_accounts_and_boosters.sql", "colorIndex": 11, "seams": [{"id": "s-ambient", "label": "20260602000067_official_accounts_and_boosters.sql", "linkOnly": true, "uncertain": false, "warnings": [], "hunks": [{"id": "h24", "file": "supabase/migrations/20260602000067_official_accounts_and_boosters.sql", "start": 1, "end": 47, "role": "environment", "confidence": 0.9, "external": [], "externalRefs": [], "rewire": null}]}]}], "tests": [{"id": "h17", "file": "supabase/functions/_shared/scoring/src/tests/unit/services/missionEngine.test.ts", "start": 339, "end": 432, "role": "test", "confidence": 1.0, "external": [], "externalRefs": [], "rewire": null}], "noise": []}
+{
+  "clusters": [
+    {
+      "id": "g1",
+      "intent": "product intent 1",
+      "colorIndex": 0,
+      "seams": [
+        {
+          "id": "s-ambient",
+          "label": "product intent 1",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h1",
+              "file": "supabase/functions/_shared/scoring/src/config.ts",
+              "start": 1,
+              "end": 8,
+              "role": "environment",
+              "confidence": 0.85,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g2",
+      "intent": "product intent 2",
+      "colorIndex": 1,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 2",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h2",
+              "file": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts",
+              "start": 8,
+              "end": 15,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h3",
+              "file": "supabase/functions/_shared/scoring/src/inMemoryRepositories.ts",
+              "start": 145,
+              "end": 171,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h6",
+              "file": "supabase/functions/_shared/scoring/src/model/weeklyTask.ts",
+              "start": 17,
+              "end": 26,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h7",
+              "file": "supabase/functions/_shared/scoring/src/repositories.ts",
+              "start": 83,
+              "end": 110,
+              "role": "environment",
+              "confidence": 0.85,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h13",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 42,
+              "end": 51,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h16",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 358,
+              "end": 365,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h22",
+              "file": "supabase/functions/scoring-cycle/repositories.ts",
+              "start": 9,
+              "end": 47,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g3",
+      "intent": "product intent 3",
+      "colorIndex": 2,
+      "seams": [
+        {
+          "id": "h4",
+          "label": "Member",
+          "linkOnly": false,
+          "uncertain": true,
+          "warnings": [
+            "isolated-core"
+          ],
+          "hunks": [
+            {
+              "id": "h4",
+              "file": "supabase/functions/_shared/scoring/src/model/member.ts",
+              "start": 31,
+              "end": 38,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h5",
+              "file": "supabase/functions/_shared/scoring/src/model/member.ts",
+              "start": 57,
+              "end": 63,
+              "role": "core",
+              "confidence": 0.5,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h10",
+              "file": "supabase/functions/_shared/scoring/src/services/engine.ts",
+              "start": 175,
+              "end": 189,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h12",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 1,
+              "end": 13,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h12",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 14,
+              "end": 26,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h14",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 208,
+              "end": 280,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h15",
+              "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
+              "start": 330,
+              "end": 340,
+              "role": "core",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g5",
+      "intent": "product intent 5",
+      "colorIndex": 3,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 5",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h8",
+              "file": "supabase/functions/_shared/scoring/src/repositories.ts",
+              "start": 112,
+              "end": 116,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g6",
+      "intent": "product intent 6",
+      "colorIndex": 4,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 6",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h9",
+              "file": "supabase/functions/_shared/scoring/src/services/engine.ts",
+              "start": 105,
+              "end": 118,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "h11",
+              "file": "supabase/functions/_shared/scoring/src/services/engine.ts",
+              "start": 265,
+              "end": 271,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g8",
+      "intent": "product intent 8",
+      "colorIndex": 5,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 8",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h18",
+              "file": "supabase/functions/generate-member-missions/index.ts",
+              "start": 6,
+              "end": 13,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g9",
+      "intent": "product intent 9",
+      "colorIndex": 6,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 9",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h19",
+              "file": "supabase/functions/generate-member-missions/index.ts",
+              "start": 66,
+              "end": 72,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g10",
+      "intent": "product intent 10",
+      "colorIndex": 7,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 10",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h20",
+              "file": "supabase/functions/scoring-cycle/index.ts",
+              "start": 6,
+              "end": 13,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g11",
+      "intent": "product intent 11",
+      "colorIndex": 8,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 11",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h21",
+              "file": "supabase/functions/scoring-cycle/index.ts",
+              "start": 24,
+              "end": 31,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g12",
+      "intent": "product intent 12",
+      "colorIndex": 9,
+      "seams": [
+        {
+          "id": "s-rewire",
+          "label": "product intent 12",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h23",
+              "file": "supabase/functions/scoring-cycle/repositories.ts",
+              "start": 114,
+              "end": 120,
+              "role": "link",
+              "confidence": 0.8,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "g13",
+      "intent": "product intent 13",
+      "colorIndex": 10,
+      "seams": [
+        {
+          "id": "s-ambient",
+          "label": "product intent 13",
+          "linkOnly": true,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "h24",
+              "file": "supabase/migrations/20260602000067_official_accounts_and_boosters.sql",
+              "start": 1,
+              "end": 47,
+              "role": "environment",
+              "confidence": 0.9,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "tests": [
+    {
+      "id": "h17",
+      "file": "supabase/functions/_shared/scoring/src/tests/unit/services/missionEngine.test.ts",
+      "start": 339,
+      "end": 432,
+      "role": "test",
+      "confidence": 1,
+      "external": [],
+      "externalRefs": [],
+      "rewire": null
+    }
+  ],
+  "noise": []
+}

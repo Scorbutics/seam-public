@@ -98,12 +98,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h2",
-                "h5",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -186,12 +181,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h2",
-                "h5",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -353,12 +343,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h2",
-                "h5",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }

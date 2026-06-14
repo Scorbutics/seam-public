@@ -2,7 +2,11 @@
 // wiring=hybrid), made deterministic via the host bus serving BOTH passes (cluster + reconcile):
 //  (1) RECONCILE PROMPT PARITY — build_reconcile_prompt byte-identical to Python.
 //  (2) INJECT PARITY — fed the SAME canned cluster + reconcile replies, TS engine.classify
-//      produces the same emit_seams_json as Python (grounding, grounded_prune, apply_seam_groups).
+//      produces the recorded emit_seams_json (grounding, grounded_prune, apply_seam_groups).
+//      NOTE: the .seams.json oracles are now TS REGRESSION SNAPSHOTS, not strict Python parity —
+//      the hybrid wiring path has a TS-only same-file grounding rung (engine.hybridWiring) that
+//      promotes same-file import→render couplings out of `suggested`; Python lacks it. Regenerate
+//      with /tmp/regen_oracles.ts (or equivalent) after an intended hybridWiring change.
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";

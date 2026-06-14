@@ -103,9 +103,19 @@ function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
     const owned = new Set<string>();
     for (const c of cores.keys())
       if (intersect(intersect(anchors.get(c) ?? new Set(), m), facts.get(c)!.defines).size) owned.add(c);
+    // Same-file grounding rung: a link/edit and a core in the SAME file that share a distinctive
+    // symbol are a real structural coupling — the import-and-render of a component the core builds.
+    // The `owned` test requires the core to DEFINE the shared symbol, which misses same-file
+    // import→render couplings (the shared symbol is an external import the core renders but doesn't
+    // define), so those edges would be marked `suggested` (dim) and the core read as isolated.
+    // Grounding them by file co-location is the same-file mirror of det.resolve_coincidence's
+    // cross-file import resolution — deterministic, and bounded (few cores per file).
+    const sameFile = new Set<string>();
+    for (const [cid, core] of cores)
+      if (cid !== h.id && core.file_path === h.file_path && intersect(anchors.get(cid) ?? new Set(), m).size) sameFile.add(cid);
     const resolved = new Set(h.resolved_wires.filter((c) => coreIds.has(c)));
-    const grounded = intersect(union(owned, resolved), coreIds);
-    const drawnSet = intersect(union(union(new Set(line), owned), resolved), coreIds);
+    const grounded = intersect(union(union(owned, resolved), sameFile), coreIds);
+    const drawnSet = intersect(union(union(union(new Set(line), owned), resolved), sameFile), coreIds);
     const [kept, suggested] = det.grounded_prune(drawnSet, grounded);
     h.wires = sorted(kept);
     h.suggested_wires = sorted(suggested);

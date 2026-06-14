@@ -151,17 +151,7 @@
               "confidence": 1,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -247,17 +237,7 @@
               "confidence": 0.8,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -410,17 +390,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -447,17 +417,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }
@@ -677,18 +637,7 @@
                   "start": 4
                 }
               ]
-            }
-          ]
-        },
-        {
-          "id": "s-ambient",
-          "label": "ambient ripple",
-          "linkOnly": false,
-          "uncertain": false,
-          "warnings": [
-            "delegated"
-          ],
-          "hunks": [
+            },
             {
               "id": "h21",
               "file": "apps/web/modules/webhooks/components/WebhookTestDisclosure.tsx",
@@ -725,17 +674,7 @@
               "confidence": 0.5,
               "external": [],
               "externalRefs": [],
-              "rewire": null,
-              "suggestedWires": [
-                "h16",
-                "h22",
-                "h25",
-                "h33",
-                "h4",
-                "h41",
-                "h47",
-                "h9"
-              ]
+              "rewire": null
             }
           ]
         }

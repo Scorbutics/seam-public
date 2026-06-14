@@ -1,7 +1,11 @@
 // Phase 4 gate: Pass B (role/span voting), Pass C (wiring), and the all-LLM/all-hybrid engines
 // (--classifier llm / hybrid), made deterministic via the host bus serving every pass:
 //  (1) PROMPT PARITY — role prompt + wire prompt byte-identical to Python.
-//  (2) INJECT PARITY — same canned replies → identical emit_seams for --classifier llm AND hybrid.
+//  (2) INJECT PARITY — same canned replies → recorded emit_seams for --classifier llm AND hybrid.
+//      The *.hybrid.seams.json oracles are TS REGRESSION SNAPSHOTS (not strict Python parity): the
+//      hybrid wiring path's same-file grounding rung (TS-only) adds same-file edges, which the
+//      cluster=hybrid det connected-components pass reads — de-isolating previously-singleton cores.
+//      The *.llm.seams.json oracles use the all-LLM path (no hybridWiring) and remain Python-parity.
 //  (3) aggregate_role_votes (the self-consistency medoid) vs Python on DIFFERING votes.
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync } from "node:fs";
