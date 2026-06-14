@@ -12,6 +12,7 @@ import * as noise from "../diff/noise_filter.js";
 import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
+import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
@@ -33,7 +34,7 @@ interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
-  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -47,7 +48,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, cache: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -91,6 +92,7 @@ function parseArgs(argv: string[]): Args {
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--no-data-coupling": a.dataCoupling = false; break;
+      case "--cache": a.cache = true; break;
       // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
       // llm=floor + the LLM shared-key front-end (cross-framework key proposals).
       case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; break; }
@@ -260,54 +262,74 @@ async function main(argv: string[]): Promise<number> {
     }
 
     noise.classify(hunks);
-    let factsProvider: FactsProvider | undefined;
-    if (a.facts) {
-      const payload = JSON.parse(readFileSync(a.facts, "utf-8"));
-      if (payload.partial) {
-        // The editor's DocumentSymbol facts (defines/enclosing) overlaid on a base producer.
-        factsProvider = new MergedFactsProvider(new RegexFactsProvider(), payload);
-      } else factsProvider = new ExternalFactsProvider(payload);
-    } else if (a.factsEngine === "treesitter") {
-      // Headless full-file AST facts (web-tree-sitter) — an async pre-pass producing a payload the
-      // sync pipeline consumes; per-hunk regex fallback for anything tree-sitter can't handle.
-      const ts = await import("../diff/facts_treesitter.js");
-      if (!ts.available()) process.stderr.write("warning: tree-sitter grammars not found; using regex facts\n");
-      else {
-        const work = hunks.filter((h) => h.role !== "noise");
-        const payload = await ts.computeTreeSitterFacts(work, new ts.RepoFileSource(a.repo));
-        factsProvider = new ExternalFactsProvider(payload);
+
+    // Classify cache (opt-in via --cache): the deterministic engine is ~0.3s; the LLM passes are the
+    // cost, and an unchanged diff re-classifies to the same thing. Key the post-classify hunks by the
+    // diff + per-pass config + model + repo and skip the LLM on a hit. OFF by default (the eval
+    // harness needs FRESH samples per run); the extension opts in for instant re-review of a stable
+    // PR. Bypassed for the explicit LLM-control modes (emit-prompts / inject-llm).
+    const useCache = a.cache && !a.emitPrompts && !a.injectLlm;
+    const ckey = useCache
+      ? cacheKey({ diff: diffText!, cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
+          model: a.model, repo: a.repo, factsEngine: a.factsEngine, resolver: a.resolver })
+      : "";
+    const cached = useCache ? cacheGet(ckey) : null;
+    const loadedHunks = cached ? hunksFromJson(cached) : [];
+    if (loadedHunks.length) {
+      hunks = loadedHunks;
+      emit("Loaded classified decomposition from cache (LLM skipped)");
+    } else {
+      let factsProvider: FactsProvider | undefined;
+      if (a.facts) {
+        const payload = JSON.parse(readFileSync(a.facts, "utf-8"));
+        if (payload.partial) {
+          // The editor's DocumentSymbol facts (defines/enclosing) overlaid on a base producer.
+          factsProvider = new MergedFactsProvider(new RegexFactsProvider(), payload);
+        } else factsProvider = new ExternalFactsProvider(payload);
+      } else if (a.factsEngine === "treesitter") {
+        // Headless full-file AST facts (web-tree-sitter) — an async pre-pass producing a payload the
+        // sync pipeline consumes; per-hunk regex fallback for anything tree-sitter can't handle.
+        const ts = await import("../diff/facts_treesitter.js");
+        if (!ts.available()) process.stderr.write("warning: tree-sitter grammars not found; using regex facts\n");
+        else {
+          const work = hunks.filter((h) => h.role !== "noise");
+          const payload = await ts.computeTreeSitterFacts(work, new ts.RepoFileSource(a.repo));
+          factsProvider = new ExternalFactsProvider(payload);
+        }
+      } else if (a.factsEngine === "resolve") {
+        // base facts (regex) PLUS codebase-resolved out-of-diff refs grounded to in-diff cores.
+        const { ResolvedFactsProvider } = await import("../diff/facts_resolve.js");
+        factsProvider = new ResolvedFactsProvider(new RegexFactsProvider(), a.repo);
       }
-    } else if (a.factsEngine === "resolve") {
-      // base facts (regex) PLUS codebase-resolved out-of-diff refs grounded to in-diff cores.
-      const { ResolvedFactsProvider } = await import("../diff/facts_resolve.js");
-      factsProvider = new ResolvedFactsProvider(new RegexFactsProvider(), a.repo);
+
+      // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's
+      // prompt and applies nothing; --inject-llm replays canned replies. Same contract as Python.
+      if (a.emitPrompts) set_host_bus(new HostBus());
+      else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
+      let recorded: HostBus["recorded"] | undefined;
+      try {
+        await engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
+          facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin });
+      } catch (e) { err((e as Error).message); }
+      finally {
+        if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); }
+      }
+      if (a.emitPrompts) {
+        const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
+        writeFileSync(a.emitPrompts, JSON.stringify({ version: 1,
+          source: { git: a.git ?? null, file: a.file ?? null, repo: a.repo }, passes }, null, 2));
+        process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
+        return 0;
+      }
+      if (useCache) cachePut(ckey, hunksToJson(hunks));   // store the fresh classification for next time
     }
 
-    // Host-served LLM (Claude Code skill / verification): --emit-prompts records each pass's
-    // prompt and applies nothing; --inject-llm replays canned replies. Same contract as Python.
-    if (a.emitPrompts) set_host_bus(new HostBus());
-    else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
-    let recorded: HostBus["recorded"] | undefined;
-    try {
-      await engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
-        facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin });
-    } catch (e) { err((e as Error).message); }
-    finally {
-      if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); }
-    }
-    if (a.emitPrompts) {
-      const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
-      writeFileSync(a.emitPrompts, JSON.stringify({ version: 1,
-        source: { git: a.git ?? null, file: a.file ?? null, repo: a.repo }, passes }, null, 2));
-      process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
-      return 0;
-    }
     if (a.dumpClassified) {
       writeFileSync(a.dumpClassified, hunksToJson(hunks));
       // Terminal when no render was asked for (format is the no-render default) — lets the eval
       // harness drive the engine as a black box without a render mode.
       if (!a.emitSeams && a.format !== "ascii" && a.format !== "llm") {
-        process.stdout.write(`Classified: ${a.dumpClassified}\n`);
+        process.stdout.write(`Classified${loadedHunks.length ? " (cached)" : ""}: ${a.dumpClassified}\n`);
         return 0;
       }
     }
