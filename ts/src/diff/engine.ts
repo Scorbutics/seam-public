@@ -47,6 +47,12 @@ export async function classify(hunks: Hunk[], opts: {
     if (roles === "hybrid") llm.reconcile_roles_llm(work, llmOpts);   // LLM re-judges the uncertain
   }
 
+  // WIRING-SIGNAL PREP (shared): the per-core anchor symbols are the one derivation that the wiring
+  // floor, the seed-clean, AND the reconcile grounding all consume — computed ONCE here (after roles
+  // fix the core set) and threaded, instead of re-derived in each. Only the det/hybrid wiring uses it.
+  const coreIds = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
+  const anchors = wiring === "llm" ? null : det._anchors(work, facts, coreIds);
+
   // WIRING (reads roles). Seam MERGING is deferred until after clustering, expressed as a DATA plan
   // (not a thunk). The hybrid wiring's reconcile LLM pass is kicked off as a PROMISE so it can overlap
   // the cluster LLM pass.
@@ -55,20 +61,19 @@ export async function classify(hunks: Hunk[], opts: {
   if (wiring === "llm") {
     llm.assign_wiring(work, llmOpts);                                  // Pass C (authoritative)
   } else {
-    det.assign_wiring(work, facts);                                    // symbol candidates
+    det.assign_wiring(work, facts, anchors!);                          // symbol candidates
     if (wiring === "det") {
-      det.reconcile_wiring(work, facts);
+      det.reconcile_wiring(work, facts, undefined, anchors!);
       mergePlan = { kind: "det" };
     } else {
       // SEED-cleaning drop set (per link → cores to omit from the LLM hint), via the edge-resolution
       // ladder: when a repo is available, resolve cross-file candidate edges (principled, per-edge);
       // else fall back to the repo-free `coimport_externals` density heuristic. Cleans the seed only —
       // the LLM re-adds real couplings from meaning, so recall is preserved (hard-pruning isn't).
-      const coreIds = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
       const drop = opts.repo
-        ? await det.resolve_coincidence(work, facts, coreIds, opts.repo)
-        : det.coimport_drop(work, facts, coreIds);
-      wiringPromise = hybridWiring(work, facts, llmOpts, drop);        // LLM draw + det grounding (async)
+        ? await det.resolve_coincidence(work, facts, coreIds, opts.repo, anchors!)
+        : det.coimport_drop(work, facts, coreIds, anchors!);
+      wiringPromise = hybridWiring(work, facts, llmOpts, drop, anchors!); // LLM draw + det grounding (async)
     }
   }
 
@@ -96,13 +101,13 @@ export async function classify(hunks: Hunk[], opts: {
 // meaning; determinism GROUNDS the draw and prunes the over-wired ungrounded ones.
 async function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
                       llmOpts: { model?: string; claudeBin?: string | null },
-                      drop: Map<string, Set<string>>): Promise<MergePlan | null> {
+                      drop: Map<string, Set<string>>,
+                      anchors: Map<string, Set<string>>): Promise<MergePlan | null> {
   const cores = new Map<string, Hunk>();
   for (const h of work) if (h.role === "core") cores.set(h.id, h);
   const targets = work.filter((h) => h.role !== "core");
   if (!cores.size) return null;
   const coreIds = new Set(cores.keys());
-  const anchors = det._anchors(work, facts, coreIds);
   // Clean the LLM wiring SEED of cross-file co-import noise: drop a candidate core from an edit's hint
   // when import-resolution shows the shared symbol is NOT that core's (resolves elsewhere) — see
   // det.resolve_coincidence. This biases the seed, not the answer — the LLM still re-adds real

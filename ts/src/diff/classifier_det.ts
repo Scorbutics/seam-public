@@ -107,9 +107,10 @@ export function coimport_externals(work: Hunk[], facts: Map<string, HunkFacts>):
 // Repo-free SEED drop set (fallback for resolve_coincidence when no repo): per link → cores whose
 // ONLY name-overlap with the link is shared co-imports (det.coimport_externals). Reproduces the prior
 // hybridWiring hint filter exactly, so the no-repo path stays byte-identical.
-export function coimport_drop(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>): Map<string, Set<string>> {
+export function coimport_drop(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>,
+                             anchorsIn?: Map<string, Set<string>>): Map<string, Set<string>> {
   const coimp = coimport_externals(work, facts);
-  const anchors = _anchors(work, facts, cores);
+  const anchors = anchorsIn ?? _anchors(work, facts, cores);
   const out = new Map<string, Set<string>>();
   if (!coimp.size) return out;
   for (const h of work) {
@@ -138,10 +139,11 @@ export function coimport_drop(work: Hunk[], facts: Map<string, HunkFacts>, cores
 // inert (empty) when `repo` is absent or its working tree doesn't match the diff's files.
 export async function resolve_coincidence(
   work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>, repo: string,
+  anchorsIn?: Map<string, Set<string>>,
 ): Promise<Map<string, Set<string>>> {
   const out = new Map<string, Set<string>>();
   if (!repo) return out;
-  const anchors = _anchors(work, facts, cores);
+  const anchors = anchorsIn ?? _anchors(work, facts, cores);
   const coreFile = new Map<string, string>();
   for (const h of work) if (cores.has(h.id)) coreFile.set(h.id, rnormpath(h.file_path));
   const fileCache = new Map<string, ReturnType<typeof parse_imports> | null>();
@@ -197,8 +199,9 @@ function _resolved_edges(work: Hunk[], facts: Map<string, HunkFacts>): Map<strin
   return out;
 }
 
-function _subject_wiring(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>): Map<string, string[]> {
-  const anchors = _anchors(work, facts, cores);
+function _subject_wiring(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>,
+                        anchorsIn?: Map<string, Set<string>>): Map<string, string[]> {
+  const anchors = anchorsIn ?? _anchors(work, facts, cores);   // accept the shared prep; else derive
   const out = new Map<string, string[]>();
   for (const h of work) {
     if (cores.has(h.id)) { out.set(h.id, []); continue; }
@@ -208,9 +211,10 @@ function _subject_wiring(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set
   return out;
 }
 
-export function reconcile_wiring(work: Hunk[], facts: Map<string, HunkFacts>, gate = _RECONCILE_GATE): Hunk[] {
+export function reconcile_wiring(work: Hunk[], facts: Map<string, HunkFacts>, gate = _RECONCILE_GATE,
+                                anchorsIn?: Map<string, Set<string>>): Hunk[] {
   const cores = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
-  const anchors = _anchors(work, facts, cores);
+  const anchors = anchorsIn ?? _anchors(work, facts, cores);
   const residual: Hunk[] = [];
   for (const h of work) {
     if (h.role === "core" || h.wires.length <= gate) continue;
@@ -303,10 +307,11 @@ export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void 
   }
 }
 
-export function assign_wiring(work: Hunk[], facts: Map<string, HunkFacts>): void {
+export function assign_wiring(work: Hunk[], facts: Map<string, HunkFacts>,
+                             anchors?: Map<string, Set<string>>): void {
   const distinctive = _distinctive(work);
   const cores = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
-  const wires_map = _subject_wiring(work, facts, cores);
+  const wires_map = _subject_wiring(work, facts, cores, anchors);
   const res_edges = _resolved_edges(work, facts);
   for (const h of work) {
     if (h.role === "core") {
