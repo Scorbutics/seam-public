@@ -1,7 +1,7 @@
 // Port of the LLM passes from src/diff/classifier.py. Prompt templates are copied VERBATIM —
 // byte-parity with Python is gated by test/classifier_llm.test.ts (prompts) + inject-llm parity
 // (parse/merge). Phase 2: Pass A (cluster). Later phases add seam/role (Pass B) + wiring (Pass C).
-import { resolve_backend, runPassRaw } from "../core/llm.js";
+import { resolve_backend, runPassRaw, runPassRawAsync } from "../core/llm.js";
 import { mkSpan, type Hunk, type Span } from "./parser.js";
 import { candidate_wirings } from "./symbol_edges.js";
 
@@ -554,12 +554,12 @@ export function build_reconcile_prompt(cores: Map<string, Hunk>, targets: Hunk[]
 
 export interface ReconcileResult { labels: Map<string, string>; groups: Map<string, string>; drawn: Map<string, string[]>; }
 
-export function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], hints: Map<string, string[]>,
-                             opts: { model?: string; claudeBin?: string | null } = {}): ReconcileResult {
+export async function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], hints: Map<string, string[]>,
+                             opts: { model?: string; claudeBin?: string | null } = {}): Promise<ReconcileResult> {
   if (!cores.size) return { labels: new Map(), groups: new Map(), drawn: new Map() };
   const [kind, binary] = resolve_backend(opts.claudeBin);
   const prompt = build_reconcile_prompt(cores, targets, hints);
-  const out = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, "reconcile");
+  const out = await runPassRawAsync(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, "reconcile");
   const labels = new Map<string, string>();
   const groups = new Map<string, string>();
   for (const [cid, o] of out) {
@@ -578,10 +578,10 @@ export function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], hints: 
 }
 
 // LLM Pass A (cluster) only: fill group/intent (product intent). Mirrors classifier.assign_clusters.
-export function assign_clusters(hunks: Hunk[], opts: { model?: string; claudeBin?: string | null } = {}): void {
+export async function assign_clusters(hunks: Hunk[], opts: { model?: string; claudeBin?: string | null } = {}): Promise<void> {
   if (!hunks.length) return;
   const [kind, binary] = resolve_backend(opts.claudeBin);
-  const labels = runPassRaw(kind, binary, build_cluster_prompt(hunks), opts.model ?? "claude-haiku-4-5",
+  const labels = await runPassRawAsync(kind, binary, build_cluster_prompt(hunks), opts.model ?? "claude-haiku-4-5",
     CLUSTER_THINKING, "cluster");
   const groupIntent = new Map<string, string>();
   const groups = new Map<string, [string, string]>();

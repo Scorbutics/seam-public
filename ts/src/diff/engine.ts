@@ -40,8 +40,10 @@ export async function classify(hunks: Hunk[], opts: {
     if (roles === "hybrid") llm.reconcile_roles_llm(work, llmOpts);   // LLM re-judges the uncertain
   }
 
-  // WIRING (reads roles). Seam MERGING is deferred until after clustering (a thunk).
+  // WIRING (reads roles). Seam MERGING is deferred until after clustering (a thunk). The hybrid
+  // wiring's reconcile LLM pass is kicked off as a PROMISE so it can overlap the cluster LLM pass.
   let seamMerge: (() => void) | null = null;
+  let wiringPromise: Promise<(() => void) | null> | null = null;
   if (wiring === "llm") {
     llm.assign_wiring(work, llmOpts);                                  // Pass C (authoritative)
   } else {
@@ -58,13 +60,19 @@ export async function classify(hunks: Hunk[], opts: {
       const drop = opts.repo
         ? await det.resolve_coincidence(work, facts, coreIds, opts.repo)
         : det.coimport_drop(work, facts, coreIds);
-      seamMerge = hybridWiring(work, facts, llmOpts, drop);          // LLM draw + det grounding
+      wiringPromise = hybridWiring(work, facts, llmOpts, drop);        // LLM draw + det grounding (async)
     }
   }
 
-  // CLUSTERS (reads the full wiring graph for det; independent for the LLM)
-  if (cluster === "llm") llm.assign_clusters(work, llmOpts);
-  else {
+  // CLUSTERS. The LLM cluster pass is INDEPENDENT of wiring (it clusters from the diff, not the wire
+  // graph), so when both are LLM we run reconcile ∥ cluster concurrently — the latency win. The det
+  // cluster pass READS h.wires, so it must wait for wiring to finish first.
+  if (cluster === "llm") {
+    const clusterPromise = llm.assign_clusters(work, llmOpts);
+    const [wres] = await Promise.all([wiringPromise ?? Promise.resolve(seamMerge), clusterPromise]);
+    seamMerge = wres ?? seamMerge;
+  } else {
+    if (wiringPromise) seamMerge = await wiringPromise;               // det clustering reads the wires
     det.assign_clusters(work, facts);
     if (cluster === "hybrid") llm.label_clusters_llm(work, llmOpts);   // LLM prose labels over det groups
   }
@@ -76,9 +84,9 @@ export async function classify(hunks: Hunk[], opts: {
 
 // The hybrid wiring (LLM-first): the LLM groups cores into seams + draws each edit's line by
 // meaning; determinism GROUNDS the draw and prunes the over-wired ungrounded ones.
-function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
+async function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
                       llmOpts: { model?: string; claudeBin?: string | null },
-                      drop: Map<string, Set<string>>): (() => void) | null {
+                      drop: Map<string, Set<string>>): Promise<(() => void) | null> {
   const cores = new Map<string, Hunk>();
   for (const h of work) if (h.role === "core") cores.set(h.id, h);
   const targets = work.filter((h) => h.role !== "core");
@@ -95,7 +103,7 @@ function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
     const d = drop.get(h.id);
     hints.set(h.id, d ? [...h.wires].filter((c) => !d.has(c)) : [...h.wires]);
   }
-  const { labels, groups, drawn } = llm.reconcile_llm(cores, targets, hints, llmOpts);
+  const { labels, groups, drawn } = await llm.reconcile_llm(cores, targets, hints, llmOpts);
   for (const h of targets) {
     const line = drawn.get(h.id);
     if (line === undefined) continue;

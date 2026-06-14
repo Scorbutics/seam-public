@@ -2,7 +2,7 @@
 // the host-bus (emit-prompts/inject-llm), JSON-array extraction, retry, usage metering. Zero
 // mode knowledge. The CLI subprocess backend is what lets the TS port be byte-verified against
 // Python via the host-bus contract (the same prompt both phases rebuild).
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -208,6 +208,65 @@ function _run_backend(kind: string, binary: string, prompt: string, model: strin
   return kind === "claude" ? _run_claude(binary, prompt, model, thinking) : _run_copilot(binary, prompt, thinking);
 }
 
+// --- async backend run (for running independent passes concurrently) ----------
+// The sync runners above use spawnSync (one blocking subprocess at a time). These mirror them with
+// `spawn`, so several passes can run as concurrent subprocesses — used by the diff engine to overlap
+// the independent reconcile (wiring) and cluster passes. Behaviour/parsing/metering is identical;
+// only the call is non-blocking.
+function _spawnAsync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}):
+    Promise<{ status: number; stdout: string; stderr: string }> {
+  return new Promise((resolve) => {
+    const proc = spawn(bin, args, { env: opts.env ?? process.env });
+    let stdout = "", stderr = "";
+    proc.stdout.on("data", (d) => { stdout += d; });
+    proc.stderr.on("data", (d) => { stderr += d; });
+    proc.on("error", (e) => resolve({ status: -1, stdout, stderr: String((e as Error).message ?? e) }));
+    proc.on("close", (code) => resolve({ status: code ?? -1, stdout, stderr }));
+    if (opts.input != null) { proc.stdin.write(opts.input); proc.stdin.end(); }
+  });
+}
+
+async function _run_claude_async(claudeBin: string, prompt: string, model: string, thinking: number | null): Promise<string> {
+  const cmd = ["-p", "--output-format", "json", "--model", model, "--strict-mcp-config"];
+  const env = { ...process.env };
+  if (thinking !== null) env.MAX_THINKING_TOKENS = String(thinking);
+  const proc = await _spawnAsync(claudeBin, cmd, { input: prompt, env });
+  if (proc.status !== 0)
+    throw new ClassifierError(`claude CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
+  let envelope: any;
+  try { envelope = JSON.parse(proc.stdout); }
+  catch { throw new ClassifierError(`claude CLI did not return JSON: ${JSON.stringify((proc.stdout ?? "").slice(0, 200))}`); }
+  if (envelope.is_error) throw new ClassifierError(`claude CLI reported error: ${envelope.result}`);
+  _USAGE.record("claude", envelope.usage ?? {}, envelope.total_cost_usd, envelope.duration_ms);
+  return envelope.result ?? "";
+}
+
+async function _run_copilot_async(copilotBin: string, prompt: string, thinking: number | null): Promise<string> {
+  const dir = mkdtempSync(join(tmpdir(), "copilot-prompt-"));
+  const promptPath = join(dir, "prompt.txt");
+  try {
+    writeFileSync(promptPath, prompt, "utf-8");
+    const pointer = `Read the file ${promptPath} and follow the instructions it contains exactly. `
+      + `Output only what those instructions ask for.`;
+    const cmd = ["-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"];
+    if (process.env.COPILOT_MODEL) cmd.push("--model", process.env.COPILOT_MODEL);
+    const effort = _thinking_to_effort(thinking);
+    if (effort) cmd.push("--effort", effort);
+    const proc = await _spawnAsync(copilotBin, cmd);
+    if (proc.status !== 0)
+      throw new ClassifierError(`copilot CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
+    if (!(proc.stdout ?? "").trim())
+      throw new ClassifierError(`copilot CLI returned no output: ${JSON.stringify((proc.stderr ?? "").trim().slice(0, 200))}`);
+    return proc.stdout;
+  } finally {
+    try { unlinkSync(promptPath); } catch { /* ignore */ }
+  }
+}
+
+async function _run_backend_async(kind: string, binary: string, prompt: string, model: string, thinking: number | null): Promise<string> {
+  return kind === "claude" ? _run_claude_async(binary, prompt, model, thinking) : _run_copilot_async(binary, prompt, thinking);
+}
+
 // Run ONE LLM pass (with one retry on malformed JSON) → {id: item}. Serves the host bus when set.
 export function runPassRaw(kind: string, binary: string, prompt: string, model: string,
                            thinking: number | null, tag: string): Map<string, any> {
@@ -218,6 +277,27 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
       const raw = _HOST_BUS !== null
         ? _HOST_BUS.serve(tag, prompt, model, thinking)
         : _run_backend(kind, binary, prompt, model, thinking);
+      for (const item of extractJsonArray(raw))
+        if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
+      break;
+    } catch (e) { lastErr = e as Error; }
+  }
+  if (!labels.size && lastErr) throw new ClassifierError(`${tag} pass failed after retry: ${lastErr.message}`);
+  return labels;
+}
+
+// Async twin of runPassRaw — identical retry/parse/metering, but awaits a non-blocking subprocess so
+// callers can run independent passes concurrently (Promise.all). The host-bus path serves synchronously
+// (batch HostBus returns from its answers map immediately), so it composes trivially.
+export async function runPassRawAsync(kind: string, binary: string, prompt: string, model: string,
+                                     thinking: number | null, tag: string): Promise<Map<string, any>> {
+  const labels = new Map<string, any>();
+  let lastErr: Error | null = null;
+  for (const attempt of [1, 2]) {
+    try {
+      const raw = _HOST_BUS !== null
+        ? _HOST_BUS.serve(tag, prompt, model, thinking)
+        : await _run_backend_async(kind, binary, prompt, model, thinking);
       for (const item of extractJsonArray(raw))
         if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
       break;
