@@ -8,7 +8,7 @@
 //      promotes same-file import→render couplings out of `suggested`; Python lacks it. Regenerate
 //      with /tmp/regen_oracles.ts (or equivalent) after an intended hybridWiring change.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../src/diff/parser.js";
@@ -24,7 +24,10 @@ import type { Hunk } from "../src/diff/parser.js";
 const __dir = dirname(fileURLToPath(import.meta.url));
 const oracleDir = join(__dir, "oracle", "hybrid");
 const samplePatch = join(__dir, "..", "..", "sample.patch");
-const caseFiles = readdirSync(join(__dir, "cases")).filter((f) => f.endsWith(".patch"));
+// Only oracle-BACKED cases: ts/test/cases is shared with the eval harness corpus, which holds many
+// patches that have no Python oracle (they're for scoring, not parity). Run parity on the ones that do.
+const caseFiles = readdirSync(join(__dir, "cases")).filter((f) => f.endsWith(".patch")
+  && existsSync(join(oracleDir, `${f.replace(/\.patch$/, "")}.reconcile.txt`)));
 const cases: { name: string; path: string }[] = [
   ...caseFiles.map((f) => ({ name: f.replace(/\.patch$/, ""), path: join(__dir, "cases", f) })),
   { name: "sample", path: samplePatch },

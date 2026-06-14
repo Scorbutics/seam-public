@@ -2,7 +2,7 @@
 // regex facts producer must emit byte-identical facts to the Python producer on the same
 // real-diff fixtures (eval/cases/*.patch). The Python output is captured in test/oracle/.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../src/diff/parser.js";
@@ -15,7 +15,11 @@ import {
 const __dir = dirname(fileURLToPath(import.meta.url));
 const casesDir = join(__dir, "cases");
 const oracleDir = join(__dir, "oracle");
-const cases = readdirSync(casesDir).filter((f) => f.endsWith(".patch")).map((f) => f.replace(/\.patch$/, "")).sort();
+// Only oracle-BACKED cases: ts/test/cases is shared with the eval harness corpus (many patches have
+// no Python oracle — they're for scoring, not parity). Run parity on the ones with a parser oracle.
+const cases = readdirSync(casesDir).filter((f) => f.endsWith(".patch")
+  && existsSync(join(oracleDir, `${f.replace(/\.patch$/, "")}.parsed.json`)))
+  .map((f) => f.replace(/\.patch$/, "")).sort();
 
 function hunks(name: string) {
   const hs = parse(readFileSync(join(casesDir, `${name}.patch`), "utf-8"));

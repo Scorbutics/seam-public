@@ -4,7 +4,7 @@
 //      (cluster=llm) must produce the same emit_seams_json as Python. Together these verify the
 //      whole pass minus the (provider-shared) model call: same prompt in, same reply → same out.
 import { describe, expect, test } from "bun:test";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { parse } from "../src/diff/parser.js";
@@ -17,7 +17,10 @@ import { HostBus, set_host_bus } from "../src/core/llm.js";
 const __dir = dirname(fileURLToPath(import.meta.url));
 const oracleDir = join(__dir, "oracle");
 const samplePatch = join(__dir, "..", "..", "sample.patch");
-const caseFiles = readdirSync(join(__dir, "cases")).filter((f) => f.endsWith(".patch"));
+// Only oracle-BACKED cases: ts/test/cases is shared with the eval harness corpus (many patches have
+// no Python oracle — they're for scoring, not parity). Run parity on the ones with a cluster oracle.
+const caseFiles = readdirSync(join(__dir, "cases")).filter((f) => f.endsWith(".patch")
+  && existsSync(join(oracleDir, "prompts", `${f.replace(/\.patch$/, "")}.cluster.txt`)));
 const cases: { name: string; path: string }[] = [
   ...caseFiles.map((f) => ({ name: f.replace(/\.patch$/, ""), path: join(__dir, "cases", f) })),
   { name: "sample", path: samplePatch },
