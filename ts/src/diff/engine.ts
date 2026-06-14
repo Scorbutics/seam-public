@@ -20,6 +20,8 @@ type MergePlan = { kind: "det" } | { kind: "hybrid"; labels: Map<string, string>
 export async function classify(hunks: Hunk[], opts: {
   cluster?: string; roles?: string; wiring?: string; facts_provider?: FactsProvider;
   repo?: string; model?: string; claudeBin?: string | null; roleVotes?: number;
+  fixedRoles?: Map<string, string>;   // pin roles (e.g. from gold) and SKIP the role pass — lets the
+                                       // eval score wiring/clustering with role errors removed
 } = {}): Promise<void> {
   const cluster = opts.cluster ?? "llm", roles = opts.roles ?? "det", wiring = opts.wiring ?? "hybrid";
   for (const [k, v] of Object.entries({ cluster, roles, wiring }))
@@ -40,8 +42,10 @@ export async function classify(hunks: Hunk[], opts: {
   const needFacts = [cluster, roles, wiring].some((p) => p === "det" || p === "hybrid");
   const facts = needFacts ? await (opts.facts_provider ?? new RegexFactsProvider()).facts(work) : new Map<string, HunkFacts>();
 
-  // ROLES
-  if (roles === "llm") llm.assign_roles(work, { ...llmOpts, roleVotes: opts.roleVotes });
+  // ROLES — pinned (fixedRoles) bypass the role pass entirely; else det/llm/hybrid as configured.
+  if (opts.fixedRoles) {
+    for (const h of work) { h.role = opts.fixedRoles.get(h.id) ?? "environment"; h.role_confidence = 1.0; h.rationale = "role pinned (gold)"; }
+  } else if (roles === "llm") llm.assign_roles(work, { ...llmOpts, roleVotes: opts.roleVotes });
   else {
     det.assign_roles(work, facts);
     if (roles === "hybrid") llm.reconcile_roles_llm(work, llmOpts);   // LLM re-judges the uncertain
@@ -143,5 +147,6 @@ async function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
     h.wires = sorted(kept);
     h.suggested_wires = sorted(suggested);
   }
+  det.finalize_wiring(work); // hybrid wiring terminal: h.wires are final — the det cluster pass may now read them
   return { kind: "hybrid", labels, groups };   // the merge phase applies apply_seam_groups from this
 }
