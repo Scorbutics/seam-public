@@ -1,0 +1,11 @@
+[
+  {"id":"h1","group":"g1","intent":"epsa v4 streaming archive decryption","role":"environment","wires":["s2"],"rationale":"method-table guard — adds mount_io to the PhysFS capability check the streaming mount relies on"},
+  {"id":"h2","group":"g1","intent":"epsa v4 streaming archive decryption","role":"environment","wires":["s2"],"rationale":"renames the archive-path env var (PSDK_ANDROID_ADDITIONAL_PARAM → PSDK_EPSA_PATH) the mount reads"},
+  {"id":"h3","group":"g1","intent":"epsa v4 streaming archive decryption","role":"link","wires":["s2"],"rationale":"compile.rb call site: swaps PhysFS.mount for ArchiveMount.mount!"},
+  {"id":"h4","group":"g1","intent":"epsa v4 streaming archive decryption","role":"link","wires":["s2"],"rationale":"copy_saves.rb call site: swaps PhysFS.mount for ArchiveMount.mount!"},
+  {"id":"h5","group":"g1","intent":"epsa v4 streaming archive decryption","role":"environment","wires":["s2"],"rationale":"renames the archive-path env var in copy_saves"},
+  {"id":"h6","group":"g1","intent":"epsa v4 streaming archive decryption","role":"core","seam":"s2","seam_label":"mount epsa archive into PhysFS","rationale":"ArchiveMount.mount! — reads keys from env, constructs EpsaStream, mounts it via PhysFS.mount_io (sole home of the mount rule)"},
+  {"id":"h7","group":"g1","intent":"epsa v4 streaming archive decryption","role":"core","seam":"s1","seam_label":"epsa v4 stream decrypter","rationale":"EpsaFormat — v4 header layout constants + AES-CTR counter (be128) arithmetic the decrypter depends on"},
+  {"id":"h8","group":"g1","intent":"epsa v4 streaming archive decryption","role":"core","seam":"s1","seam_label":"epsa v4 stream decrypter","rationale":"EpsaStream — chunked AES-256-CTR streaming decrypt + per-chunk HMAC verify behind the PhysFS_Io duck type"},
+  {"id":"h9","group":"g1","intent":"epsa v4 streaming archive decryption","role":"test","wires":["s1","s2"],"rationale":"unit tests for EpsaStream (IO surface, seeks, integrity, duplicates) + the prelude-concatenation load order covering ArchiveMount"}
+]
