@@ -87,7 +87,11 @@ A hunk can appear in several seams (a link wires more than one core). Occurrence
   "external":    ["@coss/ui"],                          // couples to a symbol from a module outside the change
   "externalRefs":[ { "symbol": "x", "source": "@coss/ui" } ],
   "rewire":      { "removed": ["showToast"], "added": ["toastManager"] } | null,  // a focused A→B swap
-  "suggestedWires": ["h7"],                             // unverified wiring guesses
+  "suggested":   true,                                  // THIS membership is a low-confidence wire (dim) — the hunk
+                                                        //   appears in this seam, but its link to it is an unverified
+                                                        //   guess, not a confirmed coupling. Absent => confident.
+  "suggestedWires": ["h7"],                             // (hunk-level) every seam id this hunk wires only as a guess;
+                                                        //   `suggested` above is just `seamId ∈ suggestedWires`, localised
   "consumers":   [ { "file": "…", "symbol": "…", "status": "resolved|suggested" } ], // blast radius (diff mode, --blast-radius)
 
   // proposed sub-structure (rendered with a distinct "proposal" affordance, never as verified)
@@ -120,3 +124,8 @@ SeamContract  { "seamA", "seamB", "links":[GraphEdge], "blurry" }
   states — surface them as neutral information, not warnings to fix.
 - **SUGGESTED ≠ resolved.** Anything tagged `suggested` / `SUGGESTED` is an unverified guess for a
   statically-opaque mechanism — render it as "go verify", never as an asserted edge.
+- **Wiring is encoded by membership; `suggested` grades it.** A non-core hunk wires to a seam by
+  appearing in that seam's `hunks` (a hunk wiring several seams is duplicated across them — dedupe by
+  `id`). On each membership, `suggested: true` marks a low-confidence (dim) wire vs a confident one;
+  this is the diff-mode mirror of the codebase-mode seam-level `suggested`. An LLM consumer should
+  read confident memberships as couplings and `suggested` ones as "verify".

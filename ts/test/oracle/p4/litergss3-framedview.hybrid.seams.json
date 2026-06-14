@@ -152,7 +152,8 @@
               "rewire": null,
               "suggestedWires": [
                 "h1"
-              ]
+              ],
+              "suggested": true
             }
           ]
         }

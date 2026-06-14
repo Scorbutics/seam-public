@@ -221,6 +221,7 @@
                 "h10",
                 "h14"
               ],
+              "suggested": true,
               "wireTargets": [
                 {
                   "file": "supabase/functions/_shared/scoring/src/services/engine.ts",
@@ -242,6 +243,7 @@
                 "h10",
                 "h14"
               ],
+              "suggested": true,
               "wireTargets": [
                 {
                   "file": "supabase/functions/_shared/scoring/src/services/engine.ts",
@@ -326,7 +328,8 @@
               "suggestedWires": [
                 "h10",
                 "h14"
-              ]
+              ],
+              "suggested": true
             }
           ]
         }
@@ -400,6 +403,7 @@
                 "h10",
                 "h14"
               ],
+              "suggested": true,
               "wireTargets": [
                 {
                   "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
@@ -438,6 +442,7 @@
                 "h10",
                 "h14"
               ],
+              "suggested": true,
               "wireTargets": [
                 {
                   "file": "supabase/functions/_shared/scoring/src/services/missionEngine.ts",
@@ -489,7 +494,8 @@
               "suggestedWires": [
                 "h10",
                 "h14"
-              ]
+              ],
+              "suggested": true
             }
           ]
         }

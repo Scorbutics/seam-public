@@ -376,14 +376,22 @@ export async function emit_seams_json(hunks: Hunk[], repo?: string, blast_radius
   const sugg = new Map<string, string[]>();
   for (const h of hunks) if (h.suggested_wires?.length) sugg.set(h.id, [...h.suggested_wires]);
 
-  const mkHunkOut = (b: Block): any => {
+  // `seamId` = the seam this hunk is being emitted UNDER. A hunk wires to a seam if seamId ∈ h.wires
+  // (which includes the suggested subset); when seamId ∈ h.suggested_wires this particular membership
+  // is a SUGGESTED (low-confidence / dim) edge, not a confirmed one — the same signal the native
+  // renderer dims. Stamped per-membership so a consumer reads it locally, without cross-referencing
+  // the hunk-level `suggestedWires` list against the enclosing seam id.
+  const mkHunkOut = (b: Block, seamId: string): any => {
     const d: any = {
       id: b.hid, file: b.file, start: b.start, end: b.end, role: b.role,
       confidence: conf.get(b.hid) ?? 1.0, external: ext.get(b.hid) ?? [],
       externalRefs: refs.get(b.hid) ?? [], rewire: rewire.get(b.hid) ?? null,
     };
     if (cons.size) d.consumers = cons.get(b.hid) ?? [];
-    if (sugg.has(b.hid)) d.suggestedWires = sugg.get(b.hid);
+    if (sugg.has(b.hid)) {
+      d.suggestedWires = sugg.get(b.hid);
+      if (sugg.get(b.hid)!.includes(seamId)) d.suggested = true; // this membership is a dim/suggested wire
+    }
     if (b.wires?.length) d.wireTargets = b.wires; // intra-seam closeness: which core this link wires
     return d;
   };
@@ -396,7 +404,7 @@ export async function emit_seams_json(hunks: Hunk[], repo?: string, blast_radius
       seams: cl.seams.map((s) => ({
         id: s.id, label: s.label || s.id, linkOnly: !!s.verification.link_only,
         uncertain: !!s.uncertain, warnings: s.verification.warnings.map((w: any) => w.kind),
-        hunks: s.blocks.map(mkHunkOut),
+        hunks: s.blocks.map((b) => mkHunkOut(b, s.id)),
       })),
     };
     if (sub) entry.subgroups = sub;

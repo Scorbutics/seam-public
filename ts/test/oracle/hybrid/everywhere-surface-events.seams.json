@@ -48,7 +48,8 @@
               "rewire": null,
               "suggestedWires": [
                 "h2"
-              ]
+              ],
+              "suggested": true
             }
           ]
         }
