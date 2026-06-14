@@ -50,7 +50,15 @@ export async function classify(hunks: Hunk[], opts: {
       det.reconcile_wiring(work, facts);
       seamMerge = () => det.merge_seams(work);
     } else {
-      seamMerge = hybridWiring(work, facts, llmOpts);                  // LLM draw + det grounding
+      // SEED-cleaning drop set (per link → cores to omit from the LLM hint), via the edge-resolution
+      // ladder: when a repo is available, resolve cross-file candidate edges (principled, per-edge);
+      // else fall back to the repo-free `coimport_externals` density heuristic. Cleans the seed only —
+      // the LLM re-adds real couplings from meaning, so recall is preserved (hard-pruning isn't).
+      const coreIds = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
+      const drop = opts.repo
+        ? await det.resolve_coincidence(work, facts, coreIds, opts.repo)
+        : det.coimport_drop(work, facts, coreIds);
+      seamMerge = hybridWiring(work, facts, llmOpts, drop);          // LLM draw + det grounding
     }
   }
 
@@ -69,25 +77,23 @@ export async function classify(hunks: Hunk[], opts: {
 // The hybrid wiring (LLM-first): the LLM groups cores into seams + draws each edit's line by
 // meaning; determinism GROUNDS the draw and prunes the over-wired ungrounded ones.
 function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
-                      llmOpts: { model?: string; claudeBin?: string | null }): (() => void) | null {
+                      llmOpts: { model?: string; claudeBin?: string | null },
+                      drop: Map<string, Set<string>>): (() => void) | null {
   const cores = new Map<string, Hunk>();
   for (const h of work) if (h.role === "core") cores.set(h.id, h);
   const targets = work.filter((h) => h.role !== "core");
   if (!cores.size) return null;
   const coreIds = new Set(cores.keys());
   const anchors = det._anchors(work, facts, coreIds);
-  // Clean the LLM wiring SEED of co-import noise: drop a candidate core from an edit's hint when the
-  // only symbols linking the two are shared design-system imports (referenced by ≥2 hunks). This
-  // biases the seed, not the answer — the LLM still re-adds real couplings from meaning, and det
-  // clustering/grounding (which read h.wires) are untouched. Big win on re-skins, no-op on logic.
-  const coimp = det.coimport_externals(work, facts);
+  // Clean the LLM wiring SEED of cross-file co-import noise: drop a candidate core from an edit's hint
+  // when import-resolution shows the shared symbol is NOT that core's (resolves elsewhere) — see
+  // det.resolve_coincidence. This biases the seed, not the answer — the LLM still re-adds real
+  // couplings from meaning, and det clustering/grounding (which read h.wires) are untouched. The
+  // resolution signal is principled & per-edge (no _COIMPORT_DOMINANCE threshold); inert without repo.
   const hints = new Map<string, string[]>();
   for (const h of targets) {
-    const m = det._mentions(facts.get(h.id)!);
-    hints.set(h.id, [...h.wires].filter((c) => {
-      const ov = [...(anchors.get(c) ?? new Set<string>())].filter((s) => m.has(s));
-      return ov.length === 0 || ov.some((s) => !coimp.has(s));
-    }));
+    const d = drop.get(h.id);
+    hints.set(h.id, d ? [...h.wires].filter((c) => !d.has(c)) : [...h.wires]);
   }
   const { labels, groups, drawn } = llm.reconcile_llm(cores, targets, hints, llmOpts);
   for (const h of targets) {

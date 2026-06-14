@@ -1,6 +1,8 @@
 // Port of src/diff/classifier_det.py — the deterministic-first classifier (roles + wiring +
 // clusters + seam merge + spans). No regex/language knowledge beyond the facts IR + a few
 // label heuristics. See the Python docstring for the model.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { connected_components } from "../core/graph_ir.js";
 import {
   type FactsProvider, type HunkFacts, RegexFactsProvider,
@@ -10,6 +12,9 @@ import { _added, _defs_refs, _diff_imports, _STOP } from "./lang.js";
 import { type Hunk, type Placement } from "./parser.js";
 import { candidate_wirings, resolve_alias, segment_link_by_core } from "./symbol_edges.js";
 import { difference, findAll, findGroup1, intersect, sorted, union } from "../core/sets.js";
+import { _resolve } from "../core/resolve/consumers.js";
+import { parse_imports } from "../core/resolve/languages/index.js";
+import { normpath as rnormpath } from "../core/resolve/walk.js";
 
 const _LOGIC_CORE_THRESHOLD = 2;
 const _AMBIENT_EXTERNAL_MIN = 3;
@@ -97,6 +102,82 @@ export function coimport_externals(work: Hunk[], facts: Map<string, HunkFacts>):
   // migration). Below the threshold a diff's few shared imports may be real couplings, and the
   // harness showed unconditional stripping over-prunes them — so leave small/clean diffs untouched.
   return out.size >= _COIMPORT_DOMINANCE ? out : new Set<string>();
+}
+
+// Repo-free SEED drop set (fallback for resolve_coincidence when no repo): per link → cores whose
+// ONLY name-overlap with the link is shared co-imports (det.coimport_externals). Reproduces the prior
+// hybridWiring hint filter exactly, so the no-repo path stays byte-identical.
+export function coimport_drop(work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>): Map<string, Set<string>> {
+  const coimp = coimport_externals(work, facts);
+  const anchors = _anchors(work, facts, cores);
+  const out = new Map<string, Set<string>>();
+  if (!coimp.size) return out;
+  for (const h of work) {
+    if (cores.has(h.id)) continue;
+    const m = _mentions(facts.get(h.id)!);
+    const drop = new Set<string>();
+    for (const c of cores) {
+      const ov = [...(anchors.get(c) ?? new Set<string>())].filter((s) => m.has(s));
+      if (ov.length > 0 && ov.every((s) => coimp.has(s))) drop.add(c);
+    }
+    if (drop.size) out.set(h.id, drop);
+  }
+  return out;
+}
+
+// Import-resolution confirmation of cross-file candidate edges (the "edge-resolution ladder").
+// For each non-core hunk h and each core c it name-couples to (anchors(c) ∩ mentions(h)), read h's
+// post-image file, find the import of the shared symbol, and resolve its module against the repo:
+//   • resolves to c's file            → CONFIRMED (a real import edge) — never marked
+//   • resolves elsewhere, c≠h file    → COINCIDENCE (shared symbol is a co-import, not c's) — marked
+//   • symbol not imported / same file → SILENT (same-component/structural coupling) — never marked
+// Returns {linkId → set of cross-file COINCIDENCE core ids}. This is a PRINCIPLED, per-edge signal
+// (no corpus-fit threshold) used to clean the hybrid LLM wiring SEED, superseding the
+// `coimport_externals` density heuristic. Same-file overlaps are deliberately spared: their coupling
+// is structural, not import-based, and the gold wires them. Async (file I/O + the resolver seam);
+// inert (empty) when `repo` is absent or its working tree doesn't match the diff's files.
+export async function resolve_coincidence(
+  work: Hunk[], facts: Map<string, HunkFacts>, cores: Set<string>, repo: string,
+): Promise<Map<string, Set<string>>> {
+  const out = new Map<string, Set<string>>();
+  if (!repo) return out;
+  const anchors = _anchors(work, facts, cores);
+  const coreFile = new Map<string, string>();
+  for (const h of work) if (cores.has(h.id)) coreFile.set(h.id, rnormpath(h.file_path));
+  const fileCache = new Map<string, ReturnType<typeof parse_imports> | null>();
+  const importsOf = (path: string) => {
+    if (fileCache.has(path)) return fileCache.get(path)!;
+    let imps: ReturnType<typeof parse_imports> | null = null;
+    try { imps = parse_imports(path, readFileSync(join(repo, path), "utf-8")); } catch { imps = null; }
+    fileCache.set(path, imps);
+    return imps;
+  };
+  for (const h of work) {
+    if (cores.has(h.id)) continue;
+    const m = _mentions(facts.get(h.id)!);
+    const imps = importsOf(h.file_path);
+    if (!imps) continue;
+    const hFile = rnormpath(h.file_path);
+    const coinc = new Set<string>();
+    for (const cid of cores) {
+      if (cid === h.id) continue;
+      const cFile = coreFile.get(cid)!;
+      if (cFile === hFile) continue;                       // same file: structural, never demote
+      const shared = intersect(anchors.get(cid)!, m);
+      if (!shared.size) continue;
+      let confirmed = false, elsewhere = false;
+      for (const sym of shared) {
+        const ref = imps.find((r) => r.name === sym || r.local === sym);
+        if (!ref || !ref.source) continue;
+        const tgt = await _resolve(repo, h.file_path, ref.source);
+        if (tgt && rnormpath(tgt) === cFile) { confirmed = true; break; }
+        if (tgt) elsewhere = true;
+      }
+      if (!confirmed && elsewhere) coinc.add(cid);
+    }
+    if (coinc.size) out.set(h.id, coinc);
+  }
+  return out;
 }
 
 function _resolved_edges(work: Hunk[], facts: Map<string, HunkFacts>): Map<string, Set<string>> {
