@@ -1,0 +1,12 @@
+[
+  {"id":"h1","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"core","seam":"s1","seam_label":"on_move_failure effect hook","rationale":"defines the new effect-level on_move_failure extension point (no-op default) on EffectBase"},
+  {"id":"h2","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"environment","wires":["s1"],"rationale":"registers on_move_failure in the effect dispatch alias table"},
+  {"id":"h3","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"core","seam":"s1","seam_label":"on_move_failure effect hook","rationale":"Procedure dispatch: iterates effects and fires effect.on_move_failure when a move fails"},
+  {"id":"h4","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"HighJumpKick: restructures its on_move_failure to chain into the new dispatch via super"},
+  {"id":"h5","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"MindBlown: chains its on_move_failure via super"},
+  {"id":"h6","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Reload: chains its on_move_failure via super"},
+  {"id":"h7","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Rollout: chains its on_move_failure via super"},
+  {"id":"h8","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"SelfDestruct: restructures to run its effect then chain via super"},
+  {"id":"h9","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Thrash: restructures confusion handling and chains via super"},
+  {"id":"h10","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"UpRoar: chains its on_move_failure via super"}
+]
