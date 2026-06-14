@@ -1,0 +1,18 @@
+[
+  {"id":"h1","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"module.c Timers: swaps raxFind+raxInsert for raxFindLink+raxInsertAt"},
+  {"id":"h2","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"core","seam":"s1","seam_label":"raxFindLink + raxInsertAt single-walk insert","rationale":"new raxLinkStillValid + raxInsertAt: commit an insert at a precomputed link"},
+  {"id":"h3","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"core","seam":"s1","seam_label":"raxFindLink + raxInsertAt single-walk insert","rationale":"raxInsertAt body (split/commit path) continuation"},
+  {"id":"h4","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"core","seam":"s1","seam_label":"raxFindLink + raxInsertAt single-walk insert","rationale":"new raxFindLink: one walk, stash the stop point as a link"},
+  {"id":"h5","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"core","seam":"s1","seam_label":"raxFindLink + raxInsertAt single-walk insert","rationale":"raxGenericInsert rebuilt on the new primitives (raxFindLink then raxInsertAt)"},
+  {"id":"h6","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"test","wires":["s1"],"rationale":"inline REDIS_TEST in rax.c exercising the new insert paths (path/marker detection misses this on C)"},
+  {"id":"h7","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"environment","wires":["s1"],"rationale":"rax.h declaration of raxFindLink + the raxNodeLink contract"},
+  {"id":"h8","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"environment","wires":["s1"],"rationale":"rax.h declaration of raxInsertAt"},
+  {"id":"h9","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: adopts the find-or-insert single-walk API"},
+  {"id":"h10","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: raxFind → raxFindLink"},
+  {"id":"h11","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: raxInsert → raxInsertAt"},
+  {"id":"h12","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: raxInsert → raxInsertAt"},
+  {"id":"h13","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: raxInsert → raxInsertAt"},
+  {"id":"h14","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"t_stream.c call site: raxFind+raxInsert → raxFindLink+raxInsertAt"},
+  {"id":"h15","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"tracking.c call site: adopts the single-walk API"},
+  {"id":"h16","group":"g1","intent":"single-walk find-then-insert via raxFindLink/raxInsertAt","role":"link","wires":["s1"],"rationale":"tracking.c call site: adopts the single-walk API"}
+]
