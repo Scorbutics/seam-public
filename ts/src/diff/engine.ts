@@ -10,6 +10,13 @@ import { intersect, sorted, union } from "../core/sets.js";
 export const DEFAULTS = { cluster: "llm", roles: "det", wiring: "hybrid" } as const;
 const ENGINES = ["llm", "det", "hybrid"];
 
+// How the deferred seam-MERGE step should run, as DATA rather than a closure — so the wiring phase
+// outputs a plain plan and the merge phase consumes it, instead of the wiring phase handing the merge
+// phase a thunk that secretly closes over the reconcile output across the cluster barrier.
+//   det    → merge cores by file+enclosing component.
+//   hybrid → merge by the LLM seam keys/labels (+ the det component floor), carrying that LLM output.
+type MergePlan = { kind: "det" } | { kind: "hybrid"; labels: Map<string, string>; groups: Map<string, string> };
+
 export async function classify(hunks: Hunk[], opts: {
   cluster?: string; roles?: string; wiring?: string; facts_provider?: FactsProvider;
   repo?: string; model?: string; claudeBin?: string | null; roleVotes?: number;
@@ -40,17 +47,18 @@ export async function classify(hunks: Hunk[], opts: {
     if (roles === "hybrid") llm.reconcile_roles_llm(work, llmOpts);   // LLM re-judges the uncertain
   }
 
-  // WIRING (reads roles). Seam MERGING is deferred until after clustering (a thunk). The hybrid
-  // wiring's reconcile LLM pass is kicked off as a PROMISE so it can overlap the cluster LLM pass.
-  let seamMerge: (() => void) | null = null;
-  let wiringPromise: Promise<(() => void) | null> | null = null;
+  // WIRING (reads roles). Seam MERGING is deferred until after clustering, expressed as a DATA plan
+  // (not a thunk). The hybrid wiring's reconcile LLM pass is kicked off as a PROMISE so it can overlap
+  // the cluster LLM pass.
+  let mergePlan: MergePlan | null = null;
+  let wiringPromise: Promise<MergePlan | null> | null = null;
   if (wiring === "llm") {
     llm.assign_wiring(work, llmOpts);                                  // Pass C (authoritative)
   } else {
     det.assign_wiring(work, facts);                                    // symbol candidates
     if (wiring === "det") {
       det.reconcile_wiring(work, facts);
-      seamMerge = () => det.merge_seams(work);
+      mergePlan = { kind: "det" };
     } else {
       // SEED-cleaning drop set (per link → cores to omit from the LLM hint), via the edge-resolution
       // ladder: when a repo is available, resolve cross-file candidate edges (principled, per-edge);
@@ -69,15 +77,17 @@ export async function classify(hunks: Hunk[], opts: {
   // cluster pass READS h.wires, so it must wait for wiring to finish first.
   if (cluster === "llm") {
     const clusterPromise = llm.assign_clusters(work, llmOpts);
-    const [wres] = await Promise.all([wiringPromise ?? Promise.resolve(seamMerge), clusterPromise]);
-    seamMerge = wres ?? seamMerge;
+    const [wres] = await Promise.all([wiringPromise ?? Promise.resolve(mergePlan), clusterPromise]);
+    mergePlan = wres ?? mergePlan;
   } else {
-    if (wiringPromise) seamMerge = await wiringPromise;               // det clustering reads the wires
+    if (wiringPromise) mergePlan = await wiringPromise;               // det clustering reads the wires
     det.assign_clusters(work, facts);
     if (cluster === "hybrid") llm.label_clusters_llm(work, llmOpts);   // LLM prose labels over det groups
   }
 
-  if (seamMerge) seamMerge();
+  // SEAM MERGE — apply the plan (was a thunk closing over reconcile output; now explicit data).
+  if (mergePlan?.kind === "det") det.merge_seams(work);
+  else if (mergePlan?.kind === "hybrid") det.apply_seam_groups(work, mergePlan.labels, mergePlan.groups, true, facts);
   det.merge_clusters_by_intent(work);
   det.assign_spans(work, opts.repo);
 }
@@ -86,7 +96,7 @@ export async function classify(hunks: Hunk[], opts: {
 // meaning; determinism GROUNDS the draw and prunes the over-wired ungrounded ones.
 async function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
                       llmOpts: { model?: string; claudeBin?: string | null },
-                      drop: Map<string, Set<string>>): Promise<(() => void) | null> {
+                      drop: Map<string, Set<string>>): Promise<MergePlan | null> {
   const cores = new Map<string, Hunk>();
   for (const h of work) if (h.role === "core") cores.set(h.id, h);
   const targets = work.filter((h) => h.role !== "core");
@@ -128,5 +138,5 @@ async function hybridWiring(work: Hunk[], facts: Map<string, HunkFacts>,
     h.wires = sorted(kept);
     h.suggested_wires = sorted(suggested);
   }
-  return () => det.apply_seam_groups(work, labels, groups, true, facts);
+  return { kind: "hybrid", labels, groups };   // the merge phase applies apply_seam_groups from this
 }
