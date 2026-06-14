@@ -43,7 +43,26 @@ export class Graph {
   blindspots: BlindSpot[] = [];
   unresolved: any[] = [];
   order(): string[] { return [...this.nodes.keys()]; }
-  resolved_edges(): Edge[] { return this.edges.filter((e) => isResolved(e.provenance)); }
+
+  // Memoized derivations of the edge list. resolved_edges() re-filtered this.edges on EVERY call and
+  // is consumed dozens of times across the codebase decomposition (roles, clusters, seams, emit);
+  // adjacency() rebuilt the undirected map ~4×. Cache both, invalidated whenever edges.length changes
+  // (the list is only ever APPENDED to, during from_resolved_graph construction — immutable through
+  // decompose). Both results are treated as READ-ONLY by every caller.
+  private _resolvedCache: Edge[] | null = null;
+  private _resolvedLen = -1;
+  private _adjCache: Map<string, Set<string>> | null = null;
+  private _adjLen = -1;
+  resolved_edges(): Edge[] {
+    if (this._resolvedCache && this._resolvedLen === this.edges.length) return this._resolvedCache;
+    this._resolvedLen = this.edges.length;
+    return (this._resolvedCache = this.edges.filter((e) => isResolved(e.provenance)));
+  }
+  adjacency(): Map<string, Set<string>> {
+    if (this._adjCache && this._adjLen === this.edges.length) return this._adjCache;
+    this._adjLen = this.edges.length;
+    return (this._adjCache = undirected_adjacency(this.resolved_edges()));
+  }
 }
 
 class DSU {

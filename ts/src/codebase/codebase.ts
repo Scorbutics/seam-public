@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
 import {
   type Edge, type Graph, type Node, type BlindSpot, Provenance, connected_components,
-  undirected_adjacency, wellformedness,
+  wellformedness,
 } from "../core/graph_ir.js";
 import * as atoms from "./atoms.js";
 
@@ -23,7 +23,7 @@ const dedup = (a: string[]): string[] => [...new Set(a)];
 export function assign_roles(g: Graph): void {
   const anchorIds = (g.anchors.length ? g.anchors : [g.anchor]).filter((a) => g.nodes.has(a));
   const anchorSyms = new Set(anchorIds.map((a) => g.nodes.get(a)!.label).filter((s) => s));
-  const adj = undirected_adjacency(g.resolved_edges());
+  const adj = g.adjacency();
   const core = new Set([...g.nodes.values()].filter((n) =>
     anchorIds.includes(n.id) || (n.enclosing && anchorSyms.has(n.enclosing))).map((n) => n.id));
   const tests = new Set([...g.nodes.values()].filter((n) => n.kind === "test").map((n) => n.id));
@@ -133,7 +133,7 @@ function _sweep_leftovers(g: Graph, seams: Seam[], adj: Map<string, Set<string>>
 export function assign_intent_seams(g: Graph): Seam[] {
   const anchors = (g.anchors.length ? g.anchors : [g.anchor]).filter((a) => g.nodes.has(a));
   if (!anchors.length) return [];
-  const adj = undirected_adjacency(g.resolved_edges());
+  const adj = g.adjacency();
 
   const carriers: Node[] = [];
   const carrierAnchor = new Map<string, string>();
@@ -220,7 +220,7 @@ export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: 
   const members = [...g.nodes.values()].filter((n) => n.role === "core" && n.id !== anchor && n.enclosing === anchorNode.label);
   if (members.length < 2) return floorSeams;
   const consumers = [...g.nodes.values()].filter((n) => n.role === "link");
-  const adj = undirected_adjacency(g.resolved_edges());
+  const adj = g.adjacency();
   const cset = new Set(members.map((m) => m.id));
   const uses = new Map<string, string[]>(consumers.map((c) => [c.id, [...inter(cset, adj.get(c.id) ?? new Set())].sort()]));
   const floorOf = new Map<string, string>();
