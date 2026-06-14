@@ -1,0 +1,10 @@
+[
+  {"id":"h1","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"environment","wires":["s1"],"rationale":"classic ZodType.superRefine interface signature gains params?: $ZodSuperRefineParams (type decl, no logic)"},
+  {"id":"h2","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"link","wires":["s1"],"rationale":"classic constructor wiring: inst.superRefine threads params into the check"},
+  {"id":"h3","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"link","wires":["s1"],"rationale":"classic superRefine() free fn forwards params to core._superRefine"},
+  {"id":"h4","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"test","wires":["s1"],"rationale":"two tests for the when predicate gating the refinement (runs / skips)"},
+  {"id":"h5","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"core","seam":"s1","seam_label":"superRefine when-param","rationale":"core: defines $ZodSuperRefineParams (the when option) and threads params through _superRefine"},
+  {"id":"h6","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"link","wires":["s1"],"rationale":"passes params into the underlying _check call — the actual param wiring"},
+  {"id":"h7","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"environment","wires":[],"rationale":"doc-comment-only sync of the pre-existing checks.ts when field — ambient drive-by, no coupling"},
+  {"id":"h8","group":"g1","intent":"thread a 'when' gate param through superRefine","role":"link","wires":["s1"],"rationale":"mini superRefine() free fn forwards params to core._superRefine (surface parity — the drift risk)"}
+]
