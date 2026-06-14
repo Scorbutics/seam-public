@@ -7,6 +7,6 @@
   {"id":"h6","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Reload: chains its on_move_failure via super"},
   {"id":"h7","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Rollout: chains its on_move_failure via super"},
   {"id":"h8","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"SelfDestruct: restructures to run its effect then chain via super"},
-  {"id":"h9","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"Thrash: restructures confusion handling and chains via super"},
+  {"id":"h9","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"core","seam":"s2","seam_label":"Thrash forced-move confusion fix","rationale":"Thrash: changes the confusion target (user→nil) on forced-move failure — a real rule change riding the hook adoption, not just a super chain"},
   {"id":"h10","group":"g1","intent":"route move failure through an effect-level on_move_failure hook","role":"link","wires":["s1"],"rationale":"UpRoar: chains its on_move_failure via super"}
 ]
