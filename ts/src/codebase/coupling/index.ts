@@ -74,13 +74,22 @@ export async function complement_unit(repo: string, file: string, line: number):
   return best ?? fallback;
 }
 
+const CHAIN_DEPTH = 1;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
+
 // Attach the shared-key boundaries for the anchor: for each key it PRODUCES surface the consumers, for
 // each it CONSUMES surface the producers — as a boundary node + (capped) crossing fan. Keys come from
 // the deterministic scan of the anchor body AND from `proposed` (the LLM, cross-framework). A proposed
 // key the index can't ground → a SUGGESTED blindspot (an LLM hypothesis, not a materialised node).
+//
+// TRANSITIVE: a complement is often itself a boundary onto the NEXT rung — a `payments` reader is an API
+// route handler that SERVES an http-route the UI fetches. Without chaining, that second hop only appears
+// if the LLM grow happens to re-anchor on a generically-named `GET` node (unreliable). So we recurse one
+// hop into each materialised complement, scanning ITS body for further keys — `seenKeys` carries the
+// boundaries an ancestor already surfaced so the chain can't loop back through the table it came in on.
 // Mutates nodes/edges/blindspots; returns the new id counter. Self-gating: no keys → no-op.
 export async function attach(repo: string, anchorId: string, anchorFile: string, anchorText: string,
-    lo: number, hi: number, nodes: any[], edges: any[], blindspots: any[], counter: number, proposed: ProposedKey[] = []): Promise<number> {
+    lo: number, hi: number, nodes: any[], edges: any[], blindspots: any[], counter: number, proposed: ProposedKey[] = [],
+    depth = CHAIN_DEPTH, seenKeys: Set<string> = new Set()): Promise<number> {
   if (!available()) return counter;
   type Acc = { kind: string; value: string; produces: boolean; line: number; fromScan: boolean };
   const accs = new Map<string, Acc>();
@@ -97,6 +106,7 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
   const index = shared_key_index(repo, SKIP_DIRS);
   const anchorNorm = normpath(anchorFile);
   const boundaryOf = new Map<string, string>();   // `${kind} ${value}` → boundary node id (one per key)
+  const surfaced = new Set(seenKeys);             // ancestor keys + the ones THIS call surfaces (fed to the chain recursion)
 
   // RELEVANCE prior for the capped fan: a complement that sits on the OTHER side of SEVERAL of the
   // anchor's keys is coupled through more than one data channel, so it's on-intent (e.g. a file that
@@ -115,6 +125,7 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
   }
 
   for (const a of [...accs.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
+    if (seenKeys.has(ikey(a.kind, a.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
     const kk = kindOf(a.kind);
     const entry = index.get(ikey(a.kind, a.value));
     const side = a.produces ? entry?.consumers : entry?.producers;   // the OTHER side
@@ -131,8 +142,9 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
     if (tid === undefined) {
       counter += 1; tid = `dc${counter}`;
       boundaryOf.set(ikey(a.kind, a.value), tid);
-      nodes.push({ id: tid, symbol: a.value, kind: kk.nodeKind, file: anchorFile, range: [a.line, a.line], enclosing: "", complexity: 1 });
+      nodes.push({ id: tid, symbol: a.value, kind: kk.nodeKind, file: anchorFile, range: [a.line, a.line], enclosing: "", complexity: 1, coupling: true });
     }
+    surfaced.add(ikey(a.kind, a.value));   // mark before recursing so a complement reading this same key skips it
     edges.push({ from: anchorId, to: tid, kind: a.produces ? kk.produceEdge : kk.consumeEdge, provenance: "RESOLVED_PARTIAL", line: a.line });
     const complements = [...byFile.entries()].sort((x, y) => {
       const sx = coFile.get(x[0]) ?? 0, sy = coFile.get(y[0]) ?? 0;
@@ -143,8 +155,15 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
       const u = await complement_unit(repo, file, line);
       counter += 1;
       const cid = `dc${counter}`;
-      nodes.push({ id: cid, symbol: u.symbol, kind: u.kind, file, range: [u.start, u.end], enclosing: "", complexity: Math.max(1, u.end - u.start + 1) });
+      nodes.push({ id: cid, symbol: u.symbol, kind: u.kind, file, range: [u.start, u.end], enclosing: "", complexity: Math.max(1, u.end - u.start + 1), coupling: true });
       edges.push({ from: tid, to: cid, kind: complementProduces ? kk.produceEdge : kk.consumeEdge, provenance: "RESOLVED_PARTIAL" });
+      // CHAIN: this complement may itself sit on the next boundary (the route handler that SERVES what the
+      // UI fetches). Recurse one hop into its body, scanning ITS keys — `surfaced` blocks the table it reads.
+      if (depth > 0) {
+        let ctext = "";
+        try { ctext = readFileSync(join(repo, file), "utf-8"); } catch { /* unreadable complement → no chain */ }
+        if (ctext) counter = await attach(repo, cid, file, ctext, u.start, u.end, nodes, edges, blindspots, counter, [], depth - 1, surfaced);
+      }
     }
     if (complements.length > READER_CAP) {
       blindspots.push({ node: tid, mechanism: "shared-key-fanout",

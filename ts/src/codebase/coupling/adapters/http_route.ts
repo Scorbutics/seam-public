@@ -10,7 +10,7 @@
 // Both sides normalise dynamic segments to `*` (`[id]` ⇄ `${id}`) so they meet on one key. JS/TS only.
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind } from "../types.js";
-import { lineOf } from "./util.js";
+import { lineOf, maskComments } from "./util.js";
 
 export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceEdge: "route-serve", consumeEdge: "route-fetch" } as const;
 
@@ -59,6 +59,7 @@ const FETCH_CALL = /\b(?:fetch|\$fetch|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\
 
 function scan(file: string, text: string): KeyHit[] {
   if (!endsWithSourceExt(file) || !JS_EXT.test(file)) return [];
+  text = maskComments(text);   // a `fetch("/api/x")` (or `export function GET`) in a comment is not a real route
   const out: KeyHit[] = [];
   const served = handler_path(file);
   if (served && served !== "/") {

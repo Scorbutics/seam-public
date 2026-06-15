@@ -138,7 +138,10 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     // a move that would flood the footprint (a widely-used class' consumers) doesn't advance the
     // answer — skip it and let the LLM try elsewhere, rather than drowning the intent in noise.
     const have = new Set(data.nodes.map((x: any) => _key(x)));
-    const new_nodes = add.nodes.filter((n: any) => !have.has(_key(n))).length;
+    // _MOVE_CAP guards against a widely-used class' import fan flooding the footprint. Data-coupling
+    // nodes (table/route boundaries + their capped readers/handlers + the one-hop UI chain) are already
+    // self-bounded by READER_CAP and are the intent ("…and where is it displayed?"), so don't count them.
+    const new_nodes = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
     if (new_nodes > _MOVE_CAP) {
       history.push({ node: node_sym, direction, added: 0, skipped: `too broad (+${new_nodes})`, ...(auto ? { auto: true } : {}) });
       if (++consecNoop >= MAX_CONSEC_NOOP) break;

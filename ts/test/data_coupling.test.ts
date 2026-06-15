@@ -188,6 +188,22 @@ describe("shared-key (data-flow) coupling", () => {
     expect(callerFiles).toContain("web/services.ts");
   });
 
+  // Rails is the STRONGEST case for LLM-over-adapter: `resources :payments` spells the path NOWHERE in
+  // the backend (no literal to grep, like Next's file-routing) — only the LLM's routing-convention
+  // knowledge recovers `/api/admin/payments` from the namespaced controller + RESTful action.
+  test("LLM-proposed route on a Rails controller action (implicit `resources` path) couples to the JS fetch", async () => {
+    const prepo = join(__dir, "fixtures", "polyroute-repo");
+    set_host_bus(new HostBus({ "discover": "[]", "discover-keys": '[{"id":"k1","kind":"route","value":"/api/admin/payments","role":"produces"}]' }));
+    let g: any;
+    try { g = await build_dependency_graph(prepo, "app/controllers/api/admin/payments_controller.rb", "index", { dataCouplingLlm: true }); }
+    finally { set_host_bus(null); }
+    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
+    expect(route).toBeDefined();   // inferred by the LLM from convention, grounded on the indexed JS fetch
+    const callerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-fetch")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file);
+    expect(callerFiles).toContain("web/services.ts");
+  });
+
   test("normPath canonicalises dynamic segments across stacks (`:id`/`{id}`/`[id]`/`${id}` → `*`)", () => {
     // handler conventions and the JS caller meet on one normalised key
     expect(scan_file_keys("app/api/items/[id]/route.ts", `export function GET(){}`))
@@ -196,6 +212,31 @@ describe("shared-key (data-flow) coupling", () => {
       .toEqual([{ kind: "http-route", value: "/api/items/*", line: 0, produces: false }]);
     expect(scan_file_keys("svc.ts", `fetch("/api/items/42?full=1")`))     // query stripped, static id kept
       .toEqual([{ kind: "http-route", value: "/api/items/42", line: 0, produces: false }]);
+  });
+
+  // TRANSITIVE CHAIN: the whole point of the second boundary — a writer reaches the UI in ONE expansion.
+  // Without it, the http-route hop only appears if the LLM grow happens to re-anchor on a generically-named
+  // `GET` node (it doesn't, reliably). The chain walks writer → `payments` → the route handler that reads
+  // it → that handler's http-route → the `fetch` caller — deterministically, no grow step.
+  test("a payments WRITER transitively reaches the UI fetch caller through the route handler (one hop)", async () => {
+    const rrepo = join(__dir, "fixtures", "route-repo");
+    const g = await build_dependency_graph(rrepo, "backend/persist.ts", "persistPayment");
+    // hop 1: db-table boundary to the route handler that reads `payments`
+    const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
+    expect(tbl).toBeDefined();
+    // hop 2 (the CHAIN): the route handler's OWN http-route, surfaced without re-anchoring
+    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
+    expect(route).toBeDefined();
+    const caller = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-fetch")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to));
+    expect(caller.map((n: any) => n.file)).toContain("lib/services.ts");
+    // hop 3 (the IMPORT hop): the PAGE that imports the fetch caller — the actual UI where it's displayed
+    const callerId = caller.find((n: any) => n.symbol === "fetchPayments")?.id;
+    const pageImporters = g.edges.filter((e: any) => e.to === callerId && e.kind === "reference")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.from).file);
+    expect(pageImporters).toContain("app/dashboard/admin/payments/page.ts");
+    // chain nodes are tagged so the orchestrator's broadness cap doesn't skip the move that surfaces them
+    expect(route.coupling).toBe(true);
   });
 
   test("--no-data-coupling disables the boundary entirely", async () => {
