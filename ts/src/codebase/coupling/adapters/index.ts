@@ -8,8 +8,9 @@ import { SUPABASE } from "./db_table.js";
 import { RAW_SQL } from "./raw_sql.js";
 import { ACTIVE_RECORD } from "./active_record.js";
 import { JOOQ } from "./jooq.js";
+import { HTTP_ROUTE } from "./http_route.js";
 
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE];
 
 const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-write", consumeEdge: "key-read", scan: () => [] };
 // Kind metadata (node label + edge kinds) for a key kind — shared by all adapters of that kind.

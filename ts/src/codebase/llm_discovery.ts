@@ -5,6 +5,7 @@ import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
 import { run_pass, ClassifierError as LLMError } from "../core/llm.js";
 import { module_entry_index } from "./string_coupling.js";
+import { normPath } from "./coupling/adapters/http_route.js";
 import { SKIP_DIRS } from "../core/resolve/languages/index.js";
 import { walk } from "../core/resolve/walk.js";
 
@@ -74,6 +75,13 @@ Return a JSON array, one object per key (empty array if none):
 `;
 }
 
+// The LLM's free-text kind vocabulary (buildKeyPrompt) → the engine's registered adapter kinds. The
+// HTTP-route adapter keys on `http-route`, but the prompt (and the model) naturally say "route" / a few
+// near-synonyms; without this, an LLM-proposed backend route would miss the index and die as an
+// `llm-proposed-key` blindspot instead of grounding to the (adapter-indexed) front-end fetch callers.
+const _KIND_ALIASES: Record<string, string> = { route: "http-route", endpoint: "http-route", http: "http-route", url: "http-route", path: "http-route" };
+const _canon_kind = (k: string): string => _KIND_ALIASES[k.toLowerCase()] ?? k;
+
 export function discover_keys(repo: string, anchorFile: string, fileText: string, lo: number, hi: number,
     opts: { model?: string; claudeBin?: string | null } = {}): { kind: string; value: string; produces: boolean }[] {
   const snippet = fileText.split("\n").slice(lo, hi + 1).join("\n").slice(0, 4000);
@@ -85,8 +93,10 @@ export function discover_keys(repo: string, anchorFile: string, fileText: string
   const seen = new Set<string>();
   for (const obj of out.values()) {
     if (!obj || typeof obj !== "object") continue;
-    const kind = String(obj.kind ?? "").trim(), value = String(obj.value ?? "").trim();
+    const kind = _canon_kind(String(obj.kind ?? "").trim());
+    let value = String(obj.value ?? "").trim();
     if (!kind || !value) continue;
+    if (kind === "http-route") value = normPath(value);   // meet the floor's normalised route key (`{id}`/`:id`/`[id]` → `*`)
     const produces = String(obj.role ?? "").trim().toLowerCase().startsWith("produc");
     const k = `${kind} ${value} ${produces}`;
     if (seen.has(k)) continue;

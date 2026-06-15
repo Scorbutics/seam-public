@@ -123,6 +123,81 @@ describe("shared-key (data-flow) coupling", () => {
     expect(readerFiles).toContain("src/invoice.ts");    // TS Supabase reader — coupled to a SQL writer
   });
 
+  // HTTP-route adapter: the SECOND boundary a UI crosses — `fetch("/api/…")` ⇄ a file-routed handler.
+  test("http-route adapter: handler file (path-derived) vs fetch caller (string literal)", () => {
+    // App Router handler — the URL comes from the FILE PATH; the hit is anchored at the exported method.
+    expect(scan_file_keys("app/api/admin/payments/route.ts", `export async function GET(req) {}`))
+      .toEqual([{ kind: "http-route", value: "/api/admin/payments", line: 0, produces: true }]);
+    // dynamic `[id]` ⇄ caller `${id}` meet on `/api/admin/payments/*`
+    expect(scan_file_keys("app/api/admin/payments/[id]/route.ts", `export const GET = () => {}`))
+      .toEqual([{ kind: "http-route", value: "/api/admin/payments/*", line: 0, produces: true }]);
+    expect(scan_file_keys("lib/svc.ts", "fetch(`/api/admin/payments/${id}`)"))
+      .toEqual([{ kind: "http-route", value: "/api/admin/payments/*", line: 0, produces: false }]);
+    // caller: query string stripped; produces=false (consumer)
+    expect(scan_file_keys("lib/svc.ts", `await fetch("/api/admin/payments?email=" + e)`))
+      .toEqual([{ kind: "http-route", value: "/api/admin/payments", line: 0, produces: false }]);
+    // Pages Router convention + axios caller
+    expect(scan_file_keys("pages/api/users/index.ts", `export default function handler() {}`))
+      .toEqual([{ kind: "http-route", value: "/api/users", line: 0, produces: true }]);
+    expect(scan_file_keys("lib/svc.ts", `axios.post("/api/users", body)`))
+      .toEqual([{ kind: "http-route", value: "/api/users", line: 0, produces: false }]);
+  });
+
+  test("http-route adapter: a route file with no exported method serves nothing; external URLs don't couple", () => {
+    expect(scan_file_keys("app/api/x/route.ts", `const GET = 1; // not exported`)).toEqual([]);
+    expect(scan_file_keys("a.ts", `fetch("https://stripe.com/v1/charges")`)).toEqual([]);   // absolute origin → skip
+    expect(scan_file_keys("a.ts", `fetch(url)`)).toEqual([]);                                // non-literal → skip
+    expect(scan_file_keys("a.py", `fetch("/api/x")`)).toEqual([]);                            // gated to JS/TS
+  });
+
+  test("a route HANDLER surfaces its fetch CALLERS as route-fetch crossings (the second UI boundary)", async () => {
+    const rrepo = join(__dir, "fixtures", "route-repo");
+    const g = await build_dependency_graph(rrepo, "app/api/admin/payments/route.ts", "GET");
+    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
+    expect(route).toBeDefined();
+    expect(g.edges).toContainEqual({ from: "n1", to: route.id, kind: "route-serve", provenance: "RESOLVED_PARTIAL", line: route.range[0] });
+    const callerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-fetch")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file);
+    expect(callerFiles).toContain("lib/services.ts");   // the service that fetch()es the route
+  });
+
+  test("symmetric: a fetch CALLER surfaces the route HANDLER as a route-serve crossing", async () => {
+    const rrepo = join(__dir, "fixtures", "route-repo");
+    const g = await build_dependency_graph(rrepo, "lib/services.ts", "fetchPayments");
+    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
+    expect(route).toBeDefined();
+    const handlerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-serve")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file);
+    expect(handlerFiles).toContain("app/api/admin/payments/route.ts");
+  });
+
+  // The LLM as a UNIVERSAL cross-stack route detector: it names the route a backend handler serves (a
+  // `@GetMapping` no adapter parses), which grounds against the JS `fetch` the floor DID index — so a
+  // Java/Ruby/C backend couples to a JS front-end with NO per-framework adapter. Just the kind reconcile.
+  test("LLM-proposed route on a Java Spring handler couples to the JS fetch caller (no Java adapter)", async () => {
+    const prepo = join(__dir, "fixtures", "polyroute-repo");
+    // The model says kind "route" (its natural word) — the reconcile maps it onto the engine's `http-route`.
+    set_host_bus(new HostBus({ "discover": "[]", "discover-keys": '[{"id":"k1","kind":"route","value":"/api/admin/payments","role":"produces"}]' }));
+    let g: any;
+    try { g = await build_dependency_graph(prepo, "backend/PaymentsController.java", "getPayments", { dataCouplingLlm: true }); }
+    finally { set_host_bus(null); }
+    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
+    expect(route).toBeDefined();   // surfaced from the LLM proposal alone, grounded on the indexed JS fetch
+    const callerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-fetch")
+      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file);
+    expect(callerFiles).toContain("web/services.ts");
+  });
+
+  test("normPath canonicalises dynamic segments across stacks (`:id`/`{id}`/`[id]`/`${id}` → `*`)", () => {
+    // handler conventions and the JS caller meet on one normalised key
+    expect(scan_file_keys("app/api/items/[id]/route.ts", `export function GET(){}`))
+      .toEqual([{ kind: "http-route", value: "/api/items/*", line: 0, produces: true }]);
+    expect(scan_file_keys("svc.ts", "fetch(`/api/items/${x}`)"))
+      .toEqual([{ kind: "http-route", value: "/api/items/*", line: 0, produces: false }]);
+    expect(scan_file_keys("svc.ts", `fetch("/api/items/42?full=1")`))     // query stripped, static id kept
+      .toEqual([{ kind: "http-route", value: "/api/items/42", line: 0, produces: false }]);
+  });
+
   test("--no-data-coupling disables the boundary entirely", async () => {
     const g = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment", { dataCoupling: false });
     expect(g.nodes.some((n: any) => n.kind === "table")).toBe(false);
