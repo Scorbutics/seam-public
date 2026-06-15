@@ -1,48 +1,52 @@
 # Architecture
 
 Reference for how the tool is wired today. For the *why* (the conceptual model — roles,
-trust directions, the read-time-decomposition thesis) see `decomposition-model-and-mvp.md`;
-for usage see `README.md`. This document is the *what and how* — mostly **diff-mode** (the
-original product); codebase-mode is sketched in §0 and detailed in the plan docs.
+trust directions, the read-time-decomposition thesis) see §9 below and [`README.md`](README.md);
+for usage see [`README.md`](README.md). This document is the *what and how* — mostly **diff-mode**
+(the original product); codebase-mode is sketched in §0, §7, and §8.5.
 
 > **One-line mental model:** a diff flows through a deterministic shell → a **per-pass
 > classifier** (each of cluster / roles / wiring independently `det` | `llm` | `hybrid`) →
-> a deterministic overlap/spans pass → a deterministic renderer (HTML report or the VS Code
-> native surface). The tool **structures, it never judges.**
+> a deterministic overlap/spans pass → a deterministic assembler → the versioned `--emit-seams`
+> JSON the VS Code extension renders natively (or an ASCII/markdown text render). The tool
+> **structures, it never judges.**
 
 ---
 
 ## 0. Code layout — two modes on a shared core
 
-The tool has **two products** behind one CLI, split into loosely-coupled folders:
+The tool has **two products** behind one CLI, split into loosely-coupled folders under `ts/src/`:
 
 ```
-src/
-  core/        shared engine, knows NO mode — graph_ir (the IR), llm (claude-CLI plumbing),
-               treesitter (parsing substrate), mode (the strategy Protocol + dispatch)
-  diff/        DIFF-MODE — review working changes → seam report. parser · diff_source · lang ·
-               symbol_edges · facts · facts_treesitter · classifier(_det) · engine · noise_filter ·
-               seams (assembly) · report_html/ (HTML) · run (the DiffMode strategy entry)
-  codebase/    CODEBASE-MODE — anchor on a symbol → intent FOOTPRINT (consumers + deps) → seams.
-               import_scan (scan) · codebase (decompose) · expand · anchor_rank · orchestrate ·
-               resolver · atoms (tree-sitter facts) · languages/ · lsp/ · run (CodebaseMode entry)
-  __init__.py  shared role constants (ROLES, ROLE_DESCRIPTIONS)
+ts/src/
+  core/        shared engine, knows NO mode — graph_ir (the IR), llm (claude-CLI / host-bus
+               plumbing), treesitter (parsing substrate), contract (schema stamp), progress,
+               resolve/ (consumers · resolver · walk · languages/ · lsp/ — the stack-specific
+               resolution behind a Resolver strategy)
+  diff/        DIFF-MODE — review working changes → seam model. parser · diff_source · lang ·
+               symbol_edges · facts · facts_treesitter · facts_resolve · classifier_det ·
+               classifier_llm · engine (per-pass orchestrator) · noise_filter · seams (assembly) ·
+               report_text (ASCII/markdown render) · blast_radius · cache · subgroup · seam_types
+  codebase/    CODEBASE-MODE — anchor on a symbol (or auto-select one from an intent) → intent
+               FOOTPRINT (consumers + deps) → seams. import_scan (scan) · codebase (decompose) ·
+               expand · anchor_rank (name-overlap recall) · intent_expand (LLM query-expansion) ·
+               anchor_select (auto-anchor: probe → judge) · orchestrate (grow) · llm_discovery ·
+               string_coupling · atoms (tree-sitter facts) · coupling/ (data-coupling adapters)
+  cli/         decompose.ts (the one CLI entry) · anchor_rank.ts (standalone ranker / --select)
 ```
 
-**The rule (enforced):** `diff/*` and `codebase/*` import only from `core/*` and within their own
-folder — **never from each other**, and `core/*` imports neither. `eval/architecture_test.py` asserts
-it (AST scan). This keeps the modes independently evolvable; adding a third mode is a new folder + a
-`Mode`, no core surgery.
+**The rule (a maintained convention):** `diff/*` and `codebase/*` import only from `core/*` and within
+their own folder — **never from each other**, and `core/*` imports neither. This keeps the modes
+independently evolvable; adding a third mode is a new folder, no core surgery.
 
-**The Mode strategy** (`core/mode.py`): each mode exposes `MODE` with `claims(args)` (do these CLI
-flags belong to me?) and `run(args) -> int`. `decompose.py` is just argparse +
-`dispatch([CODEBASE_MODE, DIFF_MODE], args)` — codebase claims `--graph/--scan/--expand-graph`, diff
-is the `--file/--git/--from-classified` fallback. Each mode's pipeline lives in its folder's `run.py`.
+**Mode dispatch** lives in `cli/decompose.ts:main`: a single branch routes `--scan` / `--graph` /
+`--expand-graph` to `runCodebase`, everything else (`--file` / `--git` / `--from-classified`) to the
+diff path. (The Python original used a `Mode` strategy Protocol; the TS port collapsed it to the branch.)
 
 The rest of this document details **diff-mode** (§1–§9), except **§8.5 (LLM call sites)** which maps
 *both* modes. Codebase-mode shares `core/graph_ir` (the IR), `core/llm`, and `core/treesitter`, but
 forks role assignment (anchor-relative BFS over a RESOLVED graph, not the `HunkFacts` ladder) — see
-`decomposition-model-and-mvp.md`, `intent-expansion-plan.md`, and `resolver-lsp-plan.md`.
+§8.5 and the **Codebase mode** section of [`README.md`](README.md).
 
 ### Clients & the contract boundary
 
@@ -73,7 +77,7 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
   diff (file/git) → diff_source → parser → noise_filter ─────────────┐
                                   (Hunk[])   (marks noise)            │
                                                                       ▼
-   ┌──────────────────── src/diff/engine.classify (orchestrator) ─────────────────┐
+   ┌──────────────────── diff/engine.classify (orchestrator) ──────────────────────┐
    │  facts = FactsProvider.facts(work)   # only if any pass is det/hybrid         │
    │                                                                               │
    │   ROLES pass   → roles/role_confidence            (det | llm | hybrid)        │
@@ -83,22 +87,22 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
    └───────────────────────────────────────────────────────────────────────────────┘
                                                                       │
                                               hunks (fully labelled)  ▼
-                       report_html.render → report.html        OR    seams.emit_seams_json → JSON
-                       (cytoscape + diff2html)                    (consumed by the VS Code extension)
+                       report_text.render → ASCII/markdown      OR    seams.emit_seams_json → JSON
+                       (--format ascii|llm, to stdout)             (the contract the VS Code ext renders)
 ```
 
-Stages (`decompose.py` is the CLI entry):
+Stages (`cli/decompose.ts` is the CLI entry):
 
 1. **`diff_source`** — load a unified diff from `--file` or `git diff <range>` (`--repo`); synthesizes diffs for untracked files.
-2. **`parser`** (`unidiff`) — split into `Hunk`s with stable ids (`h1`, `h2`, …). **Python owns hunk-id assignment** — every other producer (incl. the VS Code extension) keys off these ids.
+2. **`parser`** — split into `Hunk`s with stable ids (`h1`, `h2`, …). **The engine owns hunk-id assignment** — every other producer (incl. the VS Code extension) keys off these ids.
 3. **`noise_filter`** — deterministic pre-pass marks whitespace / rename / binary / lockfile / doc / generated hunks as `noise` (the one role where determinism matters); they skip the classifier.
 4. **`engine.classify`** — the per-pass classifier (§3).
 5. **`assign_spans`** — deterministic overlap/header-peel (§5), always run.
-6. **`seams`** (assembly) → **`report_html`** (HTML report), or **`seams.emit_seams_json`** for the extension.
+6. **`seams`** (assembly) → **`report_text.render`** (ASCII/markdown), or **`seams.emit_seams_json`** for the extension. (The old self-contained HTML report was removed — clients render the JSON.)
 
 ---
 
-## 2. Data model (`src/diff/parser.py`, `src/diff/facts.py`)
+## 2. Data model (`diff/parser.ts`, `diff/facts.ts`)
 
 - **`Hunk`** — the unit of decomposition. Carries the diff text + metadata, then the labels filled by the passes:
   - `role` ∈ `core | link | environment | test | noise`
@@ -114,7 +118,7 @@ Stages (`decompose.py` is the CLI entry):
 
 ---
 
-## 3. The per-pass classifier (`src/diff/engine.py`)
+## 3. The per-pass classifier (`diff/engine.ts`)
 
 Three passes, each independently on one of three engines. **Order: roles → wiring → clusters → spans** (each reads the prior). `facts` is computed once if any pass is `det`/`hybrid`.
 
@@ -126,21 +130,21 @@ Three passes, each independently on one of three engines. **Order: roles → wir
 
 **Engine choice rationale (measured, 4 shared gold cases):** roles det ≈ **0.77** vs llm ≈ 0.55; wiring det F1 ≈ **0.63** vs llm ≈ 0.24 (the llm number was role-confounded — see §9); cluster llm F1 ≈ **0.98** vs det ≈ 0.68. So: LLM where it's the only reliable engine (grouping), deterministic where it wins (roles), hybrid where the deterministic tail needs cleanup (wiring of tangled diffs).
 
-Special case: **all-LLM** (`cluster=roles=wiring=llm`) routes to the legacy `classifier.classify` (cluster ∥ roles concurrently, then wire pass) for its speed optimization, then runs `assign_spans`.
+Special case: **all-LLM** (`cluster=roles=wiring=llm`) routes to `classifier_llm.classify_all_llm` (cluster ∥ roles concurrently, then wire pass) for its speed optimization, then runs `assign_spans`.
 
 `--classifier X` is a preset that sets all three; a per-pass flag overrides it. `--classifier det` = fully offline (no LLM).
 
-### 3a. ROLES (`classifier_det.assign_roles` / `classifier.assign_roles`)
+### 3a. ROLES (`classifier_det.assign_roles` / `classifier_llm.assign_roles`)
 
 Deterministic ladder over `HunkFacts` (in order): `is_test` → `is_sql`→env → import-only / type-decl-only → env → `implements`→link (adapter) → then the **core/link** call from change-magnitude (`decisions`) + def↔use direction (defines-a-used-symbol = core; references-one = link). `role_confidence` is the heuristic's margin. `hybrid` re-judges only `< 0.6`-confidence hunks with the LLM. **Validated-safe rules only** (e.g. `implements`→link, `.sql`→env each co-occur with a single gold role); the `logic==0 ⇒ env` demotion was tried and reverted (it killed logic-less React cores).
 
-### 3b. WIRING (`classifier_det` + `classifier.reconcile_llm`)
+### 3b. WIRING (`classifier_det` + `classifier_llm.reconcile_llm`)
 
 - **`det`**: subject-anchored wiring (`_subject_wiring`) — a non-core hunk wires to every core whose **distinctive subject** it mentions (a core's subject = its defs + the modified enclosing symbol + its call/JSX subjects). Distinctiveness drops ambient symbols (frequency cut) and **shared imported chrome** (symbols imported-from-outside the diff used in ≥3 hunks — `Button`, `useLocale`). Then `reconcile_wiring` (tier-2, deterministic): on an over-wired hunk (> 4 cores) keep only edges to cores it *owns* a symbol of; a hunk with **no owned edge is a legitimate hub** (header/barrel) → left alone.
-- **`llm`**: `classifier.assign_wiring` (Pass C) — fragile standalone, kept for completeness.
+- **`llm`**: `classifier_llm.assign_wiring` (Pass C) — fragile standalone, kept for completeness.
 - **`hybrid`** (default, **LLM-first**): the LLM **draws every non-core hunk's dependency line by meaning** *and* **names every seam** (technical intent) in one call, with the deterministic symbol candidates passed only as a **hint**. Then determinism **grounds** it: `h.wires = LLM_drawn ∪ det_owned` (re-add owned-symbol edges the LLM missed); no LLM list for a hunk → keep the deterministic candidates. This is the inversion: *LLM draws, determinism checks* — meaning over symbols, with symbol grounding as the safety net.
 
-### 3c. CLUSTERS (`classifier_det.assign_clusters` / `classifier.assign_clusters`)
+### 3c. CLUSTERS (`classifier_det.assign_clusters` / `classifier_llm.assign_clusters`)
 
 - **`det`**: connected components over the wiring graph; `intent` is a structural label (the cluster's core symbol via `_primary_symbol`, which prefers a Component/Type name over a destructured local).
 - **`llm`** (default): LLM grouping + product-intent prose.
@@ -148,7 +152,7 @@ Deterministic ladder over `HunkFacts` (in order): `is_test` → `is_sql`→env �
 
 ---
 
-## 4. The Facts IR & producers (`src/diff/facts.py`, `src/diff/facts_treesitter.py`)
+## 4. The Facts IR & producers (`diff/facts.ts`, `diff/facts_treesitter.ts`)
 
 The deterministic passes contain **zero regex / language knowledge** — they read `HunkFacts`. A `FactsProvider` produces them; swap the provider to change the syntax source. Two producers are *correct iff they emit equal `HunkFacts`* — the contract that makes "tree-sitter ≡ VS Code AST" a test, not a hope.
 
@@ -156,6 +160,7 @@ The deterministic passes contain **zero regex / language knowledge** — they re
 - **`TreeSitterFactsProvider(file_source)`** — full-file AST (optional `tree_sitter_language_pack`); parses the post-image file, masks comment/string nodes, scopes to the hunk's changed lines, reuses `facts_for_hunk`. **Alignment-guarded** — if the working tree doesn't match the diff (wrong commit) it falls back to regex per hunk; never trusts a misaligned parse.
 - **`ExternalFactsProvider(payload)`** — consumes a `HunkFacts` payload computed *outside* Python (the VS Code extension's language-server facts). Per-hunk regex fallback.
 - **`MergedFactsProvider(base, payload)`** — overlays a *partial* external payload (only the fields a source can fill, e.g. VS Code DocumentSymbols → `defines`/`enclosing`) onto a base provider.
+- **`ResolvedFactsProvider(base, repo)`** (`diff/facts_resolve.ts`) — base facts (regex) **plus** codebase-resolved out-of-diff refs grounded to in-diff cores (`--facts-engine resolve`).
 - **`FileSource`** — `RepoFileSource` (working tree) / `DictFileSource` (fixtures). Full-file granularity is what makes tree-sitter ≡ VS Code provable.
 
 Shared helpers: `facts_from_texts` (assembly given raw + masked text — same for every producer), `changed_newside`, `facts_for_hunk` (full-file slice + alignment), `leading_ambient_lines` (the header-peel signal used by spans).
@@ -178,69 +183,74 @@ The renderer and the extension **read** placements to draw split gutter bars / p
 
 ## 6. Output surfaces
 
-- **HTML report** (`report_html.render`) — self-contained (cytoscape graph + diff2html); seams built per cluster, spans/placements applied, per-seam *look-here* flags (isolated-core / dangling-link / uncertain / untested-core).
-- **Seam JSON** (`seams.emit_seams_json`) — the contract for the extension: `{clusters:[{intent, seams:[{label, linkOnly, uncertain, warnings, hunks:[{id,file,start,end,role,confidence,external,externalRefs,rewire}]}]}], tests, noise}`.
-- **VS Code extension** (`vscode-extension/`) — consumes `--emit-seams` and renders *natively*: per-seam role gutter bar (split where placements overlap) + scrollbar map + seam tree + CodeLens labels; lazy external-coupling resolution via the editor's go-to-definition (`VsCodeResolver`). It also *produces* facts: `facts.ts:computeSymbolFacts` walks DocumentSymbols → a partial `HunkFacts` payload, passed back via `--facts`. Setting **`seam.engine`** = `hybrid` (default → `--cluster llm --roles det --wiring hybrid`) | `det` (offline) | `llm`. *(The compiled `out/extension.js` must be rebuilt with `npm run compile` after TS edits.)*
+The self-contained HTML report (cytoscape + diff2html) was **removed** — clients render the JSON. Two surfaces remain:
+
+- **Text report** (`report_text.render`) — an ASCII / markdown seam tree to stdout (`--format ascii|llm`); spans/placements applied, per-seam *look-here* flags (isolated-core / dangling-link / uncertain / untested-core).
+- **Seam JSON** (`seams.emit_seams_json`) — the contract for every client: `{clusters:[{intent, seams:[{label, linkOnly, uncertain, warnings, hunks:[{id,file,start,end,role,confidence,external,externalRefs,rewire}]}]}], tests, noise}` (codebase mode adds `resolutionQuality`, `unresolved`, `blindspots`, `autoGrown`). Stamped with `schemaVersion` by `core/contract.ts`.
+- **VS Code extension** (`vscode-extension/`) — consumes `--emit-seams` and renders *natively*: per-seam role gutter bar (split where placements overlap) + scrollbar map + seam tree + CodeLens labels; lazy external-coupling resolution via the editor's go-to-definition. It also *produces* facts: `facts.ts:computeSymbolFacts` walks DocumentSymbols → a partial `HunkFacts` payload, passed back via `--facts`. Setting **`seam.engine`** = `hybrid` (default → `--cluster llm --roles det --wiring hybrid`) | `det` (offline) | `llm`. *(Build with `bun run compile` — bun, not npm.)*
 
 ---
 
-## 7. CLI (`decompose.py`)
+## 7. CLI (`cli/decompose.ts`)
 
 - Source: `--file` | `--git <range> --repo` | `--from-classified <json>` (re-render a dump, no LLM).
 - Engines: `--cluster/--roles/--wiring {llm,det,hybrid}`, or `--classifier {llm,det,hybrid}` (preset).
-- Facts: `--facts-engine {regex,treesitter}`, `--facts <json>` (external), `--emit-hunks <json>` (parse-only skeleton for an external producer).
-- Output: `-o report.html` | `--emit-seams <json>`; `--dump-classified <json>` (the post-classify intermediate state, re-renderable).
+- Facts: `--facts-engine {regex,treesitter,resolve}`, `--facts <json>` (external), `--emit-hunks <json>` (parse-only skeleton for an external producer).
+- Output: `--format ascii|llm` (text to stdout) | `--emit-seams <json>`; `--dump-classified <json>` (the post-classify intermediate state, re-renderable). `--format html` is a clear error (HTML removed).
+- Codebase mode: `--scan --anchor-file <f> [--symbol <s>]`, `--graph`/`--expand-graph`, `--auto --intent <q>` (auto-grow; auto-anchor when `--symbol` is omitted), `--grow det|llm`, `--data-coupling off|floor|llm`, `--bidirectional`, `--llm-bridge <dir>`.
 - LLM: `--model`, `--claude-bin` (auto-detects `claude`, falls back to `copilot`).
 
 ---
 
-## 8. Evaluation (`eval/`)
+## 8. Evaluation (`ts/eval/` + `ts/test/`)
 
-- **`harness.py`** — the regression gate. `generate --engine {det,llm}` runs each `cases/*.patch` (det once, llm N×, cached) → `score` computes **stability**, **accuracy** vs `gold/`, and **health**. Gates on N-run aggregates with tolerance. Wiring is scored by **seam-granular precision-weighted Fβ(0.5)** (a false coupling hurts a reader more than a missing one; seam-granular avoids the seam→core expansion artifact) — the old edge-recall **wiring F1 is kept for context but no longer gated**. Health's **over-wiring** (`over_wired` / max·mean seams-per-hunk) is the gated reading-failure signal; **isolated-cores / dangling-links / orphans are informational postures, NOT errors** (a dangling link may point at existing/external code, an isolated core may be a self-contained refactor) and are never gated. Optional `eval/sentinels/<case>.json` lists must-have couplings (e.g. the informal JNI edge a symbol scan can't see) as an under-wiring guard. Gold seam-granular = `eval/baseline-det.json`.
-- **`extraction_test.py`** — exact assertions on the deterministic signals (external/rewire/alias/segmentation).
-- **`facts_provider_test.py`** — the provider contract (round-trip, `external ≡ regex`, merge, fallback; the `assert_providers_equivalent` checker).
-- **`treesitter_test.py`** — tree-sitter producer (comment/string masking win, clean-code equivalence, fallback, alignment guard).
-- **`test_det_spans.py`** (pytest) — the spans/overlap + labelling unit suite.
-- **`architecture_test.py`** — the loose-coupling guard (§0): an AST scan asserting `diff/*` and `codebase/*` never import each other and `core/*` imports neither. Fails if a cross-mode coupling creeps back.
-- **codebase-mode** — `codebase_test.py` (anchor-relative roles → seams, end-to-end on a fixture graph), `resolver_test.py` (the Resolver strategy + real-LSP integration, `-m integration`), `import_scan_test.py`, `expand_test.py`, `orchestrate_test.py`, `anchor_rank_test.py`. Integration tests that spin up real language servers are marked `@pytest.mark.integration` and **excluded from the default run** (`pytest.ini`: `addopts = -m "not integration"`) — run them explicitly with `pytest eval/ -m integration`.
-- **`gold/`** — hand-agreed labels (5 cases across C/C++/Kotlin+Ruby/TS+SQL). **`gold_candidates/`** — meaning-based candidates (LLM-first wiring dumps incl. cal.com) pending audit/promotion; the current wiring gold is symbol-derived and over-dense (acme-boosters 41 edges/24 hunks), so it under-scores meaning-based wiring (rework in progress).
+- **`ts/eval/harness.ts`** — the regression gate. `generate --engine {det,llm}` runs each gold case (det once, llm N×, cached under `ts/eval/_runs/`) → `score` computes **stability**, **accuracy** vs `ts/eval/gold/`, and **health**. Gates on N-run aggregates with tolerance against a baseline saved with `--save` / checked with `--baseline`. Wiring is scored by **seam-granular precision-weighted Fβ(0.5)** (a false coupling hurts a reader more than a missing one; seam-granular avoids the seam→core expansion artifact) — the old edge-recall **wiring F1 is kept for context but no longer gated**. Health's **over-wiring** (`over_wired` / max·mean seams-per-hunk) is the gated reading-failure signal; **isolated-cores / dangling-links / orphans are informational postures, NOT errors** (a dangling link may point at existing/external code, an isolated core may be a self-contained refactor) and are never gated. Optional `ts/eval/sentinels/<case>.json` lists must-have couplings (e.g. the informal JNI edge a symbol scan can't see) as an under-wiring guard.
+- **Unit suites** (`ts/test/*.test.ts`, run with `bun test`): `extraction.test.ts` (deterministic signals — external/rewire/alias/segmentation), `facts.test.ts` (the provider contract — round-trip, `external ≡ regex`, merge, fallback), `treesitter.test.ts` (comment/string masking, clean-code equivalence, fallback, alignment guard), `seams.test.ts` / `classified.test.ts` (assembly + spans/overlap), `hybrid.test.ts`, `wire_barrier.test.ts` / `wire_resolve.test.ts`, `cache.test.ts`, `blast_radius.test.ts`.
+- **codebase-mode** — `codebase.test.ts` (anchor-relative roles → seams on a fixture graph), `resolver.test.ts` (the Resolver strategy + real-LSP integration), `import_scan.test.ts`, `orchestrate.test.ts`, `anchor_rank.test.ts`, `data_coupling.test.ts`, `phase4.test.ts`. Tests that spin up real language servers are guarded so the default `bun test` stays offline.
+- **`ts/eval/gold/`** — hand-agreed labels, **12 cases across TS / Java / Ruby / C / C++** (e.g. `calcom-webhooks`, `zod-superrefine-when`, `spring-datasource-lazy`, `godot-canvas-oversampling`, `redis-rax-findlink`, `psdk-*`). Some are drafts pending audit; the symbol-derived wiring gold is over-dense in places, so it under-scores meaning-based wiring (rework in progress).
 
 ---
 
 ## 8.5 LLM call sites (both modes) — the complete map
 
-Every LLM call in the codebase funnels through `core/llm`: `resolve_backend()` (picks claude→copilot, or `("host","")` when a `HostBus` is installed) → `_run_pass()` (one pass, one retry, JSON-array parse) → `_run_backend()` → `_run_claude()` / `_run_copilot()` (the `subprocess.run` at `core/llm.py:~218`). Diff-mode passes call `_run_pass` directly (via `resolve_backend` per pass); codebase-mode passes call the thin `llm.run_pass(prompt, tag=…)` facade (`core/llm.py:349`) which wraps the same two. **One interception point covers everything** — installing a `HostBus` (`set_host_bus`) routes *all* of these through the running session / a subagent instead of a subprocess, in **both** modes, with no binary lookup (see `--emit-prompts`/`--inject-llm` and `.claude/skills/seam/`).
+Every LLM call funnels through `core/llm.ts`: `resolve_backend()` (picks claude→copilot, or `("host","")` when a `HostBus` is installed) → `run_pass()` (the facade — one pass, one retry, JSON-array parse) → `runPassRaw()` → `_run_claude()` / `_run_copilot()` (the `spawnSync`). Both diff-mode and codebase-mode passes call `run_pass(prompt, {tag})`. **One interception point covers everything** — installing a `HostBus` (`set_host_bus`) makes `resolve_backend` return `("host","")` so *all* of these route through the running session / a subagent instead of a subprocess, in **both** modes, with no binary lookup (see `--emit-prompts`/`--inject-llm`, `--llm-bridge`, and `.claude/skills/seam/`).
 
-`thinking` is the per-call `MAX_THINKING_TOKENS` budget (0 = off/fast; a positive int caps it; ON is reserved for grouping). Every codebase-mode pass degrades to the deterministic floor on `LLMError`.
+`thinking` is the per-call `MAX_THINKING_TOKENS` budget (0 = off/fast; a positive int caps it; ON is reserved for grouping). Every codebase-mode pass degrades to the deterministic floor on `ClassifierError` (`LLMError`).
 
-### DIFF mode (`src/diff/`)
+### DIFF mode (`diff/`)
 
 Passes run in order **roles → wiring → clusters → spans** (`engine.classify`). Default engine = `cluster=llm roles=det wiring=hybrid` (what the VS Code extension sends).
 
-| # | pass (function) | site | `tag` | thinking | in the **default**? |
-|---|---|---|---|---|---|
-| 1 | **wiring** reconcile — `classifier.reconcile_llm` | `classifier.py:715` | `reconcile` | 0 | ✅ **yes** (wiring=hybrid; only if ≥1 core) |
-| 2 | **cluster** — `classifier.assign_clusters` | `classifier.py:557` | `cluster` | 2048 | ✅ **yes** (cluster=llm) |
-| 3 | **roles** voting — `classifier.assign_roles` | `classifier.py:587` | `role` / `role.vN` | 0 | ❌ only if `roles=llm` (N-vote self-consistency) |
-| 4 | **roles** reconcile — `classifier.reconcile_roles_llm` | `classifier.py:755` | `reconcile-roles` | 0 | ❌ only if `roles=hybrid` (re-judges `<0.6`-confidence) |
-| 5 | **wiring** Pass C — `classifier.assign_wiring`→`_run_wire_pass` | `classifier.py:480` | `wire` | 0 | ❌ only if `wiring=llm` |
-| 6 | **cluster** labels — `classifier.label_clusters_llm` | `classifier.py:791` | `label-clusters` | 2048 | ❌ only if `cluster=hybrid` |
-| — | **all-LLM fast path** — `classifier.classify` (cluster ∥ roles, then wire) | `classifier.py:~848` | `cluster`,`role`,`wire` | mixed | ❌ only if `cluster=roles=wiring=llm` |
+All sites are in `diff/classifier_llm.ts`.
+
+| # | pass (function) | `tag` | thinking | in the **default**? |
+|---|---|---|---|---|
+| 1 | **wiring** reconcile — `reconcile_llm` | `reconcile` | 0 | ✅ **yes** (wiring=hybrid; only if ≥1 core) |
+| 2 | **cluster** — `assign_clusters` | `cluster` | 2048 | ✅ **yes** (cluster=llm) |
+| 3 | **roles** voting — `assign_roles` | `role` / `role.vN` | 0 | ❌ only if `roles=llm` (N-vote self-consistency) |
+| 4 | **roles** reconcile — `reconcile_roles_llm` | `reconcile-roles` | 0 | ❌ only if `roles=hybrid` (re-judges `<0.6`-confidence) |
+| 5 | **wiring** Pass C — `assign_wiring` | `wire` | 0 | ❌ only if `wiring=llm` |
+| 6 | **cluster** labels — `label_clusters_llm` | `label-clusters` | 2048 | ❌ only if `cluster=hybrid` |
+| — | **all-LLM fast path** — `classify_all_llm` (cluster ∥ roles, then wire) | `cluster`,`role`,`wire` | mixed | ❌ only if `cluster=roles=wiring=llm` |
 
 So the **default diff run makes exactly 2 LLM calls**: `reconcile` then `cluster`. `roles`/spans are deterministic.
 
-### CODEBASE mode (`src/codebase/`)
+### CODEBASE mode (`codebase/`)
 
-CLI default = the **deterministic floor** (anchor → footprint → intent floor): `--classifier` is unset, so `use_llm=False` and the LLM is off. **The VS Code extension opts in** — its codebase scan sends the `seam.engine` setting (default `hybrid`) as `--classifier hybrid` (`extension.ts:644`), and codebase mode treats `hybrid`≡`llm` (`use_llm = args.classifier in ("llm","hybrid")`, no per-pass split), so a default extension scan **does** run `seam-refine` (and `relevance` too, but only when an `--intent` is given). All calls are `thinking=0` via `llm.run_pass`.
+CLI default = the **deterministic floor** (anchor → footprint → intent floor): `--classifier` is unset, so `useLlm` is false and the LLM is off. **The VS Code extension opts in** — its codebase scan sends the `seam.engine` setting (default `hybrid`) as `--classifier hybrid`, and codebase mode treats `hybrid`≡`llm` (`useLlm = classifier ∈ {llm, hybrid}`, no per-pass split), so a default extension scan **does** run `seam-refine` (and `seam-intent`/`relevance` too, but only when an `--intent` is given). All calls go through `run_pass`.
 
 | pass (function) | site | `tag` | gated by | what it does |
 |---|---|---|---|---|
-| **seam refine** — `codebase.refine_seams_llm` | `codebase.py:364` | `seam-refine` | `use_llm` (`--classifier llm\|hybrid`) | F4: refines the deterministic floor into named technical-intent seams (a *proposed* partition over verified carriers; never invents an edge) |
-| **mark relevance** — `codebase.mark_relevance_llm` | `codebase.py:432` | `relevance` | `use_llm` **and** `--intent` | F5: tags each link on-the-answer-path vs incidental relative to the question (additive — dims, never drops) |
-| **residual discovery** — `llm_discovery.discover` | `llm_discovery.py:81` | `discover` | DOWN-expansion tier-3 path | proposes residual couplings the deterministic scan missed → SUGGESTED edges |
-| **auto-orchestrate** — `orchestrate.auto_orchestrate` | `orchestrate.py:82` | `orchestrate` | `--auto` (needs `--symbol`+`--intent`) | P5 loop (≤ `--max-steps`): the LLM picks the next node + direction to grow the footprint toward the intent |
+| **intent expand** — `expand_intent_terms` | `intent_expand.ts` | `expand` | auto-anchor selection (`--auto`, no `--symbol`) | proposes identifier-style recall keywords so the morphological candidate scan reaches *register* from *"registration"* (grounded by the scan; graceful `[]` offline) |
+| **anchor judge** — `judge_anchor_llm` | `anchor_select.ts` | `anchor-judge` | auto-anchor selection (≥2 connected candidates) | picks WHICH probed footprint is the intent's entry point — the semantic call structure can't make (a data-heavy helper out-crosses the real gate) |
+| **seam refine** — `refine_seams_llm` | `codebase.ts` | `seam-refine` | `useLlm` (`--classifier llm\|hybrid`) | F4: refines the deterministic floor into named technical-intent seams (a *proposed* partition over verified carriers; never invents an edge) |
+| **seam intent / relevance** — `label_focus_relevance_llm` | `codebase.ts` | `seam-intent` | `useLlm` **and** `--intent` | F5: labels + TIERS each seam spine/supporting/off and marks the answer seam, primed by topology + db-table priors (additive — dims, never drops) |
+| **residual discovery** — `discover` / `discover_keys` | `llm_discovery.ts` | `discover` / `discover-keys` | `--data-coupling llm` / tier-3 DOWN-expansion | proposes residual couplings (or shared-key boundaries) the deterministic scan missed → SUGGESTED edges |
+| **auto-orchestrate** — `auto_orchestrate` | `orchestrate.ts` | `orchestrate` | `--auto --grow llm` | legacy LLM grow: the LLM picks the next node + direction; default `--grow det` (`grow_to_terminals`) follows crossings to terminals with **no** LLM |
 
-**The codebase invariant (`core/llm` docstring):** the LLM here only produces a *proposed partition / labels / suggestions* over **resolved** carriers — it never finds an atom or an edge (those are deterministically resolved), so a mis-frame can't make the map lie.
+**Auto-anchor selection (`codebase/anchor_select.ts`).** When `--auto` is given an `--intent` but **no `--symbol`**, the engine chooses the anchor instead of the user: `find_anchor_candidates` + `rank_anchors` (name-overlap recall, widened by the `expand` pass) → a shallow deterministic `grow_to_terminals` **probe** of each top-K candidate → drop the ones whose footprint dead-ends (the structural floor: `reach`/`crossings`/`terminals`) → the `anchor-judge` LLM picks the connected footprint that answers the intent. Same split as the rest of the system: **structure measures connectedness (a fact), the LLM judges relevance (the meaning)** — so a name-matching-but-isolated symbol can't be picked and hide the real result. Degrades to the structural-best pick when no model is available.
+
+**The codebase invariant (`core/llm` docstring):** the LLM here only produces a *proposed partition / labels / suggestions / an anchor choice* over **resolved** carriers — it never finds an atom or an edge (those are deterministically resolved), so a mis-frame can't make the map lie.
 
 ---
 
@@ -250,11 +260,12 @@ CLI default = the **deterministic floor** (anchor → footprint → intent floor
 - **Wiring's real bug was extraction, not roles.** Anchoring only on *newly-defined* symbols missed cores that *modify* existing ones; anchoring on a core's full **subject** lifted det wiring F1 0.13 → 0.63. Shared imported **chrome** (Button/useLocale) caused the cal.com hairball → dropped from anchors.
 - **"LLM-first wiring is bad" was a measurement artifact** — the ~0.24 A/B ran LLM *roles* too (wiring is role-dominated) and the standalone Pass C was prompt-fragile. Given a good draw prompt the LLM wires fine, which is what makes the LLM-first hybrid sound.
 - **Hubs vs containers.** A header/barrel with many *correct* edges looks "over-wired" by count; it's protected (no owned edge ⇒ not pruned/escalated). The inverted draw is hub-safe (LLM keeps real relations; det grounding re-adds owned edges).
-- **Facts IR isolates language-specificity** to one swappable producer — the §10-honest path to tree-sitter / VS Code AST without touching the classifier.
+- **Facts IR isolates language-specificity** to one swappable producer — the honest path to tree-sitter / VS Code AST without touching the classifier (§4).
 
 ### Known limits / open
 
 - Vocabulary-saturation diffs (one feature, shared domain vocab) remain hard deterministically — the Layer-2/LLM case.
 - Wiring **gold is being reworked** (symbol-derived, over-dense) so the LLM-first wiring can be measured honestly.
-- VS Code AST producer is validated only on the Python contract; the extension TS needs F5 validation.
-- **Codebase-mode** (non-diff: anchor → footprint) is **now built** (`src/codebase/`, §0) — no longer out of scope. It shares `core/` but forks role assignment; its language/stack resolution is externalised to real LSP servers (`codebase/lsp/`, `codebase/languages/`) — see `resolver-lsp-plan.md` and `intent-expansion-plan.md`.
+- VS Code AST producer is validated against the facts-provider contract; the extension's live AST path still needs F5 validation.
+- **Codebase-mode** (non-diff: anchor → footprint) is **now built** (`ts/src/codebase/`, §0) — no longer out of scope. It shares `core/` but forks role assignment; its language/stack resolution is externalised to real LSP servers behind a Resolver strategy (`core/resolve/lsp/`, `core/resolve/languages/`).
+- **Auto-anchor** (intent → selected anchor) is recall- and judgement-bound: the structural probe reliably discards dead-end anchors, but the candidate pool is bounded by the name-overlap scan + LLM query-expansion, and the final pick is an LLM judgement (`--symbol` skips it). See `codebase/anchor_select.ts`.

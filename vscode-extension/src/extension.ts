@@ -1202,6 +1202,16 @@ async function analyzeFromIntent(auto = false) {
   if (!intent || !intent.trim()) return;
   sessionIntent = intent;                  // persist the question so expansions re-focus the answer
 
+  if (auto) {
+    // AUTO MAP: no manual pick. The engine SELECTS the anchor (structural probe floor drops candidates
+    // whose footprint dead-ends; an LLM judges which connected footprint is the intent's entry point),
+    // then grows from it — so a name-matching-but-isolated anchor can't be picked and hide the result.
+    await runScan(env.tool,
+                  ["--intent", intent, "--auto", "--max-steps", "3"],
+                  `Seam: auto-mapping the footprint for “${intent}”…`, `auto · ${intent}`);
+    return;
+  }
+
   const noMatch = () => vscode.window.showWarningMessage(`Seam: no anchors matched “${intent}”. Try a keyword that appears in the code.`);
   const hasLlm = await llmAvailable(env);   // probe once (no LLM call) — gates the fallback + the LLM item
   const picked = await vscode.window.withProgress(
@@ -1235,13 +1245,7 @@ async function analyzeFromIntent(auto = false) {
   if (!picked) return;
 
   const depth = vscode.workspace.getConfiguration("seam").get<number>("codebaseDepth") ?? 2;
-  if (auto) {
-    // P5: the LLM grows the footprint toward the question (picks node + up/down each step), then focuses.
-    await runScan(env.tool,
-                  ["--anchor-file", picked.file, "--symbol", picked.symbol, "--intent", intent,
-                   "--auto", "--max-steps", "3"],
-                  `Seam: auto-growing the footprint for “${intent}”…`, `auto · ${picked.symbol}`);
-  } else if (picked.kind === "class") {
+  if (picked.kind === "class") {
     await runScanClass(env.tool, picked, depth, intent);   // intent focuses the matching seam
   } else {
     await runScan(env.tool,

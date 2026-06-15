@@ -24,7 +24,7 @@ There are two product modes, sharing the same host-served-LLM mechanics:
 |---|---|---|---|
 | **Diff review** | *What does this change do; how do I review it by intent?* | `reconcile`, `cluster` (1–2) | batch (§A) |
 | **Codebase — static footprint** | *Where does this symbol/intent live; who consumes it?* | **none** (deterministic) | direct run (§B) |
-| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | `orchestrate` ×N (+ `discover`) | interactive bridge (§C) |
+| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | `expand`+`anchor-judge` (if auto-anchor) + `orchestrate` ×N (+ `discover`) | interactive bridge (§C) |
 
 ## Prerequisites
 
@@ -134,17 +134,33 @@ depends on step N−1's answer, so the batch contract (§A) can't serve it. Inst
 **interactive bridge** (`--llm-bridge`), the same channel the MCP server uses — you become the host
 pump, answering each request with a subagent.
 
-`--auto` **requires `--symbol` and `--intent`** and is inherently LLM (no `det`).
+`--auto` **requires `--intent`** and is inherently LLM (no `det`). It takes `--symbol` two ways:
+
+- **You name the anchor** — pass `--anchor-file` + `--symbol` (e.g. from a cursor pick or §B scan).
+- **Auto-anchor (omit `--symbol`)** — the engine SELECTS the anchor for the intent: it probes the
+  top name-matched candidates with a shallow deterministic grow, drops the ones whose footprint
+  dead-ends (so a name-matching-but-isolated symbol can't be picked and hide the real result), then
+  serves ONE `anchor-judge` LLM pass to choose which connected footprint is the intent's entry point.
+  This is the right default when you only have a question, not a symbol. It prints
+  `[auto-anchor:llm|structural] <symbol> (<file>)` so you can see what it chose.
 
 ### C1 — Start the engine in the background
 
 Run it with `run_in_background: true` (it blocks on each LLM pass until you answer):
 
 ```bash
+# you name the anchor:
 $ENGINE --scan --auto --repo "<REPO>" --anchor-file "<F>" --symbol "<S>" \
         --intent "<question>" --max-steps <N> --classifier hybrid \
         --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
+# …or auto-anchor (engine selects) — just drop --anchor-file/--symbol:
+$ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> \
+        --classifier hybrid --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
 ```
+
+With auto-anchor, the deterministic probe runs in-process FIRST (no bridge traffic, but a few seconds
+of apparent silence before `req-0`), then `req-0` is the `anchor-judge` pass; the `orchestrate`/
+`discover` moves follow.
 
 ### C2 — Pump the bridge, one pass per turn
 
@@ -155,9 +171,11 @@ For `n = 0, 1, 2, …` until the background engine exits (i.e. `$OUT/seams.json`
 ends):
 1. **Wait** for `$OUT/bridge/req-<n>.json` to exist (use the **Monitor** tool with an until-condition
    — foreground `sleep` is disallowed). Per-pass deadline is 300 s; well within a turn.
-2. **Read** it → `{ seq, tag, prompt, model, thinking }`. `tag` is `orchestrate` (a grow move),
-   `discover` (a dependency-scan move), or `relevance` (scoring the grown footprint against the
-   intent) — all fine on haiku. Don't assume the tag; just answer whatever `prompt` asks for.
+2. **Read** it → `{ seq, tag, prompt, model, thinking }`. With auto-anchor the first passes are
+   `expand` (propose recall keywords for the intent) then `anchor-judge` (pick the anchor) — both only
+   when `--symbol` was omitted. Then `orchestrate` (a grow move), `discover` (a dependency-scan move),
+   and finally `relevance`/`seam-intent` (scoring the grown footprint against the intent) — all fine
+   on haiku. Don't assume the tag; just answer whatever `prompt` asks for.
 3. **Spawn a subagent** with `prompt` verbatim + *"This is a pure classification task — answer from
    the text above ALONE; do NOT use tools or explore a repo. Output ONLY the JSON array — no prose, no
    fences."* (A grow/`orchestrate` prompt names real symbols, so without this a subagent may go

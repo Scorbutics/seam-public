@@ -8,7 +8,7 @@ import { emit } from "../core/progress.js";
 import { from_resolved_graph } from "../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "./codebase.js";
 import { _key, merge_resolved } from "./expand.js";
-import { build_consumers_graph, build_dependency_graph } from "./import_scan.js";
+import { build_consumers_graph, build_dependency_graph, build_bidirectional_graph } from "./import_scan.js";
 import { KEY_NODE_KINDS } from "./coupling/index.js";
 
 // The current footprint as {id, symbol, role, file, crossing} — deterministic roles only (fast, no
@@ -170,10 +170,16 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
 // discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin };
-  let data: any = await build_consumers_graph(repo, anchorFile, symbol, co);
+  // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
+  // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
+  // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
+  // `direction` tags let decompose detect the policy-vs-flow shape. Frontier growth stays consumer-ward.
+  let data: any = opts.bidirectional
+    ? await build_bidirectional_graph(repo, anchorFile, symbol, co)
+    : await build_consumers_graph(repo, anchorFile, symbol, co);
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
@@ -191,17 +197,30 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     const next = cand[0];
     if (!next) break;
     expanded.add(_key(next));
+    // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM toward its terminals
+    // (screens, entry points) via its own consumers; a DEPENDENCY (backward — from the bidirectional
+    // seed) extends DOWNSTREAM toward the processing it drives via ITS deps. So an entry-point anchor
+    // (a handler whose work is all downstream) traces the full path, not just its zero consumers.
+    // Dep resolution is LOCAL (the file's imports) — cheap; consumers are the repo scan.
+    const dir: string | undefined = next.direction;
     let add: any;
-    try { add = await build_consumers_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co }); }
-    catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
+    try {
+      add = dir === "backward"
+        ? await build_dependency_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co })
+        : await build_consumers_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co });
+    } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
     if (flood > _MOVE_CAP) { history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
+    // carry the grow direction outward so the chain keeps extending the same way (consumers further up,
+    // deps further down); the seed tagged the anchor's two sides, this propagates past one hop.
+    const tag = dir ?? "forward";
+    for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
-    history.push({ node: next.symbol, added: data.nodes.length - before });
+    history.push({ node: next.symbol, added: data.nodes.length - before, ...(dir === "backward" ? { dir: "down" } : {}) });
   }
   return [data, history];
 }

@@ -138,6 +138,33 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
   } else if (a.scan) {
+    // Auto-anchor: --auto with --intent but NO --symbol → SELECT the anchor instead of the user picking
+    // one (a bad pick linked to nothing hides the real result).
+    if (a.auto && a.intent && !a.symbol) {
+      // #1 first: if the intent is SPECIFICALLY about an HTTP endpoint, the LLM picks its path from a
+      // structural enumeration (handles convention-named route handlers + anonymous edge functions the
+      // lexical net can't see). Conservative — returns none for behavior/service intents, which then
+      // fall through to the normal lexical→probe→judge selection (no override of a good service anchor).
+      const { available } = await import("../core/llm.js");
+      if (available(a.claudeBin)) {
+        const ep = await import("../codebase/entrypoint_select.js");
+        const eps = ep.enumerate_entrypoints(a.repo);
+        const pick = ep.select_entrypoint_llm(a.intent, eps, { model: a.model, claudeBin: a.claudeBin });
+        if (pick) {
+          [a.anchorFile, a.symbol] = await ep.entrypoint_anchor(a.repo, pick);
+          process.stdout.write(`[auto-anchor:entrypoint] ${pick.path} → ${a.symbol} (${a.anchorFile})\n`);
+        }
+      }
+      if (!a.symbol) {
+        // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
+        // is the intent's entry point.
+        const { select_anchor } = await import("../codebase/anchor_select.js");
+        const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin });
+        if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
+        a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
+        process.stdout.write(`[auto-anchor:${sel.chosenBy}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
+      }
+    }
     if (!a.anchorFile) err("--scan requires --anchor-file");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
     // them, then re-invokes with --attribution).
@@ -159,10 +186,10 @@ async function runCodebase(a: Args): Promise<number> {
       try {
         [data, hist] = a.grow === "llm"
           ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm })
-          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm });
+          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm });
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
-      process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added})`).join(", ") || "none") + "\n");
+      process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam

@@ -27,13 +27,27 @@ reasoning.
 | Mode | Anchor | Answers |
 |---|---|---|
 | **Diff** | a unified diff / `git diff <range>` | *What does this change do, and how do I review it by intent?* |
-| **Codebase** | a symbol or a module file | *Where does this intent live — who consumes it, what does it wire?* |
+| **Codebase** | a symbol, a module file, or just a natural-language intent | *Where does this intent live — who consumes it, what does it wire?* |
 
 **Diff mode** groups the hunks of a change into seams. **Codebase mode** starts from an anchor
 (a symbol, or a whole module) and traces its **intent footprint** across the repo — consumers and
 dependencies — then decomposes *that* into seams. Codebase mode is **honest about static gaps**:
 edges it can't resolve come back as `SUGGESTED` / `blindspots` (a boundary to verify), never asserted
 as real.
+
+Codebase mode doesn't *guess* where an intent lives — it **grows the footprint deterministically**
+(`--grow det`, the default): it follows the resolved crossings (imports, shared-keys, HTTP routes) to
+the terminals with **zero LLM**, skipping moves that would flood the map with a generic util. The
+model is asked only to *name and tier* what the trace already found — it **never invents an edge**
+(`--grow llm` keeps the older LLM-directed move-picker).
+
+You don't have to know the anchor. Given **just a natural-language intent** (`--auto` with no
+`--symbol`), the engine **selects the starting symbol itself**: it probes the best name-matched
+candidates with a cheap deterministic grow, **discards the ones whose footprint dead-ends** (so a
+name-matching-but-isolated symbol can't be picked and hide the real answer), and an **LLM judges
+which connected footprint is the intent's entry point** — then grows that one. This is the same
+split as everywhere else: structure measures connectedness (a fact), the LLM judges relevance (the
+meaning). LLM query-expansion widens recall so *"registration"* still finds `RegisterPage`.
 
 ## The five roles
 
@@ -187,6 +201,12 @@ bun ts/src/cli/decompose.ts --scan --repo . --classifier det \
 # focus the footprint on a natural-language intent  (needs a `claude` CLI)
 bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts --symbol emit_seams_json \
     --intent "rate-limit the public API" --emit-seams footprint.json
+
+# AUTO-ANCHOR: give ONLY an intent — the engine selects the anchor, grows it deterministically to the
+# terminals (`--grow det`, default; zero LLM), and decomposes (no --anchor-file / --symbol).
+# Prints `[auto-anchor:llm|structural] <symbol> (<file>)`.  (needs a `claude` CLI for anchor-judge + tiering)
+bun ts/src/cli/decompose.ts --scan --auto --repo . \
+    --intent "how does the seam JSON contract get stamped" --emit-seams footprint.json
 ```
 
 `--depth N` follows N consumer hops; `resolutionQuality` / `unresolved` / `blindspots` in the output
@@ -304,7 +324,10 @@ a subagent standing in for the MCP server's sampling). It covers **both** modes:
 - **Diff review** — *"review by seam"*, *"decompose this diff"* → emit prompts → subagent per pass →
   inject → render.
 - **Codebase intent discovery** — *"where does X live"*, *"map the footprint of X"* → a deterministic
-  static footprint, or an LLM-grown one (`--auto`) driven over the interactive `--llm-bridge`.
+  grow to its terminals (default `--grow det`, zero LLM), or an LLM-directed grow (`--grow llm`)
+  driven over the interactive `--llm-bridge` — with
+  the **anchor auto-selected from just the intent** when no symbol is given (an `expand` + `anchor-judge`
+  pass precede the grow moves).
 
 It auto-triggers on those phrasings, or invoke it explicitly with `/seam`. This is the zero-setup path
 when there's no model CLI on PATH; if `claude` *is* available, plain `decompose.ts … --emit-seams`
@@ -342,7 +365,7 @@ opposite**:
 
 | | **Augment** context engine | **Seam** codebase mode |
 |---|---|---|
-| **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); LLM only to *grow* the footprint + *tier* it |
+| **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); the footprint **grows deterministically** to its terminals (default `--grow det`, zero LLM), LLM only to *tier* it |
 | **Index** | the whole repo, continuous, **real-time** (100M+ lines) | an **on-demand footprint** from one anchor, per question |
 | **Output** | invisible context feeding the model | a **transparent map** — spine, roles, wiring, intent tiers |
 | **Confidence** | a similarity score | **provenance** (`RESOLVED` / `PARTIAL` / `SUGGESTED`) + named **blindspots** |
@@ -383,6 +406,10 @@ Known limits:
 - **Codebase mode is bounded by static resolution.** Cross-language / string-dispatch / DI edges
   surface as `SUGGESTED`/`blindspots` to verify; a headless LSP resolver improves this where a
   language server exists.
+- **Auto-anchor selection is recall- and judgement-bound.** Given only an intent, the structural
+  floor reliably *discards* a dead-end anchor, but the candidate it picks among is bounded by the
+  name-overlap scan + LLM query-expansion (a symbol the expanded vocabulary never names won't be
+  probed), and the final pick is an LLM judgement (not deterministic). Naming a `--symbol` skips it.
 - **Domain coherence is an LLM call primed by structure.** Keeping the spine to one domain (e.g.
   `members` side-effect seams off a `payments` spine) is a **semantic judgement**, so it's the LLM's —
   the tier pass is fed deterministic **priors** (each seam's flow position, hop-distance, and the db

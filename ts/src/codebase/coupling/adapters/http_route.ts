@@ -4,9 +4,12 @@
 //
 // Two sides, asymmetric in where the key VALUE comes from:
 //   • the HANDLER (producer) — a file-routing convention: Next.js App Router `app/**/route.ts` exporting
-//     GET/POST/… , or Pages Router `pages/api/**`. The path is DERIVED FROM THE FILE PATH (the handler
-//     body never contains its own URL), so the hit line is anchored at the exported method.
-//   • the CALLER (consumer) — a `fetch`/axios/ky call whose first arg is a "/…" string LITERAL.
+//     GET/POST/… , Pages Router `pages/api/**`, or a Supabase/Deno EDGE FUNCTION `**/functions/<slug>/
+//     index.*` (an anonymous `Deno.serve(…)` handler, served at `/functions/v1/<slug>`). The path is
+//     DERIVED FROM THE FILE PATH (the handler body never contains its own URL), so the hit is anchored
+//     at the exported method (Next) or the serve call (edge).
+//   • the CALLER (consumer) — a `fetch`/axios/ky call whose first arg is a "/…" string LITERAL, or a
+//     `supabase.functions.invoke('slug')` SDK call (which carries the slug, not a URL).
 // Both sides normalise dynamic segments to `*` (`[id]` ⇄ `${id}`) so they meet on one key. JS/TS only.
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind } from "../types.js";
@@ -16,6 +19,15 @@ export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceE
 
 const JS_EXT = /\.(?:[mc]?[jt]sx?)$/;                       // .ts .tsx .js .jsx .mjs .cjs .mts .cts
 const ROUTE_FILE = /(?:^|\/)route\.(?:[mc]?[jt]sx?)$/;       // Next.js App Router handler file
+// Supabase / Deno EDGE FUNCTION: `**/functions/<slug>/index.*` served at `/functions/v1/<slug>`. The
+// `(?!_)` drops `_shared` and other underscore-prefixed support dirs (Supabase's convention for non-
+// functions). The handler is an anonymous `Deno.serve(…)` callback (no method export), so its hit is
+// anchored at the serve call; a file matching the path but without a serve call (e.g. a `types/index.ts`)
+// is NOT a function and emits nothing.
+const EDGE_FN = /(?:^|\/)functions\/(?!_)([^/]+)\/index\.(?:[mc]?[jt]sx?)$/;
+const EDGE_SERVE = /\b(?:Deno\.serve|serve)\s*\(/;
+// A Supabase-JS invoke of an edge function: `supabase.functions.invoke('slug')` — the consumer side.
+const INVOKE_CALL = /\bfunctions\.invoke\s*\(\s*[`'"]([^`'"]+)/g;
 
 // Collapse a URL/file path to its shared key so the two sides MEET regardless of how each spells a
 // dynamic segment: JS `${id}`/Next `[id]`/`[...slug]`, Spring/OpenAPI `{id}`, Rails/Express `:id`,
@@ -30,6 +42,8 @@ export function normPath(p: string): string {
 
 // The URL a route-handler FILE serves, from its location (file-based routing). null if not a handler file.
 function handler_path(file: string): string | null {
+  const edge = EDGE_FN.exec(file);
+  if (edge) return normPath("/functions/v1/" + edge[1]);
   const parts = file.split("/");
   const base = parts[parts.length - 1];
   // App Router: app/<segs>/route.ts — segments between `app` and the route file (route groups `(x)` and
@@ -63,9 +77,15 @@ function scan(file: string, text: string): KeyHit[] {
   const out: KeyHit[] = [];
   const served = handler_path(file);
   if (served && served !== "/") {
-    let m: RegExpExecArray | null;
-    METHOD_EXPORT.lastIndex = 0;
-    while ((m = METHOD_EXPORT.exec(text)) !== null) out.push({ kind: "http-route", value: served, line: lineOf(text, m.index), produces: true });
+    if (EDGE_FN.test(file)) {
+      // anonymous Deno.serve handler — anchor the hit at the serve call; no serve ⇒ not a function.
+      const s = EDGE_SERVE.exec(text);
+      if (s) out.push({ kind: "http-route", value: served, line: lineOf(text, s.index), produces: true });
+    } else {
+      let m: RegExpExecArray | null;
+      METHOD_EXPORT.lastIndex = 0;
+      while ((m = METHOD_EXPORT.exec(text)) !== null) out.push({ kind: "http-route", value: served, line: lineOf(text, m.index), produces: true });
+    }
   }
   let c: RegExpExecArray | null;
   FETCH_CALL.lastIndex = 0;
@@ -74,6 +94,13 @@ function scan(file: string, text: string): KeyHit[] {
     if (!raw.startsWith("/")) continue;                    // only same-origin absolute paths couple to a route
     const path = normPath(raw);
     if (path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, c.index), produces: false });
+  }
+  // `functions.invoke('slug')` consumer → the edge function's served path (the SDK call carries no URL).
+  let v: RegExpExecArray | null;
+  INVOKE_CALL.lastIndex = 0;
+  while ((v = INVOKE_CALL.exec(text)) !== null) {
+    const slug = v[1].replace(/^\/+/, "");
+    if (slug) out.push({ kind: "http-route", value: normPath("/functions/v1/" + slug), line: lineOf(text, v.index), produces: false });
   }
   return out;
 }

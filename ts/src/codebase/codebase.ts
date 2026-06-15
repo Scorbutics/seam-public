@@ -276,7 +276,10 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // seams (reached only via SUGGESTED edges), exactly the ones carrying mechanical labels and the most
   // likely to be off-intent. Excluding them is what left `members`/`GET`/`POST` unnamed and undimmed.
   const ranked = seams.filter((s) => s.node_ids.length);
-  if (ranked.length < 2) return;
+  // A tiny footprint (one seam) has nothing to TIER — but leaving it untiered renders as a blank map
+  // with no spine/answer. It IS the whole answer, so floor it as the spine seam deterministically
+  // rather than asking the LLM to rank one thing against nothing.
+  if (ranked.length < 2) { if (ranked.length === 1) { ranked[0].tier = "spine"; ranked[0].selected = true; } return; }
   const rep = (s: Seam) => maxBy(s.node_ids.map((i) => g.nodes.get(i)!).filter(Boolean), (n) => n.complexity);
   // PRIORS — hand the model deterministic FACTS so it CONFIRMS the spine rather than reasoning it out
   // (robust on a weak model). The model makes the JUDGEMENT; structure supplies the facts:
@@ -318,8 +321,10 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     "   point through processing to the output/screen the question is about; \"supporting\" if it is needed",
     "   or related but NOT the main flow (auth/session, config, a helper, a secondary lookup); \"off\" if it",
     "   is connected but a DIFFERENT concern — a sibling entity's CRUD or a side-effect, logging, a utility",
-    " - answers: true for the SINGLE seam that is the END of the main path (the result/screen the user",
-    "   ultimately sees), false for the rest (at most one true)",
+    " - answers: true for the SINGLE seam where the main path CULMINATES — the outcome the question is",
+    "   about: a screen the user sees, a record written, a job/message dispatched, OR the final processing",
+    "   step. A backend flow (webhook, cron, queue worker) still culminates — pick its last step. false for",
+    "   the rest (at most one true)",
     "",
     "Keep the spine to ONE domain: a seam whose `tables:` are a DIFFERENT entity than the main flow's is",
     "doing another domain's work (a side-effect) — make it \"supporting\" even if it ALSO touches the main",
@@ -358,6 +363,14 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   if (anchorSeamId) tierMap.set(anchorSeamId, "spine");
   if (answer) tierMap.set(answer.id, "spine");
   for (const s of ranked) s.tier = tierMap.get(s.id) ?? "supporting";
+  // A backend flow (webhook/cron/worker) may have no UI terminal, so the LLM marks no `answers` seam —
+  // but a coherent flow still CULMINATES. Fall back to the FAR END of the spine (the spine seam furthest
+  // from the anchor, by the same BFS trace that orders the spine): topology only, language-agnostic.
+  if (!answer) {
+    const order = _spine_order(g, ranked);
+    const farId = order[order.length - 1];
+    if (farId && farId !== anchorSeamId) answer = { id: farId, cx: 0 };
+  }
   // Dim OFF-intent seams (keep visible) — but never dim a node that ALSO lives in a non-off seam.
   const keep = new Set<string>();
   for (const s of ranked) if (s.tier !== "off") for (const nid of s.node_ids) keep.add(nid);
@@ -393,6 +406,22 @@ function _spine_order(g: Graph, seams: Seam[]): string[] {
   return seams.filter((s) => s.tier === "spine")
     .sort((a, b) => ((dist.get(a.id) ?? 1e9) - (dist.get(b.id) ?? 1e9)) || (idx.get(a.id)! - idx.get(b.id)!))
     .map((s) => s.id);
+}
+
+// A wide grown footprint correctly DIMS its long tail (the tier pass marks off-intent seams `off`), but
+// emitting dozens of individual `off` seams just clutters the map. Beyond a cap, fold the smallest off
+// seams into ONE "+N more dimmed concerns" summary — keep the largest few for reference. Operates on the
+// tier label only (no language/framework knowledge); the dimming itself already happened upstream.
+const _OFF_CAP = 8;
+function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
+  const off = seams.filter((s) => s.tier === "off");
+  if (off.length <= cap) return seams;
+  const sorted = [...off].sort((a, b) => b.node_ids.length - a.node_ids.length);
+  const keep = new Set(sorted.slice(0, cap));
+  const drop = sorted.slice(cap);
+  const merged = _mk_seam("off-more", `${drop.length} more dimmed concerns`, drop.flatMap((s) => s.node_ids), true, "floor");
+  merged.tier = "off"; merged.suggested = true;
+  return [...seams.filter((s) => s.tier !== "off" || keep.has(s)), merged];
 }
 
 // Auto-detect the flow's TERMINALS and promote them to implicit CO-ANCHORS. The user anchors ONE end of
@@ -571,7 +600,7 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
   const health = wellformedness(g);
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
-  return emit_seams(g, health, seams, { shape, lead });
+  return emit_seams(g, health, collapse_off_seams(seams), { shape, lead });
 }
 
 // POLICY vs FLOW — the shape of a footprint. A FLOW moves data through a pipeline (it has a data
