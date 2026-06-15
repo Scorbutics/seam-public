@@ -383,6 +383,13 @@ Known limits:
 - **Codebase mode is bounded by static resolution.** Cross-language / string-dispatch / DI edges
   surface as `SUGGESTED`/`blindspots` to verify; a headless LSP resolver improves this where a
   language server exists.
+- **Domain coherence is an LLM call primed by structure.** Keeping the spine to one domain (e.g.
+  `members` side-effect seams off a `payments` spine) is a **semantic judgement**, so it's the LLM's —
+  the tier pass is fed deterministic **priors** (each seam's flow position, hop-distance, and the db
+  `tables:` it touches) and decides. Structure supplies *facts*; the model supplies the *verdict*. So
+  the db-table prior is just **absent** (not fatal) when there's no data-coupling — the LLM still tiers
+  by meaning. The general limit is the usual one: the verdict is LLM-quality-bound and not
+  deterministic (the spine can vary run-to-run; the priors make it robust on a weak model).
 - **Test-only PRs have no core to anchor on.** On a change that's almost all tests plus one trivial
   production line (e.g. `samples/httpx-json-compact-tests`), Seam reports **0 cores** and renders a
   single link-only "ambient" seam with the tests grouped to skim — correct, but there's no

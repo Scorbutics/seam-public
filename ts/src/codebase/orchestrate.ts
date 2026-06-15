@@ -9,6 +9,7 @@ import { from_resolved_graph } from "../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "./codebase.js";
 import { _key, merge_resolved } from "./expand.js";
 import { build_consumers_graph, build_dependency_graph } from "./import_scan.js";
+import { KEY_NODE_KINDS } from "./coupling/index.js";
 
 // The current footprint as {id, symbol, role, file, crossing} — deterministic roles only (fast, no
 // LLM). `crossing` flags a node reached across a heuristic boundary: the frontier the LLM should
@@ -156,6 +157,51 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     // the LLM try a different node, stopping only once it's stuck for MAX_CONSEC_NOOP moves running.
     if (added === 0) { if (++consecNoop >= MAX_CONSEC_NOOP) break; continue; }
     consecNoop = 0;
+  }
+  return [data, history];
+}
+
+// #1 — DETERMINISTIC grow (no LLM). The LLM move-picker only ever tried to follow the resolved CROSSINGS
+// (data-coupling boundaries, string-dispatch, suggested edges) outward to the footprint's terminals — and
+// did it unreliably (it fixates on the anchor; the deterministic frontier-fallback caught it live). So
+// follow them directly: each step re-anchor on the most promising unexpanded frontier node — a
+// crossing-reached one first (that's the chain toward the terminals), else the largest consumer — letting
+// the transitive data-coupling chain extend reach. Bounded by steps + a per-move flood cap + a node budget.
+// Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
+// discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
+export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
+    opts: { maxSteps?: number; maxNodes?: number; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {}): Promise<[any, any[]]> {
+  const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
+  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin };
+  let data: any = await build_consumers_graph(repo, anchorFile, symbol, co);
+  const history: any[] = [];
+  const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
+  for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
+    emit(`Growing the footprint to its terminals (step ${step + 1})…`);
+    const g = from_resolved_graph(data);
+    assign_roles(g);
+    const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
+    const crossings = new Set<string>();
+    for (const e of g.resolved_edges()) if (_is_crossing(e)) crossings.add(e.dst);
+    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet; crossings first
+    // (the data-flow chain toward terminals), then the largest remaining consumer.
+    const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
+      && roleById.get(n.id) !== "core" && !KEY_NODE_KINDS.has(n.kind) && !expanded.has(_key(n)));
+    cand.sort((a: any, b: any) => (Number(crossings.has(b.id)) - Number(crossings.has(a.id))) || ((b.complexity ?? 0) - (a.complexity ?? 0)));
+    const next = cand[0];
+    if (!next) break;
+    expanded.add(_key(next));
+    let add: any;
+    try { add = await build_consumers_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co }); }
+    catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
+    // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
+    // answer — data-coupling fan is exempt (self-bounded + the intent).
+    const have = new Set(data.nodes.map((x: any) => _key(x)));
+    const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
+    if (flood > _MOVE_CAP) { history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
+    const before = data.nodes.length;
+    data = merge_resolved(data, add, add.anchor?.id);
+    history.push({ node: next.symbol, added: data.nodes.length - before });
   }
   return [data, history];
 }

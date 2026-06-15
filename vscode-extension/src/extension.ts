@@ -21,7 +21,7 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 // (threaded behaviour); read-only data is "environment". RESOLVED — these are real uses.
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
-interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; wireTargets?: { file: string; start: number }[]; }
+interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; wireTargets?: { file: string; start: number }[]; direction?: "forward" | "backward"; }
 interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; tier?: "spine" | "supporting" | "off"; }
 // Altitude mid-level: a deterministic STRUCTURAL grouping of a big cluster's seams (by coupling +
 // directory), so the reviewer collapses/expands groups to zoom. Absent on small/tight clusters.
@@ -56,6 +56,9 @@ interface SeamModel {
   seamContracts?: SeamContract[];   // the symbols bridging each pair of seams (the inter-seam contract)
   selectedSeam?: string;   // P1: the seam matching the user's intent (auto-focused), or ""
   autoGrown?: boolean;     // P5: an LLM-grown footprint — show it ALL (the growth is the answer), don't isolate
+  // Bidirectional footprint: `shape` = policy (cross-cutting, no spine → mechanism + N enforcement sites)
+  // vs flow (a pipeline with a spine); `lead` = which slice the question wants front (backward/forward/both).
+  shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both";
 }
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
@@ -901,6 +904,12 @@ async function runScan(tool: string, scanArgs: string[], title: string, range: s
         // --auto orchestrates multiple LLM steps outside the host-bus pass → it can't be served via
         // vscode.lm; force the CLI for it (hostBusable=false).
         const flags = ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engineCfg, "--emit-graph", graph];
+        // BIDIRECTIONAL (opt-in): a single-symbol footprint can include the anchor's DEPENDENCIES (the
+        // backward "how it works" slice), not just its consumers — so a cross-cutting POLICY shows its
+        // mechanism, and the engine can tell policy from flow. Only for a single symbol (not module/auto).
+        if (vscode.workspace.getConfiguration("seam").get<boolean>("bidirectional")
+            && scanArgs.includes("--symbol") && !scanArgs.includes("--auto"))
+          flags.push("--bidirectional");
         await runDecompose(flags, out, engineCfg !== "det", tool,
           (m) => progress.report({ message: m }), token, !scanArgs.includes("--auto"));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
@@ -1583,6 +1592,10 @@ type Node =
   // INTENT MAP: seams grouped by relevance to the question — the spine (main path) leads, supporting
   // and off-intent side-effects collapse below it. Only built when the engine tiered the seams.
   | { kind: "tierGroup"; cluster: Cluster; tier: SeamTier; seams: Seam[] }
+  // POLICY shape (cross-cutting concern): the MECHANISM (backward slice — how it works) + a collapsed
+  // ENFORCEMENT surface (forward slice — the N sites it's applied at, grouped by directory).
+  | { kind: "policyGroup"; cluster: Cluster; side: "mechanism" | "enforcement" }
+  | { kind: "enforcementDir"; dir: string; hunks: SeamHunk[] }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
   | { kind: "extTarget"; target: ExternalTarget }
@@ -1736,6 +1749,11 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       if (isolate)
         return el.cluster.seams.filter((s) => s.id === focusedSeamId)
           .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+      // POLICY shape: a cross-cutting concern has no spine — render the MECHANISM (how it works) and a
+      // collapsed ENFORCEMENT surface (where it's applied), not a flat fan of N equal seams.
+      if (model.shape === "policy")
+        return [{ kind: "policyGroup", cluster: el.cluster, side: "mechanism" } as Node,
+                { kind: "policyGroup", cluster: el.cluster, side: "enforcement" } as Node];
       // INTENT MAP (codebase): when the engine tiered the seams, group them by relevance — Main path
       // (the spine, in trace order) leads; Supporting and Off-intent collapse below. Preserves engine
       // order WITHIN a tier (the spine is BFS-traced anchor→display), so the path reads top-to-bottom.
@@ -1761,6 +1779,23 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // Keep ENGINE order (spine = BFS trace anchor→display; others = discovery order) — do NOT risk-sort,
       // or the path stops reading as a path. The per-seam health glyph still carries the risk signal.
       return el.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+    if (el.kind === "policyGroup") {
+      const hunks = el.cluster.seams.flatMap((s) => s.hunks);
+      if (el.side === "mechanism")
+        // the backward slice (+ the anchor itself) — the few deps that ARE the answer to "how does it work"
+        return hunks.filter((h) => h.direction === "backward" || h.id === "n1")
+          .map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.cluster.seams[0], hunk }));
+      // the forward slice, collapsed to a counted surface grouped by directory (an enforcement map, not N seams)
+      const byDir = new Map<string, SeamHunk[]>();
+      for (const h of hunks.filter((h) => h.direction === "forward")) {
+        const dir = h.file.split("/").slice(0, -1).join("/") || h.file;
+        (byDir.get(dir) ?? byDir.set(dir, []).get(dir)!).push(h);
+      }
+      return [...byDir.entries()].sort((a, b) => b[1].length - a[1].length)
+        .map(([dir, hs]) => ({ kind: "enforcementDir", dir, hunks: hs } as Node));
+    }
+    if (el.kind === "enforcementDir")
+      return el.hunks.map((hunk) => ({ kind: "hunk", cluster: model!.clusters[0], seam: model!.clusters[0].seams[0], hunk }));
     if (el.kind === "seam") {
       // the seam's resolved wiring (other seams it connects to) shows first, then its hunks. The
       // inter-seam CONTRACT is not a row here — it's marked on the participating hunks themselves.
@@ -1818,6 +1853,32 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.iconPath = new vscode.ThemeIcon("symbol-color");
       const nsub = el.cluster.subgroups?.length ?? 0;
       it.description = nsub ? `${nsub} groups · ${el.cluster.seams.length} seams` : `${el.cluster.seams.length} seams`;
+      return it;
+    }
+    if (el.kind === "policyGroup") {
+      const hunks = el.cluster.seams.flatMap((s) => s.hunks);
+      if (el.side === "mechanism") {
+        const n = hunks.filter((h) => h.direction === "backward").length;
+        const lead = model?.lead !== "forward";   // mechanism leads unless the question is about "where used"
+        const it = new vscode.TreeItem("◆ Mechanism",
+          lead ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+        it.description = `how it works · ${n} dep${n !== 1 ? "s" : ""}`;
+        it.iconPath = new vscode.ThemeIcon("gear");
+        it.tooltip = "The backward slice — the dependencies this cross-cutting concern is built on (the actual answer to \"how does it work\"). Often delegates outward; check the blind spots for external deps.";
+        return it;
+      }
+      const files = new Set(hunks.filter((h) => h.direction === "forward").map((h) => h.file)).size;
+      const it = new vscode.TreeItem("· Enforced at",
+        model?.lead === "forward" ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      it.description = `${files} site${files !== 1 ? "s" : ""}`;
+      it.iconPath = new vscode.ThemeIcon("shield", new vscode.ThemeColor("descriptionForeground"));
+      it.tooltip = "The forward slice — the sites where this concern is applied, collapsed by directory. A surface to scan, not a flow: there's no spine because it's a policy enforced at N points.";
+      return it;
+    }
+    if (el.kind === "enforcementDir") {
+      const it = new vscode.TreeItem(`${el.dir}/`, vscode.TreeItemCollapsibleState.Collapsed);
+      it.description = `${el.hunks.length} site${el.hunks.length !== 1 ? "s" : ""}`;
+      it.iconPath = new vscode.ThemeIcon("folder");
       return it;
     }
     if (el.kind === "tierGroup") {

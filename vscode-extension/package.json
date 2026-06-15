@@ -65,7 +65,7 @@
       },
       {
         "command": "seam.autoMapIntent",
-        "title": "Seam: Auto-map intent (LLM grows the footprint)…",
+        "title": "Seam: Auto-map intent (grow the footprint toward a question)…",
         "icon": "$(sparkle)"
       },
       {
@@ -239,6 +239,11 @@
           "minimum": 1,
           "maximum": 4,
           "description": "Codebase mode (Analyze from anchor): how many call-graph hops to resolve outward from the anchor. Higher = more context but slower / larger (the anchor-bounded BFS depth)."
+        },
+        "seam.bidirectional": {
+          "type": "boolean",
+          "default": false,
+          "description": "Codebase mode (single-symbol anchor): include the anchor's DEPENDENCIES (the 'how it works' mechanism), not just its consumers. Lets Seam distinguish a cross-cutting POLICY (a mechanism enforced at N sites — rendered as Mechanism + a collapsed enforcement surface) from a FLOW (a pipeline with a spine). Experimental."
         },
         "seam.resolver": {
           "type": "string",

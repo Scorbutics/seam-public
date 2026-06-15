@@ -17,6 +17,7 @@ export interface Node {
   enclosing: string; complexity: number; role: string; role_confidence: number; relevant: boolean;
   group: string; intent: string; seam: string; seam_label: string;
   subcores: any[]; contract: any[];
+  direction?: "forward" | "backward";   // bidirectional footprint: reached as a CONSUMER (forward) or a DEPENDENCY (backward)
 }
 export function mkNode(p: Partial<Node> & { id: string }): Node {
   return {
@@ -24,7 +25,7 @@ export function mkNode(p: Partial<Node> & { id: string }): Node {
     kind: p.kind ?? "", enclosing: p.enclosing ?? "", complexity: p.complexity ?? 0,
     role: p.role ?? "", role_confidence: p.role_confidence ?? 1.0, relevant: p.relevant ?? true,
     group: p.group ?? "", intent: p.intent ?? "", seam: p.seam ?? "", seam_label: p.seam_label ?? "",
-    subcores: p.subcores ?? [], contract: p.contract ?? [],
+    subcores: p.subcores ?? [], contract: p.contract ?? [], direction: p.direction,
   };
 }
 
@@ -118,6 +119,7 @@ export function from_resolved_graph(data: any): Graph {
       id: nd.id, label: nd.symbol ?? nd.id, file: nd.file ?? "",
       start: rng[0] ? Number(rng[0]) : 0, end: rng.length > 1 ? Number(rng[1]) : 0,
       kind: nd.kind ?? "", enclosing: nd.enclosing ?? "", complexity: Number(nd.complexity ?? 0) || 0,
+      direction: nd.direction,
     }));
   }
   const present = new Set(g.nodes.keys());

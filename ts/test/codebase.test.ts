@@ -66,6 +66,59 @@ describe("intent map: graded tiers + spine ordering", () => {
   });
 });
 
+describe("domain prior: the db tables a seam touches are surfaced to the tier pass", () => {
+  test("the seam-intent prompt tags each seam with its `tables:` (the fact; the LLM makes the verdict)", async () => {
+    // anchor writes `payments`; a `members` table sits in a side-effect domain. The tier pass must SEE which
+    // table each seam touches — so the model can keep the spine to one domain. We assert the FACT is fed
+    // (the verdict is the model's, not a deterministic post-pass).
+    const data = {
+      version: 1, anchor: { id: "n1", symbol: "processPayment", file: "pay.ts", range: [1, 9] },
+      language: "typescript", resolutionQuality: "FULL", complete: true,
+      nodes: [
+        { id: "n1", symbol: "processPayment", file: "pay.ts", kind: "function", range: [1, 9] },
+        { id: "pt", symbol: "payments", file: "pay.ts", kind: "table", range: [3, 3] },          // primary (1 hop)
+        { id: "pc", symbol: "showPayment", file: "ui/payment.ts", kind: "function", range: [1, 4] },
+        { id: "prov", symbol: "provisionMember", file: "member.ts", kind: "function", range: [1, 6] },
+        { id: "mt", symbol: "members", file: "member.ts", kind: "table", range: [2, 2] },         // farther domain
+      ],
+      edges: [
+        { from: "n1", to: "pt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+        { from: "pt", to: "pc", kind: "db-read", provenance: "RESOLVED_PARTIAL" },
+        { from: "n1", to: "prov", kind: "reference", provenance: "RESOLVED_FULL" },
+        { from: "prov", to: "mt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+      ],
+    };
+    const g = from_resolved_graph(data);
+    let seamIntentPrompt = "";
+    // A mock that demotes by READING the surfaced prior — a seam tagged with a non-`payments` table is
+    // doing another domain's work → supporting. (This is the LLM's job; the test asserts both the fact is
+    // fed AND that acting on it tiers correctly.)
+    class Bus extends HostBus {
+      serve(tag: string, prompt: string, model: string, t: number | null): string {
+        super.serve(tag, prompt, model, t);
+        if (tag !== "seam-intent") return "[]";
+        seamIntentPrompt = prompt;
+        return JSON.stringify([...prompt.matchAll(/^ {2}(\S+): .*\[([^\]]*)\]/gm)].map((m2) => {
+          const id = m2[1], tag2 = m2[2];
+          const forksOff = /tables:/.test(tag2) && /members/.test(tag2);   // touches a non-payments domain
+          return { id, label: id, tier: forksOff ? "supporting" : "spine", answers: false };
+        }));
+      }
+    }
+    set_host_bus(new Bus());
+    let m: any;
+    try { m = await decompose(g, { useLlm: true, intent: "how are payments processed" }); } finally { set_host_bus(null); }
+    // 1. the FACT is surfaced: the member seam's prompt row is tagged with its table
+    expect(/\[[^\]]*tables:[^\]]*members[^\]]*\]/.test(seamIntentPrompt)).toBe(true);
+    expect(/\[[^\]]*tables:[^\]]*payments[^\]]*\]/.test(seamIntentPrompt)).toBe(true);
+    // 2. acting on the fact tiers correctly: members-domain → supporting, payments-only → spine
+    const seams = m.clusters[0].seams;
+    const touchesMembers = (s: any) => s.hunks.some((h: any) => h.label === "members");
+    expect(seams.filter((s: any) => s.tier === "spine" && touchesMembers(s)).length).toBe(0);
+    expect(seams.filter((s: any) => s.tier === "spine" && s.hunks.some((h: any) => h.label === "payments") && !touchesMembers(s)).length).toBeGreaterThan(0);
+  });
+});
+
 describe("flow terminals are auto-promoted to co-anchors", () => {
   test("a far screen (in-degree 0) becomes a first-class core seam, not a dimmed environment leaf", async () => {
     const repoDir = join(fixturesDir, "route-repo");
@@ -96,6 +149,77 @@ describe("flow terminals are auto-promoted to co-anchors", () => {
     expect((pageNode(g) as any).role).toBe("core");   // promoted purely by topology — no intent words
     const pageHunk = model.clusters[0].seams.flatMap((s: any) => s.hunks).find((h: any) => h.file === "app/dashboard/admin/payments/page.ts" && h.role === "core");
     expect(pageHunk).toBeDefined();
+  });
+});
+
+describe("bidirectional footprint: policy vs flow shape", () => {
+  // A synthetic ResolvedGraph: an anchor consumed by N route files (forward, import-only) + one
+  // dependency (backward). No data subject → a cross-cutting POLICY, not a flow with a spine.
+  const policyGraph = (n: number, extraNodes: any[] = []) => ({
+    version: 1, anchor: { id: "n1", symbol: "requireAuth", file: "auth.ts", range: [1, 5] },
+    language: "typescript", resolutionQuality: "FULL", complete: true,
+    nodes: [
+      { id: "n1", symbol: "requireAuth", file: "auth.ts", kind: "function", range: [1, 5] },
+      ...Array.from({ length: n }, (_, i) => ({ id: `c${i}`, symbol: "GET", file: `app/api/r${i}/route.ts`, kind: "function", range: [1, 3], direction: "forward" })),
+      { id: "d1", symbol: "createClient", file: "lib/client.ts", kind: "function", range: [1, 2], direction: "backward" },
+      ...extraNodes,
+    ],
+    edges: [
+      ...Array.from({ length: n }, (_, i) => ({ from: `c${i}`, to: "n1", kind: "reference", provenance: "RESOLVED_FULL" })),
+      { from: "n1", to: "d1", kind: "reference", provenance: "RESOLVED_FULL" },
+    ],
+  });
+
+  test("a wide import-only consumer fan with no data subject is shape=policy, with both directions tagged", async () => {
+    const g = from_resolved_graph(policyGraph(9));
+    const m: any = await decompose(g, {});
+    expect(m.shape).toBe("policy");
+    const hunks = m.clusters[0].seams.flatMap((s: any) => s.hunks);
+    expect(hunks.some((h: any) => h.direction === "forward")).toBe(true);   // where it's enforced
+    expect(hunks.some((h: any) => h.direction === "backward")).toBe(true);  // how it works (the mechanism)
+  });
+
+  test("the same fan WITH a data-table subject node is shape=flow (a pipeline, not a policy)", async () => {
+    const g = from_resolved_graph(policyGraph(9, [
+      { id: "tbl", symbol: "sessions", file: "auth.ts", kind: "table", range: [3, 3], direction: "backward" },
+    ]));
+    const m: any = await decompose(g, {});
+    expect(m.shape).toBe("flow");
+  });
+
+  test("a narrow footprint (no wide fan, no subject) is shape=flow, not policy", async () => {
+    const g = from_resolved_graph(policyGraph(3));   // only 3 consumers — below the policy threshold
+    const m: any = await decompose(g, {});
+    expect(m.shape).toBe("flow");
+  });
+
+  test("lead is NOT parsed from the intent text — a policy defaults to its mechanism regardless of wording", async () => {
+    const mk = async (intent?: string) => (await decompose(from_resolved_graph(policyGraph(9)), intent ? { intent } : {})).lead;
+    expect(await mk(undefined)).toBe("backward");                            // shape default
+    expect(await mk("where is requireAdmin used and called?")).toBe("backward");   // intent string IGNORED (no keyword match)
+    expect(await mk("oÃ¹ est-ce utilisÃ©")).toBe("backward");                  // other language → still not parsed
+  });
+
+  test("lead follows the LLM's answer-seam slice direction (the model knows the intent, not a regex)", async () => {
+    const g = from_resolved_graph(policyGraph(9));
+    // Mock the seam-intent pass to pick a FORWARD seam (a route consumer) as the answer → lead must be forward.
+    class Bus extends HostBus {
+      serve(tag: string, prompt: string, model: string, t: number | null): string {
+        super.serve(tag, prompt, model, t);
+        if (tag !== "seam-intent") return "[]";
+        const ids = [...prompt.matchAll(/^ {2}(\S+):/gm)].map((r) => r[1]);
+        let picked = false;
+        return JSON.stringify(ids.map((id) => {
+          const ans = /@api\/r/.test(id) && !picked;   // a forward enforcement-site seam (a route consumer)
+          if (ans) picked = true;
+          return { id, label: "x", tier: "spine", answers: ans };
+        }));
+      }
+    }
+    set_host_bus(new Bus());
+    let m: any;
+    try { m = await decompose(g, { useLlm: true, intent: "anything" }); } finally { set_host_bus(null); }
+    expect(m.lead).toBe("forward");   // derived from the LLM's pick, not the word "anything"
   });
 });
 

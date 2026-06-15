@@ -34,7 +34,7 @@ interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
-  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -48,7 +48,7 @@ function resolveEngines(a: Args): { cluster: string; roles: string; wiring: stri
 }
 
 function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, cache: false };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, cache: false, bidirectional: false, grow: "det" };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -85,6 +85,8 @@ function parseArgs(argv: string[]): Args {
       case "--expand-symbol": a.expandSymbol = next(); break;
       case "--expand-line": a.expandLine = parseInt(next() ?? "0", 10); break;
       case "--down": a.down = true; break;
+      case "--bidirectional": a.bidirectional = true; break;   // footprint = consumers (forward) + deps (backward)
+      case "--grow": a.grow = (next() ?? "det").toLowerCase(); break;   // auto-grow strategy: det (deterministic, default) | llm
       case "--cross-from": a.crossFrom = next(); break;
       case "--emit-candidates": a.emitCandidates = next(); break;
       case "--attribution": a.attribution = next(); break;
@@ -149,11 +151,18 @@ async function runCodebase(a: Args): Promise<number> {
     if (a.auto) {
       // P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
       if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
-      const { auto_orchestrate } = await import("../codebase/orchestrate.js");
+      const orch = await import("../codebase/orchestrate.js");
       let hist: any[];
-      try { [data, hist] = await auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm }); }
-      catch (e) { err(`auto-orchestration failed: ${(e as Error).message}`); }
-      process.stdout.write(`[auto] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.direction}:${h.node}(+${h.added})`).join(", ") || "none") + "\n");
+      // `--grow det` (default) follows the resolved crossings to the terminals deterministically — no LLM
+      // move-picker (the intent is still used downstream, by the tier pass). `--grow llm` = the old
+      // LLM-orchestrated grow.
+      try {
+        [data, hist] = a.grow === "llm"
+          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm })
+          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm });
+      }
+      catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
+      process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
@@ -176,7 +185,9 @@ async function runCodebase(a: Args): Promise<number> {
       // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
       // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
       data = a.symbol
-        ? await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
+        ? a.bidirectional
+          ? await scan.build_bidirectional_graph(a.repo, a.anchorFile!, a.symbol, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
+          : await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
         : await scan.build_module_graph(a.repo, a.anchorFile!);
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {

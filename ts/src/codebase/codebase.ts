@@ -76,7 +76,7 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
-import { KEY_EDGE_KINDS } from "./coupling/index.js";
+import { KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS } from "./coupling/index.js";
 // Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
 // plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
 // newly-registered key kind becomes a crossing automatically.
@@ -278,8 +278,40 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   const ranked = seams.filter((s) => s.node_ids.length);
   if (ranked.length < 2) return;
   const rep = (s: Seam) => maxBy(s.node_ids.map((i) => g.nodes.get(i)!).filter(Boolean), (n) => n.complexity);
+  // PRIORS — hand the model deterministic FACTS so it CONFIRMS the spine rather than reasoning it out
+  // (robust on a weak model). The model makes the JUDGEMENT; structure supplies the facts:
+  //  • topology: is the seam the ANCHOR, an ENDPOINT (a terminal the flow reaches — in-degree 0, a
+  //    screen/entry point) or intermediate plumbing, and its hop-distance from the anchor;
+  //  • DOMAIN: which db table(s) it touches — so the model can keep the spine to ONE domain and spot a seam
+  //    doing a DIFFERENT entity's work as a side-effect (the case a pure topology read misses, because such
+  //    a seam touches the main table too). This is the fact; the relevance verdict stays the model's.
+  const indeg = new Map<string, number>();
+  for (const e of g.resolved_edges()) if (e.kind !== "contains") indeg.set(e.dst, (indeg.get(e.dst) ?? 0) + 1);
+  const adj = g.adjacency();
+  const dist = new Map<string, number>([[g.anchor, 0]]);
+  const q = [g.anchor];
+  while (q.length) { const c = q.shift()!; const d = dist.get(c)!; for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
+  const subjectNodes = new Map<string, Set<string>>();   // db-table name → node ids that touch it (boundary + direct neighbours)
+  for (const n of g.nodes.values()) {
+    if (!DOMAIN_SUBJECT_KINDS.has(n.kind) || !n.label) continue;
+    const set = subjectNodes.get(n.label) ?? subjectNodes.set(n.label, new Set()).get(n.label)!;
+    set.add(n.id);
+    for (const nb of adj.get(n.id) ?? []) set.add(nb);
+  }
+  const tablesFor = (s: Seam): string[] => [...subjectNodes].filter(([, nodes]) => s.node_ids.some((i) => nodes.has(i))).map(([t]) => t);
+  const hintFor = (s: Seam): string => {
+    const tables = tablesFor(s);
+    const tag = tables.length ? `; tables: ${tables.join(", ")}` : "";
+    if (s.node_ids.includes(g.anchor)) return `anchor (start of the flow)${tag}`;
+    const d = Math.min(99, ...s.node_ids.map((i) => dist.get(i) ?? 99));
+    const endpoint = s.node_ids.some((i) => i !== g.anchor && (indeg.get(i) ?? 0) === 0);
+    return `${endpoint ? "ENDPOINT" : "intermediate"}${d < 99 ? `, ${d} hop${d !== 1 ? "s" : ""} from anchor` : ""}${tag}`;
+  };
   const lines = [`A developer is mapping the code that answers: "${intent}".`, "",
-    "Here are candidate SEAMS — each a group of related code reached while mapping that question.",
+    "Here are candidate SEAMS — each a group of related code reached while mapping that question. Each is",
+    "tagged [ … ] with deterministic facts: its position in the flow (ANCHOR = the start; ENDPOINT = where",
+    "the flow surfaces, a screen / entry point; intermediate = plumbing between), its hop-distance, and the",
+    "db `tables:` it touches. The main path runs anchor → … → the ENDPOINT that answers the question.",
     "For EACH seam decide three things:",
     " - label: 3-6 words naming what this seam DOES (its technical intent — NOT a file or symbol name)",
     " - tier: \"spine\" if it is ON THE MAIN PATH that answers the question — the core flow from the entry",
@@ -288,11 +320,15 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     "   is connected but a DIFFERENT concern — a sibling entity's CRUD or a side-effect, logging, a utility",
     " - answers: true for the SINGLE seam that is the END of the main path (the result/screen the user",
     "   ultimately sees), false for the rest (at most one true)",
+    "",
+    "Keep the spine to ONE domain: a seam whose `tables:` are a DIFFERENT entity than the main flow's is",
+    "doing another domain's work (a side-effect) — make it \"supporting\" even if it ALSO touches the main",
+    "table. (Example: on a payments flow, a seam touching `members` is supporting, not spine.)",
     ""];
   for (const s of ranked) {
     const r = rep(s); if (!r) continue;
     const others = s.node_ids.map((i) => g.nodes.get(i)!).filter((n) => n && n !== r).slice(0, 3).map((n) => n.label).filter(Boolean);
-    lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}`);
+    lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}  [${hintFor(s)}]`);
   }
   lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",
     "Output ONLY a JSON array, one object per seam:",
@@ -511,10 +547,12 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
   model?: string; claudeBin?: string | null } = {}): Promise<any> {
-  // Anchor the role model at BOTH ends of the flow: the user's anchor + the auto-detected terminals (the
-  // screens/entry points the footprint reaches). Gated on `intent` so the deterministic oracle parity
-  // (no-intent decompose) is untouched. See _promote_terminals.
-  if (opts.intent) _promote_terminals(g);
+  // Bidirectional footprints carry a policy-vs-flow SHAPE; classify it FIRST (direction-based, stable),
+  // because the next step depends on it: anchor the role model at both ends of a FLOW (promote the
+  // terminals/screens) — but NOT a POLICY, whose enforcement sites are a collapsed surface, not cores.
+  const bidir = [...g.nodes.values()].some((n) => n.direction);
+  const shape = bidir ? _detect_shape(g) : undefined;
+  if (opts.intent && shape !== "policy") _promote_terminals(g);
   assign_roles(g);
   assign_clusters(g);
   if (opts.repo) {
@@ -532,7 +570,44 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   // names them, dims off-intent concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
   if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
   const health = wellformedness(g);
-  return emit_seams(g, health, seams);
+  const lead = shape ? _lead_slice(g, seams, shape) : undefined;
+  return emit_seams(g, health, seams, { shape, lead });
+}
+
+// POLICY vs FLOW — the shape of a footprint. A FLOW moves data through a pipeline (it has a data
+// SUBJECT — a table/route/resource boundary), so it has a spine: anchor → … → terminal. A POLICY is a
+// cross-cutting concern (auth/logging/validation) coupled to a wide fan of consumers ONLY by import,
+// with no shared subject — there is no spine, it is "a mechanism enforced at N sites". Detecting this
+// deterministically (subject present? else wide import-only fan?) is what lets the renderer collapse the
+// fan to a counted enforcement surface instead of fabricating N equal seams. Bidirectional-only signal.
+const _POLICY_MIN_CONSUMERS = 8;
+function _detect_shape(g: Graph): "policy" | "flow" {
+  // a data SUBJECT (a coupling boundary node — table/route/resource/…, sourced from the adapter registry,
+  // not a hardcoded list, so new key kinds auto-count) ⇒ this is a FLOW (a pipeline), not a policy.
+  if ([...g.nodes.values()].some((n) => KEY_NODE_KINDS.has(n.kind))) return "flow";
+  // count by DIRECTION, not role — so it's stable whether or not terminal-promotion ran (a policy's
+  // enforcement sites are in-degree-0 forward terminals; we must classify it BEFORE deciding to promote).
+  const fwdFiles = new Set([...g.nodes.values()]
+    .filter((n) => n.direction === "forward" && n.id !== g.anchor)
+    .map((n) => n.file));
+  return fwdFiles.size >= _POLICY_MIN_CONSUMERS ? "policy" : "flow";
+}
+
+// Which slice the view FRONTS (BACKWARD = how it works / the mechanism; FORWARD = where it's used / the
+// enforcement sites). The intent direction is a SEMANTIC judgement — it can't be keyword-matched robustly
+// (typos, other languages, indirect wording), so the deterministic floor NEVER reads the intent string.
+// Instead we read what the LLM ALREADY decided: the seam-intent pass picks the seam that ANSWERS the
+// question (`selected`), and that seam's slice direction IS what the developer wants fronted. That's the
+// integration point — the model understands the intent; we just surface its choice. Offline / no pick →
+// deterministic default by SHAPE (a policy fronts its mechanism; a flow fronts its consumers/spine).
+function _lead_slice(g: Graph, seams: Seam[], shape: "policy" | "flow"): "backward" | "forward" {
+  const answer = seams.find((s) => s.selected);
+  if (answer) {
+    let fwd = 0, bwd = 0;
+    for (const id of answer.node_ids) { const d = g.nodes.get(id)?.direction; if (d === "forward") fwd++; else if (d === "backward") bwd++; }
+    if (fwd !== bwd) return fwd > bwd ? "forward" : "backward";   // follow the LLM's answer-seam direction
+  }
+  return shape === "policy" ? "backward" : "forward";
 }
 
 // --------------------------------------------------------------------------- emit (SeamModel)
@@ -541,6 +616,7 @@ function _seam_hunk(n: Node, provenance: string): any {
     id: n.id, file: n.file, start: n.start, end: n.end, role: n.role,
     confidence: Math.round(n.role_confidence * 100) / 100, label: n.label,
     provenance, relevant: n.relevant, external: [], externalRefs: [], rewire: null,
+    direction: n.direction,
   };
   if (n.subcores.length) out.subcores = n.subcores;
   if (n.contract.length) out.contract = n.contract;
@@ -572,7 +648,7 @@ function _seam_contracts(g: Graph, seams: Seam[]): any[] {
   return out;
 }
 
-export function emit_seams(g: Graph, health: any, seams: Seam[]): any {
+export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both" } = {}): any {
   const edgeProv = new Map<string, string>();
   for (const e of g.resolved_edges()) edgeProv.set(`${e.src} ${e.dst}`, e.provenance);
   const seamWarnings: Map<string, string[]> = health.seam_warnings;
@@ -660,9 +736,12 @@ export function emit_seams(g: Graph, health: any, seams: Seam[]): any {
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";
   const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams, ...(spine.length ? { spine } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
+  // policy-vs-flow `shape` + the `lead` slice — only on a BIDIRECTIONAL footprint (decompose passes them);
+  // single-direction footprints (the oracle fixtures) emit neither, so byte-identical parity is preserved.
   return {
     clusters, tests, noise: [],
     mode: "codebase", selectedSeam, anchor: g.anchor,
+    ...(opts.shape ? { shape: opts.shape } : {}), ...(opts.lead ? { lead: opts.lead } : {}),
     resolutionQuality: g.resolution_quality, language: g.language, complete: g.complete,
     seamEdges: [],
     edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line })),

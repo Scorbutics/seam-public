@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HostBus, set_host_bus } from "../src/core/llm.js";
-import { auto_orchestrate, _step_prompt } from "../src/codebase/orchestrate.js";
+import { auto_orchestrate, grow_to_terminals, _step_prompt } from "../src/codebase/orchestrate.js";
 
 // Paths are CWD-RELATIVE (bun test runs from ts/): the ResolvedGraph echoes the input path verbatim,
 // so the oracle — generated with the same cwd-relative paths — must be compared against the same.
@@ -22,6 +22,17 @@ describe("codebase auto-orchestrate (host-bus inject) vs Python", () => {
     try { [data, hist] = await auto_orchestrate(repo, svc, "PaymentService", "how does refund work", { maxSteps: 3 }); }
     finally { set_host_bus(null); }
     expect(JSON.parse(JSON.stringify({ data, hist }))).toEqual(oracle);
+  });
+
+  // #1 — the deterministic grow (NO LLM) follows the resolved crossings to the footprint's terminals.
+  // From the payments WRITER it must reach the admin PAGE (writer → payments → route → service → page),
+  // with no host bus set — fully reproducible.
+  test("grow_to_terminals reaches the UI terminal deterministically (no LLM)", async () => {
+    const rrepo = join("test", "fixtures", "route-repo");
+    const [data, hist]: [any, any[]] = await grow_to_terminals(rrepo, "backend/persist.ts", "persistPayment", { dataCoupling: true });
+    expect(hist.length).toBeGreaterThan(0);                          // it actually expanded
+    const files = new Set(data.nodes.map((n: any) => n.file));
+    expect(files.has("app/dashboard/admin/payments/page.ts")).toBe(true);   // the terminal screen, reached with zero LLM
   });
 
   test("_step_prompt (crossing branch) byte-identical to Python", () => {
