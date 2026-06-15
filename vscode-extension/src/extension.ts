@@ -22,11 +22,11 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
 interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; wireTargets?: { file: string; start: number }[]; }
-interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; }
+interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; tier?: "spine" | "supporting" | "off"; }
 // Altitude mid-level: a deterministic STRUCTURAL grouping of a big cluster's seams (by coupling +
 // directory), so the reviewer collapses/expands groups to zoom. Absent on small/tight clusters.
 interface SubGroup { label: string; seamIds: string[]; }
-interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; subgroups?: SubGroup[]; }
+interface Cluster { id: string; intent: string; colorIndex: number; seams: Seam[]; subgroups?: SubGroup[]; spine?: string[]; }
 // Codebase-mode adds honest-gap fields (the extension reads them additively; diff-mode
 // omits them, so all are optional). `resolutionQuality` drives the honesty banner, and
 // `unresolved`/`blindspots` are the UNKNOWN / statically-opaque overlays (plan §1/§2).
@@ -1576,9 +1576,13 @@ async function goToDef(t: ExternalTarget) {
 }
 
 // --- the seam tree: clusters → seams → hunks → resolved external targets ---------
+type SeamTier = "spine" | "supporting" | "off";
 type Node =
   | { kind: "cluster"; cluster: Cluster }
   | { kind: "subgroup"; cluster: Cluster; group: SubGroup }
+  // INTENT MAP: seams grouped by relevance to the question — the spine (main path) leads, supporting
+  // and off-intent side-effects collapse below it. Only built when the engine tiered the seams.
+  | { kind: "tierGroup"; cluster: Cluster; tier: SeamTier; seams: Seam[] }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
   | { kind: "extTarget"; target: ExternalTarget }
@@ -1732,6 +1736,16 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       if (isolate)
         return el.cluster.seams.filter((s) => s.id === focusedSeamId)
           .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
+      // INTENT MAP (codebase): when the engine tiered the seams, group them by relevance — Main path
+      // (the spine, in trace order) leads; Supporting and Off-intent collapse below. Preserves engine
+      // order WITHIN a tier (the spine is BFS-traced anchor→display), so the path reads top-to-bottom.
+      if (el.cluster.seams.some((s) => s.tier)) {
+        const tiers: SeamTier[] = ["spine", "supporting", "off"];
+        return tiers
+          .map((tier) => ({ tier, seams: el.cluster.seams.filter((s) => (s.tier ?? "supporting") === tier) }))
+          .filter((grp) => grp.seams.length)
+          .map((grp) => ({ kind: "tierGroup", cluster: el.cluster, tier: grp.tier, seams: grp.seams } as Node));
+      }
       // Altitude: a big cluster shows its SUB-GROUPS (collapsed by default = overview); expand one
       // to drill into its seams. Small/tight clusters have no subgroups → seams directly.
       if (el.cluster.subgroups?.length)
@@ -1743,6 +1757,10 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       return sortedSeams(el.cluster.seams.filter((s) => ids.has(s.id)))
         .map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     }
+    if (el.kind === "tierGroup")
+      // Keep ENGINE order (spine = BFS trace anchor→display; others = discovery order) — do NOT risk-sort,
+      // or the path stops reading as a path. The per-seam health glyph still carries the risk signal.
+      return el.seams.map((seam) => ({ kind: "seam", cluster: el.cluster, seam }));
     if (el.kind === "seam") {
       // the seam's resolved wiring (other seams it connects to) shows first, then its hunks. The
       // inter-seam CONTRACT is not a row here — it's marked on the participating hunks themselves.
@@ -1802,6 +1820,20 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.description = nsub ? `${nsub} groups · ${el.cluster.seams.length} seams` : `${el.cluster.seams.length} seams`;
       return it;
     }
+    if (el.kind === "tierGroup") {
+      const meta = {
+        spine: { glyph: "◆", label: "Main path", icon: "target", expand: true, tip: "The spine that answers the question — the flow from the anchor through processing to what's displayed, in trace order." },
+        supporting: { glyph: "▸", label: "Supporting", icon: "list-tree", expand: false, tip: "Needed or related, but not the main flow (auth, config, helpers, secondary lookups)." },
+        off: { glyph: "·", label: "Side-effects & off-intent", icon: "circle-outline", expand: false, tip: "Connected, but a different concern — a sibling entity's CRUD, a side-effect, logging, a utility." },
+      }[el.tier];
+      const it = new vscode.TreeItem(`${meta.glyph} ${meta.label}`,
+        meta.expand ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      it.description = `${el.seams.length} seam${el.seams.length !== 1 ? "s" : ""}`;
+      it.iconPath = new vscode.ThemeIcon(meta.icon, el.tier === "off" ? new vscode.ThemeColor("disabledForeground") : undefined);
+      it.tooltip = meta.tip;
+      it.contextValue = "seam.tierGroup";
+      return it;
+    }
     if (el.kind === "subgroup") {
       // ALTITUDE control: collapsed = overview (you see the few groups), expand = zoom into its seams.
       // The default depth is a setting so a reviewer can start at "overview" or "seams".
@@ -1824,8 +1856,11 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       const partnerIds = new Set<string>((seamNeighbors.get(el.seam.id) ?? []).map((n) => n.id));
       for (const pid of seamContractsByPartner.get(el.seam.id)?.keys() ?? []) partnerIds.add(pid);
       const wired = partnerIds.size;
+      // Spine seams lead with their step in the main-path trace (1 = anchor … N = what's displayed).
+      const step = el.cluster.spine?.indexOf(el.seam.id) ?? -1;
+      const lead = step >= 0 ? `${step + 1}. ` : "";
       const it = new vscode.TreeItem(
-        h.glyph ? `${h.glyph} ${el.seam.label}` : el.seam.label, vscode.TreeItemCollapsibleState.Collapsed);
+        h.glyph ? `${lead}${h.glyph} ${el.seam.label}` : `${lead}${el.seam.label}`, vscode.TreeItemCollapsibleState.Collapsed);
       // Description = the seam's CHARACTER (role makeup) + how connected it is — risk lives in the
       // glyph + icon colour, not the text, so the line stays calm.
       it.description = [makeupText(counts), wired ? `↔${wired}` : ""].filter(Boolean).join("  ·  ");

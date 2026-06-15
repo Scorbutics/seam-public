@@ -71,7 +71,7 @@ function _area(path: string): string {
 }
 
 interface Seam { id: string; label: string; linkOnly: boolean; node_ids: string[]; proposedBy: string;
-  selected?: boolean; suggested?: boolean; }
+  selected?: boolean; suggested?: boolean; tier?: "spine" | "supporting" | "off"; }
 function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boolean, proposedBy = "floor"): Seam {
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
@@ -282,45 +282,104 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     "Here are candidate SEAMS — each a group of related code reached while mapping that question.",
     "For EACH seam decide three things:",
     " - label: 3-6 words naming what this seam DOES (its technical intent — NOT a file or symbol name)",
-    " - relevant: true if it is ON the path to answering the question; false if it is connected but a",
-    "   DIFFERENT concern (a sibling entity's CRUD, auth/session/logging/config, a generic utility)",
-    " - answers: true for the SINGLE seam that best answers the question, false for the rest (at most one true)",
+    " - tier: \"spine\" if it is ON THE MAIN PATH that answers the question — the core flow from the entry",
+    "   point through processing to the output/screen the question is about; \"supporting\" if it is needed",
+    "   or related but NOT the main flow (auth/session, config, a helper, a secondary lookup); \"off\" if it",
+    "   is connected but a DIFFERENT concern — a sibling entity's CRUD or a side-effect, logging, a utility",
+    " - answers: true for the SINGLE seam that is the END of the main path (the result/screen the user",
+    "   ultimately sees), false for the rest (at most one true)",
     ""];
   for (const s of ranked) {
     const r = rep(s); if (!r) continue;
     const others = s.node_ids.map((i) => g.nodes.get(i)!).filter((n) => n && n !== r).slice(0, 3).map((n) => n.label).filter(Boolean);
     lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}`);
   }
-  lines.push("", "Default relevant=true when unsure; mark incidental ONLY when clearly a different concern.",
+  lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",
     "Output ONLY a JSON array, one object per seam:",
-    '[{"id":"<seam id>","label":"<3-6 words>","relevant":true|false,"answers":true|false}]');
+    '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting|off","answers":true|false}]');
 
   let out: Map<string, any>;
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-intent" }); }
   catch (e) { if (e instanceof LLMError) return; throw e; }
 
-  // Relabel + collect verdicts; pick the single best "answers" seam (highest-complexity rep breaks ties).
-  const incidental = new Set<string>();
+  // Relabel + tier each seam; pick the single best "answers" seam (highest-complexity rep breaks ties).
+  const tierMap = new Map<string, "spine" | "supporting" | "off">();
   let answer: { id: string; cx: number } | null = null;
   for (const s of ranked) {
     const o = out.get(s.id);
     if (!o || typeof o !== "object") continue;
     const lab = String(o.label ?? "").trim();
     if (lab) s.label = lab;
-    if ([false, "false", "False", 0].includes(o.relevant)) incidental.add(s.id);
+    const t = String(o.tier ?? "").trim().toLowerCase();
+    tierMap.set(s.id, t === "spine" ? "spine" : t === "off" ? "off" : "supporting");
     if ([true, "true", "True", 1].includes(o.answers)) {
       const cx = rep(s)?.complexity ?? 1;
       if (!answer || cx > answer.cx) answer = { id: s.id, cx };
     }
   }
-  // Dim incidental seams (keep visible) — but never dim a node that ALSO lives in a relevant seam.
+  // The anchor's OWN seam and the answer seam are, by definition, the two ends of the main path.
+  const anchorSeamId = seams.find((s) => s.node_ids.includes(g.anchor))?.id;
+  if (anchorSeamId) tierMap.set(anchorSeamId, "spine");
+  if (answer) tierMap.set(answer.id, "spine");
+  for (const s of ranked) s.tier = tierMap.get(s.id) ?? "supporting";
+  // Dim OFF-intent seams (keep visible) — but never dim a node that ALSO lives in a non-off seam.
   const keep = new Set<string>();
-  for (const s of ranked) if (!incidental.has(s.id)) for (const nid of s.node_ids) keep.add(nid);
-  for (const s of ranked) if (incidental.has(s.id)) for (const nid of s.node_ids) {
+  for (const s of ranked) if (s.tier !== "off") for (const nid of s.node_ids) keep.add(nid);
+  for (const s of ranked) if (s.tier === "off") for (const nid of s.node_ids) {
     if (keep.has(nid)) continue;
     const n = g.nodes.get(nid); if (n) n.relevant = false;
   }
   if (answer) for (const s of seams) s.selected = s.id === answer.id;
+}
+
+// Order the spine (main-path) seams as a TRACE from the anchor outward: BFS distance over the seam
+// adjacency (two seams are adjacent when a resolved edge crosses between them), then by original order.
+// Seams with no LLM tier (no intent pass) stay untiered → no spine → caller leaves the order untouched.
+function _spine_order(g: Graph, seams: Seam[]): string[] {
+  const nodeSeam = new Map<string, string>();
+  for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
+  const adj = new Map<string, Set<string>>();
+  for (const e of g.resolved_edges()) {
+    if (e.kind === "contains") continue;
+    const a = nodeSeam.get(e.src), b = nodeSeam.get(e.dst);
+    if (!a || !b || a === b) continue;
+    (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+    (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a);
+  }
+  const dist = new Map<string, number>();
+  const anchorSeam = nodeSeam.get(g.anchor) ?? seams.find((s) => s.tier === "spine")?.id;
+  if (anchorSeam) {
+    dist.set(anchorSeam, 0);
+    const q = [anchorSeam];
+    while (q.length) { const cur = q.shift()!; const d = dist.get(cur)!; for (const nb of adj.get(cur) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
+  }
+  const idx = new Map(seams.map((s, i) => [s.id, i]));
+  return seams.filter((s) => s.tier === "spine")
+    .sort((a, b) => ((dist.get(a.id) ?? 1e9) - (dist.get(b.id) ?? 1e9)) || (idx.get(a.id)! - idx.get(b.id)!))
+    .map((s) => s.id);
+}
+
+// Auto-detect the flow's TERMINALS and promote them to implicit CO-ANCHORS. The user anchors ONE end of
+// a flow (the processing core); a terminal is the OTHER end — a node the footprint REACHES but that
+// nothing in the footprint depends on (in-degree 0): a screen, a top-level handler, an entry point. The
+// role model is anchor-relative, so without this a terminal is "far from the anchor" → demoted to
+// `environment` and never made a seam. Adding terminals to `g.anchors` anchors the model at BOTH ends, so
+// relevance becomes "near AN END of the flow", not "near the single anchor" — a far screen is now
+// first-class. Purely TOPOLOGICAL (no intent words, language-agnostic); the intent tier pass then prunes
+// WHICH terminals matter (a member screen surfaces as a terminal but is tiered `off` — by intent, never
+// by distance). Bounded so a wide footprint can't balloon the seam count.
+const _TERMINAL_CAP = 12;
+function _promote_terminals(g: Graph): void {
+  const anchors = new Set(g.anchors.length ? g.anchors : [g.anchor]);
+  const indeg = new Map<string, number>();
+  for (const e of g.resolved_edges()) if (e.kind !== "contains") indeg.set(e.dst, (indeg.get(e.dst) ?? 0) + 1);
+  const reach = g.adjacency();   // a terminal must be connected to the footprint the anchor seeds
+  const boundary = new Set(["table", "route", "resource"]);   // data-flow boundary nodes are plumbing, never an end
+  const terminals = [...g.nodes.values()]
+    .filter((n) => !anchors.has(n.id) && (indeg.get(n.id) ?? 0) === 0 && !boundary.has(n.kind) && (reach.get(n.id)?.size ?? 0) > 0)
+    .sort((a, b) => b.complexity - a.complexity)
+    .slice(0, _TERMINAL_CAP);
+  for (const t of terminals) if (!g.anchors.includes(t.id)) g.anchors.push(t.id);
 }
 
 // --------------------------------------------------------------------------- detect_* (C3)
@@ -452,6 +511,10 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
   model?: string; claudeBin?: string | null } = {}): Promise<any> {
+  // Anchor the role model at BOTH ends of the flow: the user's anchor + the auto-detected terminals (the
+  // screens/entry points the footprint reaches). Gated on `intent` so the deterministic oracle parity
+  // (no-intent decompose) is untouched. See _promote_terminals.
+  if (opts.intent) _promote_terminals(g);
   assign_roles(g);
   assign_clusters(g);
   if (opts.repo) {
@@ -465,8 +528,8 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
     seams = refine_seams_llm(g, seams, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin });
   }
   seams = _extract_suggested_seams(g, seams);
-  // Intent pass over the FINAL seams (grown + data-coupling included): names them, dims off-intent
-  // concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
+  // Intent pass over the FINAL seams (grown + data-coupling included): tiers them spine/supporting/off,
+  // names them, dims off-intent concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
   if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
   const health = wellformedness(g);
   return emit_seams(g, health, seams);
@@ -578,11 +641,24 @@ export function emit_seams(g: Graph, health: any, seams: Seam[]): any {
     const warns: string[] = [];
     for (const i of ids) for (const w of [...(seamWarnings.get(i) ?? []), ...(nodeWarnings.get(i) ?? [])]) if (!warns.includes(w)) warns.push(w);
     outSeams.push({ id: s.id, label: s.label, linkOnly: s.linkOnly, uncertain: false, warnings: warns,
-      hunks: ordered, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false });
+      hunks: ordered, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false,
+      tier: s.tier });
   }
 
+  // INTENT MAP: tier each seam and order them as a trace — the spine (main path, anchor→…→display) first,
+  // then supporting, then off-intent side-effects last. Untiered (no intent pass) → all rank equal → the
+  // original order is preserved (no regression). The spine is BFS-ordered so the path reads top-to-bottom.
+  const spine = _spine_order(g, seams);
+  const spineRank = new Map(spine.map((id, i) => [id, i]));
+  const tierRank = (t?: string) => (t === "spine" ? 0 : t === "off" ? 2 : 1);
+  const origIdx = new Map(outSeams.map((s, i) => [s.id, i]));
+  outSeams.sort((a, b) =>
+    (tierRank(a.tier) - tierRank(b.tier)) ||
+    ((spineRank.get(a.id) ?? 1e9) - (spineRank.get(b.id) ?? 1e9)) ||
+    (origIdx.get(a.id)! - origIdx.get(b.id)!));
+
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";
-  const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams }];
+  const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams, ...(spine.length ? { spine } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
   return {
     clusters, tests, noise: [],
