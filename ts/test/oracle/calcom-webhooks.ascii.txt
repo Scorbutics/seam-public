@@ -1,9 +1,9 @@
-Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 9  env 27)
+Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 12  env 24)
 ◆ core   → link   ∙ env   ✓ test      ⚠ verify   ~ uncertain   ⇲ outside-diff
 
 ◆ g1  WebhookForm
 ├─ ▸ webhooks  (12 seams)
-│  ├─ ▣ h8  EventWebhooksTab    ⚠ untested
+│  ├─ ▣ h8  EventWebhooksTab    ⚠ untested · ↔ h17,h22,h44
 │  │  ├─ ◆ core EventWebhooksTab.tsx:126   defines EventWebhooksTab
 │  │  ├─ ∙ env  InstantEventController.tsx:374   no logic or wiring detected (uncertain)
 │  │  ├─ → link EventWebhooksTab.tsx:95   references a core's symbol (wires it in)
@@ -11,34 +11,34 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, WebhookTestDisclosure, DeleteWebhookDialog
 │  │  ├─ → link WebhookForm.tsx:577   (here: link) defines WebhookForm
 │  │  ├─ ∙ env  webhook-edit-view.tsx:1   wires: WebhookVersionCTA, WebhookFormHeader, WebhookFormSkeleton
-│  │  ├─ ∙ env  webhook-edit-view.tsx:77   wires: WebhookListItem, WebhookTestDisclosure  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-edit-view.tsx:77   wires: WebhookListItem, WebhookTestDisclosure  ·  ↻ showToast → toastManager
 │  │  ├─ ∙ env  webhook-edit-view.tsx:92   no logic or wiring detected (uncertain)
 │  │  ├─ ∙ env  webhook-new-view.tsx:1   wires: WebhookVersionCTA, WebhookFormHeader, WebhookFormSkeleton
-│  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookListItem, WebhookTestDisclosure, WebhooksView  ·  ↻ showToast → toastManager
-│  │  └─ ∙ env  webhook-new-view.tsx:53   wires: WebhookListItem, WebhookTestDisclosure, WebhooksView  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:32   wires: WebhookListItem, WebhookTestDisclosure, WebhooksView  ·  ↻ showToast → toastManager
+│  │  └─ → link webhook-new-view.tsx:53   wires: WebhookListItem, WebhookTestDisclosure, WebhooksView  ·  ↻ showToast → toastManager
 │  ├─ ▣ h9  CreateNewWebhookButton    ⚠ untested · ↔ h23,h48,h47
 │  │  ├─ ∙ env  CreateNewWebhookButton.tsx:1   (here: environment) defines CreateNewWebhookButton
 │  │  ├─ ◆ core CreateNewWebhookButton.tsx:12   defines CreateNewWebhookButton
 │  │  ├─ → link WebhookListItem.tsx:280   (here: link) defines WebhookListItem
 │  │  ├─ ∙ env  index.ts:1   wires: WebhooksView
 │  │  └─ → link webhooks-view.tsx:55   (here: link) defines WebhooksView
-│  ├─ ▣ h17  WebhookListItem    ⚠ untested · ↔ h48,h33,h41
+│  ├─ ▣ h17  WebhookListItem    ⚠ untested · ↔ h48,h8,h22,h44,h33,h41
 │  │  ├─ ◆ core WebhookListItem.tsx:56   defines WebhookListItem
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookTestDisclosure, DeleteWebhookDialog, EventWebhooksTab
 │  │  ├─ ∙ env  WebhookForm.tsx:1   wires: WebhookForm, WebhookVersionCTA, DeleteWebhookDialog, WebhookFormSkeleton
 │  │  ├─ → link WebhookListItem.tsx:355   wires: ListItem
-│  │  ├─ ∙ env  webhook-edit-view.tsx:77   wires: WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookTestDisclosure, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  ├─ ∙ env  webhook-new-view.tsx:53   wires: WebhookTestDisclosure, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-edit-view.tsx:77   wires: WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:32   wires: WebhookTestDisclosure, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:53   wires: WebhookTestDisclosure, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  ├─ ∙ env  webhooks-skeleton.tsx:1   (here: environment) wires: WebhookFormSkeleton, WebhooksHeader, ListItem
 │  │  └─ → link webhooks-skeleton.tsx:6   wires: WebhookFormSkeleton, WebhooksHeader, ListItem
-│  ├─ ▣ h22  WebhookTestDisclosure    ⚠ untested · ⚠ isolated-core
+│  ├─ ▣ h22  WebhookTestDisclosure    ⚠ untested · ↔ h8,h17,h44
 │  │  ├─ ◆ core WebhookTestDisclosure.tsx:19   defines WebhookTestDisclosure
 │  │  ├─ ∙ env  EventTypeWebhookListItem.tsx   wires: WebhookListItem, DeleteWebhookDialog, EventWebhooksTab
 │  │  ├─ ∙ env  WebhookTestDisclosure.tsx:1   wires: WebhookForm, WebhookFormSkeleton, WebhookTestHeader
-│  │  ├─ ∙ env  webhook-edit-view.tsx:77   wires: WebhookListItem, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  └─ ∙ env  webhook-new-view.tsx:53   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-edit-view.tsx:77   wires: WebhookListItem, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:32   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  └─ → link webhook-new-view.tsx:53   wires: WebhookListItem, WebhooksView, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  ├─ ▣ h23  WebhookVersionCTA    ⚠ untested · ↔ h32,h47,h33,h9,h48
 │  │  ├─ ∙ env  WebhookVersionCTA.tsx:1   (here: environment) defines WebhookVersionCTA
 │  │  ├─ ◆ core WebhookVersionCTA.tsx:4   defines WebhookVersionCTA
@@ -84,11 +84,11 @@ Seam · 54 hunks → 10 clusters · 23 seams · 18 cores  (roles: core 18  link 
 │  │  ├─ ∙ env  webhooks-header.tsx:1   (here: environment) defines WebhooksHeader
 │  │  ├─ ◆ core webhooks-header.tsx:6   defines WebhooksHeader
 │  │  └─ → link webhooks-skeleton.tsx:12   wires: WebhookListItem, WebhookFormSkeleton, ListItem
-│  ├─ ▣ h44  WebhooksView    ⚠ untested · ⚠ isolated-core
+│  ├─ ▣ h44  WebhooksView    ⚠ untested · ↔ h8,h17,h22
 │  │  ├─ ◆ core webhooks-view.tsx:41   defines WebhooksView
 │  │  ├─ ∙ env  index.ts:1   wires: CreateNewWebhookButton
-│  │  ├─ ∙ env  webhook-new-view.tsx:32   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
-│  │  ├─ ∙ env  webhook-new-view.tsx:53   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:32   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
+│  │  ├─ → link webhook-new-view.tsx:53   wires: WebhookListItem, WebhookTestDisclosure, EventWebhooksTab  ·  ↻ showToast → toastManager
 │  │  └─ ∙ env  webhook-new-view.tsx:63   no logic or wiring detected (uncertain)
 │  ├─ ▣ h47  AppHeader    ⚠ untested · ↔ h23,h32,h9
 │  │  ├─ ∙ env  app-header.tsx:1   (here: environment) defines AppHeader

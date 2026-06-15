@@ -94,8 +94,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
               "start": 77,
               "end": 83,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -134,8 +134,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 32,
               "end": 44,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -152,8 +152,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 53,
               "end": 59,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -375,8 +375,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
               "start": 77,
               "end": 83,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -393,8 +393,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 32,
               "end": 44,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -411,8 +411,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 53,
               "end": 59,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -453,9 +453,7 @@
           "label": "WebhookTestDisclosure",
           "linkOnly": false,
           "uncertain": false,
-          "warnings": [
-            "isolated-core"
-          ],
+          "warnings": [],
           "hunks": [
             {
               "id": "h22",
@@ -495,8 +493,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
               "start": 77,
               "end": 83,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -513,8 +511,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 32,
               "end": 44,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -531,8 +529,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 53,
               "end": 59,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -1105,9 +1103,7 @@
           "label": "WebhooksView",
           "linkOnly": false,
           "uncertain": false,
-          "warnings": [
-            "isolated-core"
-          ],
+          "warnings": [],
           "hunks": [
             {
               "id": "h44",
@@ -1136,8 +1132,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 32,
               "end": 44,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -1154,8 +1150,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 53,
               "end": 59,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {

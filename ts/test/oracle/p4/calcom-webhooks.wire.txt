@@ -78,7 +78,7 @@ hunk id only:
     candidate cores: (none — infer from rationale)
   h29 link (cluster ?): link — references a core's symbol (wires it in)
     candidate cores: h23, h32, h33
-  h30 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+  h30 link (cluster ?): link — rewires a call/component (showToast → toastManager)
     candidate cores: (none — infer from rationale)
   h31 environment (cluster ?): environment — no logic or wiring detected (uncertain)
     candidate cores: (none — infer from rationale)
@@ -86,9 +86,9 @@ hunk id only:
     candidate cores: (none — infer from rationale)
   h35 environment (cluster ?): environment — imports wiring the change in
     candidate cores: h23, h32
-  h36 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+  h36 link (cluster ?): link — rewires a call/component (showToast → toastManager)
     candidate cores: (none — infer from rationale)
-  h37 environment (cluster ?): environment — no logic or wiring detected (uncertain)
+  h37 link (cluster ?): link — rewires a call/component (showToast → toastManager)
     candidate cores: (none — infer from rationale)
   h38 environment (cluster ?): environment — no logic or wiring detected (uncertain)
     candidate cores: (none — infer from rationale)

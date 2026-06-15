@@ -10,7 +10,7 @@ import {
 } from "./facts.js";
 import { _added, _defs_refs, _diff_imports, _STOP } from "./lang.js";
 import { type Hunk, type Placement } from "./parser.js";
-import { candidate_wirings, resolve_alias, segment_link_by_core } from "./symbol_edges.js";
+import { candidate_wirings, resolve_alias, rewire_pairs, segment_link_by_core } from "./symbol_edges.js";
 import { difference, findAll, findGroup1, intersect, sorted, union } from "../core/sets.js";
 import { _resolve } from "../core/resolve/consumers.js";
 import { parse_imports } from "../core/resolve/languages/index.js";
@@ -25,6 +25,28 @@ const _RECONCILE_GATE = 4;
 const _CONF_TEST = 1.0, _CONF_ENV_IMPORT = 1.0, _CONF_ENV_DECL = 0.85, _CONF_ENV_SQL = 0.9;
 const _CONF_ADAPTER = 0.8, _CONF_CORE_DEF_LOGIC = 0.9, _CONF_CORE_LOGIC = 0.7;
 const _CONF_CORE_DEF = 0.65, _CONF_LINK = 0.8, _CONF_FALLBACK = 0.5;
+
+// --- Wiring lifecycle barrier ------------------------------------------------
+// assign_clusters builds the cluster graph by READING h.wires. In the hybrid wiring path those wires
+// are written ASYNCHRONOUSLY (engine's hybridWiring resolves a promise that deliberately overlaps the
+// LLM cluster pass), so reading them before that promise settles is a race — and one the fuzzy harness
+// would NOT catch, since it tolerates run-to-run variance. This barrier makes the ordering invariant
+// (wiring → det clustering) enforced rather than merely commented: assign_wiring marks the work set
+// PROVISIONAL, the path's terminal step (reconcile_wiring for det, engine.hybridWiring for hybrid)
+// marks it SETTLED via finalize_wiring, and assign_clusters throws if it runs while still provisional.
+// Keyed on the work-array identity every pass already shares. Paths that never call det.assign_wiring
+// (pure-LLM wiring, which writes wires synchronously) never set the flag and are unaffected.
+const _wireState = new WeakMap<Hunk[], "provisional" | "settled">();
+function _mark_wiring_provisional(work: Hunk[]): void { _wireState.set(work, "provisional"); }
+export function finalize_wiring(work: Hunk[]): void { if (_wireState.has(work)) _wireState.set(work, "settled"); }
+function _assert_wires_settled(work: Hunk[]): void {
+  if (_wireState.get(work) === "provisional")
+    throw new Error(
+      "det.assign_clusters read h.wires while wiring was still PROVISIONAL — the wiring pass (hybrid: " +
+      "engine.hybridWiring's promise) must complete and call det.finalize_wiring before the det cluster " +
+      "pass runs. See engine.classify: the LLM cluster pass is wiring-independent and may overlap wiring, " +
+      "but the det cluster pass reads the wire graph and must await it.");
+}
 
 // --- Python str case-method equivalents (Unicode-aware) ----------------------
 const hasUpper = (s: string) => s.toLowerCase() !== s;          // any(c.isupper() for c in s)
@@ -224,6 +246,7 @@ export function reconcile_wiring(work: Hunk[], facts: Map<string, HunkFacts>, ga
     h.wires = sorted(owned);
     if (h.wires.length > gate) residual.push(h);
   }
+  finalize_wiring(work); // det terminal step: wires are now settled, det clustering may read them
   return residual;
 }
 
@@ -261,7 +284,12 @@ function _distinctive(work: Hunk[]): Set<string> {
   return out;
 }
 
-export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void {
+// The two relational signals the role pass reads, derived from the symbol-grounded wiring graph:
+//   referenced — this hunk DEFINES a symbol another hunk references (an inbound dependency edge);
+//   targets    — the set of hunks this hunk points AT (its outbound dependency edges).
+// Shared by both the flat (assign_roles) and the core-first (assign_roles_core_first) passes.
+function _role_signals(work: Hunk[], facts: Map<string, HunkFacts>):
+    { referenced: Set<string>; targets: Map<string, Set<string>> } {
   const cand = candidate_wirings(work);
   const dr = new Map<string, [Set<string>, Set<string>]>();
   for (const h of work) dr.set(h.id, [facts.get(h.id)!.defines, facts.get(h.id)!.references]);
@@ -282,6 +310,12 @@ export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void 
   for (const [hid, definers] of _resolved_edges(work, facts)) {
     targets.set(hid, union(targets.get(hid)!, definers));
   }
+  return { referenced, targets };
+}
+
+export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void {
+  const { referenced, targets } = _role_signals(work, facts);
+  const rewire = rewire_pairs(work);   // crisp removed→added symbol swaps (a hunk that REWIRES connects)
 
   for (const h of work) {
     const f = facts.get(h.id)!;
@@ -297,10 +331,15 @@ export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void 
       const defines_ref = referenced.has(h.id);
       const logic = f.decisions;
       const uses = targets.get(h.id)!.size > 0;
+      const rw = rewire.get(h.id)!;
+      const rewired = rw.removed.length > 0 && rw.added.length > 0;
       if (defines_ref && logic >= 1) { h.role = "core"; h.role_confidence = _CONF_CORE_DEF_LOGIC; h.rationale = "core — defines logic other hunks depend on"; }
       else if (logic >= _LOGIC_CORE_THRESHOLD) { h.role = "core"; h.role_confidence = _CONF_CORE_LOGIC; h.rationale = "core — substantial new behavioral logic"; }
       else if (defines_ref) { h.role = "core"; h.role_confidence = _CONF_CORE_DEF; h.rationale = "core — defines a symbol other hunks depend on"; }
       else if (uses) { h.role = "link"; h.role_confidence = _CONF_LINK; h.rationale = "link — references a core's symbol (wires it in)"; }
+      // A crisp REWIRE (swapped one call/component for another) CONNECTS to a core defined elsewhere;
+      // it does not decide. Without this rung a `dec>=1` rewired call-site is wrongly promoted to core.
+      else if (rewired) { h.role = "link"; h.role_confidence = _CONF_LINK; h.rationale = `link — rewires a call/component (${rw.removed.join(",")} → ${rw.added.join(",")})`; }
       else if (logic >= 1) { h.role = "core"; h.role_confidence = _CONF_FALLBACK; h.rationale = "core — some new logic, no clear wiring (uncertain)"; }
       else { h.role = "environment"; h.role_confidence = _CONF_FALLBACK; h.rationale = "environment — no logic or wiring detected (uncertain)"; }
     }
@@ -309,6 +348,7 @@ export function assign_roles(work: Hunk[], facts: Map<string, HunkFacts>): void 
 
 export function assign_wiring(work: Hunk[], facts: Map<string, HunkFacts>,
                              anchors?: Map<string, Set<string>>): void {
+  _mark_wiring_provisional(work);
   const distinctive = _distinctive(work);
   const cores = new Set(work.filter((h) => h.role === "core").map((h) => h.id));
   const wires_map = _subject_wiring(work, facts, cores, anchors);
@@ -356,6 +396,7 @@ export function merge_seams(work: Hunk[]): void {
 }
 
 export function assign_clusters(work: Hunk[], facts: Map<string, HunkFacts>): void {
+  _assert_wires_settled(work);
   const distinctive = _distinctive(work);
   const edges: [string, string][] = [];
   for (const h of work) for (const t of h.wires) edges.push([h.id, t]);

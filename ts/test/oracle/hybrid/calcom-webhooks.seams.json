@@ -862,8 +862,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-edit-view.tsx",
               "start": 77,
               "end": 83,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -1031,7 +1031,7 @@
       "colorIndex": 17,
       "seams": [
         {
-          "id": "s-ambient",
+          "id": "s-rewire",
           "label": "intent g18",
           "linkOnly": true,
           "uncertain": false,
@@ -1053,8 +1053,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 32,
               "end": 44,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {
@@ -1086,7 +1086,7 @@
       "colorIndex": 18,
       "seams": [
         {
-          "id": "s-ambient",
+          "id": "s-rewire",
           "label": "intent g19",
           "linkOnly": true,
           "uncertain": false,
@@ -1097,8 +1097,8 @@
               "file": "apps/web/modules/webhooks/views/webhook-new-view.tsx",
               "start": 53,
               "end": 59,
-              "role": "environment",
-              "confidence": 0.5,
+              "role": "link",
+              "confidence": 0.8,
               "external": [],
               "externalRefs": [],
               "rewire": {

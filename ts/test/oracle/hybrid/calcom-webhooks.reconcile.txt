@@ -604,7 +604,7 @@ EDIT h29  [webhook-edit-view.tsx]  role=link
      <WebhookForm
   symbols suggest: h12="WebhookForm", h15="WebhookForm", h17="WebhookListItem", h22="WebhookTestDisclosure", h23="WebhookVersionCTA", h25="DeleteWebhookDialog", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h8="EventWebhooksTab"
 ---
-EDIT h30  [webhook-edit-view.tsx]  role=environment
+EDIT h30  [webhook-edit-view.tsx]  role=link
              platform: webhook.platform ?? undefined,
            })
          ) {
@@ -682,7 +682,7 @@ EDIT h35  [webhook-new-view.tsx]  role=environment
 +import { trpc } from "@calcom/trpc/react";
   symbols suggest: h23="WebhookVersionCTA", h32="WebhookFormHeader", h33="WebhookFormSkeleton", h8="EventWebhooksTab"
 ---
-EDIT h36  [webhook-new-view.tsx]  role=environment
+EDIT h36  [webhook-new-view.tsx]  role=link
  
    const createWebhookMutation = trpc.viewer.webhook.create.useMutation({
      async onSuccess() {
@@ -700,7 +700,7 @@ EDIT h36  [webhook-new-view.tsx]  role=environment
  
   symbols suggest: h17="WebhookListItem", h22="WebhookTestDisclosure", h44="WebhooksView", h8="EventWebhooksTab"
 ---
-EDIT h37  [webhook-new-view.tsx]  role=environment
+EDIT h37  [webhook-new-view.tsx]  role=link
          platform,
        })
      ) {
