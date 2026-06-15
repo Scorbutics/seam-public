@@ -332,6 +332,38 @@ postures, not errors*. The goal is "an acceptable representation," not per-hunk 
 Deterministic signals (external coupling, A→B rewire, span segmentation) are pure functions of the
 diff and are gated by exact-assertion tests in [`ts/test/`](ts/test/), the right tool for them.
 
+## How it compares — context engines (Augment Code & co.)
+
+Codebase mode puts Seam in the same problem space as a **context engine** like
+[Augment Code](https://www.augmentcode.com/context-engine): *give an AI — or a human — the right
+cross-cutting slice of a large codebase, beyond grep.* The field has converged on "embeddings alone
+aren't enough, you need the dependency graph," and both build one. But the **retrieval substrate is
+opposite**:
+
+| | **Augment** context engine | **Seam** codebase mode |
+|---|---|---|
+| **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); LLM only to *grow* the footprint + *tier* it |
+| **Index** | the whole repo, continuous, **real-time** (100M+ lines) | an **on-demand footprint** from one anchor, per question |
+| **Output** | invisible context feeding the model | a **transparent map** — spine, roles, wiring, intent tiers |
+| **Confidence** | a similarity score | **provenance** (`RESOLVED` / `PARTIAL` / `SUGGESTED`) + named **blindspots** |
+| **Surface** | a full assistant + hosted infra + non-code sources (commits, tickets, docs) | a focused decomposition tool, code-only |
+
+They **converge** on the mission, on building a dependency graph, and on exposing context over
+**MCP** (Augment shipped a Context-Engine MCP server in 2026; Seam [already has one](mcp/)).
+
+**Seam-distinct:** an **intent spine** (a ranked, readable main-path answer — not retrieved snippets);
+**provenance + blindspots** (it states what it *can't* statically see, where a similarity engine
+returns its best match silently); and **cross-framework data-coupling as a first-class edge** — a
+`payments` table or `/api/payments` route shared between a backend function and a frontend page. That
+last one is the sharpest line: such a link has **no embedding similarity** (the string `payments` in a
+SQL call vs a `.tsx` screen aren't semantically close), so a vector engine is weakest exactly where
+Seam is strong — and Seam's edge is **verifiable**, not probabilistic.
+
+**Where Seam is behind:** scale (no 100M-line real-time index), learned embeddings, and the non-code
+sources. The honest read is **same goal, opposite philosophy** — learned-embedding / always-on /
+invisible-plumbing vs deterministic-structural / on-demand / transparent-and-honest — so the two are
+arguably **complementary** (both speak MCP), not strictly competing.
+
 ## Status & limits
 
 The original *tool vs. discipline* question — does the auto-decomposed presentation deliver the
