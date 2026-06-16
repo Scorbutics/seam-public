@@ -82,6 +82,7 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
 }
 
 import { KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS } from "./coupling/index.js";
+import { git_lineage } from "./lineage.js";
 // Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
 // plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
 // newly-registered key kind becomes a crossing automatically.
@@ -662,7 +663,7 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
 }
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
-  model?: string; claudeBin?: string | null; promoteSpinePath?: boolean } = {}): Promise<any> {
+  model?: string; claudeBin?: string | null; promoteSpinePath?: boolean; lineage?: boolean } = {}): Promise<any> {
   // Bidirectional footprints carry a policy-vs-flow SHAPE; classify it FIRST (direction-based, stable),
   // because the next step depends on it: anchor the role model at both ends of a FLOW (promote the
   // terminals/screens) — but NOT a POLICY, whose enforcement sites are a collapsed surface, not cores.
@@ -689,7 +690,7 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
   // Emit the model UNCOLLAPSED — off-seam collapsing is a human-render concern, applied by each client
   // (see collapse_off_seams), so an LLM consumer of seams.json gets the full recall, not a "+N more" stub.
-  return emit_seams(g, health, seams, { shape, lead });
+  return emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined });
 }
 
 // POLICY vs FLOW — the shape of a footprint. A FLOW moves data through a pipeline (it has a data
@@ -766,7 +767,7 @@ function _seam_contracts(g: Graph, seams: Seam[]): any[] {
   return out;
 }
 
-export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both" } = {}): any {
+export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both"; lineageRepo?: string } = {}): any {
   const edgeProv = new Map<string, string>();
   for (const e of g.resolved_edges()) edgeProv.set(`${e.src} ${e.dst}`, e.provenance);
   const seamWarnings: Map<string, string[]> = health.seam_warnings;
@@ -874,6 +875,16 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     ((spineRank.get(a.id) ?? 1e9) - (spineRank.get(b.id) ?? 1e9)) ||
     (origIdx.get(a.id)! - origIdx.get(b.id)!));
 
+  // GIT LINEAGE (opt-in, additive): attach the last-touching commit of each seam's primary file — the
+  // "why" layer, 100% deterministic (git ground truth). Conditional on lineageRepo, so the oracle
+  // fixtures (which never set it) stay byte-identical.
+  if (opts.lineageRepo) {
+    const files = outSeams.map((s: any) => s.primary?.file).filter(Boolean);
+    if (files.length) {
+      const lin = git_lineage(opts.lineageRepo, files);
+      for (const s of outSeams) { const l = s.primary && lin.get(s.primary.file); if (l) s.lineage = l; }
+    }
+  }
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";
   // CULMINATION RANKING (intent pass only): the climax as a RANKED list with confidence + the structural
   // facts that grounded it — what an LLM consumer reads instead of the fragile single `selectedSeam` ★.

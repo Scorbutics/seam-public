@@ -11,7 +11,8 @@
 type Hunk = { file?: string; role?: string };
 type Seam = { id: string; label: string; tier?: string; selected?: boolean; suggested?: boolean;
   primary?: { file: string; line: number; symbol: string }; hunks?: Hunk[];
-  culmination?: number; writes?: string[]; dir?: string };
+  culmination?: number; writes?: string[]; dir?: string;
+  lineage?: { sha: string; subject: string; author: string; date: string } };
 type Ranked = { id: string; label: string; score: number; tier?: string; writes?: string[]; dir?: string | null };
 
 const rolesOf = (s: Seam): string => {
@@ -26,6 +27,9 @@ const facts = (s: Seam): string => {
   if (s.dir) bits.push(s.dir === "backward" ? "downstream" : "upstream entry");
   return bits.length ? `  {${bits.join("; ")}}` : "";
 };
+// git lineage — the deterministic "why" (last-touching commit). Shown inline so an LLM reads provenance
+// it can trust alongside the code location.
+const lineageOf = (s: any): string => s.lineage ? `  ↳ ${s.lineage.sha} "${s.lineage.subject}" (${s.lineage.author}, ${s.lineage.date})` : "";
 
 export function renderLlmContext(model: any): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
@@ -47,7 +51,7 @@ export function renderLlmContext(model: any): string {
   const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
   if (spine.length) {
     out.push("## Spine (main path, read in order)");
-    spine.forEach((s, i) => out.push(`${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}`));
+    spine.forEach((s, i) => out.push(`${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`));
     out.push("");
   }
 
@@ -72,7 +76,7 @@ export function renderLlmContext(model: any): string {
   const list = (title: string, items: Seam[]) => {
     if (!items.length) return;
     out.push(`## ${title}`);
-    for (const s of items) out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}`);
+    for (const s of items) out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`);
     out.push("");
   };
   const spineSet = new Set(spineIds);
