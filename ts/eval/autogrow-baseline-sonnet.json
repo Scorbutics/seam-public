@@ -1,0 +1,22 @@
+{
+  "label": "sonnet",
+  "cases": {
+    "private-app-missions": {
+      "runs": 3,
+      "spine_jaccard": 0.69,
+      "culmination_agreement": 1,
+      "culmination_modal": "save@backend/supabase/functions/scoring-cycle/repositories.ts",
+      "tier_agreement": 0.895,
+      "spine_len": {
+        "min": 5,
+        "max": 6,
+        "mean": 5.3
+      },
+      "seams": {
+        "min": 75,
+        "max": 75,
+        "mean": 75
+      }
+    }
+  }
+}

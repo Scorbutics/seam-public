@@ -1,0 +1,12 @@
+[
+  {
+    "label": "private-app-subscribe",
+    "repo": "~/dev/private-app",
+    "intent": "how does a member subscribe and gain paid access through Stripe checkout"
+  },
+  {
+    "label": "private-app-missions",
+    "repo": "~/dev/private-app",
+    "intent": "how are weekly missions generated and assigned to each member"
+  }
+]
