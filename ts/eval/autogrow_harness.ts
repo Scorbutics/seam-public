@@ -16,6 +16,7 @@
 // an opaque id repeats.
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -25,7 +26,12 @@ const CASES = join(__dir, "autogrow-cases.json");
 const RUNS_DIR = join(__dir, "_autogrow_runs");
 const BUN = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "bun";
 
-type Case = { label: string; repo: string; intent: string; anchorFile?: string; symbol?: string };
+// expectedAnchor / expectedCulmination are HUMAN-LABELED ground truth (a substring of the anchor symbol /
+// the culmination's symbol@file). When present, the harness scores per-step ACCURACY (not just stability)
+// and gates: a SELECTING step must clear ≥0.8 (ideally ≥0.9); the deterministic grow must be 100% (an
+// identical footprint across runs). Absent → stability only.
+type Case = { label: string; repo: string; intent: string; anchorFile?: string; symbol?: string;
+  expectedAnchor?: string; expectedCulmination?: string };
 const expandHome = (p: string) => p.startsWith("~") ? join(process.env.HOME ?? "", p.slice(1)) : p;
 const mean = (a: number[]): number => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 const round = (x: number, n = 3): number => Math.round(x * 10 ** n) / 10 ** n;
@@ -42,11 +48,14 @@ function loadCases(only?: string): Case[] {
 // agree even when the engine numbered the seams differently.
 const seamIdentity = (s: any): string => s?.primary ? `${s.primary.symbol}@${s.primary.file}` : (s?.label ?? "?");
 
-type Projection = { spine: string[]; culmination: string | null; tiers: Map<string, string>; nSeams: number };
+type Projection = { spine: string[]; culmination: string | null; tiers: Map<string, string>; nSeams: number;
+  anchor: string; footprint: string };
 function project(model: any): Projection {
   const cl = (model.clusters ?? [])[0] ?? { seams: [] };
   const seams: any[] = cl.seams ?? [];
   const byId = new Map(seams.map((s) => [s.id, s]));
+  const lbl = new Map<string, string>();
+  for (const sm of seams) for (const h of (sm.hunks ?? [])) lbl.set(h.id, h.label);
   const spine = (cl.spine ?? []).map((id: string) => seamIdentity(byId.get(id))).filter((x: string) => x !== "?");
   // culmination identity: prefer the ranked top, else the selectedSeam pointer.
   const topRanked = (cl.culminationRanked ?? []).filter((r: any) => r.score > 0)[0];
@@ -54,8 +63,36 @@ function project(model: any): Projection {
   const culmination = culmId ? seamIdentity(byId.get(culmId)) : null;
   const tiers = new Map<string, string>();
   for (const s of seams) tiers.set(seamIdentity(s), s.tier ?? "supporting");
-  return { spine, culmination: culmination === "?" ? null : culmination, tiers, nSeams: seams.length };
+  // anchor SYMBOL (the entrypoint/anchor pick) + a hash of the GROWN footprint (the deterministic grow —
+  // must be identical run-to-run for the same anchor).
+  const anchor = lbl.get(model.anchor) ?? model.anchor ?? "?";
+  const footprint = createHash("md5").update((model.edges ?? []).map((e: any) => `${e.from}>${e.to}:${e.kind}`).sort().join("|")).digest("hex").slice(0, 12);
+  return { spine, culmination: culmination === "?" ? null : culmination, tiers, nSeams: seams.length, anchor, footprint };
 }
+
+// per-step ACCURACY vs human ground truth, + the determinism check. Substring match (the expected label is
+// contained in the run's anchor symbol / culmination identity) so a short label like "scoring-cycle/
+// repositories.ts" matches "save@…/scoring-cycle/repositories.ts".
+function accuracy(projs: Projection[], c: Case): any | null {
+  if (!c.expectedAnchor && !c.expectedCulmination) return null;
+  const has = (hay: string | null, needle?: string) => !!needle && !!hay && hay.toLowerCase().includes(needle.toLowerCase());
+  const frac = (xs: boolean[]) => xs.length ? round(xs.filter(Boolean).length / xs.length) : 0;
+  // determinism: per distinct anchor, every run that picked it must grow the SAME footprint.
+  const byAnchor = new Map<string, Set<string>>();
+  for (const p of projs) (byAnchor.get(p.anchor) ?? byAnchor.set(p.anchor, new Set()).get(p.anchor)!).add(p.footprint);
+  const footprint_stable = [...byAnchor.values()].every((s) => s.size === 1);
+  return {
+    anchor_accuracy: c.expectedAnchor ? frac(projs.map((p) => has(p.anchor, c.expectedAnchor))) : null,
+    culmination_accuracy: c.expectedCulmination ? frac(projs.map((p) => has(p.culmination, c.expectedCulmination))) : null,
+    footprint_stable,                                  // the deterministic grow must be 100%
+    anchors_seen: [...byAnchor.keys()],
+  };
+}
+
+// 0.8 = the floor (FAIL below), 0.9 = the target. A SELECTING step is graded against these; the
+// deterministic footprint is pass/fail at 100%.
+const ACC_FLOOR = 0.8, ACC_TARGET = 0.9;
+const grade = (x: number | null): string => x === null ? "—" : x < ACC_FLOOR ? "❌FAIL" : x < ACC_TARGET ? "⚠ WARN" : "✅PASS";
 
 // --- agreement metrics across N projections -----------------------------------------------------
 const jaccard = (a: Set<string>, b: Set<string>): number => {
@@ -136,11 +173,30 @@ function score(a: any): number {
   for (const c of loadCases(a.case)) {
     const projs = loadRuns(label, c.label);
     if (projs.length < 2) { process.stdout.write(`[warn] ${c.label}: <2 runs (run 'generate' first)\n`); continue; }
-    report.cases[c.label] = stability(projs);
+    const entry: any = stability(projs);
+    const acc = accuracy(projs, c);
+    if (acc) entry.accuracy = acc;
+    report.cases[c.label] = entry;
   }
   printReport(report);
   if (a.save) { writeFileSync(a.save, JSON.stringify(report, null, 2)); process.stdout.write(`\nsaved -> ${a.save}\n`); }
-  if (a.baseline) return gate(report, JSON.parse(readFileSync(a.baseline, "utf-8")), a.tol ?? 0.1);
+  // per-step ACCURACY gate (when any case carries ground truth): a SELECTING step below the floor, or a
+  // non-deterministic footprint, FAILS — this is the 80%/100% bar as a CI gate.
+  const accCode = accuracyGate(report);
+  const baseCode = a.baseline ? gate(report, JSON.parse(readFileSync(a.baseline, "utf-8")), a.tol ?? 0.1) : 0;
+  return accCode || baseCode;
+}
+
+function accuracyGate(report: any): number {
+  const fails: string[] = [];
+  for (const [name, e] of Object.entries<any>(report.cases)) {
+    const acc = e.accuracy; if (!acc) continue;
+    if (acc.anchor_accuracy !== null && acc.anchor_accuracy < ACC_FLOOR) fails.push(`${name}: anchor accuracy ${pct(acc.anchor_accuracy)} < ${pct(ACC_FLOOR)}  (saw: ${acc.anchors_seen.join(", ")})`);
+    if (acc.culmination_accuracy !== null && acc.culmination_accuracy < ACC_FLOOR) fails.push(`${name}: culmination accuracy ${pct(acc.culmination_accuracy)} < ${pct(ACC_FLOOR)}`);
+    if (!acc.footprint_stable) fails.push(`${name}: deterministic grow NOT 100% — same anchor grew different footprints`);
+  }
+  if (fails.length) { process.stdout.write(`\n❌ ACCURACY GATE FAILED:\n${fails.map((r) => `   - ${r}`).join("\n")}\n`); return 1; }
+  if (Object.values<any>(report.cases).some((e) => e.accuracy)) process.stdout.write(`\n✅ accuracy gate: every SELECT step ≥ ${pct(ACC_FLOOR)}, deterministic grow = 100%\n`);
   return 0;
 }
 
@@ -154,6 +210,13 @@ function printReport(report: any): void {
     process.stdout.write(`  tier agreement      ${pct(s.tier_agreement)}  (shared symbols tiered alike)\n`);
     process.stdout.write(`  spine length        min=${s.spine_len.min} max=${s.spine_len.max} mean=${s.spine_len.mean}\n`);
     process.stdout.write(`  seams               min=${s.seams.min} max=${s.seams.max} mean=${s.seams.mean}\n`);
+    if (s.accuracy) {
+      const ac = s.accuracy;
+      process.stdout.write(`  — accuracy vs ground truth (bar: ${pct(ACC_FLOOR)} floor / ${pct(ACC_TARGET)} target) —\n`);
+      if (ac.anchor_accuracy !== null) process.stdout.write(`  anchor (SELECT)     ${pct(ac.anchor_accuracy)}  ${grade(ac.anchor_accuracy)}\n`);
+      if (ac.culmination_accuracy !== null) process.stdout.write(`  culmination (SELECT) ${pct(ac.culmination_accuracy)}  ${grade(ac.culmination_accuracy)}\n`);
+      process.stdout.write(`  grow (DETERMINISTIC) ${ac.footprint_stable ? "100%  ✅PASS" : "<100% ❌FAIL"}  (same anchor → same footprint)\n`);
+    }
   }
 }
 

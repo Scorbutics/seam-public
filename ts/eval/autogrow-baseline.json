@@ -16,6 +16,14 @@
         "min": 75,
         "max": 75,
         "mean": 75
+      },
+      "accuracy": {
+        "anchor_accuracy": 1,
+        "culmination_accuracy": 1,
+        "footprint_stable": true,
+        "anchors_seen": [
+          "generate-member-missions"
+        ]
       }
     }
   }

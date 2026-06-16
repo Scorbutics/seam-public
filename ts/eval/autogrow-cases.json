@@ -7,6 +7,8 @@
   {
     "label": "private-app-missions",
     "repo": "~/dev/private-app",
-    "intent": "how are weekly missions generated and assigned to each member"
+    "intent": "how are weekly missions generated and assigned to each member",
+    "expectedAnchor": "generate-member-missions",
+    "expectedCulmination": "save@backend/supabase/functions/scoring-cycle/repositories.ts"
   }
 ]
