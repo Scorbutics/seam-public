@@ -41,7 +41,10 @@ async function bundle(entry, outfile) {
     target: "node18",
     format: "cjs",
     // web-tree-sitter resolves its own core wasm relative to its package; keep it on disk, unbundled.
-    external: ["web-tree-sitter"],
+    // @xenova/transformers (embedding anchor recall, opt-in) is external so the default .vsix doesn't
+    // carry its ~23 MB + model loader; when absent at runtime the engine's import throws and
+    // embed_anchor_candidates catches it → falls back to the lexical floor (graceful, off by default).
+    external: ["web-tree-sitter", "@xenova/transformers"],
     plugins: [tsImports],
     logLevel: "info",
     legalComments: "none",

@@ -150,6 +150,7 @@ function generate(a: any): number {
         "--classifier", "hybrid", "--model", a.model, "--emit-seams", dest];
       if (c.anchorFile && c.symbol) args.push("--anchor-file", c.anchorFile, "--symbol", c.symbol);
       if (a.promoteSpinePath) args.push("--promote-spine-path");
+      if (a.anchorRecall) args.push("--anchor-recall", a.anchorRecall);
       process.stdout.write(`[run]  ${c.label} ${i}/${runs} …\n`);
       const proc = spawnSync(BUN, args, { encoding: "utf-8", timeout: 600_000 });
       if (proc.status !== 0) { process.stderr.write(`  failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 400)}\n`); return 1; }
@@ -246,6 +247,7 @@ function parse(argv: string[]): any {
       case "--label": a.label = next(); break;
       case "--case": a.case = next(); break;
       case "--promote-spine-path": a.promoteSpinePath = true; break;
+      case "--anchor-recall": a.anchorRecall = next(); break;
       case "--force": a.force = true; break;
       case "--save": a.save = next(); break;
       case "--baseline": a.baseline = next(); break;

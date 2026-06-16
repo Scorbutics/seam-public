@@ -85,8 +85,16 @@ stem with the wording), and A/B `--anchor-recall embed` vs `lexical`:
   carry the **enclosing class + signature + path**, not the bare name — that moved `save` from #5 (0.215,
   below a distractor) to #3 (0.424). So embed `"<kind> <name>(<sig>) in <enclosing> — <path>"`.
 - **P1:** the lazy disk-cached index + def enumeration.
-- **P2:** wire into `select_anchor` behind `--anchor-recall embed` (default `lexical` until the gate
-  passes), add fuzzy harness cases, validate, graduate.
+- **P2 — DONE (2026-06-16).** Wired into `select_anchor` behind `--anchor-recall embed` (default
+  `lexical`); harness `--anchor-recall` passthrough; `@xenova/transformers` esbuild-externalized in
+  `vscode-extension/build.mjs` (bundle stays 370 KB, not +23 MB; absent at runtime → caught → lexical).
+  **Validation (recall of the right region, private-app fuzzy intents):** embed recall is an ADDITIVE union, so
+  the product pool is `lexical ∪ embed` and recall is monotonic. On 2 scorer-behaviour intents whose
+  right anchor (`pairHistoryScorer` in `scorers/`) the name-filter can't reach:
+  `lexical 1/2 · embed 1/2 · UNION 2/2`. On intent 1 ("score how well two members match") embed recalls
+  `pairHistoryScorer.score` at **#1** where lexical misses entirely. The union never regresses recall and
+  strictly improves it on the lexical-miss case. Remaining to graduate to default: a larger fuzzy-case
+  set run through the full accuracy gate (`--anchor-recall embed` vs `lexical`, anchor accuracy ≥80%).
 
 ## 10. Risks / constraints
 
