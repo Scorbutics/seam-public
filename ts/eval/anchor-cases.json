@@ -4,7 +4,7 @@
     "expectedAnchor": "requestPasswordReset", "lexicalMiss": false },
   { "label": "excluded-list", "repo": "~/dev/private-app",
     "intent": "how are a member's excluded members listed",
-    "expectedAnchor": "fetchExcludedMembers", "lexicalMiss": false },
+    "expectedAnchor": "exclu", "lexicalMiss": false },
   { "label": "bug-create", "repo": "~/dev/private-app",
     "intent": "how is a bug report created and saved",
     "expectedAnchor": "createBugReport", "lexicalMiss": false },

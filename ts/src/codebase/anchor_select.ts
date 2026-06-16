@@ -177,8 +177,12 @@ export async function select_anchor(repo: string, intent: string,
     const { embed_anchor_candidates } = await import("./anchor_embed.js");
     const have = new Set(probeList.map((c) => `${c.name}|${c.file}`));
     for (const d of await embed_anchor_candidates(repo, intent, { k: topK })) {
-      const key = `${d.name}|${d.file}`;
-      if (!have.has(key)) { have.add(key); probeList.push({ name: d.name, file: d.file, kind: d.kind, score: 0, terms: ["~embed"] }); }
+      // a METHOD is rarely a standalone anchor — anchor on its enclosing CLASS instead (the lexical recall
+      // only ever yields classes/functions, so this keeps the embed pool to the same anchor granularity).
+      const name = (d.kind === "method" && d.enclosing) ? d.enclosing : d.name;
+      const kind = d.kind === "method" ? "class" : d.kind;
+      const key = `${name}|${d.file}`;
+      if (!have.has(key)) { have.add(key); probeList.push({ name, file: d.file, kind, score: 0, terms: ["~embed"] }); }
     }
   }
   const toProbe = probeList.slice(0, 16);   // bound the probe budget when the pool is unioned
