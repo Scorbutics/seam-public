@@ -96,6 +96,11 @@
           "id": "PaymentService.charge",
           "label": "process charges",
           "linkOnly": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 0,
+            "symbol": "PaymentService"
+          },
           "proposedBy": "llm",
           "selected": false,
           "suggested": false,
@@ -165,6 +170,11 @@
           "id": "PaymentService.refund",
           "label": "handle refunds",
           "linkOnly": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 0,
+            "symbol": "PaymentService"
+          },
           "proposedBy": "llm",
           "selected": false,
           "suggested": false,

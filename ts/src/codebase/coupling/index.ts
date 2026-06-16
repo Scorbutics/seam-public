@@ -15,7 +15,7 @@ import type { Access, ProposedKey } from "./types.js";
 import { kindOf, scan_file_keys } from "./adapters/index.js";
 
 export type { KeyHit, KeyKind, Access, ProposedKey } from "./types.js";
-export { ADAPTERS, KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, scan_file_keys } from "./adapters/index.js";
+export { ADAPTERS, KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS, scan_file_keys } from "./adapters/index.js";
 
 const READER_CAP = 6;                          // materialise at most this many complement nodes per key
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };

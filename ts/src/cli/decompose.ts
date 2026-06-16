@@ -30,7 +30,7 @@ interface Args {
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
-  emitGraph?: string; intent?: string;
+  emitGraph?: string; intent?: string; fromSeams?: string;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
@@ -80,6 +80,7 @@ function parseArgs(argv: string[]): Args {
       case "--depth": a.depth = parseInt(next() ?? "1", 10); break;
       case "--emit-graph": a.emitGraph = next(); break;
       case "--intent": a.intent = next(); break;
+      case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -265,6 +266,13 @@ async function main(argv: string[]): Promise<number> {
   // in-the-loop auto-orchestration moves — is served on demand by a host (the MCP server's sampling).
   // Covers BOTH modes, so it must be set before dispatch and before any mode's own host-bus handling.
   if (a.llmBridge) set_host_bus(new InteractiveHostBus(a.llmBridge));
+  // --from-seams: render an already-emitted seams.json — a pure projection (no engine, no LLM). The
+  // `llm-context` format is a token-economical, no-collapse, confidence-ranked view for a downstream agent.
+  if (a.fromSeams) {
+    const m = JSON.parse(readFileSync(a.fromSeams, "utf-8"));
+    if (a.format === "llm-context") { const { renderLlmContext } = await import("../codebase/llm_context.js"); process.stdout.write(renderLlmContext(m) + "\n"); return 0; }
+    err("--from-seams currently supports --format llm-context");
+  }
   if (a.scan || a.graph || a.expandGraph) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph
   reset_usage();
   let hunks: Hunk[];

@@ -110,6 +110,11 @@
           "id": "PaymentService.charge",
           "label": "charge",
           "linkOnly": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 0,
+            "symbol": "PaymentService"
+          },
           "proposedBy": "floor",
           "selected": false,
           "suggested": false,

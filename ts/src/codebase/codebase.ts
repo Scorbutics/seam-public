@@ -69,14 +69,19 @@ function _area(path: string): string {
   }
   return parts.slice(0, -1).join("/") || path;
 }
+const _FAN_CAP = 8;   // a seam with more than this many inline call-sites is a guard/policy fan → cap + summarize
 
 interface Seam { id: string; label: string; linkOnly: boolean; node_ids: string[]; proposedBy: string;
-  selected?: boolean; suggested?: boolean; tier?: "spine" | "supporting" | "off"; }
+  selected?: boolean; suggested?: boolean; tier?: "spine" | "supporting" | "off";
+  // Intent pass only: a culmination confidence (0..1, model verdict blended with structural facts) plus the
+  // facts that grounded it — retained for the LLM-context projection (which surfaces a RANKED climax, not a
+  // single boolean ★). Absent on non-intent footprints, so the *_seams oracles stay byte-identical.
+  culmination?: number; writes?: string[]; dir?: "forward" | "backward"; }
 function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boolean, proposedBy = "floor"): Seam {
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
-import { KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS } from "./coupling/index.js";
+import { KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS } from "./coupling/index.js";
 // Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
 // plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
 // newly-registered key kind becomes a crossing automatically.
@@ -302,29 +307,57 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     for (const nb of adj.get(n.id) ?? []) set.add(nb);
   }
   const tablesFor = (s: Seam): string[] => [...subjectNodes].filter(([, nodes]) => s.node_ids.some((i) => nodes.has(i))).map(([t]) => t);
+  // CULMINATION-GROUNDING FACTS (the priors that fix the "synthetic-referee endpoint crowned the climax"
+  // case): a flow CULMINATES where it WRITES its subject (a created/updated record), not at an endpoint
+  // that merely reads it. `writesBy` = node → subject tables it PRODUCES (src of a produce-edge into a
+  // db-table node); the produce-edge kinds come from the adapter registry (KEY_PRODUCE_EDGE_KINDS), never a
+  // hardcoded list. `dirFor` = the seam's grow DIRECTION: backward (a DEPENDENCY / downstream sink — where a
+  // generation flow ends) vs forward (a CONSUMER / upstream caller — an entry/admin tool that calls IN).
+  const writesBy = new Map<string, Set<string>>();
+  for (const e of g.resolved_edges()) {
+    if (!KEY_PRODUCE_EDGE_KINDS.has(e.kind)) continue;
+    const dst = g.nodes.get(e.dst);
+    if (!dst || !DOMAIN_SUBJECT_KINDS.has(dst.kind) || !dst.label) continue;
+    (writesBy.get(e.src) ?? writesBy.set(e.src, new Set()).get(e.src)!).add(dst.label);
+  }
+  const writesFor = (s: Seam): string[] => [...new Set(s.node_ids.flatMap((i) => [...(writesBy.get(i) ?? [])]))];
+  const dirFor = (s: Seam): "forward" | "backward" | undefined => {
+    let f = 0, b = 0;
+    for (const i of s.node_ids) { if (i === g.anchor) continue; const d = g.nodes.get(i)?.direction; if (d === "forward") f++; else if (d === "backward") b++; }
+    return f === 0 && b === 0 ? undefined : (b >= f ? "backward" : "forward");
+  };
   const hintFor = (s: Seam): string => {
     const tables = tablesFor(s);
     const tag = tables.length ? `; tables: ${tables.join(", ")}` : "";
-    if (s.node_ids.includes(g.anchor)) return `anchor (start of the flow)${tag}`;
+    const writes = writesFor(s);
+    const wtag = writes.length ? `; WRITES ${writes.join(", ")}` : "";
+    const dir = dirFor(s);
+    const dtag = dir === "backward" ? "; downstream" : dir === "forward" ? "; upstream entry" : "";
+    const extra = `${tag}${wtag}${dtag}`;
+    if (s.node_ids.includes(g.anchor)) return `anchor (start of the flow)${extra}`;
     const d = Math.min(99, ...s.node_ids.map((i) => dist.get(i) ?? 99));
     const endpoint = s.node_ids.some((i) => i !== g.anchor && (indeg.get(i) ?? 0) === 0);
-    return `${endpoint ? "ENDPOINT" : "intermediate"}${d < 99 ? `, ${d} hop${d !== 1 ? "s" : ""} from anchor` : ""}${tag}`;
+    return `${endpoint ? "ENDPOINT" : "intermediate"}${d < 99 ? `, ${d} hop${d !== 1 ? "s" : ""} from anchor` : ""}${extra}`;
   };
   const lines = [`A developer is mapping the code that answers: "${intent}".`, "",
     "Here are candidate SEAMS — each a group of related code reached while mapping that question. Each is",
     "tagged [ … ] with deterministic facts: its position in the flow (ANCHOR = the start; ENDPOINT = where",
-    "the flow surfaces, a screen / entry point; intermediate = plumbing between), its hop-distance, and the",
-    "db `tables:` it touches. The main path runs anchor → … → the ENDPOINT that answers the question.",
+    "the flow surfaces, a screen / entry point; intermediate = plumbing between), its hop-distance, the",
+    "db `tables:` it touches, whether it `WRITES` a subject (produces a record), and its grow direction",
+    "(`downstream` = a dependency the flow ends at; `upstream entry` = a consumer/caller that invokes it).",
+    "The main path runs anchor → … → the step where the flow's OUTCOME is produced.",
     "For EACH seam decide three things:",
     " - label: 3-6 words naming what this seam DOES (its technical intent — NOT a file or symbol name)",
     " - tier: \"spine\" if it is ON THE MAIN PATH that answers the question — the core flow from the entry",
     "   point through processing to the output/screen the question is about; \"supporting\" if it is needed",
     "   or related but NOT the main flow (auth/session, config, a helper, a secondary lookup); \"off\" if it",
     "   is connected but a DIFFERENT concern — a sibling entity's CRUD or a side-effect, logging, a utility",
-    " - answers: true for the SINGLE seam where the main path CULMINATES — the outcome the question is",
-    "   about: a screen the user sees, a record written, a job/message dispatched, OR the final processing",
-    "   step. A backend flow (webhook, cron, queue worker) still culminates — pick its last step. false for",
-    "   the rest (at most one true)",
+    " - culmination: a number 0..1 — how strongly THIS seam is where the flow's main path CULMINATES (its",
+    "   OUTCOME): a record WRITTEN to the subject, a job/message dispatched, the final downstream step, or",
+    "   the screen that surfaces the result. Give the single best culmination ~1.0, near-misses lower, the",
+    "   rest 0. GROUND it on the facts: a seam tagged `WRITES <subject>` or `downstream` is a strong",
+    "   culmination; an `ENDPOINT` that is an `upstream entry` (a consumer / admin / test tool that merely",
+    "   CALLS INTO the flow) is NOT the culmination even if it touches the subject table — score it ~0.",
     "",
     "Keep the spine to ONE domain: a seam whose `tables:` are a DIFFERENT entity than the main flow's is",
     "doing another domain's work (a side-effect) — make it \"supporting\" even if it ALSO touches the main",
@@ -337,15 +370,22 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   }
   lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",
     "Output ONLY a JSON array, one object per seam:",
-    '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting|off","answers":true|false}]');
+    '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting|off","culmination":0..1}]');
 
   let out: Map<string, any>;
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-intent" }); }
   catch (e) { if (e instanceof LLMError) return; throw e; }
 
-  // Relabel + tier each seam; pick the single best "answers" seam (highest-complexity rep breaks ties).
+  // Relabel + tier each seam; rank the CULMINATION (the model's verdict, grounded on the WRITES/downstream
+  // facts we fed it) and pick the strongest as the answer. `culmination` is a 0..1 confidence; we also
+  // accept the legacy boolean `answers` (true→1) so older callers/mocks keep working. The per-seam score +
+  // the grounding facts (writes/dir) are RETAINED on the seam for the LLM-context projection's ranked climax
+  // — the fragile single-★ pick stays the model's call, we just stop throwing the ranking away.
   const tierMap = new Map<string, "spine" | "supporting" | "off">();
-  let answer: { id: string; cx: number } | null = null;
+  let answer: { id: string; score: number; cx: number } | null = null;
+  const num = (v: any): number => typeof v === "number" ? v
+    : [true, "true", "True", 1].includes(v) ? 1
+    : (typeof v === "string" && v.trim() !== "" && !isNaN(+v)) ? +v : 0;
   for (const s of ranked) {
     const o = out.get(s.id);
     if (!o || typeof o !== "object") continue;
@@ -353,9 +393,12 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     if (lab) s.label = lab;
     const t = String(o.tier ?? "").trim().toLowerCase();
     tierMap.set(s.id, t === "spine" ? "spine" : t === "off" ? "off" : "supporting");
-    if ([true, "true", "True", 1].includes(o.answers)) {
+    const c = Math.max(0, Math.min(1, num(o.culmination ?? o.answers)));
+    const writes = writesFor(s), dir = dirFor(s);
+    s.culmination = c; if (writes.length) s.writes = writes; if (dir) s.dir = dir;
+    if (c > 0) {
       const cx = rep(s)?.complexity ?? 1;
-      if (!answer || cx > answer.cx) answer = { id: s.id, cx };
+      if (!answer || c > answer.score || (c === answer.score && cx > answer.cx)) answer = { id: s.id, score: c, cx };
     }
   }
   // The anchor's OWN seam and the answer seam are, by definition, the two ends of the main path.
@@ -369,7 +412,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   if (!answer) {
     const order = _spine_order(g, ranked);
     const farId = order[order.length - 1];
-    if (farId && farId !== anchorSeamId) answer = { id: farId, cx: 0 };
+    if (farId && farId !== anchorSeamId) answer = { id: farId, score: 0, cx: 0 };
   }
   // Dim OFF-intent seams (keep visible) — but never dim a node that ALSO lives in a non-off seam.
   const keep = new Set<string>();
@@ -384,16 +427,21 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
 // Order the spine (main-path) seams as a TRACE from the anchor outward: BFS distance over the seam
 // adjacency (two seams are adjacent when a resolved edge crosses between them), then by original order.
 // Seams with no LLM tier (no intent pass) stay untiered → no spine → caller leaves the order untouched.
-function _spine_order(g: Graph, seams: Seam[]): string[] {
+function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
   const nodeSeam = new Map<string, string>();
   for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
   const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
   for (const e of g.resolved_edges()) {
     if (e.kind === "contains") continue;
     const a = nodeSeam.get(e.src), b = nodeSeam.get(e.dst);
     if (!a || !b || a === b) continue;
-    (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
-    (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a);
+    // DIRECTED along the flow when a lead is known (auto-grown / bidirectional footprints), so the spine
+    // reads in execution-ish order from the anchor: backward (deps / downstream) follows edges src→dst;
+    // forward (consumers / upstream) follows them in reverse. Undirected fallback otherwise (oracle parity).
+    if (lead === "backward") link(a, b);
+    else if (lead === "forward") link(b, a);
+    else { link(a, b); link(b, a); }
   }
   const dist = new Map<string, number>();
   const anchorSeam = nodeSeam.get(g.anchor) ?? seams.find((s) => s.tier === "spine")?.id;
@@ -697,6 +745,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     const hunks: any[] = ids.map((i) => _seam_hunk(g.nodes.get(i)!, g.nodes.get(i)!.role === "core" ? "RESOLVED_FULL" : provOf(i, idset)));
     const callerDst = new Map<any, string>(); // a caller hunk wires the seam member it calls (edge dst)
     const seenC = new Set<string>();
+    const callerHunks: any[] = [];
     for (const e of g.resolved_edges()) {
       if (e.kind === "contains" || !idset.has(e.dst) || idset.has(e.src)) continue;
       const c = g.nodes.get(e.src);
@@ -706,9 +755,21 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
       const ch = { id: `call:${e.src}:${e.dst}`, file: c.file, start: cl, end: cl, role: "link",
         confidence: 0.9, label: c.label, caller: true, provenance: e.provenance, relevant: c.relevant,
         external: [], externalRefs: [], rewire: null };
-      hunks.push(ch);
+      callerHunks.push(ch);
       callerDst.set(ch, e.dst);
     }
+    // CAP a wide caller fan: a policy guard called from N sites would pile N inline caller hunks into one
+    // unreviewable seam — but those callers are already their own seams (terminal-promoted) and in
+    // `seamContracts`. Keep a few (file/line order) + a "+N more call sites" summary. Structural, agnostic.
+    if (callerHunks.length > _FAN_CAP) {
+      callerHunks.sort(fileLine);
+      for (const ch of callerHunks.slice(_FAN_CAP)) callerDst.delete(ch);
+      const more = callerHunks.length - _FAN_CAP;
+      callerHunks.splice(_FAN_CAP, more, { id: `call:more:${s.id}`, file: "", start: 0, end: 0, role: "link",
+        confidence: 0.9, label: `+${more} more call site(s)`, caller: true, summary: true,
+        provenance: "RESOLVED_FULL", relevant: true, external: [], externalRefs: [], rewire: null });
+    }
+    for (const ch of callerHunks) hunks.push(ch);
     // Core-grouped ordering (replaces the flat file/line sort): each core, then the members that wire
     // it, so a link sits next to what it links. Wiring is the REAL resolved graph here — a member
     // connected (either direction) to a core in this seam, and a caller to the core it calls. A
@@ -745,15 +806,25 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     for (const t of trailing.sort(fileLine)) ordered.push(t);
     const warns: string[] = [];
     for (const i of ids) for (const w of [...(seamWarnings.get(i) ?? []), ...(nodeWarnings.get(i) ?? [])]) if (!warns.includes(w)) warns.push(w);
+    // The seam's REPRESENTATIVE (a trustworthy "this is where it lives" pointer): the anchor if this seam
+    // holds it, else the highest-complexity CORE (the defining symbol), else the heaviest node — NOT the
+    // file/line-first hunk, which is often a neighbour the seam merely wires. Consumers point here.
+    const byCx = (a: string, b: string) => (g.nodes.get(b)!.complexity ?? 0) - (g.nodes.get(a)!.complexity ?? 0);
+    const pid = ids.includes(g.anchor) ? g.anchor
+      : ([...ids].filter((i) => g.nodes.get(i)!.role === "core").sort(byCx)[0] ?? [...ids].sort(byCx)[0]);
+    const pn = pid ? g.nodes.get(pid) : undefined;
     outSeams.push({ id: s.id, label: s.label, linkOnly: s.linkOnly, uncertain: false, warnings: warns,
       hunks: ordered, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false,
-      tier: s.tier });
+      tier: s.tier, ...(pn ? { primary: { file: pn.file, line: pn.start, symbol: pn.label } } : {}),
+      // Intent pass only (additive + conditional → non-intent *_seams oracles stay byte-identical).
+      ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
+      ...(s.writes && s.writes.length ? { writes: s.writes } : {}), ...(s.dir ? { dir: s.dir } : {}) });
   }
 
   // INTENT MAP: tier each seam and order them as a trace — the spine (main path, anchor→…→display) first,
   // then supporting, then off-intent side-effects last. Untiered (no intent pass) → all rank equal → the
   // original order is preserved (no regression). The spine is BFS-ordered so the path reads top-to-bottom.
-  const spine = _spine_order(g, seams);
+  const spine = _spine_order(g, seams, opts.lead);
   const spineRank = new Map(spine.map((id, i) => [id, i]));
   const tierRank = (t?: string) => (t === "spine" ? 0 : t === "off" ? 2 : 1);
   const origIdx = new Map(outSeams.map((s, i) => [s.id, i]));
@@ -763,7 +834,16 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     (origIdx.get(a.id)! - origIdx.get(b.id)!));
 
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";
-  const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams, ...(spine.length ? { spine } : {}) }];
+  // CULMINATION RANKING (intent pass only): the climax as a RANKED list with confidence + the structural
+  // facts that grounded it — what an LLM consumer reads instead of the fragile single `selectedSeam` ★.
+  // Conditional, so non-intent footprints (the oracle fixtures) omit it and stay byte-identical.
+  const culminationRanked = outSeams
+    .filter((s) => typeof s.culmination === "number")
+    .map((s) => ({ id: s.id, label: s.label, score: s.culmination as number, tier: s.tier,
+      writes: s.writes ?? [], dir: s.dir ?? null }))
+    .sort((a, b) => b.score - a.score);
+  const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams,
+    ...(spine.length ? { spine } : {}), ...(culminationRanked.length ? { culminationRanked } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
   // policy-vs-flow `shape` + the `lead` slice — only on a BIDIRECTIONAL footprint (decompose passes them);
   // single-direction footprints (the oracle fixtures) emit neither, so byte-identical parity is preserved.

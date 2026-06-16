@@ -26,6 +26,11 @@ export const KEY_NODE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => k.nodeKi
 // as opposed to TRANSPORT (routes) or generic resources. Subject-continuity keys on the domain ENTITY, so
 // a payment seam touching its own `/api/payments` route isn't mistaken for a fork into another domain.
 export const DOMAIN_SUBJECT_KINDS = new Set(ADAPTERS.filter((a) => a.kind === DB_TABLE_META.kind).map((a) => a.nodeKind));
+// The WRITE (produce) edge kinds — a node that is the SRC of one of these PRODUCES the key/subject (a db
+// write, a created record, a dispatched message), as opposed to merely reading it. Sourced from the
+// registry (each adapter declares its `produceEdge`) so a new adapter's write kind auto-counts. The
+// intent pass uses this to ground the culmination: a flow CULMINATES where it writes its subject.
+export const KEY_PRODUCE_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => k.produceEdge));
 
 // Every adapter's key accesses in one file (the deterministic floor scan).
 export function scan_file_keys(file: string, text: string): KeyHit[] {

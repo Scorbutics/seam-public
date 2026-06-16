@@ -144,7 +144,12 @@
           ],
           "proposedBy": "floor",
           "selected": false,
-          "suggested": false
+          "suggested": false,
+          "primary": {
+            "file": "src/Widget.tsx",
+            "line": 0,
+            "symbol": "Widget"
+          }
         }
       ]
     }

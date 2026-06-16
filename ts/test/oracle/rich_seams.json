@@ -114,7 +114,12 @@
           ],
           "proposedBy": "floor",
           "selected": false,
-          "suggested": false
+          "suggested": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 10,
+            "symbol": "PaymentService"
+          }
         },
         {
           "id": "sug-processGateway",
@@ -155,7 +160,12 @@
           ],
           "proposedBy": "crossing",
           "selected": false,
-          "suggested": true
+          "suggested": true,
+          "primary": {
+            "file": "src/gateway/stripe.ts",
+            "line": 5,
+            "symbol": "processGateway"
+          }
         }
       ]
     }
