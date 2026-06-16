@@ -1,6 +1,6 @@
 # Plan — Intent culmination + domain-key fidelity (codebase auto-grow)
 
-Status: Step 1 PROTOTYPED + validated (2026-06-16); Step 2 still proposed. Scope: the `seam-intent` pass only
+Status: Step 1 + Step 2 + off-collapse relocation all PROTOTYPED + validated (2026-06-16). Scope: the `seam-intent` pass only
 (`label_focus_relevance_llm`, `ts/src/codebase/codebase.ts:274`). Grow is **out of scope** — it
 stays `auto:det`, FULL resolution, honest blindspots; the dogfood confirmed grow is the durable win.
 
@@ -136,9 +136,52 @@ blindspots with SUGGESTED candidates, a "how to use" note.
    a no-op on the oracles (non-intent → 0 off seams), but it changes the model the extension consumes →
    scope it deliberately.
 
+## 6c. Off-collapse relocation + Step 2 (2026-06-16 — both DONE)
+
+**Off-collapse relocated (gap #3).** `collapse_off_seams` is no longer applied in `decompose()`; the engine
+emits the model UNCOLLAPSED and the function is now an `export`ed CLIENT helper (the VS Code extension
+already groups seams under a collapsible `off` tier node — extension.ts:1764 — so it needs no change and
+arguably improves: individual off-seam labels are now visible). Validated on a fresh private-app intent-B emit:
+NEW engine → 76 seams, **no `off-more`/"dimmed concerns" seam**, 29 individual off seams; the projection
+shows **0** "+N more" roll-ups. OLD engine → 30 seams with the collapse stub. Oracles byte-identical
+(non-intent → 0 off → was already a no-op). The LLM projection now gets full recall.
+
+**Step 2 SHIPPED behind `--promote-spine-path` (default off → oracles/tests unchanged).** A structural,
+PROMOTE-ONLY post-pass (`_promote_spine_path`): after tiering, BFS the shortest seam-path between the two
+confirmed spine endpoints (anchor seam → culmination seam) over undirected seam adjacency, and promote any
+SUPPORTING seam on it to `spine`. Pure topology (path membership), never demotes the model's calls, never
+pulls in off-branch noise → **payments-safe by construction** (a `members` side-write hangs off the path →
+stays supporting) while it rescues a buried compute table (`pair_weights` on a `weekly_tasks` flow → on-path
+→ spine). Unit test (`codebase.test.ts` "Step 2: promote on-path…") proves BOTH directions: on-path
+`weekly_tasks` write promoted, off-path `members` side-write untouched. 212 pass / 0 fail, typecheck clean.
+
 ## 7. Hand-off to the LLM-context projection (DONE — see §6b)
 
 Step 1's **ranked culmination + retained confidence** is the schema the `--format llm-context`
 projection consumes: no lossy collapsing, confidence instead of a boolean ★, token-economical
 paths+roles+tables+blindspot-candidates. Same canonical `seams.json`, thin serializer — no forked
 semantics (see `multi-client-not-server-oriented.md`).
+
+## 8. Regression & stability coverage (2026-06-16)
+
+**Pinned golds (deterministic, mocked-LLM)** in `ts/test/codebase.test.ts` guard the wins:
+- *"pinned gold: Step-1 culmination grounding"* — the synthetic-referee scenario: a flow whose subject
+  WRITER (`persistTask` → `weekly_tasks`) competes with an admin ENDPOINT (`submitFakeReferees`) that
+  READS the subject but WRITES only foreign tables. Asserts (1) the prior is fed (writer row tags
+  `WRITES weekly_tasks`; endpoint tags `WRITES members/subscriptions` but NOT the subject) and (2)
+  end-to-end the writer is `selectedSeam` + `culminationRanked[0]`, the endpoint is never spine/answer.
+- *"Step 2: promote on-path…"* — on-path compute promoted, off-path `members` side-write stays
+  supporting (payments-safe). 214 tests pass.
+
+**Auto-grow STABILITY harness** `ts/eval/autogrow_harness.ts` (gold-free; `generate` N live runs →
+`score` run-to-run agreement, keyed on `primary.symbol@file` not seam id). Sonnet vs haiku on
+private-app-missions (3 runs each) shows the intent-B climax fragility is **model-tier-dependent**:
+
+| metric | haiku | sonnet |
+|---|---|---|
+| spine agreement (Jaccard) | 51% | 69% |
+| culmination agreement | 67% (modal = the ANCHOR, wrong) | **100% (modal = the `weekly_tasks` write, correct)** |
+| tier agreement | 74% | 90% |
+
+→ the Step-1 grounding produces a stable, correct climax on sonnet; haiku wobbles. **The `seam-intent`
+pass wants sonnet, not the pinned `claude-haiku-4-5`.** Baselines: `ts/eval/autogrow-baseline{,-sonnet}.json`.

@@ -276,7 +276,7 @@ export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: 
 // it without dropping it, and (3) votes the single seam that best ANSWERS the question into focus.
 // Supersedes the link-only mark_relevance_llm — one run_pass call, so the generation stays ceiling-safe.
 export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: string,
-    opts: { model?: string; claudeBin?: string | null } = {}): void {
+    opts: { model?: string; claudeBin?: string | null; promoteSpinePath?: boolean } = {}): void {
   // Include SUGGESTED seams — in codebase mode those ARE the grown-consumer + data-coupling crossing
   // seams (reached only via SUGGESTED edges), exactly the ones carrying mechanical labels and the most
   // likely to be off-intent. Excluding them is what left `members`/`GET`/`POST` unnamed and undimmed.
@@ -414,6 +414,13 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     const farId = order[order.length - 1];
     if (farId && farId !== anchorSeamId) answer = { id: farId, score: 0, cx: 0 };
   }
+  // STEP 2 (opt-in): promote SUPPORTING seams that sit structurally ON the path between the two confirmed
+  // spine endpoints (anchor seam → culmination seam) up to `spine`. A seam on the shortest seam-path
+  // between anchor and outcome IS the main path — even if the model, keying on the anchor's single table,
+  // demoted it as "another domain" (the case a COMPUTE table buries: pair_weights on a weekly_tasks flow).
+  if (opts.promoteSpinePath && anchorSeamId && answer && answer.id !== anchorSeamId) {
+    _promote_spine_path(g, ranked, anchorSeamId, answer.id);
+  }
   // Dim OFF-intent seams (keep visible) — but never dim a node that ALSO lives in a non-off seam.
   const keep = new Set<string>();
   for (const s of ranked) if (s.tier !== "off") for (const nid of s.node_ids) keep.add(nid);
@@ -456,12 +463,44 @@ function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "
     .map((s) => s.id);
 }
 
+// STEP 2 — promote the SUPPORTING seams that lie on the shortest seam-path between the two confirmed spine
+// endpoints (anchor → culmination). Pure topology: a seam structurally BETWEEN the two ends of the main
+// path IS the main path. Promote-only (never demotes the model's calls) and path-bounded (an off-concern
+// hanging off the side is not on the anchor→outcome path, so it's never pulled in) → safe for the payments
+// case (a `members` side-write is off-path → stays supporting) while it rescues a buried compute table
+// (pair_weights on a weekly_tasks flow → on-path → spine). Undirected seam adjacency: connectivity between
+// the endpoints is all the path needs.
+function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: string): void {
+  const nodeSeam = new Map<string, string>();
+  for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
+  const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => { (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b); (adj.get(b) ?? adj.set(b, new Set()).get(b)!).add(a); };
+  for (const e of g.resolved_edges()) {
+    if (e.kind === "contains") continue;
+    const a = nodeSeam.get(e.src), b = nodeSeam.get(e.dst);
+    if (a && b && a !== b) link(a, b);
+  }
+  const prev = new Map<string, string>(); const seen = new Set([fromId]); const q = [fromId];
+  while (q.length) { const c = q.shift()!; if (c === toId) break; for (const nb of adj.get(c) ?? []) if (!seen.has(nb)) { seen.add(nb); prev.set(nb, c); q.push(nb); } }
+  if (!seen.has(toId)) return;                          // endpoints disconnected → nothing on a path
+  const byId = new Map(seams.map((s) => [s.id, s]));
+  for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) {
+    const s = byId.get(cur); if (s && s.tier === "supporting") s.tier = "spine";   // promote-only
+  }
+}
+
 // A wide grown footprint correctly DIMS its long tail (the tier pass marks off-intent seams `off`), but
-// emitting dozens of individual `off` seams just clutters the map. Beyond a cap, fold the smallest off
-// seams into ONE "+N more dimmed concerns" summary — keep the largest few for reference. Operates on the
-// tier label only (no language/framework knowledge); the dimming itself already happened upstream.
-const _OFF_CAP = 8;
-function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
+// showing dozens of individual `off` seams clutters a HUMAN map. Beyond a cap, fold the smallest off seams
+// into ONE "+N more dimmed concerns" summary — keep the largest few for reference. Operates on the tier
+// label only (no language/framework knowledge); the dimming itself already happened upstream.
+//
+// PRESENTATION ONLY — a CLIENT helper, NOT applied to the emitted model. Collapsing is a human-rendering
+// concern (multi-client: one canonical model, many thin clients), so the engine emits every off seam and
+// each client decides: the VS Code extension groups them under a collapsible `off` tier node; the
+// llm-context projection lists them ALL (an LLM consumer wants the recall, not a roll-up). A CLI/human
+// renderer that wants the capped view calls this.
+export const _OFF_CAP = 8;
+export function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
   const off = seams.filter((s) => s.tier === "off");
   if (off.length <= cap) return seams;
   const sorted = [...off].sort((a, b) => b.node_ids.length - a.node_ids.length);
@@ -623,7 +662,7 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
 }
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
-  model?: string; claudeBin?: string | null } = {}): Promise<any> {
+  model?: string; claudeBin?: string | null; promoteSpinePath?: boolean } = {}): Promise<any> {
   // Bidirectional footprints carry a policy-vs-flow SHAPE; classify it FIRST (direction-based, stable),
   // because the next step depends on it: anchor the role model at both ends of a FLOW (promote the
   // terminals/screens) — but NOT a POLICY, whose enforcement sites are a collapsed surface, not cores.
@@ -645,10 +684,12 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   seams = _extract_suggested_seams(g, seams);
   // Intent pass over the FINAL seams (grown + data-coupling included): tiers them spine/supporting/off,
   // names them, dims off-intent concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
-  if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin });
+  if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin, promoteSpinePath: opts.promoteSpinePath });
   const health = wellformedness(g);
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
-  return emit_seams(g, health, collapse_off_seams(seams), { shape, lead });
+  // Emit the model UNCOLLAPSED — off-seam collapsing is a human-render concern, applied by each client
+  // (see collapse_off_seams), so an LLM consumer of seams.json gets the full recall, not a "+N more" stub.
+  return emit_seams(g, health, seams, { shape, lead });
 }
 
 // POLICY vs FLOW — the shape of a footprint. A FLOW moves data through a pipeline (it has a data

@@ -30,7 +30,7 @@ interface Args {
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
-  emitGraph?: string; intent?: string; fromSeams?: string;
+  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
@@ -81,6 +81,7 @@ function parseArgs(argv: string[]): Args {
       case "--emit-graph": a.emitGraph = next(); break;
       case "--intent": a.intent = next(); break;
       case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)
+      case "--promote-spine-path": a.promoteSpinePath = true; break;   // Step 2: promote on-path supporting seams to spine
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -192,7 +193,7 @@ async function runCodebase(a: Args): Promise<number> {
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
-      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin });
+      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       if (a.emitSeams) {
@@ -229,7 +230,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitPrompts) set_host_bus(new HostBus());
   else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
   let model: any, recorded: HostBus["recorded"] | undefined;
-  try { model = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin }); }
+  try { model = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath }); }
   finally { if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); } }
   if (a.emitPrompts) {
     const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));

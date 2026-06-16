@@ -119,6 +119,136 @@ describe("domain prior: the db tables a seam touches are surfaced to the tier pa
   });
 });
 
+describe("pinned gold: Step-1 culmination grounding (flow writer vs admin endpoint)", () => {
+  // The private-app intent-B failure, pinned: a flow generateMissions → (pair_weights) → persistTask(WRITES
+  // weekly_tasks) → showed via an admin ENDPOINT `submitFakeReferees` that READS weekly_tasks but WRITES
+  // foreign tables (members, subscriptions) — the "synthetic-referee" distractor that used to get crowned.
+  // This gold guards BOTH halves of Step 1: (1) the prior — the prompt must tag the writer `WRITES
+  // weekly_tasks` and the endpoint `WRITES members/subscriptions` but NOT weekly_tasks; (2) the
+  // parse/retain — given a response grounded on those facts, the WRITER is the culmination, the foreign
+  // endpoint is never the spine/answer.
+  const data = {
+    version: 1, anchor: { id: "n1", symbol: "generateMissions", file: "gen.ts", range: [1, 9] },
+    language: "typescript", resolutionQuality: "FULL", complete: true,
+    nodes: [
+      { id: "n1", symbol: "generateMissions", file: "gen.ts", kind: "function", range: [1, 9] },
+      { id: "pw", symbol: "pair_weights", file: "gen.ts", kind: "table", range: [4, 4] },
+      { id: "save", symbol: "persistTask", file: "persist.ts", kind: "function", range: [1, 9] },
+      { id: "wt", symbol: "weekly_tasks", file: "persist.ts", kind: "table", range: [3, 3] },
+      { id: "admin", symbol: "submitFakeReferees", file: "admin/route.ts", kind: "function", range: [1, 9] },
+      { id: "mt", symbol: "members", file: "admin/route.ts", kind: "table", range: [5, 5] },
+      { id: "st", symbol: "subscriptions", file: "admin/route.ts", kind: "table", range: [6, 6] },
+    ],
+    edges: [
+      { from: "n1", to: "pw", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+      { from: "pw", to: "save", kind: "db-read", provenance: "RESOLVED_PARTIAL" },
+      { from: "save", to: "wt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+      { from: "admin", to: "wt", kind: "db-read", provenance: "RESOLVED_PARTIAL" },
+      { from: "admin", to: "mt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+      { from: "admin", to: "st", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+    ],
+  };
+  let seamIntentPrompt = "";
+  // A well-behaved model GROUNDED on the facts: the non-anchor seam that WRITES the subject is the
+  // culmination; an endpoint that writes only FOREIGN tables scores 0. (Mock reads the same WRITES tag a
+  // live model is shown — that is the point of the grounding.)
+  class Bus extends HostBus {
+    serve(tag: string, prompt: string, model: string, t: number | null): string {
+      super.serve(tag, prompt, model, t);
+      if (tag !== "seam-intent") return "[]";
+      seamIntentPrompt = prompt;
+      return JSON.stringify([...prompt.matchAll(/^ {2}(\S+): "[^"]*" — \S+.*\[([^\]]*)\]/gm)].map((m) => {
+        const id = m[1], tagstr = m[2];
+        const writesSubject = /WRITES[^;]*weekly_tasks/.test(tagstr) && !/^anchor \(start/.test(tagstr.trim());
+        return { id, label: id, tier: writesSubject ? "spine" : "supporting", culmination: writesSubject ? 1 : 0 };
+      }));
+    }
+  }
+  const seamWith = (m: any, sym: string) => m.clusters[0].seams.find((s: any) => s.primary?.symbol === sym);
+
+  test("the prior is fed: writer row tags WRITES weekly_tasks; the foreign-table endpoint does not", async () => {
+    set_host_bus(new Bus());
+    try { await decompose(from_resolved_graph(data), { useLlm: true, intent: "how are weekly missions generated and assigned" }); }
+    finally { set_host_bus(null); }
+    const row = (sym: string) => seamIntentPrompt.split("\n").find((l) => l.includes(`— ${sym} `)) ?? "";
+    expect(/WRITES[^;\]]*weekly_tasks/.test(row("persistTask"))).toBe(true);          // the writer is grounded
+    const adminRow = row("submitFakeReferees");
+    expect(/ENDPOINT/.test(adminRow)).toBe(true);
+    expect(/WRITES[^;\]]*(members|subscriptions)/.test(adminRow)).toBe(true);          // writes foreign tables
+    expect(/WRITES[^;\]]*weekly_tasks/.test(adminRow)).toBe(false);                    // but NOT the subject
+  });
+
+  test("end-to-end: the weekly_tasks writer is the culmination; the admin endpoint never is", async () => {
+    set_host_bus(new Bus());
+    let m: any;
+    try { m = await decompose(from_resolved_graph(data), { useLlm: true, intent: "how are weekly missions generated and assigned" }); }
+    finally { set_host_bus(null); }
+    const writer = seamWith(m, "persistTask"), admin = seamWith(m, "submitFakeReferees");
+    expect(m.selectedSeam).toBe(writer.id);                              // the WRITER is crowned
+    expect(m.clusters[0].culminationRanked[0].id).toBe(writer.id);       // …and tops the ranked climax
+    expect(m.clusters[0].culminationRanked[0].score).toBeGreaterThan(0);
+    expect(m.selectedSeam).not.toBe(admin.id);                           // the synthetic-referee endpoint
+    expect(admin.tier).not.toBe("spine");                                // …is never the spine/answer
+  });
+});
+
+describe("Step 2: promote on-path supporting seams to spine (--promote-spine-path)", () => {
+  // Flow: n1 → persistTask → weekly_tasks(write) → showMissions(read = the culmination screen). A SIDE
+  // branch n1 → notifyMember → members(write). The model demotes EVERY non-answer seam to supporting —
+  // including the on-path `weekly_tasks` step (the compute/persist a single-table domain prior buries) AND
+  // the off-path `members` side-write. Only the structural path pass can tell them apart.
+  const data = {
+    version: 1, anchor: { id: "n1", symbol: "generateMissions", file: "gen.ts", range: [1, 9] },
+    language: "typescript", resolutionQuality: "FULL", complete: true,
+    nodes: [
+      { id: "n1", symbol: "generateMissions", file: "gen.ts", kind: "function", range: [1, 9] },
+      { id: "save", symbol: "persistTask", file: "persist.ts", kind: "function", range: [1, 9] },
+      { id: "wt", symbol: "weekly_tasks", file: "persist.ts", kind: "table", range: [3, 3] },
+      { id: "ui", symbol: "showMissions", file: "ui.ts", kind: "function", range: [1, 9] },
+      { id: "side", symbol: "notifyMember", file: "notify.ts", kind: "function", range: [1, 9] },
+      { id: "mt", symbol: "members", file: "notify.ts", kind: "table", range: [3, 3] },
+    ],
+    edges: [
+      { from: "n1", to: "save", kind: "reference", provenance: "RESOLVED_FULL" },
+      { from: "save", to: "wt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+      { from: "wt", to: "ui", kind: "db-read", provenance: "RESOLVED_PARTIAL" },
+      { from: "n1", to: "side", kind: "reference", provenance: "RESOLVED_FULL" },
+      { from: "side", to: "mt", kind: "db-write", provenance: "RESOLVED_PARTIAL" },
+    ],
+  };
+  // Mock: `showMissions` (the read terminal) is the culmination (1.0); everything else supporting/0.
+  class Bus extends HostBus {
+    serve(tag: string, prompt: string, model: string, t: number | null): string {
+      super.serve(tag, prompt, model, t);
+      if (tag !== "seam-intent") return "[]";
+      return JSON.stringify([...prompt.matchAll(/^ {2}(\S+): "[^"]*" — (\S+)/gm)].map((m) => {
+        const id = m[1], rep = m[2];
+        return { id, label: id, tier: "supporting", culmination: rep === "showMissions" ? 1 : 0 };
+      }));
+    }
+  }
+  const run = async (promoteSpinePath: boolean) => {
+    set_host_bus(new Bus());
+    try { return await decompose(from_resolved_graph(data), { useLlm: true, intent: "how are missions generated", promoteSpinePath }); }
+    finally { set_host_bus(null); }
+  };
+  const labels = (s: any) => new Set(s.hunks.map((h: any) => h.label));
+  // the on-path weekly_tasks WRITE step (persistTask + weekly_tasks) — NOT the culmination screen that
+  // merely reads weekly_tasks, and NOT the anchor seam.
+  const wtWriteSeam = (m: any) => m.clusters[0].seams.find((s: any) => labels(s).has("weekly_tasks") && labels(s).has("persistTask") && !labels(s).has("generateMissions"));
+  const sideSeam = (m: any) => m.clusters[0].seams.find((s: any) => labels(s).has("members") && !labels(s).has("generateMissions"));
+
+  test("off (flag absent): the on-path weekly_tasks write step stays supporting", async () => {
+    const m = await run(false);
+    expect(wtWriteSeam(m)?.tier).toBe("supporting");
+  });
+  test("on: the on-path weekly_tasks step is promoted to spine; the off-path members side-write is not", async () => {
+    const m = await run(true);
+    expect(wtWriteSeam(m)?.tier).toBe("spine");    // on anchor→culmination path → promoted
+    expect(sideSeam(m)?.tier).toBe("supporting");  // side branch → never promoted (payments-safe)
+  });
+});
+
 describe("flow terminals are auto-promoted to co-anchors", () => {
   test("a far screen (in-degree 0) becomes a first-class core seam, not a dimmed environment leaf", async () => {
     const repoDir = join(fixturesDir, "route-repo");
