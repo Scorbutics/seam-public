@@ -22,6 +22,7 @@ export interface ImportRef {
   line: number;          // 0-based line
   col: number;
   source: string | null; // the module string, or null
+  reexport?: boolean;    // `export { X } from '...'` — a barrel hop, not a use; followed transitively
 }
 
 // How to launch + drive a language's LSP server. Pure config — no resolution logic. Port of the

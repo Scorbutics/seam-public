@@ -49,7 +49,7 @@ export function _kind_for(file: string, kind: string): string {
 
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
-export interface Consumer { file: string; local: string; source: string; status: string; }
+export interface Consumer { file: string; local: string; source: string; status: string; reexport?: boolean; }
 
 // One repo walk → [consumer_file, {member → local}] for files whose import of one or more
 // `memberNames` resolves to `anchorFile` — member co-occurrence for module mode. Port of
@@ -80,9 +80,9 @@ export async function scan_module_consumers(repo: string, anchorFile: string, me
   return out;
 }
 
-// Files importing `symbol`, classified resolved (module → anchor file) vs suggested (basename-only).
-// Port of consumers.scan_consumers.
-export async function scan_consumers(repo: string, anchorFile: string, symbol: string): Promise<Consumer[]> {
+// One repo walk → files importing `symbol` whose module resolves to `anchorFile` (resolved) or whose
+// basename matches (suggested). `reexport` is carried so the transitive closure can follow barrels.
+async function _scan_direct(repo: string, anchorFile: string, symbol: string): Promise<Consumer[]> {
   const anchorNorm = normpath(anchorFile);
   const anchorBase = stem(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
@@ -100,13 +100,37 @@ export async function scan_consumers(repo: string, anchorFile: string, symbol: s
         if (ref.name !== symbol) continue;
         const target = await _resolve_import(repo, rel, ref);
         if (target !== null) {
-          if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved" });
+          if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved", reexport: ref.reexport });
         } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {
-          out.push({ file: rel, local: ref.local, source: ref.source, status: "suggested" });
+          out.push({ file: rel, local: ref.local, source: ref.source, status: "suggested", reexport: ref.reexport });
         }
         break;
       }
     }
   }
   return out;
+}
+
+const _REEXPORT_HOP_CAP = 5;   // runaway guard on barrel chains (a → barrel → barrel → …)
+
+// Files importing `symbol`, classified resolved vs suggested — TRANSITIVELY THROUGH BARRELS. A consumer
+// that RE-EXPORTS the symbol (`export { X } from anchor`) is a barrel, not a real user: keep searching for
+// the symbol (under its outward name) imported FROM that barrel, transitively, so the real users of a
+// barrel-wired symbol resolve to the anchor instead of dead-ending at the barrel. Re-export hops are
+// transparent (they don't count toward the caller's depth) — only a visited-set + hop cap bound the walk.
+export async function scan_consumers(repo: string, anchorFile: string, symbol: string,
+    _visited?: Set<string>, _hop = 0): Promise<Consumer[]> {
+  const visited = _visited ?? new Set<string>();
+  const key = `${normpath(anchorFile)}::${symbol}`;
+  if (visited.has(key) || _hop > _REEXPORT_HOP_CAP) return [];
+  visited.add(key);
+  const out: Consumer[] = [];
+  for (const c of await _scan_direct(repo, anchorFile, symbol)) {
+    out.push(c);   // the barrel/importer file is itself part of the wiring chain
+    if (c.reexport && c.status === "resolved") {
+      for (const t of await scan_consumers(repo, c.file, c.local, visited, _hop + 1)) out.push(t);
+    }
+  }
+  const seen = new Set<string>();
+  return out.filter((c) => { const k = `${c.file}::${c.local}`; if (seen.has(k)) return false; seen.add(k); return true; });
 }
