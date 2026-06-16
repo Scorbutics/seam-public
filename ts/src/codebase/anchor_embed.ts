@@ -28,10 +28,15 @@ async function embed_one(text: string): Promise<number[]> {
 }
 const cosine = (a: number[], b: number[]): number => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
-// disk cache: embed-string hash → vector, per repo, under the OS cache dir (never written into the
-// target repo). Incremental — only new/changed def strings are embedded; the rest are reused.
+// BGE-family retrieval models expect an instruction prefix on the QUERY (not the passages); a generic
+// model (MiniLM/mpnet) wants none. Applied to the intent only.
+const QUERY_PREFIX = /bge/i.test(MODEL) ? "Represent this sentence for searching relevant passages: " : "";
+
+// disk cache: embed-string hash → vector, per repo AND MODEL (different models have different dims /
+// spaces — keying by repo alone would mix incompatible vectors), under the OS cache dir (never written
+// into the target repo). Incremental — only new/changed def strings are embedded; the rest are reused.
 function cachePath(repo: string): string {
-  return join(homedir(), ".cache", "seam", "embed", `${h(repo)}.json`);
+  return join(homedir(), ".cache", "seam", "embed", `${h(repo + "|" + MODEL)}.json`);
 }
 function loadCache(p: string): Record<string, number[]> {
   try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : {}; } catch { return {}; }
@@ -53,7 +58,7 @@ export async function embed_anchor_candidates(repo: string, intent: string,
     for (let i = 0; i < strings.length; i++) if (!cache[h(strings[i])]) misses.push(i);
     for (const i of misses) { cache[h(strings[i])] = await embed_one(strings[i]); dirty = true; }
     if (dirty) { mkdirSync(dirname(cp), { recursive: true }); writeFileSync(cp, JSON.stringify(cache)); }
-    const iv = await embed_one(intent);
+    const iv = await embed_one(QUERY_PREFIX + intent);
     const scored = defs.map((d, i) => ({ d, s: cosine(iv, cache[h(strings[i])]) }));
     scored.sort((a, b) => b.s - a.s);
     return scored.slice(0, opts.k ?? 20).map((x) => x.d);
