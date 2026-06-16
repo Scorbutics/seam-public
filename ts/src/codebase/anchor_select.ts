@@ -157,7 +157,7 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
 // fallback order); the LLM is the one semantic call (skipped cleanly when no backend). `chosen` is null
 // only when NOTHING grew at all. `chosenBy` records which pass decided, for transparency.
 export async function select_anchor(repo: string, intent: string,
-    opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null } = {}):
+    opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed" } = {}):
     Promise<{ chosen: ProbedAnchor | null; chosenBy: "llm" | "structural" | "none"; ranked: ProbedAnchor[] }> {
   const topK = opts.topK ?? 8;
   // LLM query-expansion is ON by default here: the deterministic candidate scan is morphological
@@ -169,10 +169,24 @@ export async function select_anchor(repo: string, intent: string,
   const cands = find_anchor_candidates(repo, keywords);
   const named = rank_anchors(intent, cands, topK, extra);
 
+  // EMBED RECALL (opt-in, #2 Slice B): union semantic def-table candidates the lexical name-filter can't
+  // reach (a path-relevant `save` that shares no stem with the intent). Additive — they probe alongside
+  // the lexical pool and earn their rank from the STRUCTURAL probe (structScore), not the name score.
+  const probeList = [...named];
+  if (opts.anchorRecall === "embed") {
+    const { embed_anchor_candidates } = await import("./anchor_embed.js");
+    const have = new Set(probeList.map((c) => `${c.name}|${c.file}`));
+    for (const d of await embed_anchor_candidates(repo, intent, { k: topK })) {
+      const key = `${d.name}|${d.file}`;
+      if (!have.has(key)) { have.add(key); probeList.push({ name: d.name, file: d.file, kind: d.kind, score: 0, terms: ["~embed"] }); }
+    }
+  }
+  const toProbe = probeList.slice(0, 16);   // bound the probe budget when the pool is unioned
+
   const probed: ProbedAnchor[] = [];
-  for (let i = 0; i < named.length; i++) {
-    const c = named[i];
-    emit(`Probing anchor ${i + 1}/${named.length}: ${c.name}…`);
+  for (let i = 0; i < toProbe.length; i++) {
+    const c = toProbe[i];
+    emit(`Probing anchor ${i + 1}/${toProbe.length}: ${c.name}…`);
     const metrics = await probe_anchor(repo, c.file, c.name, { dataCoupling: opts.dataCoupling, maxNodes: opts.maxNodes, maxSteps: opts.maxSteps });
     probed.push({ id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: c.score, terms: c.terms ?? [],
       metrics, structScore: struct_score(metrics, c.score) });

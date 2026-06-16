@@ -30,7 +30,7 @@ interface Args {
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
-  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean;
+  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
@@ -83,6 +83,7 @@ function parseArgs(argv: string[]): Args {
       case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)
       case "--promote-spine-path": a.promoteSpinePath = true; break;   // Step 2: promote on-path supporting seams to spine
       case "--lineage": a.lineage = true; break;   // attach per-seam git lineage (last-touching commit) to the footprint
+      case "--anchor-recall": a.anchorRecall = (next() ?? "lexical").toLowerCase(); break;   // lexical (default) | embed
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -162,7 +163,7 @@ async function runCodebase(a: Args): Promise<number> {
         // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
         // is the intent's entry point.
         const { select_anchor } = await import("../codebase/anchor_select.js");
-        const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin });
+        const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "embed" ? "embed" : "lexical" });
         if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
         a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
         process.stdout.write(`[auto-anchor:${sel.chosenBy}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
