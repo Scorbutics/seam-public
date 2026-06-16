@@ -86,5 +86,20 @@ anchor — regardless of whether its NAME matched.
   as specified.** The idea needs a FAITHFUL footprint first: describe a DIRECTIONAL/spine footprint (what
   the anchor PRODUCES downstream), or the anchor's own immediate call tree, NOT the wandering bidirectional
   probe with its data-coupling fan. Re-spike with that before P1 — or set aside.
-- **P1:** wire `--anchor-select reconstruct` into `select_anchor` + the no-flow signal.
+- **P0 re-spike — RAN, the refined recipe WORKS (1 case, promising).** Grow each candidate WITHOUT
+  data-coupling (`dataCoupling:false`) → FAITHFUL footprints (the right anchor reads as
+  `WeeklyTaskRepository/PairWeightRepository/getCurrentIsoWeek/member repos`, not the reset fan), so the
+  blind descriptions are faithful. Embed-compare: the off-domain (password) is now cleanly REJECTED
+  (0.295, last) and the right anchor jumps LAST → 2nd (0.404) — but a same-domain distractor
+  (`deleteWeeklyMissionsForWeek` 0.465) still edges it on vocabulary (it literally says "weekly mission";
+  the right anchor honestly says "weekly TASK") + embeddings missing that DELETE is the opposite ACTION of
+  generate. **An LLM RERANK over the top fixes it:** given the 3 blind descriptions (neutral labels), even
+  haiku picks the right anchor — it catches delete ≠ generate. **Validated recipe = faithful
+  (no-data-coupling) footprint → blind describe → embed narrow → LLM rerank top-2/3**, layering
+  structure(det)/embed(fast domain)/LLM(precision) — the hybrid+rerank shape. First POSITIVE
+  anchor-selection result of the thread. Caveats: 1 case (needs the corpus); the rerank reintroduces some
+  cost/variance but over a TINY set (far less than the noisy anchor-judge over 16). No-flow detection stays
+  free (0 terminals/0 crossings). → worth a real P1 build + harness gate.
+- **P1:** wire `--anchor-select reconstruct` into `select_anchor` (faithful footprint → describe → embed →
+  rerank) + the no-flow signal.
 - **P2:** harness gate vs `judge`/`embed`; decide the default.
