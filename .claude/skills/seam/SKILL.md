@@ -71,10 +71,13 @@ Read `prompts.json`. For **each** pass, spawn a subagent (Agent tool) whose task
 text above ALONE. Do NOT use any tools, read files, or explore a repo. Output ONLY the JSON array the
 instructions ask for — no prose, no markdown fences."* (Without the no-tools instruction a subagent
 may mistake the prompt for a task about the current repo and waste a turn exploring.) Spawn the passes
-**concurrently** (they are independent). Route by the
-`thinking` hint: `thinking > 0` (e.g. `cluster`) → a stronger model (sonnet/opus); `thinking == 0`
-(e.g. `reconcile`) → haiku is fine. Each subagent runs in its own isolated context, so Seam's prompts
-never pollute this conversation.
+**concurrently** (they are independent). **Route each pass to the subagent tier in its `model` field**:
+the engine stamps the right tier per pass — the cheap passes carry `claude-haiku-4-5`, the genuinely
+SEMANTIC anchor/intent passes (`entrypoint-select`, `anchor-judge`, `seam-intent`) carry
+`claude-sonnet-4-6` (they wobble run-to-run on a weak model — the stability harness pinned them as the
+dominant instability). So a pass whose `model` names **sonnet/opus → spawn that stronger tier**; a
+`haiku` model (or `thinking > 0` as a secondary hint) → haiku is fine. Each subagent runs in its own
+isolated context, so Seam's prompts never pollute this conversation.
 
 Assemble replies keyed by tag → `$OUT/answers.json`:
 
@@ -174,9 +177,11 @@ ends):
 2. **Read** it → `{ seq, tag, prompt, model, thinking }`. With auto-anchor the first passes are
    `expand` (propose recall keywords for the intent) then `anchor-judge` (pick the anchor) — both only
    when `--symbol` was omitted. Then `orchestrate` (a grow move), `discover` (a dependency-scan move),
-   and finally `relevance`/`seam-intent` (scoring the grown footprint against the intent) — all fine
-   on haiku. Don't assume the tag; just answer whatever `prompt` asks for.
-3. **Spawn a subagent** with `prompt` verbatim + *"This is a pure classification task — answer from
+   and finally `relevance`/`seam-intent` (scoring the grown footprint against the intent). **Route by the
+   `model` field** (step 3): the engine sends the semantic passes (`entrypoint-select`, `anchor-judge`,
+   `seam-intent`) with `claude-sonnet-4-6` and the cheap ones with `claude-haiku-4-5` — honor it (they
+   were proven to need the stronger tier). Don't assume the tag; just answer whatever `prompt` asks for.
+3. **Spawn a subagent of the pass's `model` tier** with `prompt` verbatim + *"This is a pure classification task — answer from
    the text above ALONE; do NOT use tools or explore a repo. Output ONLY the JSON array — no prose, no
    fences."* (A grow/`orchestrate` prompt names real symbols, so without this a subagent may go
    exploring the repo and blow the 300 s deadline.)

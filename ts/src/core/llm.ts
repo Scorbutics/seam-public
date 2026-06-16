@@ -10,6 +10,23 @@ import { join } from "node:path";
 export class ClassifierError extends Error {}
 export const LLMError = ClassifierError;
 
+// PER-PASS MODEL ROUTING. A few codebase passes are genuinely SEMANTIC judgements (which entry point /
+// anchor the question is about; which seam is the culmination) where a weak model wobbles run-to-run —
+// the stability harness pinned this as the dominant auto-grow instability (anchor flips 1/3 of runs on
+// haiku; sonnet is 3/3). Cheap patches (a deterministic culmination floor, self-consistency voting) were
+// tried and did NOT fix it — the variance is model-JUDGEMENT quality, not jitter a vote averages out. So
+// route ONLY these passes to a stronger tier; the cheap passes (expand, orchestrate, reconcile) stay on
+// the base model. Upgrade-only: a haiku base is lifted to STRONG_MODEL, a sonnet/opus base is left as-is
+// (never downgraded). `model` flows to BOTH the live `claude --model` call AND the recorded metadata the
+// skill routes on, so both paths get the better tier. Escape hatch: SEAM_STRONG_MODEL="" disables it (so
+// the harness can A/B a pure-base run); set it to a model id to pin a different strong tier.
+export const STRONG_PASSES = new Set(["entrypoint-select", "anchor-judge", "seam-intent"]);
+const STRONG_MODEL = process.env.SEAM_STRONG_MODEL ?? "claude-sonnet-4-6";
+function _route_model(tag: string | undefined, base: string): string {
+  if (!tag || !STRONG_PASSES.has(tag) || !STRONG_MODEL) return base;
+  return /haiku/i.test(base) ? STRONG_MODEL : base;   // upgrade a weak base; never downgrade a strong one
+}
+
 const _VSCODE_EXT_GLOB_PREFIX = "anthropic.claude-code-";
 const _VSCODE_EXT_BIN_SUFFIX = join("resources", "native-binary", "claude");
 
@@ -315,6 +332,6 @@ export function run_pass(prompt: string, opts: {
   model?: string; tag?: string; thinking?: number | null; claudeBin?: string | null;
 } = {}): Map<string, any> {
   const [kind, binary] = resolve_backend(opts.claudeBin);
-  return runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5",
-    opts.thinking ?? 0, opts.tag ?? "codebase");
+  const model = _route_model(opts.tag, opts.model ?? "claude-haiku-4-5");
+  return runPassRaw(kind, binary, prompt, model, opts.thinking ?? 0, opts.tag ?? "codebase");
 }

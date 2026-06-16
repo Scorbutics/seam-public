@@ -1,21 +1,21 @@
 {
-  "label": "haiku-live",
+  "label": "hybrid",
   "cases": {
     "private-app-missions": {
       "runs": 3,
-      "spine_jaccard": 0.505,
-      "culmination_agreement": 0.667,
-      "culmination_modal": "generate-member-missions@backend/supabase/functions/generate-member-missions/index.ts",
-      "tier_agreement": 0.736,
+      "spine_jaccard": 0.926,
+      "culmination_agreement": 1,
+      "culmination_modal": "save@backend/supabase/functions/scoring-cycle/repositories.ts",
+      "tier_agreement": 0.991,
       "spine_len": {
-        "min": 4,
-        "max": 5,
-        "mean": 4.7
+        "min": 8,
+        "max": 9,
+        "mean": 8.3
       },
       "seams": {
         "min": 75,
-        "max": 83,
-        "mean": 77.7
+        "max": 75,
+        "mean": 75
       }
     }
   }
