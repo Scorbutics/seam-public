@@ -257,6 +257,11 @@
           "default": false,
           "description": "Codebase mode (single-symbol anchor): include the anchor's DEPENDENCIES (the 'how it works' mechanism), not just its consumers. Lets Seam distinguish a cross-cutting POLICY (a mechanism enforced at N sites — rendered as Mechanism + a collapsed enforcement surface) from a FLOW (a pipeline with a spine). Experimental."
         },
+        "seam.affinity": {
+          "type": "boolean",
+          "default": false,
+          "description": "Codebase intent mode (deep, slower): also surface intent-related seams that share the footprint's subjects but have NO resolved edge to it (e.g. runtime-DI-only / cross-language). Uses an LLM affinity pass (self-consistency voted) → marked SUGGESTED. Off by default — it adds ~30-40s and is a deliberate 'what else relates to this intent' deep-dive. (Facade/web upstream entries reachable by a real edge are already included by default, no flag needed.) Needs an LLM backend; only applies to intent-driven maps."
+        },
         "seam.resolver": {
           "type": "string",
           "enum": [

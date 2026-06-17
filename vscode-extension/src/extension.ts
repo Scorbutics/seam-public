@@ -910,6 +910,10 @@ async function runScan(tool: string, scanArgs: string[], title: string, range: s
         if (vscode.workspace.getConfiguration("seam").get<boolean>("bidirectional")
             && scanArgs.includes("--symbol") && !scanArgs.includes("--auto"))
           flags.push("--bidirectional");
+        // AFFINITY (opt-in, intent-driven only): the deep "what else relates to this intent" pass. The
+        // engine no-ops it without an --intent, so it's safe to always append when enabled.
+        if (vscode.workspace.getConfiguration("seam").get<boolean>("affinity") && scanArgs.includes("--intent"))
+          flags.push("--affinity");
         await runDecompose(flags, out, engineCfg !== "det", tool,
           (m) => progress.report({ message: m }), token, !scanArgs.includes("--auto"));
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
