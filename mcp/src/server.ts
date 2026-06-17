@@ -155,7 +155,10 @@ server.registerTool("grow_intent", {
     + "PASS THE ANCHOR YOU ALREADY HAVE: `symbol` is the starting point — when you've already located a "
     + "likely symbol (you usually have, from a couple of orienting greps/reads), give it here and Seam "
     + "traces+decomposes from it directly (~11s) instead of hunting for the anchor itself (~28s). So the "
-    + "efficient pattern is: grep to ORIENT (find one candidate), then this tool to TRACE from it.",
+    + "efficient pattern is: grep to ORIENT (find one candidate), then this tool to TRACE from it. "
+    + "ALSO a PLANNING step before implementing: before changing a flow you haven't mapped — when "
+    + "understanding the current code would take 2+ symbol-discovery greps across files — call this FIRST "
+    + "to plan against a verified spine + blast-radius, not a guess; cheaper than reconstructing it yourself.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo."),
     anchorFile: z.string().describe("Path to the file holding the anchor symbol (relative to repo or absolute)."),

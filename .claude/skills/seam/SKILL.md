@@ -14,6 +14,9 @@ description: >-
   DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
   have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
   selection and traces+decomposes from it (~11s vs ~28s auto-anchor). grep to ORIENT, Seam to TRACE.
+  ALSO for INTERNAL PLANNING before implementing: if a change touches a flow you haven't mapped and
+  understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST (orient grep →
+  named-anchor grow) to plan against a verified spine, not a guess — not just for "how does X work".
 ---
 
 # Seam (host-served LLM, diff + codebase)
@@ -46,6 +49,12 @@ There are two product modes, sharing the same host-served-LLM mechanics:
   - Avoid the compiled binary unless you know it was rebuilt after the latest engine change — it can
     lag source. `cd "$SEAM/ts" && bun run build` refreshes it.
 - **No `claude` binary is required.** No binary discovery happens while a host bus is active.
+- **If a `claude` binary IS on PATH, PREFER the engine's own path over this skill's host-serving.** Run
+  the engine plainly (no `--llm-bridge`) — it serves every LLM pass via `claude -p` on the tier Seam
+  intends (haiku for cheap passes, sonnet for the semantic ones) with thinking OFF, deterministically.
+  That's faster and cheaper than host subagents, which inherit the session's (often Opus) tier and CAN'T
+  turn thinking off. Use this skill's subagent-serving only when there is **no** binary (the usual
+  in-Claude-Code case). Rule of thumb: dedicated cheap passes (engine `claude -p`) > Opus subagents.
 
 Use a scratch dir for intermediates: `OUT=$(mktemp -d)`.
 
