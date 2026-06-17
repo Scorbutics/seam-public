@@ -393,7 +393,11 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // 3-6-word label dominates each). Most seams are "off" and get dimmed/collapsed — they don't need a
   // pretty label. So by default ask only for the seams that MATTER (spine/supporting + the culmination);
   // any seam not listed defaults to "off" and keeps its mechanical label. That cuts the output ~3-5×.
-  // SEAM_VERBOSE_TIER restores the per-seam format (every seam, every label) for A/B / fidelity.
+  //  - SEAM_VERBOSE_TIER: per-seam format (every seam, every label) — for A/B / human fidelity.
+  // NOTE: dropping the label (an "LLM-first, no-labels" mode) was tried and REJECTED — it systematically
+  // degraded the culmination (3/3: the SAVE → a sibling VIEW), because NAMING each seam is reasoning
+  // scaffold, not just presentation: forcing the model to say "persist bug report" is what makes it crown
+  // the save as the outcome. The ~2.8s saving wasn't worth a wrong answer-of-the-spine.
   const _verbose = !!process.env.SEAM_VERBOSE_TIER;
   if (_verbose) {
     lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",

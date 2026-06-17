@@ -220,9 +220,14 @@ roles** for the user — or point them at `seams.json` for the VS Code extension
   across the two invocations — don't change the working tree between A1 and A3, and keep flags equal.
 - **Atomicity (§C).** Always write `resp-<n>.json` via tmp + rename; read only `req-<n>.json` (never a
   `.tmp`). The bridge degrades a missing/late answer to `[]` (like an unavailable model) after 300 s.
-- **Model fidelity.** Subagents run on this session's model tier, not Seam's pinned `claude-haiku-4-5`,
-  with no per-call thinking budget (model choice is the only lever — route by `thinking`). Fine-to-
-  better for the once-per-run cluster/orchestrate passes.
+- **Model fidelity — route by the pass's `model`, NOT the session tier.** Spawn each subagent on the
+  tier the engine stamped in `model` (cheap passes → `haiku`, the semantic anchor/intent passes →
+  `sonnet`). Do NOT just inherit the session tier: running Seam's fact-primed, thinking-off passes on a
+  big thinking model (e.g. Opus) is wasted tokens + latency for no quality gain — they're designed to be
+  cheap and scoped. The one thing you CAN'T replicate via a subagent is the engine's thinking-OFF budget
+  (`MAX_THINKING_TOKENS=0`); subagents carry the session's thinking — a small, unavoidable skill tax.
+  Note: do NOT try to make this cheaper by dropping the seam-intent label — naming is reasoning scaffold
+  for the engine pass, and dropping it degrades the culmination (tried + rejected).
 - **Caching (§A).** To re-render later without re-asking subagents: add `--dump-classified state.json`
   to A3, then `$ENGINE --from-classified state.json --format …` (no LLM at all).
 

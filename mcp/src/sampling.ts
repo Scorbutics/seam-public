@@ -24,11 +24,16 @@ export function clientSupportsSampling(server: McpServer): boolean {
 function delay(ms: number): Promise<void> { return new Promise((r) => setTimeout(r, ms)); }
 
 // One sampling round-trip: hand a pass's prompt to the client's model, return its raw text (the
-// engine's JSON-array extractor parses it exactly as it would a `claude -p` reply).
-async function sampleOnce(server: McpServer, prompt: string): Promise<string> {
+// engine's JSON-array extractor parses it exactly as it would a `claude -p` reply). `model` is the tier
+// the engine stamped for this pass (haiku for the cheap passes, sonnet for the semantic ones) — forwarded
+// as a sampling HINT so a cooperating client serves cheap passes on a cheap model instead of its default
+// (often the expensive session model); these are fact-primed, thinking-off passes that don't need a big
+// model. It's a preference, not a mandate — the client may ignore it.
+async function sampleOnce(server: McpServer, prompt: string, model?: string): Promise<string> {
   const res = await server.server.createMessage({
     messages: [{ role: "user", content: { type: "text", text: prompt } }],
     maxTokens: 8192,
+    ...(model ? { modelPreferences: { hints: [{ name: model }] } } : {}),
   });
   const c = res.content;
   if (c && c.type === "text" && typeof c.text === "string") return c.text;
@@ -69,7 +74,7 @@ export async function runEngineWithBridge(server: McpServer, flags: string[], sc
         let req: any;
         try { req = JSON.parse(readFileSync(join(channel, name), "utf-8")); } catch { handled.delete(name); continue; }
         let text = "[]";
-        try { text = await sampleOnce(server, req.prompt); }
+        try { text = await sampleOnce(server, req.prompt, req.model); }
         catch (e) { stderr += `\n[bridge] sampling failed for pass ${req.seq} (${req.tag}): ${(e as Error).message}`; }
         const tmp = join(channel, `resp-${req.seq}.tmp`);
         writeFileSync(tmp, JSON.stringify({ text }));
