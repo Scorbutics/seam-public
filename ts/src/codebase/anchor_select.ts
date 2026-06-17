@@ -218,6 +218,12 @@ export async function select_anchor(repo: string, intent: string,
   }
   const toProbe = probeList.slice(0, 16);   // bound the probe budget when the pool is unioned
 
+  // SEQUENTIAL on purpose. Probing concurrently was tried (a bounded pool) and reverted: it corrupts the
+  // metrics because the grow path is NOT reentrant — `shared_key_index` (coupling/index.ts `_CACHE`) hands
+  // back a by-reference cached index and the resolver is a module global (`_ACTIVE_RESOLVER`), so
+  // interleaved grows race (proven: parallel structScores went unstable + differed from sequential, e.g.
+  // 165.41 vs 180.50). Parallelizing needs a reentrant grow (per-call resolver context + a copied/immutable
+  // key index) first — see memory `probe-parallelism-blocked-on-reentrancy`.
   const probed: ProbedAnchor[] = [];
   for (let i = 0; i < toProbe.length; i++) {
     const c = toProbe[i];
