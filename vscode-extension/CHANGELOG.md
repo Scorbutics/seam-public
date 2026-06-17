@@ -3,6 +3,22 @@
 All notable changes to the Seam extension. Distributed as a `.vsix` via
 [GitHub Releases](https://github.com/Scorbutics/seam/releases) — experimental, not on the Marketplace.
 
+## 0.2.2
+
+Deeper resolution — DI bindings and modern ESM. (Engine improvements; the bundled engine carries them.)
+
+- **Interface→impl (DI) reachability** — a footprint now extends *past* a `@Inject`/`@Autowired`/CDI
+  interface to its concrete implementation (sole impl → resolved; multiple → an honest blindspot listing
+  candidates; framework-generated, e.g. a Spring-Data repository → an honest terminal). Spines reach the
+  real JPA/JMS/service classes, not just the DI seam.
+- **NodeNext `.js`-ESM imports** — `import { x } from "./y.js"` now resolves to its `.ts` source (the
+  modern TypeScript convention); previously these were invisible and footprints could come back isolated.
+- **Dynamic `import()`** — `const { x } = await import("./y.js")` (lazy-loading / code-splitting /
+  React.lazy / Next.js lazy routes) is now followed when the path is a string literal (computed paths
+  stay an honest blindspot).
+
+Found and validated by running Seam on its own engine (`build_dependency_graph`: 1 → 36 symbols).
+
 ## 0.2.1
 
 Java codebase mode, hardened end-to-end on real apps (Jakarta EE + Spring). All engine-side, so the
