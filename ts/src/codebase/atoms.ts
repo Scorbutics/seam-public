@@ -38,6 +38,10 @@ export const _INTERFACE_MEMBER = new Set(["method_signature", "property_signatur
 // clause are not mistaken for bases). _BASE_NAME = the kinds a base reference can take.
 export const _HERITAGE = new Set(["extends_clause", "superclass", "base_class_clause", "argument_list", "extends_interfaces"]);
 export const _BASE_NAME = new Set(["identifier", "type_identifier", "member_expression", "scoped_identifier", "scoped_type_identifier"]);
+// `implements` clause kinds (a CLASS → the interfaces it implements): Java `super_interfaces` (names
+// nested under a `type_list`), TS `implements_clause` (nested under `class_heritage`). Kept DISTINCT
+// from _HERITAGE (which is `extends` only) so interface→impl resolution reads the implements relation.
+export const _IMPLEMENTS = new Set(["super_interfaces", "implements_clause"]);
 export const _EXPORT = new Set(["export_statement"]);
 export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
 export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
