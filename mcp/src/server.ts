@@ -151,7 +151,11 @@ server.registerTool("grow_intent", {
     + "files and you need the ordered path (anchor → … → where it culminates) — prefer ONE call here over "
     + "4+ iterative greps to stitch a flow by hand, and call it to MAP a flow before editing across it. "
     + "Do NOT use for naming a known symbol, find-usages, or a single-fact lookup — grep/LSP is faster. "
-    + "Returns `noFlow` when the intent is computation/strategy with no traceable spine.",
+    + "Returns `noFlow` when the intent is computation/strategy with no traceable spine. "
+    + "PASS THE ANCHOR YOU ALREADY HAVE: `symbol` is the starting point — when you've already located a "
+    + "likely symbol (you usually have, from a couple of orienting greps/reads), give it here and Seam "
+    + "traces+decomposes from it directly (~11s) instead of hunting for the anchor itself (~28s). So the "
+    + "efficient pattern is: grep to ORIENT (find one candidate), then this tool to TRACE from it.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo."),
     anchorFile: z.string().describe("Path to the file holding the anchor symbol (relative to repo or absolute)."),

@@ -11,6 +11,9 @@ description: >-
   feature works, where a flow ends, what's the blast radius, mapping a flow before editing it):
   prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand. Do NOT use Seam for a single
   symbol lookup, find-usages, or a one-fact answer — grep/LSP is instant. Seam to MAP, grep to DRILL.
+  DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
+  have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
+  selection and traces+decomposes from it (~11s vs ~28s auto-anchor). grep to ORIENT, Seam to TRACE.
 ---
 
 # Seam (host-served LLM, diff + codebase)
@@ -143,7 +146,11 @@ pump, answering each request with a subagent.
 
 `--auto` **requires `--intent`** and is inherently LLM (no `det`). It takes `--symbol` two ways:
 
-- **You name the anchor** — pass `--anchor-file` + `--symbol` (e.g. from a cursor pick or §B scan).
+- **You name the anchor (PREFER THIS)** — pass `--anchor-file` + `--symbol` (e.g. from a cursor pick,
+  a §B scan, or a symbol you already grepped/read). Seam then SKIPS the whole anchor-selection stage
+  (entrypoint-select + expand + probe + anchor-judge) and goes straight to grow → decompose: **~11s vs
+  ~28s for auto-anchor**, and an LLM caller's context-informed pick is usually as good. Default to this
+  whenever you already have a candidate symbol — which, after a couple of orienting greps, you usually do.
 - **Auto-anchor (omit `--symbol`)** — the engine SELECTS the anchor for the intent: it probes the
   top name-matched candidates with a shallow deterministic grow, drops the ones whose footprint
   dead-ends (so a name-matching-but-isolated symbol can't be picked and hide the real result), then
