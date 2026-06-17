@@ -2,10 +2,23 @@
 // EMBED for semantic anchor recall: name + kind + signature line + enclosing class + path. This is the
 // closed set the embedding recall ranks against (structure enumerates; the embedder only ranks) — NOT a
 // whole-file chunk index. Deterministic, offline; the embed string is built by `embedString`.
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { endsWithSourceExt, SKIP_DIRS } from "../core/resolve/languages/index.js";
 import { walk } from "../core/resolve/walk.js";
+
+// Anchor candidates come from HAND-WRITTEN source. A source file past this size is almost always a
+// vendored/minified/generated bundle (e.g. a checked-in JS library under webapp/resources, a generated
+// client) — never a module you'd anchor an INTENT on, and parsing/embedding it dominates recall cost.
+// Skipping it from the candidate table is language-agnostic and only affects RECALL (a large real file
+// is still resolvable as an import target). Adjustable; 128 KB clears typical hand-written modules.
+const _MAX_CANDIDATE_BYTES = 128 * 1024;
+
+// Shared by every anchor-candidate enumerator (def table + lexical name floor) so a vendored bundle is
+// excluded from ALL recall paths, not just one. Missing/unstattable → treat as skip.
+export function oversizedForAnchor(abs: string): boolean {
+  try { return statSync(abs).size > _MAX_CANDIDATE_BYTES; } catch { return true; }
+}
 
 export interface Def { name: string; kind: string; file: string; signature: string; enclosing: string; doc: string; }
 
@@ -72,6 +85,7 @@ export function enumerate_defs(repo: string, limit = 4000): Def[] {
     for (const fn of files) {
       if (!endsWithSourceExt(fn)) continue;
       const abs = join(dir, fn);
+      if (oversizedForAnchor(abs)) continue;   // skip vendored/generated bundles
       let text: string;
       try { text = readFileSync(abs, "utf-8"); } catch { continue; }
       const rel = relative(repo, abs).replace(/\\/g, "/");
