@@ -49,6 +49,12 @@ export interface ProbedAnchor {
 // The data-flow boundary kinds are plumbing, never an "end" of the flow — mirrors _promote_terminals.
 const _BOUNDARY = new Set(["table", "route", "resource"]);
 
+// Kinds that are DATA SHAPES, never a flow anchor — an anchor is a symbol that DOES something (a function
+// /class/method), not a contract. Dropping these before the probe is a free, safe probe-count cut (embed
+// recall surfaces them — e.g. `BugReportRow`, `BugReportsTabProps` were probed for nothing). Structural
+// closed-set, not a guess: an interface/type/enum is never the "starting point to read the code from".
+const _NON_ANCHOR_KINDS = new Set(["interface", "type", "enum"]);
+
 // Compute the structural facts of a grown footprint. Reuses the SAME primitives the decompose pipeline
 // uses (from_resolved_graph + assign_roles + _is_crossing + the terminal filter) so the probe measures
 // exactly what the real grow would surface — no parallel heuristic to drift.
@@ -216,7 +222,8 @@ export async function select_anchor(repo: string, intent: string,
       if (!have.has(key)) { have.add(key); probeList.push({ name, file: d.file, kind, score: 0, terms: ["~embed"] }); }
     }
   }
-  const toProbe = probeList.slice(0, 16);   // bound the probe budget when the pool is unioned
+  // drop data-shape candidates (never anchors) BEFORE probing — a free probe-count cut — then bound the budget.
+  const toProbe = probeList.filter((c) => !_NON_ANCHOR_KINDS.has(c.kind)).slice(0, 16);
 
   // SEQUENTIAL on purpose. Probing concurrently was tried (a bounded pool) and reverted: it corrupts the
   // metrics because the grow path is NOT reentrant — `shared_key_index` (coupling/index.ts `_CACHE`) hands
