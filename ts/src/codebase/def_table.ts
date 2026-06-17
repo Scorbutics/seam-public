@@ -3,6 +3,7 @@
 // closed set the embedding recall ranks against (structure enumerates; the embedder only ranks) — NOT a
 // whole-file chunk index. Deterministic, offline; the embed string is built by `embedString`.
 import { readFileSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { endsWithSourceExt, SKIP_DIRS } from "../core/resolve/languages/index.js";
 import { walk } from "../core/resolve/walk.js";
@@ -18,6 +19,38 @@ const _MAX_CANDIDATE_BYTES = 128 * 1024;
 // excluded from ALL recall paths, not just one. Missing/unstattable → treat as skip.
 export function oversizedForAnchor(abs: string): boolean {
   try { return statSync(abs).size > _MAX_CANDIDATE_BYTES; } catch { return true; }
+}
+
+// git's view of non-ignored files (tracked + untracked-but-not-ignored), repo-relative, NUL-separated.
+// Lets git do the .gitignore matching (nested/global/negation rules) instead of us re-implementing it.
+// null ⇒ not a git repo / git unavailable → caller falls back to the SKIP_DIRS walk.
+function _git_files(repo: string): string[] | null {
+  const r = spawnSync("git", ["-C", repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+    { encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 });
+  if (r.status !== 0 || typeof r.stdout !== "string") return null;
+  return r.stdout.split("\0").filter(Boolean);
+}
+
+// The repo's anchor-CANDIDATE source files, layered most-principled-first:
+//   1. respect .gitignore (via git) — excludes build outputs / deps / generated code the repo itself
+//      declares junk, rather than guessing with a hardcoded skip list (non-git trees fall back to it);
+//   2. still drop well-known vendored dir names even when COMMITTED (vendor/, node_modules/, …);
+//   3. drop oversized vendored/minified bundles (committed libs git tracks, e.g. a checked-in leaflet).
+// Deterministic (sorted) regardless of source. Repo-relative, forward-slash paths.
+export function candidate_source_files(repo: string): string[] {
+  repo = expanduser(repo);
+  let rels = _git_files(repo);
+  if (rels === null) {
+    rels = [];
+    for (const [dir, files] of walk(repo, SKIP_DIRS))
+      for (const fn of files) rels.push(relative(repo, join(dir, fn)).replace(/\\/g, "/"));
+  }
+  const out = rels.filter((rel) =>
+    endsWithSourceExt(rel)
+    && !rel.split("/").some((seg) => SKIP_DIRS.has(seg))
+    && !oversizedForAnchor(join(repo, rel)));
+  out.sort();
+  return out;
 }
 
 export interface Def { name: string; kind: string; file: string; signature: string; enclosing: string; doc: string; }
@@ -81,16 +114,10 @@ export function embedString(d: Def): string {
 export function enumerate_defs(repo: string, limit = 4000): Def[] {
   repo = expanduser(repo);
   const out: Def[] = [];
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const abs = join(dir, fn);
-      if (oversizedForAnchor(abs)) continue;   // skip vendored/generated bundles
-      let text: string;
-      try { text = readFileSync(abs, "utf-8"); } catch { continue; }
-      const rel = relative(repo, abs).replace(/\\/g, "/");
-      for (const d of defs_in_file(rel, text)) { out.push(d); if (out.length >= limit) return out; }
-    }
+  for (const rel of candidate_source_files(repo)) {
+    let text: string;
+    try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
+    for (const d of defs_in_file(rel, text)) { out.push(d); if (out.length >= limit) return out; }
   }
   return out;
 }
