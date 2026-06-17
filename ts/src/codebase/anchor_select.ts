@@ -17,6 +17,7 @@ import { emit } from "../core/progress.js";
 import { run_pass, available, ClassifierError as LLMError } from "../core/llm.js";
 import { assign_roles, _is_crossing } from "./codebase.js";
 import { defs_in_file } from "./def_table.js";
+import { defs_in_file_treesitter } from "./def_treesitter.js";
 import { grow_to_terminals } from "./orchestrate.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
 import { expand_intent_terms } from "./intent_expand.js";
@@ -117,12 +118,15 @@ export async function probe_anchor(repo: string, file: string, symbol: string,
 // Look up a candidate's CODE IDENTITY — its declaration line + leading doc-comment — from its own file.
 // This is the evidence a human reader actually uses to pick an anchor ("class MissionEngine extends Engine
 // — orchestrates weekly mission assignment"), which the topology facts (reach/crossings) throw away. Cheap:
-// one file read + the deterministic def scan, only for the handful of survivors going to the judge.
-function _candidate_identity(repo: string, file: string, name: string): { signature: string; doc: string } | null {
+// one file read + a def scan, only for the handful of survivors going to the judge. Prefers the AST
+// (tree-sitter) producer so signature+doc work across all five languages — Ruby/C/C++ where the regex
+// floor extracts little — and falls back to the TS/JS regex when no grammar/parse is available.
+async function _candidate_identity(repo: string, file: string, name: string): Promise<{ signature: string; doc: string } | null> {
   try {
     const root = repo.startsWith("~") ? (process.env.HOME ?? "") + repo.slice(1) : repo;
     const abs = file.startsWith("/") ? file : join(root, file);
-    const defs = defs_in_file(file, readFileSync(abs, "utf-8"));
+    const text = readFileSync(abs, "utf-8");
+    const defs = (await defs_in_file_treesitter(file, text)) ?? defs_in_file(file, text);
     const d = defs.find((x) => x.name === name) ?? defs.find((x) => x.enclosing === name);
     return d ? { signature: d.signature, doc: d.doc } : null;
   } catch { return null; }
@@ -228,7 +232,7 @@ export async function select_anchor(repo: string, intent: string,
   // commits LAST, judging each candidate by its own CODE (declaration + doc) plus the surface it's wired
   // to — the reader's evidence, not topology counts (which the 6-failure thread proved mis-rank the judge).
   if (chosen && (opts.judge ?? true) && alive.length >= 2 && available(opts.claudeBin)) {
-    for (const a of alive) { const id = _candidate_identity(repo, a.file, a.name); if (id) { a.signature = id.signature; a.doc = id.doc; } }
+    for (const a of alive) { const id = await _candidate_identity(repo, a.file, a.name); if (id) { a.signature = id.signature; a.doc = id.doc; } }
     emit("Judging which footprint answers the intent…");
     const pick = judge_anchor_llm(intent, alive, { model: opts.model, claudeBin: opts.claudeBin });
     const picked = pick ? alive.find((p) => p.id === pick) : null;
