@@ -3,6 +3,20 @@
 All notable changes to the Seam extension. Distributed as a `.vsix` via
 [GitHub Releases](https://github.com/Scorbutics/seam/releases) — experimental, not on the Marketplace.
 
+## 0.2.3
+
+Footprints reach DI-wired upstream entry points. (Engine improvement; the bundled engine carries it.)
+
+- **Interface-consumer enrichment (default)** — a footprint now also grows the consumers of the
+  interface(s) its anchor implements. DI/CDI consumers import the *interface*, not the implementation,
+  so the facade/web entry that calls a `@Inject`/`@Autowired` service was previously missed; now it's
+  reached **deterministically** (real edges, no LLM) and scoped by the intent tiering. Disable with
+  `seam.toolPath` dev flag `--no-interface-consumers` if ever needed. No-op on code without
+  class-implements (e.g. function-style TS).
+- **Opt-in affinity pass** (CLI `--affinity`) — for the rarer case of an intent-related seam with *no*
+  resolved path at all, a shared-subject + intent-conditioned, self-consistency-voted LLM pass surfaces
+  it as SUGGESTED. Off by default (it's an expensive, deliberate "what else relates" deep-dive).
+
 ## 0.2.2
 
 Deeper resolution — DI bindings and modern ESM. (Engine improvements; the bundled engine carries them.)
