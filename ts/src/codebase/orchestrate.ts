@@ -170,7 +170,7 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
 // discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin };
   // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
@@ -221,6 +221,29 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
     history.push({ node: next.symbol, added: data.nodes.length - before, ...(dir === "backward" ? { dir: "down" } : {}) });
+  }
+  // TRUNCATION HONESTY (real grow only — keep the shallow probe's footprint clean). A footprint that
+  // stops at the step/node BUDGET with frontier still unexpanded, or at a node the resolver couldn't
+  // expand, READS AS COMPLETE but isn't — the silent-truncation source of "plausible-but-incomplete".
+  // Surface it as a blindspot so the map is honest about where it stopped (some remaining nodes may be
+  // leaves; the cap itself is the honest signal). Cheap: reuses the same frontier predicate + history.
+  if (opts.flagTruncation) {
+    const gT = from_resolved_graph(data);
+    assign_roles(gT);
+    const roleT = new Map([...gT.nodes.values()].map((n: any) => [n.id, n.role]));
+    const remaining = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
+      && roleT.get(n.id) !== "core" && !KEY_NODE_KINDS.has(n.kind) && !expanded.has(_key(n)));
+    data.blindspots = data.blindspots ?? [];
+    if (remaining.length) {
+      const names = [...new Set(remaining.map((n: any) => n.symbol).filter(Boolean))].slice(0, 8) as string[];
+      const cap = data.nodes.length >= maxNodes ? `node budget (${maxNodes})` : `step budget (${maxSteps})`;
+      data.blindspots.push({ node: "footprint", mechanism: "grow-truncated",
+        evidence: `grow hit the ${cap} with ${remaining.length} frontier node(s) not followed — the footprint may be incomplete past them`,
+        candidates: names });
+    }
+    for (const h of history) if (h.skipped === "build failed")
+      data.blindspots.push({ node: h.node, mechanism: "unfollowable",
+        evidence: "the resolver could not expand this node (unsupported file / parse failure) — the path beyond it is not mapped", candidates: [] });
   }
   return [data, history];
 }
