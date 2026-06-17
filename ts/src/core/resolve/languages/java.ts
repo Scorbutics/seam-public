@@ -62,11 +62,32 @@ function _java_index(repo: string): Map<string, string> {
 
 const _INDEX_CACHE = new Map<string, Map<string, string>>();
 
-export function floor_resolve(repo: string, _importingFile: string, source: string): string | null {
+// The package declared in a file (cached). file may be repo-relative or absolute.
+const _PKG_OF_CACHE = new Map<string, string | null>();
+function _readPkg(path: string): string | null {
+  try { const m = readFileSync(path, "utf-8").match(_PKG_RE); return m ? m[1] : null; } catch { return null; }
+}
+function _package_of(repo: string, file: string): string | null {
+  if (_PKG_OF_CACHE.has(file)) return _PKG_OF_CACHE.get(file)!;
+  const pkg = _readPkg(join(repo, file)) ?? _readPkg(file);
+  _PKG_OF_CACHE.set(file, pkg);
+  return pkg;
+}
+
+export function floor_resolve(repo: string, importingFile: string, source: string): string | null {
   if (!_INDEX_CACHE.has(repo)) _INDEX_CACHE.set(repo, _java_index(repo));
   const index = _INDEX_CACHE.get(repo)!;
-  // Try the full FQN, then drop trailing segments — so a nested-class import (`a.b.Outer.Inner`) or a
-  // static-member import (`a.b.C.FOO`) resolves to its enclosing type's file.
+  // A BARE type name (no dots) used WITHOUT an import = a SAME-PACKAGE reference (Java needs no import
+  // for siblings). Resolve it against the importing file's own package. This is the gap that broke flat-
+  // package apps (e.g. spring-petclinic's controller→repository in one `owner` package): no import line,
+  // so neither the import scan nor an LSP query (never issued) saw it. The dep graph feeds body type-
+  // refs here so same-package siblings resolve deterministically (package = dir, class = filename).
+  if (!source.includes(".")) {
+    const pkg = _package_of(repo, importingFile);
+    return pkg ? (index.get(`${pkg}.${source}`) ?? null) : null;
+  }
+  // FQN: try the full name, then drop trailing segments — so a nested-class import (`a.b.Outer.Inner`)
+  // or a static-member import (`a.b.C.FOO`) resolves to its enclosing type's file.
   const parts = source.split(".");
   for (let k = parts.length; k >= 1; k--) {
     const hit = index.get(parts.slice(0, k).join("."));

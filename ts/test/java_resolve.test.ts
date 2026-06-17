@@ -15,6 +15,7 @@ const write = (rel: string, text: string) => { mkdirSync(join(src(rel), ".."), {
 beforeAll(() => {
   rmSync(REPO, { recursive: true, force: true });
   write("com/x/app/Service.java", "package com.x.app;\nimport com.x.domain.Repo;\npublic class Service {}\n");
+  write("com/x/app/Helper.java", "package com.x.app;\npublic class Helper {}\n");   // same-package sibling of Service
   write("com/x/domain/Repo.java", "package com.x.domain;\npublic class Repo {\n  public static class Inner {}\n}\n");
   write("com/x/domain/Const.java", "package com.x.domain;\npublic class Const { public static final int N = 1; }\n");
 });
@@ -67,6 +68,18 @@ describe("java FQN→file resolver", () => {
 
   test("external / unknown FQN → null", () => {
     expect(floor_resolve(REPO, src("com/x/app/Service.java"), "java.util.List")).toBeNull();
+  });
+
+  // SAME-PACKAGE: a bare type name (no import) resolves to a sibling in the importing file's package —
+  // the flat-package case (spring-petclinic's controller→repository in one `owner` package).
+  test("bare type name resolves to a same-package sibling", () => {
+    expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Helper")?.replace(/\\/g, "/"))
+      .toBe("src/main/java/com/x/app/Helper.java");
+  });
+
+  test("bare type name with no same-package sibling → null (not a cross-package guess)", () => {
+    expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Repo")).toBeNull();   // Repo is in com.x.domain, not com.x.app
+    expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Nonexistent")).toBeNull();
   });
 });
 
