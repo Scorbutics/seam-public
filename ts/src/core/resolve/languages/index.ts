@@ -1,19 +1,19 @@
-// Port of src/core/resolve/languages/__init__.py — the language registry. The minimal providers
-// (c/cpp/java/kotlin/ruby) have no floor or import parser yet (LSP-only); they contribute their
-// extensions to SOURCE_EXTS. TS/Python carry the floor + import parsing.
+// Port of src/core/resolve/languages/__init__.py — the language registry. TS/Python/Java carry a
+// deterministic floor + import parsing; the remaining minimal providers (c/cpp/kotlin/ruby) have no
+// floor yet (LSP-only) and just contribute their extensions to SOURCE_EXTS.
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec, type TableAccess } from "./base.js";
 export type { TableAccess };
 import { PROVIDER as TS } from "./typescript.js";
 import { PROVIDER as PY } from "./python.js";
+import { PROVIDER as JAVA } from "./java.js";
 
 // A minimal (LSP-only) provider: no floor / import parser, but a server spec so spec_for_file maps it.
 const minimal = (name: string, extensions: string[], lsp: ServerSpec): LanguageProvider => ({ name, extensions, lsp });
 
 export const PROVIDERS: LanguageProvider[] = [
-  TS, PY,
-  minimal("java", [".java"], { language: "java", command: system("jdtls"), languageId: "java", rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts", ".project"] }),
+  TS, PY, JAVA,
   minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] }),
   minimal("ruby", [".rb", ".rake"], { language: "ruby", command: system("ruby-lsp", "--stdio"), languageId: "ruby", rootMarkers: ["Gemfile", ".ruby-version"] }),
   minimal("c", [".c", ".h"], { language: "c", command: system("clangd"), languageId: "c", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
