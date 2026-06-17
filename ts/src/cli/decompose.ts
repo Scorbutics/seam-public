@@ -295,6 +295,18 @@ async function runCodebase(a: Args): Promise<number> {
       if (k) emit(`affinity: +${k} intent-related seam(s) (${hits.filter((h) => h.connected).length} grow-confirmed → resolved, ${hits.filter((h) => !h.connected).length} suggested)`);
     } catch (e) { process.stderr.write(`affinity pass skipped: ${(e as Error).message}\n`); }
   }
+  // Tag framework/external ENTRY roots so they read as flow STARTS, not the suspicious "isolated".
+  // Bounded to in-degree-0 nodes (no in-repo caller = the entry candidates); is_framework_entry is
+  // agnostic (annotation-PRESENCE or external-interface callback — no per-framework list).
+  if (a.symbol && Array.isArray(data?.nodes) && data.nodes.length) {
+    try {
+      const hasIncoming = new Set((data.edges ?? []).map((e: any) => e.to));
+      for (const n of data.nodes as any[]) {
+        if (hasIncoming.has(n.id) || !n.file || !n.symbol) continue;   // only roots (nothing in the footprint calls them)
+        if (await scan.is_framework_entry(a.repo, n.file, n.symbol)) n.entry = true;
+      }
+    } catch (e) { process.stderr.write(`entry tagging skipped: ${(e as Error).message}\n`); }
+  }
   const g = from_resolved_graph(data);
   if (!g.nodes.size) err("resolved graph has no nodes");
   const useLlm = a.classifier === "llm" || a.classifier === "hybrid";

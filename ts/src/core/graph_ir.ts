@@ -18,6 +18,7 @@ export interface Node {
   group: string; intent: string; seam: string; seam_label: string;
   subcores: any[]; contract: any[];
   direction?: "forward" | "backward";   // bidirectional footprint: reached as a CONSUMER (forward) or a DEPENDENCY (backward)
+  entry?: boolean;                       // a framework/external ENTRY (annotation-wired / external-interface callback) — a ROOT, not "isolated"
 }
 export function mkNode(p: Partial<Node> & { id: string }): Node {
   return {
@@ -25,7 +26,7 @@ export function mkNode(p: Partial<Node> & { id: string }): Node {
     kind: p.kind ?? "", enclosing: p.enclosing ?? "", complexity: p.complexity ?? 0,
     role: p.role ?? "", role_confidence: p.role_confidence ?? 1.0, relevant: p.relevant ?? true,
     group: p.group ?? "", intent: p.intent ?? "", seam: p.seam ?? "", seam_label: p.seam_label ?? "",
-    subcores: p.subcores ?? [], contract: p.contract ?? [], direction: p.direction,
+    subcores: p.subcores ?? [], contract: p.contract ?? [], direction: p.direction, entry: p.entry,
   };
 }
 
@@ -119,7 +120,7 @@ export function from_resolved_graph(data: any): Graph {
       id: nd.id, label: nd.symbol ?? nd.id, file: nd.file ?? "",
       start: rng[0] ? Number(rng[0]) : 0, end: rng.length > 1 ? Number(rng[1]) : 0,
       kind: nd.kind ?? "", enclosing: nd.enclosing ?? "", complexity: Number(nd.complexity ?? 0) || 0,
-      direction: nd.direction,
+      direction: nd.direction, entry: nd.entry,
     }));
   }
   const present = new Set(g.nodes.keys());
@@ -178,9 +179,15 @@ export function wellformedness(g: Graph): any {
   const containerLabels = new Set([...cores].map((c) => g.nodes.get(c)!.enclosing).filter((e) => e));
   const seam_warnings = new Map<string, string[]>();
   for (const c of cores) {
-    const label = g.nodes.get(c)!.label;
-    if (label && containerLabels.has(label)) continue;
-    if (!inter(links, adj.get(c))) { if (!seam_warnings.has(c)) seam_warnings.set(c, []); seam_warnings.get(c)!.push("isolated-core"); }
+    const node = g.nodes.get(c)!;
+    if (node.label && containerLabels.has(node.label)) continue;
+    if (!inter(links, adj.get(c))) {
+      // A core with no link is normally "isolated" (verify it). But a framework/external ENTRY (a
+      // route/scheduled/lifecycle handler or message-listener callback) is SUPPOSED to have no in-repo
+      // caller — the container invokes it. Label it "entry" (a root), not the suspicious "isolated-core".
+      if (!seam_warnings.has(c)) seam_warnings.set(c, []);
+      seam_warnings.get(c)!.push(node.entry ? "entry" : "isolated-core");
+    }
   }
   const node_warnings = new Map<string, string[]>();
   for (const ln of links) {
