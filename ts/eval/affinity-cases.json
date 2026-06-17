@@ -3,6 +3,8 @@
     "label": "private-app-bug-create",
     "repo": "~/dev/private-app",
     "intent": "how is a bug report created and saved",
-    "subjects": ["BugReportRow", "createBugReport", "bug_reports"]
+    "subjects": ["BugReportRow", "createBugReport", "bug_reports"],
+    "anchorFile": "lib/services/bug-reports.ts",
+    "anchorSymbol": "createBugReport"
   }
 ]

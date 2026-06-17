@@ -8,9 +8,21 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { candidate_source_files } from "./def_table.js";
-import { run_pass } from "../core/llm.js";
+import { run_pass_async } from "../core/llm.js";
+import { build_dependency_graph } from "./import_scan.js";
+import { normpath } from "../core/resolve/walk.js";
 
-export interface AffinityHit { file: string; shared: string[]; confidence: number; reason: string; }
+export interface AffinityHit { file: string; symbol: string; shared: string[]; confidence: number; reason: string; }
+// An affinity hit after the grow-probe: `connected` = a resolved edge links it BACK to the footprint
+// (→ promote to RESOLVED, deterministic); else it stays a SUGGESTED affinity. `via` = the footprint
+// symbol it connected through.
+export interface AffinityResult extends AffinityHit { connected: boolean; via?: string; }
+
+// The file's primary declared type — the symbol to grow a probe from. First class/interface/enum.
+function _symbolOf(text: string): string {
+  const m = text.match(/\b(?:export\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)/);
+  return m ? m[1] : "";
+}
 
 // A compact, cheap gist of a file (regex, no parse): its type decl + a couple of method names — enough
 // for the LLM to judge purpose without sending the whole file.
@@ -28,15 +40,15 @@ function _gist(text: string): string {
 // Candidate files that reference ≥1 footprint subject, ranked by how many DISTINCT subjects they share
 // (co-occurrence — the more of the footprint's subjects a file touches, the likelier it's related), then
 // path for determinism. The structural floor; the LLM only ever sees the top `cap`.
-function _candidates(repo: string, subjects: string[], exclude: Set<string>, cap: number): { file: string; shared: string[]; gist: string }[] {
+function _candidates(repo: string, subjects: string[], exclude: Set<string>, cap: number): { file: string; symbol: string; shared: string[]; gist: string }[] {
   const pats = subjects.filter(Boolean).map((s) => ({ s, re: new RegExp(`\\b${s.replace(/[^\w]/g, "")}\\b`) }));
-  const out: { file: string; shared: string[]; gist: string }[] = [];
+  const out: { file: string; symbol: string; shared: string[]; gist: string }[] = [];
   for (const rel of candidate_source_files(repo)) {
     if (exclude.has(rel)) continue;
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
     const shared = pats.filter((p) => p.re.test(text)).map((p) => p.s);
-    if (shared.length) out.push({ file: rel, shared, gist: _gist(text) });
+    if (shared.length) out.push({ file: rel, symbol: _symbolOf(text), shared, gist: _gist(text) });
   }
   out.sort((a, b) => b.shared.length - a.shared.length || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
   return out.slice(0, cap);
@@ -62,20 +74,53 @@ function _prompt(subjects: string[], intent: string, cands: { file: string; shar
   ].join("\n");
 }
 
-// Run the intent-conditioned affinity pass. ONE LLM call. Returns the related hits (SUGGESTED). Never
-// throws into the caller — a footprint must not fail because this best-effort enrichment did.
-export function subject_affinity(repo: string, subjects: string[], intent: string,
-    opts: { cap?: number; exclude?: string[]; model?: string; claudeBin?: string | null } = {}): AffinityHit[] {
+// Run the intent-conditioned affinity pass with SELF-CONSISTENCY VOTING. The single LLM call is noisy on
+// borderline intent-relevance (measured: ~44% run-to-run agreement), so cast `votes` ballots and keep
+// only candidates a MAJORITY mark related; confidence = vote fraction. The ballots run CONCURRENTLY
+// (run_pass_async) so the wall-clock stays ~one pass on the CLI path. SUGGESTED-only; never throws into
+// the caller (a footprint must not fail because this best-effort enrichment did).
+export async function subject_affinity(repo: string, subjects: string[], intent: string,
+    opts: { cap?: number; exclude?: string[]; votes?: number; model?: string; claudeBin?: string | null } = {}): Promise<AffinityHit[]> {
   if (!subjects.length || !intent) return [];
   const cands = _candidates(repo, subjects, new Set(opts.exclude ?? []), opts.cap ?? 30);
   if (!cands.length) return [];
-  let res: Map<string, any>;
-  try { res = run_pass(_prompt(subjects, intent, cands), { tag: "affinity", thinking: 0, model: opts.model, claudeBin: opts.claudeBin }); }
-  catch { return []; }
+  const votes = Math.max(1, opts.votes ?? 3);
+  const prompt = _prompt(subjects, intent, cands);
+  const ballots = await Promise.all(Array.from({ length: votes }, () =>
+    run_pass_async(prompt, { tag: "affinity", thinking: 0, model: opts.model, claudeBin: opts.claudeBin }).catch(() => null)));
+  const cast = ballots.filter(Boolean).length;
+  if (!cast) return [];
+  const tally = new Array(cands.length).fill(0);
+  const lastReason = new Array<string>(cands.length).fill("");
+  for (const res of ballots) if (res) for (let i = 0; i < cands.length; i++) { const r = res.get(String(i)); if (r) { tally[i]++; lastReason[i] = String(r.reason ?? ""); } }
+  const need = Math.ceil(cast / 2);   // strict majority of the ballots actually cast
   const hits: AffinityHit[] = [];
-  for (let i = 0; i < cands.length; i++) {
-    const r = res.get(String(i));
-    if (r) hits.push({ file: cands[i].file, shared: cands[i].shared, confidence: Number(r.confidence ?? 0.5), reason: String(r.reason ?? "") });
-  }
+  for (let i = 0; i < cands.length; i++)
+    if (tally[i] >= need) hits.push({ file: cands[i].file, symbol: cands[i].symbol, shared: cands[i].shared, confidence: tally[i] / cast, reason: lastReason[i] });
   return hits;
+}
+
+// Roadmap step: SEED auto-grow with the affinity hits. For each intent-related hit (found by shared
+// subject, NOT by a resolved edge — the footprint is excluded), grow a dependency probe from it and ask
+// whether a RESOLVED edge links it BACK to the footprint. Connect-back → `connected` (promote to a real
+// edge — precise AND deterministic, so it no longer relies on the fragile LLM judgement); no connect-back
+// → it stays a SUGGESTED affinity (the genuinely edge-less, e.g. runtime-DI-only, case). This is the
+// recall→verify shape: affinity recalls candidates across boundaries; the deterministic grow confirms them.
+export async function affinity_grow(repo: string, subjects: string[], intent: string, footprintFiles: string[],
+    opts: { cap?: number; votes?: number; model?: string; claudeBin?: string | null } = {}): Promise<AffinityResult[]> {
+  const fset = new Set(footprintFiles.map((f) => normpath(f)));
+  const hits = await subject_affinity(repo, subjects, intent, { ...opts, exclude: footprintFiles });
+  const out: AffinityResult[] = [];
+  for (const h of hits) {
+    let connected = false, via: string | undefined;
+    if (h.symbol) {
+      try {
+        const probe = await build_dependency_graph(repo, h.file, h.symbol, { dataCoupling: false });
+        const back = (probe.nodes ?? []).find((n: any) => n.id !== "n1" && n.file && fset.has(normpath(n.file)));
+        if (back) { connected = true; via = back.symbol; }
+      } catch { /* probe failed → stays SUGGESTED, honest */ }
+    }
+    out.push({ ...h, connected, via });
+  }
+  return out;
 }
