@@ -167,6 +167,9 @@ async function runCodebase(a: Args): Promise<number> {
         if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
         a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
         process.stdout.write(`[auto-anchor:${sel.chosenBy}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
+        // honest signal: the chosen anchor is a computation/strategy unit with no traceable flow — the
+        // grow will be a 1-seam stub, not a spine. Surface it rather than letting the user read it as a miss.
+        if (sel.noFlow) process.stdout.write(`[no-flow] "${a.intent}" resolves to dispatch/computation code with no traceable spine; expect touchpoints, not an ordered path.\n`);
       }
     }
     if (!a.anchorFile) err("--scan requires --anchor-file");

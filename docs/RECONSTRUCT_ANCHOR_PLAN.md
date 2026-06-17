@@ -1,6 +1,23 @@
 # Plan — Anchor selection by round-trip intent reconstruction (cycle consistency)
 
-Status: PROPOSED (2026-06-16). Replaces/augments the noisy `anchor-judge` (pick-by-shallow-probe-metrics)
+Status: **REJECTED (2026-06-17).** Built (`--anchor-select reconstruct`) and tested on real intents; it
+lost and was reverted. On the corpus it REGRESSED a flow case (bug-create: picked `fetchBugReports` (read)
+over `createBugReport` (create)) and never beat the default `judge` path; on the no-flow scorer cases it
+picked distractors every run and could not fire `noFlow` (no-flow units have low `structScore`, so the
+shortlist dropped them BEFORE the noFlow check — a structural flaw in the funnel). This is the FIFTH
+anchor-selection approach to pass a spike and fail on multi-case testing (after voting, culmination floor,
+embed-recall auto-pick, round-trip-bidirectional). The durable conclusion: **the default `judge` path is
+the answer** — recall a candidate SET (lexical ∪ embed), cheap-probe each, and let the LLM commit LAST
+from each footprint's deterministic facts (what it reaches/crosses), not from a blind description. The one
+keeper extracted from this work is the deterministic `noFlow` signal (now in `select_anchor` + a CLI
+`[no-flow]` note): when the chosen anchor reaches no terminal and crosses no boundary, there is no spine to
+find — report touchpoints, don't fake a path. See memory `anchor-selection-five-failures`.
+
+---
+
+_Original proposal below, kept for the record._
+
+Replaces/augments the noisy `anchor-judge` (pick-by-shallow-probe-metrics)
 with a generate-and-verify selector: shortlist anchors, describe each one's footprint BLIND, compare the
 description back to the intent, pick the best match. Scope: `select_anchor` (the auto-anchor path).
 

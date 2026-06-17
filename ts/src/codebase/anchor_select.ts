@@ -10,10 +10,13 @@
 // dead-end? This is the structural/semantic split from CLAUDE.md: connectedness is a measured fact
 // (deterministic, here); "which footprint is what the user MEANS" is a semantic judgement left to a
 // later LLM pass. The degenerate isolated case is killed here, structurally, with no model in the loop.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { from_resolved_graph } from "../core/graph_ir.js";
 import { emit } from "../core/progress.js";
 import { run_pass, available, ClassifierError as LLMError } from "../core/llm.js";
 import { assign_roles, _is_crossing } from "./codebase.js";
+import { defs_in_file } from "./def_table.js";
 import { grow_to_terminals } from "./orchestrate.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
 import { expand_intent_terms } from "./intent_expand.js";
@@ -38,6 +41,8 @@ export interface ProbedAnchor {
   terms: string[];        // which intent words matched (explanation)
   metrics: ProbeMetrics | null;   // null = the probe grow failed
   structScore: number;    // the connectedness ranking (reaches-terminals weighted)
+  signature?: string;     // the candidate's own declaration line (its CODE identity) — what a reader judges by
+  doc?: string;           // its leading doc-comment, the concept the name omits — fed to the judge as MEANING
 }
 
 // The data-flow boundary kinds are plumbing, never an "end" of the flow — mirrors _promote_terminals.
@@ -109,34 +114,47 @@ export async function probe_anchor(repo: string, file: string, symbol: string,
   } catch { return null; }
 }
 
+// Look up a candidate's CODE IDENTITY — its declaration line + leading doc-comment — from its own file.
+// This is the evidence a human reader actually uses to pick an anchor ("class MissionEngine extends Engine
+// — orchestrates weekly mission assignment"), which the topology facts (reach/crossings) throw away. Cheap:
+// one file read + the deterministic def scan, only for the handful of survivors going to the judge.
+function _candidate_identity(repo: string, file: string, name: string): { signature: string; doc: string } | null {
+  try {
+    const root = repo.startsWith("~") ? (process.env.HOME ?? "") + repo.slice(1) : repo;
+    const abs = file.startsWith("/") ? file : join(root, file);
+    const defs = defs_in_file(file, readFileSync(abs, "utf-8"));
+    const d = defs.find((x) => x.name === name) ?? defs.find((x) => x.enclosing === name);
+    return d ? { signature: d.signature, doc: d.doc } : null;
+  } catch { return null; }
+}
+
 // Phase 2 — the SEMANTIC pick. Structure can rank by connectedness but cannot tell which connected
-// footprint is what the user MEANS: on "how does admin auth work", a data-heavy referrals helper
-// out-crosses the actual auth gate, yet the gate (wired to every admin screen) is the right entry
-// point. That's a natural-language judgement → the LLM, grounded on the deterministic facts of each
-// probed footprint (what it REACHES), never on the symbol name. Returns the chosen candidate id, or
-// null if the model is unavailable/unusable (caller falls back to the structural order).
+// footprint is what the user MEANS. The 6-failure thread proved topology FACTS (reach/crossings/cores)
+// mis-rank and destabilize the judge — so judge on what a reader judges by: each candidate's own CODE
+// (its declaration + doc) plus the surface its footprint is WIRED TO (endpoints). Identity over topology.
+// Returns the chosen candidate id, or null if the model is unavailable/unusable (caller falls back).
 export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
     opts: { model?: string; claudeBin?: string | null } = {}): string | null {
   if (connected.length < 2) return connected[0]?.id ?? null;
   const lines = [
-    `A developer asks: "${intent}". You must choose the single best STARTING POINT in the code to`,
-    "answer it — the symbol whose footprint IS the mechanism the question is about, not one that merely",
-    "touches it. Below are candidate anchors; each is tagged with deterministic facts about the code",
-    "footprint it reaches (reach = symbols connected to it; endpoints = screens/entry points it surfaces;",
-    "boundaries = data-flow boundaries like db tables / routes it crosses). Names can mislead — judge by",
-    "what each one is WIRED TO.",
+    `A developer asks: "${intent}". Choose the single best STARTING POINT in the code to answer it — the`,
+    "symbol whose CODE is the mechanism the question is about, not one that merely touches it. For each",
+    "candidate you get its declaration (the actual code line) and doc-comment — what it IS — plus the",
+    "screens / entry points its footprint is wired to. Judge by what each one IS and DOES, matched to the",
+    "question; the name alone can mislead.",
     "",
   ];
   for (const c of connected) {
     const m = c.metrics!;
-    const ep = m.terminalLabels.length ? `; reaches endpoints: ${m.terminalLabels.join(", ")}` : "";
-    const bd = m.crossingLabels.length ? `; crosses boundaries: ${m.crossingLabels.join(", ")}` : "";
-    lines.push(`  ${c.id}: ${c.name} (${c.file}) — reach ${m.reach}, ${m.terminals} endpoint(s), ${m.crossings} boundary node(s)${ep}${bd}`);
+    const sig = c.signature ? `\n     code: ${c.signature}` : "";
+    const dc = c.doc ? `\n     doc: ${c.doc}` : "";
+    const ep = m.terminalLabels.length ? `\n     wired to: ${m.terminalLabels.join(", ")}` : "";
+    lines.push(`  ${c.id}: ${c.name} (${c.file})${sig}${dc}${ep}`);
   }
   lines.push("",
-    "Pick the ONE anchor that best answers the question as a starting point to read the code from.",
-    "Prefer the anchor that GOVERNS or DEFINES the mechanism and is wired to the relevant surface (the",
-    "screens/handlers the question is about) over a peripheral helper that only participates in it.",
+    "Pick the ONE whose declaration + doc most directly answers the question as the place to start reading.",
+    "Prefer the symbol that GOVERNS or DEFINES the mechanism the question is about over a peripheral helper",
+    "that only participates in it.",
     'Output ONLY a JSON array, one object per candidate: [{"id":"<candidate id>","best":true|false}]',
     "with `best` true for exactly ONE.");
 
@@ -158,7 +176,7 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
 // only when NOTHING grew at all. `chosenBy` records which pass decided, for transparency.
 export async function select_anchor(repo: string, intent: string,
     opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed" } = {}):
-    Promise<{ chosen: ProbedAnchor | null; chosenBy: "llm" | "structural" | "none"; ranked: ProbedAnchor[] }> {
+    Promise<{ chosen: ProbedAnchor | null; chosenBy: "llm" | "structural" | "none"; noFlow?: boolean; ranked: ProbedAnchor[] }> {
   const topK = opts.topK ?? 8;
   // LLM query-expansion is ON by default here: the deterministic candidate scan is morphological
   // (stem overlap), so it can't bridge "registration"→register / "completion"→complete and silently
@@ -206,13 +224,20 @@ export async function select_anchor(repo: string, intent: string,
 
   let chosen = pool[0] ?? null;
   let chosenBy: "llm" | "structural" | "none" = chosen ? "structural" : "none";
-  // the semantic pick — only over the CONNECTED survivors (structure already vetoed the isolated).
+  // the semantic pick — only over the CONNECTED survivors (structure already vetoed the isolated). The LLM
+  // commits LAST, judging each candidate by its own CODE (declaration + doc) plus the surface it's wired
+  // to — the reader's evidence, not topology counts (which the 6-failure thread proved mis-rank the judge).
   if (chosen && (opts.judge ?? true) && alive.length >= 2 && available(opts.claudeBin)) {
+    for (const a of alive) { const id = _candidate_identity(repo, a.file, a.name); if (id) { a.signature = id.signature; a.doc = id.doc; } }
     emit("Judging which footprint answers the intent…");
     const pick = judge_anchor_llm(intent, alive, { model: opts.model, claudeBin: opts.claudeBin });
     const picked = pick ? alive.find((p) => p.id === pick) : null;
     if (picked) { chosen = picked; chosenBy = "llm"; }
   }
+  // no-flow: a chosen footprint that reaches no terminal and crosses no boundary is a computation/strategy
+  // unit (polymorphic dispatch / a pure helper), not a traceable flow — there is no spine to find. Report
+  // it honestly rather than emit a 1-seam stub. Deterministic, decoupled from which pass picked the anchor.
+  const noFlow = !!(chosen?.metrics && chosen.metrics.terminals === 0 && chosen.metrics.crossings === 0);
   // surface the chosen anchor first in the ranked list regardless of which pass picked it.
-  return { chosen, chosenBy, ranked: chosen ? [chosen, ...ranked.filter((p) => p !== chosen)] : ranked };
+  return { chosen, chosenBy, noFlow, ranked: chosen ? [chosen, ...ranked.filter((p) => p !== chosen)] : ranked };
 }
