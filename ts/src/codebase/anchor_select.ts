@@ -232,6 +232,7 @@ export async function select_anchor(repo: string, intent: string,
   // 165.41 vs 180.50). Parallelizing needs a reentrant grow (per-call resolver context + a copied/immutable
   // key index) first — see memory `probe-parallelism-blocked-on-reentrancy`.
   const probed: ProbedAnchor[] = [];
+  const _pt0 = process.env.SEAM_TIMING ? performance.now() : 0;   // probe-phase wall-clock (opt-in)
   for (let i = 0; i < toProbe.length; i++) {
     const c = toProbe[i];
     emit(`Probing anchor ${i + 1}/${toProbe.length}: ${c.name}…`);
@@ -239,6 +240,7 @@ export async function select_anchor(repo: string, intent: string,
     probed.push({ id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: c.score, terms: c.terms ?? [],
       metrics, structScore: struct_score(metrics, c.score) });
   }
+  if (_pt0) process.stderr.write(`[timing] probe phase: ${Math.round(performance.now() - _pt0)}ms for ${toProbe.length} candidates\n`);
 
   // keep the connected candidates; if the probe disqualified everything (e.g. resolver gap), fall back
   // to the full probed list ranked by name so the ramp never empties out.

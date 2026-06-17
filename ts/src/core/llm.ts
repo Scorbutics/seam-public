@@ -289,11 +289,13 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
                            thinking: number | null, tag: string): Map<string, any> {
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
+  const _t0 = process.env.SEAM_TIMING ? performance.now() : 0;   // per-pass wall-clock (opt-in)
   for (const attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
         ? _HOST_BUS.serve(tag, prompt, model, thinking)
         : _run_backend(kind, binary, prompt, model, thinking);
+      if (_t0) process.stderr.write(`[timing] LLM ${tag} (${model}): ${Math.round(performance.now() - _t0)}ms, prompt ${prompt.length} chars\n`);
       for (const item of extractJsonArray(raw))
         if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
       break;

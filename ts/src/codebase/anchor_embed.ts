@@ -57,6 +57,7 @@ function loadCache(p: string): Record<string, number[]> {
 // falls back to the lexical floor — embed recall is strictly additive, never load-bearing).
 export async function embed_anchor_candidates(repo: string, intent: string,
     opts: { k?: number } = {}): Promise<Def[]> {
+  const _et0 = process.env.SEAM_TIMING ? performance.now() : 0;   // embed-recall wall-clock (opt-in)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
     const defs = enumerate_defs(repo);
@@ -72,6 +73,7 @@ export async function embed_anchor_candidates(repo: string, intent: string,
     const iv = await embed_one(QUERY_PREFIX + intent);
     const scored = defs.map((d, i) => ({ d, s: cosine(iv, cache[h(strings[i])]) }));
     scored.sort((a, b) => b.s - a.s);
+    if (_et0) process.stderr.write(`[timing] embed recall: ${Math.round(performance.now() - _et0)}ms (${defs.length} defs, ${misses.length} newly embedded)\n`);
     return scored.slice(0, opts.k ?? 20).map((x) => x.d);
   } catch { return []; }
 }
