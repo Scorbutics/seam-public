@@ -83,7 +83,7 @@ function parseArgs(argv: string[]): Args {
       case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)
       case "--promote-spine-path": a.promoteSpinePath = true; break;   // Step 2: promote on-path supporting seams to spine
       case "--lineage": a.lineage = true; break;   // attach per-seam git lineage (last-touching commit) to the footprint
-      case "--anchor-recall": a.anchorRecall = (next() ?? "lexical").toLowerCase(); break;   // lexical (default) | embed
+      case "--anchor-recall": a.anchorRecall = (next() ?? "embed").toLowerCase(); break;   // embed (default) | lexical
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -164,9 +164,13 @@ async function runCodebase(a: Args): Promise<number> {
         }
       }
       // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
-      // (lexical/embed symbols + any entry-point seed) is the intent's entry point.
+      // (lexical/embed symbols + any entry-point seed) is the intent's entry point. Embed recall is the
+      // DEFAULT (graduated the gate: 83% vs lexical 50%, no per-case regression, recovers the fuzzy
+      // name-mismatch anchors the lexical net misses); `--anchor-recall lexical` opts out. Where
+      // transformers.js isn't available (e.g. the bundled .vsix) embed_anchor_candidates returns [] and
+      // it degrades to lexical, so defaulting on is safe.
       const { select_anchor } = await import("../codebase/anchor_select.js");
-      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "embed" ? "embed" : "lexical", seeds });
+      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", seeds });
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;

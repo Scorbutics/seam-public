@@ -5,6 +5,16 @@
 // per-case regression (embed ≥ lexical everywhere — guards the real risk: a bigger pool luring the judge
 // to an embed distractor); (3) a strict win on the fuzzy subset (where lexical < 80%).
 //
+// GATE RESULT (2026-06): embed GRADUATED — 83% vs lexical 50%, no per-case regression, fuzzy wins
+// (scorer-match/inbound-load 0→100; matching-engine 0→0 is the known vocabulary gap). `embed` is now
+// the engine/CLI default.
+//
+// ⚠ WASM-HEAP CAVEAT: embed uses tree-sitter + transformers WASM; running ALL cases in ONE process
+// (the no-`--case` batch below) exhausts the WASM heap after ~dozens of in-process select_anchor calls
+// and prints `Aborted()` — embed runs then return null and score a FALSE 0%. The PRODUCT is unaffected
+// (one select_anchor per process). For clean embed numbers run PER-CASE (each a fresh process):
+//   for c in <labels>; do bun ts/eval/anchor_recall_harness.ts --runs 3 --case "$c"; done
+//
 //   bun ts/eval/anchor_recall_harness.ts --runs 3            # run+score both modes, cached
 //   bun ts/eval/anchor_recall_harness.ts --runs 3 --case scorer-match
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";

@@ -22,6 +22,16 @@ async function embedder(): Promise<any> {
   return _embedder;
 }
 
+// Is transformers.js loadable at all? Cached so it costs one import attempt per process. Embed recall is
+// the DEFAULT now, but the bundled .vsix externalizes the lib — so probe BEFORE the expensive def walk and
+// bail fast (→ falls back to lexical) instead of scanning the whole repo only to fail the import.
+let _tfAvailable: boolean | null = null;
+async function transformersAvailable(): Promise<boolean> {
+  if (_tfAvailable !== null) return _tfAvailable;
+  try { await import("@xenova/transformers"); _tfAvailable = true; } catch { _tfAvailable = false; }
+  return _tfAvailable;
+}
+
 async function embed_one(text: string): Promise<number[]> {
   const out = await (await embedder())(text, { pooling: "mean", normalize: true });
   return Array.from(out.data as Float32Array);
@@ -48,6 +58,7 @@ function loadCache(p: string): Record<string, number[]> {
 export async function embed_anchor_candidates(repo: string, intent: string,
     opts: { k?: number } = {}): Promise<Def[]> {
   try {
+    if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
     const defs = enumerate_defs(repo);
     if (!defs.length) return [];
     const strings = defs.map(embedString);
