@@ -3,6 +3,27 @@
 All notable changes to the Seam extension. Distributed as a `.vsix` via
 [GitHub Releases](https://github.com/Scorbutics/seam/releases) — experimental, not on the Marketplace.
 
+## 0.2.1
+
+Java codebase mode, hardened end-to-end on real apps (Jakarta EE + Spring). All engine-side, so the
+bundled extension now actually traces Java flows — `v0.2.0` predated this work.
+
+- **Java resolution floor** — deterministic FQN-import → file resolution (no LSP/toolchain needed),
+  plus **same-package** (flat-layout, e.g. a controller + repository in one package) and **wildcard
+  import** support.
+- **Interfaces/enums/records** are recognised as type definitions, so a dependency on an interface
+  resolves (previously dropped — injected repository/service interfaces vanished from footprints).
+- **Interface→impl (DI) reachability** — a footprint now extends *past* a `@Inject`/`@Autowired`
+  interface to its concrete implementation (sole impl → resolved; multiple → an honest blindspot listing
+  candidates; framework-generated, e.g. a Spring-Data repository → an honest terminal). Spines reach the
+  real JPA/JMS/routing classes, not just the DI seam.
+- **Cross-language anchor recall** — embedding recall now enumerates definitions via tree-sitter for
+  non-TS languages (it was near-blind on Java), so auto-anchor lands on the right Java symbol; and
+  candidate recall now respects `.gitignore` and skips vendored/minified bundles.
+
+Validated on `eclipse-ee4j/cargotracker` (booking / routing / handling flows culminate correctly) and
+`spring-petclinic`. TS/JS behaviour unchanged.
+
 ## 0.2.0
 
 Codebase mode grew up: the extension now maps **intent footprints** across a repo, not just diffs.

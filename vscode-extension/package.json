@@ -2,7 +2,7 @@
   "name": "seam",
   "displayName": "Seam — review by intent",
   "description": "Review by intent, not by file. Seam decomposes a diff — or a codebase intent — into seams (units of one intent) and paints them natively: seam colours on the diff, a seam tree, and intent footprints (anchor → spine → culmination) across the repo. Engine bundled (TypeScript), no checkout needed.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "seam-local",
   "license": "MIT",
   "icon": "media/icon.png",
