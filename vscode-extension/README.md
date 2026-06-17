@@ -16,9 +16,23 @@ intent-driven decomposition is **LLM-powered** — it runs through your existing
 - **Seam tree** (activity-bar icon) — clusters → seams → hunks. Click a hunk to
   jump the editor to it (the "related code closer" navigation).
 
+A seam is an **intent at a sub level** — and you *see* it: the colours, the tree, and the scrollbar
+map turn "what is this change actually doing" into something you read at a glance, instead of holding
+it in your head while scrolling. That visual decomposition of intent is the point.
+
 The classification is the engine: a `--emit-seams` model (file + line range + role per hunk) that
 the extension renders natively. The engine ships **inside** the `.vsix` (esbuild bundle), run with
 VS Code's own Node — so installing the `.vsix` is all a user needs.
+
+## Codebase mode (map an intent)
+
+Beyond diffs, Seam maps where an intent **lives across a repo**. From the editor: **Analyze codebase
+from anchor** (cursor), **Analyze module** (a file's exports), **Find footprint by intent…** (describe
+it in words), or **Auto-map intent** (grow the footprint toward a question). Seam traces the footprint
+and renders it as seams — an **anchor → spine → culmination** path, off-domain parts dimmed, and edges
+it can't statically resolve flagged as `SUGGESTED` / blindspots rather than asserted. Use it to
+understand how a feature flows, or to map a change's blast radius before you make it. No index to build
+or keep fresh — it traces on demand, in any supported language.
 
 ## Install (try it)
 1. Download `seam-<version>.vsix` from the [Releases](https://github.com/Scorbutics/seam/releases) page.
@@ -70,10 +84,10 @@ discovery in **Expand → dependencies** (Expand → consumers is fine).
 > what Seam is for. Treat it as a degraded mode, not the default experience.
 
 ## Settings
-- `seam.engine` — `hybrid` (LLM intent + deterministic roles/wiring — the intended experience; needs
-  an LLM backend, see [above](#llm-required)), `llm` (all LLM), or `det` (offline structural fallback).
-  Currently defaults to `det` so a fresh install always produces output; set `hybrid` once a backend is
-  in place.
+- `seam.engine` — `hybrid` (LLM intent + deterministic roles/wiring — **the default** and intended
+  experience; needs an LLM backend, see [above](#llm-required)), `llm` (all LLM), or `det` (offline
+  structural fallback — no backend needed, but seam labels are structural, not product-intent). With no
+  LLM backend available, set `det` so a fresh install still produces output.
 - `seam.resolver` — `det` (default, offline). `lsp`/`auto` need a dev checkout (see below).
 - `seam.blastRadius` — on by default.
 - `seam.toolPath` — **dev only**: point at a `code-review-sort` checkout to run the engine from
@@ -103,6 +117,7 @@ reopen the folder — no re-running the LLM on the same diff. The tree shows a
 refresh, or `Seam: Clear decorations` to forget it.
 
 ## Status
-v1: role-coloured decorations (gutter + scrollbar) + seam tree + click-to-diff +
-auto-saved/restored last run. The "gathered seam panel" (a side view stacking a
-seam's hunks together) and commit-review (arbitrary refs) are the planned v2.
+Shipped: diff review (role-coloured gutter + scrollbar decorations, seam tree, click-to-diff,
+auto-saved/restored last run) **and** codebase mode (intent footprints from an anchor / module /
+natural-language intent, auto-grow, expand consumers & dependencies). Planned: a "gathered seam panel"
+(a side view stacking a seam's hunks together) and commit-review across arbitrary refs.

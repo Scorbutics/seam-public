@@ -1,11 +1,23 @@
 {
   "name": "seam",
   "displayName": "Seam — review by intent",
-  "description": "Decompose a diff into seams (core/link/environment/test/noise) and review by intent: seam colours on the native diff + a seam tree, powered by the Seam engine (TypeScript).",
-  "version": "0.1.0",
+  "description": "Review by intent, not by file. Seam decomposes a diff — or a codebase intent — into seams (units of one intent) and paints them natively: seam colours on the diff, a seam tree, and intent footprints (anchor → spine → culmination) across the repo. Engine bundled (TypeScript), no checkout needed.",
+  "version": "0.2.0",
   "publisher": "seam-local",
   "license": "MIT",
   "icon": "media/icon.png",
+  "keywords": [
+    "code review",
+    "diff",
+    "pull request",
+    "intent",
+    "code navigation",
+    "refactoring",
+    "codebase map",
+    "static analysis",
+    "tree-sitter",
+    "ai"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/Scorbutics/seam.git"
