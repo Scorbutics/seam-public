@@ -14,9 +14,11 @@ description: >-
   DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
   have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
   selection and traces+decomposes from it (~11s vs ~28s auto-anchor). grep to ORIENT, Seam to TRACE.
-  ALSO for INTERNAL PLANNING before implementing: if a change touches a flow you haven't mapped and
-  understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST (orient grep →
-  named-anchor grow) to plan against a verified spine, not a guess — not just for "how does X work".
+  ALSO for INTERNAL PLANNING before implementing: if a change touches a LOGIC/DATA flow (a spine) you
+  haven't mapped and understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST
+  (orient grep → named-anchor grow) to plan against a verified spine, not a guess — not just for "how
+  does X work". NOT for presentation/display-only changes (layout/styling/visuals): no spine → noFlow,
+  just grep/read. File-count alone doesn't trigger Seam — a flow to trace does.
 ---
 
 # Seam (host-served LLM, diff + codebase)
