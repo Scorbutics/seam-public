@@ -153,10 +153,20 @@ async function runCodebase(a: Args): Promise<number> {
       // footprint best answers the intent (decide-LAST, the pattern that survived).
       const { available } = await import("../core/llm.js");
       const seeds: { name: string; file: string; kind: string }[] = [];
+      let expandTerms: string[] | undefined;
       if (available(a.claudeBin)) {
         const ep = await import("../codebase/entrypoint_select.js");
+        const { expand_intent_terms_async } = await import("../codebase/intent_expand.js");
         const eps = ep.enumerate_entrypoints(a.repo);
-        const pick = ep.select_entrypoint_llm(a.intent, eps, { model: a.model, claudeBin: a.claudeBin });
+        // `entrypoint-select` and `expand` are INDEPENDENT LLM passes that both precede the anchor
+        // decision (one seeds a route candidate, the other the recall keywords) — run them CONCURRENTLY
+        // to save a round-trip on the dominant LLM-pass cost. The picked route still enters the SAME
+        // probe→judge funnel as a SEED candidate (decide-LAST), and the expand terms feed select_anchor.
+        const [pick, terms] = await Promise.all([
+          ep.select_entrypoint_llm(a.intent, eps, { model: a.model, claudeBin: a.claudeBin }),
+          expand_intent_terms_async(a.intent, { model: a.model, claudeBin: a.claudeBin }),
+        ]);
+        expandTerms = terms;
         if (pick) {
           const [file, symbol] = await ep.entrypoint_anchor(a.repo, pick);
           seeds.push({ name: symbol, file, kind: "route" });
@@ -170,7 +180,7 @@ async function runCodebase(a: Args): Promise<number> {
       // transformers.js isn't available (e.g. the bundled .vsix) embed_anchor_candidates returns [] and
       // it degrades to lexical, so defaulting on is safe.
       const { select_anchor } = await import("../codebase/anchor_select.js");
-      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", seeds });
+      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", seeds, expandTerms });
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;

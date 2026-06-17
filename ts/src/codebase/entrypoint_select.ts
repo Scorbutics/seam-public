@@ -10,7 +10,7 @@
 // the direction-aware grow traces (so an anonymous edge handler needs no symbol).
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { run_pass, ClassifierError as LLMError } from "../core/llm.js";
+import { run_pass_async, ClassifierError as LLMError } from "../core/llm.js";
 import { walk } from "../core/resolve/walk.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../core/resolve/languages/index.js";
 import { scan_file_keys, complement_unit } from "./coupling/index.js";
@@ -50,8 +50,8 @@ export function enumerate_entrypoints(repo: string, limit = 300): EntryPoint[] {
 // One LLM pass: which enumerated endpoint is the intent SPECIFICALLY about — or `none`. Conservative by
 // construction (the prompt biases to `none` for behavior/service intents) so it can't override a good
 // service anchor. Returns the chosen EntryPoint or null (none / no backend / unusable).
-export function select_entrypoint_llm(intent: string, eps: EntryPoint[],
-    opts: { model?: string; claudeBin?: string | null } = {}): EntryPoint | null {
+export async function select_entrypoint_llm(intent: string, eps: EntryPoint[],
+    opts: { model?: string; claudeBin?: string | null } = {}): Promise<EntryPoint | null> {
   if (!eps.length) return null;
   const shown = eps.slice(0, 150);
   const lines = [
@@ -69,7 +69,7 @@ export function select_entrypoint_llm(intent: string, eps: EntryPoint[],
     '"how does email notification work", "how is auth enforced"), answer "none" — do NOT force a match.',
     'Output ONLY a JSON array with one object: [{"id":"e<N>"}] or [{"id":"none"}]');
   let out: Map<string, any>;
-  try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "entrypoint-select" }); }
+  try { out = await run_pass_async(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "entrypoint-select" }); }
   catch (e) { if (e instanceof LLMError) return null; throw e; }
   for (const v of out.values()) {
     const id = String(v?.id ?? "").trim();

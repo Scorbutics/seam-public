@@ -337,3 +337,14 @@ export function run_pass(prompt: string, opts: {
   const model = _route_model(opts.tag, opts.model ?? "claude-haiku-4-5");
   return runPassRaw(kind, binary, prompt, model, opts.thinking ?? 0, opts.tag ?? "codebase");
 }
+
+// Async twin of run_pass — awaits a non-blocking subprocess so INDEPENDENT passes can run concurrently
+// (Promise.all) on the direct `claude -p` path. The host-bus path still serves sequentially (its serve is
+// sync), so the skill/MCP stay correct — they just don't overlap.
+export async function run_pass_async(prompt: string, opts: {
+  model?: string; tag?: string; thinking?: number | null; claudeBin?: string | null;
+} = {}): Promise<Map<string, any>> {
+  const [kind, binary] = resolve_backend(opts.claudeBin);
+  const model = _route_model(opts.tag, opts.model ?? "claude-haiku-4-5");
+  return runPassRawAsync(kind, binary, prompt, model, opts.thinking ?? 0, opts.tag ?? "codebase");
+}

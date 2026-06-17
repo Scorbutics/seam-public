@@ -185,14 +185,16 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
 // fallback order); the LLM is the one semantic call (skipped cleanly when no backend). `chosen` is null
 // only when NOTHING grew at all. `chosenBy` records which pass decided, for transparency.
 export async function select_anchor(repo: string, intent: string,
-    opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed"; seeds?: { name: string; file: string; kind: string }[] } = {}):
+    opts: { topK?: number; llmExpand?: boolean; expandTerms?: string[]; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed"; seeds?: { name: string; file: string; kind: string }[] } = {}):
     Promise<{ chosen: ProbedAnchor | null; chosenBy: "llm" | "structural" | "none"; noFlow?: boolean; ranked: ProbedAnchor[] }> {
   const topK = opts.topK ?? 8;
   // LLM query-expansion is ON by default here: the deterministic candidate scan is morphological
   // (stem overlap), so it can't bridge "registration"→register / "completion"→complete and silently
   // drops the right symbols at the content pre-filter. The LLM proposing domain vocabulary is the
   // sanctioned meaning-bridge (grounded by the scan: junk terms find nothing); graceful [] offline.
-  const extra = (opts.llmExpand ?? true) ? expand_intent_terms(intent, { model: opts.model, claudeBin: opts.claudeBin }) : [];
+  // expand keywords: use the caller's PRE-COMPUTED terms when given (the CLI runs `expand` concurrently
+  // with `entrypoint-select`), else run the pass here (other callers — harness/MCP — stay unchanged).
+  const extra = opts.expandTerms ?? ((opts.llmExpand ?? true) ? expand_intent_terms(intent, { model: opts.model, claudeBin: opts.claudeBin }) : []);
   const keywords = [...new Set([..._content_words(intent), ...extra])].sort();
   const cands = find_anchor_candidates(repo, keywords);
   const named = rank_anchors(intent, cands, topK, extra);
