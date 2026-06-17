@@ -179,7 +179,7 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
 // fallback order); the LLM is the one semantic call (skipped cleanly when no backend). `chosen` is null
 // only when NOTHING grew at all. `chosenBy` records which pass decided, for transparency.
 export async function select_anchor(repo: string, intent: string,
-    opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed" } = {}):
+    opts: { topK?: number; llmExpand?: boolean; judge?: boolean; dataCoupling?: boolean; maxNodes?: number; maxSteps?: number; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed"; seeds?: { name: string; file: string; kind: string }[] } = {}):
     Promise<{ chosen: ProbedAnchor | null; chosenBy: "llm" | "structural" | "none"; noFlow?: boolean; ranked: ProbedAnchor[] }> {
   const topK = opts.topK ?? 8;
   // LLM query-expansion is ON by default here: the deterministic candidate scan is morphological
@@ -195,9 +195,18 @@ export async function select_anchor(repo: string, intent: string,
   // reach (a path-relevant `save` that shares no stem with the intent). Additive — they probe alongside
   // the lexical pool and earn their rank from the STRUCTURAL probe (structScore), not the name score.
   const probeList = [...named];
+  const have = new Set(probeList.map((c) => `${c.name}|${c.file}`));
+  // SEED candidates — anchors a STRUCTURAL enumerator surfaced that the NAME-net can't see (an HTTP route
+  // handler whose convention name `GET`/`POST`/slug never matches the intent words). They enter the SAME
+  // probe→judge funnel as ordinary candidates, NOT as a preemptive override: a seed wins only if its grown
+  // footprint best answers the intent (the decide-LAST pattern). Front of the list so the probe-budget
+  // slice never drops them; if a seed is the ONLY connected candidate the fallback still anchors on it.
+  for (const s of opts.seeds ?? []) {
+    const key = `${s.name}|${s.file}`;
+    if (!have.has(key)) { have.add(key); probeList.unshift({ name: s.name, file: s.file, kind: s.kind, score: 0, terms: ["~entry"] }); }
+  }
   if (opts.anchorRecall === "embed") {
     const { embed_anchor_candidates } = await import("./anchor_embed.js");
-    const have = new Set(probeList.map((c) => `${c.name}|${c.file}`));
     for (const d of await embed_anchor_candidates(repo, intent, { k: topK })) {
       // a METHOD is rarely a standalone anchor — anchor on its enclosing CLASS instead (the lexical recall
       // only ever yields classes/functions, so this keeps the embed pool to the same anchor granularity).

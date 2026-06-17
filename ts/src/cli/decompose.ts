@@ -145,32 +145,35 @@ async function runCodebase(a: Args): Promise<number> {
     // Auto-anchor: --auto with --intent but NO --symbol → SELECT the anchor instead of the user picking
     // one (a bad pick linked to nothing hides the real result).
     if (a.auto && a.intent && !a.symbol) {
-      // #1 first: if the intent is SPECIFICALLY about an HTTP endpoint, the LLM picks its path from a
-      // structural enumeration (handles convention-named route handlers + anonymous edge functions the
-      // lexical net can't see). Conservative — returns none for behavior/service intents, which then
-      // fall through to the normal lexical→probe→judge selection (no override of a good service anchor).
+      // #1 ENUMERATE the HTTP entry points (structure): a route handler whose convention name (`GET`/
+      // `POST`/slug) or anonymous edge fn the lexical net can't see. The LLM names the route the intent
+      // points at, if any. This is a RECALL source, NOT a preemptive override: the picked route enters
+      // the SAME probe→judge funnel as a SEED candidate, so a tangential route ("/bug-reports/screenshot"
+      // for "how is a bug created") can't hijack a better service anchor — it wins only if its grown
+      // footprint best answers the intent (decide-LAST, the pattern that survived).
       const { available } = await import("../core/llm.js");
+      const seeds: { name: string; file: string; kind: string }[] = [];
       if (available(a.claudeBin)) {
         const ep = await import("../codebase/entrypoint_select.js");
         const eps = ep.enumerate_entrypoints(a.repo);
         const pick = ep.select_entrypoint_llm(a.intent, eps, { model: a.model, claudeBin: a.claudeBin });
         if (pick) {
-          [a.anchorFile, a.symbol] = await ep.entrypoint_anchor(a.repo, pick);
-          process.stdout.write(`[auto-anchor:entrypoint] ${pick.path} → ${a.symbol} (${a.anchorFile})\n`);
+          const [file, symbol] = await ep.entrypoint_anchor(a.repo, pick);
+          seeds.push({ name: symbol, file, kind: "route" });
+          process.stdout.write(`[entry-candidate] ${pick.path} → ${symbol} (${file})\n`);
         }
       }
-      if (!a.symbol) {
-        // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
-        // is the intent's entry point.
-        const { select_anchor } = await import("../codebase/anchor_select.js");
-        const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "embed" ? "embed" : "lexical" });
-        if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
-        a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
-        process.stdout.write(`[auto-anchor:${sel.chosenBy}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
-        // honest signal: the chosen anchor is a computation/strategy unit with no traceable flow — the
-        // grow will be a 1-seam stub, not a spine. Surface it rather than letting the user read it as a miss.
-        if (sel.noFlow) process.stdout.write(`[no-flow] "${a.intent}" resolves to dispatch/computation code with no traceable spine; expect touchpoints, not an ordered path.\n`);
-      }
+      // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
+      // (lexical/embed symbols + any entry-point seed) is the intent's entry point.
+      const { select_anchor } = await import("../codebase/anchor_select.js");
+      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "embed" ? "embed" : "lexical", seeds });
+      if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
+      a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
+      const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
+      process.stdout.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
+      // honest signal: the chosen anchor is a computation/strategy unit with no traceable flow — the
+      // grow will be a 1-seam stub, not a spine. Surface it rather than letting the user read it as a miss.
+      if (sel.noFlow) process.stdout.write(`[no-flow] "${a.intent}" resolves to dispatch/computation code with no traceable spine; expect touchpoints, not an ordered path.\n`);
     }
     if (!a.anchorFile) err("--scan requires --anchor-file");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
