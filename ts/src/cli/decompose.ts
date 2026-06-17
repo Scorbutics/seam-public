@@ -35,6 +35,7 @@ interface Args {
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
+  checkBackend?: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -97,6 +98,7 @@ function parseArgs(argv: string[]): Args {
       case "--auto": a.auto = true; break;
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
+      case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
       case "--no-data-coupling": a.dataCoupling = false; break;
       case "--cache": a.cache = true; break;
       // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
@@ -285,6 +287,15 @@ async function runCodebase(a: Args): Promise<number> {
 
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
+  // --check-backend: source-of-truth probe for whether the engine can serve its OWN LLM passes from a
+  // local binary (claude/copilot). Prints the resolved backend kind on success. Clients (the MCP server)
+  // use this to decide binary-backed vs sampling-backed LLM serving without duplicating resolve_backend.
+  if (a.checkBackend) {
+    const { available, resolve_backend } = await import("../core/llm.js");
+    if (!available(a.claudeBin)) return 1;
+    process.stdout.write(resolve_backend(a.claudeBin)[0] + "\n");
+    return 0;
+  }
   // --llm-bridge installs an INTERACTIVE host bus (process-wide) so every LLM pass — including the
   // in-the-loop auto-orchestration moves — is served on demand by a host (the MCP server's sampling).
   // Covers BOTH modes, so it must be set before dispatch and before any mode's own host-bus handling.

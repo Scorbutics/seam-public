@@ -27,6 +27,19 @@ export function engineInvocation(): { cmd: string; pre: string[] } {
 
 export class EngineError extends Error {}
 
+// Whether the engine can serve its OWN LLM passes from a local binary (claude/copilot). Asks the engine
+// itself (--check-backend) so the resolution logic stays the engine's source-of-truth — we don't
+// re-scan PATH / CLAUDE_BIN / COPILOT_BIN here. Cached: a server-lifetime fact (binaries don't appear
+// mid-run). Returns the backend kind ("claude"|"copilot") or null when none resolves.
+let _backendKind: string | null | undefined;
+export function backendKind(cwd = REPO_ROOT): string | null {
+  if (_backendKind !== undefined) return _backendKind;
+  const { cmd, pre } = engineInvocation();
+  const proc = spawnSync(cmd, [...pre, "--check-backend"], { cwd, encoding: "utf-8", maxBuffer: 1 << 20 });
+  _backendKind = proc.status === 0 ? (proc.stdout || "").trim() || "unknown" : null;
+  return _backendKind;
+}
+
 // Run the engine with FLAGS (everything after the entry). Returns captured stdout — the engine writes
 // its artifacts to the --emit-* files the caller passes, and a one-line status to stdout/stderr.
 export function runEngine(flags: string[], cwd = REPO_ROOT): { stdout: string; stderr: string } {
