@@ -389,9 +389,23 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     const others = s.node_ids.map((i) => g.nodes.get(i)!).filter((n) => n && n !== r).slice(0, 3).map((n) => n.label).filter(Boolean);
     lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}  [${hintFor(s)}]`);
   }
-  lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",
-    "Output ONLY a JSON array, one object per seam:",
-    '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting|off","culmination":0..1}]');
+  // OUTPUT FORMAT. seam-intent's latency is OUTPUT-bound (the model writes one object per seam, and the
+  // 3-6-word label dominates each). Most seams are "off" and get dimmed/collapsed — they don't need a
+  // pretty label. So by default ask only for the seams that MATTER (spine/supporting + the culmination);
+  // any seam not listed defaults to "off" and keeps its mechanical label. That cuts the output ~3-5×.
+  // SEAM_VERBOSE_TIER restores the per-seam format (every seam, every label) for A/B / fidelity.
+  const _verbose = !!process.env.SEAM_VERBOSE_TIER;
+  if (_verbose) {
+    lines.push("", "Default tier=\"supporting\" when unsure; use \"off\" ONLY when clearly a different concern.",
+      "Output ONLY a JSON array, one object per seam:",
+      '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting|off","culmination":0..1}]');
+  } else {
+    lines.push("",
+      "Output ONLY a JSON array of the seams that are SPINE or SUPPORTING, plus the single culmination —",
+      "one object each. OMIT every other seam: any seam you do NOT list is treated as \"off\" (a different",
+      "concern). When unsure whether a seam is supporting or off, LIST it as supporting (don't drop it).",
+      '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting","culmination":0..1}]');
+  }
 
   let out: Map<string, any>;
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-intent" }); }
@@ -429,7 +443,10 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   const anchorSeamId = seams.find((s) => s.node_ids.includes(g.anchor))?.id;
   if (anchorSeamId) tierMap.set(anchorSeamId, "spine");
   if (answer) tierMap.set(answer.id, "spine");
-  for (const s of ranked) s.tier = tierMap.get(s.id) ?? "supporting";
+  // a seam the LLM didn't return: in terse mode that means "off" (it listed only spine/supporting); in
+  // verbose mode the LLM tiered every seam, so a gap is an "unsure" → the documented supporting default.
+  const _unlistedTier = _verbose ? "supporting" : "off";
+  for (const s of ranked) s.tier = tierMap.get(s.id) ?? _unlistedTier;
   // A backend flow (webhook/cron/worker) may have no UI terminal, so the LLM marks no `answers` seam —
   // but a coherent flow still CULMINATES. Fall back to the FAR END of the spine (the spine seam furthest
   // from the anchor, by the same BFS trace that orders the spine): topology only, language-agnostic.
