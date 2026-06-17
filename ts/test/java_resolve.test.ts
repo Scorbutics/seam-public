@@ -41,7 +41,7 @@ describe("java import parser", () => {
   });
 
   test("skips wildcard imports (no single target file)", () => {
-    expect(refs().some((x) => x.source.endsWith(".*"))).toBe(false);
+    expect(refs().some((x) => x.source?.endsWith(".*"))).toBe(false);
   });
 
   test("captures external imports too (resolver decides they're unresolvable)", () => {

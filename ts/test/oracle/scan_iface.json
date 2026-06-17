@@ -1,61 +1,68 @@
 {
+  "version": 1,
   "anchor": {
+    "id": "IRepo",
+    "symbol": "IRepo",
     "file": "src/repo.ts",
-    "id": "n1",
     "range": [
       0,
-      0
-    ],
-    "symbol": "IRepo"
+      3
+    ]
   },
-  "anchors": [
-    "n1"
-  ],
-  "blindspots": [],
-  "complete": true,
-  "depth": 1,
-  "edges": [
-    {
-      "from": "n2",
-      "kind": "reference",
-      "provenance": "RESOLVED_FULL",
-      "to": "n1"
-    },
-    {
-      "from": "n2",
-      "kind": "call",
-      "provenance": "RESOLVED_PARTIAL",
-      "to": "n1"
-    }
-  ],
   "language": "typescript",
+  "resolutionQuality": "FULL",
+  "depth": 1,
+  "complete": true,
   "nodes": [
     {
-      "complexity": 1,
-      "enclosing": "",
+      "id": "IRepo",
+      "symbol": "IRepo",
+      "kind": "class",
       "file": "src/repo.ts",
-      "id": "n1",
-      "kind": "symbol",
       "range": [
         0,
-        0
+        3
       ],
-      "symbol": "IRepo"
+      "enclosing": "",
+      "complexity": 4
     },
     {
-      "complexity": 4,
-      "enclosing": "",
-      "file": "src/service.ts",
-      "id": "n2",
+      "id": "c1",
+      "symbol": "service",
       "kind": "function",
+      "file": "src/service.ts",
       "range": [
         1,
         4
       ],
-      "symbol": "service"
+      "enclosing": "",
+      "complexity": 4
     }
   ],
-  "resolutionQuality": "FULL",
+  "edges": [
+    {
+      "from": "c1",
+      "to": "IRepo",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL"
+    },
+    {
+      "from": "c1",
+      "to": "IRepo",
+      "kind": "call",
+      "provenance": "RESOLVED_PARTIAL"
+    }
+  ],
+  "blindspots": [
+    {
+      "node": "IRepo",
+      "mechanism": "method-unattributed-consumers",
+      "evidence": "1 consumer(s) import IRepo as a RESOLVED reference but no method call could be attributed to an instance (factory/DI/dynamic): src/service.ts",
+      "candidates": []
+    }
+  ],
   "unresolved": [],
-  "version": 1
+  "anchors": [
+    "IRepo"
+  ]
 }

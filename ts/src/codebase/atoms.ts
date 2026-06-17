@@ -16,8 +16,12 @@ const _PARAM_NODE = new Set(["required_parameter", "optional_parameter", "rest_p
   "parameter_declaration", "optional_parameter_declaration", "formal_parameter", "spread_parameter",
   "receiver_parameter", "typed_parameter", "default_parameter", "typed_default_parameter", "parameter"]);
 export const _CALL = new Set(["call_expression", "method_invocation", "call", "invocation_expression"]);
-// class / member / instantiation vocabulary (shared with import_scan)
-export const _CLASS_KINDS = new Set(["class_declaration", "abstract_class_declaration", "class_definition", "class_specifier", "struct_specifier"]);
+// class / member / instantiation vocabulary (shared with import_scan). "Class-like" = any NAMED TYPE
+// declaration that can be imported/depended on — incl. interfaces/enums/records (Java + TS), not just
+// concrete classes. Without this, an imported interface (the common DI/abstraction target, e.g. a
+// repository or service interface) isn't recognised as a def, so the dependency edge to it is dropped.
+export const _CLASS_KINDS = new Set(["class_declaration", "abstract_class_declaration", "class_definition",
+  "class_specifier", "struct_specifier", "interface_declaration", "enum_declaration", "record_declaration"]);
 export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration"]);
 export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_identifier"]);
 export const _MEMBER = new Set(["member_expression", "attribute", "field_access", "selector_expression", "field_expression"]);
