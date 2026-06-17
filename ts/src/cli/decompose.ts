@@ -35,7 +35,7 @@ interface Args {
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
-  checkBackend?: boolean; affinity?: boolean;
+  checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -100,6 +100,7 @@ function parseArgs(argv: string[]): Args {
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint
+      case "--no-interface-consumers": a.interfaceConsumers = false; break;   // disable the default interface-consumer enrichment
       case "--no-data-coupling": a.dataCoupling = false; break;
       case "--cache": a.cache = true; break;
       // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
@@ -247,6 +248,27 @@ async function runCodebase(a: Args): Promise<number> {
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }
     catch (e) { err(`could not load resolved graph: ${(e as Error).message}`); }
+  }
+  // DEFAULT deterministic enrichment: reach the facade-style UPSTREAM entries a bidirectional grow
+  // misses because DI/CDI consumers import the INTERFACE, not the impl (so consumers-of-the-impl finds
+  // nothing). Grow consumers of the interface(s) the anchor implements and merge them in — CERTAIN
+  // (resolved edges), no LLM; the seam-intent tiering then scopes them by intent. --no-interface-consumers
+  // disables. Bounded: only the anchor's own interfaces.
+  if (a.interfaceConsumers !== false && a.symbol && a.anchorFile && Array.isArray(data?.nodes) && data.nodes.length) {
+    try {
+      const ifaces = await scan.implemented_interfaces(a.repo, a.anchorFile, a.symbol);
+      const { merge_resolved } = await import("../codebase/expand.js");
+      let added = 0;
+      for (const iface of ifaces) {
+        const node = (data.nodes as any[]).find((n) => n.symbol === iface);
+        if (!node?.file) continue;   // the interface must already be a resolved node (a dep of the anchor)
+        const before = (data.nodes as any[]).length;
+        const cons = await scan.build_consumers_graph(a.repo, node.file, iface, { dataCoupling: false });
+        data = merge_resolved(data, cons, node.id);   // attach the interface's consumers at the interface node
+        added += (data.nodes as any[]).length - before;
+      }
+      if (added) emit(`interface-consumers: +${added} upstream seam(s) via ${ifaces.length} interface(s) (deterministic)`);
+    } catch (e) { process.stderr.write(`interface-consumers enrichment skipped: ${(e as Error).message}\n`); }
   }
   // --affinity (opt-in): fold INTENT-RELATED seams that share the footprint's subjects but aren't
   // reachable by a resolved edge (e.g. DI-wired upstream entry points). subject_affinity recalls them
