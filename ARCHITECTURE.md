@@ -64,9 +64,14 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
   changes do, and clients warn on a higher major.
 - **Distribution:** [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — bun-from-source vs the
   `bun build --compile` single binary, the tree-sitter-grammar caveat, and the host-bus LLM seam.
-- **MCP:** [`mcp/`](mcp/) exposes `decompose_diff` / `intent_footprint` to any agent. `det` is offline;
-  `hybrid`/`llm` borrow the **caller's** model via MCP sampling, mapped onto the `--emit-prompts` →
-  `--inject-llm` host-bus handshake (the same one the `seam` skill uses). **No daemon.**
+- **MCP:** [`mcp/`](mcp/) exposes `decompose_diff` / `intent_footprint` / `grow_intent` to any agent.
+  `det` is offline. `hybrid`/`llm` serve their LLM passes one of two ways, auto-chosen per call
+  (override with `SEAM_MCP_LLM=binary|sampling`): **binary** — the engine makes its own `claude`/`copilot`
+  calls (cheap dedicated tier, no sampling needed — so clients *without* MCP sampling, e.g. GitHub
+  Copilot, still work as long as a CLI is on PATH); **sampling** — borrow the **caller's** model via MCP
+  sampling (over the `--llm-bridge` host bus, the same seam the `seam` skill uses). `auto` prefers a
+  local binary, falls back to sampling. The MCP server picks via the engine's own `--check-backend`
+  probe, so backend resolution stays the engine's source-of-truth. **No daemon.**
 
 ---
 

@@ -299,14 +299,16 @@ in-repo blast radius that a bare `--file <patch>` run can't supply.
 
 ## The MCP server (any LLM can consult Seam)
 
-[`mcp/`](mcp/) exposes Seam to any MCP-capable agent as two tools — `decompose_diff` and
-`intent_footprint` — over the same JSON contract. It's a thin stdio adapter over the engine (no
-daemon):
+[`mcp/`](mcp/) exposes Seam to any MCP-capable agent as three tools — `decompose_diff`,
+`intent_footprint`, and `grow_intent` (LLM-directed auto-grow) — over the same JSON contract. It's a
+thin stdio adapter over the engine (no daemon):
 
 - **`engine="det"`** (default) — fully offline, instant; most agents want the *structure* (seams,
   roles, wiring), not prose.
-- **`engine="hybrid"/"llm"`** — borrows the **calling client's** model via MCP **sampling**, mapped
-  onto the host-bus handshake. No nested `claude -p`, no API key.
+- **`engine="hybrid"/"llm"`** — adds product-intent labels. Its LLM passes are served one of two ways,
+  auto-chosen (override with `SEAM_MCP_LLM=binary|sampling`): a **local `claude`/`copilot` binary** if
+  one is on PATH (cheap dedicated tier — so a client *without* MCP sampling, e.g. GitHub Copilot, still
+  works), else the **calling client's model via MCP sampling**. No API key either way.
 
 ```bash
 bun mcp/src/server.ts          # stdio MCP server
