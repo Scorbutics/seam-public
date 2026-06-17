@@ -60,7 +60,7 @@ export async function embed_anchor_candidates(repo: string, intent: string,
   const _et0 = process.env.SEAM_TIMING ? performance.now() : 0;   // embed-recall wall-clock (opt-in)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
-    const defs = enumerate_defs(repo);
+    const defs = await enumerate_defs(repo);
     if (!defs.length) return [];
     const strings = defs.map(embedString);
     const cp = cachePath(repo);

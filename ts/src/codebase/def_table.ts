@@ -5,8 +5,9 @@
 import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
-import { endsWithSourceExt, SKIP_DIRS } from "../core/resolve/languages/index.js";
+import { endsWithSourceExt, provider_for, SKIP_DIRS } from "../core/resolve/languages/index.js";
 import { walk } from "../core/resolve/walk.js";
+import { defs_in_file_treesitter } from "./def_treesitter.js";
 
 // Anchor candidates come from HAND-WRITTEN source. A source file past this size is almost always a
 // vendored/minified/generated bundle (e.g. a checked-in JS library under webapp/resources, a generated
@@ -111,13 +112,22 @@ export function embedString(d: Def): string {
   return `${prefix}${d.signature || d.name}${encl} — ${d.file}${doc}`;
 }
 
-export function enumerate_defs(repo: string, limit = 4000): Def[] {
+export async function enumerate_defs(repo: string, limit = 4000): Promise<Def[]> {
   repo = expanduser(repo);
   const out: Def[] = [];
   for (const rel of candidate_source_files(repo)) {
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
-    for (const d of defs_in_file(rel, text)) { out.push(d); if (out.length >= limit) return out; }
+    // PER-LANGUAGE def extraction. The regex extractor (`defs_in_file`) is TS/JS-syntax-specific: it
+    // parses TS/JS fine and is the extractor the embed-recall gate was validated with, so KEEP it for
+    // TS/JS — no reason to swap a validated path (tree-sitter is more accurate but an unvalidated change
+    // for TS embed ranking). For the OTHER languages the regex is near-blind (it found ~1 def across a
+    // whole Java repo), so use the language-agnostic tree-sitter extractor there (regex fallback when
+    // grammars are absent — the offline .vsix).
+    const defs = provider_for(rel)?.name === "typescript"
+      ? defs_in_file(rel, text)
+      : (await defs_in_file_treesitter(rel, text)) ?? defs_in_file(rel, text);
+    for (const d of defs) { out.push(d); if (out.length >= limit) return out; }
   }
   return out;
 }
