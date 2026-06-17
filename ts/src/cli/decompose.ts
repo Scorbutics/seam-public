@@ -35,7 +35,7 @@ interface Args {
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
-  checkBackend?: boolean;
+  checkBackend?: boolean; affinity?: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -99,6 +99,7 @@ function parseArgs(argv: string[]): Args {
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
+      case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint
       case "--no-data-coupling": a.dataCoupling = false; break;
       case "--cache": a.cache = true; break;
       // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
@@ -246,6 +247,31 @@ async function runCodebase(a: Args): Promise<number> {
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }
     catch (e) { err(`could not load resolved graph: ${(e as Error).message}`); }
+  }
+  // --affinity (opt-in): fold INTENT-RELATED seams that share the footprint's subjects but aren't
+  // reachable by a resolved edge (e.g. DI-wired upstream entry points). subject_affinity recalls them
+  // (structure) + the LLM judges intent-relevance with self-consistency voting; a grow-probe that
+  // connects BACK to the footprint promotes a hit to a real edge (RESOLVED_PARTIAL), else it stays a
+  // SUGGESTED affinity. Intent-related → on the spine, per the design.
+  if (a.affinity && a.intent && Array.isArray(data?.nodes) && data.nodes.length) {
+    try {
+      const { affinity_grow } = await import("../codebase/subject_affinity.js");
+      const subjects = [...new Set((data.nodes as any[]).map((n) => n.symbol).filter(Boolean))];
+      const fpFiles = (data.nodes as any[]).map((n) => n.file).filter(Boolean);
+      const hits = await affinity_grow(a.repo, subjects, a.intent, fpFiles, { model: a.model, claudeBin: a.claudeBin });
+      const idBySym = new Map<string, string>((data.nodes as any[]).map((n) => [n.symbol, n.id]));
+      const anchorId = data.anchor ?? (data.nodes[0] as any)?.id;
+      let k = 0;
+      for (const h of hits) {
+        const id = `aff${++k}`;
+        (data.nodes as any[]).push({ id, symbol: h.symbol || basename(h.file), kind: "class", file: h.file, range: [0, 0], enclosing: "", complexity: 1, affinity: true });
+        const to = (h.connected && h.via && idBySym.get(h.via)) || anchorId;
+        (data.edges ??= []).push(h.connected
+          ? { from: id, to, kind: "import", provenance: "RESOLVED_PARTIAL", affinity: true }
+          : { from: id, to: anchorId, kind: "suggested-affinity", provenance: "SUGGESTED", affinity: true });
+      }
+      if (k) emit(`affinity: +${k} intent-related seam(s) (${hits.filter((h) => h.connected).length} grow-confirmed → resolved, ${hits.filter((h) => !h.connected).length} suggested)`);
+    } catch (e) { process.stderr.write(`affinity pass skipped: ${(e as Error).message}\n`); }
   }
   const g = from_resolved_graph(data);
   if (!g.nodes.size) err("resolved graph has no nodes");
