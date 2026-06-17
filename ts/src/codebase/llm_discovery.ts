@@ -17,6 +17,11 @@ event/topic name, a framework convention, or dynamic loading. NOT ordinary impor
 FUNCTION (file: ${file}):
 ${snippet}
 
+PUB/SUB & MESSAGING: if this function PUBLISHES/FIRES/EMITS an event or message (any framework — a CDI
+event, a Spring publisher, an event bus, a JMS/queue send), the coupled target is the code that
+HANDLES/SUBSCRIBES TO it; if it HANDLES/RECEIVES one, the target is the EMITTER. Name that handler/emitter
+file. The link is the event TYPE or topic/destination name.
+
 ALREADY RESOLVED — do NOT repeat these targets:
 ${resolved}
 
@@ -66,8 +71,9 @@ ${snippet}
 
 For each shared key with CONCRETE textual evidence above, give:
   kind  — one of: db-table | queue | event | route | cache | key
-  value — the literal name (the table/topic/event/route string)
-  role  — "produces" if this function WRITES/EMITS/HANDLES it, "consumes" if it READS/SUBSCRIBES to it
+  value — the literal name (the table/topic/event-type/route string)
+  role  — "produces" if this function WRITES/EMITS/PUBLISHES/FIRES it, "consumes" if it READS/SUBSCRIBES-TO/HANDLES it
+          (for an event/queue: emitting = produces, an @Observes/@EventListener/onMessage handler = consumes)
 Do NOT invent keys — only ones literally present. A wrong guess is worse than silence.
 
 Return a JSON array, one object per key (empty array if none):
