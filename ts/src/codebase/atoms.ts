@@ -42,6 +42,10 @@ export const _BASE_NAME = new Set(["identifier", "type_identifier", "member_expr
 // nested under a `type_list`), TS `implements_clause` (nested under `class_heritage`). Kept DISTINCT
 // from _HERITAGE (which is `extends` only) so interface→impl resolution reads the implements relation.
 export const _IMPLEMENTS = new Set(["super_interfaces", "implements_clause"]);
+// Annotation / decorator node kinds — the LANGUAGE-level marker that a declaration is wired declaratively
+// (Java `annotation`/`marker_annotation`, TS/Python `decorator`). Framework-AGNOSTIC: presence is the
+// signal (a method the framework invokes), NOT which annotation — so no per-framework list to keep in sync.
+export const _ANNOTATION = new Set(["annotation", "marker_annotation", "decorator"]);
 export const _EXPORT = new Set(["export_statement"]);
 export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
 export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
