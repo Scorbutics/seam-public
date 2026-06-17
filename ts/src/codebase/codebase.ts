@@ -194,6 +194,7 @@ export function assign_intent_seams(g: Graph): Seam[] {
 
 // --------------------------------------------------------------------------- F4: LLM refine / relevance
 import { run_pass, ClassifierError as LLMError } from "../core/llm.js";
+import { emit } from "../core/progress.js";
 
 function _build_refine_prompt(g: Graph, members: Node[], floorOf: Map<string, string>, uses: Map<string, string[]>, intent?: string): string {
   const anchorSym = g.nodes.has(g.anchor) ? g.nodes.get(g.anchor)!.label : g.anchor;
@@ -340,6 +341,25 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     const endpoint = s.node_ids.some((i) => i !== g.anchor && (indeg.get(i) ?? 0) === 0);
     return `${endpoint ? "ENDPOINT" : "intermediate"}${d < 99 ? `, ${d} hop${d !== 1 ? "s" : ""} from anchor` : ""}${extra}`;
   };
+  // DETERMINISTIC PRE-TIER FLOOR (perf — the seam-intent prompt scales with footprint size, the dominant
+  // cost). A seam FAR from the anchor that touches NONE of the flow's domain tables, WRITES none of them,
+  // and is not an endpoint is STRUCTURALLY a different concern — the prompt's own "one domain" rule applied
+  // as a FACT, not a judgement. Pre-mark those "off" and don't spend tokens on them; the anchor, the domain,
+  // every endpoint, and all near hops still go to the LLM, which keeps the spine/culmination/supporting
+  // JUDGEMENT. Conservative (validated: the floored set ⊆ the LLM's "off" set on a real footprint), and only
+  // engages on a sizeable footprint. SEAM_NO_PRETIER disables it (harness A/B).
+  const minHop = (s: Seam): number => Math.min(99, ...s.node_ids.map((i) => dist.get(i) ?? 99));
+  const isEndpoint = (s: Seam): boolean => s.node_ids.some((i) => i !== g.anchor && (indeg.get(i) ?? 0) === 0);
+  const _DOMAIN_HOP = 2, _OFF_HOP = 5;
+  const domain = new Set<string>();
+  for (const s of ranked) if (minHop(s) <= _DOMAIN_HOP) { for (const t of tablesFor(s)) domain.add(t); for (const t of writesFor(s)) domain.add(t); }
+  const clearlyOff = (s: Seam): boolean => !s.node_ids.includes(g.anchor) && minHop(s) >= _OFF_HOP
+    && !isEndpoint(s) && ![...tablesFor(s), ...writesFor(s)].some((t) => domain.has(t));
+  const useFloor = !process.env.SEAM_NO_PRETIER && ranked.length >= 16 && domain.size > 0;
+  const floored = new Set<Seam>(useFloor ? ranked.filter(clearlyOff) : []);
+  const toJudge = ranked.filter((s) => !floored.has(s));
+  if (floored.size) emit(`pre-tier floor: ${floored.size}/${ranked.length} far off-domain seams marked off deterministically (saved from the LLM pass)`);
+
   const lines = [`A developer is mapping the code that answers: "${intent}".`, "",
     "Here are candidate SEAMS — each a group of related code reached while mapping that question. Each is",
     "tagged [ … ] with deterministic facts: its position in the flow (ANCHOR = the start; ENDPOINT = where",
@@ -364,7 +384,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     "doing another domain's work (a side-effect) — make it \"supporting\" even if it ALSO touches the main",
     "table. (Example: on a payments flow, a seam touching `members` is supporting, not spine.)",
     ""];
-  for (const s of ranked) {
+  for (const s of toJudge) {
     const r = rep(s); if (!r) continue;
     const others = s.node_ids.map((i) => g.nodes.get(i)!).filter((n) => n && n !== r).slice(0, 3).map((n) => n.label).filter(Boolean);
     lines.push(`  ${s.id}: "${s.label}" — ${r.label} (${r.file})${others.length ? "; also " + others.join(", ") : ""}  [${hintFor(s)}]`);
@@ -383,6 +403,9 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // the grounding facts (writes/dir) are RETAINED on the seam for the LLM-context projection's ranked climax
   // — the fragile single-★ pick stays the model's call, we just stop throwing the ranking away.
   const tierMap = new Map<string, "spine" | "supporting" | "off">();
+  // floored seams never reached the LLM → seed them "off" (else the post-loop's default would make them
+  // "supporting"). They keep their existing mechanical label and get culmination 0; they're dimmed below.
+  for (const s of floored) { tierMap.set(s.id, "off"); s.culmination = 0; }
   let answer: { id: string; score: number; cx: number } | null = null;
   const num = (v: any): number => typeof v === "number" ? v
     : [true, "true", "True", 1].includes(v) ? 1
