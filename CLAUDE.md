@@ -22,3 +22,7 @@ In plan and agent modes, do not hesitate to ask questions if you need more infor
 For the architecture / high complexity code related tasks, behave like a Senior Software engineer / an architect.
 
 Challenge the solutions I am proposing (if there is an existing better way, don't challenge everything for the sake of challenge...).
+
+Using Seam to navigate code (dogfood it):
+ - When you need to understand how a feature/flow WORKS across multiple files, where a flow ends/culminates, or the blast radius of a change, call Seam (the `seam` skill, or the MCP `grow_intent`/`intent_footprint` tools) instead of stitching it together by hand. Prefer ONE Seam run over 4+ iterative greps to reconstruct a flow, and call it to MAP a flow before editing across it.
+ - Use grep/LSP — NOT Seam — for a single symbol lookup, find-usages, or any one-fact answer: they are instant. The tell is the answer's shape: a list of locations → grep; a path/flow/structure with a beginning and end → Seam. Seam to MAP, grep to DRILL. Seam returns `noFlow` when the intent is computation/strategy with no traceable spine (then read the touchpoints, don't expect a path).

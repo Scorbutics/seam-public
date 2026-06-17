@@ -7,6 +7,10 @@ description: >-
   diff's hunks into seams) and CODEBASE intent discovery (trace where a symbol/intent lives — a static
   footprint, or an LLM-grown one). Use when asked to "review by seam", "decompose this diff", "run
   Seam", "where does X live", "map the footprint of X", or to grow an intent across a codebase.
+  ROUTING — reach for Seam when the answer is a PATH/FLOW/STRUCTURE across multiple files (how a
+  feature works, where a flow ends, what's the blast radius, mapping a flow before editing it):
+  prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand. Do NOT use Seam for a single
+  symbol lookup, find-usages, or a one-fact answer — grep/LSP is instant. Seam to MAP, grep to DRILL.
 ---
 
 # Seam (host-served LLM, diff + codebase)

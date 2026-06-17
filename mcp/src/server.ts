@@ -79,7 +79,9 @@ server.registerTool("decompose_diff", {
     + "(core/link/environment/test/noise) with wiring and optional blast-radius. Pass `diff` (raw "
     + "unified-diff text) OR `repo`+`range` (a git revision range like 'HEAD~1' or 'main...HEAD'). "
     + "Returns the Seam JSON model (docs/SEAM_JSON_CONTRACT.md). Roles top out ~0.8 accuracy and "
-    + "confidence<0.6 means 'maybe' — the tool structures, the human judges.",
+    + "confidence<0.6 means 'maybe' — the tool structures, the human judges. "
+    + "WHEN: to review a diff/PR by intent (core/link/env/test), not file-by-file. This is not a search "
+    + "tool — it explains a change you ALREADY have.",
   inputSchema: {
     diff: z.string().optional().describe("Raw unified-diff text. Provide this OR repo+range."),
     repo: z.string().optional().describe("Absolute path to the git repo (with `range`)."),
@@ -108,7 +110,10 @@ server.registerTool("intent_footprint", {
     "Starting from an ANCHOR (a symbol, or a whole module file), trace its footprint across the "
     + "codebase and decompose it into seams — who consumes it, what it wires, where the intent lives. "
     + "Honest about gaps: statically-opaque edges are returned as SUGGESTED/blindspots, never asserted. "
-    + "Returns the Seam JSON model with codebase-mode fields (resolutionQuality, unresolved, blindspots).",
+    + "Returns the Seam JSON model with codebase-mode fields (resolutionQuality, unresolved, blindspots). "
+    + "WHEN: you KNOW the anchor symbol/file and want its footprint + consumers. For 'how does X work/flow' "
+    + "WITHOUT a known anchor, use `grow_intent`. NOT for a single symbol lookup or find-usages — grep/LSP "
+    + "is instant; reach here only when you need the traced cross-file footprint, not a list of locations.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo."),
     anchorFile: z.string().describe("Path to the file holding the anchor symbol/module (relative to repo or absolute)."),
@@ -141,7 +146,12 @@ server.registerTool("grow_intent", {
     + "the footprint covers the answer, and decompose the result into seams. This is Seam's "
     + "auto-orchestration loop — the model directs every move, served by YOUR model via MCP sampling "
     + "(no nested CLI, no API key). Needs a sampling-capable client. For a single non-iterative scan, "
-    + "use `intent_footprint` instead.",
+    + "use `intent_footprint` instead. "
+    + "WHEN TO CALL: the question is how a feature / intent / mechanism WORKS or FLOWS across multiple "
+    + "files and you need the ordered path (anchor → … → where it culminates) — prefer ONE call here over "
+    + "4+ iterative greps to stitch a flow by hand, and call it to MAP a flow before editing across it. "
+    + "Do NOT use for naming a known symbol, find-usages, or a single-fact lookup — grep/LSP is faster. "
+    + "Returns `noFlow` when the intent is computation/strategy with no traceable spine.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo."),
     anchorFile: z.string().describe("Path to the file holding the anchor symbol (relative to repo or absolute)."),
