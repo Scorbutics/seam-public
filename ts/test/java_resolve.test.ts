@@ -16,6 +16,7 @@ beforeAll(() => {
   rmSync(REPO, { recursive: true, force: true });
   write("com/x/app/Service.java", "package com.x.app;\nimport com.x.domain.Repo;\npublic class Service {}\n");
   write("com/x/app/Helper.java", "package com.x.app;\npublic class Helper {}\n");   // same-package sibling of Service
+  write("com/x/app/Wild.java", "package com.x.app;\nimport com.x.domain.*;\npublic class Wild {}\n");   // wildcard-imports com.x.domain
   write("com/x/domain/Repo.java", "package com.x.domain;\npublic class Repo {\n  public static class Inner {}\n}\n");
   write("com/x/domain/Const.java", "package com.x.domain;\npublic class Const { public static final int N = 1; }\n");
 });
@@ -77,9 +78,19 @@ describe("java FQN→file resolver", () => {
       .toBe("src/main/java/com/x/app/Helper.java");
   });
 
-  test("bare type name with no same-package sibling → null (not a cross-package guess)", () => {
-    expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Repo")).toBeNull();   // Repo is in com.x.domain, not com.x.app
+  test("bare type name with no same-package sibling and no wildcard → null (not a cross-package guess)", () => {
+    expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Repo")).toBeNull();   // Repo is in com.x.domain; Service neither same-packages nor wildcard-imports it
     expect(floor_resolve(REPO, src("com/x/app/Service.java"), "Nonexistent")).toBeNull();
+  });
+
+  // WILDCARD: `import a.b.*;` makes a.b's types visible by bare name (no per-type import line).
+  test("bare type resolves via a wildcard import (import a.b.*;)", () => {
+    expect(floor_resolve(REPO, src("com/x/app/Wild.java"), "Repo")?.replace(/\\/g, "/"))
+      .toBe("src/main/java/com/x/domain/Repo.java");
+  });
+
+  test("wildcard import doesn't resolve a type absent from the imported package", () => {
+    expect(floor_resolve(REPO, src("com/x/app/Wild.java"), "Nonexistent")).toBeNull();
   });
 });
 
