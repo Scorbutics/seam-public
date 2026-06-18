@@ -34,6 +34,10 @@ engine yourself. Pick the tool by the shape of the question:
   where the flow starts.
 - Seam is **honest about gaps.** Statically-opaque edges (cross-language, DI, string dispatch) come
   back as `SUGGESTED` / `blindspots` — treat those as leads to verify, never as asserted facts.
+- **Footprints COMPOSE.** When a footprint ends at a *cross-stack blindspot* (a shared key / route whose
+  other side isn't in the footprint — e.g. a backend→frontend data flow), the right next move is to call
+  the Seam tool AGAIN anchored on the **other side** (the unresolved key as the `intent`, or the consumer
+  file as the anchor) and stitch the two footprints together — **not** a manual grep sweep over the UI.
 - **Engine cost.** `decompose_diff` and `intent_footprint` default to offline (`engine="det"`, no LLM).
   `grow_intent` is LLM-driven — those passes are served by the local `copilot` binary through the
   registered server (no API key, no MCP sampling needed).

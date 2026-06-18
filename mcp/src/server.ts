@@ -139,7 +139,11 @@ server.registerTool("intent_footprint", {
     + "Returns the Seam JSON model with codebase-mode fields (resolutionQuality, unresolved, blindspots). "
     + "WHEN: you KNOW the anchor symbol/file and want its footprint + consumers. For 'how does X work/flow' "
     + "WITHOUT a known anchor, use `grow_intent`. NOT for a single symbol lookup or find-usages — grep/LSP "
-    + "is instant; reach here only when you need the traced cross-file footprint, not a list of locations.",
+    + "is instant; reach here only when you need the traced cross-file footprint, not a list of locations. "
+    + "COMPOSE across boundaries: when the footprint ends at a cross-stack blindspot (a shared key/route "
+    + "whose other side isn't here — e.g. a backend→frontend data flow), call this tool AGAIN anchored on "
+    + "the other side (the key as `intent`, or the consumer file as `anchorFile`) and stitch the two "
+    + "footprints together — don't degrade to a manual grep sweep.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo."),
     anchorFile: z.string().describe("Path to the file holding the anchor symbol/module (relative to repo or absolute)."),
@@ -180,6 +184,9 @@ server.registerTool("grow_intent", {
     + "4+ iterative greps to stitch a flow by hand, and call it to MAP a flow before editing across it. "
     + "Do NOT use for naming a known symbol, find-usages, or a single-fact lookup — grep/LSP is faster. "
     + "Returns `noFlow` when the intent is computation/strategy with no traceable spine. "
+    + "COMPOSE across boundaries: when the grown footprint ends at a cross-stack blindspot (a shared "
+    + "key/route whose other side isn't in this footprint — e.g. backend→frontend), call this tool AGAIN "
+    + "anchored on the OTHER side (the key as `intent`) and stitch the two together, instead of grepping. "
     + "PASS THE ANCHOR YOU ALREADY HAVE: `symbol` is the starting point — when you've already located a "
     + "likely symbol (you usually have, from a couple of orienting greps/reads), give it here and Seam "
     + "traces+decomposes from it directly (~11s) instead of hunting for the anchor itself (~28s). So the "

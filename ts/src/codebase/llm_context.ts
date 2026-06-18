@@ -93,8 +93,19 @@ export function renderLlmContext(model: any): string {
     // A blindspot WITH candidates is an actionable lead (keep one line per node — the candidates differ).
     // A candidate-LESS blindspot (e.g. `external-libraries`) is ambient — the same mechanism on a dozen
     // nodes is noise, not a dozen leads, so collapse it to one summary line per mechanism.
+    // EXCEPTION: a CROSS-STACK data-flow boundary (a shared key whose other side isn't in this footprint —
+    // the backend↔frontend case) is neither: the best next move is a SECOND Seam anchored on the other
+    // side, NOT a manual grep. Render those with that directive (the evidence already names the key).
+    const CROSS = new Set(["llm-proposed-key", "shared-key-fanout"]);
     const ambient = new Map<string, string[]>();
     for (const b of bs) {
+      if (CROSS.has(b.mechanism)) {
+        out.push(`- ${b.node}: ${b.mechanism} — ${b.evidence}`);
+        out.push("    ↪ Unfollowed data-flow boundary. To cross it, run Seam again from the OTHER side —"
+          + " intent_footprint / grow_intent with the key above as the intent (or the consumer file as the"
+          + " anchor) — and compose the two footprints. Don't fall back to a manual grep sweep.");
+        continue;
+      }
       // ambient = NO candidate edges to chase (e.g. external-libraries) → collapse; a blindspot WITH
       // candidate edges is an actionable per-node lead even if their symbol names didn't survive emit
       // (the evidence still names the unresolved target, e.g. "OwnerRepository has 2 implementations").
@@ -110,6 +121,9 @@ export function renderLlmContext(model: any): string {
   out.push("## How to use",
     "Read the Spine top-to-bottom for the mechanism. Treat the Culmination ranking as confidence, not",
     "fact — verify the top pick (the single climax is unreliable on backend cron/queue flows). Off-path",
-    "seams are related but a different concern. Blindspot candidates are unproven leads to chase.");
+    "seams are related but a different concern. Blindspot candidates are unproven leads to chase.",
+    "Seam footprints COMPOSE: when one ends at a cross-stack blindspot you care about (a data-flow",
+    "boundary to a frontend/other service), run a SECOND Seam anchored on the other side and stitch the",
+    "two together — that's faster and more complete than a manual grep sweep.");
   return out.join("\n");
 }

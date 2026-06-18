@@ -223,6 +223,14 @@ roles** for the user — or point them at `seams.json` for the VS Code extension
 (see [docs/SEAM_JSON_CONTRACT.md](../../../docs/SEAM_JSON_CONTRACT.md)); codebase mode adds
 `resolutionQuality`, `unresolved`, `blindspots`, and `autoGrown: true` for §C.
 
+**Footprints COMPOSE — re-anchor across a cross-stack blindspot instead of grepping.** When a codebase
+footprint ends at a `blindspot` with mechanism `llm-proposed-key` or `shared-key-fanout`, that is a
+data-flow boundary (a shared key/route/event whose other side — often a frontend or another service —
+isn't in this footprint). The right next move is to run Seam AGAIN from the other side: a second §B/§C
+run with the unresolved key as `--intent` (or the consumer file as `--anchor-file`), then stitch the
+two footprints together for the user. Do this rather than falling back to a manual grep sweep over the
+UI — it keeps the cross-stack half of the flow on the same structural footing as the first half.
+
 ## Notes & gotchas
 
 - **No binary discovery while a bus is active.** Neither `--emit-prompts`/`--inject-llm` (§A) nor
