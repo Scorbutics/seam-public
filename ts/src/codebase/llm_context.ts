@@ -90,10 +90,20 @@ export function renderLlmContext(model: any): string {
   const bs: any[] = model.blindspots ?? [];
   if (bs.length) {
     out.push("## Blindspots (unverified edges — verify before trusting)");
+    // A blindspot WITH candidates is an actionable lead (keep one line per node — the candidates differ).
+    // A candidate-LESS blindspot (e.g. `external-libraries`) is ambient — the same mechanism on a dozen
+    // nodes is noise, not a dozen leads, so collapse it to one summary line per mechanism.
+    const ambient = new Map<string, string[]>();
     for (const b of bs) {
+      // ambient = NO candidate edges to chase (e.g. external-libraries) → collapse; a blindspot WITH
+      // candidate edges is an actionable per-node lead even if their symbol names didn't survive emit
+      // (the evidence still names the unresolved target, e.g. "OwnerRepository has 2 implementations").
+      if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
       const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
       out.push(`- ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
     }
+    for (const [mech, nodes] of ambient)
+      out.push(`- ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
     out.push("");
   }
 

@@ -134,6 +134,7 @@ async function runCodebase(a: Args): Promise<number> {
 
   const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";
   let data: any;
+  let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
     const { merge_resolved } = await import("../codebase/expand.js");
@@ -189,9 +190,10 @@ async function runCodebase(a: Args): Promise<number> {
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
       process.stdout.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
-      // honest signal: the chosen anchor is a computation/strategy unit with no traceable flow — the
-      // grow will be a 1-seam stub, not a spine. Surface it rather than letting the user read it as a miss.
-      if (sel.noFlow) process.stdout.write(`[no-flow] "${a.intent}" resolves to dispatch/computation code with no traceable spine; expect touchpoints, not an ordered path.\n`);
+      // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
+      // message until AFTER the decompose — if the grow + seam-intent actually find a culmination, the
+      // guess was wrong (conservative on controllers), so don't print a contradictory [no-flow].
+      noFlowHint = !!sel.noFlow;
     }
     if (!a.anchorFile) err("--scan requires --anchor-file");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
@@ -316,6 +318,11 @@ async function runCodebase(a: Args): Promise<number> {
   let model: any, recorded: HostBus["recorded"] | undefined;
   try { model = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage }); }
   finally { if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); } }
+  // Deferred no-flow: print the auto-anchor's "no traceable spine" hint ONLY if the decompose genuinely
+  // found no culmination — otherwise the guess was wrong (conservative on controllers) and a [no-flow]
+  // next to a real spine would mislead.
+  if (noFlowHint && a.intent && !(model?.clusters ?? []).flatMap((c: any) => c.seams ?? []).some((s: any) => (s.culmination ?? 0) >= 0.5))
+    process.stdout.write(`[no-flow] "${a.intent}" resolves to dispatch/computation code with no traceable spine; expect touchpoints, not an ordered path.\n`);
   if (a.emitPrompts) {
     const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
     writeFileSync(a.emitPrompts, JSON.stringify({ version: 1, source: { scan: a.scan, graph: a.graph ?? null, repo: a.repo }, passes }, null, 2));
