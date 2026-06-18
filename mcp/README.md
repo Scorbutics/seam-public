@@ -23,7 +23,10 @@ From an anchor (a symbol, or a whole module file), trace its footprint across th
 static scan and decompose it into seams — who consumes it, what it wires, where the intent lives.
 Honest about gaps: statically-opaque edges come back as `SUGGESTED`/`blindspots`, never asserted.
 
-- `repo`, `anchorFile` (required), `symbol`, `intent`, `depth`, `engine`
+- `repo`, `anchorFile` (required), `symbol`, `intent`, `depth`, `crossFramework`, `engine`
+  (`crossFramework` = opt-in LLM cross-framework coupling, off by default — the deterministic floor
+  already couples DB tables + HTTP routes across the stack; enable only for a cross-stack question the
+  trace left open, it costs an extra LLM pass per step.)
 
 ### `grow_intent`
 The LLM-in-the-loop counterpart to `intent_footprint`. Where `intent_footprint` takes one static scan,
@@ -32,7 +35,8 @@ iteratively pick the next consumer (up) or dependency (down) to follow until the
 answer, and decompose the grown result. This is Seam's auto-orchestration loop — every move is the
 model's, served by **your** model via sampling. LLM-only (no `det`); needs a sampling-capable client.
 
-- `repo`, `anchorFile`, `symbol`, `intent` (required), `maxSteps`, `engine` (`hybrid`/`llm`)
+- `repo`, `anchorFile`, `symbol`, `intent` (required), `maxSteps`, `crossFramework`, `engine` (`hybrid`/`llm`)
+  (`crossFramework` as above — opt-in cross-framework coupling, off by default.)
 
 All tools return two content blocks: a short human summary, and the full Seam JSON model.
 

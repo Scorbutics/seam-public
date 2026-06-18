@@ -40,6 +40,15 @@ const ENGINE = z.enum(["det", "hybrid", "llm"]).default("det")
   .describe("det = offline, no LLM (default, recommended). hybrid/llm add product-intent labels via a "
     + "local claude/copilot binary if present, else YOUR model over MCP sampling (SEAM_MCP_LLM overrides).");
 
+// Opt-in LLM data-coupling (--data-coupling llm). The deterministic floor already couples DB tables,
+// HTTP routes (incl. annotation handlers ⇄ fetch/$http callers), and edge functions across the stack.
+// Turn this ON only when the question genuinely SPANS frameworks/stacks and the deterministic trace left
+// a cross-stack blindspot — it adds an LLM pass per build/grow-step (cost + run-to-run variance), so it's
+// a deliberate deep-dive, not a default.
+const CROSS_FRAMEWORK = z.boolean().default(false)
+  .describe("Enable LLM cross-framework data-coupling (extra LLM pass per step). Use ONLY when the "
+    + "question spans frameworks/stacks AND the deterministic trace left a blindspot; off by default.");
+
 // A compact human-facing summary so a chat client shows something legible above the JSON.
 function summarize(model: any): string {
   const clusters = model.clusters ?? [];
@@ -150,13 +159,15 @@ server.registerTool("intent_footprint", {
     symbol: z.string().optional().describe("The anchor symbol. Omit to analyze the whole module (all its exports)."),
     intent: z.string().optional().describe("A natural-language intent to focus the footprint on (hybrid/llm engines)."),
     depth: z.number().int().min(1).max(4).default(1).describe("How many consumer hops to follow."),
+    crossFramework: CROSS_FRAMEWORK,
     engine: ENGINE,
   },
-}, async ({ repo, anchorFile, symbol, intent, depth, engine }) => {
+}, async ({ repo, anchorFile, symbol, intent, depth, crossFramework, engine }) => {
   try {
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth)];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
+    if (crossFramework) base.push("--data-coupling", "llm");
     return await decompose(server, base, engine);
   } catch (e) { return errReply(e); }
 });
@@ -200,12 +211,14 @@ server.registerTool("grow_intent", {
     symbol: z.string().describe("The anchor symbol to seed the footprint from."),
     intent: z.string().describe("The natural-language question to grow the footprint toward."),
     maxSteps: z.number().int().min(1).max(8).default(4).describe("Maximum number of grow moves the model may make."),
+    crossFramework: CROSS_FRAMEWORK,
     engine: LLM_ENGINE,
   },
-}, async ({ repo, anchorFile, symbol, intent, maxSteps, engine }) => {
+}, async ({ repo, anchorFile, symbol, intent, maxSteps, crossFramework, engine }) => {
   try {
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
       "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps)];
+    if (crossFramework) base.push("--data-coupling", "llm");
     return await decompose(server, base, engine);
   } catch (e) { return errReply(e); }
 });

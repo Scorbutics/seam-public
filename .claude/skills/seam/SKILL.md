@@ -231,6 +231,14 @@ run with the unresolved key as `--intent` (or the consumer file as `--anchor-fil
 two footprints together for the user. Do this rather than falling back to a manual grep sweep over the
 UI — it keeps the cross-stack half of the flow on the same structural footing as the first half.
 
+**Cross-framework data-coupling (`--data-coupling llm`) is OPT-IN.** The deterministic floor already
+couples DB tables, HTTP routes (annotation handlers ⇄ `fetch`/`$http` callers), and edge functions
+across the stack. Add `--data-coupling llm` ONLY when a question genuinely spans frameworks/stacks AND
+the deterministic trace left a cross-stack blindspot — it proposes keys cross-framework but costs an
+extra LLM pass per build/grow-step (and via this skill each is a subagent), so it's a deliberate
+deep-dive, not a default. Prefer the re-anchor-and-compose move above first; reach for it when even that
+can't ground the other side.
+
 ## Notes & gotchas
 
 - **No binary discovery while a bus is active.** Neither `--emit-prompts`/`--inject-llm` (§A) nor
