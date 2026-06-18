@@ -341,7 +341,8 @@ thin stdio adapter over the engine (no daemon):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash -s -- --mcp
-#   …registers with the `claude` CLI automatically; for another host it prints the stdio command/args.
+#   …auto-registers with the `claude` and/or `copilot` CLI when on PATH (Copilot CLI has no MCP
+#   sampling, so it's registered with SEAM_MCP_LLM=binary — LLM passes run via the copilot binary).
 
 bun mcp/src/server.ts          # …or run the stdio server directly from a checkout
 ```
