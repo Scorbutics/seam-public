@@ -23,7 +23,7 @@ import { emit, emitTimingSummary } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 interface Args {
-  file?: string; git?: string; fromClassified?: string; repo: string;
+  file?: string; git?: string; submodules?: boolean; fromClassified?: string; repo: string;
   format: string; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
@@ -56,6 +56,7 @@ function parseArgs(argv: string[]): Args {
     switch (v) {
       case "--file": a.file = next(); break;
       case "--git": a.git = next(); break;
+      case "--submodules": a.submodules = true; break;   // also include each git submodule's diff (paths prefixed by the submodule dir)
       case "--from-classified": a.fromClassified = next(); break;
       case "--repo": a.repo = next(); break;
       case "--format": a.format = next(); break;
@@ -392,7 +393,7 @@ async function main(argv: string[]): Promise<number> {
       try { set_resolver(await make_resolver(a.resolver)); } catch (e) { err((e as Error).message); }
     }
     let diffText: string;
-    try { diffText = diff_source.get_diff({ file: a.file, git: a.git, repo: a.repo }); }
+    try { diffText = diff_source.get_diff({ file: a.file, git: a.git, repo: a.repo, submodules: a.submodules }); }
     catch (e) { err((e as Error).message); }
     hunks = parse(diffText!);
     if (!hunks.length) err("no hunks found in diff");
@@ -464,7 +465,7 @@ async function main(argv: string[]): Promise<number> {
       if (a.emitPrompts) {
         const passes = [...(recorded ?? new Map()).entries()].map(([tag, rec]) => ({ tag, ...rec }));
         writeFileSync(a.emitPrompts, JSON.stringify({ version: 1,
-          source: { git: a.git ?? null, file: a.file ?? null, repo: a.repo }, passes }, null, 2));
+          source: { git: a.git ?? null, file: a.file ?? null, repo: a.repo, submodules: a.submodules ?? false }, passes }, null, 2));
         process.stdout.write(`Prompts: ${a.emitPrompts} (${passes.length} pass${passes.length !== 1 ? "es" : ""}: ${passes.map((p) => p.tag).join(", ") || "none"})\n`);
         return 0;
       }

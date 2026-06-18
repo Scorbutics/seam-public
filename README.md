@@ -213,6 +213,15 @@ bun ts/src/cli/decompose.ts --git main..HEAD --repo . --format ascii
 bun ts/src/cli/decompose.ts --file sample.patch --classifier det --wiring llm --format ascii
 ```
 
+**Submodules** — a parent-repo `git diff` only shows a submodule *pointer* bump, not the file changes
+inside it. Add **`--submodules`** to decompose **working changes + modules** as one: the pointer noise
+is dropped and each submodule's real diff is folded in with its paths prefixed by the submodule dir
+(`vendor/sub/lib.ts`), so a cross-submodule change reviews as a single set of seams.
+
+```bash
+bun ts/src/cli/decompose.ts --git HEAD --repo . --submodules --classifier det --format ascii
+```
+
 More varied real-world diffs (small bugfix, multi-file feature, mostly-tests, rename-heavy) are
 checked in under [`samples/`](samples/) — see [§Sample diffs](#sample-diffs).
 
