@@ -44,8 +44,12 @@ engine yourself. Pick the tool by the shape of the question:
   with the flag on, the LLM pass fires only on nodes the floor couldn't key (budget-capped). Set
   `crossFramework: true` ONLY when a question spans frameworks/stacks and the trace left a blindspot;
   prefer the re-anchor-and-compose move first.
-- **Timing.** Each tool reply ends with a `⏱ timing` block — total runtime and per-phase durations.
-  When the user asks how long the run or a step took, read it straight from there.
+- **Timing.** Each tool reply ends with a `⏱ timing` block — total runtime and per-phase durations
+  (grow steps, the seam-intent LLM pass). When the user asks how long the run or a step took, read it
+  straight from there. For a DEEPER breakdown of a slow grow step (consumer walk+parse vs data-coupling),
+  the reply also includes a `🔬 grow sub-steps` block — but only when the MCP server was registered with
+  `--env SEAM_TIMING=1` (re-register: `copilot mcp add seam --env SEAM_MCP_LLM=binary --env SEAM_TIMING=1
+  -- bun ~/.seam/mcp/src/server.ts`). Use that to attribute a slow grow.
 - **Engine cost.** `decompose_diff` and `intent_footprint` default to offline (`engine="det"`, no LLM).
   `grow_intent` is LLM-driven — those passes are served by the local `copilot` binary through the
   registered server (no API key, no MCP sampling needed).

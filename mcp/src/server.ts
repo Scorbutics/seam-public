@@ -84,11 +84,29 @@ function formatTiming(t: { totalMs: number; phases: { phase: string; durationMs:
   return `⏱ timing — total ${fmtS(t.totalMs)} (per phase):\n${steps}`;
 }
 
+// Opt-in (SEAM_TIMING=1 on the server env) sub-step breakdown the engine emits as `[build-timing]
+// <symbol>: <category> <ms>` lines — splits each grow step into consumer walk+parse vs data-coupling.
+// Aggregate by category so a slow grow is attributable; only present when SEAM_TIMING was set.
+function parseBuildTiming(stderr: string): string | null {
+  const re = /\[build-timing\] .+?: (.+?) (\d+)ms\s*$/;
+  const sums = new Map<string, { ms: number; n: number }>();
+  for (const l of stderr.split("\n")) {
+    const m = re.exec(l); if (!m) continue;
+    const s = sums.get(m[1]) ?? { ms: 0, n: 0 }; s.ms += Number(m[2]); s.n += 1; sums.set(m[1], s);
+  }
+  if (!sums.size) return null;
+  const rows = [...sums.entries()].sort((a, b) => b[1].ms - a[1].ms)
+    .map(([k, v]) => `  • ${fmtS(v.ms)} total (${v.n}× builds)  ${k}`).join("\n");
+  return `🔬 grow sub-steps (SEAM_TIMING):\n${rows}`;
+}
+
 // Both content shapes: a JSON block for the agent to parse, a summary for a human to read.
 function reply(model: any, stderr = "") {
   const timing = parseTiming(stderr);
+  const sub = parseBuildTiming(stderr);
+  const tail = [timing ? formatTiming(timing) : "", sub ?? ""].filter(Boolean).join("\n\n");
   return { content: [
-    { type: "text" as const, text: summarize(model) + (timing ? `\n\n${formatTiming(timing)}` : "") },
+    { type: "text" as const, text: summarize(model) + (tail ? `\n\n${tail}` : "") },
     { type: "text" as const, text: "```json\n" + JSON.stringify(model) + "\n```" },
   ] };
 }
