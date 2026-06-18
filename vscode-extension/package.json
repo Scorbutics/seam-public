@@ -52,6 +52,11 @@
         "icon": "$(symbol-color)"
       },
       {
+        "command": "seam.reviewWithSubmodules",
+        "title": "Seam: Review working changes + submodules",
+        "icon": "$(symbol-color)"
+      },
+      {
         "command": "seam.loadSeams",
         "title": "Seam: Load seams from file (demo)",
         "icon": "$(file-symlink-file)"

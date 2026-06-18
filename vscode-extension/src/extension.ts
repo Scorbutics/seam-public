@@ -255,6 +255,7 @@ function activateInner(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("seam.detangle", detangle),
     vscode.commands.registerCommand("seam.mapIntent", mapIntent),
     vscode.commands.registerCommand("seam.review", () => runReview("HEAD")),
+    vscode.commands.registerCommand("seam.reviewWithSubmodules", () => runReview("HEAD", true)),
     vscode.commands.registerCommand("seam.reviewCommit", reviewCommit),
     vscode.commands.registerCommand("seam.loadSeams", loadSeams),
     vscode.commands.registerCommand("seam.analyzeCodebase", analyzeCodebase),
@@ -807,7 +808,7 @@ async function buildAstFacts(tool: string, emitHunks: (skelPath: string) => Prom
   }
 }
 
-async function runReview(range: string) {
+async function runReview(range: string, submodules = false) {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) { vscode.window.showErrorMessage("Seam: open a folder/repo first."); return; }
   repoRoot = folder.uri.fsPath;
@@ -844,11 +845,14 @@ async function runReview(range: string) {
         if (engineMode !== "llm") {               // det/hybrid use deterministic roles → AST facts help
           progress.report({ message: "Computing code facts…" });
           factsPath = await buildAstFacts(tool, (skel) => runStreaming(run,
-            [engineEntry("decompose"), "--git", range, "--repo", repoRoot, "--emit-hunks", skel], tool));
+            [engineEntry("decompose"), "--git", range, "--repo", repoRoot,
+             ...(submodules ? ["--submodules"] : []), "--emit-hunks", skel], tool));
         }
         // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
         // the headless language server (warm daemon) with the deterministic floor as fallback.
+        // --submodules also folds each git submodule's working diff in (paths prefixed by the submodule dir).
         const flags = ["--git", range, "--repo", repoRoot, ...engineArgs,
+                       ...(submodules ? ["--submodules"] : []),
                        ...(factsPath ? ["--facts", factsPath] : []),
                        ...(resolver !== "det" ? ["--resolver", resolver] : []),
                        ...(blastRadius ? ["--blast-radius"] : [])];
@@ -1268,12 +1272,15 @@ async function detangle() {
   const pick = await vscode.window.showQuickPick(
     [
       { id: "working", label: "$(git-commit) Working changes", description: "Decompose the working tree against HEAD" },
+      { id: "working-sub", label: "$(git-commit) Working changes + submodules", description: "Working tree AND each git submodule's changes, decomposed as one" },
       { id: "commit", label: "$(git-branch) A commit…", description: "Pick a commit or range to decompose" },
     ],
     { title: "Seam — detangle a diff", placeHolder: "What do you want to detangle?" },
   );
   if (!pick) return;
-  return pick.id === "working" ? runReview("HEAD") : reviewCommit();
+  if (pick.id === "working") return runReview("HEAD");
+  if (pick.id === "working-sub") return runReview("HEAD", true);
+  return reviewCommit();
 }
 
 async function mapIntent() {
