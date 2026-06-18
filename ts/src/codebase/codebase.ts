@@ -310,6 +310,21 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
     for (const nb of adj.get(n.id) ?? []) set.add(nb);
   }
   const tablesFor = (s: Seam): string[] => [...subjectNodes].filter(([, nodes]) => s.node_ids.some((i) => nodes.has(i))).map(([t]) => t);
+  // FLOOR domain (perf only): the deterministic pre-tier floor needs a notion of "the flow's subject" to
+  // decide which far seams are off. subjectNodes is db-tables-only (the prompt's one-domain rule treats
+  // routes as transport) — so on a ROUTE-based cross-stack footprint (AngularJS $http ⇄ servlet, no db
+  // tables) `domain` was empty and the floor stayed INERT. Give the floor a BROADER subject map over ALL
+  // boundary kinds (route/table/event/resource) so it engages there too. Floor-only — does NOT touch the
+  // prompt hints or the one-domain judgement, so it can't change tiering quality (it only decides which
+  // clearly-off seams skip the LLM, and the floored set stays ⊆ the LLM's "off").
+  const floorSubjectNodes = new Map<string, Set<string>>();
+  for (const n of g.nodes.values()) {
+    if (!KEY_NODE_KINDS.has(n.kind) || !n.label) continue;
+    const set = floorSubjectNodes.get(n.label) ?? floorSubjectNodes.set(n.label, new Set()).get(n.label)!;
+    set.add(n.id);
+    for (const nb of adj.get(n.id) ?? []) set.add(nb);
+  }
+  const floorSubjectsFor = (s: Seam): string[] => [...floorSubjectNodes].filter(([, nodes]) => s.node_ids.some((i) => nodes.has(i))).map(([t]) => t);
   // CULMINATION-GROUNDING FACTS (the priors that fix the "synthetic-referee endpoint crowned the climax"
   // case): a flow CULMINATES where it WRITES its subject (a created/updated record), not at an endpoint
   // that merely reads it. `writesBy` = node → subject tables it PRODUCES (src of a produce-edge into a
@@ -353,9 +368,9 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   const isEndpoint = (s: Seam): boolean => s.node_ids.some((i) => i !== g.anchor && (indeg.get(i) ?? 0) === 0);
   const _DOMAIN_HOP = 2, _OFF_HOP = 5;
   const domain = new Set<string>();
-  for (const s of ranked) if (minHop(s) <= _DOMAIN_HOP) { for (const t of tablesFor(s)) domain.add(t); for (const t of writesFor(s)) domain.add(t); }
+  for (const s of ranked) if (minHop(s) <= _DOMAIN_HOP) { for (const t of floorSubjectsFor(s)) domain.add(t); for (const t of writesFor(s)) domain.add(t); }
   const clearlyOff = (s: Seam): boolean => !s.node_ids.includes(g.anchor) && minHop(s) >= _OFF_HOP
-    && !isEndpoint(s) && ![...tablesFor(s), ...writesFor(s)].some((t) => domain.has(t));
+    && !isEndpoint(s) && ![...floorSubjectsFor(s), ...writesFor(s)].some((t) => domain.has(t));
   const useFloor = !process.env.SEAM_NO_PRETIER && ranked.length >= 16 && domain.size > 0;
   const floored = new Set<Seam>(useFloor ? ranked.filter(clearlyOff) : []);
   const toJudge = ranked.filter((s) => !floored.has(s));
