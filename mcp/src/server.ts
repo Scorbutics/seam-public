@@ -73,14 +73,14 @@ function summarize(model: any): string {
 // The engine emits a one-line timing summary on stderr at the end of a run (see core/progress.ts).
 // Parse it so the agent can tell the user how long each phase took. Contract marker — keep in sync.
 const TIMING_PREFIX = "@@SEAM_TIMING@@";
-function parseTiming(stderr: string): { totalMs: number; phases: { phase: string; deltaMs: number }[] } | null {
+function parseTiming(stderr: string): { totalMs: number; phases: { phase: string; durationMs: number }[] } | null {
   const line = stderr.split("\n").reverse().find((l) => l.startsWith(TIMING_PREFIX));
   if (!line) return null;
   try { return JSON.parse(line.slice(TIMING_PREFIX.length).trim()); } catch { return null; }
 }
 const fmtS = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-function formatTiming(t: { totalMs: number; phases: { phase: string; deltaMs: number }[] }): string {
-  const steps = t.phases.map((p) => `  • ${fmtS(p.deltaMs)}  ${p.phase}`).join("\n");
+function formatTiming(t: { totalMs: number; phases: { phase: string; durationMs: number }[] }): string {
+  const steps = t.phases.map((p) => `  • ${fmtS(p.durationMs)}  ${p.phase}`).join("\n");
   return `⏱ timing — total ${fmtS(t.totalMs)} (per phase):\n${steps}`;
 }
 

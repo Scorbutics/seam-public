@@ -20,7 +20,8 @@ describe("progress timing summary", () => {
     const t = JSON.parse(summary!.slice(TIMING_PREFIX.length).trim());
     expect(t.phases.map((p: any) => p.phase)).toEqual(["Scanning…", "Growing…"]);
     expect(typeof t.totalMs).toBe("number");
-    expect(t.phases.every((p: any) => typeof p.deltaMs === "number")).toBe(true);
+    // durationMs is forward (start → next phase / end), so it's defined even for the LAST phase
+    expect(t.phases.every((p: any) => typeof p.durationMs === "number")).toBe(true);
   });
 
   test("emitTimingSummary is a no-op when nothing was timed", () => {

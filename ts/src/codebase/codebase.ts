@@ -233,6 +233,7 @@ export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: 
   const floorOf = new Map<string, string>();
   for (const s of floorSeams) for (const nid of s.node_ids) if (cset.has(nid)) floorOf.set(nid, s.id);
 
+  emit("Refining seam clusters (LLM)…");
   let out: Map<string, any>;
   try { out = run_pass(_build_refine_prompt(g, members, floorOf, uses, opts.intent), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-refine" }); }
   catch (e) { if (e instanceof LLMError) return floorSeams; throw e; }
@@ -411,6 +412,10 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
       '[{"id":"<seam id>","label":"<3-6 words>","tier":"spine|supporting","culmination":0..1}]');
   }
 
+  // This is the dominant cost of an intent run — an LLM pass whose OUTPUT scales with the seam count
+  // (one object per seam). Emit it as a phase so the timing summary attributes the time here (not to the
+  // fast deterministic grow), making "why is this slow / which step?" answerable from the timing marker.
+  emit(`Tiering ${ranked.length} seam(s) by intent (LLM — output-bound, scales with footprint size)…`);
   let out: Map<string, any>;
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "seam-intent" }); }
   catch (e) { if (e instanceof LLMError) return; throw e; }
