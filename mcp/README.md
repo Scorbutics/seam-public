@@ -25,8 +25,9 @@ Honest about gaps: statically-opaque edges come back as `SUGGESTED`/`blindspots`
 
 - `repo`, `anchorFile` (required), `symbol`, `intent`, `depth`, `crossFramework`, `engine`
   (`crossFramework` = opt-in LLM cross-framework coupling, off by default — the deterministic floor
-  already couples DB tables + HTTP routes across the stack; enable only for a cross-stack question the
-  trace left open, it costs an extra LLM pass per step.)
+  already couples DB tables + HTTP routes across the stack; with it on, the LLM pass is fallback-gated
+  (fires only on floor-blind nodes, budget-capped) so it scales. Enable for a cross-stack question the
+  trace left open.) Each reply ends with a `⏱ timing` block (total + per-phase durations).
 
 ### `grow_intent`
 The LLM-in-the-loop counterpart to `intent_footprint`. Where `intent_footprint` takes one static scan,

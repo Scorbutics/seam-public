@@ -13,6 +13,7 @@ import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index
 import { normpath, walk } from "../../core/resolve/walk.js";
 import type { Access, ProposedKey } from "./types.js";
 import { kindOf, scan_file_keys } from "./adapters/index.js";
+import { emit } from "../../core/progress.js";
 
 export type { KeyHit, KeyKind, Access, ProposedKey } from "./types.js";
 export { ADAPTERS, KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS, scan_file_keys } from "./adapters/index.js";
@@ -20,6 +21,28 @@ export { ADAPTERS, KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRO
 const READER_CAP = 6;                          // materialise at most this many complement nodes per key
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 const ikey = (kind: string, value: string) => `${kind} ${value}`;
+
+// LLM data-coupling (--data-coupling llm) is a FALLBACK, not a per-node tax: it runs the LLM key pass
+// ONLY where the deterministic floor found nothing in range, and only within a per-run budget. This is
+// what lets the opt-in scale on heavy grows — the floor covers the bulk for free (every node would
+// otherwise cost an LLM pass × every grow step), and the LLM fires only on genuinely floor-blind nodes.
+// The budget is process-scoped; the engine runs one decompose per process, so it resets naturally.
+const LLM_COUPLING_BUDGET = 12;
+let _llmBudget = LLM_COUPLING_BUDGET;
+let _llmCapNoted = false;
+export function resetLlmCouplingBudget(): void { _llmBudget = LLM_COUPLING_BUDGET; _llmCapNoted = false; }
+
+export async function maybe_discover_keys(repo: string, anchorFile: string, text: string, lo: number, hi: number,
+    opts: { model?: string; claudeBin?: string | null }): Promise<ProposedKey[]> {
+  if (scan_file_keys(anchorFile, text).some((h) => h.line >= lo && h.line <= hi)) return [];   // floor covers it → no LLM
+  if (_llmBudget <= 0) {
+    if (!_llmCapNoted) { _llmCapNoted = true; emit(`LLM data-coupling budget (${LLM_COUPLING_BUDGET}) reached — remaining floor-blind nodes left to the deterministic floor; narrow the footprint or anchor closer to use it.`); }
+    return [];
+  }
+  _llmBudget -= 1;
+  const { discover_keys } = await import("../llm_discovery.js");
+  return discover_keys(repo, anchorFile, text, lo, hi, opts);
+}
 
 // ---- the repo-wide grounding index: `${kind} ${value}` → who produces / consumes it ----------
 type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;

@@ -19,7 +19,7 @@ import {
 } from "../diff/facts.js";
 import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
-import { emit } from "../core/progress.js";
+import { emit, emitTimingSummary } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 interface Args {
@@ -507,4 +507,4 @@ async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
-main(process.argv.slice(2)).then((code) => process.exit(code));
+main(process.argv.slice(2)).then((code) => { emitTimingSummary(); process.exit(code); });

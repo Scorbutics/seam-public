@@ -38,11 +38,14 @@ engine yourself. Pick the tool by the shape of the question:
   other side isn't in the footprint — e.g. a backend→frontend data flow), the right next move is to call
   the Seam tool AGAIN anchored on the **other side** (the unresolved key as the `intent`, or the consumer
   file as the anchor) and stitch the two footprints together — **not** a manual grep sweep over the UI.
-- **`crossFramework` is opt-in.** `intent_footprint` / `grow_intent` take a `crossFramework` flag that
-  enables LLM cross-framework coupling. The default (deterministic) floor already couples DB tables and
-  HTTP routes (annotation handlers ⇄ `fetch`/`$http`) across the stack — so set `crossFramework: true`
-  ONLY when a question spans frameworks/stacks and the deterministic trace left a blindspot. It costs an
-  extra LLM pass per step, so prefer the re-anchor-and-compose move first.
+- **`crossFramework` is opt-in (and fallback-gated).** `intent_footprint` / `grow_intent` take a
+  `crossFramework` flag that enables LLM cross-framework coupling. The default (deterministic) floor
+  already couples DB tables and HTTP routes (annotation handlers ⇄ `fetch`/`$http`) across the stack;
+  with the flag on, the LLM pass fires only on nodes the floor couldn't key (budget-capped). Set
+  `crossFramework: true` ONLY when a question spans frameworks/stacks and the trace left a blindspot;
+  prefer the re-anchor-and-compose move first.
+- **Timing.** Each tool reply ends with a `⏱ timing` block — total runtime and per-phase durations.
+  When the user asks how long the run or a step took, read it straight from there.
 - **Engine cost.** `decompose_diff` and `intent_footprint` default to offline (`engine="det"`, no LLM).
   `grow_intent` is LLM-driven — those passes are served by the local `copilot` binary through the
   registered server (no API key, no MCP sampling needed).

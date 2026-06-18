@@ -8,7 +8,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan_file_keys } from "../src/codebase/coupling/index.js";
+import { scan_file_keys, maybe_discover_keys } from "../src/codebase/coupling/index.js";
 import { build_class_graph, build_module_graph, build_consumers_graph } from "../src/codebase/import_scan.js";
 import { available } from "../src/codebase/atoms.js";
 
@@ -52,6 +52,14 @@ describe("caller side ($http / fetch — framework-agnostic)", () => {
   test("an Express route DEFINITION (router.get) is NOT mistaken for a caller", () => {
     // `get` is not a recognised caller API, so a server-side route definition stays out of the caller set
     expect(keys("c.js", 'router.get("/users", handler)').filter((h) => !h.produces)).toEqual([]);
+  });
+});
+
+describe("LLM data-coupling is fallback-gated (scales heavy grows)", () => {
+  test("a node the floor already keyed costs NO LLM pass (returns [] without trying a binary)", async () => {
+    // floor finds the $http route here → the LLM fallback must not fire, even with a bogus binary
+    const r = await maybe_discover_keys("/tmp", "c.js", '$http.get("/api/x")', 0, 5, { claudeBin: "/no/such/binary" });
+    expect(r).toEqual([]);
   });
 });
 

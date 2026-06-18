@@ -231,13 +231,19 @@ run with the unresolved key as `--intent` (or the consumer file as `--anchor-fil
 two footprints together for the user. Do this rather than falling back to a manual grep sweep over the
 UI — it keeps the cross-stack half of the flow on the same structural footing as the first half.
 
-**Cross-framework data-coupling (`--data-coupling llm`) is OPT-IN.** The deterministic floor already
-couples DB tables, HTTP routes (annotation handlers ⇄ `fetch`/`$http` callers), and edge functions
-across the stack. Add `--data-coupling llm` ONLY when a question genuinely spans frameworks/stacks AND
-the deterministic trace left a cross-stack blindspot — it proposes keys cross-framework but costs an
-extra LLM pass per build/grow-step (and via this skill each is a subagent), so it's a deliberate
-deep-dive, not a default. Prefer the re-anchor-and-compose move above first; reach for it when even that
-can't ground the other side.
+**Cross-framework data-coupling (`--data-coupling llm`) is OPT-IN, and fallback-gated.** The
+deterministic floor already couples DB tables, HTTP routes (annotation handlers ⇄ `fetch`/`$http`
+callers), and edge functions across the stack. The LLM key pass now fires ONLY on nodes the floor
+couldn't key, bounded by a per-run budget (so it scales on a heavy grow instead of an LLM pass per
+node × every step — earlier it didn't). Add `--data-coupling llm` when a question genuinely spans
+frameworks/stacks AND the deterministic trace left a cross-stack blindspot; prefer the
+re-anchor-and-compose move above first. Via this skill each fallback pass is a subagent, so it stays a
+deliberate deep-dive, not a default.
+
+**Per-step timing.** Every run prints a final `@@SEAM_TIMING@@ {"totalMs":…,"phases":[{phase,atMs,
+deltaMs}]}` line on stderr (the per-phase `@@SEAM_PROGRESS@@` markers it summarises are the steps:
+Scanning, Growing step N, Decomposing, …). When the user asks how long the run or each step took, read
+that marker from the captured stderr and report `deltaMs` per phase + `totalMs`.
 
 ## Notes & gotchas
 

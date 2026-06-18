@@ -42,12 +42,13 @@ const ENGINE = z.enum(["det", "hybrid", "llm"]).default("det")
 
 // Opt-in LLM data-coupling (--data-coupling llm). The deterministic floor already couples DB tables,
 // HTTP routes (incl. annotation handlers ⇄ fetch/$http callers), and edge functions across the stack.
-// Turn this ON only when the question genuinely SPANS frameworks/stacks and the deterministic trace left
-// a cross-stack blindspot — it adds an LLM pass per build/grow-step (cost + run-to-run variance), so it's
-// a deliberate deep-dive, not a default.
+// FALLBACK-gated: the LLM key pass fires only on nodes the floor couldn't key, bounded by a per-run
+// budget — so it scales on a heavy grow (the floor covers the bulk for free). Turn it ON when a question
+// genuinely SPANS frameworks/stacks and the trace left a cross-stack blindspot; off by default.
 const CROSS_FRAMEWORK = z.boolean().default(false)
-  .describe("Enable LLM cross-framework data-coupling (extra LLM pass per step). Use ONLY when the "
-    + "question spans frameworks/stacks AND the deterministic trace left a blindspot; off by default.");
+  .describe("Enable LLM cross-framework data-coupling. Fallback-gated (an LLM pass only on nodes the "
+    + "deterministic floor couldn't key, budget-capped). Use when the question spans frameworks/stacks "
+    + "AND the deterministic trace left a blindspot; off by default.");
 
 // A compact human-facing summary so a chat client shows something legible above the JSON.
 function summarize(model: any): string {
@@ -69,10 +70,25 @@ function summarize(model: any): string {
   return `${head}${extras ? `   (${extras})` : ""}\n${intents}`;
 }
 
+// The engine emits a one-line timing summary on stderr at the end of a run (see core/progress.ts).
+// Parse it so the agent can tell the user how long each phase took. Contract marker — keep in sync.
+const TIMING_PREFIX = "@@SEAM_TIMING@@";
+function parseTiming(stderr: string): { totalMs: number; phases: { phase: string; deltaMs: number }[] } | null {
+  const line = stderr.split("\n").reverse().find((l) => l.startsWith(TIMING_PREFIX));
+  if (!line) return null;
+  try { return JSON.parse(line.slice(TIMING_PREFIX.length).trim()); } catch { return null; }
+}
+const fmtS = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+function formatTiming(t: { totalMs: number; phases: { phase: string; deltaMs: number }[] }): string {
+  const steps = t.phases.map((p) => `  • ${fmtS(p.deltaMs)}  ${p.phase}`).join("\n");
+  return `⏱ timing — total ${fmtS(t.totalMs)} (per phase):\n${steps}`;
+}
+
 // Both content shapes: a JSON block for the agent to parse, a summary for a human to read.
-function reply(model: any) {
+function reply(model: any, stderr = "") {
+  const timing = parseTiming(stderr);
   return { content: [
-    { type: "text" as const, text: summarize(model) },
+    { type: "text" as const, text: summarize(model) + (timing ? `\n\n${formatTiming(timing)}` : "") },
     { type: "text" as const, text: "```json\n" + JSON.stringify(model) + "\n```" },
   ] };
 }
@@ -89,10 +105,11 @@ async function decompose(server: McpServer, baseFlags: string[], engine: string)
   return withScratch(async (scratch) => {
     const out = join(scratch, "seams.json");
     const flags = [...baseFlags, "--classifier", engine, "--emit-seams", out];
-    if (engine === "det") runEngine(flags);                       // offline, no LLM
-    else if (resolveLlmServe(server) === "binary") runEngine(flags);   // engine serves its own passes via claude/copilot
+    let stderr = "";
+    if (engine === "det") stderr = runEngine(flags).stderr;                       // offline, no LLM
+    else if (resolveLlmServe(server) === "binary") stderr = runEngine(flags).stderr;   // engine serves its own passes via claude/copilot
     else await runEngineWithBridge(server, flags, scratch);       // borrow the client's model via sampling
-    return reply(readJson(out));
+    return reply(readJson(out), stderr);
   });
 }
 
