@@ -17,6 +17,16 @@ It **structures, it does not judge.** No score, no approval, no "the LLM reviewe
 only pays the tax of reconstructing a change's structure so a triangulating review can happen
 without the linear scroll fighting it. The human still trusts.
 
+**Language-agnostic by construction.** The same structural engine works across
+**TypeScript/JavaScript, Java, Ruby, C, and C++** — definitions, references, and class heritage come
+from tree-sitter, so adding a language is a grammar, not a rewrite. Framework conventions a static
+scan would miss are recovered *agnostically* — **DI wiring** (interface → implementation),
+**container-invoked entry points** (`@GetMapping`/`@Path`/`onMessage`/`@Scheduled`, detected by
+annotation **presence**, never a hardcoded per-framework list), and **pub/sub messaging** (emitter ↔
+handler by shared event/topic) — from node kinds and heritage, with **zero per-framework code**. When
+a relation genuinely needs a framework's API name to even *find*, it falls to the LLM discover tier as
+a `SUGGESTED` lead, never asserted.
+
 The engine is a **stateless TypeScript library** (`ts/`). Every surface — the CLI, the VS Code
 extension, the MCP server, a future IntelliJ plugin — is a thin client over **one versioned JSON
 contract** (`--emit-seams`). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full model and the
@@ -115,15 +125,34 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 - **Contract** — `ts/src/core/contract.ts` stamps `schemaVersion`; the full shape is in
   [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump it; breaking
   changes do, and clients warn on a higher major.
-- **Distribution** — run from source (`bun`) or ship the self-contained binary
-  (`bun build --compile`). [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers both and the
-  tree-sitter-grammar caveat.
+- **Distribution** — a one-line [`install.sh`](install.sh) sets up the skill + MCP server from source
+  (`curl … | bash`); run the engine directly from a checkout (`bun`); or ship the self-contained
+  binary (`bun build --compile`). [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and
+  the tree-sitter-grammar caveat (why the source install keeps full AST facts the lone binary drops).
 - **The LLM seam** — `det` runs fully offline. For `hybrid`/`llm`, the engine either spawns a
   subscription-backed CLI (`claude`/`copilot`, no API key) **or** hands its prompts back to a host
   that already has a model, via the host-bus contract (`--emit-prompts` → answer → `--inject-llm`).
   That seam is what lets the `seam` Claude skill and the MCP server **borrow the caller's model**.
 
 ## Install & run
+
+### Quick install — the Claude skill + MCP server (one line)
+
+To *use* Seam (not develop it), install the **Claude Code skill** and/or the **MCP server** straight
+from `curl` — it bootstraps `bun`, fetches the engine, and wires both up so Seam works from any project:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
+#   …| bash -s -- --skill    # only the Claude Code skill
+#   …| bash -s -- --mcp      # only the MCP server (auto-registers with the `claude` CLI if present)
+```
+
+Re-run it any time to update (it tracks `main`). It installs from **source** — so you keep full
+tree-sitter facts for all five languages, not the regex fallback a single compiled binary would force.
+The **VS Code extension** is a separate self-contained `.vsix` (latest on
+[GitHub Releases](https://github.com/Scorbutics/seam/releases); see [§The VS Code extension](#the-vs-code-extension-primary-interactive-surface)).
+
+### From source (for development)
 
 The only prerequisite is [**bun**](https://bun.sh) — no Python, no venv, no `node`/`npm`. Install
 the deps once, then run from source:
@@ -311,7 +340,10 @@ thin stdio adapter over the engine (no daemon):
   works), else the **calling client's model via MCP sampling**. No API key either way.
 
 ```bash
-bun mcp/src/server.ts          # stdio MCP server
+curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash -s -- --mcp
+#   …registers with the `claude` CLI automatically; for another host it prints the stdio command/args.
+
+bun mcp/src/server.ts          # …or run the stdio server directly from a checkout
 ```
 
 See [`mcp/README.md`](mcp/README.md) for the tool schemas and `.mcp.json` registration.
@@ -334,6 +366,10 @@ a subagent standing in for the MCP server's sampling). It covers **both** modes:
 It auto-triggers on those phrasings, or invoke it explicitly with `/seam`. This is the zero-setup path
 when there's no model CLI on PATH; if `claude` *is* available, plain `decompose.ts … --emit-seams`
 also works.
+
+Install it into any project in one line (`curl … | bash -s -- --skill` — see
+[§Quick install](#quick-install--the-claude-skill--mcp-server-one-line)); the installer pins the
+checkout path so the skill resolves the engine from wherever Claude Code runs.
 
 ## Reliability harness (`ts/eval/`)
 
