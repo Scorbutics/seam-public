@@ -33,10 +33,25 @@ describe("annotation-route adapter (handler side, agnostic)", () => {
   });
 });
 
-describe("caller side ($http / fetch)", () => {
+describe("caller side ($http / fetch — framework-agnostic)", () => {
+  const callerVal = (code: string) => keys("c.js", code).filter((h) => h.kind === "http-route" && !h.produces).map((h) => h.value);
   test("AngularJS $http.get path literal → consumed http-route", () => {
-    const hits = keys("c.js", "$http.get('/manage/rest/member/document/' + id)");
-    expect(hits).toContainEqual({ kind: "http-route", value: "/manage/rest/member/document", line: 0, produces: false });
+    expect(callerVal("$http.get('/manage/rest/member/document/' + id)")).toContain("/manage/rest/member/document");
+  });
+  // React/Vue share the same HTTP libraries — no framework-specific API needed for the common cases.
+  test("React fetch / axios.get / ky / template literal", () => {
+    expect(callerVal('fetch("/api/users")')).toContain("/api/users");
+    expect(callerVal('axios.get(`/api/users/${id}`)')).toContain("/api/users/*");
+    expect(callerVal('ky.post("/api/orders")')).toContain("/api/orders");
+  });
+  test("Vue vue-resource this.$http and Nuxt useFetch / $fetch", () => {
+    expect(callerVal('this.$http.get("/api/members")')).toContain("/api/members");
+    expect(callerVal('const {data} = useFetch("/api/members")')).toContain("/api/members");
+    expect(callerVal('$fetch("/api/members")')).toContain("/api/members");
+  });
+  test("an Express route DEFINITION (router.get) is NOT mistaken for a caller", () => {
+    // `get` is not a recognised caller API, so a server-side route definition stays out of the caller set
+    expect(keys("c.js", 'router.get("/users", handler)').filter((h) => !h.produces)).toEqual([]);
   });
 });
 
