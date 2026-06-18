@@ -51,31 +51,47 @@ const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."
 
 export interface Consumer { file: string; local: string; source: string; status: string; reexport?: boolean; }
 
-// One repo walk → [consumer_file, {member → local}] for files whose import of one or more
-// `memberNames` resolves to `anchorFile` — member co-occurrence for module mode. Port of
-// consumers.scan_module_consumers.
-export async function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): Promise<[string, Record<string, string>][]> {
-  const anchorNorm = normpath(anchorFile);
-  const anchorAbs = normpath(join(repo, anchorFile));
-  const out: [string, Record<string, string>][] = [];
+// Repo-wide parsed-imports index, built ONCE per repo and reused by every consumer scan. Each
+// scan_consumers otherwise re-walks + re-reads + re-PARSES every file in the repo, and the grow calls it
+// repeatedly (per frontier node AND per route-caller in _chain_route_consumers, per step) — which
+// dominates a large-repo grow (measured: ~6s/build, 36s of a 52s run on a real repo). Content-static per
+// run + process-scoped, so memoising is safe (same rationale as the tree-sitter parse cache).
+const _repoImportsCache = new Map<string, { rel: string; norm: string; refs: ImportRef[] }[]>();
+export function resetRepoImports(): void { _repoImportsCache.clear(); }
+function _repoImports(repo: string): { rel: string; norm: string; refs: ImportRef[] }[] {
+  let idx = _repoImportsCache.get(repo);
+  if (idx) return idx;
+  idx = [];
   for (const [dir, files] of walk(repo, SKIP_DIRS)) {
     for (const fn of files) {
       if (!endsWithSourceExt(fn)) continue;
       const path = join(dir, fn);
-      if (normpath(path) === anchorAbs) continue;
       let text: string;
       try { text = readFileSync(path, "utf-8"); } catch { continue; }
-      if (![...memberNames].some((m) => text.includes(m))) continue;
       const rel = relative(repo, path);
-      const used: Record<string, string> = {};
-      for (const ref of parse_imports(rel, text)) {
-        if (!memberNames.has(ref.name)) continue;
-        const target = await _resolve_import(repo, rel, ref);
-        if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
-        if (!(ref.name in used)) used[ref.name] = ref.local;
-      }
-      if (Object.keys(used).length) out.push([rel, used]);
+      idx.push({ rel, norm: normpath(path), refs: parse_imports(rel, text) });
     }
+  }
+  _repoImportsCache.set(repo, idx);
+  return idx;
+}
+
+// [consumer_file, {member → local}] for files whose import of one or more `memberNames` resolves to
+// `anchorFile` — member co-occurrence for module mode. Reads the cached import index (no re-walk).
+export async function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): Promise<[string, Record<string, string>][]> {
+  const anchorNorm = normpath(anchorFile);
+  const anchorAbs = normpath(join(repo, anchorFile));
+  const out: [string, Record<string, string>][] = [];
+  for (const { rel, norm, refs } of _repoImports(repo)) {
+    if (norm === anchorAbs) continue;
+    const used: Record<string, string> = {};
+    for (const ref of refs) {
+      if (!memberNames.has(ref.name)) continue;
+      const target = await _resolve_import(repo, rel, ref);
+      if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
+      if (!(ref.name in used)) used[ref.name] = ref.local;
+    }
+    if (Object.keys(used).length) out.push([rel, used]);
   }
   return out;
 }
@@ -87,25 +103,17 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
   const anchorBase = stem(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
   const out: Consumer[] = [];
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const path = join(dir, fn);
-      if (normpath(path) === anchorAbs) continue;
-      let text: string;
-      try { text = readFileSync(path, "utf-8"); } catch { continue; }
-      if (!text.includes(symbol)) continue;
-      const rel = relative(repo, path);
-      for (const ref of parse_imports(rel, text)) {
-        if (ref.name !== symbol) continue;
-        const target = await _resolve_import(repo, rel, ref);
-        if (target !== null) {
-          if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved", reexport: ref.reexport });
-        } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {
-          out.push({ file: rel, local: ref.local, source: ref.source, status: "suggested", reexport: ref.reexport });
-        }
-        break;
+  for (const { rel, norm, refs } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
+    if (norm === anchorAbs) continue;
+    for (const ref of refs) {
+      if (ref.name !== symbol) continue;
+      const target = await _resolve_import(repo, rel, ref);
+      if (target !== null) {
+        if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved", reexport: ref.reexport });
+      } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {
+        out.push({ file: rel, local: ref.local, source: ref.source, status: "suggested", reexport: ref.reexport });
       }
+      break;
     }
   }
   return out;
