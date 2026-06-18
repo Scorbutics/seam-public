@@ -245,7 +245,7 @@ async function runCodebase(a: Args): Promise<number> {
         ? a.bidirectional
           ? await scan.build_bidirectional_graph(a.repo, a.anchorFile!, a.symbol, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
           : await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
-        : await scan.build_module_graph(a.repo, a.anchorFile!);
+        : await scan.build_module_graph(a.repo, a.anchorFile!, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }

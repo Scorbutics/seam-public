@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scan_file_keys } from "../src/codebase/coupling/index.js";
-import { build_class_graph } from "../src/codebase/import_scan.js";
+import { build_class_graph, build_module_graph, build_consumers_graph } from "../src/codebase/import_scan.js";
 import { available } from "../src/codebase/atoms.js";
 
 const keys = (file: string, text: string) => scan_file_keys(file, text);
@@ -83,5 +83,21 @@ describe("cross-stack coupling: servlet anchor reaches the AngularJS caller", ()
     expect(files.some((f: string) => f.endsWith("memberDocCtrl.js"))).toBe(true);
     // and a route boundary node was materialised (the served path)
     expect((g.nodes ?? []).some((n: any) => n.kind === "route" && String(n.symbol).includes("/document"))).toBe(true);
+  });
+
+  // The OTHER direction — the one a user actually anchors on. An AngularJS controller has no export and
+  // no importer, and its $http call is inside an anonymous `.controller(...)` callback, so it used to
+  // read as "1 core isolated". Both module mode (whole-file scan) and an unresolvable controller-name
+  // "symbol" (range-less → whole-file fallback) must now reach the servlet.
+  const reaches = (g: any, suffix: string) => (g.nodes ?? []).some((n: any) => String(n.file).endsWith(suffix));
+  test("controller as MODULE anchor reaches the servlet", async () => {
+    if (!available()) return;
+    const g = await build_module_graph(REPO, "frontend/memberDocCtrl.js", { dataCoupling: true });
+    expect(reaches(g, "ManageDocumentVaultServlet.java")).toBe(true);
+  });
+  test("controller-NAME as a (range-less) symbol anchor reaches the servlet via whole-file fallback", async () => {
+    if (!available()) return;
+    const g = await build_consumers_graph(REPO, "frontend/memberDocCtrl.js", "memberDocumentVaultDocuSignController", { dataCoupling: true });
+    expect(reaches(g, "ManageDocumentVaultServlet.java")).toBe(true);
   });
 });
