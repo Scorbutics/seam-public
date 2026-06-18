@@ -6,7 +6,7 @@ import { basename, join, relative } from "node:path";
 import { run_pass, ClassifierError as LLMError } from "../core/llm.js";
 import { module_entry_index } from "./string_coupling.js";
 import { normPath } from "./coupling/adapters/http_route.js";
-import { SKIP_DIRS } from "../core/resolve/languages/index.js";
+import { SKIP_DIRS, endsWithSourceExt } from "../core/resolve/languages/index.js";
 import { walk } from "../core/resolve/walk.js";
 
 function buildPrompt(file: string, snippet: string, resolved: string): string {
@@ -48,7 +48,7 @@ function _ground(repo: string, target: string, entryIndex: Map<string, string[]>
   const matches: string[] = [];
   for (const [dir, files] of walk(repo, SKIP_DIRS)) {
     for (const f of files) {
-      if (stem(f) === base && [".ts", ".tsx", ".js", ".jsx", ".py"].some((e) => f.endsWith(e))) {
+      if (stem(f) === base && endsWithSourceExt(f)) {   // any supported language (registry-sourced), not just JS/Py — so a cross-stack proposal can ground to a .java/.rb/.c backend
         matches.push(relative(repo, join(dir, f)));
         if (matches.length > 1) return null;
       }

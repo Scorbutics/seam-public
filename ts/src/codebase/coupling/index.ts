@@ -25,6 +25,34 @@ const ikey = (kind: string, value: string) => `${kind} ${value}`;
 type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
 const _CACHE = new Map<string, KeyIndex>();
 
+const _HTTP_ROUTE = "http-route";
+// Route patterns rarely equal a caller URL byte-for-byte: a handler `@WebServlet("/document/*")` is
+// mounted under a context path the caller spells in full (`/manage/rest/member/document`). So for
+// http-route keys ONLY, couple a handler to a caller when one path's segments are a whole-SEGMENT SUFFIX
+// of the other's (after dropping a trailing `/*` wildcard) — whole-segment so `/doc` ≁ `/mydoc`.
+const routeSegs = (value: string): string[] => value.replace(/\/\*+$/, "").split("/").filter(Boolean);
+function routeSuffixMatch(a: string, b: string): boolean {
+  const A = routeSegs(a), B = routeSegs(b);
+  if (!A.length || !B.length) return false;
+  const [long, short] = A.length >= B.length ? [A, B] : [B, A];
+  return short.every((s, i) => long[long.length - short.length + i] === s);
+}
+// The OTHER side of an access — exact-key matches, plus (for http-route) suffix-aliased route keys, so a
+// full-URL caller grounds to a sub-path/wildcard handler and vice-versa. Dedup is handled downstream (byFile).
+function otherSide(index: KeyIndex, kind: string, value: string, produces: boolean): Access[] {
+  const exact = index.get(ikey(kind, value));
+  const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
+  if (kind !== _HTTP_ROUTE) return out;
+  const prefix = `${_HTTP_ROUTE} `;
+  for (const [k, v] of index) {
+    if (!k.startsWith(prefix)) continue;
+    const val = k.slice(prefix.length);
+    if (val === value || !routeSuffixMatch(val, value)) continue;
+    out.push(...(produces ? v.consumers : v.producers));
+  }
+  return out;
+}
+
 export function shared_key_index(repo: string, skipDirs: Set<string>): KeyIndex {
   if (_CACHE.has(repo)) return _CACHE.get(repo)!;
   const idx: KeyIndex = new Map();
@@ -115,9 +143,8 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
   // Cheap & deterministic — reuses the index already built; demotes hub-table crowds below the cap.
   const coFile = new Map<string, number>();
   for (const a of accs.values()) {
-    const e = index.get(ikey(a.kind, a.value));
     const seen = new Set<string>();
-    for (const c of (a.produces ? e?.consumers : e?.producers) ?? []) {
+    for (const c of otherSide(index, a.kind, a.value, a.produces)) {
       if (normpath(c.file) === anchorNorm || seen.has(c.file)) continue;
       seen.add(c.file);
       coFile.set(c.file, (coFile.get(c.file) ?? 0) + 1);
@@ -127,8 +154,7 @@ export async function attach(repo: string, anchorId: string, anchorFile: string,
   for (const a of [...accs.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
     if (seenKeys.has(ikey(a.kind, a.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
     const kk = kindOf(a.kind);
-    const entry = index.get(ikey(a.kind, a.value));
-    const side = a.produces ? entry?.consumers : entry?.producers;   // the OTHER side
+    const side = otherSide(index, a.kind, a.value, a.produces);   // the OTHER side (exact + route suffix aliases)
     const complementProduces = !a.produces;
     const byFile = new Map<string, number>();
     for (const c of side ?? []) { if (normpath(c.file) === anchorNorm) continue; if (!byFile.has(c.file) || c.line < byFile.get(c.file)!) byFile.set(c.file, c.line); }

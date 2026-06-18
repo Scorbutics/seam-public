@@ -68,8 +68,12 @@ function handler_path(file: string): string | null {
 // HTTP-method handlers a route file exports (App Router `export function GET`/`export const GET = …`,
 // Pages Router `export default`). Each is anchored at its own line so a per-method anchor lands in range.
 const METHOD_EXPORT = /\bexport\s+(?:async\s+)?(?:default\b|(?:function\s+|const\s+|let\s+|var\s+)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b)/g;
-// A fetch-like call: fetch(…) / axios[.method](…) / ky[.method](…) / $fetch(…) / request(…), first arg a string.
-const FETCH_CALL = /\b(?:fetch|\$fetch|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\(\s*[`'"]([^`'"]*)/g;
+// A fetch-like call whose first arg is a string path: fetch / $fetch / request / axios[.method] /
+// ky[.method] / AngularJS $http[.method] / $resource. (`$http({url:…})` config-object form isn't caught —
+// only the positional-path form, the common case.)
+// NB: a leading `\b` does NOT match before `$` (both sides non-word), which silently missed `$http`/
+// `$fetch`; a negative lookbehind on word-char/`$`/`.` is the correct left boundary for `$`-prefixed names.
+const FETCH_CALL = /(?<![\w$.])(?:fetch|\$fetch|\$http(?:\.\w+)?|\$resource|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\(\s*[`'"]([^`'"]*)/g;
 
 function scan(file: string, text: string): KeyHit[] {
   if (!endsWithSourceExt(file) || !JS_EXT.test(file)) return [];
