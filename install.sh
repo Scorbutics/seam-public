@@ -99,7 +99,19 @@ if [ "$do_skill" -eq 1 ]; then
     }
     { print }
   ' "$src_skill" > "$SKILL_DIR/SKILL.md"
-  log "skill installed — in Claude Code, ask to \"run Seam\" / \"decompose this diff\" / \"map the footprint of X\"."
+  log "Claude Code skill installed — ask to \"run Seam\" / \"decompose this diff\" / \"map the footprint of X\"."
+
+  # Copilot CLI reads personal skills from ~/.copilot/skills (NOT ~/.claude/skills), and its Seam path
+  # is the MCP server, not host-served subagents — so install a SEPARATE, thin routing skill that just
+  # tells Copilot WHEN to call the seam MCP tools. Only when copilot is on PATH (else it's litter).
+  if command -v copilot >/dev/null 2>&1; then
+    cop_skill="$HOME_DIR/mcp/copilot-skill/SKILL.md"
+    if [ -f "$cop_skill" ]; then
+      mkdir -p "$HOME/.copilot/skills/seam"
+      cp "$cop_skill" "$HOME/.copilot/skills/seam/SKILL.md"
+      log "Copilot CLI routing skill installed → ~/.copilot/skills/seam/ (routes to the seam MCP tools)."
+    fi
+  fi
 fi
 
 # ── MCP server ─────────────────────────────────────────────────────────────--─
