@@ -3,6 +3,24 @@
 All notable changes to the Seam extension. Distributed as a `.vsix` via
 [GitHub Releases](https://github.com/Scorbutics/seam/releases) — experimental, not on the Marketplace.
 
+## 0.2.4
+
+Java/JVM footprints reach framework-invoked entry points, and the intent map is
+cleaner. (Engine improvements; the bundled engine carries them.)
+
+- **Framework entry points** — a method the framework/container invokes
+  (`@GetMapping`/`@Path`/`onMessage`/`@Scheduled`/`@Observes`, …) has no static
+  caller, so a footprint used to read it as a dead "isolated-core". It's now
+  detected **agnostically** — method-level annotation *presence* (any framework,
+  no hardcoded list) or implementing an interface declared outside the repo —
+  and rendered as an **entry** root, where the flow starts.
+- **Pub/sub & messaging coupling** — the LLM discover tier now couples an event
+  emitter to its handler (and back) by the shared event/topic/queue name —
+  cross-framework, zero framework-specific code, surfaced as SUGGESTED.
+- **Cleaner intent map** — `[no-flow]` is no longer printed when the footprint
+  actually traces to a spine; ambient blindspots (e.g. external libraries) are
+  summarised to one line per mechanism instead of repeating per node.
+
 ## 0.2.3
 
 Footprints reach DI-wired upstream entry points. (Engine improvement; the bundled engine carries it.)
