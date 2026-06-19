@@ -10,8 +10,9 @@ import { ACTIVE_RECORD } from "./active_record.js";
 import { JOOQ } from "./jooq.js";
 import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
+import { FILE_CHANNEL } from "./file_channel.js";
 
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL];
 
 const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-write", consumeEdge: "key-read", scan: () => [] };
 // Kind metadata (node label + edge kinds) for a key kind — shared by all adapters of that kind.
@@ -33,7 +34,11 @@ export const DOMAIN_SUBJECT_KINDS = new Set(ADAPTERS.filter((a) => a.kind === DB
 // intent pass uses this to ground the culmination: a flow CULMINATES where it writes its subject.
 export const KEY_PRODUCE_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => k.produceEdge));
 
-// Every adapter's key accesses in one file (the deterministic floor scan).
+// Every adapter's key accesses in one file (the deterministic floor scan). SEAM_NO_ADAPTERS=1 disables
+// the framework floor entirely — the FRAMEWORK-AGNOSTIC test: with the hand-written adapters unlinked,
+// every node is floor-blind, so the fallback-gated LLM key pass (maybe_discover_keys) fires everywhere
+// and must REGENERATE the couplings the adapters had hard-coded. Carrier-channel (data-file) is separate.
 export function scan_file_keys(file: string, text: string): KeyHit[] {
+  if (process.env.SEAM_NO_ADAPTERS === "1") return [];
   return ADAPTERS.flatMap((a) => a.scan(file, text));
 }

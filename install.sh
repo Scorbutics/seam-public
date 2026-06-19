@@ -78,6 +78,15 @@ fi
 if "$BUN" "$HOME_DIR/ts/src/cli/decompose.ts" --check-backend >/dev/null 2>&1; then :; fi
 log "engine ready: $BUN $HOME_DIR/ts/src/cli/decompose.ts"
 
+# Convenience shim for the learned-adapter CLI (list/promote the LLM-deduced .seam adapters).
+if [ -d "$HOME/.local/bin" ]; then
+  shim="$HOME/.local/bin/seam-adapters"
+  printf '#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n' "$BUN" "$HOME_DIR/ts/src/cli/adapters.ts" > "$shim" && chmod +x "$shim"
+  log "installed seam-adapters → $shim  (list / promote learned .seam adapters)"
+else
+  log "seam-adapters: run via  $BUN $HOME_DIR/ts/src/cli/adapters.ts list   (add ~/.local/bin to PATH for a shim)"
+fi
+
 # ── skill (Claude Code) ────────────────────────────────────────────────────--─
 if [ "$do_skill" -eq 1 ]; then
   src_skill="$HOME_DIR/.claude/skills/seam/SKILL.md"

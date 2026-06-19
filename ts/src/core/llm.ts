@@ -20,7 +20,11 @@ export const LLMError = ClassifierError;
 // (never downgraded). `model` flows to BOTH the live `claude --model` call AND the recorded metadata the
 // skill routes on, so both paths get the better tier. Escape hatch: SEAM_STRONG_MODEL="" disables it (so
 // the harness can A/B a pure-base run); set it to a model id to pin a different strong tier.
-export const STRONG_PASSES = new Set(["entrypoint-select", "anchor-judge", "seam-intent"]);
+// The carrier/key SYNTHESIS passes are semantic judgements too (is this method a read/write carrier?
+// which key does this file produce/consume?) — they wobble on haiku (the coupling eval gold loop measured
+// stability ~0.67), and they're LEARN-ONCE (cached to .seam), so paying the strong tier once for a
+// reliable adapter is worth it. So route them to STRONG_MODEL like the other semantic passes.
+export const STRONG_PASSES = new Set(["entrypoint-select", "anchor-judge", "seam-intent", "discover-keys-batch", "carrier-synthesis-batch"]);
 const STRONG_MODEL = process.env.SEAM_STRONG_MODEL ?? "claude-sonnet-4-6";
 function _route_model(tag: string | undefined, base: string): string {
   if (!tag || !STRONG_PASSES.has(tag) || !STRONG_MODEL) return base;

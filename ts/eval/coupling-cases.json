@@ -1,0 +1,26 @@
+[
+  {
+    "name": "psdk-mini: full floor recovers db-table + data-file",
+    "repo": "psdk-mini",
+    "anchorFile": "billing.rb",
+    "symbol": "charge",
+    "config": {},
+    "goldComplete": true,
+    "expect": [
+      { "value": "payments" },
+      { "value": "Data/Bill.rxdata" }
+    ]
+  },
+  {
+    "name": "psdk-mini: adapters UNLINKED + LLM regenerates the db-table coupling (the eval loop)",
+    "repo": "psdk-mini",
+    "anchorFile": "billing.rb",
+    "symbol": "charge",
+    "config": { "noAdapters": true, "llm": true },
+    "goldComplete": true,
+    "expect": [
+      { "value": "payments" },
+      { "value": "Data/Bill.rxdata" }
+    ]
+  }
+]

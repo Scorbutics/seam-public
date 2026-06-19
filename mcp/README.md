@@ -41,6 +41,13 @@ model's, served by **your** model via sampling. LLM-only (no `det`); needs a sam
 
 All tools return two content blocks: a short human summary, and the full Seam JSON model.
 
+## Learned adapters (CLI companion)
+
+When a `hybrid`/`llm` run learns data-coupling adapters for an unknown/homemade framework, they persist to
+the repo's `.seam/` (LLM-once → deterministic-forever; see the main README). Inspect & promote them with
+the `seam-adapters` CLI — `bun ts/src/cli/adapters.ts list | promote <name> | where` (the installer adds a
+`seam-adapters` shim on PATH). The learned adapters are plain, named, reviewable records — not a hidden index.
+
 ## The LLM question — det vs sampling
 
 Seam's pipeline makes its *own* LLM calls (cluster labelling, reconciliation, and the auto-grow

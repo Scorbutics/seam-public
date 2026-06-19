@@ -231,14 +231,37 @@ run with the unresolved key as `--intent` (or the consumer file as `--anchor-fil
 two footprints together for the user. Do this rather than falling back to a manual grep sweep over the
 UI — it keeps the cross-stack half of the flow on the same structural footing as the first half.
 
-**Cross-framework data-coupling (`--data-coupling llm`) is OPT-IN, and fallback-gated.** The
+**Cross-framework data-coupling (`--data-coupling llm`) is OPT-IN, batched, and CACHED.** The
 deterministic floor already couples DB tables, HTTP routes (annotation handlers ⇄ `fetch`/`$http`
-callers), and edge functions across the stack. The LLM key pass now fires ONLY on nodes the floor
-couldn't key, bounded by a per-run budget (so it scales on a heavy grow instead of an LLM pass per
-node × every step — earlier it didn't). Add `--data-coupling llm` when a question genuinely spans
-frameworks/stacks AND the deterministic trace left a cross-stack blindspot; prefer the
-re-anchor-and-compose move above first. Via this skill each fallback pass is a subagent, so it stays a
-deliberate deep-dive, not a default.
+callers), homemade carriers (Ruby `load_data`/`save_data` etc.), and edge functions across the stack.
+`--data-coupling llm` LEARNS adapters for what the floor missed: the repo-wide key index synthesises
+keys for floor-blind files and teacher-3 classifies opaque carriers — each in ONE batched LLM call,
+GROUNDED by cross-site co-occurrence (a wrong proposal that doesn't co-occur is dropped — no human
+validation needed). Results persist to `.seam/` keyed by content hash, so it's **LLM once → deterministic
+forever**: the FIRST run pays, later runs (even fully offline `det`) read `.seam` with zero LLM. Default
+stays `floor`/`det`; the recommended pattern is a one-time CI warm-up (`--data-coupling llm`, then
+`git add -f .seam/*.json`). `.seam/` self-ignores by default. Add `--data-coupling llm` when a question
+genuinely spans frameworks AND the deterministic trace left a cross-stack blindspot.
+
+**Learned adapters (`.seam/`) — view & promote (`seam-adapters`).** Both axes are named + reviewable:
+**carrier** adapters get an LLM-given friendly name + description; **key** adapters (a floor-blind file's
+deduced keys) get a file-derived name + a keys summary. So `.seam/` is human-reviewable, not opaque
+hashes. Inspect and promote them:
+
+```bash
+bun "$SEAM/ts/src/cli/adapters.ts" list [--repo <R>]        # learned adapters: repo .seam + shared store
+bun "$SEAM/ts/src/cli/adapters.ts" promote <name> [--repo <R>]   # copy one up into the SHARED adapter store
+bun "$SEAM/ts/src/cli/adapters.ts" where                    # print the repo + shared .seam paths
+```
+
+Two tiers: repo-local `.seam/` (per-repo cache) is read FIRST, then the SHARED store
+(**`~/.config/seam/adapters`**, overridable with `$SEAM_ADAPTERS_DIR`). `promote` is how you stage a good learned adapter
+for review → then hand-port it into the Seam repo as a deterministic adapter. When the user asks "what
+adapters did Seam learn / generate", run `list` and report the names + descriptions.
+
+**Adapter-learning steps are emitted** as `@@SEAM_PROGRESS@@` markers ("Learning N carrier adapter(s) via
+LLM…", "Deducing data-coupling keys for N floor-blind file(s)…"), alongside the grow phases — surface them
+so the user sees what the LLM pass is doing.
 
 **Per-step timing.** Every run prints a final `@@SEAM_TIMING@@ {"totalMs":…,"phases":[{phase,atMs,
 deltaMs}]}` line on stderr (the per-phase `@@SEAM_PROGRESS@@` markers it summarises are the steps:

@@ -11,8 +11,8 @@
 import { readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { affinity_grow } from "../src/codebase/subject_affinity.js";
-import { build_dependency_graph } from "../src/codebase/import_scan.js";
+import { affinity_grow } from "../src/codebase/grow/subject_affinity.js";
+import { build_dependency_graph } from "../src/codebase/scan/import_scan.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 type Case = { label: string; repo: string; intent: string; subjects: string[]; anchorFile: string; anchorSymbol: string };

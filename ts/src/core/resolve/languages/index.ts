@@ -5,17 +5,17 @@ import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec, type TableAccess } from "./base.js";
 export type { TableAccess };
-import { PROVIDER as TS } from "./typescript.js";
-import { PROVIDER as PY } from "./python.js";
-import { PROVIDER as JAVA } from "./java.js";
+import { PROVIDER as TS } from "../../../languages/typescript/resolve.js";
+import { PROVIDER as PY } from "../../../languages/python/resolve.js";
+import { PROVIDER as JAVA } from "../../../languages/java/resolve.js";
+import { PROVIDER as RUBY } from "../../../languages/ruby/resolve.js";
 
 // A minimal (LSP-only) provider: no floor / import parser, but a server spec so spec_for_file maps it.
 const minimal = (name: string, extensions: string[], lsp: ServerSpec): LanguageProvider => ({ name, extensions, lsp });
 
 export const PROVIDERS: LanguageProvider[] = [
-  TS, PY, JAVA,
+  TS, PY, JAVA, RUBY,
   minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] }),
-  minimal("ruby", [".rb", ".rake"], { language: "ruby", command: system("ruby-lsp", "--stdio"), languageId: "ruby", rootMarkers: ["Gemfile", ".ruby-version"] }),
   minimal("c", [".c", ".h"], { language: "c", command: system("clangd"), languageId: "c", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
   minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"], { language: "cpp", command: system("clangd"), languageId: "cpp", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
 ];

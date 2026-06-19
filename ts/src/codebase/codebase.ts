@@ -9,6 +9,7 @@ import {
   wellformedness,
 } from "../core/graph_ir.js";
 import * as atoms from "./atoms.js";
+import { RENDER } from "./config.js";
 
 const _CONF_CORE = 1.0, _CONF_TEST = 1.0, _CONF_LINK = 0.9, _CONF_ENV = 0.6;
 
@@ -69,7 +70,7 @@ function _area(path: string): string {
   }
   return parts.slice(0, -1).join("/") || path;
 }
-const _FAN_CAP = 8;   // a seam with more than this many inline call-sites is a guard/policy fan → cap + summarize
+const _FAN_CAP = RENDER.fanCap;   // a seam with more than this many inline call-sites is a guard/policy fan → cap + summarize
 
 interface Seam { id: string; label: string; linkOnly: boolean; node_ids: string[]; proposedBy: string;
   selected?: boolean; suggested?: boolean; tier?: "spine" | "supporting" | "off";
@@ -81,14 +82,13 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
-import { KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS } from "./coupling/index.js";
+import { isCouplingCrossing, isFlowSubject, isDomainSubject, isProduceEdge } from "./coupling/index.js";
 import { git_lineage } from "./lineage.js";
 // Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
 // plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
 // newly-registered key kind becomes a crossing automatically.
-const _CROSSING_KINDS = new Set(["dispatch", ...KEY_EDGE_KINDS]);
 export function _is_crossing(e: Edge): boolean {
-  return _CROSSING_KINDS.has(e.kind) || e.provenance === Provenance.SUGGESTED;
+  return e.kind === "dispatch" || isCouplingCrossing(e.kind) || e.provenance === Provenance.SUGGESTED;
 }
 
 function _hard_reachable(g: Graph): Set<string> {
@@ -304,7 +304,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   while (q.length) { const c = q.shift()!; const d = dist.get(c)!; for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
   const subjectNodes = new Map<string, Set<string>>();   // db-table name → node ids that touch it (boundary + direct neighbours)
   for (const n of g.nodes.values()) {
-    if (!DOMAIN_SUBJECT_KINDS.has(n.kind) || !n.label) continue;
+    if (!isDomainSubject(n.kind) || !n.label) continue;
     const set = subjectNodes.get(n.label) ?? subjectNodes.set(n.label, new Set()).get(n.label)!;
     set.add(n.id);
     for (const nb of adj.get(n.id) ?? []) set.add(nb);
@@ -319,7 +319,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // clearly-off seams skip the LLM, and the floored set stays ⊆ the LLM's "off").
   const floorSubjectNodes = new Map<string, Set<string>>();
   for (const n of g.nodes.values()) {
-    if (!KEY_NODE_KINDS.has(n.kind) || !n.label) continue;
+    if (!isFlowSubject(n.kind) || !n.label) continue;
     const set = floorSubjectNodes.get(n.label) ?? floorSubjectNodes.set(n.label, new Set()).get(n.label)!;
     set.add(n.id);
     for (const nb of adj.get(n.id) ?? []) set.add(nb);
@@ -333,9 +333,9 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // generation flow ends) vs forward (a CONSUMER / upstream caller — an entry/admin tool that calls IN).
   const writesBy = new Map<string, Set<string>>();
   for (const e of g.resolved_edges()) {
-    if (!KEY_PRODUCE_EDGE_KINDS.has(e.kind)) continue;
+    if (!isProduceEdge(e.kind)) continue;
     const dst = g.nodes.get(e.dst);
-    if (!dst || !DOMAIN_SUBJECT_KINDS.has(dst.kind) || !dst.label) continue;
+    if (!dst || !isDomainSubject(dst.kind) || !dst.label) continue;
     (writesBy.get(e.src) ?? writesBy.set(e.src, new Set()).get(e.src)!).add(dst.label);
   }
   const writesFor = (s: Seam): string[] => [...new Set(s.node_ids.flatMap((i) => [...(writesBy.get(i) ?? [])]))];
@@ -564,7 +564,7 @@ function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: stri
 // each client decides: the VS Code extension groups them under a collapsible `off` tier node; the
 // llm-context projection lists them ALL (an LLM consumer wants the recall, not a roll-up). A CLI/human
 // renderer that wants the capped view calls this.
-export const _OFF_CAP = 8;
+export const _OFF_CAP = RENDER.offCap;
 export function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
   const off = seams.filter((s) => s.tier === "off");
   if (off.length <= cap) return seams;
@@ -585,7 +585,7 @@ export function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
 // first-class. Purely TOPOLOGICAL (no intent words, language-agnostic); the intent tier pass then prunes
 // WHICH terminals matter (a member screen surfaces as a terminal but is tiered `off` — by intent, never
 // by distance). Bounded so a wide footprint can't balloon the seam count.
-const _TERMINAL_CAP = 12;
+const _TERMINAL_CAP = RENDER.terminalCap;
 function _promote_terminals(g: Graph): void {
   const anchors = new Set(g.anchors.length ? g.anchors : [g.anchor]);
   const indeg = new Map<string, number>();
@@ -604,7 +604,7 @@ import { walk as repoWalk } from "../core/resolve/walk.js";
 const _DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
 const _SCAN_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
 const _CB_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "out", ".turbo", "coverage", ".cache", "vendor"]);
-const _BLINDSPOT_CAP = 50;
+const _BLINDSPOT_CAP = RENDER.blindspotCap;
 const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n; };
 const stemOf = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
@@ -763,11 +763,11 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
 // with no shared subject — there is no spine, it is "a mechanism enforced at N sites". Detecting this
 // deterministically (subject present? else wide import-only fan?) is what lets the renderer collapse the
 // fan to a counted enforcement surface instead of fabricating N equal seams. Bidirectional-only signal.
-const _POLICY_MIN_CONSUMERS = 8;
+const _POLICY_MIN_CONSUMERS = RENDER.policyMinConsumers;
 function _detect_shape(g: Graph): "policy" | "flow" {
   // a data SUBJECT (a coupling boundary node — table/route/resource/…, sourced from the adapter registry,
   // not a hardcoded list, so new key kinds auto-count) ⇒ this is a FLOW (a pipeline), not a policy.
-  if ([...g.nodes.values()].some((n) => KEY_NODE_KINDS.has(n.kind))) return "flow";
+  if ([...g.nodes.values()].some((n) => isFlowSubject(n.kind))) return "flow";
   // count by DIRECTION, not role — so it's stable whether or not terminal-promotion ran (a policy's
   // enforcement sites are in-degree-0 forward terminals; we must classify it BEFORE deciding to promote).
   const fwdFiles = new Set([...g.nodes.values()]

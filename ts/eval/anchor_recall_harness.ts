@@ -20,7 +20,7 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { select_anchor } from "../src/codebase/anchor_select.js";
+import { select_anchor } from "../src/codebase/anchor/anchor_select.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CASES = join(__dir, "anchor-cases.json");

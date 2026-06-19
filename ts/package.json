@@ -8,6 +8,15 @@
   },
   "scripts": {
     "test": "bun test",
+    "test:arch": "bun test test/architecture.test.ts",
+    "test:core": "bun test test/core",
+    "test:coupling": "bun test test/coupling",
+    "test:scan": "bun test test/scan",
+    "test:grow": "bun test test/grow",
+    "test:anchor": "bun test test/anchor",
+    "test:languages": "bun test test/languages",
+    "test:codebase": "bun test test/codebase",
+    "test:diff": "bun test test/diff",
     "typecheck": "tsc --noEmit -p .",
     "build": "bun build src/cli/decompose.ts --compile --outfile dist/seam"
   },

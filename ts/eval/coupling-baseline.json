@@ -1,0 +1,14 @@
+{
+  "psdk-mini: full floor recovers db-table + data-file": {
+    "recall": 1,
+    "precision": 1,
+    "stability": 1,
+    "runs": 1
+  },
+  "psdk-mini: adapters UNLINKED + LLM regenerates the db-table coupling (the eval loop)": {
+    "recall": 1,
+    "precision": 1,
+    "stability": 1,
+    "runs": 3
+  }
+}

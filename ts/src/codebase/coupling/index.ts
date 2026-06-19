@@ -11,42 +11,37 @@ import { basename, join, relative } from "node:path";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS } from "../atoms.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
-import type { Access, ProposedKey } from "./types.js";
-import { kindOf, scan_file_keys } from "./adapters/index.js";
-import { emit } from "../../core/progress.js";
+import type { Access, ProposedKey, CouplingNode, Crossing, Blindspot } from "./types.js";
+import { EngineCtx } from "../engine_ctx.js";
+import { kindOf, scan_file_keys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { COUPLING } from "./config.js";
 
 export type { KeyHit, KeyKind, Access, ProposedKey } from "./types.js";
-export { ADAPTERS, KEY_EDGE_KINDS, KEY_NODE_KINDS, DOMAIN_SUBJECT_KINDS, KEY_PRODUCE_EDGE_KINDS, scan_file_keys } from "./adapters/index.js";
+export { ADAPTERS, scan_file_keys } from "./adapters/index.js";
 
-const READER_CAP = 6;                          // materialise at most this many complement nodes per key
+// Classification predicates — the data-coupling VOCABULARY exposed as BEHAVIOUR, not raw kind Sets.
+// Consumers (the grow loop, the seam assembler) ask coupling "is this edge a crossing? this node a flow
+// subject? this a produce-edge?" instead of importing the Sets, so coupling's representation stays private.
+export const isCouplingCrossing = (edgeKind: string): boolean => KEY_EDGE_KINDS.has(edgeKind);
+export const isFlowSubject = (nodeKind: string): boolean => KEY_NODE_KINDS.has(nodeKind);
+export const isProduceEdge = (edgeKind: string): boolean => KEY_PRODUCE_EDGE_KINDS.has(edgeKind);
+export const isDomainSubject = (nodeKind: string): boolean => DOMAIN_SUBJECT_KINDS.has(nodeKind);
+
+const READER_CAP = COUPLING.readerCap;                          // materialise at most this many complement nodes per key
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
-const ikey = (kind: string, value: string) => `${kind} ${value}`;
+const keyId = (kind: string, value: string) => `${kind} ${value}`;   // the kind+value identity of a shared key
 
-// LLM data-coupling (--data-coupling llm) is a FALLBACK, not a per-node tax: it runs the LLM key pass
-// ONLY where the deterministic floor found nothing in range, and only within a per-run budget. This is
-// what lets the opt-in scale on heavy grows — the floor covers the bulk for free (every node would
-// otherwise cost an LLM pass × every grow step), and the LLM fires only on genuinely floor-blind nodes.
-// The budget is process-scoped; the engine runs one decompose per process, so it resets naturally.
-const LLM_COUPLING_BUDGET = 12;
-let _llmBudget = LLM_COUPLING_BUDGET;
-let _llmCapNoted = false;
-export function resetLlmCouplingBudget(): void { _llmBudget = LLM_COUPLING_BUDGET; _llmCapNoted = false; }
+// NOTE: the LLM key pass is no longer a per-anchor call here — it's the repo-wide, batched, cached
+// `llm_key_index` (anchor keys come from that index via resolveCoupling, below). The old per-anchor
+// `maybe_discover_keys` + its budget were removed (2026-06-19); `attach` still consumes the grounded
+// `proposed` keys that index produces.
 
-export async function maybe_discover_keys(repo: string, anchorFile: string, text: string, lo: number, hi: number,
-    opts: { model?: string; claudeBin?: string | null }): Promise<ProposedKey[]> {
-  if (scan_file_keys(anchorFile, text).some((h) => h.line >= lo && h.line <= hi)) return [];   // floor covers it → no LLM
-  if (_llmBudget <= 0) {
-    if (!_llmCapNoted) { _llmCapNoted = true; emit(`LLM data-coupling budget (${LLM_COUPLING_BUDGET}) reached — remaining floor-blind nodes left to the deterministic floor; narrow the footprint or anchor closer to use it.`); }
-    return [];
-  }
-  _llmBudget -= 1;
-  const { discover_keys } = await import("../llm_discovery.js");
-  return discover_keys(repo, anchorFile, text, lo, hi, opts);
-}
-
-// ---- the repo-wide grounding index: `${kind} ${value}` → who produces / consumes it ----------
+// ---- the repo-wide GROUNDING INDEX: for each key, who PRODUCES it (writers) vs who CONSUMES it
+// (readers), found by scanning every file once. This is what turns "the anchor produces `payments`"
+// into "…and these files read it". Example:
+//   "db-table payments" → { producers: [billing.rb:40],            // the writers
+//                           consumers: [report.rb:12, dash.tsx:88] }  // the readers
 type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
-const _CACHE = new Map<string, KeyIndex>();
 
 const _HTTP_ROUTE = "http-route";
 // Route patterns rarely equal a caller URL byte-for-byte: a handler `@WebServlet("/document/*")` is
@@ -60,10 +55,17 @@ function routeSuffixMatch(a: string, b: string): boolean {
   const [long, short] = A.length >= B.length ? [A, B] : [B, A];
   return short.every((s, i) => long[long.length - short.length + i] === s);
 }
-// The OTHER side of an access — exact-key matches, plus (for http-route) suffix-aliased route keys, so a
-// full-URL caller grounds to a sub-path/wildcard handler and vice-versa. Dedup is handled downstream (byFile).
+// The OTHER side of an access — its COMPLEMENTS. If the anchor PRODUCES the key we return its consumers;
+// if it CONSUMES, we return its producers:
+//   produces `payments`  → [report.rb:12, dash.tsx:88]   (the readers)
+//   consumes `payments`  → [billing.rb:40]               (the writer)
+// This is a one-directional lookup keyed PURELY on the shared key string — there is NO check that the
+// complement points back at THIS producer. The only evidence is "both name the same key", which is why
+// every edge `attach` emits is RESOLVED_PARTIAL (a shared-name crossing), never an asserted call.
+// Exact-key matches, plus (for http-route) suffix-aliased route keys, so a full-URL caller grounds to a
+// sub-path/wildcard handler and vice-versa. Dedup is handled downstream (complementFiles).
 function otherSide(index: KeyIndex, kind: string, value: string, produces: boolean): Access[] {
-  const exact = index.get(ikey(kind, value));
+  const exact = index.get(keyId(kind, value));
   const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
   if (kind !== _HTTP_ROUTE) return out;
   const prefix = `${_HTTP_ROUTE} `;
@@ -76,8 +78,21 @@ function otherSide(index: KeyIndex, kind: string, value: string, produces: boole
   return out;
 }
 
-export function shared_key_index(repo: string, skipDirs: Set<string>): KeyIndex {
-  if (_CACHE.has(repo)) return _CACHE.get(repo)!;
+// Merge a second index (e.g. the carrier-channel data-file keys) into a copy of the base — concatenating
+// producers/consumers on shared keys. Non-mutating so the cached base index stays clean.
+function _merge_index(base: KeyIndex, extra: KeyIndex): KeyIndex {
+  const out: KeyIndex = new Map();
+  for (const [k, v] of base) out.set(k, { producers: [...v.producers], consumers: [...v.consumers] });
+  for (const [k, v] of extra) {
+    if (!out.has(k)) out.set(k, { producers: [], consumers: [] });
+    out.get(k)!.producers.push(...v.producers);
+    out.get(k)!.consumers.push(...v.consumers);
+  }
+  return out;
+}
+
+export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): KeyIndex {
+  if (ctx.sharedKey.has(repo)) return ctx.sharedKey.get(repo)!;
   const idx: KeyIndex = new Map();
   for (const [dir, files] of walk(repo, skipDirs)) {
     for (const fn of files) {
@@ -88,13 +103,13 @@ export function shared_key_index(repo: string, skipDirs: Set<string>): KeyIndex 
       const hits = scan_file_keys(rel, text);
       if (!hits.length) continue;
       for (const h of hits) {
-        const k = ikey(h.kind, h.value);
+        const k = keyId(h.kind, h.value);
         if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
         (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: rel, line: h.line });
       }
     }
   }
-  _CACHE.set(repo, idx);
+  ctx.sharedKey.set(repo, idx);
   return idx;
 }
 
@@ -125,100 +140,242 @@ export async function complement_unit(repo: string, file: string, line: number):
   return best ?? fallback;
 }
 
-const CHAIN_DEPTH = 1;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
+const CHAIN_DEPTH = COUPLING.chainDepth;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
 
-// Attach the shared-key boundaries for the anchor: for each key it PRODUCES surface the consumers, for
-// each it CONSUMES surface the producers — as a boundary node + (capped) crossing fan. Keys come from
-// the deterministic scan of the anchor body AND from `proposed` (the LLM, cross-framework). A proposed
-// key the index can't ground → a SUGGESTED blindspot (an LLM hypothesis, not a materialised node).
-//
-// TRANSITIVE: a complement is often itself a boundary onto the NEXT rung — a `payments` reader is an API
-// route handler that SERVES an http-route the UI fetches. Without chaining, that second hop only appears
-// if the LLM grow happens to re-anchor on a generically-named `GET` node (unreliable). So we recurse one
-// hop into each materialised complement, scanning ITS body for further keys — `seenKeys` carries the
-// boundaries an ancestor already surfaced so the chain can't loop back through the table it came in on.
-// Mutates nodes/edges/blindspots; returns the new id counter. Self-gating: no keys → no-op.
-export async function attach(repo: string, anchorId: string, anchorFile: string, anchorText: string,
-    lo: number, hi: number, nodes: any[], edges: any[], blindspots: any[], counter: number, proposed: ProposedKey[] = [],
-    depth = CHAIN_DEPTH, seenKeys: Set<string> = new Set()): Promise<number> {
-  if (!available()) return counter;
-  type Acc = { kind: string; value: string; produces: boolean; line: number; fromScan: boolean };
-  const accs = new Map<string, Acc>();
-  for (const h of scan_file_keys(anchorFile, anchorText)) {
-    if (h.line < lo || h.line > hi) continue;
-    const k = `${h.kind} ${h.value} ${h.produces}`;
-    if (!accs.has(k) || h.line < accs.get(k)!.line) accs.set(k, { kind: h.kind, value: h.value, produces: h.produces, line: h.line, fromScan: true });
+// The coupling sub-graph `attach` builds, as ONE mutable accumulator threaded through the chain recursion
+// (so a deep recursive call appends to the same arrays, with no by-hand counter plumbing). It OWNS the
+// `dc{n}` node-id sequence, seeded from the engine-wide counter: addNode() mints the next id, stores the
+// node, and returns it — the single place ids are minted, so callers never increment a counter themselves.
+class CouplingGraph {
+  readonly nodes: CouplingNode[] = [];
+  readonly edges: Crossing[] = [];
+  readonly blindspots: Blindspot[] = [];
+  constructor(private _counter: number) {}
+  addNode(node: Omit<CouplingNode, "id">): string {   // mints the id (the single place ids are minted)
+    this._counter += 1;
+    const id = `dc${this._counter}`;
+    this.nodes.push({ id, ...node });
+    return id;
   }
-  for (const p of proposed) {
-    const k = `${p.kind} ${p.value} ${p.produces}`;
-    if (!accs.has(k)) accs.set(k, { kind: p.kind, value: p.value, produces: p.produces, line: lo, fromScan: false });
-  }
-  if (!accs.size) return counter;
-  const index = shared_key_index(repo, SKIP_DIRS);
-  const anchorNorm = normpath(anchorFile);
-  const boundaryOf = new Map<string, string>();   // `${kind} ${value}` → boundary node id (one per key)
-  const surfaced = new Set(seenKeys);             // ancestor keys + the ones THIS call surfaces (fed to the chain recursion)
+  addEdge(edge: Crossing): void { this.edges.push(edge); }
+  addBlindspot(blindspot: Blindspot): void { this.blindspots.push(blindspot); }
+  get counter(): number { return this._counter; }   // the advanced id counter, for the caller to continue from
+}
 
-  // RELEVANCE prior for the capped fan: a complement that sits on the OTHER side of SEVERAL of the
-  // anchor's keys is coupled through more than one data channel, so it's on-intent (e.g. a file that
-  // writes BOTH `payments` and `members` in the payment flow); one sharing only a hub key (`members`)
-  // is generic noise. Score = number of distinct anchor keys whose complement side names the file.
-  // Cheap & deterministic — reuses the index already built; demotes hub-table crowds below the cap.
-  const coFile = new Map<string, number>();
-  for (const a of accs.values()) {
-    const seen = new Set<string>();
-    for (const c of otherSide(index, a.kind, a.value, a.produces)) {
-      if (normpath(c.file) === anchorNorm || seen.has(c.file)) continue;
-      seen.add(c.file);
-      coFile.set(c.file, (coFile.get(c.file) ?? 0) + 1);
+// merge two repo-wide key indexes (carrier-channel + LLM-key) — concat producers/consumers on shared keys.
+type _KIdx = Map<string, { producers: any[]; consumers: any[] }>;
+function _merge_key_index(a: _KIdx | undefined, b: _KIdx | undefined): _KIdx | undefined {
+  if (!a) return b; if (!b) return a;
+  const out: _KIdx = new Map(a);
+  for (const [k, v] of b) {
+    const e = out.get(k);
+    if (e) out.set(k, { producers: [...e.producers, ...v.producers], consumers: [...e.consumers, ...v.consumers] });
+    else out.set(k, { producers: [...v.producers], consumers: [...v.consumers] });
+  }
+  return out;
+}
+
+// PUBLIC per-anchor ENTRYPOINT — resolve the data-coupling boundary for an anchor span and return a DELTA
+// (nodes/edges/blindspots + the advanced id counter) for the caller to merge into its graph. Coupling owns
+// its OWN grounding here: the Ruby carrier-channel (teacher 1/2/3, homemade data-file coupling) PLUS the
+// language-agnostic LLM key index (the framework-AGNOSTIC grounding for floor-blind files) PLUS the
+// anchor's proposed keys. So a caller never orchestrates coupling internals nor hands coupling its arrays.
+// Self-gates to a no-op delta when data-coupling is off; the grounding self-gates to zero cost without
+// `--data-coupling llm` or a prior `.seam/` cache. (Was scan/import_scan `_carrier_extra` + the `attach` call.)
+export interface CouplingOpts { dataCoupling?: boolean; llm?: boolean; model?: string; claudeBin?: string | null }
+export async function resolveCoupling(
+  repo: string, anchorId: string, anchorFile: string, anchorText: string, lo: number, hi: number,
+  counter: number, opts: CouplingOpts = {}, ctx: EngineCtx = new EngineCtx(),
+): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+  const graph = new CouplingGraph(counter);
+  if (opts.dataCoupling === false) return { nodes: graph.nodes, edges: graph.edges, blindspots: graph.blindspots, counter };
+  const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
+  let accs: { kind: string; value: string; produces: boolean; line: number }[] | undefined, index: _KIdx | undefined;
+  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake")) {
+    const cc = await import("./carrier/engine.js");
+    index = await cc.carrierChannelIndex(repo, llmOpts, ctx);            // batched carrier-synth prefetch (warms the cache)
+    accs = await cc.anchorCarrierAccs(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
+  }
+  const lk = await import("./llm_key_index.js");
+  const ki = await lk.llmKeyIndex(repo, llmOpts, ctx);                   // repo-wide grounding (the other side), cached
+  if (ki.size) index = _merge_key_index(index, ki);
+  const proposed = await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx);   // the anchor's own gaps
+  await attach(graph, repo, anchorId, anchorFile, anchorText, lo, hi, proposed ?? [], undefined, undefined, { accs, index }, ctx);
+  return { nodes: graph.nodes, edges: graph.edges, blindspots: graph.blindspots, counter: graph.counter };
+}
+
+// One key the anchor body touches. `fromScan` separates a deterministic-FLOOR key (scan or carrier) from
+// an LLM proposal — an ungrounded proposal becomes a blindspot, an ungrounded floor key is silent.
+type AnchorKey = { kind: string; value: string; produces: boolean; line: number; fromScan: boolean };
+
+// Collect the keys the anchor body touches, from three sources, deduped (earliest line wins):
+//   1. the deterministic per-file scan (framework adapters)          ┐ both are the deterministic FLOOR,
+//   2. carrier-channel accesses (Ruby homemade data-file wrappers)   ┘ so they count as fromScan = true
+//   3. LLM-proposed keys — kept only where the floor didn't already cover them (fromScan = false)
+// e.g. a `Payment.create(...)` write in the span → AnchorKey{ kind:"db-table", value:"payments", produces:true }.
+function collectAnchorKeys(
+  anchorFile: string, anchorText: string, spanLo: number, spanHi: number,
+  carrierAccs: { kind: string; value: string; produces: boolean; line: number }[],
+  proposed: ProposedKey[],
+): Map<string, AnchorKey> {
+  const anchorKeys = new Map<string, AnchorKey>();
+  const accessId = (k: { kind: string; value: string; produces: boolean }) => `${k.kind} ${k.value} ${k.produces}`;
+  for (const hit of [...scan_file_keys(anchorFile, anchorText), ...carrierAccs]) {
+    if (hit.line < spanLo || hit.line > spanHi) continue;
+    const id = accessId(hit);
+    if (!anchorKeys.has(id) || hit.line < anchorKeys.get(id)!.line)
+      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, fromScan: true });
+  }
+  for (const proposedKey of proposed) {
+    const id = accessId(proposedKey);
+    if (!anchorKeys.has(id))
+      anchorKeys.set(id, { kind: proposedKey.kind, value: proposedKey.value, produces: proposedKey.produces, line: spanLo, fromScan: false });
+  }
+  return anchorKeys;
+}
+
+// ---- RELEVANCE ranking for the capped fan (a separate concern: SCORE here, APPLY just below) ----------
+// We only materialise READER_CAP complements per key, so when a key has many we must keep the most on-
+// intent ones. The signal: a complement file on the OTHER side of SEVERAL of the anchor's keys is coupled
+// through more than one data channel — clearly part of the flow — while one sharing a single hub key is
+// generic noise. So we score each complement file by how many DISTINCT anchor keys name it on their far
+// side. Example — the anchor (a payment flow) touches keys `payments` AND `members`:
+//   billing_report.rb  reads payments + members  → score 2   (kept first — coupled through both channels)
+//   user_profile.tsx   reads members only        → score 1   (demoted — only shares the generic hub table)
+// Cheap & deterministic: reuses the grounding index already built; demotes hub-table crowds below the cap.
+function rankComplementsByCoOccurrence(
+  anchorKeys: Iterable<AnchorKey>, index: KeyIndex, anchorPath: string,
+): Map<string, number> {
+  const coOccurrenceByFile = new Map<string, number>();
+  for (const key of anchorKeys) {
+    const seenFiles = new Set<string>();
+    for (const complement of otherSide(index, key.kind, key.value, key.produces)) {
+      if (normpath(complement.file) === anchorPath || seenFiles.has(complement.file)) continue;
+      seenFiles.add(complement.file);
+      coOccurrenceByFile.set(complement.file, (coOccurrenceByFile.get(complement.file) ?? 0) + 1);
     }
   }
+  return coOccurrenceByFile;
+}
 
-  for (const a of [...accs.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
-    if (seenKeys.has(ikey(a.kind, a.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
-    const kk = kindOf(a.kind);
-    const side = otherSide(index, a.kind, a.value, a.produces);   // the OTHER side (exact + route suffix aliases)
-    const complementProduces = !a.produces;
-    const byFile = new Map<string, number>();
-    for (const c of side ?? []) { if (normpath(c.file) === anchorNorm) continue; if (!byFile.has(c.file) || c.line < byFile.get(c.file)!) byFile.set(c.file, c.line); }
+// APPLY the scores: order one key's complement files by co-occurrence DESC (relevance), then file/line ASC
+// (a stable tie-break). The first READER_CAP of the result survive the cap. Input/output are [file, line].
+function orderComplementsByRelevance(
+  complementFiles: Map<string, number>, coOccurrenceByFile: Map<string, number>,
+): [string, number][] {
+  return [...complementFiles.entries()].sort((x, y) => {
+    const scoreX = coOccurrenceByFile.get(x[0]) ?? 0, scoreY = coOccurrenceByFile.get(y[0]) ?? 0;
+    if (scoreX !== scoreY) return scoreY - scoreX;                 // higher cross-key co-occurrence first
+    return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1];       // then stable file, then line
+  });
+}
 
-    if (!byFile.size) {
-      if (!a.fromScan) blindspots.push({ node: anchorId, mechanism: "llm-proposed-key",
-        evidence: `LLM proposes a ${a.kind} coupling on '${a.value}' (${a.produces ? "produced" : "consumed"} here) the deterministic scan didn't index`, candidates: [] });
+// The NEAR-side lookup for one key: its complement files — the OTHER side from the index (exact + route
+// suffix aliases), the anchor's own file dropped, deduped to file → earliest line (one complement node per
+// file, located at its first access).
+function collectComplementFiles(index: KeyIndex, key: AnchorKey, anchorPath: string): Map<string, number> {
+  const complementFiles = new Map<string, number>();
+  for (const access of otherSide(index, key.kind, key.value, key.produces)) {
+    if (normpath(access.file) === anchorPath) continue;
+    if (!complementFiles.has(access.file) || access.line < complementFiles.get(access.file)!) complementFiles.set(access.file, access.line);
+  }
+  return complementFiles;
+}
+
+// The shared, per-attach context — bundled so the helpers below take a `scope`, not a dozen parameters. A
+// fresh scope is built per attach call (its `depth` is the current chain level; the recursion makes a new
+// one at depth-1).
+interface AttachScope {
+  graph: CouplingGraph;
+  repo: string;
+  index: KeyIndex;                  // the grounding index (base, optionally carrier-extended)
+  anchorPath: string;
+  coOccurrence: Map<string, number>;
+  depth: number;
+  carrier: { accs?: { kind: string; value: string; produces: boolean; line: number }[]; index?: KeyIndex };
+  ctx: EngineCtx;
+}
+
+// CROSS the boundary (the FAR side): rank this key's complement files, materialise the top READER_CAP as
+// nodes with boundary→complement crossings, chain one hop into each, and record the over-cap tail as a
+// fanout blindspot. `surfacedKeys` already carries this boundary's key, so the chain can't loop back in.
+async function crossBoundary(
+  scope: AttachScope, boundaryId: string, key: AnchorKey, complementFiles: Map<string, number>, surfacedKeys: Set<string>,
+): Promise<void> {
+  const { graph, repo, depth, carrier, ctx, coOccurrence } = scope;
+  const adapter = kindOf(key.kind);
+  const complementProduces = !key.produces;
+  const rankedComplements = orderComplementsByRelevance(complementFiles, coOccurrence);
+  for (const [file, line] of rankedComplements.slice(0, READER_CAP)) {
+    const unit = await complement_unit(repo, file, line);
+    const complementId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true });
+    graph.addEdge({ from: boundaryId, to: complementId, kind: complementProduces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });
+    // CHAIN: this complement may itself sit on the next boundary (the route handler that SERVES what the UI
+    // fetches). Recurse one hop into its body, scanning ITS keys — `surfacedKeys` blocks the table it reads.
+    if (depth > 0) {
+      let complementText = "";
+      try { complementText = readFileSync(join(repo, file), "utf-8"); } catch { /* unreadable complement → no chain */ }
+      if (complementText) await attach(graph, repo, complementId, file, complementText, unit.start, unit.end, [], depth - 1, surfacedKeys, { index: carrier.index }, ctx);
+    }
+  }
+  if (rankedComplements.length > READER_CAP) {
+    graph.addBlindspot({ node: boundaryId, mechanism: "shared-key-fanout",
+      evidence: `'${key.value}' (${key.kind}) is ${complementProduces ? "written" : "read"} in ${rankedComplements.length} files (showing ${READER_CAP}) — a data-flow boundary, not a call`,
+      candidates: rankedComplements.slice(READER_CAP).map(([file]) => ({ file, symbol: key.value, provenance: "SUGGESTED" })) });
+  }
+}
+
+// Attach the shared-key boundaries for one anchor span into `graph`: for each key it PRODUCES surface the
+// consumers, for each it CONSUMES surface the producers — as a boundary node + a (capped) crossing fan.
+// Keys come from collectAnchorKeys (scan + carrier floor + LLM proposals). Per key, two halves:
+//   NEAR side (here)         — find the complement files, then emit the boundary node + anchor→boundary edge
+//   FAR side (crossBoundary) — rank + materialise the complements, draw boundary→complement edges, chain on
+// A proposed key the index can't ground → a blindspot (an LLM hypothesis, not a materialised node).
+// Appends to `graph` (which owns id minting); returns nothing. Self-gating: no keys → no-op.
+export async function attach(graph: CouplingGraph, repo: string, anchorId: string, anchorFile: string, anchorText: string,
+    spanLo: number, spanHi: number, proposed: ProposedKey[] = [],
+    depth = CHAIN_DEPTH, seenKeys: Set<string> = new Set(),
+    carrier: { accs?: { kind: string; value: string; produces: boolean; line: number }[]; index?: KeyIndex } = {},
+    ctx: EngineCtx = new EngineCtx()): Promise<void> {
+  if (!available()) return;
+
+  const anchorKeys = collectAnchorKeys(anchorFile, anchorText, spanLo, spanHi, carrier.accs ?? [], proposed);
+  if (!anchorKeys.size) return;
+
+  // the repo-wide grounding index, optionally extended with the carrier-channel index (data-file keys)
+  const baseIndex = shared_key_index(repo, SKIP_DIRS, ctx);
+  const groundingIndex: KeyIndex = carrier.index ? _merge_index(baseIndex, carrier.index) : baseIndex;
+
+  const anchorPath = normpath(anchorFile);
+  const coOccurrenceByFile = rankComplementsByCoOccurrence(anchorKeys.values(), groundingIndex, anchorPath);
+  const scope: AttachScope = { graph, repo, index: groundingIndex, anchorPath, coOccurrence: coOccurrenceByFile, depth, carrier, ctx };
+
+  const boundaryNodeIdByKey = new Map<string, string>();   // key identity → boundary node id (one per key)
+  const surfacedKeys = new Set(seenKeys);                  // ancestor keys + the ones THIS call surfaces (fed to the chain recursion)
+
+  for (const key of [...anchorKeys.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
+    if (seenKeys.has(keyId(key.kind, key.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
+    const adapter = kindOf(key.kind);
+
+    // NEAR side: which files sit on the other side of this key?
+    const complementFiles = collectComplementFiles(groundingIndex, key, anchorPath);
+    if (!complementFiles.size) {
+      // an LLM-proposed key the deterministic index can't ground → a blindspot, not a materialised node
+      if (!key.fromScan) graph.addBlindspot({ node: anchorId, mechanism: "llm-proposed-key",
+        evidence: `LLM proposes a ${key.kind} coupling on '${key.value}' (${key.produces ? "produced" : "consumed"} here) the deterministic scan didn't index`, candidates: [] });
       continue;
     }
-    let tid = boundaryOf.get(ikey(a.kind, a.value));
-    if (tid === undefined) {
-      counter += 1; tid = `dc${counter}`;
-      boundaryOf.set(ikey(a.kind, a.value), tid);
-      nodes.push({ id: tid, symbol: a.value, kind: kk.nodeKind, file: anchorFile, range: [a.line, a.line], enclosing: "", complexity: 1, coupling: true });
+
+    // emit (once) the boundary node standing for this key, plus the anchor→boundary crossing edge
+    let boundaryId = boundaryNodeIdByKey.get(keyId(key.kind, key.value));
+    if (boundaryId === undefined) {
+      boundaryId = graph.addNode({ symbol: key.value, kind: adapter.nodeKind, file: anchorFile, range: [key.line, key.line], enclosing: "", complexity: 1, coupling: true });
+      boundaryNodeIdByKey.set(keyId(key.kind, key.value), boundaryId);
     }
-    surfaced.add(ikey(a.kind, a.value));   // mark before recursing so a complement reading this same key skips it
-    edges.push({ from: anchorId, to: tid, kind: a.produces ? kk.produceEdge : kk.consumeEdge, provenance: "RESOLVED_PARTIAL", line: a.line });
-    const complements = [...byFile.entries()].sort((x, y) => {
-      const sx = coFile.get(x[0]) ?? 0, sy = coFile.get(y[0]) ?? 0;
-      if (sx !== sy) return sy - sx;   // higher cross-key co-occurrence first (relevance-ranked cap)
-      return x[0] < y[0] ? -1 : x[0] > y[0] ? 1 : x[1] - y[1];   // then stable file/line
-    });
-    for (const [file, line] of complements.slice(0, READER_CAP)) {
-      const u = await complement_unit(repo, file, line);
-      counter += 1;
-      const cid = `dc${counter}`;
-      nodes.push({ id: cid, symbol: u.symbol, kind: u.kind, file, range: [u.start, u.end], enclosing: "", complexity: Math.max(1, u.end - u.start + 1), coupling: true });
-      edges.push({ from: tid, to: cid, kind: complementProduces ? kk.produceEdge : kk.consumeEdge, provenance: "RESOLVED_PARTIAL" });
-      // CHAIN: this complement may itself sit on the next boundary (the route handler that SERVES what the
-      // UI fetches). Recurse one hop into its body, scanning ITS keys — `surfaced` blocks the table it reads.
-      if (depth > 0) {
-        let ctext = "";
-        try { ctext = readFileSync(join(repo, file), "utf-8"); } catch { /* unreadable complement → no chain */ }
-        if (ctext) counter = await attach(repo, cid, file, ctext, u.start, u.end, nodes, edges, blindspots, counter, [], depth - 1, surfaced);
-      }
-    }
-    if (complements.length > READER_CAP) {
-      blindspots.push({ node: tid, mechanism: "shared-key-fanout",
-        evidence: `'${a.value}' (${a.kind}) is ${complementProduces ? "written" : "read"} in ${complements.length} files (showing ${READER_CAP}) — a data-flow boundary, not a call`,
-        candidates: complements.slice(READER_CAP).map(([file]) => ({ file, symbol: a.value, provenance: "SUGGESTED" })) });
-    }
+    surfacedKeys.add(keyId(key.kind, key.value));   // mark before recursing so a complement reading this same key skips it
+    graph.addEdge({ from: anchorId, to: boundaryId, kind: key.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL", line: key.line });
+
+    // FAR side: cross the boundary out to its (ranked, capped) complements
+    await crossBoundary(scope, boundaryId, key, complementFiles, surfacedKeys);
   }
-  return counter;
 }

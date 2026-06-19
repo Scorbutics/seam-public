@@ -2,9 +2,9 @@
 // Port of src/codebase/anchor_rank.py main() — find + rank candidate anchors against a typed intent
 // (or emit SUGGESTED boundary crossings for a symbol). Mirrors `python -m src.codebase.anchor_rank`.
 import { readFileSync, writeFileSync } from "node:fs";
-import { find_anchor_candidates, rank_anchors, suggest_crossings, _content_words } from "../codebase/anchor_rank.js";
-import { expand_intent_terms } from "../codebase/intent_expand.js";
-import { select_anchor } from "../codebase/anchor_select.js";
+import { find_anchor_candidates, rank_anchors, suggest_crossings, _content_words } from "../codebase/anchor/anchor_rank.js";
+import { expand_intent_terms } from "../codebase/anchor/intent_expand.js";
+import { select_anchor } from "../codebase/anchor/anchor_select.js";
 import { available } from "../core/llm.js";
 
 async function main(argv: string[]): Promise<number> {

@@ -381,6 +381,30 @@ Install it into any project in one line (`curl … | bash -s -- --skill` — see
 [§Quick install](#quick-install--the-claude-skill--mcp-server-one-line)); the installer pins the
 checkout path so the skill resolves the engine from wherever Claude Code runs.
 
+## Learned adapters — transparent, named, promotable (`seam-adapters`)
+
+The deterministic floor covers known frameworks. For the rest — a homemade or unknown framework — a
+**one-time** `--data-coupling llm` run lets the LLM **learn an adapter** (a carrier's read/write
+signature, or a floor-blind file's keys), **grounded by cross-site co-occurrence** so a wrong guess that
+doesn't co-occur is dropped (no human gate needed — the deterministic layer is the validator). Learned
+adapters persist to **`.seam/`** keyed by content hash, so it's **LLM-once → deterministic-forever**: the
+first run pays, every later run (even fully offline) reads `.seam` with zero LLM. `.seam/` self-ignores by
+default; the team pattern is a CI warm-up that commits it (`git add -f .seam/*.json`).
+
+Unlike an always-on hosted index, the learned adapters are **plain, named, reviewable records you own** —
+inspect and promote them with `seam-adapters`:
+
+```bash
+bun ts/src/cli/adapters.ts list             # learned adapters (repo .seam + shared store), named + described
+bun ts/src/cli/adapters.ts promote <name>   # copy one up into the shared store ($SEAM_ADAPTERS_DIR-overridable)
+bun ts/src/cli/adapters.ts where            # print the repo + shared store locations
+```
+
+(The one-line installer drops a `seam-adapters` shim on PATH if `~/.local/bin` exists.) Two tiers: the
+repo-local `.seam/` is read first, then the shared store (`~/.config/seam/adapters`, `$SEAM_ADAPTERS_DIR`-overridable) — so a **`promote`** stages a good learned
+adapter for review and reuse across repos, and from there you hand-port the keepers into the engine as
+deterministic adapters. The whole loop is inspectable: no index server, no lock-in.
+
 ## Reliability harness (`ts/eval/`)
 
 The **LLM** classifier is **not deterministic** (the CLI exposes no temperature), so a single run is
@@ -400,6 +424,20 @@ Accuracy is role accuracy, permutation-invariant **cluster F1**, and wiring as a
 precision-weighted Fβ(0.5)** (a false coupling hurts a reader more than a missing one). The gated
 **health** signal is **over-wiring**; *isolated cores / dangling links / orphans are informational
 postures, not errors*. The goal is "an acceptable representation," not per-hunk label-match.
+
+A second harness, [`ts/eval/coupling_harness.ts`](ts/eval/coupling_harness.ts), is the **LLM-learned-adapter
+eval gold loop**: it runs data-coupling recovery N times against a gold (each case's expected couplings)
+and scores **recall** (gold edges recovered), **precision** (no fabricated couplings — the grounding gate),
+and **stability** (run-to-run agreement), with a baseline gate. It's how teacher-3 is *validated*, and it
+*drives* tuning — e.g. it measured the framework-unlink regeneration at recall 0.83 / stability 0.67 on the
+base model, justifying routing the synthesis passes to the strong tier, which lifted it to **1.0 / 1.0**.
+
+```bash
+bun ts/eval/coupling_harness.ts generate --runs 3   # cache N live runs per case
+bun ts/eval/coupling_harness.ts eval --save         # recall / precision / stability → baseline
+bun ts/eval/coupling_harness.ts eval --baseline     # gate: non-zero on regression
+```
+
 Deterministic signals (external coupling, A→B rewire, span segmentation) are pure functions of the
 diff and are gated by exact-assertion tests in [`ts/test/`](ts/test/), the right tool for them.
 

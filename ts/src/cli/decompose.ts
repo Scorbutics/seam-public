@@ -129,7 +129,7 @@ async function runCodebase(a: Args): Promise<number> {
     const { set_resolver } = await import("../core/resolve/consumers.js");
     try { set_resolver(await make_resolver(a.resolver)); } catch (e) { err((e as Error).message); }
   }
-  const scan = await import("../codebase/import_scan.js");
+  const scan = await import("../codebase/scan/index.js");
   const { from_resolved_graph } = await import("../core/graph_ir.js");
   const { decompose } = await import("../codebase/codebase.js");
 
@@ -138,7 +138,7 @@ async function runCodebase(a: Args): Promise<number> {
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
-    const { merge_resolved } = await import("../codebase/expand.js");
+    const { merge_resolved } = await import("../codebase/scan/index.js");
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
       const add = a.down
@@ -151,42 +151,13 @@ async function runCodebase(a: Args): Promise<number> {
     // Auto-anchor: --auto with --intent but NO --symbol → SELECT the anchor instead of the user picking
     // one (a bad pick linked to nothing hides the real result).
     if (a.auto && a.intent && !a.symbol) {
-      // #1 ENUMERATE the HTTP entry points (structure): a route handler whose convention name (`GET`/
-      // `POST`/slug) or anonymous edge fn the lexical net can't see. The LLM names the route the intent
-      // points at, if any. This is a RECALL source, NOT a preemptive override: the picked route enters
-      // the SAME probe→judge funnel as a SEED candidate, so a tangential route ("/bug-reports/screenshot"
-      // for "how is a bug created") can't hijack a better service anchor — it wins only if its grown
-      // footprint best answers the intent (decide-LAST, the pattern that survived).
-      const { available } = await import("../core/llm.js");
-      const seeds: { name: string; file: string; kind: string }[] = [];
-      let expandTerms: string[] | undefined;
-      if (available(a.claudeBin)) {
-        const ep = await import("../codebase/entrypoint_select.js");
-        const { expand_intent_terms_async } = await import("../codebase/intent_expand.js");
-        const eps = ep.enumerate_entrypoints(a.repo);
-        // `entrypoint-select` and `expand` are INDEPENDENT LLM passes that both precede the anchor
-        // decision (one seeds a route candidate, the other the recall keywords) — run them CONCURRENTLY
-        // to save a round-trip on the dominant LLM-pass cost. The picked route still enters the SAME
-        // probe→judge funnel as a SEED candidate (decide-LAST), and the expand terms feed select_anchor.
-        const [pick, terms] = await Promise.all([
-          ep.select_entrypoint_llm(a.intent, eps, { model: a.model, claudeBin: a.claudeBin }),
-          expand_intent_terms_async(a.intent, { model: a.model, claudeBin: a.claudeBin }),
-        ]);
-        expandTerms = terms;
-        if (pick) {
-          const [file, symbol] = await ep.entrypoint_anchor(a.repo, pick);
-          seeds.push({ name: symbol, file, kind: "route" });
-          process.stdout.write(`[entry-candidate] ${pick.path} → ${symbol} (${file})\n`);
-        }
-      }
-      // Structural probe floor drops the isolated candidates; an LLM judges which connected footprint
-      // (lexical/embed symbols + any entry-point seed) is the intent's entry point. Embed recall is the
-      // DEFAULT (graduated the gate: 83% vs lexical 50%, no per-case regression, recovers the fuzzy
-      // name-mismatch anchors the lexical net misses); `--anchor-recall lexical` opts out. Where
-      // transformers.js isn't available (e.g. the bundled .vsix) embed_anchor_candidates returns [] and
-      // it degrades to lexical, so defaulting on is safe.
-      const { select_anchor } = await import("../codebase/anchor_select.js");
-      const sel = await select_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", seeds, expandTerms });
+      // The full auto-anchor pipeline behind ONE call: entry-point seed + intent-expand (concurrent,
+      // LLM-gated) feeding the probe→judge select_anchor. The entry seed is a SEED candidate (decide-LAST),
+      // not a preemptive override; embed recall is the default (degrades to lexical where transformers.js
+      // is absent). The CLI only does presentation (logging/err) on the returned data.
+      const { find_anchor } = await import("../codebase/anchor/index.js");
+      const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed" });
+      if (sel.entryCandidate) process.stdout.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
@@ -209,7 +180,7 @@ async function runCodebase(a: Args): Promise<number> {
     if (a.auto) {
       // P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
       if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
-      const orch = await import("../codebase/orchestrate.js");
+      const orch = await import("../codebase/grow/index.js");
       let hist: any[];
       // `--grow det` (default) follows the resolved crossings to the terminals deterministically — no LLM
       // move-picker (the intent is still used downstream, by the tier pass). `--grow llm` = the old
@@ -260,7 +231,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.interfaceConsumers !== false && a.symbol && a.anchorFile && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
       const ifaces = await scan.implemented_interfaces(a.repo, a.anchorFile, a.symbol);
-      const { merge_resolved } = await import("../codebase/expand.js");
+      const { merge_resolved } = await import("../codebase/scan/index.js");
       let added = 0;
       for (const iface of ifaces) {
         const node = (data.nodes as any[]).find((n) => n.symbol === iface);
@@ -280,7 +251,7 @@ async function runCodebase(a: Args): Promise<number> {
   // SUGGESTED affinity. Intent-related → on the spine, per the design.
   if (a.affinity && a.intent && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
-      const { affinity_grow } = await import("../codebase/subject_affinity.js");
+      const { affinity_grow } = await import("../codebase/grow/index.js");
       const subjects = [...new Set((data.nodes as any[]).map((n) => n.symbol).filter(Boolean))];
       const fpFiles = (data.nodes as any[]).map((n) => n.file).filter(Boolean);
       const hits = await affinity_grow(a.repo, subjects, a.intent, fpFiles, { model: a.model, claudeBin: a.claudeBin });
