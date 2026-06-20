@@ -16,21 +16,20 @@
 //
 // LAZY + cached: results persist to `.seam/key-adapters.json` (LLM once → deterministic forever; CI warm-up
 // commits it). A normal det run with no `.seam/` does zero work.
-import { readFileSync } from "node:fs";
 import { createHash } from "node:crypto";
-import { join, relative } from "node:path";
-import { run_pass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
-import { walk } from "../../core/resolve/walk.js";
+
+const PASS = registerPass({ tag: "discover-keys-batch", tier: "strong", note: "shared-key producer/consumer discovery (semantic, learn-once → .seam)" });
+import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
 import { scan_file_keys } from "./adapters/index.js";
 import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_cache.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
-import type { Access, KeyHit } from "./types.js";
+import type { GroundingIndex, KeyHit } from "./types.js";
 
-type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
 export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null }
 
 const SNIPPET_CAP = COUPLING.snippetCap;
@@ -96,7 +95,7 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
     if (!chunk.length) return;
     const prompt = _batchPrompt(chunk.map((c) => ({ file: c.file, snippet: c.text.slice(0, PER_FILE) })));
     let byFile = new Map<string, KeyHit[]>();
-    try { byFile = _parseBatch(run_pass(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: "discover-keys-batch" })); }
+    try { byFile = _parseBatch(run_pass(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
     catch (e) { if (!(e instanceof LLMError)) throw e; }
     for (const c of chunk) { const keys = byFile.get(c.file) ?? []; result.set(c.file, keys); persistFileKeys(repo, c.ck, { ..._keyAdapterMeta(c.file, keys), keys }); }
     chunk = []; size = 0;
@@ -110,30 +109,25 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
   return result;
 }
 
-export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx()): Promise<KeyIndex> {
+export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx()): Promise<GroundingIndex> {
   const augment = !!opts.augment || process.env.SEAM_KEY_AUGMENT === "1";
   const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}`;
   if (ctx.llmKey.has(cacheKey)) return ctx.llmKey.get(cacheKey)!;
-  const idx: KeyIndex = new Map();
+  const idx: GroundingIndex = new Map();
   if (!opts.llm && !hasKeyCache(repo)) { ctx.llmKey.set(cacheKey, idx); return idx; }
 
   // pass 1 — gather each file's deterministic floor keys + decide which files need the LLM
   const floorOf = new Map<string, Set<string>>();     // file → `${kind} ${value}` the floor already produced
   const llmKeysOf = new Map<string, KeyHit[]>();       // file → cached LLM keys
   const toSynth: { file: string; text: string; ck: string }[] = [];
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
-      let text: string; try { text = readFileSync(join(dir, fn), "utf-8"); } catch { continue; }
-      const floor = scan_file_keys(rel, text);
-      floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
-      if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
-      const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
-      const disk = cachedFileKeys(repo, ck);
-      if (disk.hit) { llmKeysOf.set(rel, disk.keys); continue; }
-      if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }
-    }
+  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
+    const floor = scan_file_keys(rel, text);
+    floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
+    if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
+    const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
+    const disk = cachedFileKeys(repo, ck);
+    if (disk.hit) { llmKeysOf.set(rel, disk.keys); continue; }
+    if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }
   }
   // pass 2 — one batched LLM call per chunk for the uncached files
   if (toSynth.length) { emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`); for (const [f, keys] of await _batchSynthesize(repo, toSynth, opts)) llmKeysOf.set(f, keys); }
@@ -160,7 +154,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
 export async function anchorProposedKeys(
   repo: string, anchorFile: string, text: string,
   opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx(),
-): Promise<{ kind: string; value: string; produces: boolean }[]> {
+): Promise<KeyHit[]> {
   const floor = new Set(scan_file_keys(anchorFile, text).map((h) => `${h.kind} ${h.value}`));
   const ck = `${anchorFile} ${createHash("sha1").update(text).digest("hex")}`;
   let keys: KeyHit[];
@@ -168,5 +162,5 @@ export async function anchorProposedKeys(
   if (disk.hit) keys = disk.keys;
   else if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; keys = (await _batchSynthesize(repo, [{ file: anchorFile, text, ck }], opts)).get(anchorFile) ?? []; }
   else return [];
-  return keys.filter((h) => !floor.has(`${h.kind} ${h.value}`)).map((h) => ({ kind: h.kind, value: h.value, produces: h.produces }));   // only the floor's gaps
+  return keys.filter((h) => !floor.has(`${h.kind} ${h.value}`));   // only the floor's gaps (KeyHits, line 0; collectAnchorKeys stamps source "llm")
 }

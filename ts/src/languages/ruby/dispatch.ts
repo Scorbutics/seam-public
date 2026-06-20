@@ -10,10 +10,8 @@
 // (1) or SUGGESTED (N). Truly-dynamic dispatch (send/method_missing/define_method) is out of scope here
 // and stays an honest blindspot for the carrier-tracer to mark. The over-approximation is safe for the
 // sink-reaching goal (union the candidates) and quarantined from the precise graph by the tier.
-import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
 import { getParser } from "../../core/treesitter.js";
-import { walk } from "../../core/resolve/walk.js";
+import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/base.js";
 
 export type ResolutionTier = "RESOLVED" | "RESOLVED_PARTIAL" | "SUGGESTED";
@@ -115,16 +113,10 @@ export async function buildRubyIndex(repo: string): Promise<RubyIndex> {
   const parser = await getParser("ruby");
   const index: RubyIndex = new Map();
   if (!parser) return index;
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const f of files) {
-      if (!f.endsWith(".rb") && !f.endsWith(".rake")) continue;
-      const abs = join(dir, f);
-      let text: string;
-      try { text = readFileSync(abs, "utf-8"); } catch { continue; }
-      let root: any;
-      try { root = parser.parse(text).rootNode; } catch { continue; }
-      _indexFile(root, relative(repo, abs).replace(/\\/g, "/"), index);
-    }
+  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, (r) => r.endsWith(".rb") || r.endsWith(".rake"))) {
+    let root: any;
+    try { root = parser.parse(text).rootNode; } catch { continue; }
+    _indexFile(root, rel, index);
   }
   return index;
 }

@@ -14,9 +14,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { emit } from "../../core/progress.js";
-import { run_pass, available, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, available, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { defs_in_file } from "../scan/def_table.js";
+
+const PASS = registerPass({ tag: "anchor-judge", tier: "strong", note: "pick the entry-point anchor among grown footprints (semantic)" });
 import { defs_in_file_treesitter } from "../scan/def_treesitter.js";
 import { grow_to_terminals } from "../grow/orchestrate.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
@@ -169,7 +171,7 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
     "with `best` true for exactly ONE.");
 
   let out: Map<string, any>;
-  try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "anchor-judge" }); }
+  try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag }); }
   catch (e) { if (e instanceof LLMError) return null; throw e; }
   // the chosen one = the candidate whose object has best truthy; ignore unknown ids.
   for (const c of connected) {

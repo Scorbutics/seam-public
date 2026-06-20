@@ -1,9 +1,20 @@
 // Port of the LLM passes from src/diff/classifier.py. Prompt templates are copied VERBATIM —
 // byte-parity with Python is gated by test/classifier_llm.test.ts (prompts) + inject-llm parity
 // (parse/merge). Phase 2: Pass A (cluster). Later phases add seam/role (Pass B) + wiring (Pass C).
-import { resolve_backend, runPassRaw, runPassRawAsync } from "../core/llm.js";
+import { resolve_backend, runPassRaw, runPassRawAsync, registerPass } from "../core/llm.js";
 import { mkSpan, type Hunk, type Span } from "./parser.js";
 import { candidate_wirings } from "./symbol_edges.js";
+
+// The diff classifier's LLM passes. All cheap (haiku): they're fact-primed, thinking-light/off
+// classifications, not the semantic judgements that justify the strong tier. Registered here so the
+// whole LLM surface is enumerable from one source; role votes reuse PASS_ROLE.tag (role.vN variants
+// are cheap too and need no separate entry).
+const PASS_CLUSTER = registerPass({ tag: "cluster", tier: "cheap", note: "group hunks into intent clusters (Pass A)" });
+const PASS_LABEL_CLUSTERS = registerPass({ tag: "label-clusters", tier: "cheap", note: "name each cluster's intent" });
+const PASS_ROLE = registerPass({ tag: "role", tier: "cheap", note: "core/link/env/test/noise role per hunk (Pass B)" });
+const PASS_WIRE = registerPass({ tag: "wire", tier: "cheap", note: "wire links to the cores they connect (Pass C)" });
+const PASS_RECONCILE = registerPass({ tag: "reconcile", tier: "cheap", note: "reconcile wiring across seams" });
+const PASS_RECONCILE_ROLES = registerPass({ tag: "reconcile-roles", tier: "cheap", note: "second-pass role reconciliation" });
 
 const ROLES = new Set(["core", "link", "environment", "test", "noise"]);
 export const ROLE_VOTES = 3;
@@ -323,7 +334,7 @@ export function assign_roles(hunks: Hunk[], opts: { model?: string; claudeBin?: 
   const roleRuns: Map<string, any>[] = [];
   for (let i = 0; i < nVotes; i++)
     roleRuns.push(runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", ROLE_THINKING,
-      nVotes <= 1 ? "role" : `role.v${i + 1}`));
+      nVotes <= 1 ? PASS_ROLE.tag : `role.v${i + 1}`));
   const [labels, roleConf] = aggregate_role_votes(roleRuns, hunkIds);
   applyRoles(hunks, labels, roleConf);
 }
@@ -372,7 +383,7 @@ export function build_wire_prompt(hunks: Hunk[]): string {
 }
 
 function run_wire_pass(hunks: Hunk[], kind: string, binary: string, model: string): void {
-  const labels = runPassRaw(kind, binary, build_wire_prompt(hunks), model, 0, "wire");
+  const labels = runPassRaw(kind, binary, build_wire_prompt(hunks), model, 0, PASS_WIRE.tag);
   const coreIds = new Set(hunks.filter((h) => h.role === "core").map((h) => h.id));
   for (const h of hunks) {
     if (h.role === "core") { h.wires = []; continue; }
@@ -445,7 +456,7 @@ export function reconcile_roles_llm(work: Hunk[], opts: { confThreshold?: number
     + "  environment = ambient support touched in passing (types, imports, config, data);\n"
     + "  test = verifies the change;  noise = formatting/rename, no logical effect.\n\n"
     + `${blocks}\n\n` + 'Output ONLY a JSON array: [{"id":"h12","role":"link"}, ...]';
-  const labels = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, "reconcile-roles");
+  const labels = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, PASS_RECONCILE_ROLES.tag);
   for (const h of targets) {
     const r = String((labels.get(h.id) ?? {}).role ?? "").trim().toLowerCase();
     if (ROLES.has(r) && r !== h.role) h.role = r;
@@ -466,7 +477,7 @@ export function label_clusters_llm(work: Hunk[], opts: { model?: string; claudeB
     + 'each a SHORT product-intent label — what the user-facing change is, e.g. '
     + '"add currency to checkout", "migrate webhooks to v2". Keep it under ~6 words.\n\n'
     + blocks.join("\n") + '\n\nOutput ONLY a JSON array: [{"id":"g1","intent":"…"}, ...]';
-  const labels = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", CLUSTER_THINKING, "label-clusters");
+  const labels = runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", CLUSTER_THINKING, PASS_LABEL_CLUSTERS.tag);
   for (const h of work) {
     const it = String((labels.get(h.group) ?? {}).intent ?? "").trim();
     if (it) h.intent = it;
@@ -482,7 +493,7 @@ export function classify_all_llm(hunks: Hunk[], opts: { model?: string; claudeBi
   const nVotes = Math.max(1, opts.roleVotes ?? ROLE_VOTES);
   const hunkIds = hunks.map((h) => h.id);
 
-  const clusterLabels = runPassRaw(kind, binary, build_cluster_prompt(hunks), model, CLUSTER_THINKING, "cluster");
+  const clusterLabels = runPassRaw(kind, binary, build_cluster_prompt(hunks), model, CLUSTER_THINKING, PASS_CLUSTER.tag);
   const rolePrompt = build_role_prompt(hunks);
   const roleRuns: Map<string, any>[] = [];
   for (let i = 0; i < nVotes; i++)
@@ -559,7 +570,7 @@ export async function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], h
   if (!cores.size) return { labels: new Map(), groups: new Map(), drawn: new Map() };
   const [kind, binary] = resolve_backend(opts.claudeBin);
   const prompt = build_reconcile_prompt(cores, targets, hints);
-  const out = await runPassRawAsync(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, "reconcile");
+  const out = await runPassRawAsync(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", 0, PASS_RECONCILE.tag);
   const labels = new Map<string, string>();
   const groups = new Map<string, string>();
   for (const [cid, o] of out) {
@@ -582,7 +593,7 @@ export async function assign_clusters(hunks: Hunk[], opts: { model?: string; cla
   if (!hunks.length) return;
   const [kind, binary] = resolve_backend(opts.claudeBin);
   const labels = await runPassRawAsync(kind, binary, build_cluster_prompt(hunks), opts.model ?? "claude-haiku-4-5",
-    CLUSTER_THINKING, "cluster");
+    CLUSTER_THINKING, PASS_CLUSTER.tag);
   const groupIntent = new Map<string, string>();
   const groups = new Map<string, [string, string]>();
   for (const [hid, item] of labels) {

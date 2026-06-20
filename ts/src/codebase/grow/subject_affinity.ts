@@ -8,8 +8,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { candidate_source_files } from "../scan/def_table.js";
-import { run_pass_async } from "../../core/llm.js";
+import { run_pass_async, registerPass } from "../../core/llm.js";
 import { build_dependency_graph } from "../scan/import_scan.js";
+
+const PASS = registerPass({ tag: "affinity", tier: "cheap", note: "intent-affinity scoring of shared-subject candidates (SUGGESTED)" });
 import { normpath } from "../../core/resolve/walk.js";
 
 export interface AffinityHit { file: string; symbol: string; shared: string[]; confidence: number; reason: string; }
@@ -87,7 +89,7 @@ export async function subject_affinity(repo: string, subjects: string[], intent:
   const votes = Math.max(1, opts.votes ?? 3);
   const prompt = _prompt(subjects, intent, cands);
   const ballots = await Promise.all(Array.from({ length: votes }, () =>
-    run_pass_async(prompt, { tag: "affinity", thinking: 0, model: opts.model, claudeBin: opts.claudeBin }).catch(() => null)));
+    run_pass_async(prompt, { tag: PASS.tag, thinking: 0, model: opts.model, claudeBin: opts.claudeBin }).catch(() => null)));
   const cast = ballots.filter(Boolean).length;
   if (!cast) return [];
   const tally = new Array(cands.length).fill(0);

@@ -11,8 +11,8 @@
 //     genuine blindspot, by design (it's a runtime binding, not a static edge) → surfaces as SUGGESTED
 //   ⛔ wildcard imports (`import a.b.*;`) — can't resolve to a single file in the floor (skipped)
 import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { walk } from "../../core/resolve/walk.js";
+import { join } from "node:path";
+import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS, system, type ImportRef, type LanguageProvider } from "../../core/resolve/languages/base.js";
 
 export const EXTENSIONS = [".java"];
@@ -43,19 +43,12 @@ const _PKG_RE = /^\s*package\s+([\w.]+)\s*;/m;
 // lexicographically-smallest repo-relative path (mirrors the TS package map), not walk order.
 function _java_index(repo: string): Map<string, string> {
   const out = new Map<string, string>();
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const f of files) {
-      if (!f.endsWith(".java")) continue;
-      const abs = join(dir, f);
-      let text: string;
-      try { text = readFileSync(abs, "utf-8"); } catch { continue; }
-      const pm = text.match(_PKG_RE);
-      const cls = f.slice(0, -5);                // strip ".java" → the public top-level class name
-      const fqn = pm ? `${pm[1]}.${cls}` : cls;
-      const rel = relative(repo, abs);
-      const prev = out.get(fqn);
-      if (prev === undefined || rel < prev) out.set(fqn, rel);
-    }
+  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, (r) => r.endsWith(".java"))) {
+    const pm = text.match(_PKG_RE);
+    const cls = rel.slice(rel.lastIndexOf("/") + 1, -5);  // strip dir prefix and ".java"
+    const fqn = pm ? `${pm[1]}.${cls}` : cls;
+    const prev = out.get(fqn);
+    if (prev === undefined || rel < prev) out.set(fqn, rel);
   }
   return out;
 }

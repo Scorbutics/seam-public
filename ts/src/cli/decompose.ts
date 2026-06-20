@@ -35,7 +35,7 @@ interface Args {
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
-  checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean;
+  checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -100,6 +100,7 @@ function parseArgs(argv: string[]): Args {
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
+      case "--list-passes": a.listPasses = true; break;   // print the LLM pass inventory (tag · tier · note) from the registry
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint
       case "--no-interface-consumers": a.interfaceConsumers = false; break;   // disable the default interface-consumer enrichment
       case "--no-data-coupling": a.dataCoupling = false; break;
@@ -333,6 +334,23 @@ async function main(argv: string[]): Promise<number> {
     const { available, resolve_backend } = await import("../core/llm.js");
     if (!available(a.claudeBin)) return 1;
     process.stdout.write(resolve_backend(a.claudeBin)[0] + "\n");
+    return 0;
+  }
+  // --list-passes: print the LLM pass inventory from the registry. Passes self-register on import, but
+  // the codebase modules are lazy-loaded (slim .vsix), so load every pass-owning module first to get a
+  // complete listing. A forgotten module only omits a row here — it never affects runtime tier routing.
+  if (a.listPasses) {
+    await Promise.all([
+      import("../diff/engine.js"), import("../codebase/anchor/index.js"), import("../codebase/grow/index.js"),
+      import("../codebase/coupling/llm_key_index.js"), import("../codebase/coupling/carrier/synth.js"),
+      import("../codebase/scan/llm_discovery.js"),
+    ]);
+    const { allPasses } = await import("../core/llm.js");
+    const passes = allPasses();
+    const w = Math.max(...passes.map((p) => p.tag.length));
+    process.stdout.write(`${passes.length} LLM pass${passes.length === 1 ? "" : "es"} (strong → upgraded to a stronger model):\n`);
+    for (const p of passes)
+      process.stdout.write(`  ${p.tag.padEnd(w)}  ${(p.tier === "strong" ? "STRONG" : "cheap ")}  ${p.note ?? ""}\n`);
     return 0;
   }
   // --llm-bridge installs an INTERACTIVE host bus (process-wide) so every LLM pass — including the

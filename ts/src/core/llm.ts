@@ -10,24 +10,45 @@ import { join } from "node:path";
 export class ClassifierError extends Error {}
 export const LLMError = ClassifierError;
 
-// PER-PASS MODEL ROUTING. A few codebase passes are genuinely SEMANTIC judgements (which entry point /
-// anchor the question is about; which seam is the culmination) where a weak model wobbles run-to-run —
-// the stability harness pinned this as the dominant auto-grow instability (anchor flips 1/3 of runs on
-// haiku; sonnet is 3/3). Cheap patches (a deterministic culmination floor, self-consistency voting) were
-// tried and did NOT fix it — the variance is model-JUDGEMENT quality, not jitter a vote averages out. So
-// route ONLY these passes to a stronger tier; the cheap passes (expand, orchestrate, reconcile) stay on
-// the base model. Upgrade-only: a haiku base is lifted to STRONG_MODEL, a sonnet/opus base is left as-is
-// (never downgraded). `model` flows to BOTH the live `claude --model` call AND the recorded metadata the
-// skill routes on, so both paths get the better tier. Escape hatch: SEAM_STRONG_MODEL="" disables it (so
-// the harness can A/B a pure-base run); set it to a model id to pin a different strong tier.
-// The carrier/key SYNTHESIS passes are semantic judgements too (is this method a read/write carrier?
-// which key does this file produce/consume?) — they wobble on haiku (the coupling eval gold loop measured
-// stability ~0.67), and they're LEARN-ONCE (cached to .seam), so paying the strong tier once for a
-// reliable adapter is worth it. So route them to STRONG_MODEL like the other semantic passes.
-export const STRONG_PASSES = new Set(["entrypoint-select", "anchor-judge", "seam-intent", "discover-keys-batch", "carrier-synthesis-batch"]);
+// LLM PASS REGISTRY — the single source of truth for "what LLM passes exist and which need a strong
+// model". Each pass is DECLARED next to its call site via registerPass(); core holds no hardcoded list
+// of feature tags. The registry is enumerable (allPasses) so the engine can introspect its own LLM
+// surface (e.g. `--list-passes`) instead of being grep-only, and `tier` lives WITH the pass so adding a
+// pass can't silently forget to route it (the old failure mode of a separate STRONG_PASSES set kept in
+// sync by hand). registerPass returns the spec, so call sites reference `SPEC.tag` — usage is tied to
+// registration: you cannot name a pass without first declaring it.
+//
+// Why `strong` exists at all: a few passes are genuinely SEMANTIC judgements (which entry point / anchor
+// the question is about; which key/carrier a file produces) where a weak model wobbles run-to-run — the
+// stability harness pinned this as the dominant auto-grow instability (anchor flips 1/3 of runs on haiku;
+// sonnet is 3/3). Cheap patches (a deterministic culmination floor, self-consistency voting) did NOT fix
+// it — the variance is model-JUDGEMENT quality, not jitter a vote averages out. The carrier/key SYNTHESIS
+// passes are semantic too and LEARN-ONCE (cached to .seam), so paying the strong tier once for a reliable
+// adapter is worth it. Everything else (expand, orchestrate, reconcile, cluster, role, wire…) stays cheap.
+export type PassTier = "cheap" | "strong";
+export interface PassSpec { tag: string; tier: PassTier; note?: string; }
+const _PASS_REGISTRY = new Map<string, PassSpec>();
+export function registerPass(spec: PassSpec): PassSpec {
+  const prev = _PASS_REGISTRY.get(spec.tag);
+  if (prev && prev.tier !== spec.tier)
+    throw new ClassifierError(`pass "${spec.tag}" re-registered with a conflicting tier (${prev.tier} vs ${spec.tier})`);
+  _PASS_REGISTRY.set(spec.tag, spec);
+  return spec;
+}
+export function getPass(tag: string): PassSpec | undefined { return _PASS_REGISTRY.get(tag); }
+export function allPasses(): PassSpec[] { return [..._PASS_REGISTRY.values()].sort((a, b) => a.tag.localeCompare(b.tag)); }
+
+// Upgrade-only model routing: a `strong` pass on a haiku base is lifted to STRONG_MODEL; a sonnet/opus
+// base is left as-is (never downgraded), and a `cheap`/unregistered tag is untouched. Applied at the
+// single runPassRaw choke point, so it covers every path (codebase run_pass AND diff runPassRaw) and is
+// idempotent (re-routing an already-strong model is a no-op). The routed `model` flows to BOTH the live
+// `claude --model` call AND the host-bus recorded metadata the skill routes on, so both get the tier.
+// Escape hatch: SEAM_STRONG_MODEL="" disables it (so the harness can A/B a pure-base run); set it to a
+// model id to pin a different strong tier.
 const STRONG_MODEL = process.env.SEAM_STRONG_MODEL ?? "claude-sonnet-4-6";
 function _route_model(tag: string | undefined, base: string): string {
-  if (!tag || !STRONG_PASSES.has(tag) || !STRONG_MODEL) return base;
+  const spec = tag ? _PASS_REGISTRY.get(tag) : undefined;
+  if (!spec || spec.tier !== "strong" || !STRONG_MODEL) return base;
   return /haiku/i.test(base) ? STRONG_MODEL : base;   // upgrade a weak base; never downgrade a strong one
 }
 
@@ -188,54 +209,19 @@ export function extractJsonArray(text: string): any[] {
 }
 
 // --- backend run -------------------------------------------------------------
-function _run_claude(claudeBin: string, prompt: string, model: string, thinking: number | null): string {
-  const cmd = ["-p", "--output-format", "json", "--model", model, "--strict-mcp-config"];
-  const env = { ...process.env };
-  if (thinking !== null) env.MAX_THINKING_TOKENS = String(thinking);
-  const proc = spawnSync(claudeBin, cmd, { input: prompt, encoding: "utf-8", env, maxBuffer: 256 * 1024 * 1024 });
-  if (proc.status !== 0)
-    throw new ClassifierError(`claude CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
-  let envelope: any;
-  try { envelope = JSON.parse(proc.stdout); }
-  catch { throw new ClassifierError(`claude CLI did not return JSON: ${JSON.stringify((proc.stdout ?? "").slice(0, 200))}`); }
-  if (envelope.is_error) throw new ClassifierError(`claude CLI reported error: ${envelope.result}`);
-  _USAGE.record("claude", envelope.usage ?? {}, envelope.total_cost_usd, envelope.duration_ms);
-  return envelope.result ?? "";
+// A sync runner (spawnSync, one blocking subprocess) and its async twin (spawn, so independent passes
+// can run concurrently — the diff engine overlaps the reconcile + cluster passes) differ ONLY in the
+// spawn call. Everything else — argument building, JSON-envelope parsing, error wording, usage
+// metering — is shared here, so a fix lands in exactly one place.
+const _MAX_BUF = 256 * 1024 * 1024;
+interface ProcResult { status: number; stdout: string; stderr: string; }
+
+function _spawnSync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}): ProcResult {
+  const p = spawnSync(bin, args, { input: opts.input, encoding: "utf-8", env: opts.env ?? process.env, maxBuffer: _MAX_BUF });
+  return { status: p.status ?? -1, stdout: p.stdout ?? "", stderr: p.stderr ?? "" };
 }
 
-function _run_copilot(copilotBin: string, prompt: string, thinking: number | null): string {
-  const dir = mkdtempSync(join(tmpdir(), "copilot-prompt-"));
-  const promptPath = join(dir, "prompt.txt");
-  try {
-    writeFileSync(promptPath, prompt, "utf-8");
-    const pointer = `Read the file ${promptPath} and follow the instructions it contains exactly. `
-      + `Output only what those instructions ask for.`;
-    const cmd = ["-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"];
-    if (process.env.COPILOT_MODEL) cmd.push("--model", process.env.COPILOT_MODEL);
-    const effort = _thinking_to_effort(thinking);
-    if (effort) cmd.push("--effort", effort);
-    const proc = spawnSync(copilotBin, cmd, { encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 });
-    if (proc.status !== 0)
-      throw new ClassifierError(`copilot CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
-    if (!(proc.stdout ?? "").trim())
-      throw new ClassifierError(`copilot CLI returned no output: ${JSON.stringify((proc.stderr ?? "").trim().slice(0, 200))}`);
-    return proc.stdout;
-  } finally {
-    try { unlinkSync(promptPath); } catch { /* ignore */ }
-  }
-}
-
-function _run_backend(kind: string, binary: string, prompt: string, model: string, thinking: number | null): string {
-  return kind === "claude" ? _run_claude(binary, prompt, model, thinking) : _run_copilot(binary, prompt, thinking);
-}
-
-// --- async backend run (for running independent passes concurrently) ----------
-// The sync runners above use spawnSync (one blocking subprocess at a time). These mirror them with
-// `spawn`, so several passes can run as concurrent subprocesses — used by the diff engine to overlap
-// the independent reconcile (wiring) and cluster passes. Behaviour/parsing/metering is identical;
-// only the call is non-blocking.
-function _spawnAsync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}):
-    Promise<{ status: number; stdout: string; stderr: string }> {
+function _spawnAsync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}): Promise<ProcResult> {
   return new Promise((resolve) => {
     const proc = spawn(bin, args, { env: opts.env ?? process.env });
     let stdout = "", stderr = "";
@@ -247,61 +233,95 @@ function _spawnAsync(bin: string, args: string[], opts: { input?: string; env?: 
   });
 }
 
-async function _run_claude_async(claudeBin: string, prompt: string, model: string, thinking: number | null): Promise<string> {
-  const cmd = ["-p", "--output-format", "json", "--model", model, "--strict-mcp-config"];
+// claude: pure arg/env builders + envelope parse (with metering), shared by the sync runner and its twin.
+function _claudeArgs(model: string): string[] { return ["-p", "--output-format", "json", "--model", model, "--strict-mcp-config"]; }
+function _claudeEnv(thinking: number | null): NodeJS.ProcessEnv {
   const env = { ...process.env };
   if (thinking !== null) env.MAX_THINKING_TOKENS = String(thinking);
-  const proc = await _spawnAsync(claudeBin, cmd, { input: prompt, env });
-  if (proc.status !== 0)
-    throw new ClassifierError(`claude CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
+  return env;
+}
+function _parseClaude(p: ProcResult): string {
+  if (p.status !== 0)
+    throw new ClassifierError(`claude CLI failed (exit ${p.status}): ${p.stderr.trim().slice(0, 300)}`);
   let envelope: any;
-  try { envelope = JSON.parse(proc.stdout); }
-  catch { throw new ClassifierError(`claude CLI did not return JSON: ${JSON.stringify((proc.stdout ?? "").slice(0, 200))}`); }
+  try { envelope = JSON.parse(p.stdout); }
+  catch { throw new ClassifierError(`claude CLI did not return JSON: ${JSON.stringify(p.stdout.slice(0, 200))}`); }
   if (envelope.is_error) throw new ClassifierError(`claude CLI reported error: ${envelope.result}`);
   _USAGE.record("claude", envelope.usage ?? {}, envelope.total_cost_usd, envelope.duration_ms);
   return envelope.result ?? "";
 }
 
-async function _run_copilot_async(copilotBin: string, prompt: string, thinking: number | null): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), "copilot-prompt-"));
-  const promptPath = join(dir, "prompt.txt");
-  try {
-    writeFileSync(promptPath, prompt, "utf-8");
-    const pointer = `Read the file ${promptPath} and follow the instructions it contains exactly. `
-      + `Output only what those instructions ask for.`;
-    const cmd = ["-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"];
-    if (process.env.COPILOT_MODEL) cmd.push("--model", process.env.COPILOT_MODEL);
-    const effort = _thinking_to_effort(thinking);
-    if (effort) cmd.push("--effort", effort);
-    const proc = await _spawnAsync(copilotBin, cmd);
-    if (proc.status !== 0)
-      throw new ClassifierError(`copilot CLI failed (exit ${proc.status}): ${(proc.stderr ?? "").trim().slice(0, 300)}`);
-    if (!(proc.stdout ?? "").trim())
-      throw new ClassifierError(`copilot CLI returned no output: ${JSON.stringify((proc.stderr ?? "").trim().slice(0, 200))}`);
-    return proc.stdout;
-  } finally {
-    try { unlinkSync(promptPath); } catch { /* ignore */ }
-  }
+// copilot: reads the prompt from a temp file (it can exceed argv limits). args + parse are shared; only
+// the spawn call differs, wrapped in the same temp-file lifecycle.
+function _copilotArgs(promptPath: string, thinking: number | null): string[] {
+  const pointer = `Read the file ${promptPath} and follow the instructions it contains exactly. `
+    + `Output only what those instructions ask for.`;
+  const cmd = ["-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"];
+  if (process.env.COPILOT_MODEL) cmd.push("--model", process.env.COPILOT_MODEL);
+  const effort = _thinking_to_effort(thinking);
+  if (effort) cmd.push("--effort", effort);
+  return cmd;
+}
+function _parseCopilot(p: ProcResult): string {
+  if (p.status !== 0)
+    throw new ClassifierError(`copilot CLI failed (exit ${p.status}): ${p.stderr.trim().slice(0, 300)}`);
+  if (!p.stdout.trim())
+    throw new ClassifierError(`copilot CLI returned no output: ${JSON.stringify(p.stderr.trim().slice(0, 200))}`);
+  return p.stdout;
+}
+function _copilotPromptPath(prompt: string): string {
+  const promptPath = join(mkdtempSync(join(tmpdir(), "copilot-prompt-")), "prompt.txt");
+  writeFileSync(promptPath, prompt, "utf-8");
+  return promptPath;
 }
 
+function _run_claude(bin: string, prompt: string, model: string, thinking: number | null): string {
+  return _parseClaude(_spawnSync(bin, _claudeArgs(model), { input: prompt, env: _claudeEnv(thinking) }));
+}
+async function _run_claude_async(bin: string, prompt: string, model: string, thinking: number | null): Promise<string> {
+  return _parseClaude(await _spawnAsync(bin, _claudeArgs(model), { input: prompt, env: _claudeEnv(thinking) }));
+}
+function _run_copilot(bin: string, prompt: string, thinking: number | null): string {
+  const promptPath = _copilotPromptPath(prompt);
+  try { return _parseCopilot(_spawnSync(bin, _copilotArgs(promptPath, thinking))); }
+  finally { try { unlinkSync(promptPath); } catch { /* ignore */ } }
+}
+async function _run_copilot_async(bin: string, prompt: string, thinking: number | null): Promise<string> {
+  const promptPath = _copilotPromptPath(prompt);
+  try { return _parseCopilot(await _spawnAsync(bin, _copilotArgs(promptPath, thinking))); }
+  finally { try { unlinkSync(promptPath); } catch { /* ignore */ } }
+}
+
+function _run_backend(kind: string, binary: string, prompt: string, model: string, thinking: number | null): string {
+  return kind === "claude" ? _run_claude(binary, prompt, model, thinking) : _run_copilot(binary, prompt, thinking);
+}
 async function _run_backend_async(kind: string, binary: string, prompt: string, model: string, thinking: number | null): Promise<string> {
   return kind === "claude" ? _run_claude_async(binary, prompt, model, thinking) : _run_copilot_async(binary, prompt, thinking);
+}
+
+// JSON reply → {id: item} map; per-pass timing emit. Both shared by the two pass runners below.
+function _collect(raw: string, labels: Map<string, any>): void {
+  for (const item of extractJsonArray(raw))
+    if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
+}
+function _emitTiming(t0: number, tag: string, model: string, promptLen: number): void {
+  if (t0) process.stderr.write(`[timing] LLM ${tag} (${model}): ${Math.round(performance.now() - t0)}ms, prompt ${promptLen} chars\n`);
 }
 
 // Run ONE LLM pass (with one retry on malformed JSON) → {id: item}. Serves the host bus when set.
 export function runPassRaw(kind: string, binary: string, prompt: string, model: string,
                            thinking: number | null, tag: string): Map<string, any> {
+  model = _route_model(tag, model);   // strong-tier upgrade, sourced from the pass registry
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
-  const _t0 = process.env.SEAM_TIMING ? performance.now() : 0;   // per-pass wall-clock (opt-in)
-  for (const attempt of [1, 2]) {
+  const t0 = process.env.SEAM_TIMING ? performance.now() : 0;   // per-pass wall-clock (opt-in)
+  for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
         ? _HOST_BUS.serve(tag, prompt, model, thinking)
         : _run_backend(kind, binary, prompt, model, thinking);
-      if (_t0) process.stderr.write(`[timing] LLM ${tag} (${model}): ${Math.round(performance.now() - _t0)}ms, prompt ${prompt.length} chars\n`);
-      for (const item of extractJsonArray(raw))
-        if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
+      _emitTiming(t0, tag, model, prompt.length);
+      _collect(raw, labels);
       break;
     } catch (e) { lastErr = e as Error; }
   }
@@ -314,17 +334,17 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
 // (batch HostBus returns from its answers map immediately), so it composes trivially.
 export async function runPassRawAsync(kind: string, binary: string, prompt: string, model: string,
                                      thinking: number | null, tag: string): Promise<Map<string, any>> {
+  model = _route_model(tag, model);   // strong-tier upgrade, sourced from the pass registry
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
-  const _t0 = process.env.SEAM_TIMING ? performance.now() : 0;   // per-pass wall-clock (opt-in)
-  for (const attempt of [1, 2]) {
+  const t0 = process.env.SEAM_TIMING ? performance.now() : 0;   // per-pass wall-clock (opt-in)
+  for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
         ? _HOST_BUS.serve(tag, prompt, model, thinking)
         : await _run_backend_async(kind, binary, prompt, model, thinking);
-      if (_t0) process.stderr.write(`[timing] LLM ${tag} (${model}): ${Math.round(performance.now() - _t0)}ms, prompt ${prompt.length} chars\n`);
-      for (const item of extractJsonArray(raw))
-        if (item && typeof item === "object" && "id" in item) labels.set(String(item.id), item);
+      _emitTiming(t0, tag, model, prompt.length);
+      _collect(raw, labels);
       break;
     } catch (e) { lastErr = e as Error; }
   }
@@ -340,8 +360,8 @@ export function run_pass(prompt: string, opts: {
   model?: string; tag?: string; thinking?: number | null; claudeBin?: string | null;
 } = {}): Map<string, any> {
   const [kind, binary] = resolve_backend(opts.claudeBin);
-  const model = _route_model(opts.tag, opts.model ?? "claude-haiku-4-5");
-  return runPassRaw(kind, binary, prompt, model, opts.thinking ?? 0, opts.tag ?? "codebase");
+  // tier routing happens in runPassRaw (the single choke point), keyed on tag via the registry
+  return runPassRaw(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", opts.thinking ?? 0, opts.tag ?? "codebase");
 }
 
 // Async twin of run_pass — awaits a non-blocking subprocess so INDEPENDENT passes can run concurrently
@@ -351,6 +371,6 @@ export async function run_pass_async(prompt: string, opts: {
   model?: string; tag?: string; thinking?: number | null; claudeBin?: string | null;
 } = {}): Promise<Map<string, any>> {
   const [kind, binary] = resolve_backend(opts.claudeBin);
-  const model = _route_model(opts.tag, opts.model ?? "claude-haiku-4-5");
-  return runPassRawAsync(kind, binary, prompt, model, opts.thinking ?? 0, opts.tag ?? "codebase");
+  // tier routing happens in runPassRawAsync (the single choke point), keyed on tag via the registry
+  return runPassRawAsync(kind, binary, prompt, opts.model ?? "claude-haiku-4-5", opts.thinking ?? 0, opts.tag ?? "codebase");
 }

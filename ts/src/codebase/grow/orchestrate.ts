@@ -3,8 +3,10 @@
 // footprint + the question, let it pick ONE node and a DIRECTION (up = consumers / down = deps) that
 // advances toward the answer, expand+merge, repeat — until done or a step budget. The LLM only
 // CHOOSES moves over the deterministic primitives; it never invents an edge.
-import { run_pass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
+
+const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow move picker (node + direction per step)" });
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
@@ -104,7 +106,7 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     emit(`Growing the footprint with the LLM (step ${_step + 1}/${maxSteps})…`);
     const summary = _summary(data);
     let out: Map<string, any>;
-    try { out = run_pass(_step_prompt(intent, summary, expanded), { model, claudeBin: opts.claudeBin, tag: "orchestrate" }); }
+    try { out = run_pass(_step_prompt(intent, summary, expanded), { model, claudeBin: opts.claudeBin, tag: PASS.tag }); }
     catch (e) { if (e instanceof LLMError) break; throw e; }
     let dec: any = out.get("step");
     if (dec === undefined) for (const v of out.values()) { if (v && typeof v === "object") { dec = v; break; } }

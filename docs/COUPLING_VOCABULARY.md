@@ -19,7 +19,34 @@ reads roughly as it's meant to.
 | **edge** | A link between two nodes. A coupling edge is a **crossing** (`db-write` / `db-read`, `route-serve` / `route-call`): the produce/consume link from a real file to a boundary node. |
 | **complement / other side** | Given the anchor *produces* key X, its complements are the files that *consume* X (and vice-versa). `otherSide()` returns them from the index. |
 | **anchor** | The symbol/file span the analysis starts from — the thing whose data couplings we're resolving. |
-| **carrier** | Ruby's homemade data-file wrapper (the `.rxdata` channel). A second *deterministic* source of keys, fed in alongside the per-file scan. |
+| **carrier** | A project-internal wrapper method that mediates access to a data channel (a file, a queue, a socket), where the key — a literal path or glob pattern — is passed as an argument. The engine traces whether the wrapper reads or writes (teacher 1), recovers the key from the call's string arg (teacher 2), and uses the LLM for opaque wrappers (teacher 3). A second *deterministic* source of keys, fed in alongside the per-file scan. Ruby is the first language with a carrier provider; the engine is provider-agnostic. |
+
+## Carrier vs boundary — they live on different layers
+
+Easy to conflate, because both sound like "the thing in the middle." They're not — a
+**carrier is an INPUT, a boundary is an OUTPUT**, and the carrier sits *upstream* of the
+boundary:
+
+- A **carrier** is one of the *key sources* — how the engine *discovers* a key. It's a
+  project-internal wrapper method (`save_data(x, 'Save.rxdata')`) that carries the key in as
+  an argument. It is not a graph element. It sits alongside the other key sources: the
+  per-file **scan** (floor) and the tier-3 LLM **proposals**.
+- A **boundary node** is a *graph vertex* — the key drawn as a synthetic node between the
+  producer and the consumer. An **edge/crossing** is a real file's produce/consume link *to*
+  that node.
+
+So the flow is one-directional: **carrier → key → boundary node + crossings**. Once a carrier
+has yielded its `data-file <path>` key, it's done; from there the key is treated identically
+to one found by the scan floor or proposed by the LLM (same grounding index, same boundary
+node, same crossings). Worked example (Ruby):
+
+| Step | Term | Value |
+|------|------|-------|
+| 1. discover the key | **carrier** | `save_data` / `load_data` wrappers (traced write/read, key from the literal arg) |
+| 2. the key | **key** | `data-file Save.rxdata` |
+| 3. sides | **produce / consume** | the `save_data` file produces it, the `load_data` file consumes it |
+| 4. draw | **boundary node** | synthetic node for `data-file Save.rxdata`, between the two |
+| 5. wire | **edge / crossing** | producer → boundary (`db-write`), boundary → consumer (`db-read`) |
 
 ## Supporting terms
 

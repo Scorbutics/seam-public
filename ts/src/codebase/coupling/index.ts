@@ -1,22 +1,28 @@
-// SHARED-KEY coupling ENGINE — the framework- and language-agnostic core. Two front-ends feed it:
-//   • the deterministic FLOOR — framework adapters (./adapters), each delegating syntax to a language
-//     provider (core/resolve/languages); and
-//   • tier-3 LLM (llm_discovery.discover_keys) — proposes keys cross-framework that ground HERE.
-// The reusable piece is `shared_key_index`: a repo-wide map of who PRODUCES vs CONSUMES each key. A
-// key the anchor produces surfaces its consumers; one it consumes surfaces its producers (so a writer
-// reaches the UI that reads it, and a reader reaches the backend that wrote it). Edges are
-// RESOLVED_PARTIAL crossings — pruned by the relevance pass, never asserted as a hard call.
+// SHARED-KEY coupling ENGINE — the framework- and language-agnostic core. It resolves ONE anchor's data
+// coupling in five steps, mirroring docs/COUPLING_VOCABULARY.md (and the type-per-step order in ./types):
+//   1. SOURCE   gather keys from three front-ends, each tagged with its KeySource. NOT all in one place:
+//      • carrier wrappers + LLM (repo-wide, EXPENSIVE, cached on EngineCtx) are assembled UP-FRONT, once
+//        per anchor, and passed into runPipeline as its `carrierAccs`/`proposed`  → resolveCoupling · assembleSources
+//      • the scan-adapter floor is cheap + span-local, so it's read INLINE        → collectAnchorKeys (also on each chained hop)
+//   2. KEY      dedupe those three sources into the keys the span touches          → AnchorKey (in collectAnchorKeys)
+//   3. GROUND   repo-wide producers/consumers per key + the "other side" lookup    → shared_key_index · otherSide
+//   4. DRAW     the key as a synthetic boundary node between the two sides         → drawBoundary
+//   5. WIRE     the produce/consume crossings from real files to that node         → wireNear (near) · crossBoundary (far)
+// `runPipeline` (steps 1-inline..5, recursive) is the per-node body; step 1's expensive half runs once before it.
+// The reusable piece is `shared_key_index`. A key the anchor produces surfaces its consumers; one it
+// consumes surfaces its producers (a writer reaches the UI that reads it, a reader reaches the backend
+// that wrote it). Edges are RESOLVED_PARTIAL crossings — pruned by the relevance pass, never a hard call.
 import { readFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, join } from "node:path";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS } from "../atoms.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
-import { normpath, walk } from "../../core/resolve/walk.js";
-import type { Access, ProposedKey, CouplingNode, Crossing, Blindspot } from "./types.js";
+import { normpath, walkFiles } from "../../core/resolve/walk.js";
+import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { kindOf, scan_file_keys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { COUPLING } from "./config.js";
 
-export type { KeyHit, KeyKind, Access, ProposedKey } from "./types.js";
+export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys } from "./adapters/index.js";
 
 // Classification predicates — the data-coupling VOCABULARY exposed as BEHAVIOUR, not raw kind Sets.
@@ -33,15 +39,16 @@ const keyId = (kind: string, value: string) => `${kind} ${value}`;   // the kind
 
 // NOTE: the LLM key pass is no longer a per-anchor call here — it's the repo-wide, batched, cached
 // `llm_key_index` (anchor keys come from that index via resolveCoupling, below). The old per-anchor
-// `maybe_discover_keys` + its budget were removed (2026-06-19); `attach` still consumes the grounded
+// `maybe_discover_keys` + its budget were removed (2026-06-19); runPipeline still consumes the grounded
 // `proposed` keys that index produces.
 
-// ---- the repo-wide GROUNDING INDEX: for each key, who PRODUCES it (writers) vs who CONSUMES it
-// (readers), found by scanning every file once. This is what turns "the anchor produces `payments`"
-// into "…and these files read it". Example:
-//   "db-table payments" → { producers: [billing.rb:40],            // the writers
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// STEP 3 — GROUND: the repo-wide GroundingIndex (who PRODUCES vs CONSUMES each key, by scanning every file
+// once) and the `otherSide` lookup across it. This is what turns "the anchor produces `payments`" into
+// "…and these files read it". Example:
+//   "db-table payments" → { producers: [billing.rb:40],              // the writers
 //                           consumers: [report.rb:12, dash.tsx:88] }  // the readers
-type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
 
 const _HTTP_ROUTE = "http-route";
 // Route patterns rarely equal a caller URL byte-for-byte: a handler `@WebServlet("/document/*")` is
@@ -61,10 +68,10 @@ function routeSuffixMatch(a: string, b: string): boolean {
 //   consumes `payments`  → [billing.rb:40]               (the writer)
 // This is a one-directional lookup keyed PURELY on the shared key string — there is NO check that the
 // complement points back at THIS producer. The only evidence is "both name the same key", which is why
-// every edge `attach` emits is RESOLVED_PARTIAL (a shared-name crossing), never an asserted call.
+// every coupling edge emitted is RESOLVED_PARTIAL (a shared-name crossing), never an asserted call.
 // Exact-key matches, plus (for http-route) suffix-aliased route keys, so a full-URL caller grounds to a
 // sub-path/wildcard handler and vice-versa. Dedup is handled downstream (complementFiles).
-function otherSide(index: KeyIndex, kind: string, value: string, produces: boolean): Access[] {
+function otherSide(index: GroundingIndex, kind: string, value: string, produces: boolean): Access[] {
   const exact = index.get(keyId(kind, value));
   const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
   if (kind !== _HTTP_ROUTE) return out;
@@ -78,35 +85,32 @@ function otherSide(index: KeyIndex, kind: string, value: string, produces: boole
   return out;
 }
 
-// Merge a second index (e.g. the carrier-channel data-file keys) into a copy of the base — concatenating
-// producers/consumers on shared keys. Non-mutating so the cached base index stays clean.
-function _merge_index(base: KeyIndex, extra: KeyIndex): KeyIndex {
-  const out: KeyIndex = new Map();
-  for (const [k, v] of base) out.set(k, { producers: [...v.producers], consumers: [...v.consumers] });
-  for (const [k, v] of extra) {
-    if (!out.has(k)) out.set(k, { producers: [], consumers: [] });
-    out.get(k)!.producers.push(...v.producers);
-    out.get(k)!.consumers.push(...v.consumers);
+// Combine grounding indexes (the scan floor + the carrier-channel data-file keys + the LLM key index) into
+// ONE fresh index — concatenating producers/consumers on shared keys. Non-mutating (fresh arrays, so the
+// cached inputs stay clean) and skips undefined parts. The single merge for the whole axis.
+export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): GroundingIndex {
+  const out: GroundingIndex = new Map();
+  for (const part of parts) {
+    if (!part) continue;
+    for (const [k, v] of part) {
+      if (!out.has(k)) out.set(k, { producers: [], consumers: [] });
+      out.get(k)!.producers.push(...v.producers);
+      out.get(k)!.consumers.push(...v.consumers);
+    }
   }
   return out;
 }
 
-export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): KeyIndex {
+export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
   if (ctx.sharedKey.has(repo)) return ctx.sharedKey.get(repo)!;
-  const idx: KeyIndex = new Map();
-  for (const [dir, files] of walk(repo, skipDirs)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      let text: string;
-      try { text = readFileSync(join(dir, fn), "utf-8"); } catch { continue; }
-      const rel = relative(repo, join(dir, fn));
-      const hits = scan_file_keys(rel, text);
-      if (!hits.length) continue;
-      for (const h of hits) {
-        const k = keyId(h.kind, h.value);
-        if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-        (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: rel, line: h.line });
-      }
+  const idx: GroundingIndex = new Map();
+  for (const { rel, text } of walkFiles(repo, skipDirs, endsWithSourceExt)) {
+    const hits = scan_file_keys(rel, text);
+    if (!hits.length) continue;
+    for (const h of hits) {
+      const k = keyId(h.kind, h.value);
+      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
+      (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: rel, line: h.line });
     }
   }
   ctx.sharedKey.set(repo, idx);
@@ -142,7 +146,7 @@ export async function complement_unit(repo: string, file: string, line: number):
 
 const CHAIN_DEPTH = COUPLING.chainDepth;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
 
-// The coupling sub-graph `attach` builds, as ONE mutable accumulator threaded through the chain recursion
+// The coupling sub-graph runPipeline builds, as ONE mutable accumulator threaded through the chain recursion
 // (so a deep recursive call appends to the same arrays, with no by-hand counter plumbing). It OWNS the
 // `dc{n}` node-id sequence, seeded from the engine-wide counter: addNode() mints the next id, stores the
 // node, and returns it — the single place ids are minted, so callers never increment a counter themselves.
@@ -160,20 +164,17 @@ class CouplingGraph {
   addEdge(edge: Crossing): void { this.edges.push(edge); }
   addBlindspot(blindspot: Blindspot): void { this.blindspots.push(blindspot); }
   get counter(): number { return this._counter; }   // the advanced id counter, for the caller to continue from
+  result(): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
+    return { nodes: this.nodes, edges: this.edges, blindspots: this.blindspots, counter: this.counter };
+  }
 }
 
-// merge two repo-wide key indexes (carrier-channel + LLM-key) — concat producers/consumers on shared keys.
-type _KIdx = Map<string, { producers: any[]; consumers: any[] }>;
-function _merge_key_index(a: _KIdx | undefined, b: _KIdx | undefined): _KIdx | undefined {
-  if (!a) return b; if (!b) return a;
-  const out: _KIdx = new Map(a);
-  for (const [k, v] of b) {
-    const e = out.get(k);
-    if (e) out.set(k, { producers: [...e.producers, ...v.producers], consumers: [...e.consumers, ...v.consumers] });
-    else out.set(k, { producers: [...v.producers], consumers: [...v.consumers] });
-  }
-  return out;
-}
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// STEP 1 (assemble half) — SOURCE: gather the EXPENSIVE, repo-wide sources ONCE per anchor before the
+// pipeline runs: the carrier-channel index + accesses (Ruby) and the LLM key index + proposed keys. Both
+// are cached on EngineCtx (built once per repo/grow), so they're resolved here at the entrypoint, NOT
+// re-fetched per node or per chained hop. The cheap scan-adapter floor runs inline inside collectAnchorKeys.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
 
 // PUBLIC per-anchor ENTRYPOINT — resolve the data-coupling boundary for an anchor span and return a DELTA
 // (nodes/edges/blindspots + the advanced id counter) for the caller to merge into its graph. Coupling owns
@@ -181,55 +182,101 @@ function _merge_key_index(a: _KIdx | undefined, b: _KIdx | undefined): _KIdx | u
 // language-agnostic LLM key index (the framework-AGNOSTIC grounding for floor-blind files) PLUS the
 // anchor's proposed keys. So a caller never orchestrates coupling internals nor hands coupling its arrays.
 // Self-gates to a no-op delta when data-coupling is off; the grounding self-gates to zero cost without
-// `--data-coupling llm` or a prior `.seam/` cache. (Was scan/import_scan `_carrier_extra` + the `attach` call.)
+// `--data-coupling llm` or a prior `.seam/` cache. (Was scan/import_scan `_carrier_extra` + a direct call.)
 export interface CouplingOpts { dataCoupling?: boolean; llm?: boolean; model?: string; claudeBin?: string | null }
+type _LlmOpts = Pick<CouplingOpts, 'llm' | 'model' | 'claudeBin'>;
+
+// STEP 1 (assemble) — the expensive sources for `resolveCoupling`: the repo-wide LLM key index + the
+// anchor's LLM proposed keys (in parallel), and for Ruby the carrier-channel index + carrier accesses;
+// the two repo-wide indexes are merged into one groundingIndex. `accesses`/`proposed` are anchor-only.
+interface AssembledSources { carrierAccesses?: KeyHit[]; groundingIndex?: GroundingIndex; proposedKeys?: KeyHit[] }
+async function assembleSources(
+  repo: string, anchorFile: string, anchorText: string, lo: number, hi: number,
+  llmOpts: _LlmOpts, ctx: EngineCtx,
+): Promise<AssembledSources> {
+
+  const lk = await import("./llm_key_index.js");
+  const [llmKeyIndex, proposedKeys] = await Promise.all([
+    lk.llmKeyIndex(repo, llmOpts, ctx),
+    lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
+  ]);
+
+  if (!anchorFile.endsWith(".rb") && !anchorFile.endsWith(".rake")) {
+    return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
+  }
+
+  const { resolveAnchorCarrier } = await import("./carrier/engine.js");
+  const { index: carrierIndex, accesses: carrierAccesses } = await resolveAnchorCarrier(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
+
+  const merged = mergeGrounding(llmKeyIndex.size ? llmKeyIndex : undefined, carrierIndex);
+  return {
+    carrierAccesses,
+    groundingIndex: merged.size ? merged : undefined,   // empty → undefined, so resolveCoupling keeps the cached base index (no copy)
+    proposedKeys,
+  };
+}
+
+// PUBLIC per-anchor ENTRYPOINT, as a TWO-PHASE pipeline:
+//   STEP 1 (assemble)  — gather the expensive repo-wide sources ONCE (assembleSources)
+//   build the STEP-3 grounding index ONCE (scan floor ⊕ the assembled carrier/LLM grounding)
+//   STEPS 2-5          — run the recursive per-node pipeline from the anchor (runPipeline)
+// Returns the graph delta. The expensive half can't live inside the recursion (a chained hop must reuse
+// the index, never re-assemble), which is why phase 1 sits out here and runPipeline is the recursive body.
 export async function resolveCoupling(
   repo: string, anchorId: string, anchorFile: string, anchorText: string, lo: number, hi: number,
   counter: number, opts: CouplingOpts = {}, ctx: EngineCtx = new EngineCtx(),
 ): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+
   const graph = new CouplingGraph(counter);
-  if (opts.dataCoupling === false) return { nodes: graph.nodes, edges: graph.edges, blindspots: graph.blindspots, counter };
+  if (opts.dataCoupling === false) return graph.result();
+
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
-  let accs: { kind: string; value: string; produces: boolean; line: number }[] | undefined, index: _KIdx | undefined;
-  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake")) {
-    const cc = await import("./carrier/engine.js");
-    index = await cc.carrierChannelIndex(repo, llmOpts, ctx);            // batched carrier-synth prefetch (warms the cache)
-    accs = await cc.anchorCarrierAccs(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
-  }
-  const lk = await import("./llm_key_index.js");
-  const ki = await lk.llmKeyIndex(repo, llmOpts, ctx);                   // repo-wide grounding (the other side), cached
-  if (ki.size) index = _merge_key_index(index, ki);
-  const proposed = await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx);   // the anchor's own gaps
-  await attach(graph, repo, anchorId, anchorFile, anchorText, lo, hi, proposed ?? [], undefined, undefined, { accs, index }, ctx);
-  return { nodes: graph.nodes, edges: graph.edges, blindspots: graph.blindspots, counter: graph.counter };
+  const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
+  if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
+
+  // STEP 3 index, built once: the repo-wide scan floor extended with the assembled carrier+LLM grounding.
+  const base = shared_key_index(repo, SKIP_DIRS, ctx);
+  const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
+  const p: PipelineCtx = { graph, repo, index, ctx };
+
+  await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
+    CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
+
+  return graph.result();
 }
 
-// One key the anchor body touches. `fromScan` separates a deterministic-FLOOR key (scan or carrier) from
-// an LLM proposal — an ungrounded proposal becomes a blindspot, an ungrounded floor key is silent.
-type AnchorKey = { kind: string; value: string; produces: boolean; line: number; fromScan: boolean };
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// STEP 1 (inline half) + STEP 2 — KEY: read the cheap scan floor INLINE, then dedupe it with the carrier +
+// LLM sources assembled up-front (above) into the keys the span touches, each tagged with the KeySource
+// that found it. The tag (not a boolean) drives step 4's blindspot gate: an ungrounded "scan"/"carrier"
+// floor key is silently dropped, an ungrounded "llm" proposal is surfaced for review.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
 
-// Collect the keys the anchor body touches, from three sources, deduped (earliest line wins):
-//   1. the deterministic per-file scan (framework adapters)          ┐ both are the deterministic FLOOR,
-//   2. carrier-channel accesses (Ruby homemade data-file wrappers)   ┘ so they count as fromScan = true
-//   3. LLM-proposed keys — kept only where the floor didn't already cover them (fromScan = false)
-// e.g. a `Payment.create(...)` write in the span → AnchorKey{ kind:"db-table", value:"payments", produces:true }.
+// Collect the keys the anchor body touches, from three sources, deduped (earliest located line wins):
+//   1. the deterministic per-file scan (framework adapters)          → source "scan"     ┐ the deterministic
+//   2. carrier-channel accesses (Ruby homemade data-file wrappers)   → source "carrier"  ┘ FLOOR (isFloor)
+//   3. LLM-proposed keys — kept only where the floor didn't already cover them → source "llm"
+// e.g. a `Payment.create(...)` write in the span → AnchorKey{ kind:"db-table", value:"payments", produces:true, source:"scan" }.
 function collectAnchorKeys(
   anchorFile: string, anchorText: string, spanLo: number, spanHi: number,
-  carrierAccs: { kind: string; value: string; produces: boolean; line: number }[],
-  proposed: ProposedKey[],
+  carrierAccs: KeyHit[], proposed: KeyHit[],
 ): Map<string, AnchorKey> {
   const anchorKeys = new Map<string, AnchorKey>();
-  const accessId = (k: { kind: string; value: string; produces: boolean }) => `${k.kind} ${k.value} ${k.produces}`;
-  for (const hit of [...scan_file_keys(anchorFile, anchorText), ...carrierAccs]) {
-    if (hit.line < spanLo || hit.line > spanHi) continue;
+  const accessId = (k: KeyHit) => `${k.kind} ${k.value} ${k.produces}`;
+  // 1+2: the located FLOOR (scan + carrier) — span-filtered, earliest line wins, tagged by source
+  const addFloor = (hit: KeyHit, source: KeySource) => {
+    if (hit.line < spanLo || hit.line > spanHi) return;
     const id = accessId(hit);
     if (!anchorKeys.has(id) || hit.line < anchorKeys.get(id)!.line)
-      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, fromScan: true });
-  }
+      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source });
+  };
+  for (const hit of scan_file_keys(anchorFile, anchorText)) addFloor(hit, "scan");
+  for (const hit of carrierAccs) addFloor(hit, "carrier");
+  // 3: LLM proposals — not precisely located, anchored at the span start, only where the floor missed them
   for (const proposedKey of proposed) {
     const id = accessId(proposedKey);
     if (!anchorKeys.has(id))
-      anchorKeys.set(id, { kind: proposedKey.kind, value: proposedKey.value, produces: proposedKey.produces, line: spanLo, fromScan: false });
+      anchorKeys.set(id, { kind: proposedKey.kind, value: proposedKey.value, produces: proposedKey.produces, line: spanLo, source: "llm" });
   }
   return anchorKeys;
 }
@@ -244,7 +291,7 @@ function collectAnchorKeys(
 //   user_profile.tsx   reads members only        → score 1   (demoted — only shares the generic hub table)
 // Cheap & deterministic: reuses the grounding index already built; demotes hub-table crowds below the cap.
 function rankComplementsByCoOccurrence(
-  anchorKeys: Iterable<AnchorKey>, index: KeyIndex, anchorPath: string,
+  anchorKeys: Iterable<AnchorKey>, index: GroundingIndex, anchorPath: string,
 ): Map<string, number> {
   const coOccurrenceByFile = new Map<string, number>();
   for (const key of anchorKeys) {
@@ -273,7 +320,7 @@ function orderComplementsByRelevance(
 // The NEAR-side lookup for one key: its complement files — the OTHER side from the index (exact + route
 // suffix aliases), the anchor's own file dropped, deduped to file → earliest line (one complement node per
 // file, located at its first access).
-function collectComplementFiles(index: KeyIndex, key: AnchorKey, anchorPath: string): Map<string, number> {
+function collectComplementFiles(index: GroundingIndex, key: AnchorKey, anchorPath: string): Map<string, number> {
   const complementFiles = new Map<string, number>();
   for (const access of otherSide(index, key.kind, key.value, key.produces)) {
     if (normpath(access.file) === anchorPath) continue;
@@ -282,27 +329,60 @@ function collectComplementFiles(index: KeyIndex, key: AnchorKey, anchorPath: str
   return complementFiles;
 }
 
-// The shared, per-attach context — bundled so the helpers below take a `scope`, not a dozen parameters. A
-// fresh scope is built per attach call (its `depth` is the current chain level; the recursion makes a new
-// one at depth-1).
-interface AttachScope {
+// The RECURSION-WIDE context: the graph accumulator + the STEP-3 grounding index, shared by every chained
+// hop. Built ONCE in resolveCoupling; runPipeline + crossBoundary thread it instead of re-passing
+// graph/repo/index/ctx through a dozen positional args (the old 12-arg `attach`).
+interface PipelineCtx {
   graph: CouplingGraph;
   repo: string;
-  index: KeyIndex;                  // the grounding index (base, optionally carrier-extended)
-  anchorPath: string;
-  coOccurrence: Map<string, number>;
-  depth: number;
-  carrier: { accs?: { kind: string; value: string; produces: boolean; line: number }[]; index?: KeyIndex };
+  index: GroundingIndex;   // STEP 3: repo-wide scan floor ⊕ the assembled carrier+LLM grounding (read-only)
   ctx: EngineCtx;
 }
+// One node the pipeline runs over: the anchor span first, then each chained complement.
+interface PipelineNode { id: string; file: string; text: string; lo: number; hi: number }
+// PipelineCtx + the per-node working state (ranking + chain depth), for the step-4/5 helpers below.
+interface NodeScope extends PipelineCtx { anchorPath: string; coOccurrence: Map<string, number>; depth: number }
 
-// CROSS the boundary (the FAR side): rank this key's complement files, materialise the top READER_CAP as
-// nodes with boundary→complement crossings, chain one hop into each, and record the over-cap tail as a
-// fanout blindspot. `surfacedKeys` already carries this boundary's key, so the chain can't loop back in.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+// STEPS 2-5 — THE PIPELINE: runPipeline runs one node (the anchor, then each chained complement) through
+// collect (1-inline + 2) → ground-lookup (3) → draw boundary (4) → wire near + cross far (5). Step 5's
+// far side recurses back into runPipeline one hop, so the body is the recursive spine.
+// ════════════════════════════════════════════════════════════════════════════════════════════════════
+
+// STEP 4 — DRAW: get-or-mint the synthetic boundary node standing for a key (ONE per kind+value, even when
+// the node both produces and consumes it). Anchored at `file` (the current node's file).
+function drawBoundary(s: NodeScope, boundaryByKey: Map<string, string>, key: AnchorKey, file: string): string {
+  const id = keyId(key.kind, key.value);
+  let boundaryId = boundaryByKey.get(id);
+  if (boundaryId === undefined) {
+    boundaryId = s.graph.addNode({ symbol: key.value, kind: kindOf(key.kind).nodeKind, file, range: [key.line, key.line], enclosing: "", complexity: 1, coupling: true });
+    boundaryByKey.set(id, boundaryId);
+  }
+  return boundaryId;
+}
+
+// STEP 5 (near) — WIRE the current node to its boundary with the produce/consume crossing.
+function wireNear(s: NodeScope, fromId: string, boundaryId: string, key: AnchorKey): void {
+  const adapter = kindOf(key.kind);
+  s.graph.addEdge({ from: fromId, to: boundaryId, kind: key.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL", line: key.line });
+}
+
+// An LLM-proposed key the deterministic index couldn't ground → a blindspot, not a materialised node. A
+// floor (scan/carrier) key that doesn't ground is silently dropped (no proposal to surface).
+function reportUngroundedKey(s: NodeScope, nodeId: string, key: AnchorKey): void {
+  if (isFloor(key)) return;
+  s.graph.addBlindspot({ node: nodeId, mechanism: "llm-proposed-key",
+    evidence: `LLM proposes a ${key.kind} coupling on '${key.value}' (${key.produces ? "produced" : "consumed"} here) the deterministic scan didn't index`, candidates: [] });
+}
+
+// STEP 5 (far) — CROSS the boundary: rank this key's complement files, materialise the top READER_CAP as
+// nodes with boundary→complement crossings, CHAIN one hop into each (re-entering runPipeline), and record
+// the over-cap tail as a fanout blindspot. `surfacedKeys` already carries this boundary's key, so the
+// chain can't loop back in.
 async function crossBoundary(
-  scope: AttachScope, boundaryId: string, key: AnchorKey, complementFiles: Map<string, number>, surfacedKeys: Set<string>,
+  s: NodeScope, boundaryId: string, key: AnchorKey, complementFiles: Map<string, number>, surfacedKeys: Set<string>,
 ): Promise<void> {
-  const { graph, repo, depth, carrier, ctx, coOccurrence } = scope;
+  const { graph, repo, depth, coOccurrence } = s;
   const adapter = kindOf(key.kind);
   const complementProduces = !key.produces;
   const rankedComplements = orderComplementsByRelevance(complementFiles, coOccurrence);
@@ -315,7 +395,7 @@ async function crossBoundary(
     if (depth > 0) {
       let complementText = "";
       try { complementText = readFileSync(join(repo, file), "utf-8"); } catch { /* unreadable complement → no chain */ }
-      if (complementText) await attach(graph, repo, complementId, file, complementText, unit.start, unit.end, [], depth - 1, surfacedKeys, { index: carrier.index }, ctx);
+      if (complementText) await runPipeline(s, { id: complementId, file, text: complementText, lo: unit.start, hi: unit.end }, depth - 1, surfacedKeys);
     }
   }
   if (rankedComplements.length > READER_CAP) {
@@ -325,57 +405,35 @@ async function crossBoundary(
   }
 }
 
-// Attach the shared-key boundaries for one anchor span into `graph`: for each key it PRODUCES surface the
-// consumers, for each it CONSUMES surface the producers — as a boundary node + a (capped) crossing fan.
-// Keys come from collectAnchorKeys (scan + carrier floor + LLM proposals). Per key, two halves:
-//   NEAR side (here)         — find the complement files, then emit the boundary node + anchor→boundary edge
-//   FAR side (crossBoundary) — rank + materialise the complements, draw boundary→complement edges, chain on
-// A proposed key the index can't ground → a blindspot (an LLM hypothesis, not a materialised node).
-// Appends to `graph` (which owns id minting); returns nothing. Self-gating: no keys → no-op.
-export async function attach(graph: CouplingGraph, repo: string, anchorId: string, anchorFile: string, anchorText: string,
-    spanLo: number, spanHi: number, proposed: ProposedKey[] = [],
-    depth = CHAIN_DEPTH, seenKeys: Set<string> = new Set(),
-    carrier: { accs?: { kind: string; value: string; produces: boolean; line: number }[]; index?: KeyIndex } = {},
-    ctx: EngineCtx = new EngineCtx()): Promise<void> {
-  if (!available()) return;
+// THE PER-NODE PIPELINE BODY — run one span (the anchor, or a chained complement) through steps 1-inline..5
+// and append the boundaries it surfaces to the shared graph. For each key it PRODUCES surface the consumers,
+// for each it CONSUMES surface the producers. `carrierAccs`/`proposed` are ANCHOR-only (empty on every hop);
+// the recursion threads the same PipelineCtx (`p`) so the index/graph are never rebuilt. No keys → no-op.
+async function runPipeline(
+  p: PipelineCtx, node: PipelineNode, depth: number, seenKeys: Set<string>,
+  carrierAccs: KeyHit[] = [], proposed: KeyHit[] = [],
+): Promise<void> {
+  // STEP 1 (inline scan) + STEP 2 — the keys this span touches, tagged by source
+  const keys = collectAnchorKeys(node.file, node.text, node.lo, node.hi, carrierAccs, proposed);
+  if (!keys.size) return;
 
-  const anchorKeys = collectAnchorKeys(anchorFile, anchorText, spanLo, spanHi, carrier.accs ?? [], proposed);
-  if (!anchorKeys.size) return;
+  // STEP 3 (rank) — score each candidate complement once, for the capped fan
+  const anchorPath = normpath(node.file);
+  const s: NodeScope = { ...p, anchorPath, coOccurrence: rankComplementsByCoOccurrence(keys.values(), p.index, anchorPath), depth };
 
-  // the repo-wide grounding index, optionally extended with the carrier-channel index (data-file keys)
-  const baseIndex = shared_key_index(repo, SKIP_DIRS, ctx);
-  const groundingIndex: KeyIndex = carrier.index ? _merge_index(baseIndex, carrier.index) : baseIndex;
+  const boundaryByKey = new Map<string, string>();   // key identity → boundary node id (one per key)
+  const surfacedKeys = new Set(seenKeys);            // ancestor keys + the ones THIS node surfaces (fed to the chain)
 
-  const anchorPath = normpath(anchorFile);
-  const coOccurrenceByFile = rankComplementsByCoOccurrence(anchorKeys.values(), groundingIndex, anchorPath);
-  const scope: AttachScope = { graph, repo, index: groundingIndex, anchorPath, coOccurrence: coOccurrenceByFile, depth, carrier, ctx };
-
-  const boundaryNodeIdByKey = new Map<string, string>();   // key identity → boundary node id (one per key)
-  const surfacedKeys = new Set(seenKeys);                  // ancestor keys + the ones THIS call surfaces (fed to the chain recursion)
-
-  for (const key of [...anchorKeys.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
+  for (const key of [...keys.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
     if (seenKeys.has(keyId(key.kind, key.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
-    const adapter = kindOf(key.kind);
 
-    // NEAR side: which files sit on the other side of this key?
-    const complementFiles = collectComplementFiles(groundingIndex, key, anchorPath);
-    if (!complementFiles.size) {
-      // an LLM-proposed key the deterministic index can't ground → a blindspot, not a materialised node
-      if (!key.fromScan) graph.addBlindspot({ node: anchorId, mechanism: "llm-proposed-key",
-        evidence: `LLM proposes a ${key.kind} coupling on '${key.value}' (${key.produces ? "produced" : "consumed"} here) the deterministic scan didn't index`, candidates: [] });
-      continue;
-    }
+    // STEP 3 (lookup) — which files sit on the other side of this key?
+    const complementFiles = collectComplementFiles(p.index, key, anchorPath);
+    if (!complementFiles.size) { reportUngroundedKey(s, node.id, key); continue; }
 
-    // emit (once) the boundary node standing for this key, plus the anchor→boundary crossing edge
-    let boundaryId = boundaryNodeIdByKey.get(keyId(key.kind, key.value));
-    if (boundaryId === undefined) {
-      boundaryId = graph.addNode({ symbol: key.value, kind: adapter.nodeKind, file: anchorFile, range: [key.line, key.line], enclosing: "", complexity: 1, coupling: true });
-      boundaryNodeIdByKey.set(keyId(key.kind, key.value), boundaryId);
-    }
-    surfacedKeys.add(keyId(key.kind, key.value));   // mark before recursing so a complement reading this same key skips it
-    graph.addEdge({ from: anchorId, to: boundaryId, kind: key.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL", line: key.line });
-
-    // FAR side: cross the boundary out to its (ranked, capped) complements
-    await crossBoundary(scope, boundaryId, key, complementFiles, surfacedKeys);
+    const boundaryId = drawBoundary(s, boundaryByKey, key, node.file);   // STEP 4
+    surfacedKeys.add(keyId(key.kind, key.value));                        // mark before recursing
+    wireNear(s, node.id, boundaryId, key);                              // STEP 5 (near)
+    await crossBoundary(s, boundaryId, key, complementFiles, surfacedKeys);   // STEP 5 (far) + chain
   }
 }

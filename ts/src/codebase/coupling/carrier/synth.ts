@@ -7,8 +7,12 @@
 // Gated (opt-in `--data-coupling llm`) + budgeted; the LLM seam is the shared run_pass (host-bus in
 // tests / claude|copilot in prod), so no API key. A signature with no valid direction = "not a carrier".
 import { createHash } from "node:crypto";
-import { run_pass, ClassifierError as LLMError } from "../../../core/llm.js";
+import { run_pass, registerPass, ClassifierError as LLMError } from "../../../core/llm.js";
 import { emit } from "../../../core/progress.js";
+
+// carrier read/write classification is a semantic judgement and LEARN-ONCE (cached to .seam). All LLM
+// synthesis goes through the ONE batched pass; resolveCarrierSignature is a pure cache reader.
+const PASS_BATCH = registerPass({ tag: "carrier-synthesis-batch", tier: "strong", note: "batch carrier read/write classification (semantic, learn-once)" });
 import type { CarrierProvider } from "./provider.js";
 import { cachedSignature, persistSignature } from "./cache.js";
 import { EngineCtx } from "../../engine_ctx.js";
@@ -23,27 +27,6 @@ const _DIRS = new Set(["read", "write"]);
 const _MEDIA = new Set(["file", "db", "serialized", "blob", "cache", "data"]);
 // in-mem signature cache (ctx.carrierSig) + the run budget (ctx.synthBudget) now live on the EngineCtx —
 // a fresh ctx is a clean slate, so the old resetCarrierSynthBudget() hook is gone.
-
-function _prompt(lang: string, className: string, method: string, source: string): string {
-  return `You are deciding whether ONE ${lang} method is a DATA I/O CARRIER — a method that READS or WRITES
-persistent data (a file, a database, a serialized/blob store) for a channel named by one of its ARGUMENTS
-(e.g. a filename or table name). It is NOT a carrier if it is pure computation, networking, logging, or
-CODE-loading (require/eval). Static tracing could not classify it (it delegates to an opaque object or a
-runtime-computed target), so judge from the code.
-
-METHOD ${className}#${method}:
-${source.slice(0, 3000)}
-
-If it IS a data carrier, emit ONE signature. If NOT, emit an empty array. Do NOT guess — a wrong
-signature is worse than silence.
-
-If it IS a carrier, also give a short kebab-case "name" (e.g. "vd-file-writer") and a one-line
-"description" of what it reads/writes — these help a human review the learned adapter.
-
-Return a JSON array with AT MOST ONE object:
-[{"id":"s1","direction":"read|write","medium":"file|db|serialized|blob|cache","keyArg":<0-based index of the argument naming the channel, or null>,"name":"short-kebab-name","description":"one line"}]
-`;
-}
 
 // Validate one LLM object → a grounded signature, or null (not a carrier / invalid).
 function _validate(obj: any): CarrierSignature | null {
@@ -64,11 +47,6 @@ function _named(sig: CarrierSignature | null, className: string, method: string)
   if (!sig.description) sig.description = `${sig.direction}s ${sig.medium} via ${className}#${method}`;
   return sig;
 }
-function _parse(out: Map<string, any>): CarrierSignature | null {
-  for (const obj of out.values()) { const s = _validate(obj); if (s) return s; }
-  return null;
-}
-
 function _ck(className: string, method: string, src: string): string {
   return `${className}#${method} ${createHash("sha1").update(src).digest("hex")}`;
 }
@@ -116,7 +94,7 @@ export async function prefetchCarrierSignatures<Idx>(
     if (!chunk.length || ctx.synthBudget <= 0) { chunk = []; size = 0; return; }
     ctx.synthBudget -= chunk.length;
     let out = new Map<string, any>();
-    try { out = run_pass(_batchPrompt(provider.name, chunk), { model: opts.model, claudeBin: opts.claudeBin, tag: "carrier-synthesis-batch" }); }
+    try { out = run_pass(_batchPrompt(provider.name, chunk), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS_BATCH.tag }); }
     catch (e) { if (!(e instanceof LLMError)) throw e; }
     chunk.forEach((t, i) => { const sig = _named(_validate(out.get(`m${i}`)), t.className, t.method); ctx.carrierSig.set(t.ck, sig); persistSignature(repo, t.ck, sig); });
     chunk = []; size = 0;
@@ -125,28 +103,20 @@ export async function prefetchCarrierSignatures<Idx>(
   flush();
 }
 
-// Resolve a carrier signature for an OPAQUE method — the teacher-3 funnel:
+// Resolve a carrier signature for an OPAQUE method — a pure CACHE READER (no LLM):
 //   1. in-memory cache (this process)
-//   2. PERSISTENT .seam/ cache (a prior run / CI warm-up) — applied even OFFLINE: synthesize once, reuse forever
-//   3. the LLM, ONLY when `opts.llm` (the --data-coupling llm opt-in) and within budget — then persist
-// Returns null = not a carrier / no cache + no LLM / budget exhausted. The content-hash key gives drift
-// invalidation (edit the method → miss → re-resolve).
+//   2. PERSISTENT .seam/ cache (a prior run / CI warm-up / prefetchCarrierSignatures) — offline-safe
+// Returns null = not a carrier / not yet learned. The content-hash key gives drift invalidation (edit the
+// method → miss). To LEARN an unknown carrier, run prefetchCarrierSignatures first (the sole LLM path).
 export async function resolveCarrierSignature<Idx>(
   repo: string, provider: CarrierProvider<Idx>, index: Idx, className: string, method: string,
-  opts: { llm?: boolean; model?: string; claudeBin?: string | null } = {}, ctx: EngineCtx = new EngineCtx(),
+  ctx: EngineCtx = new EngineCtx(),
 ): Promise<CarrierSignature | null> {
   const src = await provider.methodSource(repo, index, className, method);
   if (!src) return null;
-  const ck = `${className}#${method} ${createHash("sha1").update(src).digest("hex")}`;
+  const ck = _ck(className, method, src);
   if (ctx.carrierSig.has(ck)) return ctx.carrierSig.get(ck)!;  // 1. process memory (this run's ctx)
   const disk = cachedSignature(repo, ck);                     // 2. persistent .seam/ (offline-safe)
   if (disk.hit) { ctx.carrierSig.set(ck, disk.sig); return disk.sig; }
-  if (!opts.llm || ctx.synthBudget <= 0) return null;          // 3. LLM only when opted-in + budgeted
-  ctx.synthBudget -= 1;
-  let sig: CarrierSignature | null = null;
-  try { sig = _named(_parse(run_pass(_prompt(provider.name, className, method, src), { model: opts.model, claudeBin: opts.claudeBin, tag: "carrier-synthesis" })), className, method); }
-  catch (e) { if (!(e instanceof LLMError)) throw e; sig = null; }
-  ctx.carrierSig.set(ck, sig);
-  persistSignature(repo, ck, sig);                            // learn once → durable for offline runs
-  return sig;
+  return null;                                                // unknown — learn via prefetchCarrierSignatures
 }

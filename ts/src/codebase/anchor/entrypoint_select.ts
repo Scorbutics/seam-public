@@ -8,11 +8,11 @@
 // intents so it never overrides a good service anchor. Structure enumerates; the LLM judges; no lexical
 // pool pollution. The chosen handler is anchored on its FILE — its imports seed the downstream, which
 // the direction-aware grow traces (so an anonymous edge handler needs no symbol).
-import { readFileSync } from "node:fs";
-import { join, relative } from "node:path";
-import { run_pass_async, ClassifierError as LLMError } from "../../core/llm.js";
-import { walk } from "../../core/resolve/walk.js";
+import { run_pass_async, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
+import { walkFiles } from "../../core/resolve/walk.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+
+const PASS = registerPass({ tag: "entrypoint-select", tier: "strong", note: "pick the implicit entry point (convention-named handler) — semantic" });
 import { scan_file_keys, complement_unit } from "../coupling/index.js";
 
 export interface EntryPoint { path: string; file: string; line: number; }
@@ -27,22 +27,15 @@ export function enumerate_entrypoints(repo: string, limit = 300): EntryPoint[] {
   repo = expanduser(repo);
   const out: EntryPoint[] = [];
   const seen = new Set<string>();
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const abs = join(dir, fn);
-      const rel = relative(repo, abs).replace(/\\/g, "/");
-      let text: string;
-      try { text = readFileSync(abs, "utf-8"); } catch { continue; }
-      for (const h of scan_file_keys(rel, text)) {
-        if (h.kind !== "http-route" || !h.produces) continue;
-        const k = `${h.value}#${h.line}#${rel}`;
-        if (seen.has(k)) continue;
-        seen.add(k);
-        out.push({ path: h.value, file: rel, line: h.line });
-      }
-      if (out.length >= limit) return out;
+  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
+    for (const h of scan_file_keys(rel, text)) {
+      if (h.kind !== "http-route" || !h.produces) continue;
+      const k = `${h.value}#${h.line}#${rel}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      out.push({ path: h.value, file: rel, line: h.line });
     }
+    if (out.length >= limit) return out;
   }
   return out;
 }
@@ -69,7 +62,7 @@ export async function select_entrypoint_llm(intent: string, eps: EntryPoint[],
     '"how does email notification work", "how is auth enforced"), answer "none" — do NOT force a match.',
     'Output ONLY a JSON array with one object: [{"id":"e<N>"}] or [{"id":"none"}]');
   let out: Map<string, any>;
-  try { out = await run_pass_async(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: "entrypoint-select" }); }
+  try { out = await run_pass_async(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag }); }
   catch (e) { if (e instanceof LLMError) return null; throw e; }
   for (const v of out.values()) {
     const id = String(v?.id ?? "").trim();

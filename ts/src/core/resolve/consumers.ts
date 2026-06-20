@@ -2,11 +2,10 @@
 // graph-building machinery stays in codebase mode; this is the thin cone diff-mode (blast radius)
 // + facts_resolve share. An edge is RESOLVED only when the import's module path resolves to the
 // anchor file; a name match whose module doesn't resolve is a SUGGESTED blind spot.
-import { readFileSync } from "node:fs";
-import { basename, join, relative } from "node:path";
+import { basename, join } from "node:path";
 import type { ImportRef } from "./languages/base.js";
 import { floor_resolve, endsWithSourceExt, parse_imports, SKIP_DIRS } from "./languages/index.js";
-import { normpath, walk } from "./walk.js";
+import { normpath, walkFiles } from "./walk.js";
 
 // A resolver: resolve_module(repo, importingFile, source) → repo-relative file | null, and
 // optionally resolve_symbol(repo, importingFile, line, col) → [file, line] | null (LSP). ASYNC —
@@ -62,15 +61,8 @@ function _repoImports(repo: string): { rel: string; norm: string; refs: ImportRe
   let idx = _repoImportsCache.get(repo);
   if (idx) return idx;
   idx = [];
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const path = join(dir, fn);
-      let text: string;
-      try { text = readFileSync(path, "utf-8"); } catch { continue; }
-      const rel = relative(repo, path);
-      idx.push({ rel, norm: normpath(path), refs: parse_imports(rel, text) });
-    }
+  for (const { rel, abs, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
+    idx.push({ rel, norm: normpath(abs), refs: parse_imports(rel, text) });
   }
   _repoImportsCache.set(repo, idx);
   return idx;

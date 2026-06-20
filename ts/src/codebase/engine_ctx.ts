@@ -8,17 +8,15 @@
 // soup). The scan parse caches, atoms `Ctx` cache, java/consumers resolution caches and string_coupling
 // entry cache migrate into this same object in follow-up stages.
 import { COUPLING } from "./coupling/config.js";
-import type { Access } from "./coupling/types.js";
+import type { GroundingIndex } from "./coupling/types.js";
 import type { CarrierSignature } from "./coupling/carrier/synth.js";
-
-type KeyIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
 
 export class EngineCtx {
   // --- coupling: repo-wide grounding indices (were module-level `_CACHE`/`_IDX_CACHE`/`_RUBY_INDEX`/`_idxCache`) ---
-  sharedKey = new Map<string, KeyIndex>();              // shared_key_index: repo → index
-  carrierChannel = new Map<string, KeyIndex>();         // carrierChannelIndex: `repo::llm|det` → index
+  sharedKey = new Map<string, GroundingIndex>();        // shared_key_index: repo → index
+  carrierChannel = new Map<string, GroundingIndex>();   // carrierChannelIndex: `repo::llm|det` → index
   langIndex = new Map<string, unknown>();               // carrier engine: `repo::provider` → built lang index
-  llmKey = new Map<string, KeyIndex>();                 // llmKeyIndex: cacheKey → index
+  llmKey = new Map<string, GroundingIndex>();           // llmKeyIndex: cacheKey → index
 
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null
@@ -26,6 +24,16 @@ export class EngineCtx {
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
+}
+
+// Canonical cache helper: return the cached value if present, else compute, store, and return it.
+// Used by every EngineCtx-backed index builder so they express only the key + computation, not the
+// has/get/set dance.
+export async function getOrSet<K, V>(map: Map<K, V>, key: K, compute: () => Promise<V>): Promise<V> {
+  if (map.has(key)) return map.get(key)!;
+  const value = await compute();
+  map.set(key, value);
+  return value;
 }
 
 // NOTE: the .seam/ DISK-cache in-memory mirrors (carrier/cache.ts, key_cache.ts) stay module-level — they

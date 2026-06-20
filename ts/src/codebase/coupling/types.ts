@@ -1,12 +1,26 @@
-// Shared-key coupling — shared types. A KEY is an identifier two files share with no import/call edge
-// (a DB table, a queue/topic, an event, a route). A KeyKind is a framework ADAPTER: it owns the
-// key's semantics (node label, produce/consume edge labels) and a per-file scan that classifies
-// produce vs consume. The grounding (who-shares-this-key, repo-wide) is generic — see ../coupling.
+// Shared-key coupling — shared types, ordered to mirror the pipeline in docs/COUPLING_VOCABULARY.md.
+// A KEY is an identifier two files share with no import/call edge (a DB table, a queue/topic, an event,
+// a route). The five steps each have ONE type here:
+//   1. SOURCE   which front-end discovered the key                         → KeySource
+//   2. KEY      one key a span touches (raw, then tagged with its source)  → KeyHit · AnchorKey
+//   3. GROUND   repo-wide producers/consumers per key                      → GroundingIndex
+//   4. DRAW     the key as a synthetic node between the two sides          → CouplingNode (a boundary)
+//   5. WIRE     a real file's produce/consume link to that node            → Crossing
+
+// ---- STEP 1: SOURCE — which of the three front-ends discovered a key. `scan`/`carrier` are the
+// deterministic FLOOR (high-precision); `llm` is a tier-3 proposal (kept only where it grounds). ---------
+export type KeySource = "scan" | "carrier" | "llm";
+
+// ---- STEP 2: KEY ----------------------------------------------------------------------------------------
+// A KeyHit is one raw key observation in a file, emitted by ANY source (a scan adapter, a carrier wrapper,
+// or the LLM). An AnchorKey is a KeyHit collected for the anchor span and TAGGED with the source that found
+// it — that tag (not a boolean) is what later decides floor-silence vs an ungrounded-proposal blindspot.
 export interface KeyHit { kind: string; value: string; line: number; produces: boolean }
-// A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in
-// `seam-adapters`, the key-axis counterpart of a carrier signature. `name` is derived from the file
-// (per-file facts don't generalize like a carrier method rule does); `description` summarises the keys.
-export interface KeyAdapter { name: string; description: string; keys: KeyHit[] }
+export interface AnchorKey extends KeyHit { source: KeySource }
+export const isFloor = (k: AnchorKey): boolean => k.source !== "llm";   // deterministic floor (scan|carrier) vs LLM proposal
+
+// A KeyKind is a framework ADAPTER: it owns the key's semantics (node label, produce/consume edge labels)
+// and a per-file scan that classifies produce vs consume. The grounding (step 3) is generic — see ./index.
 export interface KeyKind {
   kind: string;          // e.g. "db-table"
   nodeKind: string;      // boundary node label, e.g. "table"
@@ -14,16 +28,26 @@ export interface KeyKind {
   consumeEdge: string;   // edge kind for a consumer↔key link, e.g. "db-read"
   scan: (file: string, text: string) => KeyHit[];
 }
-export interface Access { file: string; line: number }   // repo-relative file, 0-based line
-export interface ProposedKey { kind: string; value: string; produces: boolean }  // an LLM-proposed key
+// A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in
+// `seam-adapters`, the key-axis counterpart of a carrier signature. `name` is derived from the file
+// (per-file facts don't generalize like a carrier method rule does); `description` summarises the keys.
+export interface KeyAdapter { name: string; description: string; keys: KeyHit[] }
 
-// ---- the graph fragments coupling EMITS ------------------------------------------------------------
+// ---- STEP 3: GROUND -------------------------------------------------------------------------------------
+export interface Access { file: string; line: number }   // repo-relative file, 0-based line
+// The repo-wide grounding index: for each key, who PRODUCES it (writers) vs who CONSUMES it (readers). This
+// is what turns "the anchor produces `payments`" into "…and these files read it". Built once, read-only.
+// ONE shared type — the scan floor, the carrier channel, and the LLM key index all populate this shape.
+export type GroundingIndex = Map<string, { producers: Access[]; consumers: Access[] }>;
+
+// ---- the graph fragments coupling EMITS (steps 4 & 5) ----------------------------------------------------
 // The wider engine handles nodes/edges structurally (as `any`), so these are not a global graph type —
 // they describe the SHAPE coupling produces, to document intent and type-check coupling internally.
 //
-// A boundary node and a complement node share ONE shape (CouplingNode): the difference between them is the
-// edges around them, not the type. A boundary stands for the shared key (the table/route); a complement is
-// a real file on the far side. Both carry `coupling: true` to mark them as data-flow, not call/import, nodes.
+// STEP 4: DRAW. A boundary node and a complement node share ONE shape (CouplingNode): the difference between
+// them is the edges around them, not the type. A boundary stands for the shared key (the table/route); a
+// complement is a real file on the far side. Both carry `coupling: true` to mark them data-flow, not
+// call/import, nodes.
 export interface CouplingNode {
   id: string;                  // `dc{n}`, minted by the graph accumulator
   symbol: string;              // a boundary's key value ("payments"), or a complement's enclosing symbol
@@ -34,9 +58,9 @@ export interface CouplingNode {
   complexity: number;
   coupling: true;
 }
-// A produce/consume CROSSING — the only edge coupling draws. Always RESOLVED_PARTIAL: grounded on a shared
-// key string, never an asserted call. `line` is set on the anchor→boundary (near) edge, omitted on the
-// boundary→complement (far) edge.
+// STEP 5: WIRE. A produce/consume CROSSING — the only edge coupling draws. Always RESOLVED_PARTIAL: grounded
+// on a shared key string, never an asserted call. `line` is set on the anchor→boundary (near) edge, omitted
+// on the boundary→complement (far) edge.
 export interface Crossing {
   from: string;
   to: string;

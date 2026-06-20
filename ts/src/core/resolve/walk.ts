@@ -3,12 +3,30 @@
 // DETERMINISTIC across machines: raw readdir order varies by OS/filesystem (ext4 vs overlayfs,
 // Linux vs macOS), and downstream consumers assign positional graph ids in walk order — so an
 // unsorted walk makes the emitted graph (and the --emit-seams contract) differ machine-to-machine.
-import { readdirSync } from "node:fs";
-import { join, normalize } from "node:path";
+import { readdirSync, readFileSync } from "node:fs";
+import { join, normalize, relative } from "node:path";
 
 export function normpath(p: string): string {
   const n = normalize(p);
   return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n;
+}
+
+// Walk the repo, filter file paths by predicate (no I/O), then read only the files that pass.
+// Yields { rel, abs, text } — the predicate runs on `rel` before any disk read, so callers pay
+// only for the files they actually need.
+export function* walkFiles(
+  repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean,
+): Generator<{ rel: string; abs: string; text: string }> {
+  for (const [dir, files] of walk(repo, skipDirs)) {
+    for (const fn of files) {
+      const abs = join(dir, fn);
+      const rel = relative(repo, abs).replace(/\\/g, "/");
+      if (!predicate(rel)) continue;
+      let text: string;
+      try { text = readFileSync(abs, "utf-8"); } catch { continue; }
+      yield { rel, abs, text };
+    }
+  }
 }
 
 export function* walk(root: string, skip: Set<string>): Generator<[string, string[]]> {

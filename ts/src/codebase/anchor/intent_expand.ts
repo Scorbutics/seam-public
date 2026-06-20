@@ -4,7 +4,9 @@
 // (e.g. "prevent double booking" → reservation, slot, conflict). The LLM only proposes vocabulary;
 // every term is grounded by the deterministic repo scan, so a hallucinated keyword simply finds
 // nothing. Kept OUT of anchor_rank.ts so that module stays offline/pure (it has its own tests).
-import { run_pass, run_pass_async, ClassifierError } from "../../core/llm.js";
+import { run_pass, run_pass_async, registerPass, ClassifierError } from "../../core/llm.js";
+
+const PASS = registerPass({ tag: "expand", tier: "cheap", note: "intent → keyword vocabulary for the anchor scan" });
 
 function _prompt(intent: string): string {
   return `You convert a short INTENT describing a feature or behaviour in a codebase into a set of
@@ -43,7 +45,7 @@ export function expand_intent_terms(
   intent: string,
   opts: { model?: string; claudeBin?: string | null } = {},
 ): string[] {
-  try { return _parse(run_pass(_prompt(intent), { model: opts.model, claudeBin: opts.claudeBin, tag: "expand" })); }
+  try { return _parse(run_pass(_prompt(intent), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
   catch (e) { if (e instanceof ClassifierError) return []; throw e; }
 }
 
@@ -53,6 +55,6 @@ export async function expand_intent_terms_async(
   intent: string,
   opts: { model?: string; claudeBin?: string | null } = {},
 ): Promise<string[]> {
-  try { return _parse(await run_pass_async(_prompt(intent), { model: opts.model, claudeBin: opts.claudeBin, tag: "expand" })); }
+  try { return _parse(await run_pass_async(_prompt(intent), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
   catch (e) { if (e instanceof ClassifierError) return []; throw e; }
 }
