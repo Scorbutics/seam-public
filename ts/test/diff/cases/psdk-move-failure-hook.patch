@@ -1,0 +1,178 @@
+commit c0dc142eaedfa95bad9a1faea41c5dbb08afbe41
+Author: Zøzo <benbar2412@gmail.com>
+Date:   Sun Mar 15 11:02:56 2026 +0000
+
+    Add on_move_failure hook to effect system
+
+diff --git a/scripts/5 Battle/06 Effects/100 EffectBase.rb b/scripts/5 Battle/06 Effects/100 EffectBase.rb
+index 707905409..9a0152189 100644
+--- a/scripts/5 Battle/06 Effects/100 EffectBase.rb	
++++ b/scripts/5 Battle/06 Effects/100 EffectBase.rb	
+@@ -426,6 +426,15 @@ module Battle
+         nil && user && target && move
+       end
+ 
++      # Function called when a move fails during its execution
++      # @param user [PFM::PokemonBattler] user of the move
++      # @param targets [Array<PFM::PokemonBattler>] expected targets
++      # @param move [Battle::Move] the move that failed
++      # @param reason [Symbol] why the move failed: :usable_by_user, :no_target, :pp, :accuracy, :immunity
++      def on_move_failure(user, targets, move, reason)
++        nil && user && targets && move && reason
++      end
++
+       # Function called when we try to get the definitive type of a move
+       # @param user [PFM::PokemonBattler]
+       # @param target [PFM::PokemonBattler] expected target
+@@ -654,6 +663,7 @@ module Battle
+           alias on_move_disabled_check on_stat_increase_prevention
+           alias on_move_priority_change on_stat_increase_prevention
+           alias on_move_ability_immunity on_stat_increase_prevention
++          alias on_move_failure on_stat_increase_prevention
+           alias on_transform_event on_stat_increase_prevention
+           alias on_single_type_multiplier_overwrite on_stat_increase_prevention
+           alias on_pre_drain base_power_multiplier
+diff --git a/scripts/5 Battle/10 Move/120 Procedure.rb b/scripts/5 Battle/10 Move/120 Procedure.rb
+index bc944a28f..abd7c5bc1 100644
+--- a/scripts/5 Battle/10 Move/120 Procedure.rb	
++++ b/scripts/5 Battle/10 Move/120 Procedure.rb	
+@@ -482,6 +482,11 @@ module Battle
+     # @param targets [Array<PFM::PokemonBattler>] expected targets
+     # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity, :pp
+     def on_move_failure(user, targets, reason)
++      creatures = [user] + targets
++      logic.each_effects(*creatures) do |effect|
++        effect.on_move_failure(user, targets, self, reason)
++      end
++
+       return false
+     end
+ 
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 HighJumpKick.rb b/scripts/5 Battle/10 Move/2 Definitions/300 HighJumpKick.rb
+index c63013b52..f347c49fd 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 HighJumpKick.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 HighJumpKick.rb	
+@@ -7,9 +7,9 @@ module Battle
+       # @param targets [Array<PFM::PokemonBattler>] expected targets
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity, :pp
+       def on_move_failure(user, targets, reason)
+-        return if %i[usable_by_user pp].include?(reason)
++        crash_procedure(user) unless %i[usable_by_user pp].include?(reason)
+ 
+-        return crash_procedure(user)
++        super
+       end
+ 
+       # Define the crash procedure when the move isn't able to connect to the target
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 MindBlown.rb b/scripts/5 Battle/10 Move/2 Definitions/300 MindBlown.rb
+index 5658b1b6d..12ff08600 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 MindBlown.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 MindBlown.rb	
+@@ -33,9 +33,9 @@ module Battle
+       # @param targets [Array<PFM::PokemonBattler>] expected targets
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity, :pp
+       def on_move_failure(user, targets, reason)
+-        return unless %i[accuracy immunity].include?(reason)
++        crash_procedure(user) if %i[accuracy immunity].include?(reason)
+ 
+-        return crash_procedure(user)
++        super
+       end
+ 
+       # Function that deals the damage to the pokemon
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 Reload.rb b/scripts/5 Battle/10 Move/2 Definitions/300 Reload.rb
+index 27074d464..26b6e4ff7 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 Reload.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 Reload.rb	
+@@ -38,11 +38,12 @@ module Battle
+       # @param targets [Array<PFM::PokemonBattler>] expected targets
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity, :pp
+       def on_move_failure(user, targets, reason)
+-        return unless reason == :usable_by_user
+-        return unless user.effects.has?(:force_next_move_base)
++        if reason == :usable_by_user && user.effects.has?(:force_next_move_base)
++          @reloading = true
++          @scene.display_message_and_wait(parse_text_with_pokemon(19, 851, user))
++        end
+ 
+-        @reloading = true
+-        @scene.display_message_and_wait(parse_text_with_pokemon(19, 851, user))
++        super
+       end
+ 
+       # Return the number of turns the effect works
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 Rollout.rb b/scripts/5 Battle/10 Move/2 Definitions/300 Rollout.rb
+index 7b1c098e9..24c6c4c85 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 Rollout.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 Rollout.rb	
+@@ -28,6 +28,8 @@ module Battle
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity
+       def on_move_failure(user, targets, reason)
+         user.effects.get(effect_name)&.kill
++
++        super
+       end
+ 
+       # Function that deals the effect to the pokemon
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 SelfDestruct.rb b/scripts/5 Battle/10 Move/2 Definitions/300 SelfDestruct.rb
+index 13126b707..901517a1e 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 SelfDestruct.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 SelfDestruct.rb	
+@@ -25,10 +25,12 @@ module Battle
+       # @param targets [Array<PFM::PokemonBattler>] expected targets
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity, :pp
+       def on_move_failure(user, targets, reason)
+-        return false if reason != :immunity
++        if reason == :immunity
++          play_animation(user, targets)
++          deal_effect(user, [])
++        end
+ 
+-        play_animation(user, targets)
+-        deal_effect(user, [])
++        super
+       end
+ 
+       # Function that deals the effect to the pokemon
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 Thrash.rb b/scripts/5 Battle/10 Move/2 Definitions/300 Thrash.rb
+index f4bc7495a..d1972b896 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 Thrash.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 Thrash.rb	
+@@ -15,14 +15,17 @@ module Battle
+       # @param targets [Array<PFM::PokemonBattler>] expected targets
+       # @param reason [Symbol] why the move failed: :usable_by_user, :accuracy, :immunity
+       def on_move_failure(user, targets, reason)
+-        return if user.has_ability?(:dancer) && user.ability_effect.activated?
+-
+-        # @type [Effects::ForceNextMoveBase]
+-        effect = user.effects.get(:force_next_move_base)
+-        return if effect.nil?
+-        return effect.kill unless effect.triggered?
++        unless user.has_ability?(:dancer) && user.ability_effect.activated?
++          # @type [Effects::ForceNextMoveBase]
++          effect = user.effects.get(:force_next_move_base)
++          if effect&.triggered?
++            logic.status_change_handler.status_change_with_process(:confusion, user, nil, self) unless user.confused?
++          elsif effect
++            effect.kill
++          end
++        end
+ 
+-        logic.status_change_handler.status_change_with_process(:confusion, user, user, self) unless user.confused?
++        super
+       end
+ 
+       # Test if the effect is working
+diff --git a/scripts/5 Battle/10 Move/2 Definitions/300 UpRoar.rb b/scripts/5 Battle/10 Move/2 Definitions/300 UpRoar.rb
+index 78c7b9dd5..83278091d 100644
+--- a/scripts/5 Battle/10 Move/2 Definitions/300 UpRoar.rb	
++++ b/scripts/5 Battle/10 Move/2 Definitions/300 UpRoar.rb	
+@@ -30,6 +30,8 @@ module Battle
+       def on_move_failure(user, targets, reason)
+         user.effects.get(effect_name)&.kill
+         scene.display_message_and_wait(calm_down_message(user))
++
++        super
+       end
+ 
+       # Function that deals the effect to the pokemon

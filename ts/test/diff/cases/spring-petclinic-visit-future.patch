@@ -1,0 +1,206 @@
+diff --git a/src/main/java/org/springframework/samples/petclinic/owner/Visit.java b/src/main/java/org/springframework/samples/petclinic/owner/Visit.java
+index 085cd28..3bb78e8 100644
+--- a/src/main/java/org/springframework/samples/petclinic/owner/Visit.java
++++ b/src/main/java/org/springframework/samples/petclinic/owner/Visit.java
+@@ -43,10 +43,10 @@ public class Visit extends BaseEntity {
+ 	private String description;
+ 
+ 	/**
+-	 * Creates a new instance of Visit for the current date
++	 * Creates a new instance of Visit for tomorrow
+ 	 */
+ 	public Visit() {
+-		this.date = LocalDate.now();
++		this.date = LocalDate.now().plusDays(1);
+ 	}
+ 
+ 	public LocalDate getDate() {
+diff --git a/src/main/java/org/springframework/samples/petclinic/owner/VisitController.java b/src/main/java/org/springframework/samples/petclinic/owner/VisitController.java
+index c721f55..b8b2700 100644
+--- a/src/main/java/org/springframework/samples/petclinic/owner/VisitController.java
++++ b/src/main/java/org/springframework/samples/petclinic/owner/VisitController.java
+@@ -15,6 +15,7 @@
+  */
+ package org.springframework.samples.petclinic.owner;
+ 
++import java.time.LocalDate;
+ import java.util.Map;
+ import java.util.Optional;
+ 
+@@ -79,6 +80,11 @@ class VisitController {
+ 		return visit;
+ 	}
+ 
++	@ModelAttribute("minVisitDate")
++	public LocalDate minVisitDate() {
++		return LocalDate.now().plusDays(1);
++	}
++
+ 	// Spring MVC calls method loadPetWithVisit(...) before initNewVisitForm is
+ 	// called
+ 	@GetMapping("/owners/{ownerId}/pets/{petId}/visits/new")
+@@ -91,6 +97,10 @@ class VisitController {
+ 	@PostMapping("/owners/{ownerId}/pets/{petId}/visits/new")
+ 	public String processNewVisitForm(@ModelAttribute Owner owner, @PathVariable int petId, @Valid Visit visit,
+ 			BindingResult result, RedirectAttributes redirectAttributes) {
++		if (visit.getDate() != null && !visit.getDate().isAfter(LocalDate.now())) {
++			result.rejectValue("date", "typeMismatch.visitDate");
++		}
++
+ 		if (result.hasErrors()) {
+ 			return "pets/createOrUpdateVisitForm";
+ 		}
+diff --git a/src/main/resources/messages/messages.properties b/src/main/resources/messages/messages.properties
+index 1935658..070c9f0 100644
+--- a/src/main/resources/messages/messages.properties
++++ b/src/main/resources/messages/messages.properties
+@@ -6,6 +6,7 @@ nonNumeric=must be all numeric
+ duplicateFormSubmission=Duplicate form submission is not allowed
+ typeMismatch.date=invalid date
+ typeMismatch.birthDate=invalid date
++typeMismatch.visitDate=Visit date must be in the future
+ owner=Owner
+ firstName=First Name
+ lastName=Last Name
+diff --git a/src/main/resources/messages/messages_de.properties b/src/main/resources/messages/messages_de.properties
+index 89a08ea..a4698d3 100644
+--- a/src/main/resources/messages/messages_de.properties
++++ b/src/main/resources/messages/messages_de.properties
+@@ -6,6 +6,7 @@ nonNumeric=darf nur numerisch sein
+ duplicateFormSubmission=Wiederholtes Absenden des Formulars ist nicht erlaubt
+ typeMismatch.date=ung�ltiges Datum
+ typeMismatch.birthDate=ung�ltiges Datum
++typeMismatch.visitDate=Das Besuchsdatum muss in der Zukunft liegen
+ owner=Besitzer
+ firstName=Vorname
+ lastName=Nachname
+diff --git a/src/main/resources/messages/messages_es.properties b/src/main/resources/messages/messages_es.properties
+index 911d733..9e3c293 100644
+--- a/src/main/resources/messages/messages_es.properties
++++ b/src/main/resources/messages/messages_es.properties
+@@ -6,6 +6,7 @@ nonNumeric=Sólo debe contener numeros
+ duplicateFormSubmission=No se permite el envío de formularios duplicados
+ typeMismatch.date=Fecha invalida
+ typeMismatch.birthDate=Fecha invalida
++typeMismatch.visitDate=La fecha de la visita debe ser futura
+ owner=Propietario
+ firstName=Nombre
+ lastName=Apellido
+diff --git a/src/main/resources/messages/messages_fa.properties b/src/main/resources/messages/messages_fa.properties
+index 6d0994a..2260298 100644
+--- a/src/main/resources/messages/messages_fa.properties
++++ b/src/main/resources/messages/messages_fa.properties
+@@ -6,6 +6,7 @@ nonNumeric=باید عددی باشد
+ duplicateFormSubmission=ارسال تکراری فرم مجاز نیست
+ typeMismatch.date=تاریخ نامعتبر
+ typeMismatch.birthDate=تاریخ تولد نامعتبر
++typeMismatch.visitDate=تاریخ ویزیت باید در آینده باشد
+ owner=مالک
+ firstName=نام
+ lastName=نام خانوادگی
+diff --git a/src/main/resources/messages/messages_ko.properties b/src/main/resources/messages/messages_ko.properties
+index 6e2f488..b0f9f0d 100644
+--- a/src/main/resources/messages/messages_ko.properties
++++ b/src/main/resources/messages/messages_ko.properties
+@@ -6,6 +6,7 @@ nonNumeric=모두 숫자로 입력해야 합니다
+ duplicateFormSubmission=중복 제출은 허용되지 않습니다
+ typeMismatch.date=잘못된 날짜입니다
+ typeMismatch.birthDate=잘못된 날짜입니다
++typeMismatch.visitDate=방문 날짜는 미래 날짜여야 합니다
+ owner=소유자
+ firstName=이름
+ lastName=성
+diff --git a/src/main/resources/messages/messages_pt.properties b/src/main/resources/messages/messages_pt.properties
+index 7eea4b9..c2efd77 100644
+--- a/src/main/resources/messages/messages_pt.properties
++++ b/src/main/resources/messages/messages_pt.properties
+@@ -6,6 +6,7 @@ nonNumeric=Deve ser tudo numerico
+ duplicateFormSubmission=O envio duplicado de formulario nao e permitido
+ typeMismatch.date=Data invalida
+ typeMismatch.birthDate=Data de nascimento invalida
++typeMismatch.visitDate=A data da visita deve estar no futuro
+ owner=Proprietário
+ firstName=Primeiro Nome
+ lastName=Sobrenome
+diff --git a/src/main/resources/messages/messages_ru.properties b/src/main/resources/messages/messages_ru.properties
+index f06d2cb..f667057 100644
+--- a/src/main/resources/messages/messages_ru.properties
++++ b/src/main/resources/messages/messages_ru.properties
+@@ -6,6 +6,7 @@ nonNumeric=должно быть все числовое значение
+ duplicateFormSubmission=Дублирование формы не допускается
+ typeMismatch.date=неправильная даные
+ typeMismatch.birthDate=неправильная дата
++typeMismatch.visitDate=Дата визита должна быть в будущем
+ owner=Владелец
+ firstName=Имя
+ lastName=Фамилия
+diff --git a/src/main/resources/messages/messages_tr.properties b/src/main/resources/messages/messages_tr.properties
+index 2c806f9..9b1e9fa 100644
+--- a/src/main/resources/messages/messages_tr.properties
++++ b/src/main/resources/messages/messages_tr.properties
+@@ -6,6 +6,7 @@ nonNumeric=sadece sayısal olmalıdır
+ duplicateFormSubmission=Formun tekrar gönderilmesine izin verilmez
+ typeMismatch.date=geçersiz tarih
+ typeMismatch.birthDate=geçersiz tarih
++typeMismatch.visitDate=Ziyaret tarihi gelecekte olmalıdır
+ owner=Sahip
+ firstName=Ad
+ lastName=Soyad
+diff --git a/src/main/resources/templates/fragments/inputField.html b/src/main/resources/templates/fragments/inputField.html
+index da1de47..37a1c06 100644
+--- a/src/main/resources/templates/fragments/inputField.html
++++ b/src/main/resources/templates/fragments/inputField.html
+@@ -11,7 +11,7 @@
+         <div class="col-sm-10">
+           <div th:switch="${type}">
+             <input th:case="'text'" class="form-control" type="text" th:field="*{__${name}__}" />
+-            <input th:case="'date'" class="form-control" type="date" th:field="*{__${name}__}" />
++            <input th:case="'date'" class="form-control" type="date" th:field="*{__${name}__}" th:min="${minVisitDate}" />
+           </div>
+           <span th:if="${valid}" class="fa fa-ok form-control-feedback" aria-hidden="true"></span>
+           <th:block th:if="${!valid}">
+@@ -24,4 +24,4 @@
+   </form>
+ </body>
+ 
+-</html>
+\ No newline at end of file
++</html>
+diff --git a/src/test/java/org/springframework/samples/petclinic/owner/VisitControllerTests.java b/src/test/java/org/springframework/samples/petclinic/owner/VisitControllerTests.java
+index bd51302..b608caa 100644
+--- a/src/test/java/org/springframework/samples/petclinic/owner/VisitControllerTests.java
++++ b/src/test/java/org/springframework/samples/petclinic/owner/VisitControllerTests.java
+@@ -32,6 +32,7 @@ import org.springframework.test.context.aot.DisabledInAotMode;
+ import org.springframework.test.context.bean.override.mockito.MockitoBean;
+ import org.springframework.test.web.servlet.MockMvc;
+ 
++import java.time.LocalDate;
+ import java.util.Optional;
+ 
+ /**
+@@ -76,6 +77,7 @@ class VisitControllerTests {
+ 		mockMvc
+ 			.perform(post("/owners/{ownerId}/pets/{petId}/visits/new", TEST_OWNER_ID, TEST_PET_ID)
+ 				.param("name", "George")
++				.param("date", LocalDate.now().plusDays(1).toString())
+ 				.param("description", "Visit Description"))
+ 			.andExpect(status().is3xxRedirection())
+ 			.andExpect(view().name("redirect:/owners/{ownerId}"));
+@@ -91,4 +93,17 @@ class VisitControllerTests {
+ 			.andExpect(view().name("pets/createOrUpdateVisitForm"));
+ 	}
+ 
++	@Test
++	void processNewVisitFormHasErrorsWhenVisitDateIsNotInFuture() throws Exception {
++		mockMvc
++			.perform(post("/owners/{ownerId}/pets/{petId}/visits/new", TEST_OWNER_ID, TEST_PET_ID)
++				.param("name", "George")
++				.param("date", LocalDate.now().toString())
++				.param("description", "Visit Description"))
++			.andExpect(model().attributeHasFieldErrors("visit", "date"))
++			.andExpect(model().attributeHasFieldErrorCode("visit", "date", "typeMismatch.visitDate"))
++			.andExpect(status().isOk())
++			.andExpect(view().name("pets/createOrUpdateVisitForm"));
++	}
++
+ }

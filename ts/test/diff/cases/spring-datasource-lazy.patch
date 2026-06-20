@@ -1,0 +1,216 @@
+diff --git a/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceBuilder.java b/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceBuilder.java
+index ecaa0296fdea..2730af59225d 100644
+--- a/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceBuilder.java
++++ b/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceBuilder.java
+@@ -237,23 +237,7 @@ public static DataSourceBuilder<?> create(@Nullable ClassLoader classLoader) {
+ 	 * @return a new {@link DataSource} builder
+ 	 */
+ 	public static DataSourceBuilder<?> derivedFrom(DataSource dataSource) {
+-		return new DataSourceBuilder<>(unwrap(dataSource));
+-	}
+-
+-	private static DataSource unwrap(DataSource dataSource) {
+-		try {
+-			while (dataSource.isWrapperFor(DataSource.class)) {
+-				DataSource unwrapped = dataSource.unwrap(DataSource.class);
+-				if (unwrapped == dataSource) {
+-					return unwrapped;
+-				}
+-				dataSource = unwrapped;
+-			}
+-		}
+-		catch (SQLException ex) {
+-			// Try to continue with the existing, potentially still wrapped, DataSource
+-		}
+-		return dataSource;
++		return new DataSourceBuilder<>(DataSourceUnwrapper.unwrapRoot(dataSource));
+ 	}
+ 
+ 	/**
+diff --git a/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceUnwrapper.java b/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceUnwrapper.java
+index af4cda88066b..de1b3e01440b 100644
+--- a/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceUnwrapper.java
++++ b/module/spring-boot-jdbc/src/main/java/org/springframework/boot/jdbc/DataSourceUnwrapper.java
+@@ -93,6 +93,37 @@ private DataSourceUnwrapper() {
+ 		return unwrap(dataSource, target, target);
+ 	}
+ 
++	/**
++	 * Return the root {@link DataSource} by recursively unwrapping all
++	 * {@link org.springframework.jdbc.datasource.DelegatingDataSource delegating}, proxy,
++	 * and {@link java.sql.Wrapper} layers until no further unwrapping is possible.
++	 * @param dataSource the datasource to unwrap
++	 * @return the root {@link DataSource}
++	 * @since 4.1.0
++	 */
++	public static DataSource unwrapRoot(DataSource dataSource) {
++		if (DELEGATING_DATA_SOURCE_PRESENT) {
++			DataSource targetDataSource = DelegatingDataSourceUnwrapper.getTargetDataSource(dataSource);
++			if (targetDataSource != null) {
++				return unwrapRoot(targetDataSource);
++			}
++		}
++		if (AopUtils.isAopProxy(dataSource)) {
++			Object proxyTarget = AopProxyUtils.getSingletonTarget(dataSource);
++			if (proxyTarget instanceof DataSource proxyDataSource) {
++				return unwrapRoot(proxyDataSource);
++			}
++		}
++		DataSource unwrapped = safeUnwrap(dataSource);
++		if (unwrapped != null) {
++			if (unwrapped == dataSource) {
++				return unwrapped;
++			}
++			return unwrapRoot(unwrapped);
++		}
++		return dataSource;
++	}
++
+ 	private static <S> @Nullable S safeUnwrap(Wrapper wrapper, Class<S> target) {
+ 		try {
+ 			if (target.isInterface() && wrapper.isWrapperFor(target)) {
+@@ -105,6 +136,18 @@ private DataSourceUnwrapper() {
+ 		return null;
+ 	}
+ 
++	private static @Nullable DataSource safeUnwrap(DataSource dataSource) {
++		try {
++			if (dataSource.isWrapperFor(DataSource.class)) {
++				return dataSource.unwrap(DataSource.class);
++			}
++		}
++		catch (Exception ex) {
++			// continue
++		}
++		return null;
++	}
++
+ 	private static final class DelegatingDataSourceUnwrapper {
+ 
+ 		private static @Nullable DataSource getTargetDataSource(DataSource dataSource) {
+diff --git a/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceBuilderTests.java b/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceBuilderTests.java
+index ab90f0a35d56..82891618719e 100644
+--- a/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceBuilderTests.java
++++ b/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceBuilderTests.java
+@@ -46,6 +46,7 @@
+ import org.vibur.dbcp.ViburDBCPDataSource;
+ 
+ import org.springframework.jdbc.datasource.AbstractDataSource;
++import org.springframework.jdbc.datasource.LazyConnectionDataSourceProxy;
+ import org.springframework.jdbc.datasource.SimpleDriverDataSource;
+ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabase;
+ import org.springframework.jdbc.datasource.embedded.EmbeddedDatabaseBuilder;
+@@ -61,6 +62,7 @@
+  * @author Stephane Nicoll
+  * @author Fabio Grassi
+  * @author Phillip Webb
++ * @author Vedran Pavic
+  */
+ class DataSourceBuilderTests {
+ 
+@@ -427,6 +429,19 @@ void buildWhenDerivedFromWrappedDataSource() {
+ 		assertThat(built.getJdbcUrl()).isEqualTo("jdbc:h2:test");
+ 	}
+ 
++	@Test
++	void buildWhenDerivedFromLazyConnectionDataSourceProxy() {
++		HikariDataSource dataSource = new HikariDataSource();
++		dataSource.setUsername("test");
++		dataSource.setPassword("secret");
++		dataSource.setJdbcUrl("jdbc:h2:test");
++		DataSourceBuilder<?> builder = DataSourceBuilder.derivedFrom(new LazyConnectionDataSourceProxy(dataSource));
++		HikariDataSource built = (HikariDataSource) builder.username("test2").password("secret2").build();
++		assertThat(built.getUsername()).isEqualTo("test2");
++		assertThat(built.getPassword()).isEqualTo("secret2");
++		assertThat(built.getJdbcUrl()).isEqualTo("jdbc:h2:test");
++	}
++
+ 	@Test // gh-26644
+ 	void buildWhenDerivedFromExistingDatabaseWithTypeChange() {
+ 		HikariDataSource dataSource = new HikariDataSource();
+diff --git a/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceUnwrapperTests.java b/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceUnwrapperTests.java
+index 3b8cd79f260d..9a00a8dae54d 100644
+--- a/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceUnwrapperTests.java
++++ b/module/spring-boot-jdbc/src/test/java/org/springframework/boot/jdbc/DataSourceUnwrapperTests.java
+@@ -106,6 +106,40 @@ void unwrapDataSourceProxy() {
+ 			.isSameAs(dataSource);
+ 	}
+ 
++	@Test
++	void unwrapRootWithPlainDataSource() {
++		DataSource dataSource = new HikariDataSource();
++		assertThat(DataSourceUnwrapper.unwrapRoot(dataSource)).isSameAs(dataSource);
++	}
++
++	@Test
++	void unwrapRootWithDelegate() {
++		DataSource dataSource = new HikariDataSource();
++		DataSource actual = wrapInDelegate(wrapInDelegate(dataSource));
++		assertThat(DataSourceUnwrapper.unwrapRoot(actual)).isSameAs(dataSource);
++	}
++
++	@Test
++	void unwrapRootWithProxy() {
++		DataSource dataSource = new HikariDataSource();
++		DataSource actual = wrapInProxy(wrapInProxy(dataSource));
++		assertThat(DataSourceUnwrapper.unwrapRoot(actual)).isSameAs(dataSource);
++	}
++
++	@Test
++	void unwrapRootWithLazyConnectionDataSource() {
++		DataSource dataSource = new HikariDataSource();
++		DataSource actual = new LazyConnectionDataSourceProxy(dataSource);
++		assertThat(DataSourceUnwrapper.unwrapRoot(actual)).isSameAs(dataSource);
++	}
++
++	@Test
++	void unwrapRootWithSeveralLevelOfWrapping() {
++		DataSource dataSource = new HikariDataSource();
++		DataSource actual = wrapInProxy(wrapInDelegate(wrapInDelegate(wrapInProxy(wrapInDelegate(dataSource)))));
++		assertThat(DataSourceUnwrapper.unwrapRoot(actual)).isSameAs(dataSource);
++	}
++
+ 	@Test
+ 	void unwrappingIsNotAttemptedWhenTargetIsNotAnInterface() {
+ 		DataSource dataSource = mock(DataSource.class);
+diff --git a/module/spring-boot-liquibase/src/test/java/org/springframework/boot/liquibase/autoconfigure/LiquibaseAutoConfigurationTests.java b/module/spring-boot-liquibase/src/test/java/org/springframework/boot/liquibase/autoconfigure/LiquibaseAutoConfigurationTests.java
+index bdcff998ca11..70db2902df73 100644
+--- a/module/spring-boot-liquibase/src/test/java/org/springframework/boot/liquibase/autoconfigure/LiquibaseAutoConfigurationTests.java
++++ b/module/spring-boot-liquibase/src/test/java/org/springframework/boot/liquibase/autoconfigure/LiquibaseAutoConfigurationTests.java
+@@ -51,6 +51,7 @@
+ import org.springframework.beans.factory.config.BeanDefinition;
+ import org.springframework.boot.autoconfigure.AutoConfigurations;
+ import org.springframework.boot.jdbc.DataSourceBuilder;
++import org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration;
+ import org.springframework.boot.jdbc.autoconfigure.EmbeddedDataSourceConfiguration;
+ import org.springframework.boot.jdbc.autoconfigure.JdbcConnectionDetails;
+ import org.springframework.boot.jdbc.autoconfigure.JdbcTemplateAutoConfiguration;
+@@ -90,6 +91,7 @@
+  * @author Moritz Halbritter
+  * @author Phillip Webb
+  * @author Ahmed Ashour
++ * @author Vedran Pavic
+  */
+ @ExtendWith(OutputCaptureExtension.class)
+ class LiquibaseAutoConfigurationTests {
+@@ -373,6 +375,20 @@ void overrideUser() {
+ 			}));
+ 	}
+ 
++	@Test
++	@WithDbChangelogMasterYamlResource
++	void lazyConnectionDataSource() {
++		String jdbcUrl = "jdbc:h2:mem:liquibase-" + UUID.randomUUID();
++		this.contextRunner.withConfiguration(AutoConfigurations.of(DataSourceAutoConfiguration.class))
++			.withPropertyValues("spring.datasource.url:" + jdbcUrl, "spring.datasource.username:not-sa",
++					"spring.datasource.connection-fetch:lazy", "spring.liquibase.user:sa")
++			.run(assertLiquibase((liquibase) -> {
++				SimpleDriverDataSource dataSource = (SimpleDriverDataSource) liquibase.getDataSource();
++				assertThat(dataSource.getUrl()).isEqualTo(jdbcUrl);
++				assertThat(dataSource.getUsername()).isEqualTo("sa");
++			}));
++	}
++
+ 	@Test
+ 	@WithDbChangelogMasterYamlResource
+ 	void overrideUserWhenCustom() {

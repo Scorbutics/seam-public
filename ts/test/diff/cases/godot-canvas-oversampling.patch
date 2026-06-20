@@ -1,0 +1,247 @@
+diff --git a/doc/classes/CanvasItem.xml b/doc/classes/CanvasItem.xml
+index 430cdbee3f76..2c5fdae8fdcc 100644
+--- a/doc/classes/CanvasItem.xml
++++ b/doc/classes/CanvasItem.xml
+@@ -668,6 +668,9 @@
+ 		<member name="modulate" type="Color" setter="set_modulate" getter="get_modulate" default="Color(1, 1, 1, 1)" keywords="color, colour">
+ 			The color applied to this [CanvasItem]. This property does affect child [CanvasItem]s, unlike [member self_modulate] which only affects the node itself.
+ 		</member>
++		<member name="oversampling_with_scale" type="int" setter="set_oversampling_with_scale" getter="get_oversampling_with_scale" enum="CanvasItem.OversamplingWithScale" default="0">
++			If enabled, oversampling for this [CanvasItem] is automatically adjusted with scale.
++		</member>
+ 		<member name="self_modulate" type="Color" setter="set_self_modulate" getter="get_self_modulate" default="Color(1, 1, 1, 1)">
+ 			The color applied to this [CanvasItem]. This property does [b]not[/b] affect child [CanvasItem]s, unlike [member modulate] which affects both the node itself and its children.
+ 			[b]Note:[/b] Internal children are also not affected by this property (see the [code]include_internal[/code] parameter in [method Node.add_child]). For built-in nodes this includes sliders in [ColorPicker], and the tab bar in [TabContainer].
+@@ -815,5 +818,17 @@
+ 		<constant name="CLIP_CHILDREN_MAX" value="3" enum="ClipChildrenMode">
+ 			Represents the size of the [enum ClipChildrenMode] enum.
+ 		</constant>
++		<constant name="OVERSAMPLING_WITH_SCALE_PARENT_NODE" value="0" enum="OversamplingWithScale">
++			The [CanvasItem] will inherit the oversampling mode from its parent.
++		</constant>
++		<constant name="OVERSAMPLING_WITH_SCALE_DISABLED" value="1" enum="OversamplingWithScale">
++			The oversampling is not affected by [CanvasItem] scale, and is equal to the [Viewport] oversampling.
++		</constant>
++		<constant name="OVERSAMPLING_WITH_SCALE_ENABLED" value="2" enum="OversamplingWithScale">
++			The oversampling is a product of [CanvasItem] scale and [Viewport] oversampling.
++		</constant>
++		<constant name="OVERSAMPLING_WITH_SCALE_MAX" value="3" enum="OversamplingWithScale">
++			Represents the size of the [enum OversamplingWithScale] enum.
++		</constant>
+ 	</constants>
+ </class>
+diff --git a/editor/scene/gui/theme_editor_preview.cpp b/editor/scene/gui/theme_editor_preview.cpp
+index e12c71e5fb3e..dd12eb8e9177 100644
+--- a/editor/scene/gui/theme_editor_preview.cpp
++++ b/editor/scene/gui/theme_editor_preview.cpp
+@@ -295,6 +295,8 @@ void DefaultThemeEditorPreview::_notification(int p_what) {
+ }
+ 
+ DefaultThemeEditorPreview::DefaultThemeEditorPreview() {
++	set_oversampling_with_scale(OVERSAMPLING_WITH_SCALE_ENABLED);
++
+ 	Panel *main_panel = memnew(Panel);
+ 	preview_content->add_child(main_panel);
+ 
+diff --git a/scene/main/canvas_item.cpp b/scene/main/canvas_item.cpp
+index fbb015573b64..842824386c62 100644
+--- a/scene/main/canvas_item.cpp
++++ b/scene/main/canvas_item.cpp
+@@ -40,6 +40,7 @@ STATIC_ASSERT_INCOMPLETE_TYPE(class, RenderingServer);
+ #include "scene/main/scene_tree.h"
+ #include "scene/main/window.h"
+ #include "scene/resources/atlas_texture.h"
++#include "scene/resources/dpi_texture.h"
+ #include "scene/resources/font.h"
+ #include "scene/resources/material.h"
+ #include "scene/resources/mesh.h"
+@@ -152,7 +153,21 @@ void CanvasItem::_redraw_callback() {
+ 
+ 	if (is_visible_in_tree()) {
+ 		drawing = true;
+-		TextServer::set_current_drawn_item_oversampling(get_viewport()->get_oversampling());
++		if (oversampling_override > 0 && _is_oversampling_with_scale()) {
++			double oversampling = oversampling_override * get_viewport()->get_oversampling();
++			if (oversampling_override_cache != oversampling) {
++				TS->reference_oversampling_level(oversampling);
++				DPITexture::reference_scaling_level(oversampling);
++				if (oversampling_override_cache > 0) {
++					TS->unreference_oversampling_level(oversampling_override_cache);
++					DPITexture::unreference_scaling_level(oversampling_override_cache);
++				}
++				oversampling_override_cache = oversampling;
++			}
++			TextServer::set_current_drawn_item_oversampling(oversampling_override_cache);
++		} else {
++			TextServer::set_current_drawn_item_oversampling(get_viewport()->get_oversampling());
++		}
+ 		current_item_drawn = this;
+ 		notification(NOTIFICATION_DRAW);
+ 		emit_signal(SceneStringName(draw));
+@@ -303,6 +318,56 @@ void CanvasItem::_exit_canvas() {
+ 	}
+ }
+ 
++bool CanvasItem::_is_oversampling_with_scale() const {
++	if (oversampling_with_scale == OVERSAMPLING_WITH_SCALE_PARENT_NODE) {
++		CanvasItem *ci = get_parent_item();
++		if (ci) {
++			return ci->_is_oversampling_with_scale();
++		}
++	}
++	return oversampling_with_scale == OVERSAMPLING_WITH_SCALE_ENABLED;
++}
++
++CanvasItem::OversamplingWithScale CanvasItem::get_oversampling_with_scale() const {
++	return oversampling_with_scale;
++}
++
++void CanvasItem::_update_oversampling(bool p_propagate) {
++	if (p_propagate) {
++		for (uint32_t n = 0; n < data.canvas_item_children.size(); n++) {
++			CanvasItem *ci = data.canvas_item_children[n];
++			if (!ci->top_level && ci->get_oversampling_with_scale() == OVERSAMPLING_WITH_SCALE_PARENT_NODE) {
++				ci->_update_oversampling(p_propagate);
++			}
++		}
++	}
++
++	if (parent_visible_in_tree) {
++		bool new_oversampling_with_scale = _is_oversampling_with_scale();
++		if (new_oversampling_with_scale) {
++			double new_os = MAX(get_global_transform().get_scale().x, get_global_transform().get_scale().y);
++			if (new_os != oversampling_override) {
++				oversampling_override = new_os;
++				queue_redraw();
++			}
++		} else {
++			oversampling_override = -1.0;
++		}
++		if (is_oversampling_with_scale_cache != new_oversampling_with_scale) {
++			is_oversampling_with_scale_cache = new_oversampling_with_scale;
++			queue_redraw();
++		}
++	}
++}
++
++void CanvasItem::set_oversampling_with_scale(CanvasItem::OversamplingWithScale p_mode) {
++	if (oversampling_with_scale == p_mode) {
++		return;
++	}
++	oversampling_with_scale = p_mode;
++	_update_oversampling(true);
++}
++
+ void CanvasItem::_notification(int p_what) {
+ 	switch (p_what) {
+ 		case NOTIFICATION_ACCESSIBILITY_UPDATE: {
+@@ -391,6 +456,7 @@ void CanvasItem::_notification(int p_what) {
+ 			if (is_physics_interpolated_and_enabled()) {
+ 				notification(NOTIFICATION_RESET_PHYSICS_INTERPOLATION);
+ 			}
++			_update_oversampling(false);
+ 
+ 		} break;
+ 		case NOTIFICATION_EXIT_TREE: {
+@@ -428,6 +494,12 @@ void CanvasItem::_notification(int p_what) {
+ 			_set_global_invalid(true);
+ 			parent_visible_in_tree = false;
+ 
++			if (oversampling_override_cache > 0) {
++				TS->unreference_oversampling_level(oversampling_override_cache);
++				DPITexture::unreference_scaling_level(oversampling_override_cache);
++				oversampling_override_cache = -1.0;
++			}
++
+ 			if (get_viewport()) {
+ 				get_parent()->disconnect(SNAME("child_order_changed"), callable_mp(get_viewport(), &Viewport::canvas_parent_mark_dirty).bind(get_parent()));
+ 			}
+@@ -1103,6 +1175,8 @@ void CanvasItem::_notify_transform(CanvasItem *p_node) {
+ 	 * notification anyway).
+ 	 */
+ 
++	_update_oversampling(false);
++
+ 	if (/*p_node->xform_change.in_list() &&*/ p_node->_is_global_invalid()) {
+ 		return; //nothing to do
+ 	}
+@@ -1498,6 +1572,9 @@ void CanvasItem::_bind_methods() {
+ 	ClassDB::bind_method(D_METHOD("set_clip_children_mode", "mode"), &CanvasItem::set_clip_children_mode);
+ 	ClassDB::bind_method(D_METHOD("get_clip_children_mode"), &CanvasItem::get_clip_children_mode);
+ 
++	ClassDB::bind_method(D_METHOD("set_oversampling_with_scale", "enabled"), &CanvasItem::set_oversampling_with_scale);
++	ClassDB::bind_method(D_METHOD("get_oversampling_with_scale"), &CanvasItem::get_oversampling_with_scale);
++
+ 	GDVIRTUAL_BIND(_draw);
+ 
+ 	ADD_GROUP("Visibility", "");
+@@ -1507,6 +1584,7 @@ void CanvasItem::_bind_methods() {
+ 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "show_behind_parent"), "set_draw_behind_parent", "is_draw_behind_parent_enabled");
+ 	ADD_PROPERTY(PropertyInfo(Variant::BOOL, "top_level"), "set_as_top_level", "is_set_as_top_level");
+ 	ADD_PROPERTY(PropertyInfo(Variant::INT, "clip_children", PROPERTY_HINT_ENUM, "Disabled,Clip Only,Clip + Draw"), "set_clip_children_mode", "get_clip_children_mode");
++	ADD_PROPERTY(PropertyInfo(Variant::INT, "oversampling_with_scale", PROPERTY_HINT_ENUM, "Inherit,Disabled,Enabled"), "set_oversampling_with_scale", "get_oversampling_with_scale");
+ 	ADD_PROPERTY(PropertyInfo(Variant::INT, "light_mask", PROPERTY_HINT_LAYERS_2D_RENDER), "set_light_mask", "get_light_mask");
+ 	ADD_PROPERTY(PropertyInfo(Variant::INT, "visibility_layer", PROPERTY_HINT_LAYERS_2D_RENDER), "set_visibility_layer", "get_visibility_layer");
+ 
+@@ -1559,6 +1637,11 @@ void CanvasItem::_bind_methods() {
+ 	BIND_ENUM_CONSTANT(CLIP_CHILDREN_ONLY);
+ 	BIND_ENUM_CONSTANT(CLIP_CHILDREN_AND_DRAW);
+ 	BIND_ENUM_CONSTANT(CLIP_CHILDREN_MAX);
++
++	BIND_ENUM_CONSTANT(OVERSAMPLING_WITH_SCALE_PARENT_NODE);
++	BIND_ENUM_CONSTANT(OVERSAMPLING_WITH_SCALE_DISABLED);
++	BIND_ENUM_CONSTANT(OVERSAMPLING_WITH_SCALE_ENABLED);
++	BIND_ENUM_CONSTANT(OVERSAMPLING_WITH_SCALE_MAX);
+ }
+ 
+ Transform2D CanvasItem::get_canvas_transform() const {
+diff --git a/scene/main/canvas_item.h b/scene/main/canvas_item.h
+index 5886e43920fc..c5dc1425e3dc 100644
+--- a/scene/main/canvas_item.h
++++ b/scene/main/canvas_item.h
+@@ -78,6 +78,13 @@ class CanvasItem : public Node {
+ 		CLIP_CHILDREN_MAX,
+ 	};
+ 
++	enum OversamplingWithScale {
++		OVERSAMPLING_WITH_SCALE_PARENT_NODE,
++		OVERSAMPLING_WITH_SCALE_DISABLED,
++		OVERSAMPLING_WITH_SCALE_ENABLED,
++		OVERSAMPLING_WITH_SCALE_MAX,
++	};
++
+ private:
+ 	mutable SelfList<Node> xform_change;
+ 
+@@ -122,6 +129,13 @@ class CanvasItem : public Node {
+ #ifdef TOOLS_ENABLED
+ 	mutable HashMap<StringName, StringName> instance_parameter_cache;
+ #endif
++	OversamplingWithScale oversampling_with_scale = OVERSAMPLING_WITH_SCALE_PARENT_NODE;
++	double oversampling_override = -1.0;
++	bool is_oversampling_with_scale_cache = false;
++	double oversampling_override_cache = -1.0;
++
++	void _update_oversampling(bool p_propagate = false);
++	bool _is_oversampling_with_scale() const;
+ 
+ 	ClipChildrenMode clip_children_mode = CLIP_CHILDREN_DISABLED;
+ 
+@@ -421,6 +435,9 @@ class CanvasItem : public Node {
+ 	TextureFilter get_texture_filter_in_tree() const;
+ 	TextureRepeat get_texture_repeat_in_tree() const;
+ 
++	OversamplingWithScale get_oversampling_with_scale() const;
++	void set_oversampling_with_scale(OversamplingWithScale p_mode);
++
+ 	// Used by control nodes to retrieve the parent's anchorable area
+ 	virtual Rect2 get_anchorable_rect() const { return Rect2(0, 0, 0, 0); }
+ 
+@@ -436,6 +453,7 @@ class CanvasItem : public Node {
+ VARIANT_ENUM_CAST(CanvasItem::TextureFilter)
+ VARIANT_ENUM_CAST(CanvasItem::TextureRepeat)
+ VARIANT_ENUM_CAST(CanvasItem::ClipChildrenMode)
++VARIANT_ENUM_CAST(CanvasItem::OversamplingWithScale)
+ 
+ class CanvasTexture : public Texture2D {
+ 	GDCLASS(CanvasTexture, Texture2D);

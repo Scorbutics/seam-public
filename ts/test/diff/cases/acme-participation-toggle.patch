@@ -1,0 +1,192 @@
+diff --git a/components/social-network-setup-table.tsx b/components/social-network-setup-table.tsx
+index a0e1006..d7a6f77 100755
+--- a/components/social-network-setup-table.tsx
++++ b/components/social-network-setup-table.tsx
+@@ -3,6 +3,7 @@
+ import React, { useState, useEffect, useRef } from "react"
+ import { Linkedin, Instagram, Facebook, Youtube, ExternalLink, Info, CheckCircle2, AlertCircle, X } from "lucide-react"
+ import { Input } from "@/components/ui/input"
++import { Switch } from "@/components/ui/switch"
+ import {
+   Popover,
+   PopoverContent,
+@@ -18,11 +19,19 @@ export interface PlatformTierState {
+   username: string
+   accountType: SocialMediaAccountType
+   /**
+-   * Which tiers this network participates in. Since the "Mise en relation" pivot
+-   * (LOT 1b) there is no per-network level: a network participates at the
+-   * member's full billing level whenever it has a link. This map is therefore
+-   * derived — all available tiers when a link is set, none otherwise — and kept
+-   * here only so {@link buildEntries} can still emit one row per (platform, tier).
++   * Per-network ON/OFF toggle. When OFF, the link is kept but the network is
++   * excluded from "mise en relation" (Connecter/Contacter). Persisted via
++   * `member_social_medias.is_active` — the scoring engine already skips inactive
++   * rows. A network can only be ON when it has a link.
++   */
++  enabled: boolean
++  /**
++   * Which tiers this network has rows for. Since the "Mise en relation" pivot
++   * (LOT 1b) there is no per-network level: a network spans the member's full
++   * billing level whenever it has a link. This map is therefore derived — all
++   * available tiers when a link is set, none otherwise — and kept here only so
++   * {@link buildEntries} can still emit one row per (platform, tier). Whether
++   * those rows are active is driven by {@link enabled}, not by this map.
+    */
+   tiers: Partial<Record<Tier, boolean>>
+ }
+@@ -89,6 +98,7 @@ export function createEmptyTableState(availableTiers: Tier[]): TableState {
+       {
+         username: "",
+         accountType: "personal" as SocialMediaAccountType,
++        enabled: false,
+         tiers: noTiersEnabled(availableTiers),
+       },
+     ])
+@@ -100,6 +110,9 @@ export function buildTableStateFromSocialMedias(
+   availableTiers: Tier[]
+ ): TableState {
+   const state = createEmptyTableState(availableTiers)
++  // A platform's rows (one per tier) share the same link and is_active flag; a
++  // platform counts as ON if any of its rows is active.
++  const activeByPlatform: Partial<Record<Platform, boolean>> = {}
+   for (const sm of socialMedias) {
+     if (!(sm.platform in state)) continue
+     // Prefer stored username; fall back to parsing from the stored URL for backwards compat
+@@ -111,13 +124,16 @@ export function buildTableStateFromSocialMedias(
+       state[sm.platform].username = parsed.username
+       state[sm.platform].accountType = parsed.accountType
+     }
++    if (sm.is_active) activeByPlatform[sm.platform] = true
++    else if (activeByPlatform[sm.platform] === undefined) activeByPlatform[sm.platform] = false
+   }
+-  // Participation = "has a link": any network with a link participates at the
+-  // member's full billing level, regardless of which tiers the legacy rows held.
++  // A network spans the member's full billing level whenever it has a link
++  // (drives which tier rows exist); the ON/OFF toggle (is_active) is separate.
++  // Legacy rows had no toggle, so default ON when the flag is absent.
+   for (const platform of Object.keys(state) as Platform[]) {
+-    state[platform].tiers = state[platform].username.trim()
+-      ? allTiersEnabled(availableTiers)
+-      : noTiersEnabled(availableTiers)
++    const hasLink = state[platform].username.trim().length > 0
++    state[platform].tiers = hasLink ? allTiersEnabled(availableTiers) : noTiersEnabled(availableTiers)
++    state[platform].enabled = hasLink && (activeByPlatform[platform] ?? true)
+   }
+   return state
+ }
+@@ -321,6 +337,32 @@ function tryParseUrl(
+   return parseUsernameFromUrl(platform, normalized)
+ }
+ 
++// --- Participation toggle ---
++
++interface ParticipationToggleProps {
++  platformName: string
++  enabled: boolean
++  /** Disabled until a link is present — a network can't be ON without one. */
++  hasLink: boolean
++  onToggle: (enabled: boolean) => void
++}
++
++function ParticipationToggle({ platformName, enabled, hasLink, onToggle }: ParticipationToggleProps) {
++  return (
++    <div className="flex items-center gap-2">
++      <Switch
++        checked={enabled}
++        disabled={!hasLink}
++        onCheckedChange={onToggle}
++        aria-label={`Activer la mise en relation pour ${platformName}`}
++      />
++      <span className={`text-xs font-medium ${enabled ? "text-foreground" : "text-muted-foreground"}`}>
++        {enabled ? "Activé" : "Désactivé"}
++      </span>
++    </div>
++  )
++}
++
+ // --- Component ---
+ 
+ interface SocialNetworkSetupTableProps {
+@@ -347,34 +389,54 @@ export function SocialNetworkSetupTable({
+     } else {
+       next[platform] = { ...next[platform], username: rawValue }
+     }
+-    // Participation = "has a link": enable every available tier when a link is
+-    // present, clear them all when it's removed.
+-    next[platform].tiers = next[platform].username.trim()
+-      ? allTiersEnabled(availableTiers)
+-      : noTiersEnabled(availableTiers)
++    const hasLink = next[platform].username.trim().length > 0
++    // The link drives which tier rows exist; pasting a link defaults the network
++    // ON, clearing it turns the toggle off (a network can't be ON without a link).
++    next[platform].tiers = hasLink ? allTiersEnabled(availableTiers) : noTiersEnabled(availableTiers)
++    next[platform].enabled = hasLink
++    onChange(next)
++  }
++
++  function handleToggle(platform: Platform, enabled: boolean) {
++    const next = { ...value }
++    next[platform] = { ...next[platform], enabled }
+     onChange(next)
+   }
+ 
+   return (
+     <div className="flex flex-col gap-3 md:gap-0">
+       {/* Header — desktop only. The link column is labelled by each field
+-          (with its info bubble), so the header only names the network column. */}
+-      <div className="hidden md:grid md:grid-cols-[160px_1fr] pb-3">
++          (with its info bubble), so the header names the network and toggle columns. */}
++      <div className="hidden md:grid md:grid-cols-[160px_1fr_140px] pb-3">
+         <span className="text-sm font-medium text-muted-foreground">Réseau social</span>
++        <span />
++        <span className="text-sm font-medium text-muted-foreground text-right">Mise en relation</span>
+       </div>
+ 
+       {/* Rows — card on mobile, grid row on desktop */}
+       {visiblePlatforms.map(({ id, name, icon }, rowIndex) => {
+         const row = value[id]
+         const isLast = rowIndex === visiblePlatforms.length - 1
++        const hasLink = row.username.trim().length > 0
+         return (
+           <div
+             key={id}
+-            className={`flex flex-col gap-3 rounded-xl border border-border/60 p-4 md:grid md:grid-cols-[160px_1fr] md:gap-0 md:rounded-none md:border-x-0 md:border-t-0 md:p-0 md:py-3 ${isLast ? "md:border-b-0" : ""}`}
++            className={`flex flex-col gap-3 rounded-xl border border-border/60 p-4 md:grid md:grid-cols-[160px_1fr_140px] md:items-center md:gap-0 md:rounded-none md:border-x-0 md:border-t-0 md:p-0 md:py-3 ${isLast ? "md:border-b-0" : ""}`}
+           >
+-            <div className="flex items-center gap-2 text-sm font-medium">
+-              <span className="text-muted-foreground">{icon}</span>
+-              {name}
++            {/* Network name — on mobile the toggle rides on the right of this row */}
++            <div className="flex items-center justify-between gap-2 text-sm font-medium md:justify-start">
++              <span className="flex items-center gap-2">
++                <span className="text-muted-foreground">{icon}</span>
++                {name}
++              </span>
++              <div className="md:hidden">
++                <ParticipationToggle
++                  platformName={name}
++                  enabled={row.enabled}
++                  hasLink={hasLink}
++                  onToggle={(enabled) => handleToggle(id, enabled)}
++                />
++              </div>
+             </div>
+             <div className="flex flex-col gap-2 md:px-4 min-w-0">
+               <UsernameField
+@@ -385,6 +447,15 @@ export function SocialNetworkSetupTable({
+                 onUsernameChange={(u) => handleUsernameChange(id, u)}
+               />
+             </div>
++            {/* Toggle — desktop only (mobile shows it in the name row above) */}
++            <div className="hidden md:flex md:justify-end md:pl-4">
++              <ParticipationToggle
++                platformName={name}
++                enabled={row.enabled}
++                hasLink={hasLink}
++                onToggle={(enabled) => handleToggle(id, enabled)}
++              />
++            </div>
+           </div>
+         )
+       })}
