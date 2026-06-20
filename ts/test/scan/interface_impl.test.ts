@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/import_scan.js";
+import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
 
 const SOLE = join(tmpdir(), "seam-impl-sole-" + process.pid);
 const MULTI = join(tmpdir(), "seam-impl-multi-" + process.pid);
@@ -40,7 +40,7 @@ describe("interface→impl resolution", () => {
   test("multiple impls: an honest blindspot with candidates, not a guess", async () => {
     const g = await build_dependency_graph(MULTI, "src/main/java/app/Consumer.java", "Consumer");
     expect(g.edges.some((e: any) => e.kind === "interface-impl")).toBe(false);   // no guessed binding
-    const bs = (g.blindspots || []).find((b: any) => b.mechanism === "interface-multiple-impls" && b.node === "Service");
+    const bs = (g.blindspots || []).find((b: any) => b.mechanism === "interface-multiple-impls" && b.node === "Service")!;
     expect(bs).toBeTruthy();
     expect([...bs.candidates].sort()).toEqual(["AltService", "DefaultService"]);
   });

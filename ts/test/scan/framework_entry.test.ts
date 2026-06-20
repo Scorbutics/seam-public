@@ -7,7 +7,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { is_framework_entry } from "../../src/codebase/scan/import_scan.js";
+import { is_framework_entry } from "../../src/codebase/scan/index.js";
 
 const REPO = join(tmpdir(), "seam-fwentry-" + process.pid);
 const w = (rel: string, t: string) => { const p = join(REPO, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };

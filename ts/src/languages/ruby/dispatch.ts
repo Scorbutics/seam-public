@@ -5,26 +5,18 @@
 // lookup (own → includes/prepends → superclass).
 //
 // Dispatch is over-approximated HONESTLY via a candidate set tiered by provenance — never a single
-// asserted guess. A PINNED receiver type with a unique chain hit → RESOLVED (the only tier a precise
+// asserted guess. A PINNED receiver type with a unique chain hit → RESOLVED_FULL (the only tier a precise
 // call-graph consumer should assert); an unknown receiver → the method's defs repo-wide, RESOLVED_PARTIAL
 // (1) or SUGGESTED (N). Truly-dynamic dispatch (send/method_missing/define_method) is out of scope here
 // and stays an honest blindspot for the carrier-tracer to mark. The over-approximation is safe for the
 // sink-reaching goal (union the candidates) and quarantined from the precise graph by the tier.
-import { getParser } from "../../core/treesitter.js";
+import { field, getParser } from "../../core/treesitter.js";
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/base.js";
+import type { MethodCandidate, MethodKind } from "../../core/dispatch.js";
+import type { Provenance } from "../../core/resolution.js";
 
-export type ResolutionTier = "RESOLVED" | "RESOLVED_PARTIAL" | "SUGGESTED";
-export type MethodKind = "instance" | "class";
-
-export interface MethodCandidate {
-  className: string;   // FQN of the owning class/module, e.g. "Yuki::VD"
-  method: string;
-  file: string;        // repo-relative
-  line: number;        // 0-based def line
-  kind: MethodKind;
-  tier: ResolutionTier;
-}
+export type { MethodCandidate, MethodKind } from "../../core/dispatch.js";
 
 interface MethodDef { kind: MethodKind; file: string; line: number }
 interface Mixin { name: string; mode: "include" | "prepend" | "extend" }
@@ -47,15 +39,15 @@ const _DYNAMIC = new Set(["send", "__send__", "public_send"]);
 export const isDynamicDispatch = (method: string): boolean => _DYNAMIC.has(method);
 
 const _row = (n: any): number => n.startPosition.row;
-const _field = (n: any, f: string): any => n.childForFieldName?.(f) ?? null;
 
 // A constant reference node → its written name: `constant` ("VD") or `scope_resolution` ("Yuki::VD").
-function _constName(n: any): string | null {
+// Exported: the carrier tracer reads constant receivers the same way (`Marshal.dump`).
+export function constName(n: any): string | null {
   if (!n) return null;
   if (n.type === "constant") return n.text;
   if (n.type === "scope_resolution") {
-    const scope = _field(n, "scope"), name = _field(n, "name");
-    const s = scope ? _constName(scope) : "";          // absent scope = leading `::` (top-level)
+    const scope = field(n, "scope"), name = field(n, "name");
+    const s = scope ? constName(scope) : "";          // absent scope = leading `::` (top-level)
     return s ? `${s}::${name?.text ?? ""}` : (name?.text ?? null);
   }
   return null;
@@ -63,13 +55,13 @@ function _constName(n: any): string | null {
 
 // `include`/`prepend`/`extend Foo` calls in a class body → mixins (the closed structural set).
 function _mixinOf(call: any): Mixin | null {
-  if (call.type !== "call" || _field(call, "receiver")) return null; // only bare `include Foo`, no receiver
-  const m = _field(call, "method");
+  if (call.type !== "call" || field(call, "receiver")) return null; // only bare `include Foo`, no receiver
+  const m = field(call, "method");
   const mode = m?.text as Mixin["mode"];
   if (mode !== "include" && mode !== "prepend" && mode !== "extend") return null;
-  const args = _field(call, "arguments");
+  const args = field(call, "arguments");
   const first = args && args.namedChildCount ? args.namedChild(0) : null;
-  const name = _constName(first);
+  const name = constName(first);
   return name ? { name, mode } : null;
 }
 
@@ -86,18 +78,18 @@ function _indexFile(root: any, file: string, index: RubyIndex): void {
   // `nesting` = the namespace parts CONTAINING the node (e.g. ["Yuki","VD"] inside class VD in module Yuki).
   const visit = (n: any, nesting: string[]) => {
     if (_CONTAINER.has(n.type)) {
-      const name = _constName(_field(n, "name"));
+      const name = constName(field(n, "name"));
       if (name) {
         const fqn = [...nesting, name].join("::");
         const info = ensure(fqn, nesting, _row(n));
-        const sc = _field(n, "superclass");
-        if (sc && !info.superclass) { const scName = _constName(sc.namedChildCount ? sc.namedChild(0) : sc); if (scName) info.superclass = scName; }
+        const sc = field(n, "superclass");
+        if (sc && !info.superclass) { const scName = constName(sc.namedChildCount ? sc.namedChild(0) : sc); if (scName) info.superclass = scName; }
         for (let i = 0; i < n.namedChildCount; i++) visit(n.namedChild(i), [...nesting, name]);
         return;
       }
     }
     if (n.type === "method" || n.type === "singleton_method") {
-      const mn = _field(n, "name")?.text;
+      const mn = field(n, "name")?.text;
       if (mn) ensure(nesting.length ? nesting.join("::") : _TOPLEVEL, nesting.slice(0, -1), _row(n))
         .methods.set(mn, { kind: n.type === "singleton_method" ? "class" : "instance", file, line: _row(n) });
       return; // don't index method-local nested defs
@@ -135,10 +127,10 @@ export function inferAssignments(text: string, root: any): RubyAssign[] {
   const out: RubyAssign[] = [];
   const visit = (n: any) => {
     if (n.type === "assignment") {
-      const left = _field(n, "left"), right = _field(n, "right");
+      const left = field(n, "left"), right = field(n, "right");
       if (left && right && right.type === "call" && (left.type === "identifier" || left.type === "instance_variable")) {
-        const recvConst = _constName(_field(right, "receiver"));
-        const m = _field(right, "method")?.text;
+        const recvConst = constName(field(right, "receiver"));
+        const m = field(right, "method")?.text;
         const fqn = m === "new" ? recvConst : (recvConst && m ? _FACTORY[`${recvConst}.${m}`] ?? null : null);
         if (fqn) out.push({ name: left.text, fqn, line: _row(n) });
       }
@@ -167,14 +159,14 @@ function _lookup(index: RubyIndex, fqn: string, method: string, kind: MethodKind
   const info = index.get(fqn);
   if (!info) return null;
   const own = info.methods.get(method);
-  if (own && own.kind === kind) return { className: fqn, method, file: own.file, line: own.line, kind, tier: "RESOLVED" };
+  if (own && own.kind === kind) return { className: fqn, method, file: own.file, line: own.line, kind, tier: "RESOLVED_FULL" };
   const mixinModes = kind === "instance" ? ["include", "prepend"] : ["extend"];
   for (const mx of info.mixins) {
     if (!mixinModes.includes(mx.mode)) continue;
     const mfqn = _resolveConst(index, mx.name, info.nesting);
     // a mixed-in module's methods are INSTANCE methods of the module; look them up as instance regardless
     const hit = mfqn ? _lookup(index, mfqn, method, "instance", seen) : null;
-    if (hit) return { ...hit, tier: "RESOLVED" };
+    if (hit) return { ...hit, tier: "RESOLVED_FULL" };
   }
   if (info.superclass) { const sfqn = _resolveConst(index, info.superclass, info.nesting); const hit = sfqn ? _lookup(index, sfqn, method, kind, seen) : null; if (hit) return hit; }
   // implicit Object: every class without an explicit superclass inherits Object, whose (private) instance
@@ -193,15 +185,15 @@ export function resolveSelfCall(index: RubyIndex, className: string, method: str
 }
 
 // All defs of `method` across the index — the over-approximation used when the receiver type is unknown.
-function _byName(index: RubyIndex, method: string, tier: ResolutionTier): MethodCandidate[] {
+function _byName(index: RubyIndex, method: string, tier: Provenance): MethodCandidate[] {
   const out: MethodCandidate[] = [];
   for (const info of index.values()) { const d = info.methods.get(method); if (d) out.push({ className: info.fqn, method, file: d.file, line: d.line, kind: d.kind, tier }); }
   return out;
 }
 
 // Resolve `recvExpr.method(...)` at line `atLine` to method-definition candidate(s), tiered by provenance.
-//  - receiver is a Constant (`Foo` / `Foo::Bar`)  → class-method lookup on that type (PINNED) → RESOLVED
-//  - receiver is a local/@ivar assigned `= C.new` → instance lookup on C (PINNED) → RESOLVED
+//  - receiver is a Constant (`Foo` / `Foo::Bar`)  → class-method lookup on that type (PINNED) → RESOLVED_FULL
+//  - receiver is a local/@ivar assigned `= C.new` → instance lookup on C (PINNED) → RESOLVED_FULL
 //  - receiver type unknown                        → the method's defs repo-wide: 1 ⇒ RESOLVED_PARTIAL, N ⇒ SUGGESTED
 export function resolveMethodCall(
   index: RubyIndex, recvExpr: string, method: string, assigns: RubyAssign[], atLine: number, nesting: string[] = [],

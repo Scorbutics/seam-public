@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { decompose } from "../../src/codebase/codebase.js";
-import { build_class_graph, build_dependency_graph } from "../../src/codebase/scan/import_scan.js";
+import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
 import { HostBus, set_host_bus } from "../../src/core/llm.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));

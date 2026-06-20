@@ -55,7 +55,7 @@ function _seam_flags(s: SeamDict): string[] {
 
 function _consumer_note(consList: any[]): string {
   const n = consList.length;
-  const res = consList.filter((c) => c.status === "resolved").length;
+  const res = consList.filter((c) => c.status === "RESOLVED_FULL").length;
   const sug = n - res;
   const split = res ? ` (${res} resolved${sug ? `, ${sug} suggested` : ""})` : " (suggested)";
   const names: string[] = [];

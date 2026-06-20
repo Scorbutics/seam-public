@@ -9,7 +9,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { candidate_source_files } from "../scan/def_table.js";
 import { run_pass_async, registerPass } from "../../core/llm.js";
-import { build_dependency_graph } from "../scan/import_scan.js";
+import { build_footprint } from "../scan/index.js";
 
 const PASS = registerPass({ tag: "affinity", tier: "cheap", note: "intent-affinity scoring of shared-subject candidates (SUGGESTED)" });
 import { normpath } from "../../core/resolve/walk.js";
@@ -117,7 +117,7 @@ export async function affinity_grow(repo: string, subjects: string[], intent: st
     let connected = false, via: string | undefined;
     if (h.symbol) {
       try {
-        const probe = await build_dependency_graph(repo, h.file, h.symbol, { dataCoupling: false });
+        const probe = await build_footprint(repo, h.file, h.symbol, { direction: "down", dataCoupling: false });
         const back = (probe.nodes ?? []).find((n: any) => n.id !== "n1" && n.file && fset.has(normpath(n.file)));
         if (back) { connected = true; via = back.symbol; }
       } catch { /* probe failed → stays SUGGESTED, honest */ }

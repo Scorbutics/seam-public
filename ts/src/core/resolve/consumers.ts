@@ -1,8 +1,10 @@
 // Port of src/core/resolve/consumers.py (the resolver-injection seam + _resolve_import). The
 // graph-building machinery stays in codebase mode; this is the thin cone diff-mode (blast radius)
-// + facts_resolve share. An edge is RESOLVED only when the import's module path resolves to the
-// anchor file; a name match whose module doesn't resolve is a SUGGESTED blind spot.
+// + facts_resolve share. A consumer is RESOLVED_FULL only when the import's module path resolves to the
+// anchor file; a name match whose module doesn't resolve is a SUGGESTED blind spot (the same one
+// resolution ladder as call-graph dispatch + graph edges — core/resolution).
 import { basename, join } from "node:path";
+import type { Provenance } from "../resolution.js";
 import type { ImportRef } from "./languages/base.js";
 import { floor_resolve, endsWithSourceExt, parse_imports, SKIP_DIRS } from "./languages/index.js";
 import { normpath, walkFiles } from "./walk.js";
@@ -48,7 +50,7 @@ export function _kind_for(file: string, kind: string): string {
 
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
-export interface Consumer { file: string; local: string; source: string; status: string; reexport?: boolean; }
+export interface Consumer { file: string; local: string; source: string; status: Provenance; reexport?: boolean; }
 
 // Repo-wide parsed-imports index, built ONCE per repo and reused by every consumer scan. Each
 // scan_consumers otherwise re-walks + re-reads + re-PARSES every file in the repo, and the grow calls it
@@ -101,9 +103,9 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
       if (ref.name !== symbol) continue;
       const target = await _resolve_import(repo, rel, ref);
       if (target !== null) {
-        if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "resolved", reexport: ref.reexport });
+        if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: ref.reexport });
       } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {
-        out.push({ file: rel, local: ref.local, source: ref.source, status: "suggested", reexport: ref.reexport });
+        out.push({ file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport });
       }
       break;
     }
@@ -127,7 +129,7 @@ export async function scan_consumers(repo: string, anchorFile: string, symbol: s
   const out: Consumer[] = [];
   for (const c of await _scan_direct(repo, anchorFile, symbol)) {
     out.push(c);   // the barrel/importer file is itself part of the wiring chain
-    if (c.reexport && c.status === "resolved") {
+    if (c.reexport && c.status === "RESOLVED_FULL") {
       for (const t of await scan_consumers(repo, c.file, c.local, visited, _hop + 1)) out.push(t);
     }
   }

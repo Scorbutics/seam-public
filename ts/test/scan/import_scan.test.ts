@@ -5,7 +5,10 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build_class_graph, build_consumers_graph, build_dependency_graph, build_module_graph, build_resolved_graph } from "../../src/codebase/scan/import_scan.js";
+import { build_consumers_graph, build_resolved_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { decompose } from "../../src/codebase/codebase.js";
 
@@ -40,7 +43,7 @@ describe("import-scan vs Python", () => {
   test("class anchor — DI/factory consumer recovered as PARTIAL call (untraced.ts)", async () => {
     const repoDir = join(__dir, "..", "fixtures", "class-repo");
     const g = await build_consumers_graph(repoDir, "src/payment/service.ts", "PaymentService", { depth: 1 });
-    const make = g.nodes.find((n: any) => n.symbol === "make" && n.file === "src/untraced.ts");
+    const make = g.nodes.find((n: any) => n.symbol === "make" && n.file === "src/untraced.ts")!;
     expect(make).toBeDefined();
     expect(g.edges).toContainEqual({ from: make.id, to: "PaymentService", kind: "call", provenance: "RESOLVED_PARTIAL" });
     // The candidate-less blind spot the floor emitted for untraced.ts is gone — the call IS attributed now.
@@ -51,7 +54,7 @@ describe("import-scan vs Python", () => {
     // No orphaned module-level node left behind for the recovered file, and no duplicate call edge on
     // the already-attributed instance consumers (admin keeps only its method-level reference edges).
     expect(g.nodes.filter((n: any) => n.file === "src/untraced.ts").length).toBe(1);
-    const admin = g.nodes.find((n: any) => n.symbol === "admin");
+    const admin = g.nodes.find((n: any) => n.symbol === "admin")!;
     expect(g.edges.filter((e: any) => e.from === admin.id && e.kind === "call").length).toBe(0);
   });
 
@@ -122,7 +125,7 @@ describe("import-scan vs Python", () => {
   test("intra-file caller of a private helper (fromStripe → enrich)", async () => {
     const repoDir = join(__dir, "..", "fixtures", "intrafile-repo");
     const g = await build_resolved_graph(repoDir, "src/phase.ts", "fromStripe", { depth: 1 });
-    const caller = g.nodes.find((n: any) => n.symbol === "enrich");
+    const caller = g.nodes.find((n: any) => n.symbol === "enrich")!;
     expect(caller).toBeDefined();
     expect(caller.file).toBe("src/phase.ts");
     expect(g.edges).toContainEqual({ from: caller.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
@@ -138,11 +141,11 @@ describe("import-scan vs Python", () => {
   test("intra-file non-call reference is RESOLVED_PARTIAL (fromStripe ↦ register)", async () => {
     const repoDir = join(__dir, "..", "fixtures", "intrafile-repo");
     const g = await build_resolved_graph(repoDir, "src/phase.ts", "fromStripe", { depth: 1 });
-    const reg = g.nodes.find((n: any) => n.symbol === "register");
+    const reg = g.nodes.find((n: any) => n.symbol === "register")!;
     expect(reg).toBeDefined();
     expect(g.edges).toContainEqual({ from: reg.id, to: "n1", kind: "reference", provenance: "RESOLVED_PARTIAL" });
     // The direct caller stays deterministic (FULL), not downgraded by the weaker reference pass.
-    const enrich = g.nodes.find((n: any) => n.symbol === "enrich");
+    const enrich = g.nodes.find((n: any) => n.symbol === "enrich")!;
     expect(g.edges).toContainEqual({ from: enrich.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
   });
 

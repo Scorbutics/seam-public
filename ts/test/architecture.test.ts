@@ -28,10 +28,11 @@ function importsOf(file: string): string[] {
 
 // A layer = files whose path contains `dir`. `forbidden` = import paths it must NEVER reference (an
 // upward/back edge). `allow` = an escape hatch for a legitimate cross (a language IMPLEMENTS the carrier
-// provider INTERFACE that lives in coupling — impl→interface is a valid downward dependency).
+// INTERFACES that live in coupling/carrier — the provider/trace/lang adapter contract — and
+// impl→interface is a valid downward dependency).
 const RULES: { name: string; dir: string; forbidden: RegExp; allow?: RegExp }[] = [
   { name: "core/ must not import codebase/", dir: "/src/core/", forbidden: /codebase\// },
-  { name: "languages/ must not import codebase/ (except the carrier provider interface)", dir: "/src/languages/", forbidden: /codebase\//, allow: /coupling\/carrier\/provider/ },
+  { name: "languages/ must not import codebase/ (except the carrier interfaces it implements)", dir: "/src/languages/", forbidden: /codebase\//, allow: /coupling\/carrier\// },
   { name: "coupling/ must not import scan|grow|anchor (it is the DAG leaf)", dir: "/src/codebase/coupling/", forbidden: /\/(scan|grow|anchor)\// },
   { name: "scan/ must not import grow|anchor", dir: "/src/codebase/scan/", forbidden: /\/(grow|anchor)\// },
   { name: "grow/ must not import anchor", dir: "/src/codebase/grow/", forbidden: /\/anchor\// },

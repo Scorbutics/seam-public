@@ -1,6 +1,6 @@
 // Contract test for Ruby qualified-call / method resolution (src/languages/ruby/dispatch.ts): the
 // class/method index (incl. superclass + mixins, re-opened classes) and resolveMethodCall's provenance
-// tiers — PINNED receivers → RESOLVED (incl. inherited / mixed-in), unknown receiver → the candidate
+// tiers — PINNED receivers → RESOLVED_FULL (incl. inherited / mixed-in), unknown receiver → the candidate
 // set tiered RESOLVED_PARTIAL (unique) / SUGGESTED (polymorphic). Hermetic — a throwaway tmp repo.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -50,31 +50,31 @@ describe("resolveMethodCall — PINNED receivers → RESOLVED", () => {
     const text = "vd = Yuki::VD.new(path, :write)\nvd.write_data(name, blob)\n";
     const r = resolveMethodCall(index, "vd", "write_data", await assignsFor(text), 1);
     expect(r).toHaveLength(1);
-    expect(r[0]).toMatchObject({ className: "Yuki::VD", kind: "instance", tier: "RESOLVED" });
+    expect(r[0]).toMatchObject({ className: "Yuki::VD", kind: "instance", tier: "RESOLVED_FULL" });
     expect(r[0].file).toBe("lib/yuki/vd.rb");
   });
 
   test("instance via an @ivar assignment", async () => {
     const text = "@store = Yuki::VD.new(p)\n@store.read_data(key)\n";
     const r = resolveMethodCall(index, "@store", "read_data", await assignsFor(text), 1);
-    expect(r).toMatchObject([{ className: "Yuki::VD", tier: "RESOLVED" }]);
+    expect(r).toMatchObject([{ className: "Yuki::VD", tier: "RESOLVED_FULL" }]);
   });
 
   test("inherited method resolves through the superclass chain", async () => {
     const text = "vd = Yuki::VD.new(p)\nvd.close\n";
     const r = resolveMethodCall(index, "vd", "close", await assignsFor(text), 1);
-    expect(r).toMatchObject([{ className: "Base", method: "close", tier: "RESOLVED" }]);
+    expect(r).toMatchObject([{ className: "Base", method: "close", tier: "RESOLVED_FULL" }]);
   });
 
   test("mixed-in (include) method resolves through the module", async () => {
     const text = "vd = Yuki::VD.new(p)\nvd.cached?\n";
     const r = resolveMethodCall(index, "vd", "cached?", await assignsFor(text), 1);
-    expect(r).toMatchObject([{ className: "Cacheable", method: "cached?", tier: "RESOLVED" }]);
+    expect(r).toMatchObject([{ className: "Cacheable", method: "cached?", tier: "RESOLVED_FULL" }]);
   });
 
   test("class-method call on a constant receiver", async () => {
     const r = resolveMethodCall(index, "Yuki::VD", "open", [], 0);
-    expect(r).toMatchObject([{ className: "Yuki::VD", kind: "class", tier: "RESOLVED" }]);
+    expect(r).toMatchObject([{ className: "Yuki::VD", kind: "class", tier: "RESOLVED_FULL" }]);
   });
 });
 

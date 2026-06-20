@@ -14,15 +14,17 @@ import { SKIP_DIRS } from "../../../core/resolve/languages/base.js";
 import { resolveCarrierSignature, prefetchCarrierSignatures } from "./synth.js";
 import { globMatch, type CarrierProvider, type CarrierObservation } from "./provider.js";
 import { RUBY_CARRIER } from "../../../languages/ruby/carrier.js";
+import { JAVA_CARRIER } from "../../../languages/java/carrier.js";
+import { TS_CARRIER } from "../../../languages/typescript/carrier.js";
 import type { Access, GroundingIndex, KeyHit } from "../types.js";
 import { EngineCtx, getOrSet } from "../../engine_ctx.js";
 
 // teacher-3 (LLM carrier synthesis) options — opt-in, threaded from --data-coupling llm.
 export interface CarrierOpts { llm?: boolean; model?: string; claudeBin?: string | null }
 
-// The carrier-provider registry — one entry per language with a carrier front-end (Ruby is the first).
-// A new language plugs in here without the engine changing.
-export const CARRIER_PROVIDERS: CarrierProvider<any>[] = [RUBY_CARRIER];
+// The carrier-provider registry — one entry per language with a carrier front-end. A new language plugs
+// in here (a dispatch + a CallGraph + teacher-2 key extraction) without the engine changing.
+export const CARRIER_PROVIDERS: CarrierProvider<any>[] = [RUBY_CARRIER, JAVA_CARRIER, TS_CARRIER];
 export function carrierProviderFor(file: string): CarrierProvider<any> | null {
   return CARRIER_PROVIDERS.find((p) => p.handles(file)) ?? null;
 }

@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/import_scan.js";
+import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
 import { scan_file_keys } from "../../src/codebase/coupling/index.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { _is_crossing } from "../../src/codebase/codebase.js";
@@ -26,7 +26,7 @@ describe("shared-key (data-flow) coupling", () => {
   });
 
   test("a writer surfaces a table boundary node + the readers as db-read crossings (det floor)", async () => {
-    const g = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment");
+    const g: any = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment");
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined();
     expect(tbl.file).toBe("src/backend/persist.ts");
@@ -37,7 +37,7 @@ describe("shared-key (data-flow) coupling", () => {
   });
 
   test("symmetric: a reader surfaces the WRITER as a db-write crossing", async () => {
-    const g = await build_dependency_graph(repo, "src/ui/invoice.ts", "showInvoice");
+    const g: any = await build_dependency_graph(repo, "src/ui/invoice.ts", "showInvoice");
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined();
     // the reader's own edge to the table is a db-read; the surfaced producer's is a db-write
@@ -90,7 +90,7 @@ describe("shared-key (data-flow) coupling", () => {
   });
 
   test("a raw-SQL writer couples to the Supabase readers of the same table (cross-stack, end-to-end)", async () => {
-    const g = await build_dependency_graph(repo, "src/backend/sql_report.ts", "archivePayment");
+    const g: any = await build_dependency_graph(repo, "src/backend/sql_report.ts", "archivePayment");
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined(); // detected purely from the raw INSERT — no Supabase builder in this file
     const readerSyms = g.edges.filter((e: any) => e.from === tbl.id && e.kind === "db-read")
@@ -120,7 +120,7 @@ describe("shared-key (data-flow) coupling", () => {
 
   test("cross-LANGUAGE coupling: a Ruby AR reader couples to the SQL/Supabase writers of the table", async () => {
     const xrepo = join(__dir, "..", "fixtures", "xlang-repo");
-    const g = await build_dependency_graph(xrepo, "src/writer.ts", "archivePayment"); // raw-SQL writer of `payments`
+    const g: any = await build_dependency_graph(xrepo, "src/writer.ts", "archivePayment"); // raw-SQL writer of `payments`
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     const readerFiles = g.edges.filter((e: any) => e.from === tbl.id && e.kind === "db-read")
       .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file).sort();
@@ -157,7 +157,7 @@ describe("shared-key (data-flow) coupling", () => {
 
   test("a route HANDLER surfaces its fetch CALLERS as route-fetch crossings (the second UI boundary)", async () => {
     const rrepo = join(__dir, "..", "fixtures", "route-repo");
-    const g = await build_dependency_graph(rrepo, "app/api/admin/payments/route.ts", "GET");
+    const g: any = await build_dependency_graph(rrepo, "app/api/admin/payments/route.ts", "GET");
     const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
     expect(route).toBeDefined();
     expect(g.edges).toContainEqual({ from: "n1", to: route.id, kind: "route-serve", provenance: "RESOLVED_PARTIAL", line: route.range[0] });
@@ -168,7 +168,7 @@ describe("shared-key (data-flow) coupling", () => {
 
   test("symmetric: a fetch CALLER surfaces the route HANDLER as a route-serve crossing", async () => {
     const rrepo = join(__dir, "..", "fixtures", "route-repo");
-    const g = await build_dependency_graph(rrepo, "lib/services.ts", "fetchPayments");
+    const g: any = await build_dependency_graph(rrepo, "lib/services.ts", "fetchPayments");
     const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
     expect(route).toBeDefined();
     const handlerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-serve")
@@ -225,7 +225,7 @@ describe("shared-key (data-flow) coupling", () => {
   // it → that handler's http-route → the `fetch` caller — deterministically, no grow step.
   test("a payments WRITER transitively reaches the UI fetch caller through the route handler (one hop)", async () => {
     const rrepo = join(__dir, "..", "fixtures", "route-repo");
-    const g = await build_dependency_graph(rrepo, "backend/persist.ts", "persistPayment");
+    const g: any = await build_dependency_graph(rrepo, "backend/persist.ts", "persistPayment");
     // hop 1: db-table boundary to the route handler that reads `payments`
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined();
@@ -245,7 +245,7 @@ describe("shared-key (data-flow) coupling", () => {
   });
 
   test("--no-data-coupling disables the boundary entirely", async () => {
-    const g = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment", { dataCoupling: false });
+    const g: any = await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment", { dataCoupling: false });
     expect(g.nodes.some((n: any) => n.kind === "table")).toBe(false);
   });
 });

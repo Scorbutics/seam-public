@@ -2,7 +2,8 @@
 // cross-language primitive the headless facts producer uses; mirrors src/core/treesitter.py.
 // web-tree-sitter is async-init, so getParser() is async; the rest of the pipeline stays sync by
 // pre-computing facts before classify (see facts_treesitter.computeTreeSitterFacts).
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 // file extension -> tree-sitter grammar name (matches src/core/treesitter.py)
@@ -26,6 +27,33 @@ const WASM_DIR = _ENV_WASM_DIR
   : fileURLToPath(new URL("../../node_modules/tree-sitter-wasms/out/", import.meta.url));
 
 export function langForExt(ext: string): string | null { return _LANG_BY_EXT[ext.toLowerCase()] ?? null; }
+
+// Generic node helpers (language-agnostic): a field accessor and a typed-descendant collector. Every
+// language front-end walks tree-sitter ASTs the same way, so these live in the shared substrate rather
+// than being re-declared per language. `collectByType` recurses through matched nodes too (a `call`
+// nested in another `call` yields both).
+export const field = (n: any, f: string): any => n?.childForFieldName?.(f) ?? null;
+export function collectByType(node: any, type: string, out: any[] = []): any[] {
+  if (node.type === type) out.push(node);
+  for (let i = 0; i < node.namedChildCount; i++) collectByType(node.namedChild(i), type, out);
+  return out;
+}
+
+// Repo-wide parsed-AST cache, keyed by (grammar, repo, file) — shared by every language's carrier
+// tracer (each otherwise re-read + re-parsed the same files across hops). Content-static per run +
+// process-scoped, so memoising is safe. `resetParseCache` is the test/CI hook (a real re-run is a
+// fresh process; tests simulate that).
+const _astCache = new Map<string, any>();
+export function resetParseCache(): void { _astCache.clear(); }
+export async function parseFile(repo: string, file: string, grammar: string): Promise<any | null> {
+  const key = `${grammar}\0${repo}\0${file}`;
+  if (_astCache.has(key)) return _astCache.get(key);
+  const parser = await getParser(grammar);
+  let root: any = null;
+  if (parser) { try { root = parser.parse(readFileSync(join(repo, file), "utf-8")).rootNode; } catch { root = null; } }
+  _astCache.set(key, root);
+  return root;
+}
 
 export function isCommentOrString(kind: string): boolean {
   return kind.includes("comment") || kind.includes("string") || kind.includes("char_literal");

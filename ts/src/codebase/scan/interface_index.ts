@@ -1,0 +1,121 @@
+// SCAN phase — the repo-wide INTERFACE→IMPL (DI binding) index and the framework-entry detector. This is
+// the runtime wiring a static import scan can't see: which concrete classes implement an interface
+// (@Inject/@Autowired/CDI), and whether a symbol is a declaratively-wired framework callback. Cross-
+// language via ../atoms node SETS. Cached per repo (a full-repo parse, built once).
+import { join, relative } from "node:path";
+import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { walk } from "../../core/resolve/walk.js";
+import {
+  type Ctx, makeCtx, available,
+  _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _ANNOTATION,
+} from "../atoms.js";
+import { _name_of, _read } from "./ast_units.js";
+
+// {interface name → the concrete in-repo CLASSES that `implement` it} + the set of names declared as
+// interfaces. Cross-language via _IMPLEMENTS (Java super_interfaces / TS implements_clause). Cached per
+// repo (a full-repo parse, so built once). This is the runtime DI binding a static import scan can't
+// see — used to extend a footprint PAST a @Inject/@Autowired interface to its impl, deterministically.
+const _IMPL_CACHE = new Map<string, { interfaces: Set<string>; impls: Map<string, { cls: string; file: string }[]> }>();
+async function _impl_index(repo: string): Promise<{ interfaces: Set<string>; impls: Map<string, { cls: string; file: string }[]> }> {
+  const cached = _IMPL_CACHE.get(repo);
+  if (cached) return cached;
+  const interfaces = new Set<string>();
+  const impls = new Map<string, { cls: string; file: string }[]>();
+  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
+    for (const fn of files) {
+      if (!endsWithSourceExt(fn)) continue;
+      const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
+      const rd = _read(repo, rel);
+      if (!rd) continue;
+      const ctx = await makeCtx(rd[0], rd[1]);
+      if (!ctx) continue;
+      for (const itf of ctx.collect(ctx.root, (k) => _INTERFACE.has(k))) { const nm = _name_of(ctx, itf); if (nm) interfaces.add(nm); }
+      for (const cls of ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k))) {
+        const cn = _name_of(ctx, cls);
+        if (!cn) continue;
+        const supers: string[] = [];
+        for (const h of ctx.children(cls)) {
+          if (_IMPLEMENTS.has(h.type)) supers.push(...ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+          else if (h.type === "class_heritage") for (const ec of ctx.children(h).filter((c) => _IMPLEMENTS.has(c.type))) supers.push(...ctx.collect(ec, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+        }
+        for (const s of supers) {
+          const arr = impls.get(s) ?? [];
+          if (!arr.some((x) => x.cls === cn && x.file === rel)) arr.push({ cls: cn, file: rel });
+          impls.set(s, arr);
+        }
+      }
+    }
+  }
+  const idx = { interfaces, impls };
+  _IMPL_CACHE.set(repo, idx);
+  return idx;
+}
+
+// The concrete in-repo implementations of an INTERFACE `name` (deterministic, sorted). Empty unless
+// `name` is declared as an interface in this repo — so we never chase a concrete class's subclasses,
+// only the genuine interface→impl (DI) relation.
+export async function impls_of(repo: string, name: string): Promise<{ cls: string; file: string }[]> {
+  const idx = await _impl_index(repo);
+  if (!idx.interfaces.has(name)) return [];
+  return [...(idx.impls.get(name) ?? [])].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+}
+
+// The interface names a class `symbol` (in `anchorFile`) IMPLEMENTS. Used to reach the facade-style
+// upstream entries a bidirectional grow misses: DI/CDI consumers import the INTERFACE, not the impl, so
+// growing consumers of the impl finds nothing — growing consumers of its interfaces does (deterministic).
+export async function implemented_interfaces(repo: string, anchorFile: string, symbol: string): Promise<string[]> {
+  const rd = _read(repo, anchorFile);
+  if (!rd || !available()) return [];
+  const ctx = await makeCtx(rd[0], rd[1]);
+  if (!ctx) return [];
+  const cls = ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k)).find((c) => _name_of(ctx, c) === symbol);
+  if (!cls) return [];
+  const out: string[] = [];
+  for (const h of ctx.children(cls)) {
+    if (_IMPLEMENTS.has(h.type)) out.push(...ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+    else if (h.type === "class_heritage") for (const ec of ctx.children(h).filter((c) => _IMPLEMENTS.has(c.type))) out.push(...ctx.collect(ec, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+  }
+  return [...new Set(out)];
+}
+
+// FRAMEWORK-ENTRY detection — generalized, NO per-framework annotation list. A `symbol` (method or
+// class) is a framework/external entry when it's wired declaratively: (a) it carries a METHOD-LEVEL
+// annotation/decorator (any — `@GET`/`@Schedule`/`@PostConstruct`/`@Observes`/a TS `@Get()`…; presence
+// is the signal, not the name), or (b) its enclosing class implements an EXTERNAL interface (one not
+// declared in this repo, e.g. `MessageListener` → `onMessage` is the framework callback). Combined by
+// the caller with "no in-repo caller", this distinguishes a framework ROOT (flow enters here from
+// outside the repo) from genuinely-isolated/dead code — across any annotation/decorator framework.
+export async function is_framework_entry(repo: string, file: string, symbol: string): Promise<boolean> {
+  const rd = _read(repo, file);
+  if (!rd || !available()) return false;
+  const ctx = await makeCtx(rd[0], rd[1]);
+  if (!ctx) return false;
+  // (a) a method-LEVEL annotation/decorator (in `modifiers`, or a sibling decorator) — NOT param/return ones.
+  // NB: a method's NAME is the identifier right before its parameter list — NOT _name_of (which returns the
+  // first name-kind child = the RETURN TYPE for `String foo()`; fine for classes, wrong for typed methods).
+  const mname = (m: any): string => {
+    const ch = ctx.children(m);
+    const fp = ch.findIndex((c: any) => String(c.type).startsWith("formal_param"));
+    if (fp > 0) for (let i = fp - 1; i >= 0; i--) if (ch[i].type === "identifier" || ch[i].type === "property_identifier") return ctx.text(ch[i]);
+    return _name_of(ctx, m) ?? "";
+  };
+  const method = ctx.collect(ctx.root, (k) => _METHOD_KINDS.has(k)).find((m) => mname(m) === symbol);
+  if (method) {
+    const mods = ctx.children(method).find((c) => c.type === "modifiers");
+    if (mods && ctx.children(mods).some((c) => _ANNOTATION.has(c.type))) return true;
+    if (ctx.children(method).some((c) => _ANNOTATION.has(c.type))) return true;   // TS decorator sibling
+  }
+  // (b) enclosing class implements an interface NOT declared in-repo → framework callback impl.
+  const idx = await _impl_index(repo);
+  for (const cls of ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k))) {
+    const impls: string[] = [];
+    for (const h of ctx.children(cls)) {
+      if (_IMPLEMENTS.has(h.type)) impls.push(...ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+      else if (h.type === "class_heritage") for (const ec of ctx.children(h).filter((c) => _IMPLEMENTS.has(c.type))) impls.push(...ctx.collect(ec, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+    }
+    if (!impls.some((i) => !idx.interfaces.has(i))) continue;   // no external interface here
+    if (_name_of(ctx, cls) === symbol) return true;
+    if (method) { const [ms] = ctx.span(method); const [cs, ce] = ctx.span(cls); if (ms >= cs && ms <= ce) return true; }
+  }
+  return false;
+}

@@ -10,7 +10,7 @@ const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
-import { build_consumers_graph, build_dependency_graph, build_bidirectional_graph } from "../scan/import_scan.js";
+import { build_footprint } from "../scan/index.js";
 import { isFlowSubject } from "../coupling/index.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -93,9 +93,9 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
   const model = opts.model ?? "claude-haiku-4-5";
   const dataCoupling = opts.dataCoupling, dataCouplingLlm = opts.dataCouplingLlm, claudeBin = opts.claudeBin;
   const ctx = new EngineCtx();   // ONE cache context shared across every grow move (repo indices built once, not per move)
-  let data: any = await build_consumers_graph(repo, anchorFile, symbol, { dataCoupling, dataCouplingLlm, model, claudeBin, ctx });
+  let data: any = await build_footprint(repo, anchorFile, symbol, { dataCoupling, dataCouplingLlm, model, claudeBin, ctx });
   const history: any[] = [];
-  // Moves already followed, keyed `${symbol} ${up|down}`. The seed = build_consumers_graph already
+  // Moves already followed, keyed `${symbol} ${up|down}`. The seed = build_footprint already
   // expanded the ANCHOR's consumers, so its `up` starts expanded (re-picking it was the #1 wasted
   // move). A no-op move no longer ends the grow — we skip it and bail only once genuinely stuck, so
   // one bad pick can't strand the footprint short of the answer.
@@ -137,9 +137,7 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
     const line = (nd.range ?? [0])[0];
     let add: any;
     try {
-      add = direction === "down"
-        ? await build_dependency_graph(repo, nd.file, nd.symbol, { anchorLine: line, dataCoupling, dataCouplingLlm, model, claudeBin, ctx })
-        : await build_consumers_graph(repo, nd.file, nd.symbol, { anchorLine: line, dataCoupling, dataCouplingLlm, model, claudeBin, ctx });
+      add = await build_footprint(repo, nd.file, nd.symbol, { direction: direction === "down" ? "down" : "up", anchorLine: line, dataCoupling, dataCouplingLlm, model, claudeBin, ctx });
     } catch { break; }
     // a move that would flood the footprint (a widely-used class' consumers) doesn't advance the
     // answer — skip it and let the LLM try elsewhere, rather than drowning the intent in noise.
@@ -182,9 +180,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
   // `direction` tags let decompose detect the policy-vs-flow shape. Frontier growth stays consumer-ward.
-  let data: any = opts.bidirectional
-    ? await build_bidirectional_graph(repo, anchorFile, symbol, co)
-    : await build_consumers_graph(repo, anchorFile, symbol, co);
+  let data: any = await build_footprint(repo, anchorFile, symbol, { direction: opts.bidirectional ? "both" : "up", ...co });
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
@@ -210,9 +206,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     const dir: string | undefined = next.direction;
     let add: any;
     try {
-      add = dir === "backward"
-        ? await build_dependency_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co })
-        : await build_consumers_graph(repo, next.file, next.symbol, { anchorLine: (next.range ?? [0])[0], ...co });
+      add = await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...co });
     } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).

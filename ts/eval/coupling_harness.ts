@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, mkdtem
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { build_consumers_graph } from "../src/codebase/scan/import_scan.js";
+import { build_footprint } from "../src/codebase/scan/index.js";
 import { isFlowSubject } from "../src/codebase/coupling/index.js";
 import { _resetKeyCacheMem } from "../src/codebase/coupling/key_cache.js";
 import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
@@ -48,7 +48,7 @@ export async function scoreCouplingCase(repo: string, c: CouplingCase, opts: { n
   const prev = process.env.SEAM_NO_ADAPTERS;
   if (opts.noAdapters) process.env.SEAM_NO_ADAPTERS = "1"; else delete process.env.SEAM_NO_ADAPTERS;
   try {
-    const g = await build_consumers_graph(repo, c.anchorFile, c.symbol, { dataCoupling: true, dataCouplingLlm: !!opts.llm });
+    const g = await build_footprint(repo, c.anchorFile, c.symbol, { dataCoupling: true, dataCouplingLlm: !!opts.llm });
     const coupling = g.nodes.filter((n: any) => n.coupling);
     const recovered = coupling.map((n: any) => String(n.symbol));
     const boundaries = coupling.filter((n: any) => isFlowSubject(n.kind)).map((n: any) => String(n.symbol));   // the key boundaries (table/route/data-file/…)

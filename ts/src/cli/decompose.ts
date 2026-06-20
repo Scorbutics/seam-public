@@ -142,9 +142,7 @@ async function runCodebase(a: Args): Promise<number> {
     const { merge_resolved } = await import("../codebase/scan/index.js");
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
-      const add = a.down
-        ? await scan.build_dependency_graph(a.repo, a.expandFile!, a.expandSymbol!, { anchorLine: a.expandLine ?? null, useLlm: useLlm0, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm })
-        : await scan.build_consumers_graph(a.repo, a.expandFile!, a.expandSymbol!, { depth: a.depth, anchorLine: a.expandLine ?? null, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+      const add = await scan.build_footprint(a.repo, a.expandFile!, a.expandSymbol!, { direction: a.down ? "down" : "up", depth: a.depth, anchorLine: a.expandLine ?? null, useLlm: useLlm0, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
       data = merge_resolved(base, add, add.anchor?.id);
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
@@ -214,11 +212,8 @@ async function runCodebase(a: Args): Promise<number> {
     try {
       // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
       // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
-      data = a.symbol
-        ? a.bidirectional
-          ? await scan.build_bidirectional_graph(a.repo, a.anchorFile!, a.symbol, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
-          : await scan.build_consumers_graph(a.repo, a.anchorFile!, a.symbol, { depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin })
-        : await scan.build_module_graph(a.repo, a.anchorFile!, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+      data = await scan.build_footprint(a.repo, a.anchorFile!, a.symbol ?? null,
+        { direction: a.symbol && a.bidirectional ? "both" : "up", depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }
@@ -238,7 +233,7 @@ async function runCodebase(a: Args): Promise<number> {
         const node = (data.nodes as any[]).find((n) => n.symbol === iface);
         if (!node?.file) continue;   // the interface must already be a resolved node (a dep of the anchor)
         const before = (data.nodes as any[]).length;
-        const cons = await scan.build_consumers_graph(a.repo, node.file, iface, { dataCoupling: false });
+        const cons = await scan.build_footprint(a.repo, node.file, iface, { dataCoupling: false });
         data = merge_resolved(data, cons, node.id);   // attach the interface's consumers at the interface node
         added += (data.nodes as any[]).length - before;
       }
