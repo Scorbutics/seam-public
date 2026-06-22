@@ -3,6 +3,30 @@
 All notable changes to the Seam extension. Distributed as a `.vsix` via
 [GitHub Releases](https://github.com/Scorbutics/seam/releases) — experimental, not on the Marketplace.
 
+## Unreleased
+
+- **Review impact in diff review (the diff↔codebase bridge)** — a diff review now
+  automatically annotates each seam with what the change touches **beyond the PR**:
+  transitive consumers **and** cross-stack data-flow readers/writers (a shared DB
+  table / HTTP route) in files the PR did *not* change — the "you changed the write,
+  not the read" signal. Each is graded by a **deterministic relevance floor**: a
+  provably-unrelated edge is suppressed, the rest show as ⚠ (verify). It runs as a
+  **second background pass over the same classification** (no re-analysis, seams don't
+  reshuffle), so the base review paints instantly and impact swaps in when ready — a ⚡
+  badge on the seam, expanding to the affected readers. Offline/deterministic by
+  default. Toggle `seam.reviewImpact` (default on); `seam.reviewImpactTriage` (default
+  off) adds an LLM pass over only the floor's `unknown` residual.
+
+- **Progressive reveal (two-step codebase map)** — codebase/intent analyses now
+  paint the **deterministic skeleton instantly** (the spine, structural symbol
+  labels, and blind spots — no LLM), then **enrich it in place**: the LLM names
+  the un-named seams and sorts them into *Main path / Supporting / Side-effects*
+  when its pass finishes. A spinner on the cluster header (and the not-yet-named
+  seams) signals the enrichment is live. The LLM pass re-decomposes the **same
+  resolved graph** (no re-scan/re-grow), so the structure is stable across the
+  swap — only names and tiers fill in. Toggle with `seam.progressiveReveal`
+  (default on); `det` is already single-pass and unaffected.
+
 ## 0.2.4
 
 Java/JVM footprints reach framework-invoked entry points, and the intent map is

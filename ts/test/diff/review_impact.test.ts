@@ -1,0 +1,84 @@
+// The diff↔codebase BRIDGE (cli/review_impact.ts) — the hero feature. Two facts a diff alone can't give,
+// verified end-to-end through the real pipeline (parse → classify det → emit → annotate):
+//   1. cross-stack: a backend-only change to a DB write flags the FRONTEND reader that isn't in the PR.
+//   2. external impact: a change to a symbol surfaces its consumers in files outside the diff.
+import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { parse } from "../../src/diff/parser.js";
+import * as noise from "../../src/diff/noise_filter.js";
+import * as engine from "../../src/diff/engine.js";
+import { emit_seams_json } from "../../src/diff/seams.js";
+import { annotateReviewImpact, triageUnknowns } from "../../src/cli/review_impact.js";
+import { HostBus, set_host_bus } from "../../src/core/llm.js";
+
+async function decompose(diff: string, repo: string) {
+  const hunks = parse(diff);
+  noise.classify(hunks);
+  await engine.classify(hunks, { cluster: "det", roles: "det", wiring: "det", repo });
+  const model = await emit_seams_json(hunks, repo, false);
+  await annotateReviewImpact(model, hunks, repo, {});
+  return model;
+}
+const seamsOf = (m: any) => (m.clusters ?? []).flatMap((c: any) => c.seams ?? []);
+
+describe("annotateReviewImpact — the diff↔codebase bridge", () => {
+  test("cross-stack: a backend-only change flags the untouched frontend reader of the shared table", async () => {
+    const repo = join("test", "fixtures", "crossstack-repo");
+    const model = await decompose(readFileSync(join(repo, "charge.patch"), "utf-8"), repo);
+    const cs = seamsOf(model).flatMap((s: any) => s.impact?.crossStack ?? []);
+    // the change touches the `payments` write; Billing.tsx reads it and is NOT in the PR
+    expect(cs.some((c: any) => c.symbol === "Billing" && c.file === "ui/Billing.tsx" && c.relation === "db-read")).toBe(true);
+  });
+
+  test("external impact: changing checkout surfaces its consumer Page (outside the diff)", async () => {
+    const repo = join("test", "fixtures", "class-repo");
+    const diff = [
+      // real `git diff` puts the enclosing scope on the @@ line — that's how the engine attributes the
+      // change to `checkout` (the subject we anchor impact on).
+      "--- a/src/checkout.ts",
+      "+++ b/src/checkout.ts",
+      "@@ -2,3 +2,3 @@ export function checkout() {",
+      "   const svc = new PaymentService(null);",
+      "-  return svc.charge(100);",
+      "+  return svc.charge(200);",
+      "",
+    ].join("\n");
+    const model = await decompose(diff, repo);
+    const ext = seamsOf(model).flatMap((s: any) => s.impact?.external ?? []);
+    expect(ext.some((e: any) => e.symbol === "Page" && e.file === "src/page.ts")).toBe(true);
+  });
+
+  test("only changed files are excluded — the signal is what's affected AND untouched", async () => {
+    // sanity: the reader's file must not be among the changed files (else it wouldn't be flagged)
+    const repo = join("test", "fixtures", "crossstack-repo");
+    const model = await decompose(readFileSync(join(repo, "charge.patch"), "utf-8"), repo);
+    const cs = seamsOf(model).flatMap((s: any) => s.impact?.crossStack ?? []);
+    expect(cs.every((c: any) => c.file !== "api/charge.ts")).toBe(true);
+  });
+
+  test("the floor TIERS cross-stack readers by relevance (change writes 'fee')", async () => {
+    const repo = join("test", "fixtures", "crossstack-repo");
+    const model = await decompose(readFileSync(join(repo, "charge.patch"), "utf-8"), repo);
+    const cs = seamsOf(model).flatMap((s: any) => s.impact?.crossStack ?? []);
+    const rel = Object.fromEntries(cs.map((c: any) => [c.symbol, c.relevance]));
+    expect(rel.Receipt).toBe("relevant");      // reads 'fee' → the change touches it
+    expect(rel.Audit).toBe("irrelevant");      // reads only 'amount' → proven unrelated, suppressed
+    expect(rel.Billing).toBe("unknown");       // select('*') → can't prove → escalate
+  });
+
+  test("Layer 3: LLM triage reclassifies the unknown residual only (host-bus pinned)", async () => {
+    const repo = join("test", "fixtures", "crossstack-repo");
+    const model = await decompose(readFileSync(join(repo, "charge.patch"), "utf-8"), repo);
+    const hunks = parse(readFileSync(join(repo, "charge.patch"), "utf-8"));
+    noise.classify(hunks);
+    await engine.classify(hunks, { cluster: "det", roles: "det", wiring: "det", repo });
+    // the floor leaves Billing 'unknown'; pin the triage verdict to 'irrelevant'
+    set_host_bus(new HostBus({ "review-triage": '[{"id":"u0","verdict":"irrelevant","reason":"reads the row but not the fee value"}]' }));
+    try { await triageUnknowns(model, hunks, repo, {}); } finally { set_host_bus(null); }
+    const cs = seamsOf(model).flatMap((s: any) => s.impact?.crossStack ?? []);
+    const billing = cs.find((c: any) => c.symbol === "Billing");
+    expect(billing.relevance).toBe("irrelevant");          // unknown → triaged
+    expect(cs.find((c: any) => c.symbol === "Receipt").relevance).toBe("relevant");   // floor verdict untouched
+  });
+});

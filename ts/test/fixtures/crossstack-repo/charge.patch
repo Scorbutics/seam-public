@@ -1,0 +1,9 @@
+--- a/api/charge.ts
++++ b/api/charge.ts
+@@ -1,5 +1,5 @@
+ import { supabase } from "../lib/db";
+ export function chargeCard(amount) {
+-  const fee = amount * 0.03;
++  const fee = amount * 0.05;
+   return supabase.from("payments").insert({ amount, fee });
+ }

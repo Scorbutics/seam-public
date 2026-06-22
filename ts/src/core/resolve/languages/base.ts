@@ -25,6 +25,18 @@ export interface ImportRef {
   reexport?: boolean;    // `export { X } from '...'` — a barrel hop, not a use; followed transitively
 }
 
+// A namespace import: `import * as X from "m"` / `const X = await import("m")` — binds the WHOLE module
+// `m` under `local`, so a symbol it provides is used as `local.symbol`. Kept OUT of ImportRef (which the
+// dependency graph + barrel walk consume by symbol name) and surfaced separately, used only by the
+// consumer member-access scan — so adding it can't perturb dependency-direction footprints / oracles.
+export interface NamespaceImport { local: string; source: string; line: number }
+
+// A default import: `import X from "m"` (or `import X, { … } from "m"`) — binds module `m`'s DEFAULT
+// export under the ARBITRARY local name `local`. It can't be matched by symbol name (the binding is the
+// importer's choice), so it's surfaced separately and matched by MODULE — a consumer iff the anchor
+// symbol is that module's default export. Same OUT-of-ImportRef rationale as NamespaceImport.
+export interface DefaultImport { local: string; source: string; line: number }
+
 // How to launch + drive a language's LSP server. Pure config — no resolution logic. Port of the
 // base.py ServerSpec. `command(repo)` → argv | null (null ⇒ server unobtainable on this machine);
 // `languageId` is a string, or (file)→string when a stack has per-file ids (tsx/jsx).
@@ -45,6 +57,13 @@ export interface LanguageProvider {
   resolve?: (repo: string, importingFile: string, source: string) => string | null;
   // the file's import statements → ImportRef[].
   imports?: (text: string) => ImportRef[];
+  // the file's NAMESPACE imports (`import * as X` / `const X = await import(...)`) → NamespaceImport[].
+  // Only languages with namespace-member access (TS/JS) implement it; the consumer scan uses it to
+  // attribute `X.symbol` member calls. [] / undefined ⇒ the language has no such form.
+  namespaceImports?: (text: string) => NamespaceImport[];
+  // the file's DEFAULT imports (`import X from "m"`) → DefaultImport[]. TS/JS only; matched by module
+  // (not name) against a default-exported anchor. [] / undefined ⇒ the language has no default exports.
+  defaultImports?: (text: string) => DefaultImport[];
   // query-builder table accesses (`.from('t').verb`) in THIS language's syntax → raw {table, verb, line}.
   // The verb classification (write vs read) is the framework adapter's job, not the language's.
   tableAccess?: (text: string) => TableAccess[];

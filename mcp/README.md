@@ -1,7 +1,9 @@
 # Seam MCP server
 
-Lets **any LLM agent** consult Seam about a diff or an intent footprint, over the same
-`--emit-seams` JSON contract the VS Code extension consumes ([docs/SEAM_JSON_CONTRACT.md](../docs/SEAM_JSON_CONTRACT.md)).
+Lets **any LLM agent** consult Seam — review a diff, trace an intent footprint, or ask a structural
+question about the codebase (who calls X, can A reach B, a module's boundary, the subsystem around X,
+how A and B differ) — over the same `--emit-seams` JSON contract the VS Code extension consumes
+([docs/SEAM_JSON_CONTRACT.md](../docs/SEAM_JSON_CONTRACT.md)).
 
 Thin by design: it locates the **stateless** Seam engine (the compiled binary or the source CLI) and
 shells out once per call. **No daemon, no resident state.** See [docs/DISTRIBUTION.md](../docs/DISTRIBUTION.md)
@@ -17,6 +19,20 @@ Group a git diff into seams (one technical intent each), labelling every hunk by
 - `repo` + `range` — a repo path and a git revision range (`HEAD~1`, `main...HEAD`)
 - `engine` — `det` (default, offline), `hybrid`, or `llm`
 - `blastRadius` — also find files *outside* the diff that import changed symbols
+- `impact` — annotate each seam with the change's codebase impact: transitive consumers **not in the PR**,
+  plus **cross-stack coupling** (a backend write whose frontend reader the PR didn't touch — the "you
+  changed the write, not the read" signal). Needs `repo`. The one thing a diff-only or codebase-only tool
+  can't produce; the structural bridge between this server's diff and codebase halves. Each flag is graded
+  by a deterministic relevance floor (relevant / unknown / provably-irrelevant→suppressed) so it isn't noise.
+- `triage` — with `impact`: an LLM pass over only the `unknown` relevance residual, reclassifying each
+  relevant/irrelevant (needs engine `hybrid`/`llm` or a local binary). The floor handles the easy 80%; this
+  is the exception handler, not the firehose.
+
+> Both codebase tools below emit the **deterministic skeleton** (`--skeleton`): the spine (when grown) +
+> structural symbol-name labels + blindspots, *without* the LLM seam-intent tiering/labeling pass. The
+> consumer here is **your** model, which re-derives tiers/labels from the symbols itself — validated A/B
+> to give an equal-or-better answer at ~⅓ the tokens, while skipping the ~18s pass. The full prose-label
+> + tier-grouping enrichment is reserved for the human VS Code visualization, which can't re-tier on the fly.
 
 ### `intent_footprint`
 From an anchor (a symbol, or a whole module file), trace its footprint across the codebase in a single
@@ -38,6 +54,42 @@ model's, served by **your** model via sampling. LLM-only (no `det`); needs a sam
 
 - `repo`, `anchorFile`, `symbol`, `intent` (required), `maxSteps`, `crossFramework`, `engine` (`hybrid`/`llm`)
   (`crossFramework` as above — opt-in cross-framework coupling, off by default.)
+
+### Structural shapes (offline/deterministic)
+
+Non-flow questions answered as **projections over the resolved graph** — each correct where grep gives
+false-positives and where an embedding/RAG index can only guess, and each **honest** (`noStructure` /
+`unreachable` route you to grep rather than fabricating a result). All are `det`, no LLM, no `engine` knob.
+
+- **`find_consumers`** (`repo`, `anchorFile`, `symbol`, `recall?`) — the RESOLVED set of callers of a
+  symbol, each tier-labelled (`RESOLVED_FULL` / `PARTIAL` / `SUGGESTED`). `recall: true` adds
+  name-grounded UNVERIFIED leads (a separate list) for languages without symbol imports (Ruby/C/C++).
+- **`find_dependencies`** (`repo`, `anchorFile`, `symbol`) — the symmetric inverse: the RESOLVED set of
+  what a symbol depends on / calls (its out-edges), tier-labelled. `noStructure` reason `none` = a leaf.
+- **`impact_of`** (`repo`, `anchorFile`, `symbol`, `depth?`) — the TRANSITIVE blast radius (what's
+  affected if X changes): the transitive consumer closure rolled up by file, the `surface` it ripples to,
+  and the `gaps` (opaque callers where the view is incomplete). The refactoring safety net.
+- **`refactor_facts`** (`repo`, `anchorFile`, `symbol`) — the one-call FACTS bundle for "how to refactor
+  X": impact + dependencies + contract together. Returns facts only — the change PLAN over them is a
+  judgement for the caller/model, not something Seam decides.
+- **`can_reach`** (`repo`, `anchorFile`, `symbol`, `toSymbol`, `toFile?`, `maxHops?`) — can FROM reach TO?
+  A verified yes/no **+ a witness path**. Three distinct negatives: `unreachable` (real), `exhausted`
+  (budget — inconclusive), `no-out-edges` (FROM unanalysable).
+- **`module_contract`** (`repo`, `anchorFile`) — a module's boundary: used exports + consumers, **dead
+  exports**, outbound deps, and fan-in/out (afferent/efferent coupling).
+- **`subsystem`** (`repo`, `anchorFile`, `symbol`, `depth?`) — the cohesive cluster around a symbol, split
+  into core vs periphery by the parameter-free weak-community rule (deterministic, local).
+- **`compare_symbols`** (`repo`, `anchorFile`, `symbol`, `toFile`, `toSymbol`, `depth?`) — how two symbols
+  differ by what they depend on (shared / A-only / B-only) + a similarity score.
+
+### `ask` — the natural-language front door
+
+From a plain question, **routes** to the right shape and runs it — or routes **away** to grep (lexical)
+/ RAG (semantic) when structure isn't the right tool. Routing is a model judgement, so this is the one
+shape tool that needs an LLM (served like `grow_intent`: a local `claude`/`copilot` binary, else your
+model via sampling). When you already know the shape, call its tool directly to skip the routing step.
+
+- `repo`, `question` (required), `engine` (`hybrid`/`llm`)
 
 All tools return two content blocks: a short human summary, and the full Seam JSON model.
 
@@ -77,8 +129,13 @@ orchestration needs. Implementation: [`src/sampling.ts`](src/sampling.ts), engin
 bun src/server.ts          # stdio MCP server
 ```
 
-Engine resolution order: `$SEAM_BIN` → `ts/dist/seam` (build with `cd ts && bun run build`) → `bun`
-+ the source CLI. Set `SEAM_BIN` to ship the server without a checkout.
+Engine resolution order: `$SEAM_BIN` → the esbuilt `ts/dist/seam.cjs` bundle (build with
+`cd ts && bun run build`; run via `bun` with `SEAM_WASM_DIR` set automatically) → `bun` + the source
+CLI (~40ms startup either way; the real cost is the tree-sitter scan, not startup). Set `SEAM_BIN` to
+ship the server without a checkout. *(Note: the locator deliberately does **not** auto-prefer a
+`ts/dist/seam` single binary — `bun build --compile` drops web-tree-sitter's core wasm and aborts on
+the first parse, so a stray broken build can't poison the server; opt a working packaged engine in via
+`SEAM_BIN`.)*
 
 ### Register with an MCP client
 
@@ -89,8 +146,7 @@ Engine resolution order: `$SEAM_BIN` → `ts/dist/seam` (build with `cd ts && bu
   "mcpServers": {
     "seam": {
       "command": "bun",
-      "args": ["/abs/path/to/code-review-sort/mcp/src/server.ts"],
-      "env": { "SEAM_BIN": "/abs/path/to/code-review-sort/ts/dist/seam" }
+      "args": ["/abs/path/to/code-review-sort/mcp/src/server.ts"]
     }
   }
 }

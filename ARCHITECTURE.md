@@ -28,16 +28,32 @@ ts/src/
                classifier_llm · engine (per-pass orchestrator) · noise_filter · seams (assembly) ·
                report_text (ASCII/markdown render) · blast_radius · cache · subgroup · seam_types
   codebase/    CODEBASE-MODE — anchor on a symbol (or auto-select one from an intent) → intent
-               FOOTPRINT (consumers + deps) → seams. import_scan (scan) · codebase (decompose) ·
-               expand · anchor_rank (name-overlap recall) · intent_expand (LLM query-expansion) ·
-               anchor_select (auto-anchor: probe → judge) · orchestrate (grow) · llm_discovery ·
-               string_coupling · atoms (tree-sitter facts) · coupling/ (data-coupling adapters)
+               FOOTPRINT (consumers + deps) → seams. scan/ (footprint build) · codebase (decompose) ·
+               anchor/ (rank · intent_expand · anchor_select: probe → judge) · llm_discovery ·
+               atoms (tree-sitter facts) · coupling/ (data-coupling adapters) · grow/ — the FOOTPRINT
+               PROJECTIONS: orchestrate (grow the spine) + the non-spine SHAPES (project_set ·
+               reach · contract · neighborhood · compare) + name_consumers (name-grounded recall) +
+               route (the NL→shape router) — §8.6
   cli/         decompose.ts (the one CLI entry) · anchor_rank.ts (standalone ranker / --select)
 ```
 
 **The rule (a maintained convention):** `diff/*` and `codebase/*` import only from `core/*` and within
 their own folder — **never from each other**, and `core/*` imports neither. This keeps the modes
 independently evolvable; adding a third mode is a new folder, no core surgery.
+
+**The one deliberate cross-mode composition** lives at the **CLI/composition root**: `cli/review_impact.ts`
+(`--review-impact`, MCP `decompose_diff impact:true`) is the *bridge* — it annotates a classified **diff**
+(diff mode) with the **codebase** impact + cross-stack coupling of the changed symbols. It must sit in
+`cli/` precisely because the layering forbids `diff/`↔`codebase/` imports; the bridge belongs above both,
+not inside either. This is the structural embodiment of "a diff is a Δ on the codebase graph" — the
+feature only Seam can build because it holds both halves on one resolved engine.
+
+Each flag is graded by a **three-layer relevance** pipeline so it stays quiet enough to leave on (the
+anti-fatigue requirement for an always-on reviewer): (1) a **deterministic floor** (`cli/review_relevance.ts`)
+— written-fields ∩ read-fields, **suppress only on proof** of disjointness; whole-row/unpinnable → `unknown`;
+(2) **tier** — relevant loud, unknown collapsed, irrelevant hidden; (3) **LLM triage** (`triageUnknowns`,
+`--triage`, the `review-triage` strong pass) on the `unknown` residual ONLY. Same structure-proves /
+LLM-judges split as the rest of the engine, applied to the output.
 
 **Mode dispatch** lives in `cli/decompose.ts:main`: a single branch routes `--scan` / `--graph` /
 `--expand-graph` to `runCodebase`, everything else (`--file` / `--git` / `--from-classified`) to the
@@ -62,9 +78,13 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
 - **Contract:** `ts/src/core/contract.ts` stamps `schemaVersion`; the shape is documented in
   [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump; breaking
   changes do, and clients warn on a higher major.
-- **Distribution:** [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — bun-from-source vs the
-  `bun build --compile` single binary, the tree-sitter-grammar caveat, and the host-bus LLM seam.
-- **MCP:** [`mcp/`](mcp/) exposes `decompose_diff` / `intent_footprint` / `grow_intent` to any agent.
+- **Distribution:** [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — bun-from-source vs the esbuilt
+  `ts/dist/seam.cjs` bundle (`bun run build`; web-tree-sitter kept external so it loads its own wasm —
+  **not** `bun build --compile`, which drops the core wasm and aborts), the grammar caveat, the host-bus seam.
+- **MCP:** [`mcp/`](mcp/) exposes **12 tools** to any agent — `decompose_diff` / `intent_footprint` /
+  `grow_intent`, the structural shapes (`find_consumers` / `find_dependencies` / `impact_of` /
+  `refactor_facts` / `can_reach` / `module_contract` / `subsystem` / `compare_symbols`, §8.6), and
+  `ask` (the NL router).
   `det` is offline. `hybrid`/`llm` serve their LLM passes one of two ways, auto-chosen per call
   (override with `SEAM_MCP_LLM=binary|sampling`): **binary** — the engine makes its own `claude`/`copilot`
   calls (cheap dedicated tier, no sampling needed — so clients *without* MCP sampling, e.g. GitHub
@@ -236,6 +256,7 @@ All sites are in `diff/classifier_llm.ts`.
 | 4 | **roles** reconcile — `reconcile_roles_llm` | `reconcile-roles` | 0 | ❌ only if `roles=hybrid` (re-judges `<0.6`-confidence) |
 | 5 | **wiring** Pass C — `assign_wiring` | `wire` | 0 | ❌ only if `wiring=llm` |
 | 6 | **cluster** labels — `label_clusters_llm` | `label-clusters` | 2048 | ❌ only if `cluster=hybrid` |
+| 7 | **review-impact triage** — `triageUnknowns` (`cli/`) | `review-triage` | 0 | ❌ only `--review-impact --triage` (LLM-judges the `unknown` relevance residual) |
 | — | **all-LLM fast path** — `classify_all_llm` (cluster ∥ roles, then wire) | `cluster`,`role`,`wire` | mixed | ❌ only if `cluster=roles=wiring=llm` |
 
 So the **default diff run makes exactly 2 LLM calls**: `reconcile` then `cluster`. `roles`/spans are deterministic.
@@ -252,10 +273,72 @@ CLI default = the **deterministic floor** (anchor → footprint → intent floor
 | **seam intent / relevance** — `label_focus_relevance_llm` | `codebase.ts` | `seam-intent` | `useLlm` **and** `--intent` | F5: labels + TIERS each seam spine/supporting/off and marks the answer seam, primed by topology + db-table priors (additive — dims, never drops) |
 | **residual discovery** — `discover` / `discover_keys` | `llm_discovery.ts` | `discover` / `discover-keys` | `--data-coupling llm` / tier-3 DOWN-expansion | proposes residual couplings (or shared-key boundaries) the deterministic scan missed → SUGGESTED edges |
 | **auto-orchestrate** — `auto_orchestrate` | `orchestrate.ts` | `orchestrate` | `--auto --grow llm` | legacy LLM grow: the LLM picks the next node + direction; default `--grow det` (`grow_to_terminals`) follows crossings to terminals with **no** LLM |
+| **shape route** — `routeQuestion` | `grow/route.ts` | `shape-route` | `--ask "<q>"` | the router (§8.6): JUDGES which shape answers the NL question + extracts the target name(s); the only LLM in the `--ask` path (the shape it picks then runs deterministically) |
 
 **Auto-anchor selection (`codebase/anchor_select.ts`).** When `--auto` is given an `--intent` but **no `--symbol`**, the engine chooses the anchor instead of the user: `find_anchor_candidates` + `rank_anchors` (name-overlap recall, widened by the `expand` pass) → a shallow deterministic `grow_to_terminals` **probe** of each top-K candidate → drop the ones whose footprint dead-ends (the structural floor: `reach`/`crossings`/`terminals`) → the `anchor-judge` LLM picks the connected footprint that answers the intent. Same split as the rest of the system: **structure measures connectedness (a fact), the LLM judges relevance (the meaning)** — so a name-matching-but-isolated symbol can't be picked and hide the real result. Degrades to the structural-best pick when no model is available.
 
 **The codebase invariant (`core/llm` docstring):** the LLM here only produces a *proposed partition / labels / suggestions / an anchor choice* over **resolved** carriers — it never finds an atom or an edge (those are deterministically resolved), so a mis-frame can't make the map lie.
+
+---
+
+## 8.6 Codebase shapes — projections over the resolved graph + the router (`codebase/grow/`)
+
+The flow/spine is **one** shape of answer; it is not the unit. The unit is the **`ResolvedGraph`**
+(`scan/graph.ts`) — resolved edges (imports, namespace-member calls, data-coupling shared-keys, HTTP
+routes). A *spine* is the longest-meaningful-path **projection** of it; a *policy* is the star/fan
+projection. The non-spine **shapes** are sibling projections of the same graph, each a small module in
+`codebase/grow/`:
+
+| shape (`--query`) | module · fn | projection | honest negative |
+|---|---|---|---|
+| **consumers** | `project_set.projectConsumerSet` | the anchor's resolved **in-edges**, tier-sorted (FULL → PARTIAL → SUGGESTED) | `noStructure` (`opaque` = callers exist but unresolved → grep; `none` = no caller) |
+| **dependencies** | `project_set.projectDependencySet` | the anchor's resolved **out-edges** (DOWN footprint) — the symmetric inverse, shares `projectEdgeSet` | `noStructure` (`none` = a leaf; `opaque` = deps don't resolve) |
+| **impact** | `impact.projectImpact` | the **transitive** consumer closure (bounded BFS up), rolled up by file, + the `surface` (leaves of the up-tree) + `gaps` (opaque callers) | `noStructure` (`isolated` = no consumer; `opaque` = only opaque callers) |
+| **refactor** | `refactor_facts.gatherRefactorFacts` | a COMPOSITION (not a projection): impact + dependencies + contract gathered SEQUENTIALLY (build_footprint isn't concurrency-safe) for "how to refactor X" | — (delegates to its parts; the PLAN is the LLM's, never emitted) |
+| **reaches** | `reach.findReach` | bounded BFS over **down** footprints A→B + a witness path | `unreachable` (closure drained) vs `exhausted` (budget — inconclusive) vs `no-out-edges` |
+| **contract** | `contract.projectContract` | module **boundary** — used exports + consumers (in-cut), dead exports, resolved imports (out-cut), fan-in/out | `noStructure` (no exports) |
+| **neighborhood** | `neighborhood.projectNeighborhood` | a bounded local ball + the **weak-community** core/periphery split (file core iff internal-edges ≥ external — parameter-free, deterministic) | `noStructure` (isolated) |
+| **compare** | `compare.projectCompare` | set-diff of two anchors' **dependency** sets (shared / A-only / B-only) + Jaccard | `noStructure` (neither has deps) |
+
+**The discriminator** (the whole reason these belong to Seam and not grep/RAG): *not* "is it a flow"
+but **"does the answer's correctness need resolved edges?"** Lexical one-fact → grep; semantic
+*about-X* → RAG; Seam owns the **structural middle**. Every shape carries the **dual of `noFlow`** — an
+explicit `noStructure` that **routes away** rather than fabricating a result. They are deterministic,
+offline, and reuse the scan wholesale (each is a projection + a renderer, not a new engine), so they
+add zero risk to the spine/grow path.
+
+Two notes that bit real repos and shaped the code:
+- **Resolver floor completeness, not embedding fallback.** A consumer the floor misses is a *resolver*
+  gap to fix. Two were: **namespace-member calls** (`const ns = await import(...)` then `ns.fn()`,
+  resolved through a re-export barrel — `core/resolve/consumers.ts` + a `namespaceImports` provider
+  method, kept out of the `ImportRef` stream so dep-graph/oracles are untouched), and a **name-grounded
+  recall** tier for languages with no symbol imports (Ruby globals are `constant` AST nodes; C/C++ have
+  no `#include` parser) — `scan/name_consumers.ts`, opt-in `--recall name`, kept in a **separate**
+  `recalled` list (never the verified members), file-deduped, labelled UNVERIFIED.
+- **`build_footprint` is not concurrency-safe** (shared module-global scan caches). The shape collectors
+  expand **sequentially** (`reach`/`neighborhood` loop with `await`; `compare` deliberately *not*
+  `Promise.all` — concurrent collection corrupted results).
+
+### The router (`grow/route.ts`) — the semantic front door
+
+`--ask "<question>"` (MCP `ask`) turns a natural-language question into a run shape. The split is the
+project's invariant applied to routing itself:
+
+1. **`SHAPES` registry** = the source of truth (id · `needs` · hint). The router prompt is **built from
+   it** — adding a shape updates routing automatically; no hardcoded list to drift (CLAUDE.md: a closed
+   STRUCTURAL set comes from the registry, never a hand-synced list).
+2. **`routeQuestion`** = one LLM pass (`shape-route`, §8.5) that **judges** the shape and extracts the
+   target name(s) — semantic, never keyword-matched. *(Framework note: `_collect` keeps only items with
+   an `id`, so the chosen shape is emitted as the `id` field.)*
+3. **`resolveName`** = a **deterministic** def-lookup (`enumerate_defs`) name→file, test-demoted,
+   ambiguity-flagged — the structural half.
+4. **`ask`** = route → resolve → run; dispatches to the five shapes + `flow` (grow + decompose), and
+   routes **away** to `grep` (lexical) / `rag` (semantic) as an honest decline. Guard: `get_host_bus()
+   || available()` — `available()` alone misses the MCP sampling bridge and would wrongly reject it.
+
+So `ask` is the realization of the "turn `noFlow` into shape-dispatch" idea: every codebase question
+has a home, and Seam says so when the home is grep or RAG rather than itself — which is what makes
+redirecting *to* Seam trustworthy.
 
 ---
 

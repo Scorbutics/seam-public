@@ -173,9 +173,12 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
 // discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
-  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: new EngineCtx() };   // ONE ctx shared across all grow moves
+  // ctx shared across all grow moves (repo indices built once). A CALLER may pass its OWN ctx to share the
+  // expensive repo-wide indices across SEVERAL grows — e.g. the anchor probes (Lever 2) build the
+  // data-coupling grounding index ONCE for the whole candidate pool instead of once per candidate.
+  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
   // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
   // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the

@@ -52,8 +52,8 @@ export async function runEngineWithBridge(server: McpServer, flags: string[], sc
 
   const channel = join(scratch, "bridge");
   mkdirSync(channel, { recursive: true });
-  const { cmd, pre } = engineInvocation();
-  const proc = spawn(cmd, [...pre, ...flags, "--llm-bridge", channel], { cwd: REPO_ROOT });
+  const { cmd, pre, env } = engineInvocation();
+  const proc = spawn(cmd, [...pre, ...flags, "--llm-bridge", channel], { cwd: REPO_ROOT, env: { ...process.env, ...env } });
 
   let stderr = "";
   proc.stderr.on("data", (d) => { stderr += d.toString(); });
