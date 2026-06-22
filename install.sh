@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Seam installer — Claude Code skill + MCP server, from source via bun.
+# Seam installer — the `seam` CLI + Claude/Copilot skills + MCP server, from source via bun.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
 #   curl -fsSL .../install.sh | bash -s -- --skill   # only the Claude Code skill
@@ -78,13 +78,21 @@ fi
 if "$BUN" "$HOME_DIR/ts/src/cli/decompose.ts" --check-backend >/dev/null 2>&1; then :; fi
 log "engine ready: $BUN $HOME_DIR/ts/src/cli/decompose.ts"
 
-# Convenience shim for the learned-adapter CLI (list/promote the LLM-deduced .seam adapters).
+# Convenience CLI shims: `seam` (the engine) + `seam-adapters` (list/promote learned .seam adapters).
+# These are the recommended way to drive Seam — the CLI has no MCP round-trip / host request-deadline.
+mkdir -p "$HOME/.local/bin" 2>/dev/null || true
 if [ -d "$HOME/.local/bin" ]; then
-  shim="$HOME/.local/bin/seam-adapters"
-  printf '#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n' "$BUN" "$HOME_DIR/ts/src/cli/adapters.ts" > "$shim" && chmod +x "$shim"
-  log "installed seam-adapters → $shim  (list / promote learned .seam adapters)"
+  seam_shim="$HOME/.local/bin/seam"
+  printf '#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n' "$BUN" "$HOME_DIR/ts/src/cli/decompose.ts" > "$seam_shim" && chmod +x "$seam_shim"
+  adapters_shim="$HOME/.local/bin/seam-adapters"
+  printf '#!/usr/bin/env bash\nexec "%s" "%s" "$@"\n' "$BUN" "$HOME_DIR/ts/src/cli/adapters.ts" > "$adapters_shim" && chmod +x "$adapters_shim"
+  log "installed CLI → $seam_shim  (+ seam-adapters)"
+  case ":$PATH:" in
+    *":$HOME/.local/bin:"*) : ;;
+    *) warn "  → ~/.local/bin is not on PATH. Add it so 'seam' works everywhere:  export PATH=\"\$HOME/.local/bin:\$PATH\"" ;;
+  esac
 else
-  log "seam-adapters: run via  $BUN $HOME_DIR/ts/src/cli/adapters.ts list   (add ~/.local/bin to PATH for a shim)"
+  log "seam: run via  $BUN $HOME_DIR/ts/src/cli/decompose.ts   (couldn't create ~/.local/bin for a 'seam' shim)"
 fi
 
 # ── skill (Claude Code) ────────────────────────────────────────────────────--─
@@ -110,15 +118,26 @@ if [ "$do_skill" -eq 1 ]; then
   ' "$src_skill" > "$SKILL_DIR/SKILL.md"
   log "Claude Code skill installed — ask to \"run Seam\" / \"decompose this diff\" / \"map the footprint of X\"."
 
-  # Copilot CLI reads personal skills from ~/.copilot/skills (NOT ~/.claude/skills), and its Seam path
-  # is the MCP server, not host-served subagents — so install a SEPARATE, thin routing skill that just
-  # tells Copilot WHEN to call the seam MCP tools. Only when copilot is on PATH (else it's litter).
+  # Copilot CLI reads personal skills from ~/.copilot/skills (NOT ~/.claude/skills). Copilot is unreliable
+  # with MCP servers (request timeouts, dropped tool-call namespaces), so its skill drives the `seam` CLI
+  # directly — not the MCP. Pin the engine command (in case `seam` isn't on PATH). Only when copilot is on
+  # PATH (else it's litter).
   if command -v copilot >/dev/null 2>&1; then
-    cop_skill="$HOME_DIR/mcp/copilot-skill/SKILL.md"
+    cop_skill="$HOME_DIR/copilot-skill/SKILL.md"
     if [ -f "$cop_skill" ]; then
       mkdir -p "$HOME/.copilot/skills/seam"
-      cp "$cop_skill" "$HOME/.copilot/skills/seam/SKILL.md"
-      log "Copilot CLI routing skill installed → ~/.copilot/skills/seam/ (routes to the seam MCP tools)."
+      awk -v cli="bun $HOME_DIR/ts/src/cli/decompose.ts" '
+        /^---$/ { c++; print
+          if (c == 2) {
+            print ""
+            print "> **Installed by install.sh.** If the `seam` command is not on PATH, run the engine as"
+            print "> `" cli "` — substitute it wherever this skill writes `seam`."
+          }
+          next
+        }
+        { print }
+      ' "$cop_skill" > "$HOME/.copilot/skills/seam/SKILL.md"
+      log "Copilot CLI skill installed → ~/.copilot/skills/seam/ (drives the seam CLI, not MCP)."
     fi
   fi
 fi

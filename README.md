@@ -212,10 +212,15 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 - **Contract** — `ts/src/core/contract.ts` stamps `schemaVersion`; the full shape is in
   [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump it; breaking
   changes do, and clients warn on a higher major.
-- **Distribution** — a one-line [`install.sh`](install.sh) sets up the skill + MCP server from source
-  (`curl … | bash`); run the engine directly from a checkout (`bun`); or ship the **esbuilt bundle**
-  (`bun run build` → `ts/dist/seam.cjs` + a grammar pack, run via bun/node with `SEAM_WASM_DIR`).
-  [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and the tree-sitter-grammar caveat.
+- **Intent relevance** — a grown footprint is the full structural closure; each seam is ranked by a
+  **deterministic embedding** of how on-intent it is (`relevance` + `tier`), and `--spine-only` crops the
+  off-intent band. The query↔passage design (what gets embedded) is in
+  [`docs/INTENT_RELEVANCE.md`](docs/INTENT_RELEVANCE.md).
+- **Distribution** — a one-line [`install.sh`](install.sh) sets up the `seam` CLI + the Claude/Copilot
+  skills + the MCP server from source (`curl … | bash`); run the engine directly from a checkout (`bun`);
+  or ship the **esbuilt bundle** (`bun run build` → `ts/dist/seam.cjs` + a grammar pack, run via bun/node
+  with `SEAM_WASM_DIR`). [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and the
+  tree-sitter-grammar caveat.
   *(A single `bun build --compile` binary is **not** used — it drops web-tree-sitter's core wasm and
   aborts on the first parse; the bundle keeps web-tree-sitter external so it resolves its own wasm.)*
 - **The LLM seam** — `det` runs fully offline. For `hybrid`/`llm`, the engine either spawns a
@@ -232,9 +237,13 @@ from `curl` — it bootstraps `bun`, fetches the engine, and wires both up so Se
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
-#   …| bash -s -- --skill    # only the Claude Code skill
+#   …| bash -s -- --skill    # only the skills (Claude + Copilot) + the `seam` CLI
 #   …| bash -s -- --mcp      # only the MCP server (auto-registers with the `claude` CLI if present)
 ```
+
+It also installs a **`seam` CLI** shim (`~/.local/bin/seam`) — the recommended way to drive Seam
+directly. The **Copilot** skill drives that CLI (not the MCP): Copilot is unreliable with MCP servers,
+and the CLI has no host request-deadline or tool-call round-trip.
 
 Re-run it any time to update (it tracks `main`). It installs from **source** — so you keep full
 tree-sitter facts for all five languages, not the regex fallback a single compiled binary would force.
