@@ -13,7 +13,7 @@ import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
-import { annotateIntentRelevance } from "../codebase/grow/intent_rank.js";
+import { annotateIntentRelevance, cropOffIntent } from "../codebase/grow/intent_rank.js";
 import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -32,7 +32,7 @@ interface Args {
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
-  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; skeleton?: boolean;
+  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; skeleton?: boolean; spineOnly?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
@@ -102,6 +102,8 @@ function parseArgs(argv: string[]): Args {
       case "--attribution": a.attribution = next(); break;
       case "--auto": a.auto = true; break;
       case "--skeleton": a.skeleton = true; break;   // LLM-consumer output: skip the LLM seam-intent pass (det skeleton: spine + structural labels + blindspots)
+      case "--spine-only": a.spineOnly = true; break;   // crop the OFF-intent band (deterministic embed tier) — opt-in token/speed view; off-seams become compact stubs in cluster.omitted
+
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
@@ -513,7 +515,8 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
-        await annotateIntentRelevance(a.repo, a.intent, model2.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
+        const ranked2 = await annotateIntentRelevance(a.repo, a.intent, model2.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
+        if (a.spineOnly) model2.spineOnly = ranked2 ? { omitted: cropOffIntent(model2.clusters) } : { omitted: 0, unavailable: true };
         writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       }
@@ -630,7 +633,8 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
-    await annotateIntentRelevance(a.repo, a.intent, model.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
+    const ranked = await annotateIntentRelevance(a.repo, a.intent, model.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
+    if (a.spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
     writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }

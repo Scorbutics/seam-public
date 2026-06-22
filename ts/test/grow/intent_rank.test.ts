@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { bandTiers, annotateIntentRelevance } from "../../src/codebase/grow/intent_rank.js";
+import { bandTiers, annotateIntentRelevance, cropOffIntent } from "../../src/codebase/grow/intent_rank.js";
 
 describe("rank-banding (pure, deterministic)", () => {
   test("top third → spine, middle → supporting, tail → off", () => {
@@ -22,6 +22,30 @@ describe("rank-banding (pure, deterministic)", () => {
     const seams: any[] = [{ id: "a" }, { id: "b" }];
     bandTiers(seams);
     expect(seams.every((s) => s.tier === undefined)).toBe(true);
+  });
+});
+
+describe("cropOffIntent (--spine-only) — deterministic, honest, lossless-by-reference", () => {
+  test("drops tier=off, keeps spine+supporting, leaves stubs in cluster.omitted", () => {
+    const clusters = [{ seams: [
+      { id: "a", label: "Spine", tier: "spine", relevance: 0.9, primary: { file: "a.ts", symbol: "A" } },
+      { id: "b", label: "Sup", tier: "supporting", relevance: 0.5, primary: { file: "b.ts", symbol: "B" } },
+      { id: "c", label: "Off", tier: "off", relevance: 0.1, primary: { file: "c.ts", symbol: "C" } },
+    ] }];
+    const omitted = cropOffIntent(clusters);
+    expect(omitted).toBe(1);
+    expect(clusters[0].seams.map((s) => s.id)).toEqual(["a", "b"]);   // spine+supporting kept in full
+    expect((clusters[0] as any).omitted).toEqual([{ id: "c", label: "Off", relevance: 0.1, file: "c.ts" }]);  // off → compact stub
+  });
+  test("no off seams → no crop, no omitted array", () => {
+    const clusters = [{ seams: [{ id: "a", tier: "spine" }] }];
+    expect(cropOffIntent(clusters)).toBe(0);
+    expect((clusters[0] as any).omitted).toBeUndefined();
+  });
+  test("untiered seams (embeddings unavailable) are NOT cropped — degrades to full", () => {
+    const clusters = [{ seams: [{ id: "a" }, { id: "b" }] }];   // no tier
+    expect(cropOffIntent(clusters)).toBe(0);
+    expect(clusters[0].seams).toHaveLength(2);
   });
 });
 

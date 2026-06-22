@@ -70,6 +70,17 @@ const CROSS_FRAMEWORK = z.boolean().default(true)
     + "the floor only (fully offline, no learning). Note: a COLD .seam/ can vary run-to-run on grow; warm it "
     + "in CI for byte-stable grows.");
 
+// --spine-only: deterministic, opt-in crop of the OFF-intent band. The full closure is the default (the
+// tool's philosophy — show everything, highlight, don't judge); this is a VIEW for an LLM consumer that
+// pays per token. The kept/dropped split is the embedding relevance TIER (reproducible, no LLM), and it's
+// HONEST — dropped seams survive as compact stubs in cluster.omitted, so nothing is silently hidden and the
+// caller can re-query full. Full output is strictly more robust (the model can override the ranking); this
+// trades that for fewer tokens. No-op (returns full) when embeddings are unavailable.
+const SPINE_ONLY = z.boolean().default(false)
+  .describe("Crop the off-intent band, keeping only spine + supporting seams (the deterministic embedding "
+    + "relevance tier — reproducible, no LLM). Opt-in token/speed view; dropped seams become compact stubs "
+    + "in cluster.omitted (nothing silently hidden). Default false = the full closure. No-op without embeddings.");
+
 // A compact human-facing summary so a chat client shows something legible above the JSON.
 function summarize(model: any): string {
   // Edge-set shapes — consumers (find_consumers, `set`) + dependencies (find_dependencies, `deps`): a
@@ -184,7 +195,12 @@ function summarize(model: any): string {
   }
   if (extImpact.length) impactLines.push(`impact: ${extImpact.length} symbol(s) affected outside this PR`);
   const impactBlock = impactLines.length ? `\n\n${impactLines.join("\n")}` : "";
-  return `${head}${extras ? `   (${extras})` : ""}\n${intents}${impactBlock}${adapterStatus(model)}`;
+  const so = model.spineOnly;
+  const spineLine = so
+    ? (so.unavailable ? "\n\nspine-only requested but embeddings unavailable → full closure returned."
+       : `\n\nspine-only: cropped ${so.omitted} off-intent seam(s) (kept spine+supporting; dropped seams are stubs in cluster.omitted — re-query without spineOnly for full).`)
+    : "";
+  return `${head}${extras ? `   (${extras})` : ""}\n${intents}${impactBlock}${adapterStatus(model)}${spineLine}`;
 }
 
 // Explicit learned-adapter status for the human summary — "X used, Y newly learned", with names + where
@@ -396,9 +412,10 @@ server.registerTool("intent_footprint", {
     intent: z.string().optional().describe("A natural-language intent to focus the footprint on (hybrid/llm engines)."),
     depth: z.number().int().min(1).max(4).default(1).describe("How many consumer hops to follow."),
     crossFramework: CROSS_FRAMEWORK,
+    spineOnly: SPINE_ONLY,
     engine: ENGINE,
   },
-}, async ({ repo, anchorFile, symbol, intent, depth, crossFramework, engine }, extra) => {
+}, async ({ repo, anchorFile, symbol, intent, depth, crossFramework, spineOnly, engine }, extra) => {
   try {
     // --skeleton: this is an LLM consumer (YOUR model reads the result), so skip the LLM seam-intent
     // labeling pass — the det skeleton (spine + structural labels + blindspots) is enough; the consuming
@@ -406,6 +423,7 @@ server.registerTool("intent_footprint", {
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth), "--skeleton"];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
+    if (spineOnly && intent) base.push("--spine-only");   // crop needs an intent to rank against
     // Data-coupling flywheel on by default (crossFramework). It needs an LLM seam (bridge/binary), so even a
     // det footprint must route through one; degrade to the floor when neither is available.
     const serve = crossFramework ? llmServeOrNull(server) : null;
@@ -454,14 +472,16 @@ server.registerTool("grow_intent", {
     intent: z.string().describe("The natural-language question to grow the footprint toward."),
     maxSteps: z.number().int().min(1).max(8).default(4).describe("Maximum number of grow moves the model may make."),
     crossFramework: CROSS_FRAMEWORK,
+    spineOnly: SPINE_ONLY,
     engine: LLM_ENGINE,
   },
-}, async ({ repo, anchorFile, symbol, intent, maxSteps, crossFramework, engine }, extra) => {
+}, async ({ repo, anchorFile, symbol, intent, maxSteps, crossFramework, spineOnly, engine }, extra) => {
   try {
     // --skeleton: LLM consumer (see intent_footprint) — the grow itself is still LLM-directed (auto-anchor
     // + move picks), but the FINAL seam-intent labeling pass is skipped; the consuming model tiers/labels.
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
       "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
+    if (spineOnly) base.push("--spine-only");   // deterministic off-intent crop (intent is always set here)
     base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
     return await decompose(server, base, engine, true, extra);   // grow is LLM-only (hybrid/llm)
   } catch (e) { return errReply(e); }

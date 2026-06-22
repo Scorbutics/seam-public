@@ -21,6 +21,26 @@ export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   });
 }
 
+// --spine-only crop: deterministically drop the OFF-intent band (tier === "off"), keeping spine +
+// supporting in full. HONEST + lossless-by-reference — each dropped seam leaves a compact stub
+// (label + relevance + file) in `cluster.omitted`, so the consumer SEES what was cut and can re-query full;
+// nothing is silently hidden. No-op when tiers are absent (embeddings unavailable) — so it degrades to the
+// full closure rather than cropping blind (the engine never judges-by-hiding without a basis). Returns the
+// omitted count. Reproducible (the tier is the embedding ranking, not an LLM).
+export function cropOffIntent(clusters: any[]): number {
+  let omitted = 0;
+  for (const cl of clusters ?? []) {
+    const keep: any[] = [], drop: any[] = [];
+    for (const s of (cl.seams ?? [])) (s.tier === "off" ? drop : keep).push(s);
+    if (!drop.length) continue;
+    cl.seams = keep;
+    cl.omitted = drop.map((s) => ({ id: s.id, label: s.label, relevance: s.relevance, file: s.primary?.file }))
+      .sort((a: any, b: any) => (b.relevance ?? 0) - (a.relevance ?? 0));
+    omitted += drop.length;
+  }
+  return omitted;
+}
+
 // Annotate every seam in the clusters with a deterministic `relevance` (0..1 cosine, embed vs intent) and a
 // rank-banded `tier`. Keyed by the seam's primary def (file::symbol), with a name-only fallback. Mutates in
 // place. No-op without an intent or when embeddings are unavailable.
