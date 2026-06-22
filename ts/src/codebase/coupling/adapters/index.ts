@@ -4,6 +4,7 @@
 // front-end (discover_keys → grounding) cover it. A generic fallback kind handles LLM-proposed keys
 // with no registered adapter (queue/event/route/cache/…).
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
+import { plausibleKeyValue } from "../key_ir.js";
 import type { KeyHit, KeyKind } from "../types.js";
 import { SUPABASE, DB_TABLE_META } from "./db_table.js";
 import { RAW_SQL } from "./raw_sql.js";
@@ -50,7 +51,11 @@ export const KEY_PRODUCE_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => 
 // and must REGENERATE the couplings the adapters had hard-coded. Carrier-channel (data-file) is separate.
 export function scan_file_keys(file: string, text: string): KeyHit[] {
   if (process.env.SEAM_NO_ADAPTERS === "1") return [];
-  return ADAPTERS.flatMap((a) => a.scan(file, text));
+  // Universal floor guard: drop implausible key values (generic words like "the", prose, too-short) from
+  // ANY adapter — the deterministic floor isn't immune (raw-SQL matched the English "…select … from the …"
+  // as a db-table read across 32 files). plausibleKeyValue is the same identifier-shape filter the LLM/
+  // matcher paths use, applied here so a coincidental match can't become a shared-key boundary.
+  return ADAPTERS.flatMap((a) => a.scan(file, text)).filter((h) => plausibleKeyValue(h.value));
 }
 
 // Non-source file extensions some adapter ALSO scans (e.g. .vue/.html templates — where event listeners

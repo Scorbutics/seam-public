@@ -24,9 +24,9 @@ describe("event adapter — producer side (emit)", () => {
   test("Vue this.$emit('close') → produced event 'close'", () => {
     expect(events("popup.js", "this.$emit('close');").some((h) => h.value === "close" && h.produces)).toBe(true);
   });
-  test("Vue 3 setup bare emit('x') and AngularJS $broadcast('y') are producers", () => {
-    expect(events("setup.js", "emit('x')").some((h) => h.value === "x" && h.produces)).toBe(true);
-    expect(events("ctrl.js", "$scope.$broadcast('y')").some((h) => h.value === "y" && h.produces)).toBe(true);
+  test("Vue 3 setup bare emit('save') and AngularJS $broadcast('refresh') are producers", () => {
+    expect(events("setup.js", "emit('save')").some((h) => h.value === "save" && h.produces)).toBe(true);
+    expect(events("ctrl.js", "$scope.$broadcast('refresh')").some((h) => h.value === "refresh" && h.produces)).toBe(true);
   });
   test("submit(...) is NOT mistaken for an emit", () => {
     expect(events("form.js", "submit('save')")).toEqual([]);
