@@ -13,6 +13,7 @@ import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
+import { annotateIntentRelevance } from "../codebase/grow/intent_rank.js";
 import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -512,6 +513,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
+        await annotateIntentRelevance(a.repo, a.intent, model2.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
         writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       }
@@ -628,6 +630,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
+    await annotateIntentRelevance(a.repo, a.intent, model.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
     writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
