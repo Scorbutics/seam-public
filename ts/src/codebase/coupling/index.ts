@@ -15,15 +15,15 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS } from "../atoms.js";
-import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { kindOf, scan_file_keys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { COUPLING } from "./config.js";
 
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
-export { ADAPTERS, scan_file_keys } from "./adapters/index.js";
+export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
 
 // Classification predicates — the data-coupling VOCABULARY exposed as BEHAVIOUR, not raw kind Sets.
 // Consumers (the grow loop, the seam assembler) ask coupling "is this edge a crossing? this node a flow
@@ -104,7 +104,7 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
   if (ctx.sharedKey.has(repo)) return ctx.sharedKey.get(repo)!;
   const idx: GroundingIndex = new Map();
-  for (const { rel, text } of walkFiles(repo, skipDirs, endsWithSourceExt)) {
+  for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
     const hits = scan_file_keys(rel, text);
     if (!hits.length) continue;
     for (const h of hits) {

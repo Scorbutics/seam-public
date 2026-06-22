@@ -22,10 +22,12 @@ import { emit } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "discover-keys-batch", tier: "strong", note: "shared-key producer/consumer discovery (semantic, learn-once → .seam)" });
 import { walkFiles } from "../../core/resolve/walk.js";
-import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
-import { scan_file_keys } from "./adapters/index.js";
+import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
 import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_cache.js";
+import { hasMatcherCache, loadMatchers } from "./key_matcher_cache.js";
+import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
@@ -114,15 +116,17 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}`;
   if (ctx.llmKey.has(cacheKey)) return ctx.llmKey.get(cacheKey)!;
   const idx: GroundingIndex = new Map();
-  if (!opts.llm && !hasKeyCache(repo)) { ctx.llmKey.set(cacheKey, idx); return idx; }
+  if (!opts.llm && !hasKeyCache(repo) && !hasMatcherCache(repo)) { ctx.llmKey.set(cacheKey, idx); return idx; }
 
   // pass 1 — gather each file's deterministic floor keys + decide which files need the LLM
   const floorOf = new Map<string, Set<string>>();     // file → `${kind} ${value}` the floor already produced
   const llmKeysOf = new Map<string, KeyHit[]>();       // file → cached LLM keys
   const toSynth: { file: string; text: string; ck: string }[] = [];
-  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
+  const blindFiles: { file: string; text: string }[] = [];   // floor-blind files → matcher-rule synthesis candidates
+  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
     const floor = scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
+    if (!floor.length && blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: rel, text });
     if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
     const disk = cachedFileKeys(repo, ck);
@@ -142,6 +146,21 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
       (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file, line: h.line });
     }
   }
+
+  // pass 4 — the MATCHER flywheel: LEARN reusable adapter rules from the floor-blind files (LLM, self-
+  // validated by re-execution; no-op without opts.llm/budget), then apply ALL matchers (newly learned +
+  // cached/shared) DETERMINISTICALLY across the repo and fold their grounded keys into the index. This is
+  // what makes a warm `.seam/` cover a learned framework offline — and what lets the flywheel improve.
+  await learnKeyMatchers(repo, blindFiles, opts, ctx);   // persists survivors into the matcher store
+  const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
+  if (matchers.length) {
+    for (const [k, v] of applyMatchers(repo, matchers)) {
+      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
+      idx.get(k)!.producers.push(...v.producers);
+      idx.get(k)!.consumers.push(...v.consumers);
+    }
+  }
+
   ctx.llmKey.set(cacheKey, idx);
   return idx;
 }

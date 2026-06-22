@@ -36,6 +36,13 @@ function resolveLlmServe(server: McpServer): LlmServe {
     + "client does not support sampling. Use engine=\"det\" for a fully offline footprint instead.");
 }
 
+// Non-throwing probe: is ANY LLM seam available? Used to gracefully DEGRADE the opt-in data-coupling
+// flywheel to the deterministic floor (instead of erroring) when a det-engine call requests it but the
+// client has neither a binary nor sampling.
+function llmServeOrNull(server: McpServer): LlmServe | null {
+  try { return resolveLlmServe(server); } catch { return null; }
+}
+
 const ENGINE = z.enum(["det", "hybrid", "llm"]).default("det")
   .describe("det = offline, no LLM (default, recommended). hybrid/llm add product-intent labels via a "
     + "local claude/copilot binary if present, else YOUR model over MCP sampling (SEAM_MCP_LLM overrides).");
@@ -45,10 +52,13 @@ const ENGINE = z.enum(["det", "hybrid", "llm"]).default("det")
 // FALLBACK-gated: the LLM key pass fires only on nodes the floor couldn't key, bounded by a per-run
 // budget — so it scales on a heavy grow (the floor covers the bulk for free). Turn it ON when a question
 // genuinely SPANS frameworks/stacks and the trace left a cross-stack blindspot; off by default.
-const CROSS_FRAMEWORK = z.boolean().default(false)
-  .describe("Enable LLM cross-framework data-coupling. Fallback-gated (an LLM pass only on nodes the "
-    + "deterministic floor couldn't key, budget-capped). Use when the question spans frameworks/stacks "
-    + "AND the deterministic trace left a blindspot; off by default.");
+const CROSS_FRAMEWORK = z.boolean().default(true)
+  .describe("LLM data-coupling FLYWHEEL (on by default). On a floor-blind data edge, the LLM synthesizes a "
+    + "CONSTRAINED adapter rule that is RE-EXECUTED + grounded before use, then cached to .seam/ and applied "
+    + "DETERMINISTICALLY forever (LLM once → deterministic after; the flywheel learns each framework once). "
+    + "Budget-capped; degrades to the deterministic floor when no LLM seam is available. Set false to force "
+    + "the floor only (fully offline, no learning). Note: a COLD .seam/ can vary run-to-run on grow; warm it "
+    + "in CI for byte-stable grows.");
 
 // A compact human-facing summary so a chat client shows something legible above the JSON.
 function summarize(model: any): string {
@@ -216,12 +226,15 @@ function errReply(e: unknown) {
 // One path for every engine: write the seam model to a scratch file and reply with it. `det` runs the
 // engine offline in one shot; `hybrid`/`llm` run it over the interactive bridge so its LLM passes are
 // served by the caller's own model via sampling.
-async function decompose(server: McpServer, baseFlags: string[], engine: string) {
+// `needsLlm` is true when the run uses ANY LLM pass — a hybrid/llm classifier, OR a det classifier that
+// still drives the LLM data-coupling flywheel (so its passes reach the client's model via the bridge, not
+// just a local binary). Defaults to "engine isn't det", overridable by the data-coupling flywheel.
+async function decompose(server: McpServer, baseFlags: string[], engine: string, needsLlm = engine !== "det") {
   return withScratch(async (scratch) => {
     const out = join(scratch, "seams.json");
     const flags = [...baseFlags, "--classifier", engine, "--emit-seams", out];
     let stderr = "";
-    if (engine === "det") stderr = runEngine(flags).stderr;                       // offline, no LLM
+    if (!needsLlm) stderr = runEngine(flags).stderr;                              // offline, no LLM
     else if (resolveLlmServe(server) === "binary") stderr = runEngine(flags).stderr;   // engine serves its own passes via claude/copilot
     else await runEngineWithBridge(server, flags, scratch);       // borrow the client's model via sampling
     return reply(readJson(out), stderr);
@@ -314,8 +327,11 @@ server.registerTool("intent_footprint", {
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth), "--skeleton"];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
-    base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
-    return await decompose(server, base, engine);
+    // Data-coupling flywheel on by default (crossFramework). It needs an LLM seam (bridge/binary), so even a
+    // det footprint must route through one; degrade to the floor when neither is available.
+    const serve = crossFramework ? llmServeOrNull(server) : null;
+    base.push("--data-coupling", serve ? "llm" : "floor");
+    return await decompose(server, base, engine, engine !== "det" || !!serve);
   } catch (e) { return errReply(e); }
 });
 

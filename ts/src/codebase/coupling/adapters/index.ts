@@ -3,6 +3,7 @@
 // table). Register an adapter here and both the deterministic floor (scan_file_keys) and the LLM
 // front-end (discover_keys → grounding) cover it. A generic fallback kind handles LLM-proposed keys
 // with no registered adapter (queue/event/route/cache/…).
+import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind } from "../types.js";
 import { SUPABASE, DB_TABLE_META } from "./db_table.js";
 import { RAW_SQL } from "./raw_sql.js";
@@ -11,8 +12,9 @@ import { JOOQ } from "./jooq.js";
 import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
+import { EVENT_BINDING } from "./event_binding.js";
 
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING];
 
 // The BUILT-IN adapter catalogue (name + one-line blurb), derived FROM the registry — the single source,
 // so adding an adapter to ADAPTERS automatically surfaces it in `seam-adapters` / the extension's adapter
@@ -49,4 +51,20 @@ export const KEY_PRODUCE_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => 
 export function scan_file_keys(file: string, text: string): KeyHit[] {
   if (process.env.SEAM_NO_ADAPTERS === "1") return [];
   return ADAPTERS.flatMap((a) => a.scan(file, text));
+}
+
+// Non-source file extensions some adapter ALSO scans (e.g. .vue/.html templates — where event listeners
+// live). Sourced from the registry (each adapter's `extraExts`), not a hardcoded list, so a new adapter's
+// template format auto-extends the walk. SEAM_NO_ADAPTERS disables the floor → no extra exts either.
+const EXTRA_EXTS = [...new Set(ADAPTERS.flatMap((a) => a.extraExts ?? []))].map((e) => e.toLowerCase());
+
+// The "is this file worth scanning for shared keys" predicate — SOURCE_EXTS (the global source set) PLUS
+// the adapters' template extras. The coupling walks (shared_key_index, llmKeyIndex) use THIS instead of
+// endsWithSourceExt so a listener in a `.vue`/`.html` template grounds against an emitter in a `.js`,
+// without making the rest of the pipeline (parsing/resolution) treat templates as source.
+export function scannableForKeys(file: string): boolean {
+  if (endsWithSourceExt(file)) return true;
+  if (process.env.SEAM_NO_ADAPTERS === "1") return false;
+  const f = file.toLowerCase();
+  return EXTRA_EXTS.some((e) => f.endsWith(e));
 }

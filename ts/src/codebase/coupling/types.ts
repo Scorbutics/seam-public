@@ -28,6 +28,9 @@ export interface KeyKind {
   consumeEdge: string;   // edge kind for a consumer↔key link, e.g. "db-read"
   name?: string;         // human-facing adapter name (the built-in catalogue surfaced in `seam-adapters`)
   blurb?: string;        // one-line description of what it couples
+  extraExts?: string[];  // non-SOURCE_EXTS file extensions this adapter ALSO scans (e.g. .vue/.html templates) —
+                         // the coupling walk unions these so listener-in-template files get scanned, even though
+                         // the rest of the pipeline (parsing/resolution) doesn't treat them as source.
   scan: (file: string, text: string) => KeyHit[];
 }
 // A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in

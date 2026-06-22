@@ -1,0 +1,136 @@
+// SELF-VALIDATING KEY-ADAPTER FLYWHEEL — the loop that lets Seam LEARN an unknown framework's shared-key
+// shape via the LLM, then run it DETERMINISTICALLY. Proves the architecture the floor-default debate hinged
+// on: what the LLM emits is a CONSTRAINED rule that is RE-EXECUTED and only kept if it actually detects a
+// key (a hallucinated rule matches nothing → dropped), with one self-correction retry; grounding (the same
+// literal co-occurring at a producer AND a consumer) is still required for an edge. The LLM is an injected
+// HostBus (no API key); SEAM_ADAPTERS_DIR → tmp keeps the shared store hermetic.
+import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { set_host_bus, HostBus } from "../../src/core/llm.js";
+import { validateMatcher, runMatcher, type KeyMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { learnKeyMatchers, applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
+import { loadMatchers, hasMatcherCache, _resetMatcherCacheMem } from "../../src/codebase/coupling/key_matcher_cache.js";
+import { EngineCtx } from "../../src/codebase/engine_ctx.js";
+
+// ---- pure IR: validate + execute --------------------------------------------------------------------
+describe("KeyMatcher IR — validate", () => {
+  test("a well-formed call matcher is accepted and canonicalised", () => {
+    const m = validateMatcher({ via: "call", token: "$emit", argIndex: 0, kind: "event", role: "produces" });
+    expect(m).toMatchObject({ via: "call", token: "$emit", argIndex: 0, kind: "event", role: "produces" });
+  });
+  test("a route/endpoint alias canonicalises to http-route", () => {
+    expect(validateMatcher({ token: "navigate", kind: "endpoint", role: "consumes" })?.kind).toBe("http-route");
+  });
+  test("a token with regex metacharacters is rejected (no injection into the executor)", () => {
+    expect(validateMatcher({ token: "a.*(b", kind: "event", role: "produces" })).toBeNull();
+    expect(validateMatcher({ token: "", kind: "event", role: "produces" })).toBeNull();
+  });
+  test("an unsupported shape (attribute) is rejected today", () => {
+    expect(validateMatcher({ via: "attribute", token: "x", kind: "event", role: "consumes" })).toBeNull();
+  });
+});
+
+describe("KeyMatcher IR — execute", () => {
+  const m = (o: Partial<KeyMatcher>): KeyMatcher => validateMatcher({ via: "call", token: "publish", argIndex: 0, kind: "queue", role: "produces", ...o })!;
+  test("detects the string-literal key argument of a call", () => {
+    expect(runMatcher(m({ token: "$emit", kind: "event" }), "this.$emit('sync', payload)"))
+      .toContainEqual({ kind: "event", value: "sync", line: 0, produces: true });
+  });
+  test("argIndex picks the right argument", () => {
+    expect(runMatcher(m({ token: "cache", argIndex: 0 }), "cache('user:42', ttl)").map((h) => h.value)).toEqual(["user:42"]);
+    expect(runMatcher(m({ token: "on", argIndex: 0, role: "consumes" }), "bus.on('refresh', cb)")[0]).toMatchObject({ value: "refresh", produces: false });
+  });
+  test("a computed/concatenated argument does NOT ground (can't be a stable literal)", () => {
+    expect(runMatcher(m({ token: "emit" }), "emit('evt-' + suffix)")).toEqual([]);
+  });
+  test("a call inside a comment is ignored; a token inside a larger identifier is not matched", () => {
+    expect(runMatcher(m({ token: "emit" }), "// emit('x')\nconst resubmit = emit('real')").map((h) => h.value)).toEqual(["real"]);
+  });
+});
+
+// ---- the synth → re-execute → self-correct → persist loop --------------------------------------------
+let REPO: string, SHARED: string;
+const ctx = () => new EngineCtx();
+// A HostBus that serves the matcher-synthesis pass; `answers` is an ARRAY of successive replies (round 1,
+// then the self-correction round), so a test can model a first-bad-then-fixed exchange.
+class MatcherBus extends HostBus {
+  private n = 0;
+  constructor(private replies: string[]) { super(); }
+  serve(tag: string): string { return tag === "discover-key-matchers" ? (this.replies[this.n++] ?? "[]") : "[]"; }
+}
+const blind = [{ file: "bus.js", text: "this.$emit('sync', x); bus.on('sync', cb);" }];
+
+beforeEach(() => {
+  REPO = mkdtempSync(join(tmpdir(), "km-repo-")); SHARED = mkdtempSync(join(tmpdir(), "km-shared-"));
+  process.env.SEAM_ADAPTERS_DIR = SHARED;
+  _resetMatcherCacheMem(); set_host_bus(null);
+});
+afterEach(() => {
+  rmSync(REPO, { recursive: true, force: true }); rmSync(SHARED, { recursive: true, force: true });
+  delete process.env.SEAM_ADAPTERS_DIR; set_host_bus(null); _resetMatcherCacheMem();
+});
+
+describe("learnKeyMatchers — re-execution gate + self-correction + persistence", () => {
+  test("a matcher that re-executes (detects a key) is accepted and persisted", async () => {
+    set_host_bus(new MatcherBus(['[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]']));
+    const learned = await learnKeyMatchers(REPO, blind, { llm: true }, ctx());
+    expect(learned.map((m) => m.token)).toContain("$emit");
+    expect(hasMatcherCache(REPO)).toBe(true);                       // persisted → warm forever
+    expect(loadMatchers(REPO).some((m) => m.token === "$emit")).toBe(true);
+  });
+
+  test("a hallucinated matcher (token matches NOTHING) is dropped, even after the retry", async () => {
+    // both the first answer and the self-correction propose a token absent from the file → never detects
+    set_host_bus(new MatcherBus([
+      '[{"id":"r1","via":"call","token":"dispatchNope","argIndex":0,"kind":"event","role":"produces"}]',
+      '[{"id":"r1","via":"call","token":"stillNope","argIndex":0,"kind":"event","role":"produces"}]',
+    ]));
+    expect(await learnKeyMatchers(REPO, blind, { llm: true }, ctx())).toEqual([]);
+    expect(hasMatcherCache(REPO)).toBe(false);
+  });
+
+  test("self-correction: a first-round dead token is fixed in the retry and then accepted", async () => {
+    set_host_bus(new MatcherBus([
+      '[{"id":"r1","via":"call","token":"emitt","argIndex":0,"kind":"event","role":"produces"}]',   // typo → matches nothing
+      '[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]',    // corrected → detects
+    ]));
+    expect((await learnKeyMatchers(REPO, blind, { llm: true }, ctx())).map((m) => m.token)).toContain("$emit");
+  });
+
+  test("no LLM (det) → no synthesis", async () => {
+    set_host_bus(new MatcherBus(['[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]']));
+    expect(await learnKeyMatchers(REPO, blind, { llm: false }, ctx())).toEqual([]);
+  });
+});
+
+// ---- deterministic application + the grounding gate --------------------------------------------------
+describe("applyMatchers — deterministic grounding (LLM-free)", () => {
+  const write = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  // a NON-floor framework (no built-in adapter covers publish/subscribe) — the flywheel's real target
+  const pub: KeyMatcher = validateMatcher({ via: "call", token: "publish", argIndex: 0, kind: "queue", role: "produces" })!;
+  const sub: KeyMatcher = validateMatcher({ via: "call", token: "subscribe", argIndex: 0, kind: "queue", role: "consumes" })!;
+
+  test("a topic produced in one file and consumed in another co-occurs → grounded both sides", () => {
+    write("emitter.js", "bus.publish('orders', data);");
+    write("reader.js", "bus.subscribe('orders', this.refresh);");
+    const idx = applyMatchers(REPO, [pub, sub]);
+    const entry = idx.get("queue orders");
+    expect(entry?.producers.some((a) => a.file.endsWith("emitter.js"))).toBe(true);
+    expect(entry?.consumers.some((a) => a.file.endsWith("reader.js"))).toBe(true);
+  });
+
+  test("a producer-only topic has no consumer side (grounding downstream then drops it as an edge)", () => {
+    write("emitter.js", "bus.publish('orphan', data);");
+    const idx = applyMatchers(REPO, [pub, sub]);
+    expect(idx.get("queue orphan")?.consumers ?? []).toEqual([]);
+  });
+
+  test("a learned matcher that duplicates the deterministic floor is reconciled away (not double-counted)", () => {
+    // $emit IS covered by the built-in event adapter → a learned $emit rule must contribute nothing here
+    write("c.js", "this.$emit('sync', data);");
+    const dupe: KeyMatcher = validateMatcher({ via: "call", token: "$emit", argIndex: 0, kind: "event", role: "produces" })!;
+    expect(applyMatchers(REPO, [dupe]).get("event sync")).toBeUndefined();
+  });
+});
