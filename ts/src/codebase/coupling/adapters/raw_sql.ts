@@ -39,4 +39,4 @@ function scan(_file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const RAW_SQL: KeyKind = { ...DB_TABLE_META, scan };
+export const RAW_SQL: KeyKind = { ...DB_TABLE_META, name: "raw-sql", blurb: "Raw SQL INSERT/UPDATE/SELECT — DB-table read/write coupling", scan };

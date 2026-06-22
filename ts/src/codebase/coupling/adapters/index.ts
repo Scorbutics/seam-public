@@ -14,6 +14,14 @@ import { FILE_CHANNEL } from "./file_channel.js";
 
 export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL];
 
+// The BUILT-IN adapter catalogue (name + one-line blurb), derived FROM the registry — the single source,
+// so adding an adapter to ADAPTERS automatically surfaces it in `seam-adapters` / the extension's adapter
+// view (no parallel list to keep in sync). These are the deterministic, always-present, code-level adapters
+// (status "built-in"), as opposed to the LLM-LEARNED ones in `.seam/` (status learnt/promoted).
+export function builtinAdapters(): { name: string; kind: string; description: string }[] {
+  return ADAPTERS.map((a) => ({ name: a.name ?? a.kind, kind: a.kind, description: a.blurb ?? "" }));
+}
+
 const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-write", consumeEdge: "key-read", scan: () => [] };
 // Kind metadata (node label + edge kinds) for a key kind — shared by all adapters of that kind.
 export const kindOf = (kind: string): KeyKind => ADAPTERS.find((a) => a.kind === kind) ?? GENERIC;

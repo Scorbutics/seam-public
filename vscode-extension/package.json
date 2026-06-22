@@ -37,6 +37,20 @@
   "contributes": {
     "commands": [
       {
+        "command": "seam.adapters.refresh",
+        "title": "Seam: Refresh adapters",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "seam.adapters.promote",
+        "title": "Seam: Promote adapter (share across repos)",
+        "icon": "$(cloud-upload)"
+      },
+      {
+        "command": "seam.adapters.manage",
+        "title": "Seam: Manage adapters"
+      },
+      {
         "command": "seam.detangle",
         "title": "Seam: Detangle a diff…",
         "icon": "$(symbol-color)"
@@ -141,6 +155,11 @@
           "id": "seam.tree",
           "name": "Seams",
           "icon": "$(symbol-color)"
+        },
+        {
+          "id": "seam.adapters",
+          "name": "Adapters",
+          "icon": "$(plug)"
         }
       ]
     },
@@ -170,6 +189,11 @@
           "command": "seam.toggleChain",
           "when": "view == seam.tree",
           "group": "1_view@1"
+        },
+        {
+          "command": "seam.adapters.refresh",
+          "when": "view == seam.adapters",
+          "group": "navigation@1"
         }
       ],
       "editor/context": [
@@ -199,6 +223,11 @@
           "command": "seam.crossBoundary",
           "when": "view == seam.tree && viewItem == seamExpandable",
           "group": "crossing@1"
+        },
+        {
+          "command": "seam.adapters.promote",
+          "when": "view == seam.adapters && viewItem == seam.adapter.learnt",
+          "group": "inline@1"
         }
       ]
     },

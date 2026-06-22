@@ -111,4 +111,4 @@ function scan(file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const HTTP_ROUTE: KeyKind = { ...HTTP_ROUTE_META, scan };
+export const HTTP_ROUTE: KeyKind = { ...HTTP_ROUTE_META, name: "next-route", blurb: "Next.js file-routed handler ⇄ fetch/$http(\"/path\") — HTTP-route coupling", scan };

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { KeyAdapter, KeyHit } from "./types.js";
 import { ensureSeamGitignore, sharedSeamDir } from "./seam_dir.js";
+import { recordAdapterUsed, recordAdapterLearned } from "./ledger.js";
 
 const SCHEMA = 2;                                  // bumped: entries are KeyAdapter (named), not raw KeyHit[]
 const _file = "key-adapters.json";
@@ -41,13 +42,14 @@ export function hasKeyCache(repo: string): boolean {
 // The keys for a content-key — repo-local FIRST, then shared. Shape kept (`{hit,keys}`) for llm_key_index.
 export function cachedFileKeys(repo: string, key: string): { hit: boolean; keys: KeyHit[] } {
   const local = _load(repo);
-  if (local.has(key)) return { hit: true, keys: local.get(key)!.keys };
+  if (local.has(key)) { const a = local.get(key)!; recordAdapterUsed(a.name, "repo"); return { hit: true, keys: a.keys }; }
   const shared = _loadShared();
-  if (shared.has(key)) return { hit: true, keys: shared.get(key)!.keys };
+  if (shared.has(key)) { const a = shared.get(key)!; recordAdapterUsed(a.name, "shared"); return { hit: true, keys: a.keys }; }
   return { hit: false, keys: [] };
 }
 
 export function persistFileKeys(repo: string, key: string, adapter: KeyAdapter): void {
+  recordAdapterLearned(adapter.name);
   const m = _load(repo);
   m.set(key, adapter);
   try {

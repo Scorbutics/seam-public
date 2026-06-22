@@ -56,6 +56,7 @@ mkdirSync(OUT, { recursive: true });
 
 await bundle("decompose.ts", "decompose.cjs");
 await bundle("anchor_rank.ts", "anchor_rank.cjs");
+await bundle("adapters.ts", "adapters.cjs");   // the learned-adapter manager (list --json / promote)
 
 // Codebase-mode assets (diff review does not need these). Copy the grammar pack and the
 // web-tree-sitter package so the bundle's runtime `import("web-tree-sitter")` resolves on the user's
@@ -66,5 +67,5 @@ mkdirSync(join(OUT, "node_modules", "web-tree-sitter"), { recursive: true });
 cpSync(WTS_SRC, join(OUT, "node_modules", "web-tree-sitter"), { recursive: true });
 
 console.log(`\nEngine bundled → ${OUT}`);
-console.log("  decompose.cjs, anchor_rank.cjs");
+console.log("  decompose.cjs, anchor_rank.cjs, adapters.cjs");
 console.log("  wasm/ (tree-sitter grammars), node_modules/web-tree-sitter");

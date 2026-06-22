@@ -22,4 +22,4 @@ function scan(file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const SUPABASE: KeyKind = { ...DB_TABLE_META, scan };
+export const SUPABASE: KeyKind = { ...DB_TABLE_META, name: "supabase-table", blurb: "Supabase `.from(t).insert/select/update` — DB-table read/write coupling", scan };

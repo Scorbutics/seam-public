@@ -11,5 +11,7 @@ export const FILE_CHANNEL: KeyKind = {
   nodeKind: "data-file",
   produceEdge: "file-write",
   consumeEdge: "file-read",
+  name: "file-channel",
+  blurb: "Shared data-file write ⇄ read (carrier-traced) — file-channel coupling",
   scan: () => [],   // carrier-traced repo-wide in ../carrier/engine.ts, fed via attach's extra accs/index
 };

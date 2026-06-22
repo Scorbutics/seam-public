@@ -26,6 +26,8 @@ export interface KeyKind {
   nodeKind: string;      // boundary node label, e.g. "table"
   produceEdge: string;   // edge kind for a producer↔key link, e.g. "db-write"
   consumeEdge: string;   // edge kind for a consumer↔key link, e.g. "db-read"
+  name?: string;         // human-facing adapter name (the built-in catalogue surfaced in `seam-adapters`)
+  blurb?: string;        // one-line description of what it couples
   scan: (file: string, text: string) => KeyHit[];
 }
 // A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in
