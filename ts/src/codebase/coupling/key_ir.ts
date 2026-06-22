@@ -29,6 +29,30 @@ export interface KeyMatcher {
 const _TOKEN_OK = /^[A-Za-z_$][\w$]*$/;   // a single identifier (member chains/metachars rejected → safe to embed)
 const _slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 
+// Generic tokens that can never be a real coupling key. A bare common word ("the") carries no
+// producer/consumer IDENTITY, so it grounds by COINCIDENCE and fans out to unrelated files (the observed
+// `"the"` false-coupling). This is a STRUCTURAL identifier-plausibility filter — shape, not meaning: a key
+// is a NAME / identifier / path / topic, never prose or a stopword. The LLM still JUDGES which keys exist;
+// this only drops values that cannot be identifiers at all (so it also cleans pre-existing junk in `.seam/`
+// at apply-time, with no re-warm). Domain-plausible words (data, value, order, user…) are deliberately NOT
+// here — only function words / literals that are never identifiers.
+const _GENERIC_KEY = new Set([
+  "the", "a", "an", "and", "or", "of", "to", "in", "on", "for", "is", "it", "as", "at", "by", "be",
+  "this", "that", "with", "from", "not", "but", "if", "else", "true", "false", "null", "none", "undefined",
+]);
+
+// True if a string is plausibly a shared-key IDENTIFIER (a table/event/topic/route/cache name), not prose
+// or a generic token. Applied at BOTH synthesis (don't cache junk) and application (filter junk already
+// cached). Paths (`/api/x`) are allowed even without a letter run; everything else needs a letter.
+export function plausibleKeyValue(value: string): boolean {
+  const v = (value ?? "").trim();
+  if (v.length < 2) return false;                                   // 0-1 chars: not a key
+  if (/\s/.test(v)) return false;                                   // whitespace ⇒ prose, not an identifier
+  if (!/[A-Za-z]/.test(v) && !v.includes("/")) return false;        // pure number/punctuation (but allow paths)
+  if (_GENERIC_KEY.has(v.toLowerCase())) return false;              // a bare function word grounds by coincidence
+  return true;
+}
+
 // Validate ONE LLM object → a KeyMatcher, or null (malformed / unsupported shape). The gate that keeps a
 // free-text model answer from becoming an executable rule unless it fits the closed template exactly.
 export function validateMatcher(obj: any): KeyMatcher | null {
@@ -89,7 +113,7 @@ export function runMatcher(m: KeyMatcher, text: string): KeyHit[] {
   let mt: RegExpExecArray | null;
   while ((mt = re.exec(masked)) !== null) {
     const value = nthStringArg(masked, re.lastIndex, m.argIndex);
-    if (value) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+    if (value && plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
   }
   return out;
 }

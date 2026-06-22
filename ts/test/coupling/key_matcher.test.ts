@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
-import { validateMatcher, runMatcher, type KeyMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { validateMatcher, runMatcher, plausibleKeyValue, type KeyMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { learnKeyMatchers, applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
 import { loadMatchers, hasMatcherCache, _resetMatcherCacheMem } from "../../src/codebase/coupling/key_matcher_cache.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
@@ -29,6 +29,21 @@ describe("KeyMatcher IR — validate", () => {
   });
   test("an unsupported shape (attribute) is rejected today", () => {
     expect(validateMatcher({ via: "attribute", token: "x", kind: "event", role: "consumes" })).toBeNull();
+  });
+});
+
+describe("key-value plausibility guard (kills the 'the' false-coupling)", () => {
+  test("generic words / prose / too-short / pure-punct values are rejected", () => {
+    for (const bad of ["the", "The", "and", "of", "a", "is", "x", "the request", "  ", "123", "*"])
+      expect(plausibleKeyValue(bad)).toBe(false);
+  });
+  test("real identifiers / topics / routes / events pass", () => {
+    for (const ok of ["orders", "payments", "user.created", "AnalyticsFileNoteEvent", "/api/members", "Data/Bill.rxdata"])
+      expect(plausibleKeyValue(ok)).toBe(true);
+  });
+  test("a matcher extracting a generic word emits NOTHING (guard applied in runMatcher)", () => {
+    const m = validateMatcher({ via: "call", token: "log", argIndex: 0, kind: "event", role: "produces" })!;
+    expect(runMatcher(m, "log('the user was updated'); log('the')")).toEqual([]);   // prose + stopword → dropped
   });
 });
 

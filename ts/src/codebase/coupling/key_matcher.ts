@@ -43,7 +43,10 @@ ${retry}
 ${blocks}
 
 For every rule with CONCRETE evidence above, output one object. Do NOT invent rules — only calls literally
-present. A wrong rule is worse than silence.
+present. A wrong rule is worse than silence. The token MUST be a SPECIFIC data-coupling API (emit/publish/
+subscribe/on/send/dispatch/topic/channel-style), NEVER a generic call whose string argument is human
+PROSE or a message — e.g. logging (log/info/warn), i18n/translation (t/translate), formatting, or
+exceptions. Such a rule extracts words like "the" and couples unrelated files by coincidence.
   via       — "call"
   token     — the callee identifier EXACTLY as written (e.g. "$emit", "publish", "from")
   argIndex  — 0-based index of the string argument that IS the key

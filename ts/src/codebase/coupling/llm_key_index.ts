@@ -23,11 +23,13 @@ import { emit } from "../../core/progress.js";
 const PASS = registerPass({ tag: "discover-keys-batch", tier: "strong", note: "shared-key producer/consumer discovery (semantic, learn-once → .seam)" });
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _NAME_KINDS } from "../atoms.js";
 import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
 import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_cache.js";
 import { hasMatcherCache, loadMatchers } from "./key_matcher_cache.js";
 import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
+import { plausibleKeyValue } from "./key_ir.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
@@ -52,7 +54,9 @@ route path. NOT ordinary imports/calls. Analyse EACH file below independently.
 ${blocks}
 
 For every shared key with CONCRETE textual evidence, output one object. Do NOT invent keys — only ones
-literally present. A wrong guess is worse than silence.
+literally present. A wrong guess is worse than silence. The value MUST be a SPECIFIC IDENTIFIER (a
+table/topic/event/route/cache name) — NEVER a common word, prose, a sentence fragment, or a generic token
+like "the"/"data"/"value": a key that is not a distinctive name couples unrelated files by coincidence.
   file  — the FILE header path it came from
   kind  — db-table | queue | event | route | cache | key
   value — the literal name (table/topic/event/route/cache-key string)
@@ -72,6 +76,7 @@ function _parseBatch(out: Map<string, any>): Map<string, KeyHit[]> {
     let value = String(obj.value ?? "").trim();
     if (!file || !kind || !value) continue;
     if (kind === "http-route") value = normPath(value);
+    if (!plausibleKeyValue(value)) continue;   // drop generic/prose values (e.g. "the") the LLM hallucinated as keys
     const produces = String(obj.role ?? "").trim().toLowerCase().startsWith("produc");
     if (!byFile.has(file)) byFile.set(file, []);
     byFile.get(file)!.push({ kind, value, line: 0, produces });
@@ -88,26 +93,50 @@ function _keyAdapterMeta(file: string, keys: KeyHit[]): { name: string; descript
   return { name, description };
 }
 
+// SYMBOL-COLLISION guard: the per-file LLM ECHOES code symbols it sees in the file (a class `MessageBean`,
+// a method `validateDocumentCount`) and proposes them as data keys — they then "ground" because the model
+// is consistently wrong across files. A real data key (a table/topic/event NAME) is NOT a code identifier
+// defined in the source. So we collect the class/method/function names DEFINED in the synthesized files
+// (the only symbols the model can echo, since that's the text it was shown) and drop any proposed key whose
+// value is one of them. Structural + language-agnostic (tree-sitter), high precision (real keys aren't defs).
+async function _definedNames(files: { file: string; text: string }[]): Promise<Set<string>> {
+  const names = new Set<string>();
+  if (!available()) return names;
+  for (const f of files) {
+    const lang = lang_for(f.file);
+    if (!lang) continue;
+    let ctx; try { ctx = await makeCtx(f.text, lang); } catch { continue; }
+    if (!ctx) continue;
+    for (const n of ctx.collect(ctx.root, (k: string) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k)))
+      for (const c of ctx.children(n)) if (_NAME_KINDS.has(c.type)) { names.add(ctx.text(c)); break; }
+  }
+  return names;
+}
+
 // Batch-synthesize keys for the given (uncached) files — chunked by snippet size, one LLM call per chunk,
 // each file's result persisted as a named KeyAdapter. Returns file → KeyHit[] (empty if the LLM found none).
 async function _batchSynthesize(repo: string, files: { file: string; text: string; ck: string }[], opts: KeyIndexOpts): Promise<Map<string, KeyHit[]>> {
   const result = new Map<string, KeyHit[]>();
   let chunk: { file: string; text: string; ck: string }[] = [], size = 0;
-  const flush = () => {
+  const flush = async () => {
     if (!chunk.length) return;
     const prompt = _batchPrompt(chunk.map((c) => ({ file: c.file, snippet: c.text.slice(0, PER_FILE) })));
     let byFile = new Map<string, KeyHit[]>();
     try { byFile = _parseBatch(run_pass(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
     catch (e) { if (!(e instanceof LLMError)) throw e; }
-    for (const c of chunk) { const keys = byFile.get(c.file) ?? []; result.set(c.file, keys); persistFileKeys(repo, c.ck, { ..._keyAdapterMeta(c.file, keys), keys }); }
+    const defNames = await _definedNames(chunk);   // code symbols the model could be echoing as keys
+    for (const c of chunk) {
+      const keys = (byFile.get(c.file) ?? []).filter((h) => !defNames.has(h.value));   // drop code-symbol echoes
+      result.set(c.file, keys); persistFileKeys(repo, c.ck, { ..._keyAdapterMeta(c.file, keys), keys });
+    }
     chunk = []; size = 0;
   };
   for (const f of files) {
     const len = Math.min(f.text.length, PER_FILE);
-    if (size + len > SNIPPET_CAP && chunk.length) flush();
+    if (size + len > SNIPPET_CAP && chunk.length) await flush();
     chunk.push(f); size += len;
   }
-  flush();
+  await flush();
   return result;
 }
 
@@ -140,6 +169,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   for (const [file, keys] of llmKeysOf) {
     const floorSet = floorOf.get(file) ?? new Set<string>();
     for (const h of keys) {
+      if (!plausibleKeyValue(h.value)) continue;            // filter junk already cached in .seam/ (no re-warm needed)
       if (floorSet.has(`${h.kind} ${h.value}`)) continue;   // floor already has this key → don't duplicate
       const k = `${h.kind} ${h.value}`;
       if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
@@ -181,5 +211,5 @@ export async function anchorProposedKeys(
   if (disk.hit) keys = disk.keys;
   else if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; keys = (await _batchSynthesize(repo, [{ file: anchorFile, text, ck }], opts)).get(anchorFile) ?? []; }
   else return [];
-  return keys.filter((h) => !floor.has(`${h.kind} ${h.value}`));   // only the floor's gaps (KeyHits, line 0; collectAnchorKeys stamps source "llm")
+  return keys.filter((h) => plausibleKeyValue(h.value) && !floor.has(`${h.kind} ${h.value}`));   // plausible keys only; floor's gaps (line 0; collectAnchorKeys stamps source "llm")
 }
