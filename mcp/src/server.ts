@@ -10,6 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { join } from "node:path";
+import { existsSync } from "node:fs";
 import { EngineError, backendKind, readJson, runEngine, runEngineAsync, withScratch, writeText } from "./engine.js";
 import { clientSupportsSampling, runEngineWithBridge } from "./sampling.js";
 import { LOG_PATH, log, nextCallId } from "./log.js";
@@ -24,11 +25,13 @@ import { LOG_PATH, log, nextCallId } from "./log.js";
 type LlmServe = "binary" | "sampling";
 const LLM_MODE = (process.env.SEAM_MCP_LLM ?? "auto").toLowerCase();
 
-// Cap COLD flywheel synthesis for INTERACTIVE calls: a single grow on a large repo over a slow binary must
-// not fire dozens of serialized LLM subprocesses (that's what blows the host's request deadline). A warm
-// `.seam/` then costs nothing; raise/lower via SEAM_KEY_BUDGET, or warm the cache once via the CLI. Engine
-// subprocesses inherit this through process.env.
-if (process.env.SEAM_KEY_BUDGET === undefined) process.env.SEAM_KEY_BUDGET = "12";
+// INTERACTIVE calls APPLY learned adapters but do NOT learn inline (cold synth budget 0). A non-zero cap
+// is the worst of both worlds on a large repo: each run's budget is spent on a DIFFERENT batch of
+// floor-blind files (the cached ones are skipped → budget frees up for the next batch), so every run stays
+// slow AND the output grows — it never converges. LEARNING is therefore an EXPLICIT step (the warm_adapters
+// tool / a CLI warm-up) that does the full repo once; thereafter every grow reuses it for free, across ALL
+// intents (the index is repo-wide, content-hash keyed — not per-intent). Raise via SEAM_KEY_BUDGET.
+if (process.env.SEAM_KEY_BUDGET === undefined) process.env.SEAM_KEY_BUDGET = "0";
 
 // Resolve, per call, how to serve LLM passes — throwing a precise, actionable error when neither path
 // is available (so a Copilot user without sampling gets "put a binary on PATH", not a silent failure).
@@ -181,7 +184,24 @@ function summarize(model: any): string {
   }
   if (extImpact.length) impactLines.push(`impact: ${extImpact.length} symbol(s) affected outside this PR`);
   const impactBlock = impactLines.length ? `\n\n${impactLines.join("\n")}` : "";
-  return `${head}${extras ? `   (${extras})` : ""}\n${intents}${impactBlock}`;
+  return `${head}${extras ? `   (${extras})` : ""}\n${intents}${impactBlock}${adapterStatus(model)}`;
+}
+
+// Explicit learned-adapter status for the human summary — "X used, Y newly learned", with names + where
+// they live (repo `.seam/` vs the shared store). The engine stamps `model.adapters` (the run ledger); we
+// surface it so a flywheel run REPORTS the compounding asset it touched, and so a re-run that learns more
+// (rather than reusing) is immediately visible. Empty ledger → nothing (a pure deterministic-floor run).
+function adapterStatus(model: any): string {
+  const ad = model.adapters;
+  if (!ad || (!ad.used?.length && !ad.learned?.length)) return "";
+  const names = (xs: string[]) => xs.slice(0, 8).join(", ") + (xs.length > 8 ? `, …+${xs.length - 8}` : "");
+  const usedNames = (ad.used ?? []).map((u: any) => u.name);
+  const fromShared = (ad.used ?? []).some((u: any) => u.scope === "shared");
+  const lines = [`learned adapters: ${usedNames.length} used` + (usedNames.length ? ` (${names(usedNames)})` : "")
+    + `, ${(ad.learned ?? []).length} newly learned` + (ad.learned?.length ? ` (${names(ad.learned)})` : "")];
+  lines.push(`  cached in <repo>/.seam/key-*.json${fromShared ? " + the shared adapter store" : ""}` +
+    ((ad.learned ?? []).length ? " — re-run to confirm 0 newly learned (fully warm); promote with `seam-adapters`" : ""));
+  return `\n\n${lines.join("\n")}`;
 }
 
 // The engine emits a one-line timing summary on stderr at the end of a run (see core/progress.ts).
@@ -215,14 +235,35 @@ function parseBuildTiming(stderr: string): string | null {
 }
 
 // Both content shapes: a JSON block for the agent to parse, a summary for a human to read.
-function reply(model: any, stderr = "") {
+function reply(model: any, stderr = "", notice = "") {
   const timing = parseTiming(stderr);
   const sub = parseBuildTiming(stderr);
   const tail = [timing ? formatTiming(timing) : "", sub ?? ""].filter(Boolean).join("\n\n");
   return { content: [
-    { type: "text" as const, text: summarize(model) + (tail ? `\n\n${tail}` : "") },
+    { type: "text" as const, text: summarize(model) + notice + (tail ? `\n\n${tail}` : "") },
     { type: "text" as const, text: "```json\n" + JSON.stringify(model) + "\n```" },
   ] };
+}
+
+// "This repo was never warmed" nudge. Since interactive grows DON'T learn inline, a cold repo silently
+// returns floor-only couplings — the user needs to know cross-framework/event/queue couplings are missing
+// until they run warm_adapters ONCE. Fires only when the call WANTED LLM data-coupling (--data-coupling
+// llm) AND no `.seam/` adapter cache exists AND this call didn't itself learn — so it stops the moment the
+// repo is warmed (warm_adapters writes the cache) and never nags a det/floor query. Repo + intent are read
+// from the engine flags so no call site has to thread them.
+function warmNudge(baseFlags: string[], model: any): string {
+  const dc = baseFlags.indexOf("--data-coupling");
+  if (dc < 0 || baseFlags[dc + 1] !== "llm") return "";                 // floor/det query → no learning expected
+  if ((model.adapters?.learned ?? []).length > 0) return "";            // this call already learned (e.g. warm_adapters)
+  const ri = baseFlags.indexOf("--repo");
+  const repo = ri >= 0 ? baseFlags[ri + 1] : null;
+  if (!repo) return "";
+  const seam = join(repo, ".seam");
+  if (existsSync(join(seam, "key-adapters.json")) || existsSync(join(seam, "key-matchers.json"))) return "";   // already warmed
+  return "\n\n⚠ Data-coupling not warmed for this repo. Cross-framework / event / queue / cache couplings the "
+    + "deterministic floor can't see are NOT in this result yet. Run `warm_adapters({ repo, anchorFile })` ONCE "
+    + "(repo-wide, one-time, reused across ALL intents; call until it reports 0 newly learned) — then re-run "
+    + "this query and those couplings resolve for free. Until then this used the deterministic floor only.";
 }
 
 function errReply(e: unknown) {
@@ -256,7 +297,7 @@ function engineLineSink(extra: any, callId: string): (line: string) => void {
 // just a local binary). Defaults to "engine isn't det", overridable by the data-coupling flywheel. The
 // binary LLM path runs ASYNC (streamed) so the server loop isn't frozen for the whole grow — that freeze is
 // what made a heavy grow_intent time out at the host: spawnSync blocked progress + the keep-alive entirely.
-async function decompose(server: McpServer, baseFlags: string[], engine: string, needsLlm = engine !== "det", extra?: any) {
+async function decompose(server: McpServer, baseFlags: string[], engine: string, needsLlm = engine !== "det", extra?: any, extraEnv?: Record<string, string>) {
   return withScratch(async (scratch) => {
     const out = join(scratch, "seams.json");
     const flags = [...baseFlags, "--classifier", engine, "--emit-seams", out];
@@ -266,15 +307,16 @@ async function decompose(server: McpServer, baseFlags: string[], engine: string,
     log(`${callId} ▶ engine ${needsLlm ? "(llm)" : "(det)"}: ${flags.join(" ")}`);
     let stderr = "";
     try {
-      if (!needsLlm) stderr = runEngine(flags).stderr;                                          // offline, fast, sync
-      else if (resolveLlmServe(server) === "binary") stderr = (await runEngineAsync(flags, sink)).stderr;   // claude/copilot, streamed
-      else stderr = await runEngineWithBridge(server, flags, scratch, sink);    // borrow the client's model via sampling
+      if (!needsLlm) stderr = runEngine(flags, undefined, extraEnv).stderr;                              // offline, fast, sync
+      else if (resolveLlmServe(server) === "binary") stderr = (await runEngineAsync(flags, sink, undefined, extraEnv)).stderr;   // claude/copilot, streamed
+      else stderr = await runEngineWithBridge(server, flags, scratch, sink, extraEnv);    // borrow the client's model via sampling
       log(`${callId} ✓ done in ${Date.now() - t0}ms`);
     } catch (e) {
       log(`${callId} ✗ failed after ${Date.now() - t0}ms: ${(e as Error).message}`);
       throw e;
     }
-    return reply(readJson(out), stderr);
+    const model = readJson(out);
+    return reply(model, stderr, warmNudge(baseFlags, model));
   });
 }
 
@@ -422,6 +464,39 @@ server.registerTool("grow_intent", {
       "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
     base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
     return await decompose(server, base, engine, true, extra);   // grow is LLM-only (hybrid/llm)
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("warm_adapters", {
+  title: "Learn this repo's data-coupling adapters (one-time, explicit)",
+  description:
+    "EXPLICITLY run the data-coupling FLYWHEEL's learning pass: the LLM deduces shared-key adapters for this "
+    + "repo's floor-blind files (events/queues/cache/cross-framework keys it has no built-in adapter for), "
+    + "RE-EXECUTES + grounds each before keeping it, and CACHES the survivors to `.seam/`. This is the slow, "
+    + "expensive step — so it is SEPARATE from querying: grow_intent / intent_footprint do NOT learn inline "
+    + "(they'd re-learn a different batch every call on a large repo, staying slow forever and bloating the "
+    + "output). Run THIS once to warm the cache; afterwards every grow/footprint reuses the learned adapters "
+    + "for free and DETERMINISTICALLY — across ALL intents (the index is repo-wide + content-hash keyed, NOT "
+    + "per-intent, so you do NOT re-warm per question). "
+    + "Learning is BATCHED: each call learns up to `budget` files and REPORTS how many it created. Call it "
+    + "REPEATEDLY until it reports 0 newly learned — that means the repo is fully warm. The anchor is only a "
+    + "trigger; the pass is repo-wide. Needs an LLM seam (a local claude/copilot binary, or a sampling host).",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo to warm."),
+    anchorFile: z.string().describe("Any file in the repo — a trigger for the repo-wide pass (relative or absolute)."),
+    symbol: z.string().optional().describe("Optional anchor symbol; omit to anchor on the whole file."),
+    budget: z.number().int().min(1).max(400).default(40).describe("Max floor-blind files to learn THIS call (bounds latency). Call again until 0 newly learned."),
+    crossFramework: CROSS_FRAMEWORK,
+  },
+}, async ({ repo, anchorFile, symbol, budget, crossFramework }, extra) => {
+  try {
+    if (!llmServeOrNull(server))
+      return errReply(new EngineError("warm_adapters needs an LLM seam — set CLAUDE_BIN / COPILOT_BIN (or PATH), or call from a sampling-capable host."));
+    const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", "1", "--skeleton"];
+    if (symbol) base.push("--symbol", symbol);
+    base.push("--data-coupling", crossFramework ? "llm" : "floor");
+    // override the interactive budget-0 default for THIS call only → actually synthesize, batched.
+    return await decompose(server, base, "det", true, extra, { SEAM_KEY_BUDGET: String(budget) });
   } catch (e) { return errReply(e); }
 });
 

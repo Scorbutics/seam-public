@@ -45,9 +45,9 @@ export function backendKind(cwd = REPO_ROOT): string | null {
 
 // Run the engine with FLAGS (everything after the entry). Returns captured stdout — the engine writes
 // its artifacts to the --emit-* files the caller passes, and a one-line status to stdout/stderr.
-export function runEngine(flags: string[], cwd = REPO_ROOT): { stdout: string; stderr: string } {
+export function runEngine(flags: string[], cwd = REPO_ROOT, extraEnv?: Record<string, string>): { stdout: string; stderr: string } {
   const { cmd, pre, env } = engineInvocation();
-  const proc = spawnSync(cmd, [...pre, ...flags], { cwd, encoding: "utf-8", maxBuffer: 256 * 1024 * 1024, env: { ...process.env, ...env } });
+  const proc = spawnSync(cmd, [...pre, ...flags], { cwd, encoding: "utf-8", maxBuffer: 256 * 1024 * 1024, env: { ...process.env, ...env, ...extraEnv } });
   if (proc.error) throw new EngineError(`could not run the Seam engine (${cmd}): ${proc.error.message}`);
   if (proc.status !== 0)
     throw new EngineError(`Seam engine failed (exit ${proc.status}): ${(proc.stderr || proc.stdout || "").trim().slice(0, 600)}`);
@@ -60,11 +60,11 @@ export function runEngine(flags: string[], cwd = REPO_ROOT): { stdout: string; s
 // host (Copilot) hits its request deadline while the engine is still working. Streaming unblocks the loop
 // AND lets the caller forward `@@SEAM_PROGRESS@@` markers as MCP progress + mirror everything to the log.
 export function runEngineAsync(
-  flags: string[], onLine?: (line: string) => void, cwd = REPO_ROOT,
+  flags: string[], onLine?: (line: string) => void, cwd = REPO_ROOT, extraEnv?: Record<string, string>,
 ): Promise<{ stdout: string; stderr: string }> {
   const { cmd, pre, env } = engineInvocation();
   return new Promise((resolve, reject) => {
-    const proc = spawn(cmd, [...pre, ...flags], { cwd, env: { ...process.env, ...env } });
+    const proc = spawn(cmd, [...pre, ...flags], { cwd, env: { ...process.env, ...env, ...extraEnv } });
     let stdout = "", stderr = "", buf = "";
     proc.stdout.on("data", (d) => { stdout += d.toString(); });   // drain so the pipe never blocks the child
     proc.stderr.on("data", (d) => {

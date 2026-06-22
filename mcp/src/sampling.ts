@@ -44,7 +44,7 @@ async function sampleOnce(server: McpServer, prompt: string, model?: string): Pr
 // interactive bridge. `flags` are the full engine flags INCLUDING the --classifier and the --emit-*
 // output target (this adds --llm-bridge). The engine writes its artifacts to those --emit-* files;
 // the caller reads them after this resolves.
-export async function runEngineWithBridge(server: McpServer, flags: string[], scratch: string, onLine?: (line: string) => void): Promise<string> {
+export async function runEngineWithBridge(server: McpServer, flags: string[], scratch: string, onLine?: (line: string) => void, extraEnv?: Record<string, string>): Promise<string> {
   if (!clientSupportsSampling(server))
     throw new EngineError(
       "this engine setting needs LLM passes, but the MCP client does not support sampling. "
@@ -53,7 +53,7 @@ export async function runEngineWithBridge(server: McpServer, flags: string[], sc
   const channel = join(scratch, "bridge");
   mkdirSync(channel, { recursive: true });
   const { cmd, pre, env } = engineInvocation();
-  const proc = spawn(cmd, [...pre, ...flags, "--llm-bridge", channel], { cwd: REPO_ROOT, env: { ...process.env, ...env } });
+  const proc = spawn(cmd, [...pre, ...flags, "--llm-bridge", channel], { cwd: REPO_ROOT, env: { ...process.env, ...env, ...extraEnv } });
 
   let stderr = "", lineBuf = "";
   proc.stderr.on("data", (d) => {
