@@ -44,7 +44,7 @@ async function sampleOnce(server: McpServer, prompt: string, model?: string): Pr
 // interactive bridge. `flags` are the full engine flags INCLUDING the --classifier and the --emit-*
 // output target (this adds --llm-bridge). The engine writes its artifacts to those --emit-* files;
 // the caller reads them after this resolves.
-export async function runEngineWithBridge(server: McpServer, flags: string[], scratch: string): Promise<void> {
+export async function runEngineWithBridge(server: McpServer, flags: string[], scratch: string, onLine?: (line: string) => void): Promise<string> {
   if (!clientSupportsSampling(server))
     throw new EngineError(
       "this engine setting needs LLM passes, but the MCP client does not support sampling. "
@@ -55,8 +55,15 @@ export async function runEngineWithBridge(server: McpServer, flags: string[], sc
   const { cmd, pre, env } = engineInvocation();
   const proc = spawn(cmd, [...pre, ...flags, "--llm-bridge", channel], { cwd: REPO_ROOT, env: { ...process.env, ...env } });
 
-  let stderr = "";
-  proc.stderr.on("data", (d) => { stderr += d.toString(); });
+  let stderr = "", lineBuf = "";
+  proc.stderr.on("data", (d) => {
+    const s = d.toString();
+    stderr += s;
+    if (!onLine) return;
+    lineBuf += s;
+    let nl: number;
+    while ((nl = lineBuf.indexOf("\n")) >= 0) { const line = lineBuf.slice(0, nl); lineBuf = lineBuf.slice(nl + 1); if (line) onLine(line); }
+  });
   proc.stdout.on("data", () => { /* drain so the pipe never blocks the child */ });
 
   // Pump: answer each request the engine drops until the process exits. Requests are published
@@ -87,6 +94,8 @@ export async function runEngineWithBridge(server: McpServer, flags: string[], sc
   const code: number = await new Promise((res) => proc.on("close", (c) => res(c ?? 0)));
   running = false;
   await pump;
+  if (lineBuf && onLine) onLine(lineBuf);
   if (code !== 0)
     throw new EngineError(`Seam engine failed (exit ${code}): ${(stderr || "").trim().slice(0, 600)}`);
+  return stderr;
 }
