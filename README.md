@@ -59,6 +59,93 @@ which connected footprint is the intent's entry point** — then grows that one.
 split as everywhere else: structure measures connectedness (a fact), the LLM judges relevance (the
 meaning). LLM query-expansion widens recall so *"registration"* still finds `RegisterPage`.
 
+## Beyond the spine — structural questions (the shapes)
+
+A *flow* (the spine: anchor → … → outcome) is one shape of answer — but many real questions aren't a
+flow: *who calls this, can A reach B, what's this module's boundary, what subsystem is X part of, how
+do A and B differ.* Each is a **projection over the same resolved graph**, deterministic and offline,
+with an **honest negative** when structure genuinely can't answer (then it tells you to use grep/RAG
+rather than fabricating a result):
+
+| Shape | Question | `--query` | MCP tool |
+|---|---|---|---|
+| **consumers** | who actually calls / uses X — resolved, so no grep false-positives (comments, strings, same-named symbols), and cross-language / cross-package where a project-scoped LSP is blind | `consumers` | `find_consumers` |
+| **dependencies** | what X depends on / calls / uses — the symmetric inverse of consumers (out-edges) | `dependencies` | `find_dependencies` |
+| **impact** | the **transitive** blast radius — everything affected if X changes (the refactoring safety net), with the surface it ripples to and the opaque gaps where the view is incomplete | `impact` | `impact_of` |
+| **refactor** | the FACTS bundle for *"how to refactor X"* — impact + dependencies + contract in one call (the *plan* over them stays a judgement for you/the model) | `refactor` | `refactor_facts` |
+| **reaches** | can A reach B? — a verified yes/no **+ a witness path**; or is X dead | `reaches` | `can_reach` |
+| **contract** | a module's boundary — used exports + their consumers, **dead exports**, outbound deps, fan-in/out | `contract` | `module_contract` |
+| **neighborhood** | the cohesive subsystem around X — core vs periphery by the parameter-free weak-community rule | `neighborhood` | `subsystem` |
+| **compare** | how A and B differ by what they depend on (shared / A-only / B-only) | `compare` | `compare_symbols` |
+
+The discriminator for *"is this a Seam question?"* is **not "is it a flow"** — it's **"does the
+answer's correctness need resolved edges?"** A lexical one-fact lookup is grep's job; a
+*what-code-is-about-X* similarity question is RAG's; Seam owns the **structural middle** — and each
+shape declines honestly (`noStructure`) when it lands outside that middle (a symbol with no resolvable
+callers routes you to grep, it doesn't assert "no callers"). The same floor every shape stands on is
+the resolved-edge resolver, hardened for the cases that bit real repos: **namespace-member calls**
+(`ns.fn()` through a re-export barrel) and a **name-grounded recall** tier for languages without
+symbol imports (Ruby globals, C/C++ — opt-in, clearly labelled UNVERIFIED, never merged into the
+verified set).
+
+### Ask Seam anything — the router
+
+You don't have to pick the shape. **`--ask "<question>"`** (MCP: **`ask`**) routes a natural-language
+question to the right shape and runs it — or routes it **away** to grep (lexical) / RAG (semantic)
+when structure isn't the right tool. Same split as everywhere: choosing the shape is a **semantic
+judgement** (an LLM pass, built from a shape *registry* so it's never a hardcoded list); resolving the
+named symbol to its definition is **deterministic** (a def lookup); running the shape is
+**deterministic**.
+
+```bash
+# the LLM routes the question, resolves the symbol, runs the shape  (needs a `claude` CLI)
+bun ts/src/cli/decompose.ts --scan --repo . --ask "who calls stampSeamModel?"
+bun ts/src/cli/decompose.ts --scan --repo . --ask "can decompose reach build_footprint?"
+```
+
+When you already know the shape, call `--query <shape>` (or the matching MCP tool) directly to skip
+the routing round-trip — those stay offline and instant.
+
+## The bridge — review a change against the structure it perturbs
+
+A diff is a **Δ on the codebase graph.** Seam holds *both* — the change decomposition (diff mode) and
+the resolved structure (codebase mode) — so it can do the one thing a diff-only review tool *and* a
+codebase-only graph tool each can't: judge a change against the whole it touches. **`--review-impact`**
+(diff mode; MCP `decompose_diff impact:true`) annotates each seam with:
+
+- **external impact** — the change's transitive consumers in files **not in the PR** (what it ripples to);
+- **cross-stack coupling** — a data-flow boundary the change crosses whose other side **isn't in the PR**:
+  *you changed the `payments` write; `Billing.tsx` reads it and you didn't touch it.*
+
+```bash
+# a backend-only change that touches a shared table → flags the untouched frontend reader
+bun ts/src/cli/decompose.ts --file ts/test/fixtures/crossstack-repo/charge.patch \
+    --repo ts/test/fixtures/crossstack-repo --classifier det --review-impact
+#   ⚠ cross-stack (touched by this change, NOT in this PR — verify):
+#        db-read of 'payments' → Billing (ui/Billing.tsx)
+```
+
+This is the sharpest line Seam draws: that backend↔frontend link has **no AST path** (different
+languages) and **no embedding similarity** (the string `payments` in a SQL call vs a `.tsx` screen
+aren't semantically close), so a per-language call-graph tool and a vector engine are *both* blind
+exactly where this is strong — and the answer is a **verified edge**, surfaced in the everyday workflow
+(PR review), framed as *information to verify*, never an asserted bug.
+
+**It stays quiet enough to leave on — three relevance layers, deterministic-first.** A flag is only
+useful if it isn't noise ("it always says X is out of my diff → I stop checking"). So each flag is
+graded by *whether the change touched the part the consumer actually uses*:
+
+1. **Deterministic floor** — the fields a change *writes* (its added lines) ∩ the fields a consumer
+   *reads*. **Suppress only on proof**: change wrote `fee`, reader reads only `amount` → *provably
+   irrelevant, dropped*; reader reads `fee` → *relevant, shown*; reader does `select('*')` → *unknown,
+   can't prove → kept*. No LLM. Kills the dominant noise case structurally.
+2. **Tier** — `relevant` shown loud, `unknown` collapsed to "verify", `irrelevant` hidden (kept in JSON).
+3. **LLM triage** (opt-in, `--triage`) — runs *only on the `unknown` residual*, reclassifying each; the
+   floor already handled the easy 80%, so the model is the exception handler, not the firehose.
+
+Same discipline as everywhere: structure proves what it can, the LLM judges the rest — here applied to
+the *output*, so the human sees only what couldn't be ruled out.
+
 ## The five roles
 
 | Role | What it is | Trust mechanism |
@@ -126,9 +213,11 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
   [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump it; breaking
   changes do, and clients warn on a higher major.
 - **Distribution** — a one-line [`install.sh`](install.sh) sets up the skill + MCP server from source
-  (`curl … | bash`); run the engine directly from a checkout (`bun`); or ship the self-contained
-  binary (`bun build --compile`). [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and
-  the tree-sitter-grammar caveat (why the source install keeps full AST facts the lone binary drops).
+  (`curl … | bash`); run the engine directly from a checkout (`bun`); or ship the **esbuilt bundle**
+  (`bun run build` → `ts/dist/seam.cjs` + a grammar pack, run via bun/node with `SEAM_WASM_DIR`).
+  [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and the tree-sitter-grammar caveat.
+  *(A single `bun build --compile` binary is **not** used — it drops web-tree-sitter's core wasm and
+  aborts on the first parse; the bundle keeps web-tree-sitter external so it resolves its own wasm.)*
 - **The LLM seam** — `det` runs fully offline. For `hybrid`/`llm`, the engine either spawns a
   subscription-backed CLI (`claude`/`copilot`, no API key) **or** hands its prompts back to a host
   that already has a model, via the host-bus contract (`--emit-prompts` → answer → `--inject-llm`).
@@ -177,12 +266,18 @@ README-command audit + offline smoke over the sample diffs + the `.vsix` build);
 proves the whole thing installs and runs **from zero inside a vanilla Docker container** — the
 "works on a clean machine" check. See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist.
 
-You can also build a standalone CLI binary (no checkout / no bun needed to *run* it):
+You can also build the engine into a **self-contained CJS bundle** (what the MCP server prefers over
+re-transpiling the source per call):
 
 ```bash
-cd ts && bun run build          # → ts/dist/seam (~100MB)
-./ts/dist/seam --file ../sample.patch --classifier det --format ascii
+cd ts && bun run build          # → ts/dist/seam.cjs  (+ dist/wasm/ grammar pack)
+SEAM_WASM_DIR="$PWD/dist/wasm" bun dist/seam.cjs --file ../sample.patch --classifier det --format ascii
 ```
+
+This uses esbuild (keeping web-tree-sitter external so it loads its own wasm) — **not**
+`bun build --compile`, which produces a binary that drops the core tree-sitter wasm and aborts on the
+first parse. The bundle still needs a `bun`/`node` runtime to execute; the MCP locator runs it with
+`SEAM_WASM_DIR` set automatically.
 
 The **default (hybrid) uses the LLM for clustering**, so it needs a subscription-backed LLM CLI (no
 API key) — prefers the Claude Code `claude` CLI (auto-detected from PATH, `$CLAUDE_BIN`, or the
@@ -249,6 +344,44 @@ bun ts/src/cli/decompose.ts --scan --auto --repo . \
 
 `--depth N` follows N consumer hops; `resolutionQuality` / `unresolved` / `blindspots` in the output
 report where static resolution gave out.
+
+**Structural shapes** (non-flow questions — all deterministic/offline, see
+[§Beyond the spine](#beyond-the-spine--structural-questions-the-shapes)):
+
+```bash
+# who calls a symbol — the RESOLVED consumer set (no grep false-positives)
+bun ts/src/cli/decompose.ts --scan --repo . --query consumers \
+    --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+
+# what a symbol depends on — the symmetric inverse (its resolved out-edges)
+bun ts/src/cli/decompose.ts --scan --repo . --query dependencies \
+    --anchor-file ts/src/codebase/grow/route.ts --symbol ask --format llm-context
+
+# transitive blast radius — what breaks if I change X (the refactoring safety net)
+bun ts/src/cli/decompose.ts --scan --repo . --query impact \
+    --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+
+# "how to refactor X" — the FACTS bundle (impact + dependencies + contract) in one call
+bun ts/src/cli/decompose.ts --scan --repo . --query refactor \
+    --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+
+# can A reach B? — verified yes/no + a witness path
+bun ts/src/cli/decompose.ts --scan --repo . --query reaches \
+    --anchor-file ts/src/codebase/grow/route.ts --symbol ask --to-symbol projectConsumerSet --format llm-context
+
+# a module's boundary (used exports + consumers, dead exports, outbound deps, fan-in/out)
+bun ts/src/cli/decompose.ts --scan --repo . --query contract --anchor-file ts/src/diff/seams.ts --format llm-context
+
+# the cohesive subsystem around a symbol; how two symbols differ by their deps
+bun ts/src/cli/decompose.ts --scan --repo . --query neighborhood --anchor-file ts/src/diff/seams.ts --symbol emit_seams_json
+bun ts/src/cli/decompose.ts --scan --repo . --query compare \
+    --anchor-file ts/src/codebase/scan/consumers_graph.ts --symbol build_consumers_graph \
+    --to-file ts/src/codebase/scan/dependency_graph.ts --to-symbol build_dependency_graph
+
+# add name-grounded UNVERIFIED leads (Ruby globals / C/C++ — the floor has no symbol imports there)
+bun ts/src/cli/decompose.ts --scan --repo . --query consumers --recall name \
+    --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+```
 
 **Output formats:** `--format ascii` (terminal), `--format llm` (compact, for an agent), or
 `--emit-seams <path>` (the JSON contract). The old HTML report has been removed — clients render the
@@ -337,9 +470,11 @@ in-repo blast radius that a bare `--file <patch>` run can't supply.
 
 ## The MCP server (any LLM can consult Seam)
 
-[`mcp/`](mcp/) exposes Seam to any MCP-capable agent as three tools — `decompose_diff`,
-`intent_footprint`, and `grow_intent` (LLM-directed auto-grow) — over the same JSON contract. It's a
-thin stdio adapter over the engine (no daemon):
+[`mcp/`](mcp/) exposes Seam to any MCP-capable agent as **twelve tools** over the same JSON contract — a
+thin stdio adapter over the engine (no daemon). Diff/flow: `decompose_diff`, `intent_footprint`,
+`grow_intent` (LLM-directed auto-grow). Structural shapes (offline/deterministic): `find_consumers`,
+`find_dependencies`, `impact_of`, `refactor_facts`, `can_reach`, `module_contract`, `subsystem`,
+`compare_symbols`. And `ask` — the natural-language front door that **routes** a question to the right shape (or away to grep/RAG). Engines:
 
 - **`engine="det"`** (default) — fully offline, instant; most agents want the *structure* (seams,
   roles, wiring), not prose.

@@ -250,6 +250,11 @@
           "default": "cli",
           "description": "How LLM passes (in 'hybrid'/'llm') are served: 'cli' (a claude/copilot CLI) or 'copilot' (borrow a model via VS Code's Language Model API — no install). Ignored when seam.engine is 'det'."
         },
+        "seam.progressiveReveal": {
+          "type": "boolean",
+          "default": true,
+          "description": "Codebase mode: two-step reveal. Paint the deterministic skeleton instantly (the spine + structural symbol labels + blind spots, no LLM), then enrich it in place — the LLM names the un-named seams and groups them into Main path / Supporting / Side-effects when the pass finishes. Off = one pass (wait for the full result). Only applies when seam.engine is 'hybrid'/'llm'; 'det' is already single-pass."
+        },
         "seam.codebaseDepth": {
           "type": "number",
           "default": 2,
@@ -286,6 +291,16 @@
           "type": "boolean",
           "default": true,
           "description": "Diff review: show each changed symbol's blast radius — who OUTSIDE the diff imports it (resolved/suggested) — so the change is read in the context of the real codebase."
+        },
+        "seam.reviewImpact": {
+          "type": "boolean",
+          "default": true,
+          "description": "Diff review: after the seams paint, automatically annotate each with its IMPACT beyond the PR — transitive consumers AND cross-stack data-flow readers/writers (a shared DB table / HTTP route) in files the PR did NOT touch (the 'you changed the write, not the read' signal). Graded by a deterministic relevance floor: provably-unrelated edges are suppressed, the rest shown as 'verify'. Runs as a second background pass over the same classification (no re-analysis), so the base review isn't slowed. Offline/deterministic unless triage is enabled."
+        },
+        "seam.reviewImpactTriage": {
+          "type": "boolean",
+          "default": false,
+          "description": "Diff review impact: run an LLM triage pass over ONLY the floor's 'unknown' residual — reclassifying each relevant/irrelevant so fewer flags say 'verify'. Adds one LLM round-trip per review and needs an LLM backend (seam.llmBackend). Off by default; the deterministic floor handles the easy majority."
         },
         "seam.defaultAltitude": {
           "type": "string",

@@ -52,6 +52,92 @@ const CROSS_FRAMEWORK = z.boolean().default(false)
 
 // A compact human-facing summary so a chat client shows something legible above the JSON.
 function summarize(model: any): string {
+  // Edge-set shapes — consumers (find_consumers, `set`) + dependencies (find_dependencies, `deps`): a
+  // tier-counted member set + the honest noStructure negative that routes the agent to grep.
+  if (model.shape === "set" || model.shape === "deps") {
+    const noun = model.shape === "deps" ? "Dependencies" : "Consumers";
+    const members: any[] = model.members ?? [];
+    const resolved = members.filter((m) => m.provenance !== "SUGGESTED");
+    const suggested = members.length - resolved.length;
+    const sym = model.anchor?.symbol ?? "?";
+    const recalled: any[] = model.recalled ?? [];
+    const recalledLine = recalled.length
+      ? `\n${recalled.length} recalled (name-grounded, UNVERIFIED):\n`
+        + recalled.slice(0, 12).map((m) => `• ${m.symbol} (${m.file}:${m.line})`).join("\n")
+        + (recalled.length > 12 ? `\n…and ${recalled.length - 12} more` : "")
+      : "";
+    if (model.noStructure)
+      return `${noun} of ${sym}: none resolved (${model.reason}).\n`
+        + (model.reason === "opaque"
+          ? "Edges exist but none resolve structurally — this is a grep/LSP question."
+          : model.shape === "deps" ? "A leaf — it uses nothing resolvable."
+          : "No caller in the repo — an entry point, dead code, or dispatched-only.")
+        + recalledLine;
+    const lines = resolved.slice(0, 12).map((m) => `• ${m.symbol} (${m.file}:${m.line}) [${m.provenance}]`).join("\n");
+    const extra = resolved.length > 12 ? `\n…and ${resolved.length - 12} more` : "";
+    return `${noun} of ${sym}: ${resolved.length} resolved`
+      + (suggested ? `, ${suggested} suggested` : "")
+      + ((model.unresolved ?? []).length ? `, ${model.unresolved.length} unresolved (grep these)` : "")
+      + `\n${lines}${extra}${recalledLine}`;
+  }
+  // Refactor-facts bundle (refactor_facts) — impact + dependencies + contract, composed.
+  if (model.shape === "refactor") {
+    const sym = model.anchor?.symbol ?? "?";
+    const im = model.impact ?? {}, dep = model.dependencies ?? {}, ct = model.contract ?? {};
+    return `Refactor facts for ${sym}: impact ${im.total ?? 0} across ${im.fileCount ?? 0} file(s)`
+      + ((im.gaps ?? []).length ? ` (${im.gaps.length} opaque gap(s))` : "")
+      + `, ${(dep.members ?? []).length} dependency(ies), contract ${(ct.provides ?? []).length} provided/`
+      + `${(ct.unusedExports ?? []).length} unused.\nThe facts to plan a change to ${sym} — the change PLAN over them is yours to make.`;
+  }
+  // Impact shape (impact_of) — transitive blast radius: count, surface, gaps.
+  if (model.shape === "impact") {
+    const sym = model.anchor?.symbol ?? "?";
+    if (model.noStructure) return `Impact of ${sym}: isolated — no resolved consumers (${model.reason})`
+      + ((model.gaps ?? []).length ? `, but ${model.gaps.length} opaque caller(s) to verify.` : ".");
+    const top = (model.files ?? []).slice(0, 10).map((f: any) => `• ${f.file} (${f.count})`).join("\n");
+    return `Impact of ${sym}: ${model.total} symbol(s) across ${model.fileCount} file(s)`
+      + `, ${(model.surface ?? []).length} at the surface`
+      + ((model.gaps ?? []).length ? `, ${model.gaps.length} opaque gap(s)` : "")
+      + (model.truncated ? " (truncated — impact ≥ shown)" : "") + `\n${top}`;
+  }
+  // Comparison shape (compare_symbols) — shared / A-only / B-only dependencies + similarity.
+  if (model.shape === "comparison") {
+    const aS = model.a?.symbol ?? "A", bS = model.b?.symbol ?? "B";
+    if (model.noStructure) return `${aS} vs ${bS}: neither has resolved dependencies — nothing to compare.`;
+    const names = (xs: any[]) => xs.slice(0, 10).map((d: any) => d.symbol).join(", ");
+    return `${aS} vs ${bS} (by deps): ${(model.shared ?? []).length} shared, ${(model.aOnly ?? []).length} ${aS}-only, `
+      + `${(model.bOnly ?? []).length} ${bS}-only — similarity ${Math.round((model.similarity ?? 0) * 100)}%\n`
+      + `shared: ${names(model.shared ?? []) || "—"}\n${aS}-only: ${names(model.aOnly ?? []) || "—"}\n${bS}-only: ${names(model.bOnly ?? []) || "—"}`;
+  }
+  // Neighborhood shape (subsystem) — core/periphery files + cohesion + boundary cut.
+  if (model.shape === "neighborhood") {
+    if (model.noStructure) return `${model.anchor?.symbol ?? "?"}: isolated — no cohesive subsystem.`;
+    const head = `Subsystem around ${model.anchor?.symbol ?? "?"}: ${(model.coreFiles ?? []).length} core`
+      + ((model.peripheryFiles ?? []).length ? ` + ${model.peripheryFiles.length} periphery` : "")
+      + `, cohesion ${Math.round((model.cohesion ?? 0) * 100)}%, boundary cut ${model.boundaryCut}`;
+    const core = (model.members ?? []).filter((m: any) => m.core).slice(0, 10)
+      .map((m: any) => `• ${m.file} (in ${m.internal}, out ${m.external})`).join("\n");
+    return `${head}${core ? `\n${core}` : ""}`;
+  }
+  // Contract shape (module_contract) — the inbound/outbound cut + coupling pair.
+  if (model.shape === "contract") {
+    if (model.noStructure) return `${model.module}: no exported members — no contract.`;
+    const head = `${model.module}: provides ${(model.provides ?? []).length} (used), ${(model.unusedExports ?? []).length} unused; `
+      + `depends ${(model.depends ?? []).length} | fan-in ${model.afferent}, fan-out ${model.efferent}`;
+    const prov = (model.provides ?? []).slice(0, 8).map((p: any) => `• ${p.symbol} ← ${p.consumerCount} consumer(s)`).join("\n");
+    const unused = (model.unusedExports ?? []).length ? `\nunused exports: ${model.unusedExports.join(", ")}` : "";
+    return `${head}${prov ? `\n${prov}` : ""}${unused}`;
+  }
+  // Reachability shape (can_reach) — verdict + witness path, with the three distinct negatives.
+  if (model.shape === "reaches") {
+    const f = model.from?.symbol ?? "?", t = model.to?.symbol ?? "?";
+    if (model.reachable)
+      return `${f} → ${t}: REACHABLE in ${(model.path?.length ?? 1) - 1} hop(s) — proven path:\n`
+        + (model.path ?? []).map((s: any) => `• ${s.symbol} (${s.file}:${s.line})`).join("\n");
+    return `${f} → ${t}: ${model.reason === "exhausted" ? "NOT FOUND within budget (INCONCLUSIVE — raise maxHops)"
+      : model.reason === "no-out-edges" ? `undefined — ${f} has no resolved dependencies`
+      : "UNREACHABLE (searched the whole resolved dependency closure)"} [${model.hops} hop(s) explored]`;
+  }
   const clusters = model.clusters ?? [];
   const seams = clusters.reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
   const roleCounts: Record<string, number> = {};
@@ -67,7 +153,18 @@ function summarize(model: any): string {
     model.resolutionQuality ? `resolution=${model.resolutionQuality}` : "",
     model.usage ? `${model.usage.calls} LLM call(s)` : "",
   ].filter(Boolean).join("  ");
-  return `${head}${extras ? `   (${extras})` : ""}\n${intents}`;
+  // --review-impact annotations (decompose_diff impact:true) — lead with the cross-stack hook, then the
+  // external-impact tally; this is the part no diff-only tool can produce.
+  const cross = clusters.flatMap((c: any) => c.seams ?? []).flatMap((s: any) => s.impact?.crossStack ?? []);
+  const extImpact = clusters.flatMap((c: any) => c.seams ?? []).flatMap((s: any) => s.impact?.external ?? []);
+  const impactLines: string[] = [];
+  if (cross.length) {
+    impactLines.push("⚠ cross-stack (changed here, NOT in this PR — verify):");
+    for (const c of cross.slice(0, 8)) impactLines.push(`  ${c.relation} of '${c.key}' → ${c.symbol} (${c.file})`);
+  }
+  if (extImpact.length) impactLines.push(`impact: ${extImpact.length} symbol(s) affected outside this PR`);
+  const impactBlock = impactLines.length ? `\n\n${impactLines.join("\n")}` : "";
+  return `${head}${extras ? `   (${extras})` : ""}\n${intents}${impactBlock}`;
 }
 
 // The engine emits a one-line timing summary on stderr at the end of a run (see core/progress.ts).
@@ -158,17 +255,29 @@ server.registerTool("decompose_diff", {
     range: z.string().optional().describe("Git revision range, e.g. 'HEAD~1', 'main...HEAD'."),
     engine: ENGINE,
     blastRadius: z.boolean().default(false).describe("Also find files OUTSIDE the diff that import changed symbols."),
+    impact: z.boolean().default(false).describe("Annotate each seam with the codebase IMPACT of the change: "
+      + "transitive consumers in files NOT in the PR, plus CROSS-STACK coupling — a backend write whose "
+      + "frontend reader the PR didn't touch (the 'you changed the write, not the read' signal). Each flag is "
+      + "tiered by a DETERMINISTIC relevance floor (relevant / unknown / provably-irrelevant→suppressed) so it "
+      + "isn't noise. Needs `repo`. The one thing a diff-only or codebase-only tool can't give."),
+    triage: z.boolean().default(false).describe("With `impact`: run an LLM triage over only the `unknown` "
+      + "relevance residual (the floor already decided the rest) — reclassify each relevant/irrelevant. "
+      + "Needs engine 'hybrid'/'llm' (or a local binary). The anti-fatigue layer on top of the floor."),
   },
-}, async ({ diff, repo, range, engine, blastRadius }) => {
+}, async ({ diff, repo, range, engine, blastRadius, impact, triage }) => {
   try {
     if (!diff && !(repo && range))
       return errReply(new EngineError("provide `diff` (raw diff text) or both `repo` and `range`."));
+    if (impact && !repo)
+      return errReply(new EngineError("`impact` needs `repo` — it resolves the change against the codebase."));
     return await withScratch(async (scratch) => {
       const base: string[] = [];
       if (diff) { const p = join(scratch, "change.patch"); writeText(p, diff); base.push("--file", p); }
       else base.push("--git", range!);
       if (repo) base.push("--repo", repo);   // required for --git; with `diff` it enables resolved wiring / blast-radius
       if (blastRadius) base.push("--blast-radius");
+      if (impact) base.push("--review-impact");
+      if (impact && triage) base.push("--triage");
       return await decompose(server, base, engine);
     });
   } catch (e) { return errReply(e); }
@@ -199,7 +308,10 @@ server.registerTool("intent_footprint", {
   },
 }, async ({ repo, anchorFile, symbol, intent, depth, crossFramework, engine }) => {
   try {
-    const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth)];
+    // --skeleton: this is an LLM consumer (YOUR model reads the result), so skip the LLM seam-intent
+    // labeling pass — the det skeleton (spine + structural labels + blindspots) is enough; the consuming
+    // model re-derives tiers/labels itself (validated A/B). The full enrichment is for the human UI only.
+    const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth), "--skeleton"];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
     if (crossFramework) base.push("--data-coupling", "llm");
@@ -251,10 +363,234 @@ server.registerTool("grow_intent", {
   },
 }, async ({ repo, anchorFile, symbol, intent, maxSteps, crossFramework, engine }) => {
   try {
+    // --skeleton: LLM consumer (see intent_footprint) — the grow itself is still LLM-directed (auto-anchor
+    // + move picks), but the FINAL seam-intent labeling pass is skipped; the consuming model tiers/labels.
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
-      "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps)];
+      "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
     if (crossFramework) base.push("--data-coupling", "llm");
     return await decompose(server, base, engine);
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("find_consumers", {
+  title: "Find the resolved consumers (callers) of a symbol",
+  description:
+    "Return the RESOLVED SET of callers/consumers of a symbol — who actually calls/uses it, each member "
+    + "tagged with its resolution tier (RESOLVED_FULL = a proven call, RESOLVED_PARTIAL = a "
+    + "dispatch/factory-routed lead, SUGGESTED = an unverified guess). This is the structurally-VERIFIED "
+    + "answer to a find-usages question: correct where grep yields false positives (the name in a comment, "
+    + "a string, or an unrelated same-named symbol) and where a project-scoped LSP is blind to cross-file / "
+    + "cross-package consumers. Fully OFFLINE/deterministic — no LLM, instant. "
+    + "WHEN TO CALL: you want the callers of a known symbol and you care that the list is correct, not "
+    + "just plausible — especially across files/packages, or when grep would be noisy. For a quick "
+    + "single-location lookup where grep is obviously clean, grep is fine. For how a flow WORKS (an ordered "
+    + "path), use grow_intent; for a symbol's whole footprint, use intent_footprint. "
+    + "HONEST NEGATIVE: returns noStructure=true (reason 'opaque' or 'none') when no caller resolves "
+    + "structurally — that is Seam telling you this is a grep/RAG question, not a failure. Don't retry; grep.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file that DEFINES the symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The symbol whose callers/consumers you want."),
+    recall: z.boolean().default(false).describe("Add name-grounded UNVERIFIED leads (a separate 'recalled' "
+      + "list). The verified floor is thin for languages without symbol imports — Ruby (global constants) "
+      + "and C/C++ (no #include parser) — where callers still use the exact symbol name. Turn ON for those, "
+      + "or when the verified set comes back empty (noStructure) but you believe callers exist. Recalled "
+      + "members are name-matched in code positions (comments/strings excluded) but not import-verified."),
+  },
+}, async ({ repo, anchorFile, symbol, recall }) => {
+  try {
+    const base = ["--scan", "--query", "consumers", "--repo", repo, "--anchor-file", anchorFile, "--symbol", symbol];
+    if (recall) base.push("--recall", "name");
+    return await decompose(server, base, "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("find_dependencies", {
+  title: "Find what a symbol depends on (its resolved out-edges)",
+  description:
+    "Return the RESOLVED SET of a symbol's DEPENDENCIES — what it calls/uses — each tier-labelled "
+    + "(RESOLVED_FULL / PARTIAL / SUGGESTED). The symmetric inverse of find_consumers (callers in → "
+    + "dependencies out): the structurally-verified answer to 'what does this use / call'. Fully OFFLINE/"
+    + "deterministic — no LLM, instant. "
+    + "WHEN: summarizing or about-to-edit a function and you need its real dependencies (not a regex of "
+    + "the body); checking what a module pulls in. HONEST NEGATIVE: returns noStructure (reason 'none' = a "
+    + "leaf with no resolvable deps; 'opaque' = deps exist but don't resolve → grep). For who calls it use "
+    + "find_consumers; for a whole module's in+out boundary use module_contract.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file that DEFINES the symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The symbol whose dependencies you want."),
+  },
+}, async ({ repo, anchorFile, symbol }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "dependencies", "--repo", repo, "--anchor-file", anchorFile, "--symbol", symbol], "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("can_reach", {
+  title: "Can FROM reach TO? (verified reachability + witness path)",
+  description:
+    "Answer whether one symbol can reach another through resolved dependency edges — a structural "
+    + "yes/no PLUS a witness PATH when reachable (FROM → … → TO, every step a resolved edge). This is a "
+    + "question grep/RAG cannot answer: it needs edge resolution and a graph traversal, not a text match. "
+    + "Offline/deterministic (bounded BFS over dependency footprints). "
+    + "WHEN: 'does this code path actually connect', 'is this helper used on the way to X', impact/"
+    + "blast-radius confirmation. THREE distinct negatives, never conflated: 'unreachable' = the whole "
+    + "resolved closure was searched and TO isn't in it (a real no); 'exhausted' = the hop budget ran out "
+    + "first (INCONCLUSIVE — raise maxHops); 'no-out-edges' = FROM has no resolved dependencies (undefined, "
+    + "not a no). For the callers of a symbol use find_consumers; for a flow's full shape use grow_intent.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file defining FROM (relative to repo or absolute)."),
+    symbol: z.string().describe("FROM — the starting symbol."),
+    toSymbol: z.string().describe("TO — the target symbol to search for."),
+    toFile: z.string().optional().describe("Optionally pin TO's file (disambiguates a same-named target)."),
+    maxHops: z.number().int().min(1).max(200).default(40).describe("BFS budget (dependency footprints expanded)."),
+  },
+}, async ({ repo, anchorFile, symbol, toSymbol, toFile, maxHops }) => {
+  try {
+    const base = ["--scan", "--query", "reaches", "--repo", repo, "--anchor-file", anchorFile,
+      "--symbol", symbol, "--to-symbol", toSymbol, "--max-hops", String(maxHops)];
+    if (toFile) base.push("--to-file", toFile);
+    return await decompose(server, base, "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("module_contract", {
+  title: "Map a module's contract (boundary: what crosses in/out)",
+  description:
+    "Map the BOUNDARY of a module (a file): its INBOUND cut (exported symbols actually consumed elsewhere, "
+    + "with who consumes each), dead public API (exports nobody imports), and its OUTBOUND cut (resolved "
+    + "external imports), plus fan-in/fan-out (afferent/efferent coupling). A structural answer grep/RAG "
+    + "can't produce — a boundary is a cut-set of resolved edges, not a text match. Offline/deterministic. "
+    + "WHEN: 'what's the public surface of this file', 'what actually uses these exports', 'what can I "
+    + "narrow/remove', 'how coupled is this module', impact sizing before a refactor. For the callers of ONE "
+    + "symbol use find_consumers; for whether two symbols connect use can_reach.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("The module file to map (relative to repo or absolute)."),
+  },
+}, async ({ repo, anchorFile }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "contract", "--repo", repo, "--anchor-file", anchorFile], "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("subsystem", {
+  title: "Map the cohesive subsystem (neighborhood) around a symbol",
+  description:
+    "Map the cohesive SUBSYSTEM a symbol belongs to: the cluster of files around it, partitioned into the "
+    + "cohesive CORE vs the loosely-attached PERIPHERY, with a boundary cut (edges leaving the core) and a "
+    + "cohesion score. Deterministic + LOCAL: a bounded bidirectional ball + the parameter-free "
+    + "weak-community rule (a file is core iff its edges inside the cluster ≥ its edges leaving it) — no "
+    + "threshold, no global index, stable run-to-run. File grain. A subsystem boundary is a cut-set of "
+    + "resolved edges, which grep/RAG can't compute. "
+    + "WHEN: 'what's the module/subsystem around X', 'what moves together', scoping a refactor's blast "
+    + "radius. For one symbol's callers use find_consumers; for a single file's API use module_contract.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("File defining the anchor symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The anchor symbol to build the subsystem around."),
+    depth: z.number().int().min(1).max(4).default(2).describe("Radius of the local ball (hops, both directions)."),
+  },
+}, async ({ repo, anchorFile, symbol, depth }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "neighborhood", "--repo", repo, "--anchor-file", anchorFile, "--symbol", symbol, "--depth", String(depth)], "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("compare_symbols", {
+  title: "Compare two symbols by what they depend on",
+  description:
+    "Diff two symbols' resolved DEPENDENCY sets — what each one USES — to answer 'how does A differ from "
+    + "B' (e.g. two implementations of the same thing, or 'here' vs 'there'). Returns shared dependencies, "
+    + "A-only, and B-only (where the two diverge), plus a Jaccard similarity. Different deps = different "
+    + "mechanism. Offline/deterministic; a structural diff grep/RAG can't do (it needs each side's resolved "
+    + "dependency closure, then a set-diff). "
+    + "WHEN: comparing two implementations/variants, confirming two functions do the same thing structurally, "
+    + "spotting the distinct piece of one path. For one symbol's callers use find_consumers.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("File defining symbol A (relative to repo or absolute)."),
+    symbol: z.string().describe("Symbol A."),
+    toFile: z.string().describe("File defining symbol B."),
+    toSymbol: z.string().describe("Symbol B."),
+    depth: z.number().int().min(1).max(4).default(1).describe("Dependency depth to collect per side (1 = direct deps)."),
+  },
+}, async ({ repo, anchorFile, symbol, toFile, toSymbol, depth }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "compare", "--repo", repo, "--anchor-file", anchorFile,
+      "--symbol", symbol, "--to-file", toFile, "--to-symbol", toSymbol, "--depth", String(depth)], "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("ask", {
+  title: "Ask Seam a question — it routes to the right shape (or to grep/RAG)",
+  description:
+    "The natural-language front door: ask a question about the codebase and Seam ROUTES it to the right "
+    + "structural shape and runs it — no need to pick a tool yourself. It dispatches to: consumers (who "
+    + "calls X), reaches (can A reach B + witness path), contract (a module's boundary), subsystem (the "
+    + "cohesive cluster around X), compare (how A and B differ by dependencies), or flow (how a feature "
+    + "works, the spine). Crucially it is HONEST about scope: a lexical one-fact question routes AWAY to "
+    + "grep, and a semantic 'what code is about X' routes AWAY to RAG — Seam answers the STRUCTURAL middle "
+    + "(questions whose correctness needs resolved edges) and declines the rest rather than forcing a "
+    + "wrong-shaped answer. Routing is a model judgement, so this needs an LLM (served by a local "
+    + "claude/copilot binary if present, else YOUR model via sampling). When you already KNOW the shape you "
+    + "want, call that tool directly (find_consumers / can_reach / module_contract / subsystem / "
+    + "compare_symbols / grow_intent) to skip the routing step.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    question: z.string().describe("The natural-language question about the codebase."),
+    engine: LLM_ENGINE,
+  },
+}, async ({ repo, question, engine }) => {
+  try {
+    return await decompose(server, ["--scan", "--repo", repo, "--ask", question], engine);
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("impact_of", {
+  title: "The transitive blast radius of a symbol (refactoring impact)",
+  description:
+    "Compute everything affected if you change a symbol — the TRANSITIVE consumer closure (callers, their "
+    + "callers, …), rolled up by file, plus the SURFACE (outermost callers / entry points the change "
+    + "ripples to — where to re-verify) and the GAPS (opaque callers where resolution gave out, so the "
+    + "impact may be larger — grep those). The refactoring safety net: verified edges, so it won't miss a "
+    + "cross-file/cross-language caller a grep would, and it's HONEST about where its view is incomplete. "
+    + "Offline/deterministic. WHEN: 'what breaks if I change X', impact/scope sizing before a refactor or "
+    + "a signature change. NOTE: this is the FACTS side of 'how to refactor X' — the change PLAN itself is "
+    + "a judgement for you to make over these facts (pair with find_dependencies + module_contract). For "
+    + "DIRECT callers only use find_consumers.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file that DEFINES the symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The symbol whose change-impact you want."),
+    depth: z.number().int().min(1).max(12).default(6).describe("Max transitive hops to follow upward."),
+  },
+}, async ({ repo, anchorFile, symbol, depth }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "impact", "--repo", repo, "--anchor-file", anchorFile, "--symbol", symbol, "--depth", String(depth)], "det");
+  } catch (e) { return errReply(e); }
+});
+
+server.registerTool("refactor_facts", {
+  title: "Everything structural you need to plan a refactor of a symbol",
+  description:
+    "The one-call FACTS bundle for 'how to refactor X': the transitive IMPACT (what breaks if X changes), "
+    + "X's DEPENDENCIES (what it uses, to preserve/rewire), and its module CONTRACT (what it promises + "
+    + "outbound deps), gathered together so a planner has the whole structural picture at once. Offline/"
+    + "deterministic. IMPORTANT: this returns FACTS, not a plan — 'how' to change X is a design JUDGEMENT "
+    + "for YOU/the model to make over these facts (Seam supplies the verified structure, it doesn't decide "
+    + "the refactor). Use this when about to modify/rename/split a symbol; for just the blast radius use "
+    + "impact_of, just callers find_consumers, just the boundary module_contract.",
+  inputSchema: {
+    repo: z.string().describe("Absolute path to the git repo."),
+    anchorFile: z.string().describe("Path to the file that DEFINES the symbol (relative to repo or absolute)."),
+    symbol: z.string().describe("The symbol you're planning to refactor."),
+  },
+}, async ({ repo, anchorFile, symbol }) => {
+  try {
+    return await decompose(server, ["--scan", "--query", "refactor", "--repo", repo, "--anchor-file", anchorFile, "--symbol", symbol], "det");
   } catch (e) { return errReply(e); }
 });
 

@@ -22,7 +22,14 @@ interface SubCore { id: string; label: string; ranges: [number, number][]; reads
 interface ContractFeed { from: string; value: string; line: number; valLine?: number; valCol?: number; }  // a consumer's value for a prop (A2; valLine/valCol = its position, A3)
 interface ContractMember { name: string; role: string; ranges: [number, number][]; invoked: boolean; feeds?: ContractFeed[]; }
 interface SeamHunk { id: string; file: string; start: number; end: number; role: string; label?: string; confidence?: number; relevant?: boolean; external?: string[]; externalRefs?: ExternalRef[]; rewire?: Rewire | null; subcores?: SubCore[]; contract?: ContractMember[]; provenance?: string; caller?: boolean; consumers?: Consumer[]; wireTargets?: { file: string; start: number }[]; direction?: "forward" | "backward"; }
-interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; tier?: "spine" | "supporting" | "off"; }
+interface Seam { id: string; label: string; linkOnly: boolean; uncertain: boolean; warnings: string[]; hunks: SeamHunk[]; suggested?: boolean; tier?: "spine" | "supporting" | "off"; impact?: SeamImpact; }
+// Diff-review IMPACT (the diff↔codebase bridge, --review-impact): what a change touches BEYOND its own
+// lines — transitive consumers + cross-stack data-flow readers/writers in files NOT in the PR, each graded
+// by the deterministic relevance floor (relevant shown / unknown to verify / irrelevant suppressed).
+type Relevance = "relevant" | "unknown" | "irrelevant";
+interface ExternalImpact { symbol: string; file: string; hop: number; relevance: Relevance; }
+interface CrossStackEdge { symbol: string; file: string; key: string; relation: string; provenance: string; relevance: Relevance; triageReason?: string; }
+interface SeamImpact { external: ExternalImpact[]; crossStack: CrossStackEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; }
 // Altitude mid-level: a deterministic STRUCTURAL grouping of a big cluster's seams (by coupling +
 // directory), so the reviewer collapses/expands groups to zoom. Absent on small/tight clusters.
 interface SubGroup { label: string; seamIds: string[]; }
@@ -168,6 +175,12 @@ let repoRoot = "";
 const SESSION_GRAPH = ".seam-session-graph.json";
 let sessionGraph: string | null = null;
 let sessionIntent = "";
+// Progressive reveal (two-step): true while the deterministic skeleton is painted and the LLM
+// enrichment pass (naming + tiering) is still running over the same graph — drives the in-tree loader.
+let enriching = false;
+// Diff review: true while the base seams are painted and the impact pass (codebase blast radius +
+// cross-stack data-flow) is still being annotated over the same classification — drives the loader.
+let annotatingImpact = false;
 let fileIndex: Map<string, IndexEntry[]> = new Map();   // repo-relative file → its hunk occurrences
 // Seam graph (S1): seam id → label, and seam id → its wired neighbours (resolved seam-to-seam).
 let seamLabel: Map<string, string> = new Map();
@@ -829,12 +842,20 @@ async function runReview(range: string, submodules = false) {
   // model through VS Code's Language Model API — no install). Only matters when the engine runs LLM
   // passes (hybrid/llm); 'det' needs no backend.
   const backend = vscode.workspace.getConfiguration("seam").get<string>("llmBackend") || "cli";
+  // Review impact (the diff↔codebase bridge): after the base seams paint, annotate each with what the
+  // change touches BEYOND the PR — transitive consumers + cross-stack data-flow readers in untouched
+  // files, graded by the deterministic relevance floor. On by default; the pass is offline/deterministic
+  // unless triage is enabled (an LLM round-trip over the floor's `unknown` residual only).
+  const reviewImpact = vscode.workspace.getConfiguration("seam").get<boolean>("reviewImpact") ?? true;
+  const reviewTriage = vscode.workspace.getConfiguration("seam").get<boolean>("reviewImpactTriage") ?? false;
 
   await vscode.window.withProgress(
     { location: vscode.ProgressLocation.Notification, title: `Seam: decomposing ${range}…`, cancellable: true },
     async (progress, token) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
+      const classified = path.join(tool, `.seam-classified-${Date.now()}.json`);   // phase-1 hunks, reused by impact
       let factsPath: string | undefined;
+      const ts = Date.now();
       try {
         // 'det' = fully offline; 'hybrid' (the default) = LLM clusters + deterministic roles/wiring;
         // 'llm' = all-LLM. The deterministic roles are fed the editor's AST facts (defines/enclosing)
@@ -848,18 +869,21 @@ async function runReview(range: string, submodules = false) {
             [engineEntry("decompose"), "--git", range, "--repo", repoRoot,
              ...(submodules ? ["--submodules"] : []), "--emit-hunks", skel], tool));
         }
-        // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives
-        // the headless language server (warm daemon) with the deterministic floor as fallback.
-        // --submodules also folds each git submodule's working diff in (paths prefixed by the submodule dir).
+        // PHASE 1 — classify the diff and paint the base seams. --dump-classified persists the classified
+        // hunks so the impact pass (phase 2) reuses them deterministically (no second LLM classification).
+        // Blast radius (who outside the diff consumes a changed symbol). --resolver auto|lsp drives the
+        // headless language server (warm daemon) with the deterministic floor as fallback. --submodules
+        // also folds each git submodule's working diff in (paths prefixed by the submodule dir).
         const flags = ["--git", range, "--repo", repoRoot, ...engineArgs,
                        ...(submodules ? ["--submodules"] : []),
                        ...(factsPath ? ["--facts", factsPath] : []),
                        ...(resolver !== "det" ? ["--resolver", resolver] : []),
-                       ...(blastRadius ? ["--blast-radius"] : [])];
+                       ...(blastRadius ? ["--blast-radius"] : []),
+                       ...(reviewImpact ? ["--dump-classified", classified] : [])];
         // copilot backend serves the LLM passes through VS Code's model; det/cli run as one CLI call.
         await runDecompose(flags, out, engineMode !== "det", tool, (m) => progress.report({ message: m }), token);
         const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
-        const ts = Date.now();
+        if (reviewImpact) annotatingImpact = true;     // tells the tree the impact pass is coming
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
@@ -867,10 +891,34 @@ async function runReview(range: string, submodules = false) {
         vscode.window.showInformationMessage(
           `Seam (${engineMode}${via}): ${parsed.clusters.length} clusters, ${n} seams.${usageNote(parsed.usage)}  ` +
           `core=amber · link=blue · environment=gray · test=green · noise=faint`);
+
+        // PHASE 2 — annotate review impact over the SAME classification (no re-classify, so seams don't
+        // reshuffle): the diff↔codebase bridge (transitive consumers + cross-stack data-flow in untouched
+        // files), graded by the relevance floor. Deterministic unless triage is on (an LLM pass over the
+        // `unknown` residual only). Failures are non-fatal — the base review stays.
+        if (reviewImpact && fs.existsSync(classified)) {
+          progress.report({ message: "Annotating impact (blast radius + cross-stack)…" });
+          const impactFlags = ["--from-classified", classified, "--review-impact", "--repo", repoRoot,
+                               ...(blastRadius ? ["--blast-radius"] : []),
+                               ...(resolver !== "det" ? ["--resolver", resolver] : []),
+                               ...(reviewTriage ? ["--triage"] : [])];
+          try {
+            // triage is the only LLM work here; the floor + bridge are deterministic (useLlm only when triaging).
+            await runDecompose(impactFlags, out, reviewTriage, tool, (m) => progress.report({ message: m }), token);
+            const withImpact = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+            annotatingImpact = false;
+            activateModel(withImpact, repoRoot, range, ts);
+            extContext.workspaceState.update(STATE_KEY, { model: withImpact, repoRoot, range, ts } as SavedRun);
+          } catch (e) {
+            process.stderr?.write?.(`review-impact skipped: ${e instanceof Error ? e.message : e}\n`);
+          }
+        }
       } catch (e) {
         vscode.window.showErrorMessage(`Seam failed: ${e instanceof Error ? e.message : e}`);
       } finally {
-        try { fs.unlinkSync(out); } catch { /* ignore */ }
+        annotatingImpact = false;
+        treeProvider.refresh();                        // clear any lingering loader if phase 2 threw
+        for (const f of [out, classified]) { try { fs.unlinkSync(f); } catch { /* ignore */ } }
         if (factsPath) { try { fs.unlinkSync(factsPath); } catch { /* ignore */ } }
       }
     },
@@ -903,34 +951,77 @@ async function runScan(tool: string, scanArgs: string[], title: string, range: s
     async (progress, token) => {
       const out = path.join(tool, `.seam-${Date.now()}.json`);
       const graph = path.join(tool, SESSION_GRAPH);   // P2: persisted ResolvedGraph for expansion
-      try {
-        const engineCfg = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
-        // --auto orchestrates multiple LLM steps outside the host-bus pass → it can't be served via
-        // vscode.lm; force the CLI for it (hostBusable=false).
-        const flags = ["--scan", "--repo", repoRoot, ...scanArgs, "--classifier", engineCfg, "--emit-graph", graph];
-        // BIDIRECTIONAL (opt-in): a single-symbol footprint can include the anchor's DEPENDENCIES (the
-        // backward "how it works" slice), not just its consumers — so a cross-cutting POLICY shows its
-        // mechanism, and the engine can tell policy from flow. Only for a single symbol (not module/auto).
-        if (vscode.workspace.getConfiguration("seam").get<boolean>("bidirectional")
-            && scanArgs.includes("--symbol") && !scanArgs.includes("--auto"))
-          flags.push("--bidirectional");
-        // AFFINITY (opt-in, intent-driven only): the deep "what else relates to this intent" pass. The
-        // engine no-ops it without an --intent, so it's safe to always append when enabled.
-        if (vscode.workspace.getConfiguration("seam").get<boolean>("affinity") && scanArgs.includes("--intent"))
-          flags.push("--affinity");
-        await runDecompose(flags, out, engineCfg !== "det", tool,
-          (m) => progress.report({ message: m }), token, !scanArgs.includes("--auto"));
-        const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+      const report = (m: string) => progress.report({ message: m });
+      const auto = scanArgs.includes("--auto");        // --auto's grow is multi-step LLM (CLI-only)
+      const intentIdx = scanArgs.indexOf("--intent");
+      const intent = intentIdx >= 0 ? scanArgs[intentIdx + 1] : undefined;
+      // Scan flags WITHOUT the classifier (added per phase below).
+      const base = ["--scan", "--repo", repoRoot, ...scanArgs];
+      // BIDIRECTIONAL (opt-in): a single-symbol footprint can include the anchor's DEPENDENCIES (the
+      // backward "how it works" slice), not just its consumers — so a cross-cutting POLICY shows its
+      // mechanism, and the engine can tell policy from flow. Only for a single symbol (not module/auto).
+      if (vscode.workspace.getConfiguration("seam").get<boolean>("bidirectional")
+          && scanArgs.includes("--symbol") && !auto)
+        base.push("--bidirectional");
+      // AFFINITY (opt-in, intent-driven only): the deep "what else relates to this intent" pass. The
+      // engine no-ops it without an --intent, so it's safe to always append when enabled.
+      if (vscode.workspace.getConfiguration("seam").get<boolean>("affinity") && intent)
+        base.push("--affinity");
+
+      const engineCfg = vscode.workspace.getConfiguration("seam").get<string>("engine") || "hybrid";
+      // Two-step reveal: paint the deterministic skeleton first, then enrich it in place. Only worth it
+      // when an LLM enrichment pass actually follows (hybrid/llm) and the user hasn't opted out.
+      const twoStep = engineCfg !== "det"
+        && (vscode.workspace.getConfiguration("seam").get<boolean>("progressiveReveal") ?? true);
+
+      // Paint + persist a result; `range` and `ts` stay constant across both phases so the swap reads as
+      // the SAME run being enriched, not a new run.
+      const ts = Date.now();
+      const paint = (parsed: SeamModel) => {
+        if (auto) parsed.autoGrown = true;             // the --graph enrich pass doesn't re-stamp this
         sessionGraph = graph;                          // fresh analysis = new session to grow from
-        const ts = Date.now();
         activateModel(parsed, repoRoot, range, ts);
         extContext.workspaceState.update(STATE_KEY, { model: parsed, repoRoot, range, ts } as SavedRun);
+      };
+      const toast = (parsed: SeamModel) => {
         const n = parsed.clusters.reduce((a, c) => a + c.seams.length, 0);
         vscode.window.showInformationMessage(
           `Seam (codebase): ${range} — ${parsed.clusters.length} cluster(s), ${n} seam(s).${usageNote(parsed.usage)}`);
+      };
+
+      try {
+        if (!twoStep) {
+          // SINGLE PASS — 'det' (offline) or progressive reveal off (wait for the full result).
+          // --auto orchestrates multiple LLM steps outside the host-bus pass → CLI-only (hostBusable=false).
+          await runDecompose([...base, "--classifier", engineCfg, "--emit-graph", graph],
+            out, engineCfg !== "det", tool, report, token, !auto);
+          const parsed = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+          paint(parsed); toast(parsed);
+          return;
+        }
+        // PHASE 1 — the deterministic skeleton (spine + structural labels + blind spots), painted now.
+        // Static scan: fully offline & instant ('det', no LLM). --auto: the grow still runs (it IS the
+        // footprint), but `--skeleton` skips the ~18s seam-intent naming/tiering pass for this phase.
+        report(auto ? "Growing the footprint…" : "Building the structure…");
+        const p1 = auto ? [...base, "--classifier", engineCfg, "--skeleton", "--emit-graph", graph]
+                        : [...base, "--classifier", "det", "--emit-graph", graph];
+        await runDecompose(p1, out, auto && engineCfg !== "det", tool, report, token, !auto);
+        const skel = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        enriching = true;
+        paint(skel);
+        // PHASE 2 — enrich over the SAME graph (no re-scan/re-grow): the LLM names the seams + tiers them
+        // spine/supporting/off. --graph is a single host-bus pass (copilot-serveable; hostBusable=true).
+        report("Naming & ranking with the LLM…");
+        const p2 = ["--graph", graph, "--classifier", engineCfg, ...(intent ? ["--intent", intent] : [])];
+        await runDecompose(p2, out, true, tool, report, token, true);
+        const full = JSON.parse(fs.readFileSync(out, "utf-8")) as SeamModel;
+        enriching = false;
+        paint(full); toast(full);
       } catch (e) {
         vscode.window.showErrorMessage(`Seam codebase analysis failed: ${e instanceof Error ? e.message : e}`);
       } finally {
+        enriching = false;
+        treeProvider.refresh();                        // clear any lingering loader if phase 2 threw
         try { fs.unlinkSync(out); } catch { /* ignore */ }
       }
     },
@@ -1612,6 +1703,10 @@ type Node =
   | { kind: "policyGroup"; cluster: Cluster; side: "mechanism" | "enforcement" }
   | { kind: "enforcementDir"; dir: string; hunks: SeamHunk[] }
   | { kind: "seam"; cluster: Cluster; seam: Seam }
+  // Diff-review IMPACT (--review-impact): a ⚡ group under a seam, expanding to the cross-stack/transitive
+  // consumers the change touches in untouched files, graded by the relevance floor.
+  | { kind: "impactGroup"; seam: Seam }
+  | { kind: "impactEdge"; rel: Relevance; relation: string; label: string; file: string; provenance?: string; reason?: string }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
   | { kind: "extTarget"; target: ExternalTarget }
   // codebase-mode blind-spot map (the differentiator): the statically-opaque mechanisms
@@ -1689,6 +1784,20 @@ function sortedSeams(seams: Seam[]): Seam[] {
   return seams.map((s, i) => [s, i] as const)
     .sort((a, b) => (seamHealth(b[0]).rank - seamHealth(a[0]).rank) || (a[1] - b[1]))
     .map(([s]) => s);
+}
+// Does a seam's review impact have anything worth showing? (irrelevant edges are suppressed by the
+// floor — they never render; gaps and any relevant/unknown edge do.)
+function shownImpact(im?: SeamImpact): boolean {
+  if (!im) return false;
+  return im.crossStack.some((c) => c.relevance !== "irrelevant")
+    || im.external.some((e) => e.relevance !== "irrelevant")
+    || im.gaps.length > 0;
+}
+// The headline counts for a seam's impact group label (relevant cross-stack drives the ⚠).
+function impactCounts(im: SeamImpact): { relevant: number; unknown: number } {
+  const all = [...im.crossStack, ...im.external];
+  return { relevant: all.filter((e) => e.relevance === "relevant").length,
+           unknown: all.filter((e) => e.relevance === "unknown").length + im.gaps.length };
 }
 function seamRoleCounts(s: Seam): Map<string, number> {
   const m = new Map<string, number>();
@@ -1816,8 +1925,28 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // inter-seam CONTRACT is not a row here — it's marked on the participating hunks themselves.
       const links: Node[] = (seamNeighbors.get(el.seam.id) ?? [])
         .map((n) => ({ kind: "seamLink", toId: n.id, provenance: n.provenance } as Node));
+      // Review impact: a ⚡ group leads (above wiring/hunks) when the change touches anything beyond the PR.
+      const impact: Node[] = shownImpact(el.seam.impact) ? [{ kind: "impactGroup", seam: el.seam }] : [];
       const hunks: Node[] = el.seam.hunks.map((hunk) => ({ kind: "hunk", cluster: el.cluster, seam: el.seam, hunk }));
-      return [...links, ...hunks];
+      return [...impact, ...links, ...hunks];
+    }
+    if (el.kind === "impactGroup") {
+      const im = el.seam.impact!;
+      const rank: Record<Relevance, number> = { relevant: 0, unknown: 1, irrelevant: 2 };
+      // cross-stack rows (relevant first), then transitive-consumer rows; irrelevant ones never reach here.
+      const cross: Node[] = im.crossStack.filter((c) => c.relevance !== "irrelevant")
+        .sort((a, b) => rank[a.relevance] - rank[b.relevance])
+        .map((c) => ({ kind: "impactEdge", rel: c.relevance, relation: `${c.relation} of '${c.key}'`,
+          label: c.symbol, file: c.file, provenance: c.provenance, reason: c.triageReason } as Node));
+      const ext: Node[] = im.external.filter((e) => e.relevance !== "irrelevant")
+        .sort((a, b) => rank[a.relevance] - rank[b.relevance])
+        .map((e) => ({ kind: "impactEdge", rel: e.relevance, relation: e.hop > 1 ? `consumer (hop ${e.hop})` : "consumer",
+          label: e.symbol, file: e.file } as Node));
+      const gaps: Node[] = im.gaps.length
+        ? [{ kind: "impactEdge", rel: "unknown", relation: "opaque caller(s) — impact may be larger",
+            label: `${im.gaps.length} gap${im.gaps.length !== 1 ? "s" : ""}`, file: "" } as Node]
+        : [];
+      return [...cross, ...ext, ...gaps];
     }
     if (el.kind === "hunk") {
       if (chainView) {
@@ -1865,9 +1994,16 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
   getTreeItem(el: Node): vscode.TreeItem {
     if (el.kind === "cluster") {
       const it = new vscode.TreeItem(el.cluster.intent, vscode.TreeItemCollapsibleState.Expanded);
-      it.iconPath = new vscode.ThemeIcon("symbol-color");
       const nsub = el.cluster.subgroups?.length ?? 0;
-      it.description = nsub ? `${nsub} groups · ${el.cluster.seams.length} seams` : `${el.cluster.seams.length} seams`;
+      const count = nsub ? `${nsub} groups · ${el.cluster.seams.length} seams` : `${el.cluster.seams.length} seams`;
+      // Progressive reveal: while the LLM enrichment runs over the skeleton, the cluster header carries a
+      // spinner + note so the deterministic result reads as "live, being named", not final.
+      it.iconPath = new vscode.ThemeIcon(enriching ? "loading~spin" : "symbol-color");
+      it.description = enriching ? `${count} · ⟳ naming & ranking…` : count;
+      it.tooltip = enriching
+        ? "The deterministic skeleton is shown; the LLM is naming the seams and sorting them into "
+          + "Main path / Supporting / Side-effects. The list updates in place when it finishes."
+        : undefined;
       return it;
     }
     if (el.kind === "policyGroup") {
@@ -1924,6 +2060,40 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       it.contextValue = "seam.subgroup";
       return it;
     }
+    if (el.kind === "impactGroup") {
+      const ic = impactCounts(el.seam.impact!);
+      const it = new vscode.TreeItem("⚡ Impact (beyond this PR)",
+        ic.relevant ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      it.description = [ic.relevant ? `${ic.relevant} to verify` : "", ic.unknown ? `${ic.unknown} maybe` : ""]
+        .filter(Boolean).join(" · ") || "blast radius";
+      it.iconPath = new vscode.ThemeIcon("zap", ic.relevant ? new vscode.ThemeColor("charts.yellow") : undefined);
+      it.tooltip = "What this change touches BEYOND its own lines — transitive consumers and cross-stack "
+        + "data-flow readers/writers in files this PR did NOT change. Graded by the deterministic relevance "
+        + "floor: shown = couldn't be ruled out (verify); provably-unrelated edges are suppressed. Information to verify, not asserted bugs.";
+      it.contextValue = "seam.impactGroup";
+      return it;
+    }
+    if (el.kind === "impactEdge") {
+      const it = new vscode.TreeItem(`${el.rel === "relevant" ? "⚠ " : ""}${el.relation} → ${el.label}`,
+        vscode.TreeItemCollapsibleState.None);
+      it.description = [el.file ? el.file.split("/").pop() : "",
+        el.provenance && el.provenance !== "RESOLVED_FULL" ? `[${el.provenance}]` : "",
+        el.rel === "unknown" ? "verify" : ""].filter(Boolean).join(" · ");
+      it.iconPath = new vscode.ThemeIcon(
+        el.rel === "relevant" ? "warning" : "question",
+        new vscode.ThemeColor(el.rel === "relevant" ? "charts.yellow" : "descriptionForeground"));
+      it.tooltip = (el.reason ? `${el.reason}\n\n` : "")
+        + (el.file ? `${el.file}\n\n` : "")
+        + (el.rel === "relevant"
+            ? "The change touched a field this consumer uses — verify it still holds."
+            : "Couldn't prove relevant or not — a lead to check, not an asserted break.");
+      if (el.file) {
+        const uri = vscode.Uri.file(path.join(repoRoot, el.file));
+        it.command = { command: "vscode.open", title: "Open", arguments: [uri] };
+        it.resourceUri = uri;
+      }
+      return it;
+    }
     if (el.kind === "seam") {
       const h = seamHealth(el.seam);
       const counts = seamRoleCounts(el.seam);
@@ -1938,11 +2108,20 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       const it = new vscode.TreeItem(
         h.glyph ? `${lead}${h.glyph} ${el.seam.label}` : `${lead}${el.seam.label}`, vscode.TreeItemCollapsibleState.Collapsed);
       // Description = the seam's CHARACTER (role makeup) + how connected it is — risk lives in the
-      // glyph + icon colour, not the text, so the line stays calm.
-      it.description = [makeupText(counts), wired ? `↔${wired}` : ""].filter(Boolean).join("  ·  ");
-      it.iconPath = new vscode.ThemeIcon(
-        el.seam.uncertain && !el.seam.suggested ? "question" : "git-merge",
-        h.colorId ? new vscode.ThemeColor(h.colorId) : undefined);
+      // glyph + icon colour, not the text, so the line stays calm. A ⚡ badge surfaces review impact
+      // (the change touches code beyond the PR); ⏳ while the impact pass is still annotating.
+      const ic = shownImpact(el.seam.impact) ? impactCounts(el.seam.impact!) : null;
+      const impactBadge = ic
+        ? `⚡${ic.relevant ? ic.relevant : ""}${ic.relevant && ic.unknown ? "+" : ""}${!ic.relevant && ic.unknown ? `?${ic.unknown}` : ""}`
+        : annotatingImpact ? "⏳" : "";
+      it.description = [makeupText(counts), wired ? `↔${wired}` : "", impactBadge].filter(Boolean).join("  ·  ");
+      // While enriching, a not-yet-tiered seam is one the LLM is still naming/categorising → spin it; an
+      // already-tiered seam (or a finished run) keeps its normal merge icon.
+      it.iconPath = enriching && !el.seam.tier
+        ? new vscode.ThemeIcon("loading~spin")
+        : new vscode.ThemeIcon(
+            el.seam.uncertain && !el.seam.suggested ? "question" : "git-merge",
+            h.colorId ? new vscode.ThemeColor(h.colorId) : undefined);
       const md = new vscode.MarkdownString(`**${el.seam.label}**\n\n`);
       if (h.tag) md.appendMarkdown(`${h.glyph} ${h.tag}\n\n`);
       const bar = makeupBar(counts);

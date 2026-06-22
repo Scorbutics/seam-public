@@ -727,7 +727,7 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
 }
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
-  model?: string; claudeBin?: string | null; promoteSpinePath?: boolean; lineage?: boolean } = {}): Promise<any> {
+  model?: string; claudeBin?: string | null; promoteSpinePath?: boolean; lineage?: boolean; skeleton?: boolean } = {}): Promise<any> {
   // Bidirectional footprints carry a policy-vs-flow SHAPE; classify it FIRST (direction-based, stable),
   // because the next step depends on it: anchor the role model at both ends of a FLOW (promote the
   // terminals/screens) — but NOT a POLICY, whose enforcement sites are a collapsed surface, not cores.
@@ -743,18 +743,25 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
     await detect_consumer_feeds(g, opts.repo);
   }
   let seams = assign_intent_seams(g);
-  if (opts.useLlm) {                                  // F4: the LLM refines/names the partition (proposed)
+  // SKELETON mode (LLM consumers — skill / MCP): skip the LLM seam-labeling passes entirely. The det
+  // structure is already complete by here (spine, structural labels, blindspots — steps above), and a
+  // consuming LLM re-derives the tiers + prose labels itself from the symbols/paths (validated A/B:
+  // equal-or-better answer at ~⅓ the tokens, and it skips the ~18s seam-intent pass). The full passes
+  // are reserved for the HUMAN visualization, where pre-digested labels + tier grouping ARE the value.
+  if (opts.useLlm && !opts.skeleton) {               // F4: the LLM refines/names the partition (proposed)
     seams = refine_seams_llm(g, seams, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin });
   }
   seams = _extract_suggested_seams(g, seams);
   // Intent pass over the FINAL seams (grown + data-coupling included): tiers them spine/supporting/off,
   // names them, dims off-intent concerns, focuses the answer. Supersedes the link-only mark_relevance_llm.
-  if (opts.useLlm && opts.intent) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin, promoteSpinePath: opts.promoteSpinePath });
+  if (opts.useLlm && opts.intent && !opts.skeleton) label_focus_relevance_llm(g, seams, opts.intent, { model: opts.model, claudeBin: opts.claudeBin, promoteSpinePath: opts.promoteSpinePath });
   const health = wellformedness(g);
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
   // Emit the model UNCOLLAPSED — off-seam collapsing is a human-render concern, applied by each client
   // (see collapse_off_seams), so an LLM consumer of seams.json gets the full recall, not a "+N more" stub.
-  return emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined });
+  const model = emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined });
+  if (opts.skeleton) model.skeleton = true;          // tells the renderer to list the untiered seams flat
+  return model;
 }
 
 // POLICY vs FLOW — the shape of a footprint. A FLOW moves data through a pipeline (it has a data

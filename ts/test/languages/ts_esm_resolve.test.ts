@@ -5,7 +5,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { imports, floor_resolve } from "../../src/languages/typescript/resolve.js";
+import { imports, namespaceImports, defaultImports, floor_resolve } from "../../src/languages/typescript/resolve.js";
 
 const REPO = join(tmpdir(), "seam-ts-esm-" + process.pid);
 const w = (rel: string, t: string) => { const p = join(REPO, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };
@@ -42,5 +42,33 @@ describe("dynamic import() parsing", () => {
   });
   test("static imports still captured (no regression)", () => {
     expect(imports("import { b } from \"./b.js\";\n").some((r) => r.name === "b" && r.source === "./b.js")).toBe(true);
+  });
+});
+
+describe("namespace import parsing (for X.symbol member-access resolution)", () => {
+  test("captures `import * as X from`", () => {
+    expect(namespaceImports("import * as api from \"./m.js\";\n")).toEqual([{ local: "api", source: "./m.js", line: 0 }]);
+  });
+  test("captures `import D, * as X from` (namespace after a default)", () => {
+    expect(namespaceImports("import D, * as api from \"./m.js\";\n").some((n) => n.local === "api" && n.source === "./m.js")).toBe(true);
+  });
+  test("captures a single-binding dynamic import as a namespace", () => {
+    expect(namespaceImports("const m = await import(\"./d.js\");\n")).toEqual([{ local: "m", source: "./d.js", line: 0 }]);
+  });
+  test("does NOT treat a destructured dynamic import as a namespace (it's named)", () => {
+    expect(namespaceImports("const { c } = await import(\"./c.js\");\n")).toEqual([]);
+  });
+});
+
+describe("default import parsing (for default-export consumer resolution)", () => {
+  test("captures `import X from` (the binding is arbitrary; matched by module)", () => {
+    expect(defaultImports("import Widget from \"./widget\";\n")).toEqual([{ local: "Widget", source: "./widget", line: 0 }]);
+  });
+  test("captures the default in `import X, { a } from`", () => {
+    expect(defaultImports("import W, { a } from \"./widget\";\n")).toEqual([{ local: "W", source: "./widget", line: 0 }]);
+  });
+  test("ignores pure named / namespace imports", () => {
+    expect(defaultImports("import { a } from \"./widget\";\n")).toEqual([]);
+    expect(defaultImports("import * as ns from \"./widget\";\n")).toEqual([]);
   });
 });

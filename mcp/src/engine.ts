@@ -15,13 +15,16 @@ function bunPath(): string {
   return existsSync(candidate) ? candidate : "bun";
 }
 
-// Locate the engine, preferring the self-contained binary so a packaged MCP server needs no
-// checkout: $SEAM_BIN → ts/dist/seam (bun build --compile) → bun + the source CLI.
-export function engineInvocation(): { cmd: string; pre: string[] } {
+// Locate the engine: $SEAM_BIN (an explicit packaged engine) → the esbuilt dist bundle (`bun run build`,
+// fast: no per-call transpile) → bun + the source CLI (always correct, ~40ms startup).
+// NOTE: we deliberately do NOT auto-prefer a `ts/dist/seam` single binary. `bun build --compile` drops
+// web-tree-sitter's core wasm, so that binary ABORTS on the first parse — auto-preferring it would let a
+// stray broken build silently break every call. A working packaged engine is opted in via SEAM_BIN.
+export function engineInvocation(): { cmd: string; pre: string[]; env?: Record<string, string> } {
   const envBin = process.env.SEAM_BIN;
   if (envBin && existsSync(envBin) && statSync(envBin).isFile()) return { cmd: envBin, pre: [] };
-  const compiled = join(REPO_ROOT, "ts", "dist", "seam");
-  if (existsSync(compiled)) return { cmd: compiled, pre: [] };
+  const bundle = join(REPO_ROOT, "ts", "dist", "seam.cjs");
+  if (existsSync(bundle)) return { cmd: bunPath(), pre: [bundle], env: { SEAM_WASM_DIR: join(REPO_ROOT, "ts", "dist", "wasm") } };
   return { cmd: bunPath(), pre: [join(REPO_ROOT, "ts", "src", "cli", "decompose.ts")] };
 }
 
@@ -34,8 +37,8 @@ export class EngineError extends Error {}
 let _backendKind: string | null | undefined;
 export function backendKind(cwd = REPO_ROOT): string | null {
   if (_backendKind !== undefined) return _backendKind;
-  const { cmd, pre } = engineInvocation();
-  const proc = spawnSync(cmd, [...pre, "--check-backend"], { cwd, encoding: "utf-8", maxBuffer: 1 << 20 });
+  const { cmd, pre, env } = engineInvocation();
+  const proc = spawnSync(cmd, [...pre, "--check-backend"], { cwd, encoding: "utf-8", maxBuffer: 1 << 20, env: { ...process.env, ...env } });
   _backendKind = proc.status === 0 ? (proc.stdout || "").trim() || "unknown" : null;
   return _backendKind;
 }
@@ -43,8 +46,8 @@ export function backendKind(cwd = REPO_ROOT): string | null {
 // Run the engine with FLAGS (everything after the entry). Returns captured stdout — the engine writes
 // its artifacts to the --emit-* files the caller passes, and a one-line status to stdout/stderr.
 export function runEngine(flags: string[], cwd = REPO_ROOT): { stdout: string; stderr: string } {
-  const { cmd, pre } = engineInvocation();
-  const proc = spawnSync(cmd, [...pre, ...flags], { cwd, encoding: "utf-8", maxBuffer: 256 * 1024 * 1024 });
+  const { cmd, pre, env } = engineInvocation();
+  const proc = spawnSync(cmd, [...pre, ...flags], { cwd, encoding: "utf-8", maxBuffer: 256 * 1024 * 1024, env: { ...process.env, ...env } });
   if (proc.error) throw new EngineError(`could not run the Seam engine (${cmd}): ${proc.error.message}`);
   if (proc.status !== 0)
     throw new EngineError(`Seam engine failed (exit ${proc.status}): ${(proc.stderr || proc.stdout || "").trim().slice(0, 600)}`);

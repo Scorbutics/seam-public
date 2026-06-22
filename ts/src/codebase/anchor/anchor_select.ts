@@ -21,6 +21,7 @@ import { defs_in_file } from "../scan/def_table.js";
 const PASS = registerPass({ tag: "anchor-judge", tier: "strong", note: "pick the entry-point anchor among grown footprints (semantic)" });
 import { defs_in_file_treesitter } from "../scan/def_treesitter.js";
 import { grow_to_terminals } from "../grow/orchestrate.js";
+import { EngineCtx } from "../engine_ctx.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
 import { expand_intent_terms } from "./intent_expand.js";
 
@@ -44,6 +45,7 @@ export interface ProbedAnchor {
   terms: string[];        // which intent words matched (explanation)
   metrics: ProbeMetrics | null;   // null = the probe grow failed
   structScore: number;    // the connectedness ranking (reaches-terminals weighted)
+  rescued?: boolean;      // was isolated on the cheap (call/import) probe, un-isolated only via data-coupling
   signature?: string;     // the candidate's own declaration line (its CODE identity) — what a reader judges by
   doc?: string;           // its leading doc-comment, the concept the name omits — fed to the judge as MEANING
 }
@@ -111,13 +113,14 @@ export function struct_score(m: ProbeMetrics | null, nameScore: number): number 
 
 // Probe ONE candidate: a shallow, deterministic grow from it, then its footprint facts. Kept small
 // (maxNodes/maxSteps) so probing K candidates stays cheap; the full grow runs later on the winner only.
+// Pass a shared `ctx` (Lever 2) to build the repo-wide indices ONCE across the whole candidate pool.
 export async function probe_anchor(repo: string, file: string, symbol: string,
-    opts: { maxNodes?: number; maxSteps?: number; dataCoupling?: boolean } = {}): Promise<ProbeMetrics | null> {
+    opts: { maxNodes?: number; maxSteps?: number; dataCoupling?: boolean; ctx?: EngineCtx } = {}): Promise<ProbeMetrics | null> {
   try {
     const [data] = await grow_to_terminals(repo, file, symbol, {
       maxNodes: opts.maxNodes ?? 30, maxSteps: opts.maxSteps ?? 8,
       bidirectional: true,   // count DOWNSTREAM reach too, so a 0-consumer entry point isn't "isolated"
-      dataCoupling: opts.dataCoupling ?? true, dataCouplingLlm: false,
+      dataCoupling: opts.dataCoupling ?? true, dataCouplingLlm: false, ctx: opts.ctx,
     });
     return footprint_metrics(data);
   } catch { return null; }
@@ -229,28 +232,59 @@ export async function select_anchor(repo: string, intent: string,
   // drop data-shape candidates (never anchors) BEFORE probing — a free probe-count cut — then bound the budget.
   const toProbe = probeList.filter((c) => !_NON_ANCHOR_KINDS.has(c.kind)).slice(0, 16);
 
-  // SEQUENTIAL on purpose. Probing concurrently was tried (a bounded pool) and reverted: it corrupts the
-  // metrics because the grow path is NOT reentrant — `shared_key_index` (coupling/index.ts `_CACHE`) hands
-  // back a by-reference cached index and the resolver is a module global (`_ACTIVE_RESOLVER`), so
-  // interleaved grows race (proven: parallel structScores went unstable + differed from sequential, e.g.
-  // 165.41 vs 180.50). Parallelizing needs a reentrant grow (per-call resolver context + a copied/immutable
-  // key index) first — see memory `probe-parallelism-blocked-on-reentrancy`.
+  // TWO-TIER PROBE (Lever 1). The probe's job is to RANK candidates by connectedness and DROP the
+  // isolated ones. Data-coupling's carrier-trace overlay DETONATES on hub classes (~100s each on cal.com
+  // — measured ~63% of auto-anchor time), yet a candidate already CALL/IMPORT-connected never needs it to
+  // look non-isolated. So probe everyone CHEAP (call/import only, no coupling) and pay the coupling overlay
+  // ONLY to RESCUE the would-be-isolated — the cross-stack-only anchors (a `$http`→backend route handler
+  // with no in-repo caller, coupled only by a shared route/key). Coupling is thus DEMOTED to a SURVIVAL
+  // signal (keep the cross-stack anchor in the pool for the judge), not a ranking input — which also keeps
+  // the ranking among the connected stable on call/import connectedness (the right probe signal, per the
+  // old PERF NOTE). SEAM_PROBE_COUPLING=always restores the probe-everyone-with-coupling path for A/B;
+  // =off disables the rescue entirely.
+  //
+  // Lever 2: ONE shared EngineCtx across the whole pool, so the repo-wide data-coupling grounding index
+  // builds ONCE for all rescue probes instead of once per candidate.
+  //
+  // SEQUENTIAL on purpose — the grow path is not reentrant across `await` (several module/ctx caches);
+  // parallelizing was proven to corrupt metrics and shelved as low-ROI. See `probe-parallelism-blocked-on-reentrancy`.
+  const alwaysCouple = process.env.SEAM_PROBE_COUPLING === "always";
+  const rescueCoupling = !alwaysCouple && (opts.dataCoupling ?? true) && process.env.SEAM_PROBE_COUPLING !== "off";
+  const ctx = new EngineCtx();
   const probed: ProbedAnchor[] = [];
   const _pt0 = process.env.SEAM_TIMING ? performance.now() : 0;   // probe-phase wall-clock (opt-in)
+  let couplingProbes = 0;
   for (let i = 0; i < toProbe.length; i++) {
     const c = toProbe[i];
     emit(`Probing anchor ${i + 1}/${toProbe.length}: ${c.name}…`);
-    const metrics = await probe_anchor(repo, c.file, c.name, { dataCoupling: opts.dataCoupling, maxNodes: opts.maxNodes, maxSteps: opts.maxSteps });
+    if (alwaysCouple) couplingProbes++;
+    const metrics = await probe_anchor(repo, c.file, c.name, { dataCoupling: alwaysCouple, maxNodes: opts.maxNodes, maxSteps: opts.maxSteps, ctx });
     probed.push({ id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: c.score, terms: c.terms ?? [],
       metrics, structScore: struct_score(metrics, c.score) });
   }
-  if (_pt0) process.stderr.write(`[timing] probe phase: ${Math.round(performance.now() - _pt0)}ms for ${toProbe.length} candidates\n`);
+  // RESCUE pass — re-probe only the would-be-isolated WITH data-coupling; a candidate that becomes
+  // connected (its sole link was a shared key/route) is rescued back into the pool, marked `rescued`.
+  if (rescueCoupling) {
+    for (const p of probed) {
+      if (p.metrics && !p.metrics.isolated) continue;   // already connected the cheap way — never pay coupling
+      emit(`Rescue-probing isolated anchor with data-coupling: ${p.name}…`);
+      couplingProbes++;
+      const m2 = await probe_anchor(repo, p.file, p.name, { dataCoupling: true, maxNodes: opts.maxNodes, maxSteps: opts.maxSteps, ctx });
+      if (m2 && !m2.isolated) { p.metrics = m2; p.structScore = struct_score(m2, p.score); p.rescued = true; }
+    }
+  }
+  if (_pt0) process.stderr.write(`[timing] probe phase: ${Math.round(performance.now() - _pt0)}ms for ${toProbe.length} candidates (${couplingProbes} with data-coupling)\n`);
 
-  // keep the connected candidates; if the probe disqualified everything (e.g. resolver gap), fall back
-  // to the full probed list ranked by name so the ramp never empties out.
-  const alive = probed.filter((p) => p.metrics && !p.metrics.isolated);
-  const pool = alive.length ? alive : probed;
-  pool.sort((a, b) => b.structScore - a.structScore || b.score - a.score);
+  // RANK: cheaply-connected first (by call/import structScore — never paid coupling), THEN rescued ones
+  // (cross-stack-only; ranked among themselves by their coupled structScore, but AFTER the call-connected,
+  // since a direct caller is stronger evidence than a shared key). If the probe disqualified everything
+  // (e.g. resolver gap), fall back to the full probed list by name so the ramp never empties out.
+  const connected = probed.filter((p) => p.metrics && !p.metrics.isolated && !p.rescued)
+    .sort((a, b) => b.structScore - a.structScore || b.score - a.score);
+  const rescued = probed.filter((p) => p.rescued)
+    .sort((a, b) => b.structScore - a.structScore || b.score - a.score);
+  const alive = [...connected, ...rescued];
+  const pool = alive.length ? alive : [...probed].sort((a, b) => b.score - a.score);
   const dead = probed.filter((p) => !pool.includes(p)).sort((a, b) => b.score - a.score);
   const ranked = [...pool, ...dead];
 

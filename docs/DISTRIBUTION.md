@@ -13,32 +13,31 @@ checkout and `bun` installed (found on PATH or at `~/.bun/bin/bun`).
 bun ts/src/cli/decompose.ts --git HEAD~1 --classifier det --emit-seams /tmp/seams.json
 ```
 
-## 2. Single self-contained binary (recommended for non-VS Code clients)
+## 2. Esbuilt CJS bundle (recommended for non-VS Code clients)
 
-`bun build --compile` produces one ~100MB executable with the bun runtime baked in — no checkout, no
-bun install, no PATH lookup. This is the simplest thing for a JVM plugin (IntelliJ) or a packaged MCP
-server to shell out to.
+`bun run build` (= `bun build.mjs`) esbuilds the engine into one **`ts/dist/seam.cjs`** plus a grammar
+pack at `ts/dist/wasm/`. It needs a `bun`/`node` runtime to execute, but no source checkout and no
+`bun install`. This is what the MCP server prefers over re-transpiling the source CLI per call.
 
 ```sh
-cd ts && bun run build          # → ts/dist/seam
-./ts/dist/seam --file change.patch --classifier det --emit-seams /tmp/seams.json
+cd ts && bun run build          # → ts/dist/seam.cjs  (+ dist/wasm/ grammar pack)
+SEAM_WASM_DIR="$PWD/dist/wasm" bun dist/seam.cjs --file change.patch --classifier det --emit-seams /tmp/seams.json
 ```
 
-The binary is gitignored (large, reproducible). Build it in CI per-platform and ship it alongside
-each client, or let the client build it on first run.
+`dist/` is gitignored (reproducible). Build it in CI and ship it alongside each client. The MCP
+locator runs it with `SEAM_WASM_DIR` set automatically (see [`mcp/README.md`](../mcp/README.md)).
 
-### Caveat: tree-sitter grammars are not embedded
+### Why not `bun build --compile`?
 
-The compiled binary cannot bundle the `.wasm` grammars from `tree-sitter-wasms`. With the binary
-alone, `--facts-engine treesitter` **falls back to the regex facts producer** (it prints
-`tree-sitter grammars not found; using regex facts`). This matters per client:
+A single `--compile` binary is **not** used: it drops web-tree-sitter's *core* `tree-sitter.wasm` (which
+web-tree-sitter loads relative to its package dir, absent in a baked binary), so the binary **aborts on
+the first parse** (`ENOENT … /$bunfs/root/tree-sitter.wasm`). The esbuild bundle avoids this by keeping
+`web-tree-sitter` **external** — it resolves from `node_modules` and finds its own wasm — and copies the
+**grammar** pack next to the bundle (pointed at by `SEAM_WASM_DIR`). So unlike the old compiled binary,
+the bundle **keeps full tree-sitter facts for all five languages**, not the regex fallback.
 
-- **det + regex facts** (the default, and the MCP server's offline floor) is fully self-contained —
-  ship just the binary.
-- **Richer AST facts** need either (a) the `tree-sitter-wasms` package available next to the binary,
-  or (b) facts supplied by the host — which is exactly what the VS Code extension does via its
-  `ExternalFactsProvider` (`--facts external`), feeding facts from the editor's language server. An
-  IntelliJ plugin would do the same from PSI, so it never depends on the embedded grammars.
+For a host that has its own AST (the VS Code extension's language-server facts via `--facts external`,
+or an IntelliJ plugin's PSI), grammar embedding is moot — the host supplies the facts directly.
 
 ## 3. Host-served LLM (no `claude`/`copilot` subprocess)
 

@@ -1,0 +1,228 @@
+// THE DIFF↔CODEBASE BRIDGE — the hero composition (lives at the CLI/composition root because diff/ and
+// codebase/ must never import each other; this is the first deliberate cross-mode pass).
+//
+// After a diff is classified, annotate each CORE seam with what the change touches BEYOND its own lines:
+//   external   — the transitive codebase impact (consumers of the changed symbol) in files NOT in the PR
+//   crossStack — data-flow readers/writers (a shared DB table / route) in files NOT in the PR: the
+//                "you changed the write, not the read" signal no diff-only or codebase-only tool can give
+//   gaps       — opaque callers where the impact view is incomplete (so the annotation is honest, not noisy)
+// The `!changedFiles.has(...)` filter is the whole value: the signal is what's affected AND untouched.
+//
+// Discipline (this is what keeps a review annotation trustworthy enough to leave ON): cross-stack is
+// INFORMATION, not an assertion ("reads `payments` — verify"), provenance-gated, and gaps are surfaced.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { RegexFactsProvider, changed_newside } from "../diff/facts.js";
+import type { Hunk } from "../diff/parser.js";
+import { normpath } from "../core/resolve/walk.js";
+import { run_pass_async, registerPass, available, get_host_bus, ClassifierError as LLMError } from "../core/llm.js";
+import { projectImpact } from "../codebase/grow/impact.js";
+import { build_footprint } from "../codebase/scan/index.js";
+import { EngineCtx } from "../codebase/engine_ctx.js";
+import { scoreRelevanceAst, externalRelevance, type Relevance } from "./review_relevance.js";
+
+const TRIAGE_PASS = registerPass({ tag: "review-triage", tier: "strong", note: "judge if a change is relevant to an unknown consumer — semantic" });
+
+export interface ExternalImpact { symbol: string; file: string; hop: number; relevance: Relevance }
+export interface CrossStackEdge { symbol: string; file: string; key: string; relation: string; provenance: string; relevance: Relevance }
+export interface SeamImpact {
+  external: ExternalImpact[];
+  crossStack: CrossStackEdge[];
+  gaps: { mechanism: string; evidence: string }[];
+  truncated?: boolean;
+}
+
+// Per core hunk, the symbols a change to it ripples FROM: newly-defined symbols + the modified enclosing
+// symbol (an edit inside `chargeCard` that doesn't redefine it still has `chargeCard` as its subject).
+function subjectsOf(facts: { defines: Set<string>; enclosing: Set<string> } | undefined): string[] {
+  if (!facts) return [];
+  return [...new Set([...facts.defines, ...facts.enclosing])].filter(Boolean);
+}
+
+// Annotate the emitted seam model in place. `hunks` are the classified Hunk objects (for role + file +
+// facts); `model` is the emit_seams_json output whose seams we enrich. Bounded + SEQUENTIAL on purpose
+// (build_footprint shares module-global caches → concurrent collection corrupts results).
+export async function annotateReviewImpact(
+  model: any, hunks: Hunk[], repo: string, opts: { maxSymbols?: number; dataCoupling?: boolean } = {},
+): Promise<void> {
+  // With the shared ctx each symbol after the first is ~0.2s, so the budget can cover a whole PR without
+  // the old per-symbol coupling cost. Higher = fewer truncations; still bounded for a runaway mega-diff.
+  const budget = opts.maxSymbols ?? 60;
+  const changed = new Set(hunks.map((h) => normpath(h.file_path)));
+  const byId = new Map(hunks.map((h) => [h.id, h]));
+  // Any changed code hunk can ripple — a one-line edit to a DB write is the headline cross-stack case and
+  // is often classified `environment`, not `core`. So scope to all CODE roles (skip test/noise), but order
+  // core-first so the budget is spent on the most important changes when a PR is large.
+  const ROLES = new Set(["core", "link", "environment"]);
+  const subjectHunks = hunks.filter((h) => h.role && ROLES.has(h.role))
+    .sort((a, b) => Number(b.role === "core") - Number(a.role === "core"));
+  if (!subjectHunks.length) return;
+  const facts = await new RegexFactsProvider().facts(subjectHunks);
+
+  // analyze = pure edge DISCOVERY (cached per symbol); relevance is applied later, per HUNK (it depends on
+  // the change's added lines, which differ by hunk even for the same symbol).
+  type RawEdge = { symbol: string; file: string; hop: number; key: string; relation: string; provenance: string };
+  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean };
+  const cache = new Map<string, Raw>();
+  let spent = 0;
+  // ONE shared cache context across every symbol's footprints — the data-coupling key index is repo-wide
+  // and ~4s to build, so without sharing it would rebuild per symbol (the measured 1m39s on cal.com).
+  // Shared, it builds once (~4s) and every later symbol reuses it (~0.2s). Same trick the grow loop uses.
+  const ctx = new EngineCtx();
+
+  const analyze = async (file: string, symbol: string): Promise<Raw> => {
+    const k = `${normpath(file)}#${symbol}`;
+    const hit = cache.get(k); if (hit) return hit;
+    const res: Raw = { external: [], crossStack: [], gaps: [] };
+    if (spent >= budget) { res.truncated = true; cache.set(k, res); return res; }
+    spent++;
+    try {
+      // Review wants what a change BREAKS (direct + a hop), not the full transitive closure → depth 2 (the
+      // relevance floor is direct-ish anyway); keeps the BFS cheap. ctx amortizes any coupling indices.
+      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 2, ctx });
+      res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
+      res.gaps = im.gaps;
+      // NB: we deliberately cap impact at depth 2 (direct breakage) for review — so projectImpact's own
+      // depth-truncation is BY DESIGN, not flagged. Only the SYMBOL budget (couldn't analyze every changed
+      // symbol) is a real incompleteness, set in the `spent >= budget` branch above.
+    } catch { /* leave external empty */ }
+    try {
+      // cross-stack: a data-flow boundary node (a shared key) reached from the changed symbol, whose other
+      // side lives in a file the PR didn't touch. byId of the footprint maps the crossing → the reader.
+      const g: any = await build_footprint(repo, file, symbol, { direction: "up", dataCoupling: true, ctx });
+      const gById = new Map<string, any>(g.nodes.map((n: any) => [n.id, n]));
+      for (const e of g.edges) {
+        const to = gById.get(e.to), from = gById.get(e.from);
+        if (!to?.coupling || !to.file) continue;                       // only the boundary's other side
+        if (changed.has(normpath(to.file)) || normpath(to.file) === normpath(file)) continue;   // not in the PR, not the anchor file
+        res.crossStack.push({ symbol: to.symbol, file: to.file, key: from?.symbol ?? "", relation: e.kind, provenance: e.provenance, hop: 1 });
+      }
+    } catch { /* leave crossStack empty */ }
+    cache.set(k, res);
+    return res;
+  };
+
+  // a relevance is an UPGRADE-only merge: relevant > unknown > irrelevant (a flag the floor proves relevant
+  // for ONE hunk stays relevant even if another hunk's change looks unrelated).
+  const RANK: Record<Relevance, number> = { relevant: 2, unknown: 1, irrelevant: 0 };
+  const better = (a: Relevance, b: Relevance) => (RANK[a] >= RANK[b] ? a : b);
+
+  for (const cluster of model.clusters ?? []) {
+    for (const seam of cluster.seams ?? []) {
+      const ext = new Map<string, ExternalImpact>(), cs = new Map<string, CrossStackEdge>();
+      const gaps = new Map<string, { mechanism: string; evidence: string }>();
+      let truncated = false;
+      for (const sh of seam.hunks ?? []) {
+        const h = byId.get(sh.id);
+        if (!h || !h.role || !ROLES.has(h.role)) continue;
+        const cn = changed_newside(h);
+        const added = [...(cn?.[2].values() ?? [])];              // the change's added line strings
+        const changedLines = new Set(cn?.[2].keys() ?? []);       // …and their new-side line numbers (for AST)
+        for (const sym of subjectsOf(facts.get(h.id))) {
+          const r = await analyze(h.file_path, sym);
+          if (r.truncated) truncated = true;
+          for (const x of r.external) {
+            const rel = externalRelevance(added, sym), k = `${x.file}#${x.symbol}`;
+            const prev = ext.get(k);
+            ext.set(k, { symbol: x.symbol, file: x.file, hop: x.hop, relevance: prev ? better(prev.relevance, rel) : rel });
+          }
+          for (const x of r.crossStack) {
+            const rel = await scoreRelevanceAst(repo, h.file_path, changedLines, added, x.file, x.key), k = `${x.file}#${x.symbol}#${x.key}`;
+            const prev = cs.get(k);
+            cs.set(k, { symbol: x.symbol, file: x.file, key: x.key, relation: x.relation, provenance: x.provenance, relevance: prev ? better(prev.relevance, rel) : rel });
+          }
+          for (const x of r.gaps) gaps.set(`${x.mechanism}\0${x.evidence}`, x);
+        }
+      }
+      if (ext.size || cs.size || gaps.size) {
+        const acc: SeamImpact = {
+          external: [...ext.values()].sort((a, b) => a.hop - b.hop || a.file.localeCompare(b.file)),
+          crossStack: [...cs.values()], gaps: [...gaps.values()], ...(truncated ? { truncated: true } : {}),
+        };
+        seam.impact = acc;   // additive contract field — clients that don't know it ignore it
+      }
+    }
+  }
+}
+
+// LAYER 3 — LLM triage on the `unknown` RESIDUAL only (never the easy 80% the floor already decided).
+// For each unknown flag, give the model the change's added lines + the consumer's code and ask whether the
+// change is relevant; reclassify relevant/irrelevant, leave `unsure` as unknown. Needs an LLM (host bus or
+// a binary); a no-op otherwise. Returns how many flags it triaged. Recall-safe: `unsure` stays surfaced.
+export async function triageUnknowns(model: any, hunks: Hunk[], repo: string, opts: { model?: string; claudeBin?: string | null } = {}): Promise<number> {
+  if (!get_host_bus() && !available(opts.claudeBin)) return 0;
+  const byId = new Map(hunks.map((h) => [h.id, h]));
+  const items: { id: string; edge: any; change: string; reader: string }[] = [];
+  let n = 0;
+  for (const cluster of model.clusters ?? []) {
+    for (const seam of cluster.seams ?? []) {
+      const im: SeamImpact | undefined = seam.impact;
+      if (!im) continue;
+      const change = (seam.hunks ?? []).flatMap((sh: any) => { const h = byId.get(sh.id); return h ? [...(changed_newside(h)?.[2].values() ?? [])] : []; }).join("\n");
+      for (const edge of [...im.crossStack, ...im.external]) {
+        if (edge.relevance !== "unknown") continue;
+        let reader = ""; try { reader = readFileSync(join(repo, edge.file), "utf-8").slice(0, 1800); } catch { /* keep empty */ }
+        items.push({ id: `u${n++}`, edge, change, reader });
+      }
+    }
+  }
+  if (!items.length) return 0;
+  const lines = [
+    "A code change MIGHT affect these consumers. For EACH item, decide if the change is RELEVANT to that",
+    "consumer — i.e. the consumer depends on the specific thing that changed. Be conservative: answer",
+    '"unsure" rather than guess. Output ONLY a JSON array: [{"id":"<id>","verdict":"relevant|irrelevant|unsure","reason":"<short>"}]',
+    "",
+  ];
+  for (const it of items) lines.push(`### ${it.id}`, "CHANGE (added lines):", it.change, "CONSUMER:", it.reader, "");
+  let out: Map<string, any>;
+  try { out = await run_pass_async(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: TRIAGE_PASS.tag }); }
+  catch (e) { if (e instanceof LLMError) return 0; throw e; }
+  for (const it of items) {
+    const v = out.get(it.id);
+    const verdict = String(v?.verdict ?? "").toLowerCase();
+    if (verdict === "relevant" || verdict === "irrelevant") it.edge.relevance = verdict;
+    if (v?.reason) it.edge.triageReason = String(v.reason);   // additive — why the LLM decided
+  }
+  return items.length;
+}
+
+// LAYER 2 — the human report, TIERED by the floor's relevance: `relevant` is shown loud; `unknown` is
+// collapsed to a count ("verify"); `irrelevant` (provably-unrelated) is dropped from the human view (it
+// stays in the JSON, suppressed). This is the anti-fatigue surface — the reader sees only what the floor
+// couldn't rule out. Cross-stack leads, framed as INFORMATION to verify, never an asserted bug.
+export function renderReviewImpact(model: any): string {
+  const out: string[] = ["# Review impact (what this change touches beyond its own lines)", ""];
+  let any = false, totalSuppressed = 0;
+  for (const cluster of model.clusters ?? []) {
+    for (const seam of cluster.seams ?? []) {
+      const im: SeamImpact | undefined = seam.impact;
+      if (!im) continue;
+      const csRel = im.crossStack.filter((c) => c.relevance === "relevant");
+      const csUnk = im.crossStack.filter((c) => c.relevance === "unknown");
+      const extRel = im.external.filter((e) => e.relevance === "relevant");
+      const extUnk = im.external.filter((e) => e.relevance === "unknown");
+      const suppressed = im.crossStack.length - csRel.length - csUnk.length + (im.external.length - extRel.length - extUnk.length);
+      totalSuppressed += suppressed;
+      if (!csRel.length && !csUnk.length && !extRel.length && !extUnk.length && !im.gaps.length) continue;
+      any = true;
+      out.push(`## ${seam.label ?? seam.id ?? "seam"}`);
+      if (csRel.length) {
+        out.push("  ⚠ cross-stack (the change touches a field this reader uses — verify):");
+        for (const c of csRel) out.push(`     ${c.relation} of '${c.key}' → ${c.symbol} (${c.file})`);
+      }
+      if (csUnk.length) {
+        out.push(`  cross-stack to verify (${csUnk.length} — couldn't prove relevant or not):`);
+        for (const c of csUnk) out.push(`     ${c.relation} of '${c.key}' → ${c.symbol} (${c.file})${c.provenance !== "RESOLVED_FULL" ? `  [${c.provenance}]` : ""}`);
+      }
+      if (extRel.length) out.push(`  affects (signature change) ${extRel.length} caller(s): ${extRel.slice(0, 6).map((e) => `${e.symbol} (${e.file})`).join(", ")}`);
+      if (extUnk.length) out.push(`  + ${extUnk.length} consumer(s) outside this PR to consider`);
+      if (im.gaps.length) out.push(`  gaps: ${im.gaps.length} opaque caller(s) — impact may be larger (grep these)`);
+      if (im.truncated) out.push("  (truncated — symbol budget hit; impact ≥ shown)");
+      out.push("");
+    }
+  }
+  if (!any) out.push("No relevant impact found for the changed code — the change looks self-contained.");
+  if (totalSuppressed) out.push(`(${totalSuppressed} flag(s) suppressed as provably-unrelated by the deterministic floor)`);
+  out.push("This is the structural blast radius of the change; the review judgement over it is yours.");
+  return out.join("\n");
+}

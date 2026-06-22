@@ -4,9 +4,10 @@
 // anchor file; a name match whose module doesn't resolve is a SUGGESTED blind spot (the same one
 // resolution ladder as call-graph dispatch + graph edges — core/resolution).
 import { basename, join } from "node:path";
+import { readFileSync } from "node:fs";
 import type { Provenance } from "../resolution.js";
-import type { ImportRef } from "./languages/base.js";
-import { floor_resolve, endsWithSourceExt, parse_imports, SKIP_DIRS } from "./languages/index.js";
+import type { ImportRef, NamespaceImport, DefaultImport } from "./languages/base.js";
+import { floor_resolve, endsWithSourceExt, parse_imports, namespace_imports, default_imports, SKIP_DIRS } from "./languages/index.js";
 import { normpath, walkFiles } from "./walk.js";
 
 // A resolver: resolve_module(repo, importingFile, source) → repo-relative file | null, and
@@ -57,17 +58,43 @@ export interface Consumer { file: string; local: string; source: string; status:
 // repeatedly (per frontier node AND per route-caller in _chain_route_consumers, per step) — which
 // dominates a large-repo grow (measured: ~6s/build, 36s of a 52s run on a real repo). Content-static per
 // run + process-scoped, so memoising is safe (same rationale as the tree-sitter parse cache).
-const _repoImportsCache = new Map<string, { rel: string; norm: string; refs: ImportRef[] }[]>();
+type ImportEntry = { rel: string; norm: string; refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[]; text: string };
+const _repoImportsCache = new Map<string, ImportEntry[]>();
 export function resetRepoImports(): void { _repoImportsCache.clear(); }
-function _repoImports(repo: string): { rel: string; norm: string; refs: ImportRef[] }[] {
+function _repoImports(repo: string): ImportEntry[] {
   let idx = _repoImportsCache.get(repo);
   if (idx) return idx;
   idx = [];
   for (const { rel, abs, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
-    idx.push({ rel, norm: normpath(abs), refs: parse_imports(rel, text) });
+    // `text` is cached so the namespace member-access scan can check `X.symbol` without a re-read; the
+    // walk already read it, so this trades memory for avoiding a second pass over the repo.
+    idx.push({ rel, norm: normpath(abs), refs: parse_imports(rel, text), ns: namespace_imports(rel, text), defs: default_imports(rel, text), text });
   }
   _repoImportsCache.set(repo, idx);
   return idx;
+}
+
+// Is `symbol` the DEFAULT export of `anchorFile`? — `export default symbol`, `export default
+// function/class symbol`, or `export { symbol as default }`. Default imports bind the module's default
+// under an arbitrary name, so we only treat them (and `default as` re-exports) as consumers when this
+// holds — recall-safe (no over-matching unrelated default imports). Anonymous `export default () => …`
+// has no symbol name, so it never matches (its importers are unattributable without a name anyway).
+function _isDefaultExport(repo: string, anchorFile: string, symbol: string): boolean {
+  let text: string;
+  try { text = readFileSync(join(repo, anchorFile), "utf-8"); } catch { return false; }
+  const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`export\\s+default\\s+(?:async\\s+)?(?:function|class)?\\s*${s}\\b`).test(text)
+    || new RegExp(`export\\s*\\{[^}]*\\b${s}\\s+as\\s+default\\b`).test(text);
+}
+
+// A namespace-member consumer: file F binds a module under `local` and uses `local.symbol`. Matches a
+// CALL `X.symbol(` as RESOLVED_FULL (a proven call) and a bare reference `X.symbol` as RESOLVED_PARTIAL
+// (a value/passed reference — a followable lead). `local` is the namespace binding (e.g. `scan`).
+function _member_use(text: string, local: string, symbol: string): Provenance | null {
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (new RegExp(`\\b${esc(local)}\\s*\\.\\s*${esc(symbol)}\\s*\\(`).test(text)) return "RESOLVED_FULL";
+  if (new RegExp(`\\b${esc(local)}\\s*\\.\\s*${esc(symbol)}\\b`).test(text)) return "RESOLVED_PARTIAL";
+  return null;
 }
 
 // [consumer_file, {member → local}] for files whose import of one or more `memberNames` resolves to
@@ -96,8 +123,9 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
   const anchorNorm = normpath(anchorFile);
   const anchorBase = stem(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
+  const isDefault = _isDefaultExport(repo, anchorFile, symbol);   // gate default-import matching (recall-safe)
   const out: Consumer[] = [];
-  for (const { rel, norm, refs } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
+  for (const { rel, norm, refs, ns, defs, text } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
     if (norm === anchorAbs) continue;
     for (const ref of refs) {
       if (ref.name !== symbol) continue;
@@ -108,6 +136,30 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
         out.push({ file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport });
       }
       break;
+    }
+    // Namespace-member consumers: `const X = await import("…anchor module…")` then `X.symbol(...)`. The
+    // module must resolve to the anchor (so when scan_consumers recurses into a re-export barrel, a
+    // namespace import of THAT barrel — e.g. `scan.build_footprint` against `scan/index.ts` — is caught).
+    // `local: symbol` lets the downstream usage-line scan find `X.symbol` by name, like a named import.
+    for (const n of ns) {
+      const t = await _resolve(repo, rel, n.source);
+      if (!t || normpath(t) !== anchorNorm) continue;
+      const status = _member_use(text, n.local, symbol);
+      if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
+    }
+    // DEFAULT-export consumers (only when `symbol` IS the anchor's default export — matched by MODULE, not
+    // name, since the binding is the importer's choice). Two forms: a `default as Name` re-export barrel
+    // (followed transitively under Name), and a direct `import Name from "anchor"` (Name = the local used).
+    if (isDefault) {
+      for (const ref of refs) {
+        if (ref.name !== "default" || !ref.reexport) continue;
+        const t = await _resolve_import(repo, rel, ref);
+        if (t?.[0] && normpath(t[0]) === anchorNorm) { out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: true }); break; }
+      }
+      for (const d of defs) {
+        const t = await _resolve(repo, rel, d.source);
+        if (t && normpath(t) === anchorNorm) { out.push({ file: rel, local: d.local, source: d.source, status: "RESOLVED_FULL" }); break; }
+      }
     }
   }
   return out;

@@ -52,6 +52,9 @@ run offline "emit the JSON contract (det)" -- \
   bun ts/src/cli/decompose.ts --file sample.patch --classifier det --emit-seams "$tmp/seams.json"
 run offline "full-file tree-sitter AST facts (det)" -- \
   bun ts/src/cli/decompose.ts --file sample.patch --classifier det --facts-engine treesitter --format ascii
+run offline "review-impact — cross-stack annotation on a diff" -- \
+  bun ts/src/cli/decompose.ts --file ts/test/fixtures/crossstack-repo/charge.patch \
+      --repo ts/test/fixtures/crossstack-repo --classifier det --review-impact
 run model   "diff, default hybrid (LLM clusters)" -- \
   bun ts/src/cli/decompose.ts --file sample.patch --format ascii
 run model   "mix per pass — det everything, LLM wiring" -- \
@@ -70,6 +73,36 @@ run offline "anchor on a symbol → footprint (det)" -- \
 run offline "anchor on a whole module (det)" -- \
   bun ts/src/cli/decompose.ts --scan --repo . --classifier det \
       --anchor-file ts/src/diff/seams.ts --emit-seams "$tmp/footprint.json"
+
+echo "-- Structural shapes (det/offline) --"
+run offline "consumers — who calls a symbol" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query consumers \
+      --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+run offline "dependencies — what a symbol uses" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query dependencies \
+      --anchor-file ts/src/codebase/grow/route.ts --symbol ask --format llm-context
+run offline "impact — transitive blast radius" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query impact \
+      --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+run offline "refactor — facts bundle (impact+deps+contract)" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query refactor \
+      --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+run offline "reaches — A → B + witness path" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query reaches \
+      --anchor-file ts/src/codebase/grow/route.ts --symbol ask --to-symbol projectConsumerSet --format llm-context
+run offline "contract — a module's boundary" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query contract --anchor-file ts/src/diff/seams.ts --format llm-context
+run offline "neighborhood — the subsystem around a symbol" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query neighborhood --anchor-file ts/src/diff/seams.ts --symbol emit_seams_json
+run offline "compare — two symbols by their deps" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query compare \
+      --anchor-file ts/src/codebase/scan/consumers_graph.ts --symbol build_consumers_graph \
+      --to-file ts/src/codebase/scan/dependency_graph.ts --to-symbol build_dependency_graph
+run offline "consumers + name-grounded recall" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --query consumers --recall name \
+      --anchor-file ts/src/core/contract.ts --symbol stampSeamModel --format llm-context
+run model   "ask — NL question routed to a shape" -- \
+  bun ts/src/cli/decompose.ts --scan --repo . --ask "who calls stampSeamModel?"
 
 echo
 echo "README audit: $ran ran, $skipped skipped$( [ "$fail" -eq 0 ] && echo ', 0 failed' || echo ', FAILURES above')."

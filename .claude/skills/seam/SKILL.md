@@ -9,8 +9,17 @@ description: >-
   Seam", "where does X live", "map the footprint of X", or to grow an intent across a codebase.
   ROUTING — reach for Seam when the answer is a PATH/FLOW/STRUCTURE across multiple files (how a
   feature works, where a flow ends, what's the blast radius, mapping a flow before editing it):
-  prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand. Do NOT use Seam for a single
-  symbol lookup, find-usages, or a one-fact answer — grep/LSP is instant. Seam to MAP, grep to DRILL.
+  prefer ONE Seam run over 4+ iterative greps to stitch a flow by hand. Seam ALSO answers non-flow
+  STRUCTURAL questions as deterministic SHAPES (§D): who calls X — RESOLVED, no grep false-positives —
+  (`--query consumers`), what X depends on (`--query dependencies`), the transitive blast radius / what
+  breaks if you change X (`--query impact`), the FACTS to refactor X (`--query refactor` =
+  impact+dependencies+contract; the PLAN stays yours), can A reach B + a witness path
+  (`--query reaches`), a module's boundary (`--query contract`), the cohesive subsystem around X
+  (`--query neighborhood`), how A and B differ (`--query compare`); or `--ask "<question>"` (§E)
+  ROUTES a plain question to the right shape. The
+  discriminator: use Seam when the answer's correctness needs RESOLVED EDGES. For a quick one-fact
+  lookup grep is still instant (Seam to MAP/VERIFY, grep to DRILL); for "what code is ABOUT X"
+  (meaning, not edges) use embeddings/RAG — Seam routes those away honestly rather than faking them.
   DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
   have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
   selection and traces+decomposes from it (~11s vs ~28s auto-anchor). grep to ORIENT, Seam to TRACE.
@@ -37,6 +46,8 @@ There are two product modes, sharing the same host-served-LLM mechanics:
 | **Diff review** | *What does this change do; how do I review it by intent?* | `reconcile`, `cluster` (1–2) | batch (§A) |
 | **Codebase — static footprint** | *Where does this symbol/intent live; who consumes it?* | **none** (deterministic) | direct run (§B) |
 | **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | `expand`+`anchor-judge` (if auto-anchor) + `orchestrate` ×N (+ `discover`) | interactive bridge (§C) |
+| **Structural shapes** | *Who calls X · what X depends on · what breaks if X changes (impact) · can A reach B · a module's boundary · the subsystem around X · how A and B differ* | **none** (deterministic) | direct run (§D) |
+| **Ask (router)** | *Any of the above, from a natural-language question* | `shape-route` (1) + the routed shape | bridge (§E) |
 
 ## Prerequisites
 
@@ -47,9 +58,11 @@ There are two product modes, sharing the same host-served-LLM mechanics:
   1. `$SEAM_BIN` if it points at an executable file (explicit override);
   2. **`bun "$SEAM/ts/src/cli/decompose.ts"`** if `bun` is available — **prefer this inside a
      checkout**: it always runs current source. (`bun` is on PATH here; `node`/`npm` are not.)
-  3. `"$SEAM/ts/dist/seam"` (the compiled `bun build --compile` binary) as a fallback.
-  - Avoid the compiled binary unless you know it was rebuilt after the latest engine change — it can
-    lag source. `cd "$SEAM/ts" && bun run build` refreshes it.
+  3. `bun "$SEAM/ts/dist/seam.cjs"` **with `SEAM_WASM_DIR="$SEAM/ts/dist/wasm"`** (the esbuilt bundle,
+     `cd "$SEAM/ts" && bun run build`) as a fallback — faster startup than source, but can lag if not
+     rebuilt after an engine change.
+  - There is **no single self-contained binary**: `bun build --compile` drops web-tree-sitter's core
+    wasm and aborts on the first parse, so the build produces the `.cjs` bundle + a grammar pack instead.
 - **No `claude` binary is required.** No binary discovery happens while a host bus is active.
 - **If a `claude` binary IS on PATH, PREFER the engine's own path over this skill's host-serving.** Run
   the engine plainly (no `--llm-bridge`) — it serves every LLM pass via `claude -p` on the tier Seam
@@ -116,6 +129,26 @@ $ENGINE --git "<RANGE>" --repo "<REPO>" --inject-llm "$OUT/answers.json" \
 prompts the subagents answered won't match what A3 rebuilds, and the answers are silently dropped to
 the deterministic floor.
 
+### A4 — `--review-impact` (the diff↔codebase bridge)
+
+Add **`--review-impact`** to a diff run (needs `--repo`) to annotate each seam with what the change
+touches *beyond its own lines* — transitive consumers **not in the PR**, and **cross-stack coupling**
+(a backend write whose frontend reader the PR didn't touch: *"changed the `payments` write → `Billing.tsx`
+reads it, not in this PR"*). It's the one feature that needs **both** modes (diff seams × codebase
+impact/coupling), so surface the cross-stack line prominently — it's the signal a diff-only review can't
+give. Frame it as *information to verify*, never an asserted bug.
+
+Each flag is **graded for relevance so it isn't noise**: a deterministic floor (does the change write a
+field the consumer reads?) tiers flags `relevant` / `unknown` / `irrelevant` (suppressed) — no subagent.
+Add **`--triage`** to run an LLM pass over only the `unknown` residual (served via the host bus — one
+batched subagent), reclassifying each. The floor handles the easy 80%; the subagent is the exception
+handler, so this is cheap.
+
+```bash
+$ENGINE --git "<RANGE>" --repo "<REPO>" --review-impact --emit-seams "$OUT/seams.json"   # floor only, no LLM
+$ENGINE --git "<RANGE>" --repo "<REPO>" --review-impact --triage --llm-bridge "$OUT/bridge" ...  # + LLM triage on unknowns (pump §C2)
+```
+
 ---
 
 ## §B — Codebase static footprint (deterministic — no subagent)
@@ -140,6 +173,14 @@ This is the cheapest entry point — instant, offline, zero LLM calls. Use it wh
 > makes the engine emit a single `relevance` LLM pass — known up front, so serve it with the **§A
 > batch round-trip** (`--emit-prompts` → subagent → `--inject-llm`), not the bridge. Without `--intent`
 > there are genuinely no LLM passes.
+>
+> **`--skeleton` (recommended when YOU — an LLM — are the consumer):** skips the LLM seam-intent
+> labeling pass, so the engine emits the **deterministic skeleton** — the spine (when grown) + structural
+> (symbol-name) labels + blindspots — and you tier/label it yourself as you read. Validated A/B: an LLM
+> consumer gets an equal-or-better answer from the skeleton at ~⅓ the tokens, *and* it skips the
+> ~18s pass. So with `--intent --skeleton` there are again **no LLM passes here at all** (no batch
+> round-trip needed). Omit `--skeleton` only when the output is going to the human VS Code view, where
+> the prose labels + tier grouping are the value.
 
 > Note: single-symbol anchors only grow if the repo's static resolver actually links consumers. Small
 > internal utilities (and the Seam repo's own symbols) often resolve **isolated** — that's correct,
@@ -176,16 +217,21 @@ Run it with `run_in_background: true` (it blocks on each LLM pass until you answ
 ```bash
 # you name the anchor:
 $ENGINE --scan --auto --repo "<REPO>" --anchor-file "<F>" --symbol "<S>" \
-        --intent "<question>" --max-steps <N> --classifier hybrid \
+        --intent "<question>" --max-steps <N> --classifier hybrid --skeleton \
         --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
 # …or auto-anchor (engine selects) — just drop --anchor-file/--symbol:
 $ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> \
-        --classifier hybrid --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
+        --classifier hybrid --skeleton --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
 ```
 
 With auto-anchor, the deterministic probe runs in-process FIRST (no bridge traffic, but a few seconds
 of apparent silence before `req-0`), then `req-0` is the `anchor-judge` pass; the `orchestrate`/
 `discover` moves follow.
+
+`--skeleton` keeps the grow LLM-directed (you still pump the `anchor-judge` + `orchestrate`/`discover`
+moves) but **drops the final `seam-intent` tiering pass from the pump** — one fewer (and the largest,
+output-bound) round-trip, because as the in-session model you tier/label the emitted skeleton yourself.
+Drop `--skeleton` only when the run is for the human VS Code view (then you also serve the tiering pass).
 
 ### C2 — Pump the bridge, one pass per turn
 
@@ -212,6 +258,66 @@ ends):
 
 When the engine finishes it writes `$OUT/seams.json` and exits. Typical: ≤ `--max-steps` (default 4)
 grow moves plus a few `discover` moves — a handful of turns.
+
+---
+
+## §D — Structural shapes (deterministic — no subagent)
+
+Non-flow questions answered as **projections over the resolved graph** — all deterministic and offline
+(like §B, nothing to host-serve), each correct where grep gives false-positives, and each **honest**:
+when structure can't answer it says `noStructure` / `unreachable` and you should fall back to grep,
+rather than fabricating a result. Run and render:
+
+```bash
+# who calls a symbol — the RESOLVED caller set (tier-labelled; no comment/same-name false-positives)
+$ENGINE --scan --repo "<REPO>" --query consumers --anchor-file "<F>" --symbol "<S>" --format llm-context
+#   add --recall name → also list name-grounded UNVERIFIED leads (Ruby globals / C/C++ — no symbol imports)
+
+# what a symbol DEPENDS ON — the symmetric inverse (its resolved out-edges)
+$ENGINE --scan --repo "<REPO>" --query dependencies --anchor-file "<F>" --symbol "<S>" --format llm-context
+
+# TRANSITIVE blast radius — what breaks if you change X (refactoring safety net; surface + opaque gaps)
+$ENGINE --scan --repo "<REPO>" --query impact --anchor-file "<F>" --symbol "<S>" --format llm-context
+
+# "How to refactor X" — the FACTS bundle (impact + dependencies + contract) in ONE call. The change
+# PLAN over them is YOUR judgement (Seam supplies verified facts; it does not decide the refactor).
+$ENGINE --scan --repo "<REPO>" --query refactor --anchor-file "<F>" --symbol "<S>" --format llm-context
+
+# can A reach B? — verified yes/no + a witness path (or unreachable / exhausted / no-out-edges)
+$ENGINE --scan --repo "<REPO>" --query reaches --anchor-file "<F>" --symbol "<A>" --to-symbol "<B>" [--to-file "<Bf>"] --format llm-context
+
+# a module's BOUNDARY — used exports + consumers, dead exports, outbound deps, fan-in/out
+$ENGINE --scan --repo "<REPO>" --query contract --anchor-file "<F>" --format llm-context
+
+# the cohesive SUBSYSTEM around a symbol (core vs periphery, weak-community)
+$ENGINE --scan --repo "<REPO>" --query neighborhood --anchor-file "<F>" --symbol "<S>" --format llm-context
+
+# how two symbols DIFFER by what they depend on (shared / A-only / B-only)
+$ENGINE --scan --repo "<REPO>" --query compare --anchor-file "<Fa>" --symbol "<A>" --to-file "<Fb>" --to-symbol "<B>" --format llm-context
+```
+
+These emit a `shape:"set"|"reaches"|"contract"|"neighborhood"|"comparison"` model (`--emit-seams` for
+the extension, or `--format llm-context` for a token-economical read). No LLM, no bridge — instant.
+Prefer a shape over `--ask` when you already know which question you're asking (skips the routing pass).
+
+## §E — Ask (the router — LLM-routed)
+
+`--ask "<question>"` lets the engine **choose** the shape: one `shape-route` LLM pass judges which shape
+answers the question and extracts the target symbol(s), then runs it (or routes **away** to grep/RAG
+when the question is lexical/semantic, not structural). Because the routed shape may itself be `flow`
+(an auto-grow), serve it over the **interactive bridge exactly like §C** — the pump is identical:
+
+```bash
+$ENGINE --scan --repo "<REPO>" --ask "<question>" --classifier hybrid \
+        --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"   # run in background, then pump §C2
+```
+
+`req-0` is the `shape-route` pass (semantic → `claude-sonnet-4-6`, spawn that tier). If it routes to a
+structural shape the engine then runs it in-process (no more reqs) and writes `seams.json`; if it routes
+to `flow` the usual `orchestrate`/`discover` reqs follow. If it routes **away**, the run prints
+`[route:grep|rag]` + guidance and emits no shape model — relay that (use grep/RAG), don't force a shape.
+*(If a `claude` binary is on PATH, just run `--ask` plainly without `--llm-bridge` — the engine serves
+the routing pass itself, faster; see the Prerequisites.)*
 
 ---
 
@@ -291,7 +397,7 @@ that marker from the captured stderr and report `deltaMs` per phase + `totalMs`.
 
 ```bash
 SEAM=/home/scorbutics/dev/code-review-sort
-ENGINE="bun $SEAM/ts/src/cli/decompose.ts"          # or "$SEAM/ts/dist/seam" if freshly built
+ENGINE="bun $SEAM/ts/src/cli/decompose.ts"          # or: bun $SEAM/ts/dist/seam.cjs (with SEAM_WASM_DIR=$SEAM/ts/dist/wasm) if built
 OUT=$(mktemp -d)
 
 # ── Diff review (§A) ──────────────────────────────────────────────────────────
@@ -301,6 +407,14 @@ $ENGINE --git HEAD --repo . --inject-llm "$OUT/answers.json" --emit-seams "$OUT/
 
 # ── Codebase static footprint (§B) — no subagent ─────────────────────────────
 $ENGINE --scan --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo --format ascii
+
+# ── Structural shapes (§D) — deterministic, no subagent ──────────────────────
+$ENGINE --scan --repo /path/to/app --query consumers --anchor-file lib/foo.ts --symbol createFoo --format llm-context
+$ENGINE --scan --repo /path/to/app --query reaches --anchor-file lib/a.ts --symbol handler --to-symbol writeDb --format llm-context
+
+# ── Ask / router (§E) — background + pump like §C ────────────────────────────
+$ENGINE --scan --repo /path/to/app --ask "who calls createFoo?" --classifier hybrid \
+        --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"   # …or plainly if a `claude` binary is on PATH
 
 # ── Codebase auto-grow (§C) — background + pump ──────────────────────────────
 #  (run in background, then loop: Monitor for req-<n>.json → subagent → resp-<n>.json)

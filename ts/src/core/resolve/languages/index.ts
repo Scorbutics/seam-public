@@ -3,7 +3,7 @@
 // floor yet (LSP-only) and just contribute their extensions to SOURCE_EXTS.
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import { SKIP_DIRS, system, type ImportRef, type LanguageProvider, type ServerSpec, type TableAccess } from "./base.js";
+import { SKIP_DIRS, system, type DefaultImport, type ImportRef, type LanguageProvider, type NamespaceImport, type ServerSpec, type TableAccess } from "./base.js";
 export type { TableAccess };
 import { PROVIDER as TS } from "../../../languages/typescript/resolve.js";
 import { PROVIDER as PY } from "../../../languages/python/resolve.js";
@@ -65,6 +65,18 @@ export function project_root(repo: string, file: string, spec: ServerSpec): stri
 export function parse_imports(file: string, text: string): ImportRef[] {
   const p = provider_for(file);
   return p?.imports ? p.imports(text) : [];
+}
+
+// the file's namespace imports (`import * as X` / `const X = await import(...)`), via its provider.
+export function namespace_imports(file: string, text: string): NamespaceImport[] {
+  const p = provider_for(file);
+  return p?.namespaceImports ? p.namespaceImports(text) : [];
+}
+
+// the file's default imports (`import X from "m"`), via its provider.
+export function default_imports(file: string, text: string): DefaultImport[] {
+  const p = provider_for(file);
+  return p?.defaultImports ? p.defaultImports(text) : [];
 }
 
 // the file's query-builder table accesses (`.from('t').verb`), via its language provider. [] if the
