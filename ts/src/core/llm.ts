@@ -3,7 +3,7 @@
 // mode knowledge. The CLI subprocess backend is what lets the TS port be byte-verified against
 // Python via the host-bus contract (the same prompt both phases rebuild).
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -251,12 +251,42 @@ function _parseClaude(p: ProcResult): string {
   return envelope.result ?? "";
 }
 
+// copilot has no `--strict-mcp-config` (claude's flag): a plain `copilot -p` boots the user's FULL MCP
+// config on EVERY pass — every server reconnected per call, including Seam's OWN MCP server (a recursion
+// hazard) — which is the dominant reason copilot passes run slow enough to time out an MCP grow (many
+// passes × a heavy MCP cold-start each). The only lever copilot exposes is `--config-dir`, which overrides
+// the whole config dir. So we point it at a scratch dir that SHADOWS mcp-config.json with `{}` (no user
+// servers) while SYMLINKING the auth/settings FILES through, so login keeps working in every auth mode
+// (env-token / OS-keychain / plaintext config.json all preserved — only env/keychain survive a bare
+// config-dir swap, so the symlink is what saves the plaintext-token user). Session/log state lands in the
+// scratch dir (directories are NOT symlinked), so our passes don't pollute the user's real copilot history.
+// Best-effort: any failure → null → we omit the flag and fall back to the un-isolated call rather than risk
+// breaking auth. Disable with SEAM_COPILOT_ISOLATE=0. Memoized: a process-lifetime fact.
+let _copilotCfgDir: string | null | undefined;
+function _copilotConfigDir(): string | null {
+  if (_copilotCfgDir !== undefined) return _copilotCfgDir;
+  const off = (process.env.SEAM_COPILOT_ISOLATE ?? "").trim().toLowerCase();
+  if (["0", "off", "false", "no"].includes(off)) return (_copilotCfgDir = null);
+  try {
+    const src = process.env.COPILOT_CONFIG_DIR || join(homedir(), ".copilot");
+    const iso = mkdtempSync(join(tmpdir(), "seam-copilot-cfg-"));
+    try {
+      for (const e of readdirSync(src, { withFileTypes: true }))
+        if (e.isFile() && e.name !== "mcp-config.json") symlinkSync(join(src, e.name), join(iso, e.name));
+    } catch { /* no source config dir (env-token auth / first run): the empty mcp-config alone still isolates */ }
+    writeFileSync(join(iso, "mcp-config.json"), "{}");   // shadow the user's MCP servers (incl. Seam itself)
+    return (_copilotCfgDir = iso);
+  } catch { return (_copilotCfgDir = null); }
+}
+
 // copilot: reads the prompt from a temp file (it can exceed argv limits). args + parse are shared; only
 // the spawn call differs, wrapped in the same temp-file lifecycle.
 function _copilotArgs(promptPath: string, thinking: number | null): string[] {
   const pointer = `Read the file ${promptPath} and follow the instructions it contains exactly. `
     + `Output only what those instructions ask for.`;
   const cmd = ["-p", pointer, "-s", "--no-ask-user", "--allow-all-tools"];
+  const cfgDir = _copilotConfigDir();
+  if (cfgDir) cmd.push("--config-dir", cfgDir);   // isolate MCP config so copilot doesn't reload every server (incl. Seam) per pass
   if (process.env.COPILOT_MODEL) cmd.push("--model", process.env.COPILOT_MODEL);
   const effort = _thinking_to_effort(thinking);
   if (effort) cmd.push("--effort", effort);
