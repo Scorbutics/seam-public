@@ -237,13 +237,15 @@ from `curl` — it bootstraps `bun`, fetches the engine, and wires both up so Se
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
-#   …| bash -s -- --skill    # only the skills (Claude + Copilot) + the `seam` CLI
-#   …| bash -s -- --mcp      # only the MCP server (auto-registers with the `claude` CLI if present)
+#   …| bash -s -- --skill        # only the skills (Claude + Copilot) + the `seam` CLI
+#   …| bash -s -- --mcp          # only the MCP server (registers with `claude`; not Copilot)
+#   …| bash -s -- --copilot-mcp  # ALSO register the MCP with Copilot (off by default)
 ```
 
 It also installs a **`seam` CLI** shim (`~/.local/bin/seam`) — the recommended way to drive Seam
 directly. The **Copilot** skill drives that CLI (not the MCP): Copilot is unreliable with MCP servers,
-and the CLI has no host request-deadline or tool-call round-trip.
+so **Copilot MCP registration is off by default** (`--copilot-mcp` to opt in); the CLI has no host
+request-deadline or tool-call round-trip. Claude Code MCP registration is unaffected.
 
 Re-run it any time to update (it tracks `main`). It installs from **source** — so you keep full
 tree-sitter facts for all five languages, not the regex fallback a single compiled binary would force.

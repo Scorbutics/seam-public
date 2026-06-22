@@ -2,13 +2,15 @@
 # Seam installer — the `seam` CLI + Claude/Copilot skills + MCP server, from source via bun.
 #
 #   curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
-#   curl -fsSL .../install.sh | bash -s -- --skill   # only the Claude Code skill
-#   curl -fsSL .../install.sh | bash -s -- --mcp      # only the MCP server
-#   curl -fsSL .../install.sh | bash -s -- --skill --mcp   # both (also the default)
+#   curl -fsSL .../install.sh | bash -s -- --skill        # only the `seam` CLI + the skills
+#   curl -fsSL .../install.sh | bash -s -- --mcp          # only the MCP server (Claude; not Copilot)
+#   curl -fsSL .../install.sh | bash -s -- --skill --mcp  # both (also the default)
+#   curl -fsSL .../install.sh | bash -s -- --copilot-mcp  # ALSO register the MCP with Copilot (off by default)
 #
 # Installs from SOURCE (one git checkout + `bun install`), not a prebuilt binary, so it keeps
-# full tree-sitter facts for all languages and updates with a re-run. The skill and the MCP server
-# both reach the same stateless engine; nothing runs as a daemon.
+# full tree-sitter facts for all languages and updates with a re-run. The skills and the MCP server
+# both reach the same stateless engine; nothing runs as a daemon. The Copilot skill drives the `seam`
+# CLI (Copilot is unreliable with MCP), so Copilot MCP registration is OFF by default (--copilot-mcp to opt in).
 #
 # Env overrides:
 #   SEAM_HOME   checkout dir            (default: ~/.seam)
@@ -27,19 +29,22 @@ warn() { printf '%s[seam]%s %s\n' "$c_warn" "$c_off" "$*" >&2; }
 die()  { printf '%s[seam]%s %s\n' "$c_err"  "$c_off" "$*" >&2; exit 1; }
 
 # ── flags ─────────────────────────────────────────────────────────────────────
-do_skill=0; do_mcp=0
+do_skill=0; do_mcp=0; do_copilot_mcp=0
 for a in "$@"; do
   case "$a" in
     --skill) do_skill=1 ;;
     --mcp)   do_mcp=1 ;;
+    --copilot-mcp) do_copilot_mcp=1 ;;   # opt back IN to registering the seam MCP with Copilot (off by default — Copilot is unreliable with MCP; its skill drives the CLI)
     -h|--help)
       sed -n '2,18p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown argument: $a (expected --skill and/or --mcp)" ;;
+    *) die "unknown argument: $a (expected --skill, --mcp, and/or --copilot-mcp)" ;;
   esac
 done
-# default: install both
-if [ "$do_skill" -eq 0 ] && [ "$do_mcp" -eq 0 ]; then do_skill=1; do_mcp=1; fi
+# default (no host flag at all): install both the skills and the MCP
+if [ "$do_skill" -eq 0 ] && [ "$do_mcp" -eq 0 ] && [ "$do_copilot_mcp" -eq 0 ]; then do_skill=1; do_mcp=1; fi
+# --copilot-mcp opts INTO the Copilot registration, which lives inside the --mcp block, so it needs it on
+[ "$do_copilot_mcp" -eq 1 ] && do_mcp=1
 
 # ── prerequisites ───────────────────────────────────────────────────────────--
 command -v git  >/dev/null 2>&1 || die "git is required"
@@ -165,19 +170,24 @@ if [ "$do_mcp" -eq 1 ]; then
     fi
   fi
 
-  # GitHub Copilot CLI — same `mcp add` shape, but Copilot has NO MCP sampling, so the engine's LLM
-  # passes (hybrid/llm/grow) must come from a local binary. With copilot on PATH, SEAM_MCP_LLM=binary
-  # makes the server serve them via the copilot binary itself. </dev/null stops a not-yet-installed
-  # copilot stub (which prompts to install) from hanging the script — it EOFs and writes no config.
+  # GitHub Copilot CLI — registration is OFF BY DEFAULT. Copilot is unreliable with MCP servers (request
+  # timeouts, dropped tool-call namespaces), and its skill now drives the `seam` CLI directly, so the MCP
+  # is redundant there. Opt back in with --copilot-mcp. (When on: Copilot has NO MCP sampling, so
+  # SEAM_MCP_LLM=binary serves the engine's LLM passes via the local copilot binary. </dev/null stops a
+  # not-yet-installed copilot stub from hanging the script.)
   if command -v copilot >/dev/null 2>&1; then
-    log "registering 'seam' with GitHub Copilot CLI"
-    copilot mcp remove seam </dev/null >/dev/null 2>&1 || true
-    copilot mcp add seam --env SEAM_MCP_LLM=binary -- "$BUN" "$server" </dev/null >/dev/null 2>&1 || true
-    if has_seam "$HOME/.copilot/mcp-config.json"; then
-      registered=1; log "  → Copilot CLI: registered (~/.copilot/mcp-config.json; LLM passes via the copilot binary)."
+    if [ "$do_copilot_mcp" -eq 1 ]; then
+      log "registering 'seam' with GitHub Copilot CLI (--copilot-mcp)"
+      copilot mcp remove seam </dev/null >/dev/null 2>&1 || true
+      copilot mcp add seam --env SEAM_MCP_LLM=binary -- "$BUN" "$server" </dev/null >/dev/null 2>&1 || true
+      if has_seam "$HOME/.copilot/mcp-config.json"; then
+        registered=1; log "  → Copilot CLI: registered (~/.copilot/mcp-config.json; LLM passes via the copilot binary)."
+      else
+        warn "  → Copilot CLI on PATH but registration didn't take (likely the install stub, or it needs auth). Run it yourself:"
+        warn "      copilot mcp add seam --env SEAM_MCP_LLM=binary -- $BUN $server"
+      fi
     else
-      warn "  → Copilot CLI on PATH but registration didn't take (likely the install stub, or it needs auth). Run it yourself:"
-      warn "      copilot mcp add seam --env SEAM_MCP_LLM=binary -- $BUN $server"
+      log "Copilot CLI: skipping MCP registration (use the CLI skill instead; --copilot-mcp to register anyway)."
     fi
   fi
 
