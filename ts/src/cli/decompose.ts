@@ -90,7 +90,7 @@ function parseArgs(argv: string[]): Args {
       case "--promote-spine-path": a.promoteSpinePath = true; break;   // Step 2: promote on-path supporting seams to spine
       case "--lineage": a.lineage = true; break;   // attach per-seam git lineage (last-touching commit) to the footprint
       case "--anchor-recall": a.anchorRecall = (next() ?? "embed").toLowerCase(); break;   // embed (default) | lexical
-      case "--anchor-select": a.anchorSelect = (next() ?? "probe").toLowerCase(); break;   // probe→judge (default) | pick (1 LLM pass, no probe sweep)
+      case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -473,7 +473,7 @@ async function runCodebase(a: Args): Promise<number> {
       // not a preemptive override; embed recall is the default (degrades to lexical where transformers.js
       // is absent). The CLI only does presentation (logging/err) on the returned data.
       const { find_anchor } = await import("../codebase/anchor/index.js");
-      const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", select: a.anchorSelect === "pick" ? "pick" : "probe" });
+      const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", select: a.anchorSelect === "probe" ? "probe" : "pick" });
       if (sel.entryCandidate) process.stdout.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;

@@ -19,11 +19,12 @@ export interface FindAnchorResult {
 }
 
 export async function find_anchor(repo: string, intent: string, opts: FindAnchorOpts = {}): Promise<FindAnchorResult> {
-  // DIRECT PICK (opt-in): ONE LLM pass names the anchor from rich candidate passages — no probe sweep, no
-  // entrypoint-select/expand passes (the grow that follows IS the connectedness check). ~6× faster than
-  // probe→judge on a big repo, same anchor on the cases measured. Falls THROUGH to probe→judge when it
-  // yields nothing (no LLM / no candidates), so it never regresses to "no anchor".
-  if (opts.select === "pick") {
+  // DIRECT PICK is the DEFAULT: ONE LLM pass names the anchor from rich candidate passages — no probe
+  // sweep, no entrypoint-select/expand passes (the grow that follows IS the connectedness check). ~6×
+  // faster than probe→judge on a big repo, same anchor on the cases measured. Falls THROUGH to probe→judge
+  // when it yields nothing (no LLM / no candidates), so it never regresses to "no anchor". Opt OUT of pick
+  // with select:"probe" (CLI `--anchor-select probe`) — the probe path is kept, just no longer default.
+  if (opts.select !== "probe") {
     const p = await pick_anchor(repo, intent, { model: opts.model, claudeBin: opts.claudeBin });
     if (p.chosen) return { chosen: p.chosen, chosenBy: "pick" };
   }
