@@ -7,7 +7,7 @@
 // SELECT/SET guards keep ordinary host syntax — notably JS `import … from "mod"` — from false-matching.
 import type { KeyHit, KeyKind } from "../types.js";
 import { DB_TABLE_META } from "./db_table.js";
-import { lineOf, maskComments } from "./util.js";
+import { lineOf, stringLiteralsOnly } from "./util.js";
 
 // an (optionally schema-qualified, optionally "/`/[ ]-quoted) SQL identifier
 const TOK = '([`"\\[]?[A-Za-z_]\\w*(?:\\.[A-Za-z_]\\w*)?[`"\\]]?)';
@@ -18,7 +18,7 @@ function cleanTable(tok: string): string {
 }
 
 function scan(_file: string, text: string): KeyHit[] {
-  text = maskComments(text);   // commented-out SQL / "select … from the …" prose in a doc-comment is not a real query
+  text = stringLiteralsOnly(text);   // raw SQL lives INSIDE a string literal — scan only those, so SQL-shaped prose in code/comments can't false-match
   if (!/\b(?:INSERT\s+INTO|REPLACE\s+INTO|DELETE\s+FROM|UPDATE|SELECT)\b/i.test(text)) return [];
   const out: KeyHit[] = [];
   // WRITES — distinctive keywords (UPDATE requires a following SET so prose/identifiers don't match)

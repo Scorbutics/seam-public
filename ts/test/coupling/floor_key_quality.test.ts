@@ -11,19 +11,20 @@ const keys = (file: string, text: string) => scan_file_keys(file, text);
 const tables = (text: string) => keys("X.java", text).filter((h) => h.kind === "db-table").map((h) => h.value);
 
 describe("floor key-quality guard (kills the raw-SQL 'the' false-coupling)", () => {
-  test("prose 'select … from the …' does NOT yield a 'the' db-table", () => {
+  test("prose 'select … from the …' inside a string yields no 'the' table (plausibility)", () => {
     expect(tables('String msg = "Select the scope of advice report from the member record";')).not.toContain("the");
   });
-  test("a generic-word table from ANY SQL shape is dropped", () => {
-    expect(tables("SELECT id FROM the")).toEqual([]);                 // 'the' → dropped by plausibility
-    expect(tables("DELETE FROM and")).toEqual([]);                    // 'and' → dropped
+  test("a generic-word table in a real SQL string is dropped (plausibility)", () => {
+    expect(tables('String q = "SELECT id FROM the";')).toEqual([]);          // 'the' → dropped
+    expect(tables('String q = "DELETE FROM and";')).toEqual([]);             // 'and' → dropped
   });
-  test("a REAL table in real SQL still resolves", () => {
-    expect(tables("SELECT id FROM member_collection WHERE x=1")).toContain("member_collection");
-    expect(tables("INSERT INTO payments (a) VALUES (1)")).toContain("payments");
+  test("a REAL table in a real SQL string still resolves", () => {
+    expect(tables('String q = "SELECT id FROM member_collection WHERE x=1";')).toContain("member_collection");
+    expect(tables('String q = "INSERT INTO payments (a) VALUES (1)";')).toContain("payments");
   });
-  test("commented-out SQL is ignored (masked), so it can't seed a phantom table", () => {
-    expect(tables("// SELECT secret FROM hidden_table\nint x = 1;")).not.toContain("hidden_table");
+  test("SQL-shaped text OUTSIDE a string (bare prose / code / comment) is ignored (string-region scan)", () => {
+    expect(tables("// SELECT secret FROM hidden_table\nint x = 1;")).not.toContain("hidden_table");   // comment
+    expect(tables("please select the rows from members manually")).toEqual([]);                       // bare prose
   });
   test("real routes / keys are unaffected by the floor guard", () => {
     expect(keys("C.java", '@GetMapping("/owners/{id}")\nvoid g(){}').some((h) => h.kind === "http-route" && h.value === "/owners/*")).toBe(true);
