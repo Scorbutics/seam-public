@@ -66,6 +66,9 @@ interface SeamModel {
   // Bidirectional footprint: `shape` = policy (cross-cutting, no spine → mechanism + N enforcement sites)
   // vs flow (a pipeline with a spine); `lead` = which slice the question wants front (backward/forward/both).
   shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both";
+  // The .seam learned-adapter flywheel: framework-key coupling adapters this run consulted (replayed
+  // offline) + newly learned (LLM-once → deterministic-forever). Surfaced as a reviewable/promotable record.
+  adapters?: { used?: { name: string; scope: "repo" | "shared" }[]; learned?: string[] };
 }
 // One occurrence of a hunk in a seam (a link can appear in several) — carries the
 // labels so decorations (role) and CodeLens (intent · seam) share one index.
@@ -1707,6 +1710,10 @@ type Node =
   // consumers the change touches in untouched files, graded by the relevance floor.
   | { kind: "impactGroup"; seam: Seam }
   | { kind: "impactEdge"; rel: Relevance; relation: string; label: string; file: string; provenance?: string; reason?: string }
+  // The .seam learned-adapter flywheel — a top-level reviewable record of the framework-key adapters this
+  // run used (replayed) / newly learned, with a promote hint.
+  | { kind: "adapters" }
+  | { kind: "adapterRow"; name: string; scope: string; isNew: boolean }
   | { kind: "hunk"; cluster: Cluster; seam: Seam; hunk: SeamHunk }
   | { kind: "extTarget"; target: ExternalTarget }
   // codebase-mode blind-spot map (the differentiator): the statically-opaque mechanisms
@@ -1754,6 +1761,8 @@ function hunkContract(seamId: string, hunkId: string): { links: GraphEdge[]; par
 }
 const hasShadows = (m: SeamModel): boolean =>
   m.mode === "codebase" && !!((m.blindspots?.length ?? 0) + (m.unresolved?.length ?? 0));
+const hasAdapters = (m: SeamModel): boolean =>
+  !!((m.adapters?.used?.length ?? 0) + (m.adapters?.learned?.length ?? 0));
 
 const ROLE_ICON: Record<string, string> = {
   core: "symbol-method", link: "link", environment: "symbol-field",
@@ -1835,7 +1844,15 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
       // The blind-spot map sits at the TOP LEVEL, beside the seams, so "where I'm blind"
       // is as visible as "what I resolved" (the differentiator — never buried).
       if (hasShadows(model)) roots.push({ kind: "shadows" });
+      if (hasAdapters(model)) roots.push({ kind: "adapters" });   // the .seam flywheel, reviewable
       return roots;
+    }
+    if (el.kind === "adapters") {
+      const a = model.adapters!;
+      const rows: Node[] = (a.learned ?? []).map((name) => ({ kind: "adapterRow", name, scope: "repo", isNew: true } as Node));
+      const learnedSet = new Set(a.learned ?? []);
+      for (const u of a.used ?? []) if (!learnedSet.has(u.name)) rows.push({ kind: "adapterRow", name: u.name, scope: u.scope, isNew: false } as Node);
+      return rows;
     }
     if (el.kind === "shadows") {
       const out: Node[] = (model.blindspots ?? []).map((bs) => ({ kind: "blindspot", bs } as Node));
@@ -2177,6 +2194,29 @@ class SeamTreeProvider implements vscode.TreeDataProvider<Node> {
         ? `reaches ${partner?.label ?? l.to} (${partner?.file}:${line}) — the seam boundary this block crosses TO`
         : `reached from ${partner?.label ?? l.from} (${partner?.file}:${line}) — where the other seam crosses INTO this block`;
       if (partner) it.command = { command: "seam.open", title: "Open", arguments: [{ ...partner, start: line, end: line }] };
+      return it;
+    }
+    if (el.kind === "adapters") {
+      const nNew = model?.adapters?.learned?.length ?? 0;
+      const nUsed = model?.adapters?.used?.length ?? 0;
+      const it = new vscode.TreeItem("Learned adapters (.seam)",
+        nNew ? vscode.TreeItemCollapsibleState.Expanded : vscode.TreeItemCollapsibleState.Collapsed);
+      it.description = [nNew ? `+${nNew} new` : "", nUsed ? `${nUsed} replayed` : ""].filter(Boolean).join(" · ");
+      it.iconPath = new vscode.ThemeIcon("plug", nNew ? new vscode.ThemeColor("charts.green") : undefined);
+      it.tooltip = "Framework-key coupling adapters Seam LEARNED for unknown/homemade frameworks "
+        + "(LLM-once → deterministic-forever, stored in .seam/). 'new' = deduced this run; 'replayed' = "
+        + "applied offline from .seam/. Review & share with `seam-adapters list | promote <name>`.";
+      it.contextValue = "seam.adapters";
+      return it;
+    }
+    if (el.kind === "adapterRow") {
+      const it = new vscode.TreeItem(`${el.isNew ? "✦ " : ""}${el.name}`, vscode.TreeItemCollapsibleState.None);
+      it.description = el.isNew ? "new this run" : `replayed · ${el.scope}`;
+      it.iconPath = new vscode.ThemeIcon(el.isNew ? "sparkle" : "plug",
+        el.isNew ? new vscode.ThemeColor("charts.green") : undefined);
+      it.tooltip = el.isNew
+        ? `Learned this run (LLM-deduced, persisted to .seam/). Promote to share: seam-adapters promote ${el.name}`
+        : `Replayed offline from the ${el.scope} .seam store (deterministic, no LLM).`;
       return it;
     }
     if (el.kind === "shadows") {

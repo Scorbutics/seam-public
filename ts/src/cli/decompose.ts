@@ -12,6 +12,7 @@ import * as noise from "../diff/noise_filter.js";
 import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
+import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
 import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -34,7 +35,7 @@ interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
-  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; cache: boolean; bidirectional: boolean; grow: string;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   reviewImpact?: boolean; triage?: boolean;
@@ -114,11 +115,11 @@ function parseArgs(argv: string[]): Args {
       case "--triage": a.triage = true; break;   // review-impact: LLM triage of the `unknown` relevance residual
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint
       case "--no-interface-consumers": a.interfaceConsumers = false; break;   // disable the default interface-consumer enrichment
-      case "--no-data-coupling": a.dataCoupling = false; break;
+      case "--no-data-coupling": a.dataCoupling = false; a.dataCouplingExplicit = true; break;
       case "--cache": a.cache = true; break;
       // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
       // llm=floor + the LLM shared-key front-end (cross-framework key proposals).
-      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; break; }
+      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingExplicit = true; break; }
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
@@ -131,6 +132,15 @@ function parseArgs(argv: string[]): Args {
 }
 
 function err(msg: string): never { process.stderr.write(`error: ${msg}\n`); process.exit(2); }
+
+// Attach the learned-adapter LEDGER (which `.seam/` adapters this run consulted + newly learned) to the
+// model before stamping, so every client surfaces the flywheel and can offer `seam-adapters promote`.
+// No-op when nothing learned/used (a normal det run with no `.seam/`), so it never adds noise.
+function stamp<T extends Record<string, any>>(model: T): T {
+  const led = ledgerSnapshot();
+  if (led.used.length || led.learned.length) (model as any).adapters = led;
+  return stampSeamModel(model);
+}
 
 // Ask query — a natural-language question routed (by the LLM) to the right shape, then run. The honest
 // front-end: it answers structural questions and routes lexical/semantic ones to grep/RAG. Emits whatever
@@ -160,7 +170,7 @@ async function runAsk(a: Args): Promise<number> {
   }
   if (a.emitSeams) {
     model.routedShape = res.shape; model.routedReason = res.reason;
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -209,7 +219,7 @@ async function runConsumerSet(a: Args, scan: typeof import("../codebase/scan/ind
         + (suggested ? `, ${suggested} suggested` : "") + (set.unresolved.length ? `, ${set.unresolved.length} unresolved (grep these)` : "") + recalled + "\n");
   }
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -244,7 +254,7 @@ async function runDependencySet(a: Args, scan: typeof import("../codebase/scan/i
         + (suggested ? `, ${suggested} suggested` : "") + (set.unresolved.length ? `, ${set.unresolved.length} unresolved (grep these)` : "") + "\n");
   }
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -268,7 +278,7 @@ async function runRefactorFacts(a: Args): Promise<number> {
       + `${rf.impact.gaps.length ? ` (${rf.impact.gaps.length} opaque gap(s))` : ""}, ${rf.dependencies.members.length} dependency(ies), `
       + `contract ${rf.contract.provides.length} provided/${rf.contract.unusedExports.length} unused — the change plan is yours to make.\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -295,7 +305,7 @@ async function runImpact(a: Args): Promise<number> {
     process.stdout.write(`Impact of '${im.anchor.symbol}': ${im.total} symbol(s) across ${im.fileCount} file(s)`
       + `, ${im.surface.length} at the surface${im.gaps.length ? `, ${im.gaps.length} opaque gap(s)` : ""}${im.truncated ? " (truncated — ≥ shown)" : ""}\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -321,7 +331,7 @@ async function runCompare(a: Args): Promise<number> {
     process.stdout.write(`${c.a.symbol} vs ${c.b.symbol}: ${c.shared.length} shared, ${c.aOnly.length} ${c.a.symbol}-only, `
       + `${c.bOnly.length} ${c.b.symbol}-only (similarity ${(c.similarity * 100).toFixed(0)}%)\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -347,7 +357,7 @@ async function runNeighborhood(a: Args): Promise<number> {
       + (n.peripheryFiles.length ? ` + ${n.peripheryFiles.length} periphery` : "")
       + `, cohesion ${(n.cohesion * 100).toFixed(0)}%, boundary cut ${n.boundaryCut} edge(s) [${n.hops} expanded]\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -372,7 +382,7 @@ async function runContract(a: Args): Promise<number> {
     process.stdout.write(`${basename(c.module)}: provides ${c.provides.length} (used), ${c.unusedExports.length} unused export(s); `
       + `depends on ${c.depends.length} external symbol(s) | fan-in ${c.afferent}, fan-out ${c.efferent}\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -398,7 +408,7 @@ async function runReaches(a: Args): Promise<number> {
   else
     process.stdout.write(`${res.from.symbol} → ${res.to.symbol}: ${res.reason === "exhausted" ? "NOT FOUND within budget (inconclusive)" : res.reason === "no-out-edges" ? "FROM has no resolved dependencies (undefined)" : "UNREACHABLE (no resolved path)"} [${res.hops} explored]\n`);
   if (a.emitSeams) {
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -433,6 +443,12 @@ async function runCodebase(a: Args): Promise<number> {
 
 
   const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";
+  // The GROW/footprint path stays FLOOR-only by default (explicit `--data-coupling llm` opts in). The
+  // autogrow harness showed that default-on data-coupling-LLM breaks deterministic grow on a COLD `.seam/`
+  // (the LLM deduces different keys each run → different footprints → the spine destabilises). The flywheel
+  // is turned on by default only in the review-impact ANNOTATION path (additive "verify" leads, not a gated
+  // spine, and it warms `.seam/` for later runs); the grow opts in explicitly so its determinism holds.
+  const dcLlm = a.dataCouplingLlm;
   let data: any;
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   if (a.expandGraph) {
@@ -440,7 +456,7 @@ async function runCodebase(a: Args): Promise<number> {
     const { merge_resolved } = await import("../codebase/scan/index.js");
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
-      const add = await scan.build_footprint(a.repo, a.expandFile!, a.expandSymbol!, { direction: a.down ? "down" : "up", depth: a.depth, anchorLine: a.expandLine ?? null, useLlm: useLlm0, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+      const add = await scan.build_footprint(a.repo, a.expandFile!, a.expandSymbol!, { direction: a.down ? "down" : "up", depth: a.depth, anchorLine: a.expandLine ?? null, useLlm: useLlm0, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm, model: a.model, claudeBin: a.claudeBin });
       data = merge_resolved(base, add, add.anchor?.id);
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
@@ -484,8 +500,8 @@ async function runCodebase(a: Args): Promise<number> {
       // LLM-orchestrated grow.
       try {
         [data, hist] = a.grow === "llm"
-          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm })
-          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm });
+          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm })
+          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
@@ -496,7 +512,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
-        writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model2)));
+        writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       }
       return 0;
@@ -511,7 +527,7 @@ async function runCodebase(a: Args): Promise<number> {
       // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
       // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
       data = await scan.build_footprint(a.repo, a.anchorFile!, a.symbol ?? null,
-        { direction: a.symbol && a.bidirectional ? "both" : "up", depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+        { direction: a.symbol && a.bidirectional ? "both" : "up", depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm, model: a.model, claudeBin: a.claudeBin });
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }
@@ -612,7 +628,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }
   return 0;
@@ -776,15 +792,20 @@ async function main(argv: string[]): Promise<number> {
   if (a.reviewImpact) {
     const { annotateReviewImpact, renderReviewImpact, triageUnknowns } = await import("./review_impact.js");
     const model: any = await emit_seams_json(hunks, a.repo, a.blastRadius);
-    try { await annotateReviewImpact(model, hunks, a.repo, { dataCoupling: a.dataCoupling }); }
+    // The flywheel turns in reviews too: learn cross-stack adapters for unknown frameworks unless det/floor
+    // is forced. Degrades to floor with no LLM backend. (`--data-coupling floor` / `--classifier det` opt out.)
+    const dcLlm = a.dataCouplingExplicit ? a.dataCouplingLlm : a.classifier !== "det";
+    try { await annotateReviewImpact(model, hunks, a.repo, { dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm, model: a.model, claudeBin: a.claudeBin }); }
     catch (e) { process.stderr.write(`review-impact skipped: ${(e as Error).message}\n`); }
     // Layer 3 (opt-in): LLM triage of the deterministic floor's `unknown` residual only.
     if (a.triage) {
       try { const t = await triageUnknowns(model, hunks, a.repo, { model: a.model, claudeBin: a.claudeBin }); if (t) emit(`triaged ${t} unknown flag(s) via LLM`); }
       catch (e) { process.stderr.write(`triage skipped: ${(e as Error).message}\n`); }
     }
+    const led = ledgerSnapshot();
+    if (led.used.length || led.learned.length) model.adapters = led;   // surface the .seam flywheel in the render
     process.stdout.write(renderReviewImpact(model) + "\n");
-    if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
+    if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
     return 0;
   }
 
@@ -794,7 +815,7 @@ async function main(argv: string[]): Promise<number> {
     const model: any = await emit_seams_json(hunks, a.repo, a.blastRadius);
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;              // tokens/cost for the extension's info message
-    writeFileSync(a.emitSeams, JSON.stringify(stampSeamModel(model)));
+    writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
     return 0;
   }

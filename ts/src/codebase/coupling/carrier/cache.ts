@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import type { CarrierSignature } from "./synth.js";
 import { ensureSeamGitignore, sharedSeamDir } from "../seam_dir.js";
+import { recordAdapterUsed, recordAdapterLearned } from "../ledger.js";
 
 const SCHEMA = 1;
 const _file = "carrier-signatures.json";
@@ -35,9 +36,9 @@ const _loadShared = () => _loadFrom(join(sharedSeamDir(), _file));
 // Has this key been resolved before? Repo-local store FIRST, then the SHARED ~/.seam store (promoted/common).
 export function cachedSignature(repo: string, key: string): { hit: boolean; sig: CarrierSignature | null } {
   const local = _load(repo);
-  if (local.has(key)) return { hit: true, sig: local.get(key)! };
+  if (local.has(key)) { const s = local.get(key)!; if (s) recordAdapterUsed(s.name, "repo"); return { hit: true, sig: s }; }
   const shared = _loadShared();
-  if (shared.has(key)) return { hit: true, sig: shared.get(key)! };
+  if (shared.has(key)) { const s = shared.get(key)!; if (s) recordAdapterUsed(s.name, "shared"); return { hit: true, sig: s }; }
   return { hit: false, sig: null };
 }
 
@@ -69,6 +70,7 @@ export function promoteSignature(repo: string, name: string): { ok: boolean; sig
 // Record a resolved signature (or null = non-carrier) and flush the store to disk. Best-effort: a write
 // failure (read-only checkout) is swallowed — the in-memory cache still serves this process.
 export function persistSignature(repo: string, key: string, sig: CarrierSignature | null): void {
+  if (sig) recordAdapterLearned(sig.name);   // a real (non-null) carrier adapter learned this run
   const m = _load(repo);
   m.set(key, sig);
   try {

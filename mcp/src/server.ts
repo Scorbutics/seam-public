@@ -314,7 +314,7 @@ server.registerTool("intent_footprint", {
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", String(depth), "--skeleton"];
     if (symbol) base.push("--symbol", symbol);
     if (intent) base.push("--intent", intent);
-    if (crossFramework) base.push("--data-coupling", "llm");
+    base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
     return await decompose(server, base, engine);
   } catch (e) { return errReply(e); }
 });
@@ -367,7 +367,7 @@ server.registerTool("grow_intent", {
     // + move picks), but the FINAL seam-intent labeling pass is skipped; the consuming model tiers/labels.
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
       "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
-    if (crossFramework) base.push("--data-coupling", "llm");
+    base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
     return await decompose(server, base, engine);
   } catch (e) { return errReply(e); }
 });

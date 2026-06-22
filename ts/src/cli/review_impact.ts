@@ -43,19 +43,24 @@ function subjectsOf(facts: { defines: Set<string>; enclosing: Set<string> } | un
 // facts); `model` is the emit_seams_json output whose seams we enrich. Bounded + SEQUENTIAL on purpose
 // (build_footprint shares module-global caches → concurrent collection corrupts results).
 export async function annotateReviewImpact(
-  model: any, hunks: Hunk[], repo: string, opts: { maxSymbols?: number; dataCoupling?: boolean } = {},
+  model: any, hunks: Hunk[], repo: string,
+  opts: { maxSymbols?: number; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {},
 ): Promise<void> {
-  // With the shared ctx each symbol after the first is ~0.2s, so the budget can cover a whole PR without
-  // the old per-symbol coupling cost. Higher = fewer truncations; still bounded for a runaway mega-diff.
-  const budget = opts.maxSymbols ?? 60;
+  // With the shared ctx the repo-wide coupling index builds ONCE and each symbol after is ~0.2s, so the
+  // budget covers a whole PR rather than the old per-symbol coupling cost. 120 clears virtually every real
+  // PR; still bounded so a runaway mega-diff (a 100s-of-file refactor — split it) truncates HONESTLY (the
+  // `truncated` flag says "impact ≥ shown") instead of running unbounded.
+  const budget = opts.maxSymbols ?? 120;
   const changed = new Set(hunks.map((h) => normpath(h.file_path)));
   const byId = new Map(hunks.map((h) => [h.id, h]));
   // Any changed code hunk can ripple — a one-line edit to a DB write is the headline cross-stack case and
-  // is often classified `environment`, not `core`. So scope to all CODE roles (skip test/noise), but order
-  // core-first so the budget is spent on the most important changes when a PR is large.
+  // is often classified `environment`, not `core`. So scope to all CODE roles (skip test/noise). Order
+  // core-first, then by CHANGE SIZE (added-line count) — so when the budget truncates a huge PR, the
+  // largest, most impactful changes are analysed first and the dropped tail is the smallest edits.
   const ROLES = new Set(["core", "link", "environment"]);
+  const addedCount = (h: Hunk) => changed_newside(h)?.[2].size ?? 0;
   const subjectHunks = hunks.filter((h) => h.role && ROLES.has(h.role))
-    .sort((a, b) => Number(b.role === "core") - Number(a.role === "core"));
+    .sort((a, b) => Number(b.role === "core") - Number(a.role === "core") || addedCount(b) - addedCount(a));
   if (!subjectHunks.length) return;
   const facts = await new RegexFactsProvider().facts(subjectHunks);
 
@@ -89,7 +94,10 @@ export async function annotateReviewImpact(
     try {
       // cross-stack: a data-flow boundary node (a shared key) reached from the changed symbol, whose other
       // side lives in a file the PR didn't touch. byId of the footprint maps the crossing → the reader.
-      const g: any = await build_footprint(repo, file, symbol, { direction: "up", dataCoupling: true, ctx });
+      // dataCouplingLlm (default ON in LLM modes) learns + persists a `.seam/` adapter for an unknown
+      // framework's cross-stack key — once, then replayed offline. Repo-wide + cached on the shared ctx
+      // (one batched pass for the whole review, not per symbol). Degrades to floor with no backend.
+      const g: any = await build_footprint(repo, file, symbol, { direction: "up", dataCoupling: true, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx });
       const gById = new Map<string, any>(g.nodes.map((n: any) => [n.id, n]));
       for (const e of g.edges) {
         const to = gById.get(e.to), from = gById.get(e.from);
@@ -224,5 +232,9 @@ export function renderReviewImpact(model: any): string {
   if (!any) out.push("No relevant impact found for the changed code — the change looks self-contained.");
   if (totalSuppressed) out.push(`(${totalSuppressed} flag(s) suppressed as provably-unrelated by the deterministic floor)`);
   out.push("This is the structural blast radius of the change; the review judgement over it is yours.");
+  // The .seam flywheel: report learned framework-key adapters this run consulted/learned (cross-stack
+  // coverage that grew the deterministic floor), so they're reviewable/promotable.
+  const ad = model.adapters as { used?: { name: string; scope: string }[]; learned?: string[] } | undefined;
+  if (ad?.learned?.length) out.push(`Learned ${ad.learned.length} new .seam adapter(s) this run: ${ad.learned.join(", ")} — review with \`seam-adapters\`.`);
   return out.join("\n");
 }

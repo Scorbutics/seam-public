@@ -116,7 +116,20 @@ reference back to the table/symbol it reads, and only count fields read *off tha
 small data-flow/binding step (the resolver already knows the table/route key); it converts the floor
 from "field names that happen to coincide" to "fields read off the thing that changed."
 
-### Gap 3 — cross-stack recall is bounded to the floor adapters
+### Gap 3 — the learned-adapter flywheel — ◐ SURFACED (2026-06-22)
+
+**Surfacing shipped** (the consumption + review halves already existed). The flywheel was *invisible*: a
+`det` run replays `.seam/` adapters offline and `seam-adapters` can promote them, but nothing told the
+user it happened. Now a run reports it: `coupling/ledger.ts` records which learned adapters were CONSULTED
+(replayed) + NEWLY learned this run; `decompose.ts stamp()` attaches `model.adapters` to every emit; the
+codebase render (`llm_context.ts`) and the diff review-impact render surface it with a `seam-adapters
+promote` hint; the VS Code extension shows a top-level **"Learned adapters (.seam)"** node (✦ new vs
+replayed). Pure observability, no-op when nothing learned. Tests: `test/coupling/ledger.test.ts`; 433 pass.
+Remaining (the original recall gap below): the user-facing review path still runs floor-only
+(`dataCouplingLlm` off) so it doesn't *grow* coverage by default — turning the flywheel in reviews is the
+deferred half (a cost/default decision).
+
+Original note:
 
 `crossStack` only fires for the registered deterministic adapters (Supabase, ActiveRecord, jOOQ, raw
 SQL, http-route, annotation-route, file-channel). Bespoke ORMs / homemade frameworks are missed unless
@@ -128,7 +141,14 @@ the learned adapter as a reviewable record. The more it's deployed, the more fra
 deterministically. (This is the compounding-asset loop; prioritise the learning UX, not more
 hand-written adapters.)
 
-### Gap 4 — the 60-symbol budget truncates big PRs
+### Gap 4 — the symbol budget truncates big PRs — ✅ SHIPPED (2026-06-22)
+
+**Done.** Budget raised 60 → 120 (the shared `EngineCtx` makes per-symbol ~0.2s, so this clears virtually
+every real PR), and the subject ordering is now core-first **then by change size** (added-line count) — so
+when a genuine mega-diff truncates, the largest/most-impactful changes are analysed first and only the
+smallest edits drop. The honest `truncated` flag is unchanged ("impact ≥ shown"). Verdicts preserved.
+
+Original note:
 
 The annotation is sequential and capped (`maxSymbols = 60`), so a mega-diff truncates — exactly where
 impact matters most. It's flagged honestly (`truncated`), but it's a ceiling.
@@ -140,16 +160,30 @@ passes) dominates. Keep the honest `truncated` signal regardless — never silen
 
 ---
 
-## 4. Prioritised roadmap
+## 4. Prioritised roadmap — STATUS (2026-06-22)
 
-1. **AST relevance floor** (Gap 1) — biggest single lever; unlocks the multi-language hero case.
-2. **Sound field binding** (Gap 2) — removes the false-`relevant` class; protects trust.
-3. **Learned-adapter UX** (Gap 3) — the compounding moat; make first-encounter learning automatic +
-   reviewable.
-4. **Budget headroom + prioritisation** (Gap 4) — cheap follow-up once 1–3 land.
+1. **AST relevance floor** (Gap 1) — ✅ SHIPPED. Cross-language floor; fixed Java-getter false-suppression.
+2. **Sound field binding** (Gap 2) — ✅ SHIPPED. Key-bound reads; killed the false-`relevant` class.
+3. **Learned-adapter flywheel** (Gap 3) — ✅ SHIPPED (surfacing + default-on learning, **scoped**).
+   `dataCouplingLlm` defaults ON in the **review-impact path** (the moat's cross-stack signal — incl. the
+   extension diff review); `det`, the anchor probe, AND the **codebase grow/footprint** stay floor-only by
+   default. The grow path was deliberately KEPT explicit-opt-in (`--data-coupling llm`): the autogrow
+   stability harness showed default-on there breaks **deterministic grow on a cold `.seam/`** (the LLM
+   deduces different keys per run → different footprints → spine destabilises; grow 100%→<100%,
+   tier 0.99→0.83). It self-heals once `.seam/` is warmed, but we gate cold determinism, so the grow opts
+   in explicitly. Review-impact learning is safe by contrast (additive "verify" leads, not a gated spine,
+   and it warms the cache). `--data-coupling floor|off` opts out; the pass degrades to floor with no backend
+   (offline suite unaffected — it no-ops). Validated: floor-blind homemade-ORM learns→persists→replays
+   offline + surfaced in `model.adapters`; MCP keeps an explicit floor/llm contract (independent of the
+   default). The flywheel turns by default where it's safe (reviews); the grow stays deterministic.
+4. **Budget headroom + prioritisation** (Gap 4) — ✅ SHIPPED. 60→120, core-first then change-size ordering.
 
-Each is independently shippable and each is validatable against the gold corpus / harness before it
-ships (the discipline that's kept this trustworthy — see §5).
+Net: **all four gaps are now shipped** — the precision/correctness floor (1, 2, 4) is hardened, and the
+learned-adapter flywheel is both visible (surfacing) AND turning by default in LLM modes (3). Each piece
+was validated against the suite + the cross-stack/floor-blind fixtures before landing (§5). The moat is no
+longer "architecture for a moat" — the compounding asset accrues on every hybrid run, deterministically
+replayed forever after. Remaining tail (minor): Gap-2 DTO/getter alias tracking; broadening learning
+beyond the `cli` backend (copilot can't serve the in-subprocess key pass today).
 
 ---
 

@@ -373,6 +373,15 @@ export function renderLlmContext(model: any): string {
     out.push("");
   }
 
+  // LEARNED ADAPTERS (the .seam flywheel): which framework-key adapters this run consulted (replayed
+  // offline) + newly learned (LLM once → deterministic forever). Surfaced so they're reviewable/promotable.
+  const ad = model.adapters as { used?: { name: string; scope: string }[]; learned?: string[] } | undefined;
+  if (ad && ((ad.used?.length ?? 0) || (ad.learned?.length ?? 0))) {
+    out.push("## Learned adapters (.seam — framework-key coupling)");
+    if (ad.learned?.length) out.push(`NEW this run (LLM-deduced, persisted to .seam/): ${ad.learned.join(", ")}`);
+    if (ad.used?.length) out.push(`replayed offline: ${ad.used.map((a) => `${a.name} [${a.scope}]`).join(", ")}`);
+    out.push("Review/promote with `seam-adapters list | promote <name>` (repo .seam → shared store).", "");
+  }
   out.push("## How to use");
   if (model.skeleton)
     // SKELETON: no LLM tiers/labels were assigned (this output is for an LLM, which tiers/labels better
