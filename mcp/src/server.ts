@@ -10,7 +10,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { join } from "node:path";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { EngineError, backendKind, readJson, runEngine, runEngineAsync, withScratch, writeText } from "./engine.js";
 import { clientSupportsSampling, runEngineWithBridge } from "./sampling.js";
 import { LOG_PATH, log, nextCallId } from "./log.js";
@@ -480,18 +480,31 @@ server.registerTool("warm_adapters", {
     + "per-intent, so you do NOT re-warm per question). "
     + "Learning is BATCHED: each call learns up to `budget` files and REPORTS how many it created. Call it "
     + "REPEATEDLY until it reports 0 newly learned — that means the repo is fully warm. The anchor is only a "
-    + "trigger; the pass is repo-wide. Needs an LLM seam (a local claude/copilot binary, or a sampling host).",
+    + "trigger; the pass is repo-wide. Needs an LLM seam (a local claude/copilot binary, or a sampling host). "
+    + "Pass reset:true on the FIRST call to wipe a stale cache (e.g. junk learned before a guard upgrade) and "
+    + "relearn clean.",
   inputSchema: {
     repo: z.string().describe("Absolute path to the git repo to warm."),
     anchorFile: z.string().describe("Any file in the repo — a trigger for the repo-wide pass (relative or absolute)."),
     symbol: z.string().optional().describe("Optional anchor symbol; omit to anchor on the whole file."),
     budget: z.number().int().min(1).max(400).default(40).describe("Max floor-blind files to learn THIS call (bounds latency). Call again until 0 newly learned."),
+    reset: z.boolean().default(false).describe("Delete this repo's learned-adapter caches (.seam/key-adapters.json + "
+      + "key-matchers.json) BEFORE learning, so stale/low-quality adapters learned before the current guards are "
+      + "removed and relearned clean. Repo-local only — the shared adapter store is untouched. Use on the FIRST "
+      + "warm call of a re-warm; leave false on the follow-up batches."),
     crossFramework: CROSS_FRAMEWORK,
   },
-}, async ({ repo, anchorFile, symbol, budget, crossFramework }, extra) => {
+}, async ({ repo, anchorFile, symbol, budget, reset, crossFramework }, extra) => {
   try {
     if (!llmServeOrNull(server))
       return errReply(new EngineError("warm_adapters needs an LLM seam — set CLAUDE_BIN / COPILOT_BIN (or PATH), or call from a sampling-capable host."));
+    if (reset) {
+      for (const f of ["key-adapters.json", "key-matchers.json"]) {
+        const p = join(repo, ".seam", f);
+        try { if (existsSync(p)) { rmSync(p); log(`warm_adapters: reset — removed ${p}`); } }
+        catch (e) { log(`warm_adapters: reset failed for ${p}: ${(e as Error).message}`); }
+      }
+    }
     const base = ["--scan", "--repo", repo, "--anchor-file", anchorFile, "--depth", "1", "--skeleton"];
     if (symbol) base.push("--symbol", symbol);
     base.push("--data-coupling", crossFramework ? "llm" : "floor");
