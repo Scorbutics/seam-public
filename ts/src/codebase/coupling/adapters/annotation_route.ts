@@ -29,4 +29,4 @@ function scan(file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const ANNOTATION_ROUTE_ADAPTER: KeyKind = { ...HTTP_ROUTE_META, scan };
+export const ANNOTATION_ROUTE_ADAPTER: KeyKind = { ...HTTP_ROUTE_META, name: "annotation-route", blurb: "@GetMapping/@Path/@app.route(\"/path\") ⇄ fetch — cross-stack HTTP-route coupling", scan };

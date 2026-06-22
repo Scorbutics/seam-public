@@ -24,4 +24,4 @@ function scan(file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const JOOQ: KeyKind = { ...DB_TABLE_META, scan };
+export const JOOQ: KeyKind = { ...DB_TABLE_META, name: "jooq", blurb: "jOOQ `.insertInto/.selectFrom(t)` — DB-table coupling", scan };

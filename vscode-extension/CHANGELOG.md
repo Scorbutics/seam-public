@@ -5,6 +5,17 @@ All notable changes to the Seam extension. Distributed as a `.vsix` via
 
 ## Unreleased
 
+- **Adapters view + management** — a new **Adapters** panel in the Seam sidebar lists every
+  data-coupling adapter by status: **Built-in** (deterministic, shipped — DB tables, HTTP routes,
+  file channels, sourced from the engine registry), **Learnt** (LLM-deduced for an unknown/homemade
+  framework, stored in this repo's `.seam/`), and **Promoted** (copied into the shared store, reused
+  across repos and replayed offline). Right-click a **Learnt** adapter → **Promote** to share it
+  (learnt → promoted). A toolbar refresh re-reads the stores. Backed by the engine's
+  `seam-adapters list --json`, so the catalogue is never hardcoded in the extension.
+- **Learn notification** — when a review/analysis LEARNS a new adapter, the extension surfaces it
+  ("Seam learned N data-coupling adapter(s)… promote to share") with a **Manage adapters** action
+  that opens the new view.
+
 - **Review impact in diff review (the diff↔codebase bridge)** — a diff review now
   automatically annotates each seam with what the change touches **beyond the PR**:
   transitive consumers **and** cross-stack data-flow readers/writers (a shared DB

@@ -34,4 +34,4 @@ function scan(file: string, text: string): KeyHit[] {
   return out;
 }
 
-export const ACTIVE_RECORD: KeyKind = { ...DB_TABLE_META, scan };
+export const ACTIVE_RECORD: KeyKind = { ...DB_TABLE_META, name: "active-record", blurb: "Rails ActiveRecord model reads/writes — DB-table coupling", scan };

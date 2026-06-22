@@ -215,6 +215,8 @@ let lensProvider: SeamLensProvider;
 let gutterDir = "";
 let treeProvider: SeamTreeProvider;
 let treeView: vscode.TreeView<Node>;
+let adapterProvider: AdapterTreeProvider;
+let adapterView: vscode.TreeView<AdapterNode>;
 let extContext: vscode.ExtensionContext;
 // FOCUS: when a seam (or cluster) is selected in the tree, only ITS hunks are
 // decorated — every other seam disappears from the editor, so you review one
@@ -264,9 +266,15 @@ function activateInner(context: vscode.ExtensionContext) {
 
   treeProvider = new SeamTreeProvider();
   treeView = vscode.window.createTreeView("seam.tree", { treeDataProvider: treeProvider });
+  adapterProvider = new AdapterTreeProvider();
+  adapterView = vscode.window.createTreeView("seam.adapters", { treeDataProvider: adapterProvider });
   lensProvider = new SeamLensProvider();
   context.subscriptions.push(
     treeView,
+    adapterView,
+    vscode.commands.registerCommand("seam.adapters.refresh", () => adapterProvider.refresh()),
+    vscode.commands.registerCommand("seam.adapters.manage", async () => { await adapterProvider.refresh(); try { await vscode.commands.executeCommand("seam.adapters.focus"); } catch { /* view focus best-effort */ } }),
+    vscode.commands.registerCommand("seam.adapters.promote", promoteAdapter),
     vscode.languages.registerCodeLensProvider([{ scheme: "file" }, { scheme: "git" }], lensProvider),
     vscode.commands.registerCommand("seam.detangle", detangle),
     vscode.commands.registerCommand("seam.mapIntent", mapIntent),
@@ -469,6 +477,20 @@ function activateModel(m: SeamModel, root: string, range: string, ts: number) {
   treeProvider.refresh();
   vscode.commands.executeCommand("setContext", "seam.active", true);  // enable nav keys
   rerender();
+  notifyLearnedAdapters(m);   // the flywheel turned this run → surface it + refresh the adapters view
+}
+
+// When a run LEARNED new `.seam/` adapters (the LLM deduced a coupling for an unknown framework), notify
+// the user and refresh the adapter view so the new entries (and the promote action) are right there.
+function notifyLearnedAdapters(m: SeamModel): void {
+  const learned = m.adapters?.learned ?? [];
+  if (!learned.length) return;
+  adapterProvider?.refresh();
+  const names = learned.slice(0, 3).join(", ") + (learned.length > 3 ? `, +${learned.length - 3} more` : "");
+  vscode.window.showInformationMessage(
+    `Seam learned ${learned.length} data-coupling adapter${learned.length !== 1 ? "s" : ""} for an unknown framework: ${names}. They replay offline now — promote to share across repos.`,
+    "Manage adapters",
+  ).then((pick) => { if (pick === "Manage adapters") vscode.commands.executeCommand("seam.adapters.manage"); });
 }
 
 // Render a pre-built `--emit-seams` JSON directly (no engine run, no LLM) — for demos,
@@ -609,7 +631,7 @@ function engine(): Engine {
   const eng = path.join(__dirname, "engine");
   return { run: process.execPath, entryDir: eng, wasmDir: path.join(eng, "wasm"), ext: ".cjs", dev: false };
 }
-function engineEntry(name: "decompose" | "anchor_rank"): string {
+function engineEntry(name: "decompose" | "anchor_rank" | "adapters"): string {
   const e = engine();
   return path.join(e.entryDir, `${name}${e.ext}`);
 }
@@ -636,6 +658,106 @@ function anchorRankInvocation(_tool: string, args: string[]): [string, string[]]
 // decompose invocation (diff + codebase mode). `args` are the CLI flags (everything after the entry).
 function decomposeInvocation(_tool: string, args: string[]): [string, string[]] {
   return [engine().run, [engineEntry("decompose"), ...args]];
+}
+
+// --- learned-adapter manager (Seam Adapters view) -----------------------------------------------
+// The data-coupling adapter inventory: BUILT-IN (deterministic, from the registry), LEARNT (repo-local
+// `.seam/`, LLM-deduced), PROMOTED (shared store, reusable across repos). Sourced from the engine's
+// `adapters list --json` so the extension never hardcodes the catalogue. The view lets you promote a
+// learnt adapter into the shared store (learnt → promoted) — the human half of the flywheel.
+interface AdapterEntry { name: string; type?: "key" | "carrier"; kind?: string; description: string; detail?: string; }
+interface AdapterInventory { builtin: AdapterEntry[]; learnt: AdapterEntry[]; promoted: AdapterEntry[]; locations?: { repo: string; shared: string }; }
+type AdapterStatus = "builtin" | "learnt" | "promoted";
+type AdapterNode =
+  | { kind: "group"; status: AdapterStatus; entries: AdapterEntry[] }
+  | { kind: "adapter"; status: AdapterStatus; entry: AdapterEntry };
+
+// The repo the adapter store lives under — the open workspace folder (adapters are a repo-level concern,
+// independent of whether an analysis has run).
+function adapterRepo(): string | null {
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? (repoRoot || null);
+}
+// Run the engine and CAPTURE stdout (the adapters CLI prints JSON / a status line there).
+function runCapture(file: string, args: string[], cwd: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { cwd, env: engineEnv(), maxBuffer: 16 * 1024 * 1024 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr.trim() || err.message)); else resolve(stdout);
+    });
+  });
+}
+async function loadAdapterInventory(): Promise<AdapterInventory | null> {
+  const repo = adapterRepo();
+  if (!repo || engineMissing()) return null;
+  try {
+    const out = await runCapture(engine().run, [engineEntry("adapters"), "list", "--json", "--repo", repo], repo);
+    return JSON.parse(out) as AdapterInventory;
+  } catch { return null; }
+}
+
+class AdapterTreeProvider implements vscode.TreeDataProvider<AdapterNode> {
+  private _onDidChange = new vscode.EventEmitter<void>();
+  readonly onDidChangeTreeData = this._onDidChange.event;
+  private inv: AdapterInventory | null = null;
+  private loaded = false;
+  async refresh(): Promise<void> { this.inv = await loadAdapterInventory(); this.loaded = true; this._onDidChange.fire(); }
+
+  async getChildren(el?: AdapterNode): Promise<AdapterNode[]> {
+    if (!this.loaded) await this.refresh();
+    if (!this.inv) return [];
+    if (!el) {
+      const groups: AdapterNode[] = [];
+      const add = (status: AdapterStatus, entries: AdapterEntry[]) => { if (entries.length) groups.push({ kind: "group", status, entries }); };
+      add("learnt", this.inv.learnt);       // lead with the actionable ones (promote candidates)
+      add("promoted", this.inv.promoted);
+      add("builtin", this.inv.builtin);
+      return groups;
+    }
+    if (el.kind === "group") return el.entries.map((entry) => ({ kind: "adapter", status: el.status, entry }));
+    return [];
+  }
+
+  getTreeItem(el: AdapterNode): vscode.TreeItem {
+    const META: Record<AdapterStatus, { label: string; icon: string; color?: string; tip: string }> = {
+      learnt:   { label: "Learnt (this repo)", icon: "sparkle", color: "charts.green", tip: "LLM-deduced for an unknown/homemade framework, stored in this repo's .seam/. Promote to share across repos." },
+      promoted: { label: "Promoted (shared)", icon: "cloud-upload", tip: "Learned adapters you promoted into the shared store (~/.config/seam/adapters) — reused by every repo, replayed offline." },
+      builtin:  { label: "Built-in", icon: "plug", tip: "Deterministic, code-level adapters shipped with Seam (DB tables, HTTP routes, file channels). Always on, offline." },
+    };
+    if (el.kind === "group") {
+      const m = META[el.status];
+      const it = new vscode.TreeItem(`${m.label}`, el.status === "builtin" ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.Expanded);
+      it.description = `${el.entries.length}`;
+      it.iconPath = new vscode.ThemeIcon(m.icon, m.color ? new vscode.ThemeColor(m.color) : undefined);
+      it.tooltip = m.tip;
+      return it;
+    }
+    const e = el.entry;
+    const it = new vscode.TreeItem(e.name, vscode.TreeItemCollapsibleState.None);
+    it.description = [el.status === "builtin" ? (e.kind ?? "") : (e.type ?? ""), e.detail ?? ""].filter(Boolean).join(" · ");
+    it.iconPath = new vscode.ThemeIcon(
+      el.status === "learnt" ? "sparkle" : el.status === "promoted" ? "cloud-upload" : "plug",
+      el.status === "learnt" ? new vscode.ThemeColor("charts.green") : undefined);
+    const md = new vscode.MarkdownString(`**${e.name}**  ·  _${el.status}_\n\n${e.description || "_(no description)_"}`);
+    if (el.status === "learnt") md.appendMarkdown("\n\n— right-click → **Promote** to share it across repos.");
+    it.tooltip = md;
+    // contextValue drives the inline "promote" action — only learnt adapters can be promoted.
+    it.contextValue = el.status === "learnt" ? "seam.adapter.learnt" : "seam.adapter";
+    return it;
+  }
+}
+
+// Promote a learnt adapter into the shared store (learnt → promoted) via the engine, then refresh.
+async function promoteAdapter(node?: AdapterNode): Promise<void> {
+  const repo = adapterRepo();
+  if (!repo) { vscode.window.showErrorMessage("Seam: open a folder first."); return; }
+  const name = node?.kind === "adapter" ? node.entry.name : undefined;
+  if (!name) { vscode.window.showErrorMessage("Seam: select a learnt adapter to promote."); return; }
+  try {
+    await runCapture(engine().run, [engineEntry("adapters"), "promote", name, "--repo", repo], repo);
+    await adapterProvider.refresh();
+    vscode.window.showInformationMessage(`Seam: promoted '${name}' to the shared adapter store — reused across repos now.`);
+  } catch (e) {
+    vscode.window.showErrorMessage(`Seam: promote failed — ${e instanceof Error ? e.message : e}`);
+  }
 }
 
 async function reviewCommit() {
