@@ -32,15 +32,24 @@ const ACC_FLOOR = 0.8, ACC_TARGET = 0.9;
 const grade = (x: number) => x < ACC_FLOOR ? "❌FAIL" : x < ACC_TARGET ? "⚠ WARN" : "✅PASS";
 const MODES = ["lexical", "embed"] as const;
 
-// modes: "lexical" (name-filter floor) | "embed" (semantic recall union); selection is always probe→judge.
+// modes: "lexical" / "embed" → selection is probe→judge (recall floor varies). "pick" → the DIRECT
+// LLM pick (one pass, no probe sweep) — the A/B target. Reports the chosen anchor + wall-clock so the
+// gold corpus settles "is pick as accurate as probe, and how much faster" with data, not vibes.
 async function runMode(c: Case, mode: string, i: number, force: boolean): Promise<string | null> {
   const dest = join(RUNS_DIR, mode, c.label, `run_${i}.json`);
   if (existsSync(dest) && !force) return JSON.parse(readFileSync(dest, "utf-8")).chosen;
-  const recall = mode.startsWith("embed") ? "embed" : "lexical";
-  const sel = await select_anchor(expandHome(c.repo), c.intent, { anchorRecall: recall, dataCoupling: true });
-  const chosen = sel.chosen ? `${sel.chosen.name}@${sel.chosen.file}` : null;
+  const t0 = Date.now();
+  let chosen: string | null, chosenBy: string, noFlow = false;
+  if (mode === "pick") {
+    const { find_anchor } = await import("../src/codebase/anchor/find.js");
+    const sel = await find_anchor(expandHome(c.repo), c.intent, { select: "pick", anchorRecall: "embed", dataCoupling: true });
+    chosen = sel.chosen ? `${sel.chosen.name}@${sel.chosen.file}` : null; chosenBy = sel.chosenBy; noFlow = sel.noFlow ?? false;
+  } else {
+    const sel = await select_anchor(expandHome(c.repo), c.intent, { anchorRecall: mode.startsWith("embed") ? "embed" : "lexical", dataCoupling: true });
+    chosen = sel.chosen ? `${sel.chosen.name}@${sel.chosen.file}` : null; chosenBy = sel.chosenBy; noFlow = sel.noFlow ?? false;
+  }
   mkdirSync(dirname(dest), { recursive: true });
-  writeFileSync(dest, JSON.stringify({ chosen, chosenBy: sel.chosenBy, noFlow: sel.noFlow ?? false }));
+  writeFileSync(dest, JSON.stringify({ chosen, chosenBy, noFlow, ms: Date.now() - t0 }));
   return chosen;
 }
 

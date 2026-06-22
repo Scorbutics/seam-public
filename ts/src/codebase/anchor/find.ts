@@ -8,16 +8,25 @@ import { available } from "../../core/llm.js";
 import { enumerate_entrypoints, select_entrypoint_llm, entrypoint_anchor } from "./entrypoint_select.js";
 import { expand_intent_terms_async } from "./intent_expand.js";
 import { select_anchor, type ProbedAnchor } from "./anchor_select.js";
+import { pick_anchor } from "./anchor_pick.js";
 
-export interface FindAnchorOpts { dataCoupling?: boolean; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed" }
+export interface FindAnchorOpts { dataCoupling?: boolean; model?: string; claudeBin?: string | null; anchorRecall?: "lexical" | "embed"; select?: "pick" | "probe" }
 export interface FindAnchorResult {
   chosen: ProbedAnchor | null;
-  chosenBy: "llm" | "structural" | "none";
+  chosenBy: "llm" | "structural" | "pick" | "none";
   noFlow?: boolean;
   entryCandidate?: { path: string; symbol: string; file: string };   // the HTTP entry seed, for a [entry-candidate] log
 }
 
 export async function find_anchor(repo: string, intent: string, opts: FindAnchorOpts = {}): Promise<FindAnchorResult> {
+  // DIRECT PICK (opt-in): ONE LLM pass names the anchor from rich candidate passages — no probe sweep, no
+  // entrypoint-select/expand passes (the grow that follows IS the connectedness check). ~6× faster than
+  // probe→judge on a big repo, same anchor on the cases measured. Falls THROUGH to probe→judge when it
+  // yields nothing (no LLM / no candidates), so it never regresses to "no anchor".
+  if (opts.select === "pick") {
+    const p = await pick_anchor(repo, intent, { model: opts.model, claudeBin: opts.claudeBin });
+    if (p.chosen) return { chosen: p.chosen, chosenBy: "pick" };
+  }
   const seeds: { name: string; file: string; kind: string }[] = [];
   let expandTerms: string[] | undefined;
   let entryCandidate: FindAnchorResult["entryCandidate"];
