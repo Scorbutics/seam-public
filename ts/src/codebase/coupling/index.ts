@@ -19,9 +19,10 @@ import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
+import { indexCacheEnabled, repoFingerprint, loadIndices, storeIndices } from "./index_cache.js";
 import { COUPLING } from "./config.js";
 import { emit } from "../../core/progress.js";
 
@@ -109,8 +110,28 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // (one file in memory at a time, never the repo) and ONE walk instead of two independent full repo reads —
 // the big win on a huge repo where the read + comment-mask dominates. Both indices cache on the ctx together;
 // honours the size cap (skips minified/generated bundles) and SEAM_NO_ADAPTERS (empty floor).
+// What changes the floor OUTPUT for the same files — folded into the disk-cache key so a config change can't
+// serve a stale index. (Adapter SET is sourced from the registry, not hardcoded.)
+function floorConfigSalt(): string {
+  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|adapters=${ADAPTERS.map((a) => a.kind).join(",")}`;
+}
+
 function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
   if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
+  // DISK CACHE (opt-in, SEAM_INDEX_CACHE=1): the floor is a pure function of repo content + config, so on a
+  // warm repeated run load it instead of the ~18s rebuild. A miss/error just falls through to the build —
+  // the cache can only affect speed, never correctness (see index_cache.ts).
+  let fingerprint: string | null = null;
+  if (indexCacheEnabled()) {
+    fingerprint = repoFingerprint(repo, skipDirs, scannableForKeys, floorConfigSalt());
+    const hit = loadIndices(repo, "floor", fingerprint, ["shared", "param"]);
+    if (hit) {
+      ctx.sharedKey.set(repo, hit.shared); ctx.paramKeys.set(repo, hit.param);
+      ctx.floorBase.set(repo, mergeGrounding(hit.shared, hit.param));
+      emit("floor index: loaded from .seam cache (unchanged files)");
+      return;
+    }
+  }
   const noAdapters = process.env.SEAM_NO_ADAPTERS === "1";
   emit("Building shared-key + param-key index (single floor pass)…");
   const shared: GroundingIndex = new Map();
@@ -136,6 +157,7 @@ function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx
   ctx.sharedKey.set(repo, shared);
   ctx.paramKeys.set(repo, param);
   ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call (was the per-grow-step ~1s cost)
+  if (fingerprint) storeIndices(repo, "floor", fingerprint, { shared, param });   // persist for the next warm run
 }
 
 export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
