@@ -8,7 +8,7 @@
 //      a consumer can hedge (the single-pick is fragile on backend flows); 3. token economy — paths +
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
-type Hunk = { file?: string; role?: string };
+type Hunk = { file?: string; role?: string; label?: string; start?: number; relevance?: number; spine?: boolean };
 type Seam = { id: string; label: string; tier?: string; selected?: boolean; suggested?: boolean;
   primary?: { file: string; line: number; symbol: string }; hunks?: Hunk[];
   culmination?: number; writes?: string[]; dir?: string;
@@ -30,6 +30,17 @@ const facts = (s: Seam): string => {
 // git lineage — the deterministic "why" (last-touching commit). Shown inline so an LLM reads provenance
 // it can trust alongside the code location.
 const lineageOf = (s: any): string => s.lineage ? `  ↳ ${s.lineage.sha} "${s.lineage.subject}" (${s.lineage.author}, ${s.lineage.date})` : "";
+
+// The intent-RELEVANT MEMBERS inside a seam — the embedding-ranked spine the floor collapsed into one
+// blob. Without these a tangled (god-object / DI) seam renders as one near-empty line; with them the
+// reader sees WHICH of the N members answer the intent. Only the `spine`-flagged members (top, above
+// the seam's mean), highest relevance first, capped. Empty when embeddings were unavailable.
+const _MEMBER_CAP = 8;
+const memberLines = (s: Seam): string[] => {
+  const sp = (s.hunks ?? []).filter((h) => h.spine && typeof h.relevance === "number")
+    .sort((a, b) => (b.relevance! - a.relevance!)).slice(0, _MEMBER_CAP);
+  return sp.map((h) => `     ★ ${h.relevance!.toFixed(2)} ${h.label ?? "?"}${h.file ? ` (${h.file}:${h.start ?? 0})` : ""}`);
+};
 
 // EDGE-SET projection — the flat, tier-grouped render shared by the consumers (`shape:"set"`, in-edges)
 // and dependencies (`shape:"deps"`, out-edges) shapes. NOT numbered spine steps — a set has no order.
@@ -302,7 +313,7 @@ export function renderLlmContext(model: any): string {
   const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
   if (spine.length) {
     out.push("## Spine (main path, read in order)");
-    spine.forEach((s, i) => out.push(`${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`));
+    spine.forEach((s, i) => { out.push(`${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); for (const ml of memberLines(s)) out.push(ml); });
     out.push("");
   }
 
@@ -324,14 +335,14 @@ export function renderLlmContext(model: any): string {
     if (s) out.push("## Culmination", `- ${s.label} — ${where(s)} (topology fallback: far end of the spine)`, "");
   }
 
-  const list = (title: string, items: Seam[]) => {
+  const list = (title: string, items: Seam[], withMembers = false) => {
     if (!items.length) return;
     out.push(`## ${title}`);
-    for (const s of items) out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`);
+    for (const s of items) { out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); if (withMembers) for (const ml of memberLines(s)) out.push(ml); }
     out.push("");
   };
   const spineSet = new Set(spineIds);
-  list("Supporting", seams.filter((s) => s.tier === "supporting"));
+  list("Supporting", seams.filter((s) => s.tier === "supporting"), true);
   // OFF-path: every one, never collapsed (the deliberate difference from the human view).
   list("Off-path (full — not collapsed)", seams.filter((s) => s.tier === "off"));
   // Spine seams not already shown in the ordered list (defensive — usually none).
