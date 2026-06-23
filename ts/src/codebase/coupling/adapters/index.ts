@@ -17,8 +17,9 @@ import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
 import { EVENT_BINDING } from "./event_binding.js";
+import { NG_SCOPE } from "./ng_scope.js";
 
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING, NG_SCOPE];
 
 // The BUILT-IN adapter catalogue (name + one-line blurb), derived FROM the registry — the single source,
 // so adding an adapter to ADAPTERS automatically surfaces it in `seam-adapters` / the extension's adapter
