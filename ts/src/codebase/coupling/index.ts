@@ -475,6 +475,13 @@ async function runPipeline(
     const id = `${hit.kind} ${hit.value} ${hit.produces}`;
     if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { ...hit, source: "scan" });
   }
+  // DIAGNOSTIC (SEAM_COUPLING_DEBUG=1): why did a node surface (or fail to surface) couplings? Prints every
+  // key this span touches, its source, and how many files sit on the OTHER side (0 = ungrounded → dropped).
+  if (process.env.SEAM_COUPLING_DEBUG) {
+    const anchorPath0 = normpath(node.file);
+    const rows = [...keys.values()].map((k) => `${k.kind} '${k.value}' (${k.produces ? "produces" : "consumes"}, ${k.source}) → ${collectComplementFiles(p.index, k, anchorPath0).size} other-side file(s)`);
+    process.stderr.write(`[coupling-debug] ${node.file}:${node.lo} surfaced ${keys.size} key(s):\n${rows.map((r) => "    " + r).join("\n") || "    (none)"}\n`);
+  }
   if (!keys.size) return;
 
   // STEP 3 (rank) — score each candidate complement once, for the capped fan
