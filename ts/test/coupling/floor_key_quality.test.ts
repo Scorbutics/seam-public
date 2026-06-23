@@ -31,13 +31,13 @@ describe("floor key-quality guard (kills the raw-SQL 'the' false-coupling)", () 
   });
 });
 
-describe("floor scan size guard (skips minified/generated bundles)", () => {
-  test("a >1MB file is skipped entirely (no char-scan, no keys) — guards the webapp vendor-bundle slowdown", () => {
-    const big = 'var x="' + "a".repeat(1_100_000) + '";var q="SELECT id FROM users";';   // a real SQL string, but in a 1.1MB file
+describe("floor scan: large files are scanned, not skipped (no data loss; cap is opt-in)", () => {
+  test("a >1MB file is STILL scanned by default — its real SQL key is not lost", () => {
+    const big = 'var x="' + "a".repeat(1_100_000) + '";var q="SELECT id FROM users";';   // a real SQL read in a 1.1MB file
     expect(big.length).toBeGreaterThan(1_000_000);
-    expect(keys("vendor.bundle.js", big)).toEqual([]);   // skipped despite containing a valid SQL read
+    expect(tables(big)).toContain("users");   // scanned (allocation-light masking makes it cheap)
   });
-  test("a normal-sized file with the same SQL still resolves (cap doesn't over-reach)", () => {
+  test("a normal-sized file with the same SQL resolves", () => {
     expect(tables('var q = "SELECT id FROM users";')).toContain("users");
   });
 });

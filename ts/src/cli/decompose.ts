@@ -527,14 +527,19 @@ async function runCodebase(a: Args): Promise<number> {
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
+      const nSeams = (model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
-        emit(`Ranking ${(model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0)} seam(s) by intent relevance (embeddings)…`);
+        emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
         await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
         emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
+      } else if (!a.emitGraph) {
+        // No output sink given — DON'T exit silently (the "no JSON" surprise). Show the result + how to capture it.
+        process.stdout.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s). `
+          + `No output written — pass --emit-seams <path> for the full JSON (or --emit-graph <path> for the raw graph).\n`);
       }
       return 0;
     }
