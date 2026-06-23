@@ -98,7 +98,12 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   while ((c = FETCH_CALL.exec(text)) !== null) {
     const raw = c[1];
     if (!raw.startsWith("/")) continue;                    // only same-origin absolute paths couple to a route
-    const path = normPath(raw);
+    let path = normPath(raw);
+    // DYNAMIC TAIL: `$http.put("/x/y/" + id)` concatenates the id, so the literal ENDS at the trailing
+    // slash and loses the dynamic segment — leaving `/x/y`, which never meets a backend `@Path("/x/y/{id}")`
+    // (→ `/x/y/*`). When a path literal ends in `/` and is immediately followed by `+` (concatenation),
+    // the next segment IS dynamic: restore the `*` so the front-end call grounds to the backend route.
+    if (raw.endsWith("/") && path !== "/" && /^[`'"]\s*\+/.test(text.slice(c.index + c[0].length))) path += "/*";
     if (path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, c.index), produces: false });
   }
   // `functions.invoke('slug')` consumer → the edge function's served path (the SDK call carries no URL).

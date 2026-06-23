@@ -11,20 +11,34 @@ import { HTTP_ROUTE_META, normPath } from "./http_route.js";
 import { lineOf, maskComments } from "./util.js";
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 
-// `@Name( …anything… "<a path-shaped string literal>" …anything… )`. The annotation's name is captured
-// only to anchor the match (`@\w[\w.]*`); the route is the first leading-slash string literal inside the
-// parens, so it catches both positional (`@WebServlet("/x")`) and named (`@RequestMapping(path="/x")`).
-const ANNOTATION_ROUTE = /@\w[\w.]*\s*\([^)]*?["'`](\/[^"'`\s]*)["'`]/g;
+// `@Name( …anything… "<literal>" …anything… )` — the annotation name only ANCHORS the match (`@\w[\w.]*`);
+// we judge the LITERAL, framework-agnostically (no per-framework name list). A literal is a route when it is:
+//   • ABSOLUTE — `/x/y` (`@WebServlet("/x")`, `@GetMapping("/x")`, `@RequestMapping(path="/x")`), OR
+//   • RELATIVE WITH A PATH-VARIABLE — `generateFileNote/{id}` / `users/<id>` / `users/:id`. JAX-RS & Spring
+//     split a route across a class `@Path("fileNote")` + method `@Path("generateFileNote/{id}")` with NO
+//     leading slash, under an external base (`/manage/rest`). The PATH-VARIABLE is the agnostic "this is a
+//     route" signal when the slash is absent; the engine's route SUFFIX matcher then grounds the relative
+//     handler to the front-end's FULL URL (`/manage/rest/fileNote/generateFileNote/*`) — no class-combine
+//     or base-path needed. A plain literal with no slash/var (`@Column("user_id")`, `@Named("x")`) is NOT a route.
+const ANNOTATION_ARG = /@\w[\w.]*\s*\([^)]*?["'`]([^"'`\s]+)["'`]/g;
+const PATHISH = /^[\w\-./{}:<>*~%]+$/;                       // path characters only — excludes prose/SQL/regex
+const PATH_VAR = /\{[^}]*\}|<[^>]*>|(?:^|\/):[A-Za-z_]/;     // {id} / <id> / :id — a dynamic route segment
+function routeValue(s: string): string | null {
+  if (!PATHISH.test(s)) return null;
+  if (s.startsWith("/")) return normPath(s);                 // absolute (unchanged behaviour)
+  if (PATH_VAR.test(s)) return normPath("/" + s);            // relative route → leading slash for a consistent key
+  return null;
+}
 
 function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!endsWithSourceExt(file)) return [];
   text = masked?.comments ?? maskComments(text);   // an annotation inside a comment is not a real route declaration (shared mask across adapters)
   const out: KeyHit[] = [];
   let m: RegExpExecArray | null;
-  ANNOTATION_ROUTE.lastIndex = 0;
-  while ((m = ANNOTATION_ROUTE.exec(text)) !== null) {
-    const path = normPath(m[1]);
-    if (path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, m.index), produces: true });
+  ANNOTATION_ARG.lastIndex = 0;
+  while ((m = ANNOTATION_ARG.exec(text)) !== null) {
+    const path = routeValue(m[1]);
+    if (path && path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, m.index), produces: true });
   }
   return out;
 }

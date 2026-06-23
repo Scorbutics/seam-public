@@ -33,12 +33,29 @@ describe("annotation-route adapter (handler side, agnostic)", () => {
     expect(keys("X.java", '@Roles(group = RoleGroup.CAN_VIEW)\npublic class X {}')).toEqual([]);
     expect(keys("X.java", "@Override\nvoid f() {}")).toEqual([]);
   });
+  test("RELATIVE JAX-RS/Spring @Path with a path-variable is a route (no leading slash needed)", () => {
+    // the method side of `@Path("fileNote")` class + `@Path("generateFileNote/{id}")` method — the slash is
+    // absent (relative under a class @Path + external base), but the {id} marks it a route; the engine's
+    // suffix matcher grounds `/generateFileNote/*` to the front-end's full `/manage/rest/.../generateFileNote/*`.
+    expect(keys("Svc.java", '@Path("generateFileNote/{id}")\npublic Response gen() {}')
+      .some((h) => h.kind === "http-route" && h.value === "/generateFileNote/*" && h.produces)).toBe(true);
+    expect(keys("Svc.java", '@GetMapping("users/{id}")\nUser get() {}')
+      .some((h) => h.value === "/users/*" && h.produces)).toBe(true);
+  });
+  test("a relative literal with NO path-variable is NOT a route (excludes @Column / bean names / date formats)", () => {
+    expect(keys("X.java", '@Column("user_id") String x;')).toEqual([]);
+    expect(keys("X.java", '@Named("myBean")\nclass X {}')).toEqual([]);
+    expect(keys("X.java", '@JsonFormat(pattern = "yyyy/MM/dd")\nDate d;')).toEqual([]);   // slash but no path-var → not a route
+  });
 });
 
 describe("caller side ($http / fetch — framework-agnostic)", () => {
   const callerVal = (code: string) => keys("c.js", code).filter((h) => h.kind === "http-route" && !h.produces).map((h) => h.value);
   test("AngularJS $http.get path literal → consumed http-route", () => {
-    expect(callerVal("$http.get('/manage/rest/member/document/' + id)")).toContain("/manage/rest/member/document");
+    // a trailing-slash literal followed by `+ id` is a DYNAMIC path — the `*` is restored so it grounds to a
+    // backend `@Path(".../{id}")` instead of falling a segment short.
+    expect(callerVal("$http.get('/manage/rest/member/document/' + id)")).toContain("/manage/rest/member/document/*");
+    expect(callerVal('$http.get("/api/members")')).toContain("/api/members");   // no trailing slash / no concat → unchanged
   });
   // React/Vue share the same HTTP libraries — no framework-specific API needed for the common cases.
   test("React fetch / axios.get / ky / template literal", () => {
@@ -104,5 +121,37 @@ describe("cross-stack coupling: servlet anchor reaches the AngularJS caller", ()
     if (!available()) return;
     const g = await build_consumers_graph(REPO, "frontend/memberDocCtrl.js", "memberDocumentVaultDocuSignController", { dataCoupling: true });
     expect(reaches(g, "ManageDocumentVaultServlet.java")).toBe(true);
+  });
+});
+
+// The user's exact case: an AngularJS front-end `$http.put('/manage/rest/fileNote/generateFileNote/' + id)`
+// reaching a JAX-RS backend whose route is SPLIT across a class `@Path("fileNote")` + method
+// `@Path("generateFileNote/{id}")` (relative, no leading slash) under an external `/manage/rest` base. The
+// dynamic-tail `*` (front-end) + relative-route extraction (back-end) + the engine's suffix matcher combine.
+describe("cross-stack coupling: JAX-RS relative @Path ⇄ AngularJS $http full URL (the front-end→back-end case)", () => {
+  const REPO = join(tmpdir(), "seam-jaxrs-test-" + process.pid);
+  const write = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  beforeAll(() => {
+    rmSync(REPO, { recursive: true, force: true });
+    write("web/js/fileNoteItem.js",
+      "function saveFileNoteItem() {\n" +
+      "  var audit = {};\n" +
+      "  $http.put('/manage/rest/fileNote/generateFileNote/' + $scope.fileNoteItem._id, audit);\n" +
+      "}\n");
+    write("backend/FileNoteService.java",
+      '@Path("fileNote")\n' +
+      "public class FileNoteService {\n" +
+      "  @PUT\n" +
+      '  @Path("generateFileNote/{id}")\n' +
+      "  public Response generateFileNote(String id) { return ok(); }\n}\n");
+  });
+  afterAll(() => rmSync(REPO, { recursive: true, force: true }));
+
+  test("the front-end $http.put reaches the JAX-RS backend through the shared route", async () => {
+    if (!available()) return;
+    const g = await build_module_graph(REPO, "web/js/fileNoteItem.js", { dataCoupling: true });
+    const files = (g.nodes ?? []).map((n: any) => n.file);
+    expect(files.some((f: string) => f.endsWith("FileNoteService.java"))).toBe(true);   // front-end → back-end
+    expect((g.nodes ?? []).some((n: any) => n.kind === "route")).toBe(true);            // a route boundary materialised
   });
 });
