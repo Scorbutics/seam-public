@@ -23,6 +23,12 @@ For the architecture / high complexity code related tasks, behave like a Senior 
 
 Challenge the solutions I am proposing (if there is an existing better way, don't challenge everything for the sake of challenge...).
 
+Every behavioural fix ships with a committed regression test — not just ad-hoc validation:
+ - Validating a fix by running a throwaway synthetic repo is the RIGHT way to confirm it, but it doesn't count as done. Turn that same scenario into a committed test so the bug can't silently come back. If I claim a fix works, there should be a test proving it.
+ - Make the test HERMETIC: a throwaway tmp (git) repo built in `beforeAll` and removed in `afterAll` — never depend on the real repo or a fixture outside the test. Mirror the per-module layout (`test/<module>/`).
+ - Assert BEHAVIOUR or a STRUCTURAL contract (the bean is reached; the adapter declares `handlerEdge`), not internal counters/diagnostics. Diagnostic-only output (timing, progress, debug dumps) needs no test.
+ - GUARD on optional capabilities: a test needing tree-sitter (`available()`) or embeddings/transformers must early-return when absent (offline CI / the .vsix), so the suite stays green everywhere — exactly as the engine degrades.
+
 Using Seam to navigate code (dogfood it):
  - When you need to understand how a feature/flow WORKS across multiple files, where a flow ends/culminates, or the blast radius of a change, call Seam (the `seam` skill, or the MCP `grow_intent`/`intent_footprint` tools) instead of stitching it together by hand. Prefer ONE Seam run over 4+ iterative greps to reconstruct a flow, and call it to MAP a flow before editing across it.
  - Use grep/LSP — NOT Seam — for a single symbol lookup, find-usages, or any one-fact answer: they are instant. The tell is the answer's shape: a list of locations → grep; a path/flow/structure with a beginning and end → Seam. Seam to MAP, grep to DRILL. Seam returns `noFlow` when the intent is computation/strategy with no traceable spine (then read the touchpoints, don't expect a path).
