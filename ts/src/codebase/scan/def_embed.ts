@@ -35,6 +35,19 @@ async function embed_one(text: string): Promise<number[]> {
   const out = await (await embedder())(text, { pooling: "mean", normalize: true });
   return Array.from(out.data as Float32Array);
 }
+
+// BATCHED embed — one forward pass for N strings instead of N sequential calls. transformers.js accepts an
+// array and returns an [N, dim] tensor (flat .data, .dims). This is the difference between a hub node's key
+// ranking costing one inference vs ~60 (the serial loop made an --intent grow on a big component hang).
+async function embed_many(texts: string[]): Promise<number[][]> {
+  if (!texts.length) return [];
+  const out = await (await embedder())(texts, { pooling: "mean", normalize: true });
+  const data = out.data as Float32Array;
+  const dim = (out.dims as number[])[out.dims.length - 1] || data.length;
+  const vecs: number[][] = [];
+  for (let i = 0; i < texts.length; i++) vecs.push(Array.from(data.subarray(i * dim, (i + 1) * dim)));
+  return vecs;
+}
 const cosine = (a: number[], b: number[]): number => { let s = 0; for (let i = 0; i < a.length; i++) s += a[i] * b[i]; return s; };
 
 // BGE-family retrieval models expect an instruction prefix on the QUERY (not the passages); a generic
@@ -52,11 +65,12 @@ export async function embedScoreStrings(intent: string, values: string[]): Promi
   try {
     if (!intent || !values.length || !(await transformersAvailable())) return out;
     if (_intentVec?.intent !== intent) _intentVec = { intent, vec: await embed_one(QUERY_PREFIX + intent) };
-    for (const v of values) {
-      let vec = _strVec.get(v);
-      if (!vec) { vec = await embed_one(v); _strVec.set(v, vec); }
-      out.set(v, cosine(_intentVec.vec, vec));
+    const missing = [...new Set(values)].filter((v) => !_strVec.has(v));   // dedupe + only the uncached
+    if (missing.length) {
+      const vecs = await embed_many(missing);                             // ONE batched pass (was N serial)
+      missing.forEach((v, i) => { if (vecs[i]) _strVec.set(v, vecs[i]); });
     }
+    for (const v of values) { const vec = _strVec.get(v); if (vec) out.set(v, cosine(_intentVec.vec, vec)); }
   } catch { /* partial/empty → caller falls back to fanout */ }
   return out;
 }

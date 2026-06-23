@@ -560,7 +560,9 @@ async function runPipeline(
     const lines = node.text.split("\n");
     const passageAt = (ln: number) => lines.slice(Math.max(0, ln - 3), ln + 4).join("\n").slice(0, 600);
     const items = grounded.map((g) => ({ value: g.key.value, otherSide: [...g.complementFiles.keys()], passage: passageAt(g.key.line) }));
+    const _rt0 = timingOn() ? performance.now() : 0;
     const rel = await s.ctx.rankKeys(items).catch(() => new Map<string, number>());
+    if (_rt0) process.stderr.write(`[dc-timing] key-rank ${node.file}:${node.lo} ${items.length} keys ${Math.round(performance.now() - _rt0)}ms\n`);
     if (rel.size) grounded.sort((a, b) => ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // most intent-relevant first
     else grounded.sort(byFanout);
   } else {
