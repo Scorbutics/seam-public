@@ -6,7 +6,7 @@
 // with a leading-slash literal — NOT on the annotation's name, so there is no per-framework list to keep
 // in sync (same principle as is_framework_entry's annotation-PRESENCE signal). Emits the same
 // `http-route` kind as the fetch/$http caller side, so a caller grounds to it through the shared index.
-import type { KeyHit, KeyKind } from "../types.js";
+import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { HTTP_ROUTE_META, normPath } from "./http_route.js";
 import { lineOf, maskComments } from "./util.js";
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
@@ -16,9 +16,9 @@ import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 // parens, so it catches both positional (`@WebServlet("/x")`) and named (`@RequestMapping(path="/x")`).
 const ANNOTATION_ROUTE = /@\w[\w.]*\s*\([^)]*?["'`](\/[^"'`\s]*)["'`]/g;
 
-function scan(file: string, text: string): KeyHit[] {
+function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!endsWithSourceExt(file)) return [];
-  text = maskComments(text);   // an annotation inside a comment is not a real route declaration
+  text = masked?.comments ?? maskComments(text);   // an annotation inside a comment is not a real route declaration (shared mask across adapters)
   const out: KeyHit[] = [];
   let m: RegExpExecArray | null;
   ANNOTATION_ROUTE.lastIndex = 0;

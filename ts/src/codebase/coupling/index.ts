@@ -21,7 +21,7 @@ import { type Access, type KeyHit, type AnchorKey, type KeySource, type Groundin
 import { EngineCtx } from "../engine_ctx.js";
 import { kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
-import { maskComments } from "./adapters/util.js";
+import { makeMaskCtx } from "./adapters/util.js";
 import { COUPLING } from "./config.js";
 import { emit } from "../../core/progress.js";
 
@@ -120,20 +120,22 @@ function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx
   // STAT-skip oversized files before reading (memory-safe) — a minified bundle never becomes a string.
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys, { maxBytes: COUPLING.maxScanBytes, onSkip: () => skipped++ })) {
     scanned++;
-    for (const h of scan_file_keys(rel, text)) {        // shared-key adapters (SEAM_NO_ADAPTERS → [] already)
+    const m = makeMaskCtx(text);                         // ONE mask cache per file, shared by the adapters AND the param pass
+    for (const h of scan_file_keys(rel, text, m)) {       // shared-key adapters (SEAM_NO_ADAPTERS → [] already)
       const k = keyId(h.kind, h.value);
       if (!shared.has(k)) shared.set(k, { producers: [], consumers: [] });
       (h.produces ? shared.get(k)!.producers : shared.get(k)!.consumers).push({ file: rel, line: h.line });
     }
-    if (!noAdapters) {                                   // param-key: collect const decls + use-sites (ONE mask/file)
-      const masked = maskComments(text);
-      scanConstDecls(masked, constMap);
-      scanParamSites(masked, rel, sites);
+    if (!noAdapters) {                                   // param-key: collect const decls + use-sites (reuse the shared comment-mask)
+      scanConstDecls(m.comments, constMap);
+      scanParamSites(m.comments, rel, sites);
     }
   }
   if (skipped) emit(`floor index: ${scanned} file(s) scanned, ${skipped} oversized skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
+  const param = noAdapters ? new Map() as GroundingIndex : resolveParamSites(sites, constMap);
   ctx.sharedKey.set(repo, shared);
-  ctx.paramKeys.set(repo, noAdapters ? new Map() : resolveParamSites(sites, constMap));
+  ctx.paramKeys.set(repo, param);
+  ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call (was the per-grow-step ~1s cost)
 }
 
 export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
@@ -145,6 +147,13 @@ export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: Engin
 export function param_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
   if (!ctx.paramKeys.has(repo)) build_floor_indices(repo, skipDirs, ctx);
   return ctx.paramKeys.get(repo)!;
+}
+
+// The MERGED deterministic floor (shared-key ⊕ const-resolved param) — cached, so the merge cost is paid
+// ONCE per repo/run, not re-done on every per-node resolveCoupling call.
+export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
+  if (!ctx.floorBase.has(repo)) build_floor_indices(repo, skipDirs, ctx);
+  return ctx.floorBase.get(repo)!;
 }
 
 function _name_of(ctx: Ctx, node: any): string | null {
@@ -260,20 +269,26 @@ export async function resolveCoupling(
   const graph = new CouplingGraph(counter);
   if (opts.dataCoupling === false) return graph.result();
 
+  const _dct = (label: string, t0: number) => { if (process.env.SEAM_TIMING) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
+  let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
   const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
   if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
+  _dct("assemble", _t); _t = performance.now();
 
   // STEP 3 index, built once: the repo-wide scan floor extended with the const-resolved param floor and the
   // assembled carrier+LLM grounding. `paramIndex` is also threaded raw so each node can re-derive its OWN
   // const-resolved param keys (the per-file scan in collectAnchorKeys doesn't const-resolve — see runPipeline).
-  const paramIndex = param_key_index(repo, SKIP_DIRS, ctx);
-  const base = mergeGrounding(shared_key_index(repo, SKIP_DIRS, ctx), paramIndex);
+  const paramIndex = param_key_index(repo, SKIP_DIRS, ctx);   // cached; threaded raw for paramKeysForSpan
+  const base = floor_base_index(repo, SKIP_DIRS, ctx);        // cached merge (shared⊕param) — built once, not per node
+  // Only re-merge when there's per-anchor LLM grounding to fold in; the det floor path reuses `base` as-is.
   const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
+  _dct("index-build", _t); _t = performance.now();
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx };
 
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
+  _dct("pipeline(attach)", _t);
 
   return graph.result();
 }

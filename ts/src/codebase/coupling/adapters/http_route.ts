@@ -12,7 +12,7 @@
 //     `supabase.functions.invoke('slug')` SDK call (which carries the slug, not a URL).
 // Both sides normalise dynamic segments to `*` (`[id]` ⇄ `${id}`) so they meet on one key. JS/TS only.
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
-import type { KeyHit, KeyKind } from "../types.js";
+import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { lineOf, maskComments } from "./util.js";
 
 export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceEdge: "route-serve", consumeEdge: "route-fetch" } as const;
@@ -77,9 +77,9 @@ const METHOD_EXPORT = /\bexport\s+(?:async\s+)?(?:default\b|(?:function\s+|const
 // the lookbehind excludes word-char/`$` only (NOT `.`) so member forms like `this.$http.get` match too.
 const FETCH_CALL = /(?<![\w$])(?:fetch|\$fetch|useFetch|\$http(?:\.\w+)?|\$resource|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\(\s*[`'"]([^`'"]*)/g;
 
-function scan(file: string, text: string): KeyHit[] {
+function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!endsWithSourceExt(file) || !JS_EXT.test(file)) return [];
-  text = maskComments(text);   // a `fetch("/api/x")` (or `export function GET`) in a comment is not a real route
+  text = masked?.comments ?? maskComments(text);   // a `fetch("/api/x")` (or `export function GET`) in a comment is not a real route (shared mask across adapters)
   const out: KeyHit[] = [];
   const served = handler_path(file);
   if (served && served !== "/") {

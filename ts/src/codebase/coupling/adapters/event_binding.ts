@@ -12,7 +12,7 @@
 // can't co-occur, by design (a wrong/ungrounded guess is dropped). Note the EVENT NAME still grounds even
 // in the dynamic `setAttribute('v-on:open', …)` case (the metawidget pattern); only the handler-NAME
 // computation is the residual blindspot.
-import type { KeyHit, KeyKind } from "../types.js";
+import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { lineOf, maskComments } from "./util.js";
 
 export const EVENT_BINDING_META = { kind: "event", nodeKind: "event", produceEdge: "event-emit", consumeEdge: "event-on" } as const;
@@ -36,9 +36,9 @@ const LISTEN_ON = /\$on\s*\(\s*[`'"]([^`'"]+)/g;
 // metawidget case: the EVENT NAME grounds here even though the bound handler name is computed.
 const LISTEN_SETATTR = /setAttribute\s*\(\s*[`'"](?:v-on:|@)([\w-]+)/g;
 
-function scan(file: string, text: string): KeyHit[] {
+function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!EVENT_EXT.test(file)) return [];
-  text = maskComments(text);   // a `$emit('x')` (or `@x="…"`) inside a comment is not a real binding
+  text = masked?.comments ?? maskComments(text);   // a `$emit('x')` (or `@x="…"`) inside a comment is not a real binding (shared mask across adapters)
   const out: KeyHit[] = [];
   const push = (name: string, idx: number, produces: boolean) => {
     const value = name.trim();

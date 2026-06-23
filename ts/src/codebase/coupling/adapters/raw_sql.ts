@@ -5,7 +5,7 @@
 //
 // Distinctive DML only (INSERT INTO / REPLACE INTO / DELETE FROM, UPDATE … SET, SELECT … FROM). The
 // SELECT/SET guards keep ordinary host syntax — notably JS `import … from "mod"` — from false-matching.
-import type { KeyHit, KeyKind } from "../types.js";
+import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { DB_TABLE_META } from "./db_table.js";
 import { lineOf, stringLiteralsOnly } from "./util.js";
 
@@ -17,8 +17,8 @@ function cleanTable(tok: string): string {
   return dot >= 0 ? bare.slice(dot + 1) : bare;
 }
 
-function scan(_file: string, text: string): KeyHit[] {
-  text = stringLiteralsOnly(text);   // raw SQL lives INSIDE a string literal — scan only those, so SQL-shaped prose in code/comments can't false-match
+function scan(_file: string, text: string, masked?: MaskCtx): KeyHit[] {
+  text = masked?.strings ?? stringLiteralsOnly(text);   // raw SQL lives INSIDE a string literal — scan only those, so SQL-shaped prose in code/comments can't false-match (shared mask across adapters)
   if (!/\b(?:INSERT\s+INTO|REPLACE\s+INTO|DELETE\s+FROM|UPDATE|SELECT)\b/i.test(text)) return [];
   const out: KeyHit[] = [];
   // WRITES — distinctive keywords (UPDATE requires a following SET so prose/identifiers don't match)

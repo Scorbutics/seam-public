@@ -11,6 +11,11 @@
 // deterministic FLOOR (high-precision); `llm` is a tier-3 proposal (kept only where it grounds). ---------
 export type KeySource = "scan" | "carrier" | "llm";
 
+// Per-file MASK CACHE shared across every adapter in one scan (impl: makeMaskCtx in adapters/util.ts).
+// `.comments` (comment content blanked) and `.strings` (only string-literal content kept) are each computed
+// at most once, lazily — so a multi-MB file is masked once, not once per adapter.
+export interface MaskCtx { readonly comments: string; readonly strings: string }
+
 // ---- STEP 2: KEY ----------------------------------------------------------------------------------------
 // A KeyHit is one raw key observation in a file, emitted by ANY source (a scan adapter, a carrier wrapper,
 // or the LLM). An AnchorKey is a KeyHit collected for the anchor span and TAGGED with the source that found
@@ -31,7 +36,7 @@ export interface KeyKind {
   extraExts?: string[];  // non-SOURCE_EXTS file extensions this adapter ALSO scans (e.g. .vue/.html templates) —
                          // the coupling walk unions these so listener-in-template files get scanned, even though
                          // the rest of the pipeline (parsing/resolution) doesn't treat them as source.
-  scan: (file: string, text: string) => KeyHit[];
+  scan: (file: string, text: string, masked?: MaskCtx) => KeyHit[];   // masked = the per-file shared mask cache (optional; adapters fall back to masking `text` themselves)
 }
 // A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in
 // `seam-adapters`, the key-axis counterpart of a carrier signature. `name` is derived from the file

@@ -45,7 +45,7 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
     }
   }
   if (opts.anchorLine != null) arange = [opts.anchorLine, Math.max(opts.anchorLine, arange[1])];
-  if (akind === "class") return build_class_graph(repo, anchorFile, symbol, { depth, verified: opts.verified, dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin });
+  if (akind === "class") return build_class_graph(repo, anchorFile, symbol, { depth, verified: opts.verified, dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx });   // forward ctx so the floor index is reused, not rebuilt per class anchor
   const aencl = akind === "method" ? (aunits.find((u) => u[1] === "class" && u[2] <= arange[0] && arange[1] <= u[3])?.[0] ?? "") : "";
   nodes.push({ id: "n1", symbol, kind: akind, file: anchorFile, range: arange, enclosing: aencl, complexity: Math.max(1, arange[1] - arange[0] + 1) });
 
@@ -136,9 +136,10 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
     // anchor side on a deterministic run too.
     const dcDelta = await dc.resolveCoupling(repo, "n1", anchorFile, ar[0], keyLo, keyHi, counter, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, opts.ctx);
     nodes.push(...dcDelta.nodes); edges.push(...dcDelta.edges); blindspots.push(...dcDelta.blindspots); counter = dcDelta.counter;
+    _bemit("data-coupling resolve (index+attach)", _bt0); _bt0 = _bt();
     counter = await _chain_route_consumers(repo, nodes, edges, counter);
+    _bemit("data-coupling route-chain", _bt0);
   }
-  _bemit("data-coupling (index+attach+route-chain)", _bt0);
 
   return makeGraph({ id: "n1", symbol, file: anchorFile, range: arange }, lang_for(anchorFile) ?? "", nodes, edges, { depth, blindspots, unresolved });
 }

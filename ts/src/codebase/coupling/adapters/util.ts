@@ -1,5 +1,18 @@
 // Shared adapter helpers.
+import type { MaskCtx } from "../types.js";
 export const lineOf = (text: string, idx: number): number => (text.slice(0, idx).match(/\n/g)?.length ?? 0);
+
+// A per-file MASK CONTEXT shared across every adapter (and the param-key pass) in one scan. maskComments
+// and stringLiteralsOnly each used to run independently per adapter — 4× maskComments + 1× stringLiteralsOnly
+// on the SAME file (the dominant cost on a multi-MB file). This computes each variant AT MOST ONCE, lazily,
+// and hands the cached result to every consumer. (MaskCtx type lives in ../types.js.)
+export function makeMaskCtx(text: string): MaskCtx {
+  let c: string | undefined, s: string | undefined;
+  return {
+    get comments() { return (c ??= maskComments(text)); },
+    get strings() { return (s ??= stringLiteralsOnly(text)); },
+  };
+}
 
 // Char codes for the scanners below — avoids per-char string compares (and the `split("")` array).
 const QUOTE_D = 34, QUOTE_S = 39, QUOTE_B = 96, SLASH = 47, STAR = 42, BACKSLASH = 92, NL = 10;
