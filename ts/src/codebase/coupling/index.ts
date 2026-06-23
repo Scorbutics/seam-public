@@ -328,11 +328,13 @@ export async function resolveCoupling(
   // Only re-merge when there's per-anchor LLM grounding to fold in; the det floor path reuses `base` as-is.
   const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
   _dct("index-build", _t); _t = performance.now();
-  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx };
+  const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
+  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats };
 
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
   _dct("pipeline(attach)", _t);
+  if (timingOn()) process.stderr.write(`[dc-timing] pipeline breakdown: ${stats.nodes} nodes · ${stats.parses} complement parses ${Math.round(stats.parseMs)}ms · ${stats.ranks} key-ranks ${Math.round(stats.rankMs)}ms\n`);
 
   return graph.result();
 }
@@ -430,7 +432,11 @@ interface PipelineCtx {
   index: GroundingIndex;   // STEP 3: repo-wide scan floor ⊕ the assembled carrier+LLM grounding (read-only)
   paramIndex: GroundingIndex;   // const-resolved param grounding, raw — so each node re-derives its own param keys
   ctx: EngineCtx;
+  stats: DcStats;          // per-resolveCoupling cost counters (visibility, not behaviour) — see resolveCoupling
 }
+// Where the data-coupling crossing actually spends its time. Threaded so the recursion accumulates into one
+// object; printed once (--verbose) at the end of the pipeline so a slow grow's cost is a fact, not a guess.
+type DcStats = { nodes: number; parses: number; parseMs: number; ranks: number; rankMs: number };
 // One node the pipeline runs over: the anchor span first, then each chained complement.
 interface PipelineNode { id: string; file: string; text: string; lo: number; hi: number }
 // PipelineCtx + the per-node working state (ranking + chain depth), for the step-4/5 helpers below.
@@ -485,7 +491,10 @@ async function crossBoundary(
     // for ages. When exhausted, stop materialising (the over-budget tail is recorded as a fanout blindspot).
     if (ctx.complementBudget <= 0) break;
     ctx.complementBudget--;
+    const _pt0 = performance.now();
     const unit = await complement_unit(repo, file, line);
+    s.stats.parses++; s.stats.parseMs += performance.now() - _pt0;
+    if (s.stats.parses % 25 === 0) emit(`data-coupling: materialized ${s.stats.parses} complements (${ctx.complementBudget} of the fanout budget left)…`);
     const complementId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true });
     graph.addEdge({ from: boundaryId, to: complementId, kind: complementProduces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });
     // CHAIN: this complement may itself sit on the next boundary (the route handler that SERVES what the UI
@@ -511,6 +520,7 @@ async function runPipeline(
   p: PipelineCtx, node: PipelineNode, depth: number, seenKeys: Set<string>,
   carrierAccs: KeyHit[] = [], proposed: KeyHit[] = [],
 ): Promise<void> {
+  p.stats.nodes++;
   // STEP 1 (inline scan) + STEP 2 — the keys this span touches, tagged by source
   const keys = collectAnchorKeys(node.file, node.text, node.lo, node.hi, carrierAccs, proposed);
   // STEP 1b — the node's const-resolved param keys, read back from the repo param index (the per-file scan
@@ -560,9 +570,10 @@ async function runPipeline(
     const lines = node.text.split("\n");
     const passageAt = (ln: number) => lines.slice(Math.max(0, ln - 3), ln + 4).join("\n").slice(0, 600);
     const items = grounded.map((g) => ({ value: g.key.value, otherSide: [...g.complementFiles.keys()], passage: passageAt(g.key.line) }));
-    const _rt0 = timingOn() ? performance.now() : 0;
+    const _rt0 = performance.now();
     const rel = await s.ctx.rankKeys(items).catch(() => new Map<string, number>());
-    if (_rt0) process.stderr.write(`[dc-timing] key-rank ${node.file}:${node.lo} ${items.length} keys ${Math.round(performance.now() - _rt0)}ms\n`);
+    const _rdt = performance.now() - _rt0; s.stats.ranks++; s.stats.rankMs += _rdt;
+    if (timingOn()) process.stderr.write(`[dc-timing] key-rank ${node.file}:${node.lo} ${items.length} keys ${Math.round(_rdt)}ms\n`);
     if (rel.size) grounded.sort((a, b) => ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // most intent-relevant first
     else grounded.sort(byFanout);
   } else {
