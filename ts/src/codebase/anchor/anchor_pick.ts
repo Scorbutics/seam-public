@@ -44,17 +44,30 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
     if (have.has(k) || _NON_ANCHOR.has(kind)) return;
     have.add(k); pool.push({ name, file, kind, def });
   };
-  // embed top-K (Def-rich) — a method anchors on its enclosing CLASS (same granularity as lexical recall)
-  for (const { def } of scored.slice(0, EMBED_TOP)) {
-    const isMethod = def.kind === "method" && !!def.enclosing;
-    add(isMethod ? def.enclosing : def.name, def.file, isMethod ? "class" : def.kind, isMethod ? (defByName.get(def.enclosing) ?? def) : def);
-  }
+  // embed top-K (Def-rich) — add each def AS ITSELF (a strongly-matching METHOD enters the pool as the
+  // method, with its own signature+doc passage). Collapsing a method to its enclosing class used to bury the
+  // signal: `sendParaplanningRequestEmail` became `FileNoteService` (doc-less class passage) so the LLM
+  // couldn't see the "paraplanning" words and picked a worse candidate it COULD read. Anchoring on the
+  // method is precisely what works when you pass --symbol explicitly, and the grow follows it the same way.
+  for (const { def } of scored.slice(0, EMBED_TOP)) add(def.name, def.file, def.kind, def);
   // lexical floor (no LLM expand) — enrich each with its Def so it shows a full passage too
   for (const c of find_anchor_candidates(repo, [..._content_words(intent)]))
     add(c.name, c.file, c.kind, defByKey.get(`${c.name}|${c.file}`) ?? defByName.get(c.name));
 
   const cand = pool.slice(0, POOL_CAP);
   if (!cand.length) return { chosen: null, chosenBy: "none" };
+
+  // DIAGNOSTIC (SEAM_ANCHOR_DEBUG=1): dump the embed ranking + the candidate pool so we can see whether the
+  // RIGHT anchor was even recalled (and at what rank), and what PASSAGE the LLM judged it on. Reveals the
+  // method→enclosing-class collapse (a method's intent words vanish behind its class's doc).
+  if (process.env.SEAM_ANCHOR_DEBUG) {
+    const rankByKey = new Map(scored.map(({ def }, i) => [`${def.name}|${def.file}`, i]));
+    const e = process.stderr;
+    e.write(`\n[anchor-debug] intent: "${intent}"\n[anchor-debug] embed-ranked defs (top 30 of ${scored.length}):\n`);
+    scored.slice(0, 30).forEach(({ def, score }, i) => e.write(`   #${i} ${score.toFixed(3)} ${def.name}${def.enclosing ? " in " + def.enclosing : ""} (${def.file})\n`));
+    e.write(`[anchor-debug] candidate pool (${cand.length}):\n`);
+    cand.forEach((c, i) => e.write(`   c${i} ${c.name} (${c.file})${c.def ? ` [embed#${rankByKey.get(`${c.def.name}|${c.def.file}`) ?? "?"}] passage: ${passage(c.def).slice(0, 160)}` : " [lexical]"}\n`));
+  }
 
   const lines = [
     `A developer asks: "${intent}". Pick the SINGLE best STARTING POINT to answer it — the symbol whose`,
@@ -74,6 +87,7 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
     const o = out.get(`c${i}`);
     if (o && typeof o === "object" && [true, "true", "True"].includes(o.best)) {
       const c = cand[i];
+      if (process.env.SEAM_ANCHOR_DEBUG) process.stderr.write(`[anchor-debug] LLM picked c${i}: ${c.name} (${c.file})\n`);
       return {
         chosen: { id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: 0, terms: ["~pick"],
                   metrics: null, structScore: 0, signature: c.def?.signature, doc: c.def?.doc },
