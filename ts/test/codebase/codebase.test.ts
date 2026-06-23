@@ -367,3 +367,36 @@ describe("codebase LLM refine (host-bus inject) vs Python", () => {
     expect(JSON.parse(JSON.stringify(model))).toEqual(oracle);
   });
 });
+
+// SEAM_SPLIT (opt-in hub-aware clustering): a HUB carrier (ambient infra used by every consumer) must NOT
+// bridge unrelated specific carriers into one blob. Default = connected-components collapses to 1 seam;
+// SEAM_SPLIT=1 excludes the hub from the merge graph so the two specific concerns separate. Deterministic.
+describe("SEAM_SPLIT hub-aware clustering", () => {
+  // App(anchor) owns 3 core methods: hub (used by ALL consumers) + specA + specB (distinct consumers).
+  const mk = (id: string, enclosing = "", complexity = 1) => ({ id, symbol: id, kind: enclosing ? "method" : "class", file: `${id}.ts`, range: [0, 0], enclosing, complexity });
+  const graph: any = {
+    version: 1, anchor: { id: "App", symbol: "App", file: "App.ts", range: [0, 0] }, language: "typescript", resolutionQuality: "FULL", depth: 1, complete: true,
+    nodes: [mk("App"), mk("hub", "App", 9), mk("specA", "App", 5), mk("specB", "App", 5),
+      mk("cA1"), mk("cA2"), mk("cB1"), mk("cB2")],
+    edges: [
+      // every consumer uses the hub; A-consumers also use specA, B-consumers specB (no specA↔specB co-use)
+      ...["cA1", "cA2", "cB1", "cB2"].map((c) => ({ from: c, to: "hub", kind: "call", provenance: "RESOLVED_FULL" })),
+      { from: "cA1", to: "specA", kind: "call", provenance: "RESOLVED_FULL" },
+      { from: "cA2", to: "specA", kind: "call", provenance: "RESOLVED_FULL" },
+      { from: "cB1", to: "specB", kind: "call", provenance: "RESOLVED_FULL" },
+      { from: "cB2", to: "specB", kind: "call", provenance: "RESOLVED_FULL" },
+    ], blindspots: [], unresolved: [],
+  };
+  const seamCount = async (split: boolean): Promise<number> => {
+    const prev = process.env.SEAM_SPLIT;
+    if (split) process.env.SEAM_SPLIT = "1"; else delete process.env.SEAM_SPLIT;
+    try { const m = await decompose(from_resolved_graph(JSON.parse(JSON.stringify(graph)))); return (m.clusters ?? []).flatMap((c: any) => c.seams ?? []).length; }
+    finally { if (prev === undefined) delete process.env.SEAM_SPLIT; else process.env.SEAM_SPLIT = prev; }
+  };
+  test("default collapses the hub-bridged carriers into ONE seam", async () => {
+    expect(await seamCount(false)).toBe(1);
+  });
+  test("SEAM_SPLIT separates the two specific concerns (hub no longer bridges) → >1 seam", async () => {
+    expect(await seamCount(true)).toBeGreaterThan(1);
+  });
+});

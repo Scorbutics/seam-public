@@ -136,6 +136,65 @@ function _sweep_leftovers(g: Graph, seams: Seam[], adj: Map<string, Set<string>>
   return seams;
 }
 
+// HUB-AWARE carrier clustering (opt-in: SEAM_SPLIT=1). The plain connected-components floor collapses a
+// tangled closure into ONE seam because a few HUB cores (ambient infra used across the whole footprint —
+// Dubbo's `URL`/`ExtensionLoader`) co-occur with everything and bridge every specific core together. Fix:
+//   1. a core used by > HUB_FRAC of consumers is a HUB → its OWN seam, EXCLUDED from the merge graph
+//      (it can't bridge unrelated concerns);
+//   2. the SPECIFIC (non-hub) cores cluster on their own PAIR co-occurrence, thresholded (≥ COOC_MERGE
+//      shared consumers to merge — a single incidental co-use no longer chains them);
+//   3. each consumer is assigned to ONE seam — the specific cluster it uses most (hubs are a tie-break-
+//      weight fallback), so a deployment consumer that also touches `URL` lands on the deployment seam.
+// Deterministic, no LLM. Returns ≥1 seam; _sweep_leftovers then places any orphan nodes.
+const _HUB_FRAC = Number(process.env.SEAM_HUB_FRAC ?? 0.25), _COOC_MERGE = Number(process.env.SEAM_COOC_MERGE ?? 2);
+function _split_seams(g: Graph, anchors: string[], cset: Set<string>,
+    uses: Map<string, Set<string>>, consumers: Node[]): Seam[] {
+  const deg = new Map<string, number>();
+  for (const u of uses.values()) for (const cid of inter(u, cset)) deg.set(cid, (deg.get(cid) ?? 0) + 1);
+  const hubBar = Math.max(2, Math.floor(consumers.length * _HUB_FRAC));
+  const isHub = (cid: string) => (deg.get(cid) ?? 0) > hubBar;
+  const cut = Math.max(2, Math.floor(cset.size / 2));
+  const specific = new Set([...cset].filter((c) => !isHub(c)));
+
+  // pair co-occurrence among SPECIFIC cores only → thresholded merge edges
+  const pair = new Map<string, number>();
+  for (const u of uses.values()) {
+    const us = [...inter(u, specific)].sort();
+    if (us.length < 2 || us.length > cut) continue;
+    for (let i = 0; i < us.length; i++) for (let j = i + 1; j < us.length; j++)
+      pair.set(`${us[i]}\t${us[j]}`, (pair.get(`${us[i]}\t${us[j]}`) ?? 0) + 1);
+  }
+  const cooc: [string, string][] = [];
+  for (const [k, n] of pair) if (n >= _COOC_MERGE) { const [a, b] = k.split("\t"); cooc.push([a, b]); }
+  const clusterOf = connected_components([...specific], cooc);
+  for (const c of cset) if (isHub(c)) clusterOf.set(c, `hub:${c}`);   // each hub = its own singleton
+
+  const byCluster = new Map<string, string[]>();
+  for (const cid of cset) { const k = clusterOf.get(cid)!; (byCluster.get(k) ?? byCluster.set(k, []).get(k)!).push(cid); }
+
+  // assign each consumer to ONE cluster: the cluster it uses most, hubs weighted ~0 so a specific core wins
+  const consByCluster = new Map<string, string[]>();
+  for (const [con, u] of uses) {
+    const uc = [...inter(u, cset)];
+    if (!uc.length) continue;
+    const tally = new Map<string, number>();
+    for (const cid of uc) { const k = clusterOf.get(cid)!; tally.set(k, (tally.get(k) ?? 0) + (isHub(cid) ? 0.01 : 1)); }
+    const best = [...tally.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0][0];
+    (consByCluster.get(best) ?? consByCluster.set(best, []).get(best)!).push(con);
+  }
+
+  const seams: Seam[] = [];
+  for (const [k, cids] of byCluster) {
+    const cs = new Set(cids);
+    const cons = consByCluster.get(k) ?? [];
+    const rep = maxBy(cids.map((c) => g.nodes.get(c)!), (n) => n.complexity);
+    const encls = new Set(cids.map((c) => g.nodes.get(c)!.enclosing));
+    const owners = anchors.filter((a) => cs.has(a) || encls.has(g.nodes.get(a)!.label));
+    seams.push(_mk_seam(rep.id, rep.label, [...owners, ...[...cids].sort(), ...cons], false));
+  }
+  return seams;
+}
+
 export function assign_intent_seams(g: Graph): Seam[] {
   const anchors = (g.anchors.length ? g.anchors : [g.anchor]).filter((a) => g.nodes.has(a));
   if (!anchors.length) return [];
@@ -164,7 +223,9 @@ export function assign_intent_seams(g: Graph): Seam[] {
   const anchor0Sym = g.nodes.get(anchor0)!.label;
   let seams: Seam[] = [];
   const anyUses = [...uses.values()].some((u) => u.size);
-  if (carriers.length > 1 && anyUses) {
+  if (carriers.length > 1 && anyUses && process.env.SEAM_SPLIT === "1") {
+    seams = _split_seams(g, anchors, cset, uses, consumers);
+  } else if (carriers.length > 1 && anyUses) {
     const cut = Math.max(2, Math.floor(carriers.length / 2));
     const cooc: [string, string][] = [];
     for (const used of uses.values()) {
