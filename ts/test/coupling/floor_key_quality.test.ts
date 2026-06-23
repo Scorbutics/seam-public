@@ -30,3 +30,14 @@ describe("floor key-quality guard (kills the raw-SQL 'the' false-coupling)", () 
     expect(keys("C.java", '@GetMapping("/owners/{id}")\nvoid g(){}').some((h) => h.kind === "http-route" && h.value === "/owners/*")).toBe(true);
   });
 });
+
+describe("floor scan size guard (skips minified/generated bundles)", () => {
+  test("a >1MB file is skipped entirely (no char-scan, no keys) — guards the webapp vendor-bundle slowdown", () => {
+    const big = 'var x="' + "a".repeat(1_100_000) + '";var q="SELECT id FROM users";';   // a real SQL string, but in a 1.1MB file
+    expect(big.length).toBeGreaterThan(1_000_000);
+    expect(keys("vendor.bundle.js", big)).toEqual([]);   // skipped despite containing a valid SQL read
+  });
+  test("a normal-sized file with the same SQL still resolves (cap doesn't over-reach)", () => {
+    expect(tables('var q = "SELECT id FROM users";')).toContain("users");
+  });
+});

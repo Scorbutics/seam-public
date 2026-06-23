@@ -14,6 +14,19 @@ import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
 import { annotateIntentRelevance, cropOffIntent } from "../codebase/grow/intent_rank.js";
+
+// Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
+// emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present JSON beats no
+// JSON at all. Mutates `model` in place; on failure leaves seams un-annotated and the --spine-only crop off.
+async function annotateForEmit(repo: string, intent: string | undefined, spineOnly: boolean | undefined, model: any): Promise<void> {
+  try {
+    const ranked = await annotateIntentRelevance(repo, intent, model.clusters);
+    if (spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
+  } catch (e) {
+    process.stderr.write(`intent-relevance annotation skipped: ${(e as Error).message}\n`);
+    if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true };
+  }
+}
 import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -510,14 +523,16 @@ async function runCodebase(a: Args): Promise<number> {
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
+      emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       if (a.emitSeams) {
         const usage = get_usage().as_dict();
         if (usage) model2.usage = usage;
-        const ranked2 = await annotateIntentRelevance(a.repo, a.intent, model2.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
-        if (a.spineOnly) model2.spineOnly = ranked2 ? { omitted: cropOffIntent(model2.clusters) } : { omitted: 0, unavailable: true };
+        emit(`Ranking ${(model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0)} seam(s) by intent relevance (embeddings)…`);
+        await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
+        emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
       }
@@ -634,8 +649,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
-    const ranked = await annotateIntentRelevance(a.repo, a.intent, model.clusters);   // deterministic embed relevance (no LLM; no-op if unavailable)
-    if (a.spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
+    await annotateForEmit(a.repo, a.intent, a.spineOnly, model);   // deterministic embed relevance (guarded — never blocks emit)
     writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }

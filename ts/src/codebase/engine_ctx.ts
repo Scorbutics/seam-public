@@ -17,6 +17,7 @@ export class EngineCtx {
   carrierChannel = new Map<string, GroundingIndex>();   // carrierChannelIndex: `repo::llm|det` → index
   langIndex = new Map<string, unknown>();               // carrier engine: `repo::provider` → built lang index
   llmKey = new Map<string, GroundingIndex>();           // llmKeyIndex: cacheKey → index
+  paramKeys = new Map<string, GroundingIndex>();        // param_key_index: repo → const-resolved param grounding
 
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null

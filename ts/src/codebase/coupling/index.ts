@@ -20,7 +20,9 @@ import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { param_key_index, paramKeysForSpan } from "./const_keys.js";
 import { COUPLING } from "./config.js";
+import { emit } from "../../core/progress.js";
 
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
@@ -103,8 +105,12 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 
 export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
   if (ctx.sharedKey.has(repo)) return ctx.sharedKey.get(repo)!;
+  emit("Building shared-key index (deterministic floor scan)…");
   const idx: GroundingIndex = new Map();
+  let scanned = 0, skipped = 0;
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
+    if (COUPLING.maxScanBytes && text.length > COUPLING.maxScanBytes) { skipped++; continue; }   // skip minified/generated bundles (counted for diagnostics)
+    scanned++;
     const hits = scan_file_keys(rel, text);
     if (!hits.length) continue;
     for (const h of hits) {
@@ -113,6 +119,7 @@ export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: Engin
       (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: rel, line: h.line });
     }
   }
+  if (skipped) emit(`shared-key index: ${scanned} file(s) scanned, ${skipped} oversized skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
   ctx.sharedKey.set(repo, idx);
   return idx;
 }
@@ -234,10 +241,13 @@ export async function resolveCoupling(
   const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
   if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
 
-  // STEP 3 index, built once: the repo-wide scan floor extended with the assembled carrier+LLM grounding.
-  const base = shared_key_index(repo, SKIP_DIRS, ctx);
+  // STEP 3 index, built once: the repo-wide scan floor extended with the const-resolved param floor and the
+  // assembled carrier+LLM grounding. `paramIndex` is also threaded raw so each node can re-derive its OWN
+  // const-resolved param keys (the per-file scan in collectAnchorKeys doesn't const-resolve — see runPipeline).
+  const paramIndex = param_key_index(repo, SKIP_DIRS, ctx);
+  const base = mergeGrounding(shared_key_index(repo, SKIP_DIRS, ctx), paramIndex);
   const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
-  const p: PipelineCtx = { graph, repo, index, ctx };
+  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx };
 
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
@@ -336,6 +346,7 @@ interface PipelineCtx {
   graph: CouplingGraph;
   repo: string;
   index: GroundingIndex;   // STEP 3: repo-wide scan floor ⊕ the assembled carrier+LLM grounding (read-only)
+  paramIndex: GroundingIndex;   // const-resolved param grounding, raw — so each node re-derives its own param keys
   ctx: EngineCtx;
 }
 // One node the pipeline runs over: the anchor span first, then each chained complement.
@@ -415,6 +426,12 @@ async function runPipeline(
 ): Promise<void> {
   // STEP 1 (inline scan) + STEP 2 — the keys this span touches, tagged by source
   const keys = collectAnchorKeys(node.file, node.text, node.lo, node.hi, carrierAccs, proposed);
+  // STEP 1b — the node's const-resolved param keys, read back from the repo param index (the per-file scan
+  // above can't resolve `getParameter(TOKEN_KEY)` → "token"). Floor source, so an ungrounded one is dropped.
+  for (const hit of paramKeysForSpan(p.paramIndex, node.file, node.lo, node.hi)) {
+    const id = `${hit.kind} ${hit.value} ${hit.produces}`;
+    if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { ...hit, source: "scan" });
+  }
   if (!keys.size) return;
 
   // STEP 3 (rank) — score each candidate complement once, for the capped fan
