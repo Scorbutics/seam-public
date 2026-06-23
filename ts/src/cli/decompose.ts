@@ -487,11 +487,13 @@ async function runCodebase(a: Args): Promise<number> {
       // is absent). The CLI only does presentation (logging/err) on the returned data.
       const { find_anchor } = await import("../codebase/anchor/index.js");
       const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", select: a.anchorSelect === "probe" ? "probe" : "pick" });
-      if (sel.entryCandidate) process.stdout.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
+      // Diagnostics go to STDERR (alongside the @@SEAM_PROGRESS@@ markers) so STDOUT can carry pure JSON
+      // when no --emit-seams file is given (a clean `seam … > out.json`).
+      if (sel.entryCandidate) process.stderr.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
-      process.stdout.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
+      process.stderr.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
       // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
       // message until AFTER the decompose — if the grow + seam-intent actually find a culmination, the
       // guess was wrong (conservative on controllers), so don't print a contradictory [no-flow].
@@ -521,25 +523,25 @@ async function runCodebase(a: Args): Promise<number> {
           : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
-      process.stdout.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
+      process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
       const g2 = from_resolved_graph(data);
       emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       const nSeams = (model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
-      if (a.emitSeams) {
-        const usage = get_usage().as_dict();
-        if (usage) model2.usage = usage;
-        emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
-        await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
+      const usage = get_usage().as_dict();
+      if (usage) model2.usage = usage;
+      emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
+      await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
+      const payload = JSON.stringify(stamp(model2));
+      if (a.emitSeams) {                              // FILE sink: write it, confirm on stdout (unchanged contract)
         emit(`Writing seams JSON → ${a.emitSeams}…`);
-        writeFileSync(a.emitSeams, JSON.stringify(stamp(model2)));
+        writeFileSync(a.emitSeams, payload);
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
-      } else if (!a.emitGraph) {
-        // No output sink given — DON'T exit silently (the "no JSON" surprise). Show the result + how to capture it.
-        process.stdout.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s). `
-          + `No output written — pass --emit-seams <path> for the full JSON (or --emit-graph <path> for the raw graph).\n`);
+      } else {                                        // no file sink → STDOUT carries the JSON (clean `seam … > out.json`)
+        process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> to write a file).\n`);
+        process.stdout.write(payload + "\n");
       }
       return 0;
     }
