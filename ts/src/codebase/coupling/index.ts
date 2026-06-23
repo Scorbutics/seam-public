@@ -495,8 +495,13 @@ async function crossBoundary(
     const unit = await complement_unit(repo, file, line);
     s.stats.parses++; s.stats.parseMs += performance.now() - _pt0;
     if (s.stats.parses % 25 === 0) emit(`data-coupling: materialized ${s.stats.parses} complements (${ctx.complementBudget} of the fanout budget left)…`);
-    const complementId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true });
-    graph.addEdge({ from: boundaryId, to: complementId, kind: complementProduces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });
+    const edgeKind = complementProduces ? adapter.produceEdge : adapter.consumeEdge;
+    // A complement reached across a HANDLER edge (a route/call server entry) is a downstream-mechanism node:
+    // tag it "backward" so the grow expands it DOWNSTREAM (into the @Inject'd bean it delegates to) — its
+    // in-repo callers are just the framework. Data-boundary complements stay untagged → upstream (display).
+    const direction = edgeKind === adapter.handlerEdge ? "backward" : undefined;
+    const complementId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true, ...(direction ? { direction } : {}) });
+    graph.addEdge({ from: boundaryId, to: complementId, kind: edgeKind, provenance: "RESOLVED_PARTIAL" });
     // CHAIN: this complement may itself sit on the next boundary (the route handler that SERVES what the UI
     // fetches). Recurse one hop into its body, scanning ITS keys — `surfacedKeys` blocks the table it reads.
     if (depth > 0) {

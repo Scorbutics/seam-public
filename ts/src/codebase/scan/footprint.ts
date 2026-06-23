@@ -16,8 +16,12 @@ import { build_module_graph } from "./module_graph.js";
 async function build_bidirectional_graph(repo: string, anchorFile: string, symbol: string, opts: FootprintOpts): Promise<ResolvedGraph> {
   const fwd = await build_consumers_graph(repo, anchorFile, symbol, opts);
   const bwd = await build_dependency_graph(repo, anchorFile, symbol, opts);
-  for (const n of fwd.nodes) if (n.id !== "n1") n.direction = "forward";
-  for (const n of bwd.nodes) if (n.id !== "n1") n.direction = "backward";
+  // Tag by the slice each node came from — but PRESERVE a direction already set on a node. A coupling pass
+  // can reach a route HANDLER on the forward (consumers) side yet mark it "backward" (its mechanism is
+  // downstream — see crossBoundary/handlerEdge); clobbering that to "forward" would strand the handler's
+  // deps (the @Inject'd bean) un-explored. So only fill in the direction where one isn't already present.
+  for (const n of fwd.nodes) if (n.id !== "n1" && !n.direction) n.direction = "forward";
+  for (const n of bwd.nodes) if (n.id !== "n1" && !n.direction) n.direction = "backward";
   return merge_resolved(fwd, bwd, "n1");   // anchor (n1) shared; deps merge in as backward-tagged nodes
 }
 

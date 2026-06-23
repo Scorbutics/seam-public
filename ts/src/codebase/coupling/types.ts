@@ -31,6 +31,13 @@ export interface KeyKind {
   nodeKind: string;      // boundary node label, e.g. "table"
   produceEdge: string;   // edge kind for a producer↔key link, e.g. "db-write"
   consumeEdge: string;   // edge kind for a consumer↔key link, e.g. "db-read"
+  // The edge whose FAR side is a request HANDLER — a node that RECEIVES the call and whose real work is
+  // DOWNSTREAM (the @Inject'd bean / service it delegates to). Set for call/route adapters where crossing
+  // the boundary lands you at a server entry point (e.g. http-route "route-serve" = the JAX-RS/Spring
+  // handler). When the grow crosses INTO this edge's target, it must continue downstream, not upstream
+  // (a handler's in-repo callers are usually just the framework → empty). DATA adapters (db-table, shared
+  // key) leave it unset: their far side is a reader whose continuation is UPSTREAM, toward where it's shown.
+  handlerEdge?: string;
   name?: string;         // human-facing adapter name (the built-in catalogue surfaced in `seam-adapters`)
   blurb?: string;        // one-line description of what it couples
   extraExts?: string[];  // non-SOURCE_EXTS file extensions this adapter ALSO scans (e.g. .vue/.html templates) —
@@ -67,6 +74,7 @@ export interface CouplingNode {
   enclosing: string;
   complexity: number;
   coupling: true;
+  direction?: string;          // grow expansion hint: "backward" ⇒ a handler complement to explore DOWNSTREAM (see crossBoundary / handlerEdge)
 }
 // STEP 5: WIRE. A produce/consume CROSSING — the only edge coupling draws. Always RESOLVED_PARTIAL: grounded
 // on a shared key string, never an asserted call. `line` is set on the anchor→boundary (near) edge, omitted

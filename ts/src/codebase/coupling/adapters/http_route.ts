@@ -15,7 +15,7 @@ import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { lineOf, maskComments } from "./util.js";
 
-export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceEdge: "route-serve", consumeEdge: "route-fetch" } as const;
+export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceEdge: "route-serve", consumeEdge: "route-fetch", handlerEdge: "route-serve" } as const;
 
 const JS_EXT = /\.(?:[mc]?[jt]sx?)$/;                       // .ts .tsx .js .jsx .mjs .cjs .mts .cts
 const ROUTE_FILE = /(?:^|\/)route\.(?:[mc]?[jt]sx?)$/;       // Next.js App Router handler file
