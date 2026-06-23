@@ -6,7 +6,7 @@ import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { endsWithSourceExt, provider_for, SKIP_DIRS } from "../../core/resolve/languages/index.js";
-import { walk } from "../../core/resolve/walk.js";
+import { walk, normpath } from "../../core/resolve/walk.js";
 import { defs_in_file_treesitter } from "./def_treesitter.js";
 import { SCAN } from "./config.js";
 
@@ -113,10 +113,16 @@ export function embedString(d: Def): string {
   return `${prefix}${d.signature || d.name}${encl} — ${d.file}${doc}`;
 }
 
-export async function enumerate_defs(repo: string, limit = 4000): Promise<Def[]> {
+// `files` (repo-relative, normpath-matched) scopes extraction to just those files — the footprint-local
+// embedding path (intent-relevance ranking) only needs its own seams' defs, not a whole-repo tree-sitter
+// walk. The emitted `Def.file` stays the canonical rel (we FILTER candidate_source_files, not iterate the
+// raw set), so cache keys match the unscoped recall pass and warm entries are reused.
+export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>): Promise<Def[]> {
   repo = expanduser(repo);
+  const want = files && files.size ? new Set([...files].map(normpath)) : null;
   const out: Def[] = [];
   for (const rel of candidate_source_files(repo)) {
+    if (want && !want.has(normpath(rel))) continue;
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
     // PER-LANGUAGE def extraction. The regex extractor (`defs_in_file`) is TS/JS-syntax-specific: it

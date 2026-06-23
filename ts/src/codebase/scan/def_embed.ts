@@ -53,11 +53,11 @@ function loadCache(p: string): Record<string, number[]> {
 // EVERY repo def scored by cosine similarity of its embed string to the intent, DESC. Lazily embeds (and
 // disk-caches) the def table on first use; subsequent queries reuse the cache. Returns [] on any failure /
 // when transformers is absent — so all callers degrade to their non-embed path.
-export async function embedScoreDefs(repo: string, intent: string): Promise<{ def: Def; score: number }[]> {
+export async function embedScoreDefs(repo: string, intent: string, files?: Set<string>): Promise<{ def: Def; score: number }[]> {
   const _et0 = process.env.SEAM_TIMING ? performance.now() : 0;   // embed-recall wall-clock (opt-in)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
-    const defs = await enumerate_defs(repo);
+    const defs = await enumerate_defs(repo, 4000, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
     if (!defs.length) return [];
     const strings = defs.map(embedString);
     const cp = cachePath(repo);

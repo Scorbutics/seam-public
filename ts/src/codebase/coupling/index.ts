@@ -20,7 +20,8 @@ import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
-import { param_key_index, paramKeysForSpan } from "./const_keys.js";
+import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
+import { maskComments } from "./adapters/util.js";
 import { COUPLING } from "./config.js";
 import { emit } from "../../core/progress.js";
 
@@ -103,25 +104,47 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
   return out;
 }
 
-export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
-  if (ctx.sharedKey.has(repo)) return ctx.sharedKey.get(repo)!;
-  emit("Building shared-key index (deterministic floor scan)…");
-  const idx: GroundingIndex = new Map();
+// SINGLE-PASS FLOOR BUILDER — read each file ONCE and feed BOTH deterministic floor indices (the shared-key
+// adapter scan AND the constant-resolved param-key const/use collection), then discard the text. STREAMING
+// (one file in memory at a time, never the repo) and ONE walk instead of two independent full repo reads —
+// the big win on a huge repo where the read + comment-mask dominates. Both indices cache on the ctx together;
+// honours the size cap (skips minified/generated bundles) and SEAM_NO_ADAPTERS (empty floor).
+function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
+  if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
+  const noAdapters = process.env.SEAM_NO_ADAPTERS === "1";
+  emit("Building shared-key + param-key index (single floor pass)…");
+  const shared: GroundingIndex = new Map();
+  const constMap = new Map<string, string>();
+  const sites: ParamSite[] = [];
   let scanned = 0, skipped = 0;
-  for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
-    if (COUPLING.maxScanBytes && text.length > COUPLING.maxScanBytes) { skipped++; continue; }   // skip minified/generated bundles (counted for diagnostics)
+  // STAT-skip oversized files before reading (memory-safe) — a minified bundle never becomes a string.
+  for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys, { maxBytes: COUPLING.maxScanBytes, onSkip: () => skipped++ })) {
     scanned++;
-    const hits = scan_file_keys(rel, text);
-    if (!hits.length) continue;
-    for (const h of hits) {
+    for (const h of scan_file_keys(rel, text)) {        // shared-key adapters (SEAM_NO_ADAPTERS → [] already)
       const k = keyId(h.kind, h.value);
-      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-      (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: rel, line: h.line });
+      if (!shared.has(k)) shared.set(k, { producers: [], consumers: [] });
+      (h.produces ? shared.get(k)!.producers : shared.get(k)!.consumers).push({ file: rel, line: h.line });
+    }
+    if (!noAdapters) {                                   // param-key: collect const decls + use-sites (ONE mask/file)
+      const masked = maskComments(text);
+      scanConstDecls(masked, constMap);
+      scanParamSites(masked, rel, sites);
     }
   }
-  if (skipped) emit(`shared-key index: ${scanned} file(s) scanned, ${skipped} oversized skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
-  ctx.sharedKey.set(repo, idx);
-  return idx;
+  if (skipped) emit(`floor index: ${scanned} file(s) scanned, ${skipped} oversized skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
+  ctx.sharedKey.set(repo, shared);
+  ctx.paramKeys.set(repo, noAdapters ? new Map() : resolveParamSites(sites, constMap));
+}
+
+export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
+  if (!ctx.sharedKey.has(repo)) build_floor_indices(repo, skipDirs, ctx);
+  return ctx.sharedKey.get(repo)!;
+}
+
+// The constant-resolved param-key grounding — built in the SAME single pass as shared_key_index.
+export function param_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
+  if (!ctx.paramKeys.has(repo)) build_floor_indices(repo, skipDirs, ctx);
+  return ctx.paramKeys.get(repo)!;
 }
 
 function _name_of(ctx: Ctx, node: any): string | null {

@@ -65,12 +65,25 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
     expect([...idx.keys()].sort()).toEqual(["key timeout", "key weight"]);
   });
   test("SEAM_NO_ADAPTERS gates the floor (param_key_index returns empty)", async () => {
-    const { param_key_index } = await import("../../src/codebase/coupling/const_keys.js");
+    const { param_key_index } = await import("../../src/codebase/coupling/index.js");   // moved: built in the fused floor pass
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const prev = process.env.SEAM_NO_ADAPTERS;
     process.env.SEAM_NO_ADAPTERS = "1";
     try { expect(param_key_index(REPO, new Set(["node_modules", ".git"]), new EngineCtx()).size).toBe(0); }
     finally { if (prev === undefined) delete process.env.SEAM_NO_ADAPTERS; else process.env.SEAM_NO_ADAPTERS = prev; }
+  });
+
+  test("fused builder: param_key_index + shared_key_index share ONE pass and agree with the standalone walk", async () => {
+    const { param_key_index, shared_key_index } = await import("../../src/codebase/coupling/index.js");
+    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+    const ctx = new EngineCtx();
+    const fused = param_key_index(REPO, new Set(["node_modules", ".git"]), ctx);
+    shared_key_index(REPO, new Set(["node_modules", ".git"]), ctx);   // same ctx → must reuse the one build
+    // the fused param index matches the standalone resolveParamKeys (behaviour-identical), and the shared
+    // index was populated in the same pass (cached on the ctx)
+    expect([...fused.keys()].sort()).toEqual([...resolveParamKeys(REPO).keys()].sort());
+    expect(ctx.sharedKey.has(REPO)).toBe(true);
+    expect(ctx.paramKeys.has(REPO)).toBe(true);
   });
 });
 

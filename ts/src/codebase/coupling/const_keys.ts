@@ -14,8 +14,6 @@ import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index
 import { lineOf, maskComments } from "./adapters/util.js";
 import { plausibleKeyValue } from "./key_ir.js";
 import { COUPLING } from "./config.js";
-import { emit } from "../../core/progress.js";
-import type { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
 
 // A NAMED string constant: `static final String NAME = "value"`, or a Java interface field `String NAME =
@@ -38,48 +36,52 @@ function resolveArg(raw: string, constMap: Map<string, string>): string | null {
   return null;
 }
 
-// Build the repo-wide CONSTANT→VALUE map, then resolve every getParameter/addParameter key through it →
-// a GroundingIndex (key value → producers/consumers). Two passes; texts cached between them.
-export function resolveParamKeys(repo: string, skipDirs: Set<string> = SKIP_DIRS): GroundingIndex {
-  const constMap = new Map<string, string>();
-  const files: { rel: string; text: string }[] = [];
-  for (const { rel, text } of walkFiles(repo, skipDirs, endsWithSourceExt)) {
-    if (COUPLING.maxScanBytes && text.length > COUPLING.maxScanBytes) continue;   // skip minified/generated bundles (same floor guard as scan_file_keys)
-    const t = maskComments(text);                // a constant or call inside a comment is not real
-    files.push({ rel, text: t });
-    let m: RegExpExecArray | null; CONST_DECL.lastIndex = 0;
-    while ((m = CONST_DECL.exec(t)) !== null) if (!constMap.has(m[1])) constMap.set(m[1], m[2]);
-  }
+// One unresolved getParameter/addParameter call-site — the raw arg + where it sits. Collected during the
+// (single, fused) repo walk, then resolved against the COMPLETE const map afterward (a constant defined in
+// file Z used in file A only resolves once every file's decls are in the map).
+export type ParamSite = { rel: string; raw: string; line: number; produces: boolean };
 
+// --- the three reusable pieces of the param pass (so the engine's FUSED single walk and the standalone
+// resolveParamKeys below share ONE implementation; all operate on COMMENT-MASKED text) ---
+
+// Collect NAMED string-constant declarations into constMap (first declaration wins).
+export function scanConstDecls(maskedText: string, constMap: Map<string, string>): void {
+  let m: RegExpExecArray | null; CONST_DECL.lastIndex = 0;
+  while ((m = CONST_DECL.exec(maskedText)) !== null) if (!constMap.has(m[1])) constMap.set(m[1], m[2]);
+}
+// Collect raw getParameter/addParameter call-sites (arg left UNRESOLVED — resolved later vs the full map).
+export function scanParamSites(maskedText: string, rel: string, out: ParamSite[]): void {
+  for (const [re, produces] of [[CONSUME, false], [PRODUCE, true]] as const) {
+    re.lastIndex = 0; let m: RegExpExecArray | null;
+    while ((m = re.exec(maskedText)) !== null) out.push({ rel, raw: m[1], line: lineOf(maskedText, m.index), produces });
+  }
+}
+// Resolve collected sites against the final const map → GroundingIndex (literal or constant → value),
+// dropping implausible values with the shared floor guard.
+export function resolveParamSites(sites: ParamSite[], constMap: Map<string, string>): GroundingIndex {
   const idx: GroundingIndex = new Map();
-  const add = (value: string, file: string, line: number, produces: boolean) => {
-    if (!plausibleKeyValue(value)) return;       // reuse the floor guard — no "the"/generic/prose keys
+  for (const s of sites) {
+    const value = resolveArg(s.raw, constMap);
+    if (!value || !plausibleKeyValue(value)) continue;   // no "the"/generic/prose keys; unresolvable args dropped
     const k = `key ${value}`;
     if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-    (produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file, line });
-  };
-  for (const { rel, text } of files) {
-    for (const [re, produces] of [[CONSUME, false], [PRODUCE, true]] as const) {
-      re.lastIndex = 0; let m: RegExpExecArray | null;
-      while ((m = re.exec(text)) !== null) {
-        const value = resolveArg(m[1], constMap);
-        if (value) add(value, rel, lineOf(text, m.index), produces);
-      }
-    }
+    (s.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file: s.rel, line: s.line });
   }
   return idx;
 }
 
-// CACHED repo wrapper (mirrors shared_key_index): build the const-resolved param grounding ONCE per repo
-// per run. Part of the deterministic FLOOR, so it honours the global adapter kill-switch — `SEAM_NO_ADAPTERS=1`
-// (the recall harness sets this) yields an empty index, identical to the floor being off.
-export function param_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
-  if (ctx.paramKeys.has(repo)) return ctx.paramKeys.get(repo)!;
-  if (process.env.SEAM_NO_ADAPTERS === "1") { const e = new Map() as GroundingIndex; ctx.paramKeys.set(repo, e); return e; }
-  emit("Building constant-resolved param-key index…");
-  const idx = resolveParamKeys(repo, skipDirs);
-  ctx.paramKeys.set(repo, idx);
-  return idx;
+// STANDALONE (own repo walk) — kept for tests and non-fused callers. The ENGINE path uses the fused
+// single-pass builder (build_floor_indices in index.ts) so this const/use scan shares ONE walk with the
+// shared-key scan. Behaviour-identical: collect every file's decls + sites, then resolve.
+export function resolveParamKeys(repo: string, skipDirs: Set<string> = SKIP_DIRS): GroundingIndex {
+  const constMap = new Map<string, string>();
+  const sites: ParamSite[] = [];
+  for (const { rel, text } of walkFiles(repo, skipDirs, endsWithSourceExt, { maxBytes: COUPLING.maxScanBytes })) {
+    const t = maskComments(text);                // a constant or call inside a comment is not real
+    scanConstDecls(t, constMap);
+    scanParamSites(t, rel, sites);
+  }
+  return resolveParamSites(sites, constMap);
 }
 
 // The const-resolved param keys a single span [file, lo..hi] touches — read back OUT of the repo index so a

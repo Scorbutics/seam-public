@@ -46,7 +46,12 @@ export function cropOffIntent(clusters: any[]): number {
 // place. No-op without an intent or when embeddings are unavailable.
 export async function annotateIntentRelevance(repo: string, intent: string | undefined, clusters: any[]): Promise<boolean> {
   if (!intent || !clusters?.length) return false;
-  const scored = await embedScoreDefs(repo, intent);
+  // FOOTPRINT-SCOPED: we only score THIS footprint's seams, so embed just the files they live in — not a
+  // whole-repo tree-sitter + embed pass. On a huge repo that turns a 4000-def walk into a few-dozen-file
+  // one (the seams' own files), and the canonical rels keep cache parity with the anchor-recall pass.
+  const files = new Set<string>();
+  for (const cl of clusters) for (const s of (cl.seams ?? [])) if (s.primary?.file) files.add(s.primary.file);
+  const scored = await embedScoreDefs(repo, intent, files.size ? files : undefined);
   if (!scored.length) return false;   // transformers absent / no defs → leave seams unannotated (graceful)
 
   const byKey = new Map<string, number>();   // file::name → best score
