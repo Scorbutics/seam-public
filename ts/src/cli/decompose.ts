@@ -534,13 +534,17 @@ async function runCodebase(a: Args): Promise<number> {
       if (usage) model2.usage = usage;
       emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
       await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
-      const payload = JSON.stringify(stamp(model2));
-      if (a.emitSeams) {                              // FILE sink: write it, confirm on stdout (unchanged contract)
+      const stamped = stamp(model2);
+      const payload = JSON.stringify(stamped);
+      if (a.emitSeams) {                              // FILE sink: write JSON, confirm on stdout (unchanged contract)
         emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, payload);
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
-      } else {                                        // no file sink → STDOUT carries the JSON (clean `seam … > out.json`)
-        process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> to write a file).\n`);
+      } else if (a.format === "llm-context") {        // HUMAN-readable spine view directly (no temp file)
+        const { renderLlmContext } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderLlmContext(stamped) + "\n");
+      } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
+        process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");
       }
       return 0;
