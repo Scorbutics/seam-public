@@ -12,24 +12,38 @@ export function normpath(p: string): string {
   return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n;
 }
 
-// GITIGNORE = git is the source of truth. `git ls-files --cached --others --exclude-standard` lists every
-// file git would keep — tracked ∪ untracked-but-not-ignored — applying ALL ignore rules (nested .gitignore,
-// negations, core.excludesfile, .git/info/exclude). So the walk skips build output, vendored deps and
-// `*.min.js` without us re-implementing (and drifting from) gitignore semantics. Returns null when the dir
-// isn't a git repo / git is absent → callers scan everything (the prior behaviour). Memoized per repo
-// (path-keyed persistence, like the other module-level path caches). Escape hatch: SEAM_NO_GITIGNORE=1.
+// GITIGNORE = git is the source of truth. We list every file git would keep — tracked ∪
+// untracked-but-not-ignored — applying ALL ignore rules (nested .gitignore, negations, core.excludesfile,
+// .git/info/exclude) without re-implementing (and drifting from) gitignore semantics. So the walk skips
+// build output, vendored deps and `*.min.js` for free. Returns null when the dir isn't a git repo / git is
+// absent → callers scan everything (the prior behaviour). Memoized per repo (path-keyed persistence, like
+// the other module-level path caches). Escape hatch: SEAM_NO_GITIGNORE=1.
+//
+// SUBMODULES: `git ls-files` does NOT descend into submodules — a submodule is one gitlink entry, its files
+// invisible. A "separate Maven module" is frequently a submodule, and dropping it silently severs a whole
+// cross-module dependency arm (e.g. an @Inject'd bean in another module). So we UNION two passes:
+//   • `--recurse-submodules` (tracked, INCLUDING submodule contents) — the bulk, submodule arms restored
+//   • `--others --exclude-standard` (untracked-not-ignored, superproject only — that flag can't combine
+//     with --recurse-submodules) — so brand-new uncommitted source is still scanned.
+// (Untracked files INSIDE a submodule are the only gap — rare, and they show up once committed.)
 const _gitKeep = new Map<string, Set<string> | null>();
+function _gitList(repo: string, args: string[]): string[] | null {
+  try {
+    const r = spawnSync("git", ["-C", repo, "ls-files", "-z", ...args], { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
+    if (r.status === 0 && typeof r.stdout === "string") return r.stdout.split("\0").filter(Boolean);
+  } catch { /* git absent / not a repo */ }
+  return null;
+}
 export function gitNonIgnored(repo: string): Set<string> | null {
   if (process.env.SEAM_NO_GITIGNORE === "1") return null;
   const hit = _gitKeep.get(repo);
   if (hit !== undefined) return hit;
+  const tracked = _gitList(repo, ["--recurse-submodules"]);
   let set: Set<string> | null = null;
-  try {
-    const r = spawnSync("git", ["-C", repo, "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
-    if (r.status === 0 && typeof r.stdout === "string")
-      set = new Set(r.stdout.split("\0").filter(Boolean).map((p) => normpath(p)));
-  } catch { /* git absent / not a repo → null (scan everything) */ }
+  if (tracked !== null) {                                // a git repo (else null → scan everything)
+    set = new Set(tracked.map((p) => normpath(p)));
+    for (const p of _gitList(repo, ["--others", "--exclude-standard"]) ?? []) set.add(normpath(p));
+  }
   _gitKeep.set(repo, set);
   return set;
 }
