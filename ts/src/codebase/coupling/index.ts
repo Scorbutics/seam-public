@@ -24,7 +24,7 @@ import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, ty
 import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
 import { COUPLING } from "./config.js";
-import { emit } from "../../core/progress.js";
+import { emit, verbose, timingOn } from "../../core/progress.js";
 
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
@@ -313,7 +313,7 @@ export async function resolveCoupling(
   const graph = new CouplingGraph(counter);
   if (opts.dataCoupling === false) return graph.result();
 
-  const _dct = (label: string, t0: number) => { if (process.env.SEAM_TIMING) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
+  const _dct = (label: string, t0: number) => { if (timingOn()) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
   const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
@@ -519,9 +519,10 @@ async function runPipeline(
     const id = `${hit.kind} ${hit.value} ${hit.produces}`;
     if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { ...hit, source: "scan" });
   }
-  // DIAGNOSTIC (SEAM_COUPLING_DEBUG=1): why did a node surface (or fail to surface) couplings? Prints every
-  // key this span touches, its source, and how many files sit on the OTHER side (0 = ungrounded → dropped).
-  if (process.env.SEAM_COUPLING_DEBUG) {
+  // DIAGNOSTIC (--verbose, or the narrow SEAM_COUPLING_DEBUG): why did a node surface (or fail to surface)
+  // couplings? Prints every key this span touches, its source, and how many files sit on the OTHER side
+  // (0 = ungrounded → dropped).
+  if (verbose() || process.env.SEAM_COUPLING_DEBUG) {
     const anchorPath0 = normpath(node.file);
     const rows = [...keys.values()].map((k) => `${k.kind} '${k.value}' (${k.produces ? "produces" : "consumes"}, ${k.source}) → ${collectComplementFiles(p.index, k, anchorPath0).size} other-side file(s)`);
     process.stderr.write(`[coupling-debug] ${node.file}:${node.lo} surfaced ${keys.size} key(s):\n${rows.map((r) => "    " + r).join("\n") || "    (none)"}\n`);

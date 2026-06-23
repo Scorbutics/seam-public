@@ -13,7 +13,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { from_resolved_graph } from "../../core/graph_ir.js";
-import { emit } from "../../core/progress.js";
+import { emit, timingOn } from "../../core/progress.js";
 import { run_pass, available, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { defs_in_file } from "../scan/def_table.js";
@@ -252,7 +252,7 @@ export async function select_anchor(repo: string, intent: string,
   const rescueCoupling = !alwaysCouple && (opts.dataCoupling ?? true) && process.env.SEAM_PROBE_COUPLING !== "off";
   const ctx = new EngineCtx();
   const probed: ProbedAnchor[] = [];
-  const _pt0 = process.env.SEAM_TIMING ? performance.now() : 0;   // probe-phase wall-clock (opt-in)
+  const _pt0 = timingOn() ? performance.now() : 0;   // probe-phase wall-clock (--verbose / SEAM_TIMING)
   let couplingProbes = 0;
   for (let i = 0; i < toProbe.length; i++) {
     const c = toProbe[i];

@@ -8,6 +8,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { enumerate_defs, embedString, type Def } from "./def_table.js";
+import { timingOn } from "../../core/progress.js";
 
 const MODEL = process.env.SEAM_EMBED_MODEL || "Xenova/all-MiniLM-L6-v2";
 const h = (s: string) => createHash("md5").update(s).digest("hex").slice(0, 16);
@@ -74,7 +75,7 @@ function loadCache(p: string): Record<string, number[]> {
 // disk-caches) the def table on first use; subsequent queries reuse the cache. Returns [] on any failure /
 // when transformers is absent — so all callers degrade to their non-embed path.
 export async function embedScoreDefs(repo: string, intent: string, files?: Set<string>): Promise<{ def: Def; score: number }[]> {
-  const _et0 = process.env.SEAM_TIMING ? performance.now() : 0;   // embed-recall wall-clock (opt-in)
+  const _et0 = timingOn() ? performance.now() : 0;   // embed-recall wall-clock (--verbose / SEAM_TIMING)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
     const defs = await enumerate_defs(repo, 4000, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall

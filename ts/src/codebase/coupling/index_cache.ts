@@ -1,4 +1,4 @@
-// INCREMENTAL per-file cache for the deterministic floor — an ISOLATED, OPT-IN layer (SEAM_INDEX_CACHE=1).
+// INCREMENTAL per-file cache for the deterministic floor — an ISOLATED layer, ON by default.
 // The floor index is a MAP-REDUCE: map(file → its raw contribution) then reduce(merge across files). So we
 // cache each file's contribution by file IDENTITY (mtime+size); a one-file edit re-scans only that file and
 // re-merges, instead of re-reading the whole repo. Design constraints (for safety, per Brice's "no obscure
@@ -9,7 +9,8 @@
 //   • CORRECTNESS BY CONSTRUCTION — a file whose (mtime,size) changed is re-scanned; a deleted file drops
 //     out of the walk (and the cache); a new file is scanned; the configSalt invalidates the WHOLE map on a
 //     config change. A corrupt/version-skewed cache resets to empty. So the cache only affects SPEED.
-//   • OPT-IN — off by default; the normal path is byte-for-byte unchanged until you enable it.
+//   • SAFE BY DEFAULT — on by default (it only affects SPEED, never output); the kill switch
+//     SEAM_INDEX_CACHE=0 falls back to a plain, oversize-skipping, byte-identical walk.
 //
 // CROSS-FILE NOTE: the param index resolves a constant DEFINED in file Z against a USE in file A. We handle
 // this by caching only each file's RAW contribution (its const decls + unresolved param sites + shared-key
@@ -18,10 +19,11 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { walk } from "../../core/resolve/walk.js";
+import { timingOn } from "../../core/progress.js";
 
 const _CACHE_VERSION = "v2-incremental";
 
-export const indexCacheEnabled = (): boolean => process.env.SEAM_INDEX_CACHE === "1";
+export const indexCacheEnabled = (): boolean => process.env.SEAM_INDEX_CACHE !== "0";   // on by default; =0 kill switch
 
 type FileEntry<T> = { m: number; s: number; d: T };          // mtimeMs, size, contribution
 type CacheFile<T> = { salt: string; files: Record<string, FileEntry<T>> };
@@ -55,6 +57,6 @@ export function incrementalScan<T>(
     out.push({ rel, data });
   }
   try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
-  if (process.env.SEAM_TIMING) process.stderr.write(`[index-cache] ${reused} file(s) reused, ${rescanned} re-scanned\n`);
+  if (timingOn()) process.stderr.write(`[index-cache] ${reused} file(s) reused, ${rescanned} re-scanned\n`);
   return out;
 }

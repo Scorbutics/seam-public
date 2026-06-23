@@ -1,4 +1,4 @@
-// Incremental per-file floor cache (opt-in, SEAM_INDEX_CACHE=1). Correctness is the whole point: a one-file
+// Incremental per-file floor cache (ON by default; SEAM_INDEX_CACHE=0 opts out). Correctness is the whole point: a one-file
 // edit must re-scan ONLY that file, the merged index must equal the uncached build, and the cross-file const
 // dependency (a constant defined in Z used in A) must stay correct when only one side changes.
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
@@ -48,13 +48,15 @@ describe("incrementalScan — re-scans only what changed", () => {
 });
 
 describe("integration: cached floor == uncached floor, and cross-file const stays correct", () => {
-  const withCache = <T>(fn: () => T): T => { const p = process.env.SEAM_INDEX_CACHE; process.env.SEAM_INDEX_CACHE = "1"; try { return fn(); } finally { if (p === undefined) delete process.env.SEAM_INDEX_CACHE; else process.env.SEAM_INDEX_CACHE = p; } };
+  const withEnv = <T>(val: string, fn: () => T): T => { const p = process.env.SEAM_INDEX_CACHE; process.env.SEAM_INDEX_CACHE = val; try { return fn(); } finally { if (p === undefined) delete process.env.SEAM_INDEX_CACHE; else process.env.SEAM_INDEX_CACHE = p; } };
+  const withCache = <T>(fn: () => T): T => withEnv("1", fn);
+  const withoutCache = <T>(fn: () => T): T => withEnv("0", fn);   // cache is ON by default → opt OUT to get the plain walk
   const keys = (i: GroundingIndex) => [...i.keys()].sort();
 
   test("warm cached build == cold uncached build (same keys)", () => {
     write("a.js", "$http.put('/manage/rest/x/y/' + id);\n");
     write("Svc.java", '@Path("x")\nclass Svc { @PUT @Path("y/{id}") void go(){} }\n');
-    const uncached = keys(shared_key_index(REPO, SKIP, new EngineCtx()));
+    const uncached = withoutCache(() => keys(shared_key_index(REPO, SKIP, new EngineCtx())));
     expect(existsSync(join(REPO, ".seam"))).toBe(false);   // uncached path writes nothing
     withCache(() => {
       keys(shared_key_index(REPO, SKIP, new EngineCtx()));            // cold (writes cache)

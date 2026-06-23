@@ -7,6 +7,7 @@ import {
   _INTERFACE, _CLASS_KINDS,
 } from "../atoms.js";
 import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
+import { timingOn } from "../../core/progress.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Provenance, type ResolvedGraph,
@@ -50,10 +51,10 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
   nodes.push({ id: "n1", symbol, kind: akind, file: anchorFile, range: arange, enclosing: aencl, complexity: Math.max(1, arange[1] - arange[0] + 1) });
 
   let counter = 1;
-  // Opt-in (SEAM_TIMING) sub-step timing — so a slow grow step on a real repo can be split into its
-  // parts: consumer resolution (repo walk + tree-sitter parse of each consumer) vs data-coupling
-  // (shared-key index + the route-chain repo walks). Coarse, stderr-only, off unless SEAM_TIMING is set.
-  const _bt = () => (process.env.SEAM_TIMING ? performance.now() : 0);
+  // Sub-step timing (--verbose, or the narrow SEAM_TIMING) — so a slow grow step on a real repo can be
+  // split into its parts: consumer resolution (repo walk + tree-sitter parse of each consumer) vs data-
+  // coupling (shared-key index + the route-chain repo walks). Coarse, stderr-only, off by default.
+  const _bt = () => (timingOn() ? performance.now() : 0);
   const _bemit = (label: string, t0: number) => { if (t0) process.stderr.write(`[build-timing] ${symbol}: ${label} ${Math.round(performance.now() - t0)}ms\n`); };
   let _bt0 = _bt();
   const seenKeys = new Map<string, string>();

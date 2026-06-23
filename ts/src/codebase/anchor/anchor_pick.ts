@@ -6,6 +6,7 @@
 // (entrypoint-select + intent-expand + judge) + 16 probes → 1 LLM pick. The pick reads each candidate's
 // PASSAGE (declaration + enclosing + file path + doc — the same signal embedScoreDefs ranks on; the path
 // carries the domain words). Degrades to none when no LLM / no candidates (caller falls back to probe→judge).
+import { verbose } from "../../core/progress.js";
 import { available, run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { type Def } from "../scan/def_table.js";
@@ -111,10 +112,10 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
   const cand = demoteHubs(pooled, fanIn);              // a hub anchor (used everywhere) → generic result + slow grow
   if (!cand.length) return { chosen: null, chosenBy: "none" };
 
-  // DIAGNOSTIC (SEAM_ANCHOR_DEBUG=1): dump the embed ranking + the candidate pool so we can see whether the
-  // RIGHT anchor was even recalled (and at what rank), and what PASSAGE the LLM judged it on. Reveals the
-  // method→enclosing-class collapse (a method's intent words vanish behind its class's doc).
-  if (process.env.SEAM_ANCHOR_DEBUG) {
+  // DIAGNOSTIC (--verbose, or the narrow SEAM_ANCHOR_DEBUG): dump the embed ranking + the candidate pool so
+  // we can see whether the RIGHT anchor was even recalled (and at what rank), and what PASSAGE the LLM judged
+  // it on. Reveals the method→enclosing-class collapse (a method's intent words vanish behind its class's doc).
+  if (verbose() || process.env.SEAM_ANCHOR_DEBUG) {
     const rankByKey = new Map(scored.map(({ def }, i) => [`${def.name}|${def.file}`, i]));
     const e = process.stderr;
     e.write(`\n[anchor-debug] intent: "${intent}"\n[anchor-debug] embed-ranked defs (top 30 of ${scored.length}):\n`);
@@ -143,7 +144,7 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
     const o = out.get(`c${i}`);
     if (o && typeof o === "object" && [true, "true", "True"].includes(o.best)) {
       const c = cand[i];
-      if (process.env.SEAM_ANCHOR_DEBUG) process.stderr.write(`[anchor-debug] LLM picked c${i}: ${c.name} (${c.file})\n`);
+      if (verbose() || process.env.SEAM_ANCHOR_DEBUG) process.stderr.write(`[anchor-debug] LLM picked c${i}: ${c.name} (${c.file})\n`);
       return {
         chosen: { id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: 0, terms: ["~pick"],
                   metrics: null, structScore: 0, signature: c.def?.signature, doc: c.def?.doc },

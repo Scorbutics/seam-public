@@ -687,6 +687,9 @@ async function runCodebase(a: Args): Promise<number> {
 
 async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
+  // --verbose is the single user-facing diagnostics surface: hand it to the cross-cutting stderr sites
+  // (coupling-debug, anchor-debug, sub-step timing) via SEAM_VERBOSE, which `verbose()`/`timingOn()` read.
+  if (a.verbose) process.env.SEAM_VERBOSE = "1";
   // --check-backend: source-of-truth probe for whether the engine can serve its OWN LLM passes from a
   // local binary (claude/copilot). Prints the resolved backend kind on success. Clients (the MCP server)
   // use this to decide binary-backed vs sampling-backed LLM serving without duplicating resolve_backend.
