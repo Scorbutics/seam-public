@@ -22,7 +22,7 @@ import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
-import { indexCacheEnabled, repoFingerprint, loadIndices, storeIndices } from "./index_cache.js";
+import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
 import { COUPLING } from "./config.js";
 import { emit } from "../../core/progress.js";
 
@@ -116,48 +116,62 @@ function floorConfigSalt(): string {
   return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|adapters=${ADAPTERS.map((a) => a.kind).join(",")}`;
 }
 
-function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
-  if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
-  // DISK CACHE (opt-in, SEAM_INDEX_CACHE=1): the floor is a pure function of repo content + config, so on a
-  // warm repeated run load it instead of the ~18s rebuild. A miss/error just falls through to the build —
-  // the cache can only affect speed, never correctness (see index_cache.ts).
-  let fingerprint: string | null = null;
-  if (indexCacheEnabled()) {
-    fingerprint = repoFingerprint(repo, skipDirs, scannableForKeys, floorConfigSalt());
-    const hit = loadIndices(repo, "floor", fingerprint, ["shared", "param"]);
-    if (hit) {
-      ctx.sharedKey.set(repo, hit.shared); ctx.paramKeys.set(repo, hit.param);
-      ctx.floorBase.set(repo, mergeGrounding(hit.shared, hit.param));
-      emit("floor index: loaded from .seam cache (unchanged files)");
-      return;
-    }
+// One file's RAW floor contribution — the per-file MAP half of the floor build, kept raw (param sites
+// UNRESOLVED) so it can be cached per-file and the cross-file const resolution happens once in the merge.
+// JSON-serializable (the incremental cache stores it opaquely).
+type FloorContribution = { keys: KeyHit[]; constDecls: [string, string][]; sites: ParamSite[] };
+function scanFloorFile(rel: string, text: string): FloorContribution {
+  const m = makeMaskCtx(text);                            // ONE mask cache, shared by the adapters AND the param pass
+  const keys = scan_file_keys(rel, text, m);              // shared-key adapters (size cap + SEAM_NO_ADAPTERS → [] internally)
+  const constDecls: [string, string][] = [];
+  const sites: ParamSite[] = [];
+  if (process.env.SEAM_NO_ADAPTERS !== "1" && !(COUPLING.maxScanBytes && text.length > COUPLING.maxScanBytes)) {
+    const cm = new Map<string, string>();
+    scanConstDecls(m.comments, cm); constDecls.push(...cm);
+    scanParamSites(m.comments, rel, sites);
   }
-  const noAdapters = process.env.SEAM_NO_ADAPTERS === "1";
-  emit("Building shared-key + param-key index (single floor pass)…");
+  return { keys, constDecls, sites };
+}
+// The REDUCE half: merge per-file contributions into the shared-key index + the const-resolved param index.
+// Const resolution is done HERE (once, in-memory) against the merged const map — that's what makes the
+// per-file cache safe across the cross-file `getParameter(CONST)` dependency. Order-stable (walk order).
+function mergeFloor(contribs: { rel: string; data: FloorContribution }[]): { shared: GroundingIndex; param: GroundingIndex } {
   const shared: GroundingIndex = new Map();
   const constMap = new Map<string, string>();
-  const sites: ParamSite[] = [];
-  let scanned = 0, skipped = 0;
-  // STAT-skip oversized files before reading (memory-safe) — a minified bundle never becomes a string.
-  for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys, { maxBytes: COUPLING.maxScanBytes, onSkip: () => skipped++ })) {
-    scanned++;
-    const m = makeMaskCtx(text);                         // ONE mask cache per file, shared by the adapters AND the param pass
-    for (const h of scan_file_keys(rel, text, m)) {       // shared-key adapters (SEAM_NO_ADAPTERS → [] already)
+  const allSites: ParamSite[] = [];
+  for (const { rel, data } of contribs) {
+    for (const h of data.keys) {
       const k = keyId(h.kind, h.value);
       if (!shared.has(k)) shared.set(k, { producers: [], consumers: [] });
       (h.produces ? shared.get(k)!.producers : shared.get(k)!.consumers).push({ file: rel, line: h.line });
     }
-    if (!noAdapters) {                                   // param-key: collect const decls + use-sites (reuse the shared comment-mask)
-      scanConstDecls(m.comments, constMap);
-      scanParamSites(m.comments, rel, sites);
-    }
+    for (const [n, v] of data.constDecls) if (!constMap.has(n)) constMap.set(n, v);
+    allSites.push(...data.sites);
   }
-  if (skipped) emit(`floor index: ${scanned} file(s) scanned, ${skipped} oversized skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
-  const param = noAdapters ? new Map() as GroundingIndex : resolveParamSites(sites, constMap);
+  const param = process.env.SEAM_NO_ADAPTERS === "1" ? new Map() as GroundingIndex : resolveParamSites(allSites, constMap);
+  return { shared, param };
+}
+
+function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
+  if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
+  let contribs: { rel: string; data: FloorContribution }[];
+  if (indexCacheEnabled()) {
+    // INCREMENTAL (opt-in): reuse unchanged files' cached contributions, re-scan only changed/new ones, then
+    // merge. A one-file edit re-reads one file. Same merge as the plain path → byte-identical index.
+    emit("Building shared-key + param-key index (incremental, cached per file)…");
+    contribs = incrementalScan(repo, skipDirs, scannableForKeys, floorConfigSalt(), scanFloorFile);
+  } else {
+    emit("Building shared-key + param-key index (single floor pass)…");
+    contribs = [];
+    let skipped = 0;   // STAT-skip oversized before reading (memory-safe) — a minified bundle never becomes a string
+    for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys, { maxBytes: COUPLING.maxScanBytes, onSkip: () => skipped++ }))
+      contribs.push({ rel, data: scanFloorFile(rel, text) });
+    if (skipped) emit(`floor index: ${skipped} oversized file(s) skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
+  }
+  const { shared, param } = mergeFloor(contribs);
   ctx.sharedKey.set(repo, shared);
   ctx.paramKeys.set(repo, param);
-  ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call (was the per-grow-step ~1s cost)
-  if (fingerprint) storeIndices(repo, "floor", fingerprint, { shared, param });   // persist for the next warm run
+  ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call
 }
 
 export function shared_key_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {

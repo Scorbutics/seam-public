@@ -1,82 +1,60 @@
-// DISK CACHE for deterministic, repo-derived GroundingIndex builds — an ISOLATED, OPT-IN memoization layer
-// (SEAM_INDEX_CACHE=1). The floor index is a PURE function of repo content + config, so a warm repeated run
-// can skip the ~18s rebuild and just read the result. Design constraints (deliberate, for safety):
+// INCREMENTAL per-file cache for the deterministic floor — an ISOLATED, OPT-IN layer (SEAM_INDEX_CACHE=1).
+// The floor index is a MAP-REDUCE: map(file → its raw contribution) then reduce(merge across files). So we
+// cache each file's contribution by file IDENTITY (mtime+size); a one-file edit re-scans only that file and
+// re-merges, instead of re-reading the whole repo. Design constraints (for safety, per Brice's "no obscure
+// bugs"):
 //
-//   • LOOSE COUPLING — this module knows nothing about coupling internals; it only (de)serializes a
-//     GroundingIndex (a plain Map) and reads/writes JSON under .seam/. The builder calls it as a front.
-//   • CORRECTNESS BY CONSTRUCTION — a stale cache is NEVER read: the key is a content FINGERPRINT
-//     (path + mtime + size of every scanned file) folded with a CONFIG salt (size cap, adapter set,
-//     kill-switch). Any change → a different key → the old file is ignored (and pruned). A miss, a corrupt
-//     file, or a version skew returns null → the caller rebuilds. So the cache can only affect SPEED.
-//   • OPT-IN — off by default, so the normal path is byte-for-byte unchanged until you enable it.
-import { createHash } from "node:crypto";
-import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+//   • LOOSE COUPLING — this module never inspects a contribution. It is GENERIC over an opaque, JSON-
+//     serializable `T`: the caller owns scanFile (the domain map) and the merge (the domain reduce).
+//   • CORRECTNESS BY CONSTRUCTION — a file whose (mtime,size) changed is re-scanned; a deleted file drops
+//     out of the walk (and the cache); a new file is scanned; the configSalt invalidates the WHOLE map on a
+//     config change. A corrupt/version-skewed cache resets to empty. So the cache only affects SPEED.
+//   • OPT-IN — off by default; the normal path is byte-for-byte unchanged until you enable it.
+//
+// CROSS-FILE NOTE: the param index resolves a constant DEFINED in file Z against a USE in file A. We handle
+// this by caching only each file's RAW contribution (its const decls + unresolved param sites + shared-key
+// hits); the caller RESOLVES after the merge (in-memory, no I/O). So a const change in Z re-reads only Z, and
+// the cheap resolve step recomputes the cross-file links correctly.
+import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { walk } from "../../core/resolve/walk.js";
-import type { GroundingIndex, Access } from "./types.js";
 
-const _CACHE_VERSION = "v1";   // bump if the serialized shape or the floor semantics change
+const _CACHE_VERSION = "v2-incremental";
 
 export const indexCacheEnabled = (): boolean => process.env.SEAM_INDEX_CACHE === "1";
 
-// A content fingerprint of the files a build reads: sorted (path, mtimeMs, size), hashed. STAT-only (no file
-// reads), so it's cheap relative to the build it guards. `configSalt` folds in everything that changes the
-// OUTPUT for the same files, so a config change invalidates cleanly (no false hits).
-export function repoFingerprint(repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean, configSalt: string): string {
-  const h = createHash("sha1");
-  h.update(`${_CACHE_VERSION}\0${configSalt}\n`);
-  const rels: string[] = [];
+type FileEntry<T> = { m: number; s: number; d: T };          // mtimeMs, size, contribution
+type CacheFile<T> = { salt: string; files: Record<string, FileEntry<T>> };
+const _cachePath = (repo: string, name: string) => join(repo, ".seam", `${name}.json`);
+
+// Walk the repo, returning each scanned file's contribution — reused from the on-disk cache when the file is
+// unchanged, recomputed via `scanFile` when it changed/is new. Persists the refreshed per-file map. Returns
+// the contributions in WALK order (sorted, deterministic) so the caller's merge is order-stable.
+export function incrementalScan<T>(
+  repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean, configSalt: string,
+  scanFile: (rel: string, text: string) => T, cacheName = "floor-files",
+): { rel: string; data: T }[] {
+  const salt = `${_CACHE_VERSION}|${configSalt}`;
+  const path = _cachePath(repo, cacheName);
+  let prev: CacheFile<T>["files"] = {};
+  try { if (existsSync(path)) { const c = JSON.parse(readFileSync(path, "utf-8")) as CacheFile<T>; if (c && c.salt === salt && c.files) prev = c.files; } } catch { /* corrupt → rebuild */ }
+
+  const out: { rel: string; data: T }[] = [];
+  const next: CacheFile<T>["files"] = {};
+  let reused = 0, rescanned = 0;
   for (const [dir, files] of walk(repo, skipDirs)) for (const fn of files) {
     const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
-    if (predicate(rel)) rels.push(rel);
+    if (!predicate(rel)) continue;
+    let st; try { st = statSync(join(repo, rel)); } catch { continue; }
+    const m = Math.round(st.mtimeMs), s = st.size;
+    const hit = prev[rel];
+    let data: T;
+    if (hit && hit.m === m && hit.s === s) { data = hit.d; reused++; }       // unchanged → reuse
+    else { let text; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; } data = scanFile(rel, text); rescanned++; }
+    next[rel] = { m, s, d: data };
+    out.push({ rel, data });
   }
-  rels.sort();
-  for (const rel of rels) {
-    let s; try { s = statSync(join(repo, rel)); } catch { continue; }
-    h.update(`${rel}\0${Math.round(s.mtimeMs)}\0${s.size}\n`);
-  }
-  return h.digest("hex").slice(0, 16);
-}
-
-// --- (de)serialization: GroundingIndex (Map<key, {producers, consumers}>) ⇄ a compact JSON shape ----------
-type SerAccess = [string, number];                                   // [file, line]
-type SerIndex = Record<string, { p: SerAccess[]; c: SerAccess[] }>;  // key → producers/consumers
-const toSer = (idx: GroundingIndex): SerIndex => {
-  const o: SerIndex = {};
-  for (const [k, v] of idx) o[k] = { p: v.producers.map((a) => [a.file, a.line] as SerAccess), c: v.consumers.map((a) => [a.file, a.line] as SerAccess) };
-  return o;
-};
-const fromSer = (s: SerIndex): GroundingIndex => {
-  const m: GroundingIndex = new Map();
-  const acc = (xs: SerAccess[]): Access[] => xs.map(([file, line]) => ({ file, line }));
-  for (const k of Object.keys(s)) m.set(k, { producers: acc(s[k].p), consumers: acc(s[k].c) });
-  return m;
-};
-
-const _cacheFile = (repo: string, prefix: string, fingerprint: string) => join(repo, ".seam", `${prefix}-${fingerprint}.json`);
-
-// Load a set of NAMED indices for a repo at this fingerprint. null on miss / any error → caller rebuilds.
-export function loadIndices(repo: string, prefix: string, fingerprint: string, names: string[]): Record<string, GroundingIndex> | null {
-  try {
-    const path = _cacheFile(repo, prefix, fingerprint);
-    if (!existsSync(path)) return null;
-    const data = JSON.parse(readFileSync(path, "utf-8")) as Record<string, SerIndex>;
-    const out: Record<string, GroundingIndex> = {};
-    for (const n of names) { if (!data[n]) return null; out[n] = fromSer(data[n]); }
-    return out;
-  } catch { return null; }
-}
-
-// Store the indices for this fingerprint, pruning older fingerprints for the same prefix. Best-effort: a
-// write failure (read-only FS, etc.) is swallowed — it only forgoes the speed-up, never breaks the run.
-export function storeIndices(repo: string, prefix: string, fingerprint: string, indices: Record<string, GroundingIndex>): void {
-  try {
-    const dir = join(repo, ".seam");
-    mkdirSync(dir, { recursive: true });
-    const keep = `${prefix}-${fingerprint}.json`;
-    for (const f of readdirSync(dir)) if (f.startsWith(`${prefix}-`) && f.endsWith(".json") && f !== keep) { try { rmSync(join(dir, f)); } catch { /* ignore */ } }
-    const data: Record<string, SerIndex> = {};
-    for (const n of Object.keys(indices)) data[n] = toSer(indices[n]);
-    writeFileSync(join(dir, keep), JSON.stringify(data));
-  } catch { /* cache write is best-effort */ }
+  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  if (process.env.SEAM_TIMING) process.stderr.write(`[index-cache] ${reused} file(s) reused, ${rescanned} re-scanned\n`);
+  return out;
 }
