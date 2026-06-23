@@ -25,36 +25,37 @@ function passage(d: Def): string {
   return `${d.signature || d.name}${encl} — ${d.file}${doc}`;
 }
 
-export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
-    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none" }> {
-  if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
-
-  const scored = await embedScoreDefs(repo, intent);   // [] when embeddings absent → caller falls back
+export type Cand = { name: string; file: string; kind: string; def?: Def };
+// Build the candidate pool (NO LLM, pure → testable): embed top-K ∪ lexical floor, deduped by name|file,
+// data-shapes (interface/type/enum) dropped, capped. Each embed-top def enters AS ITSELF — a strongly-
+// matching METHOD enters as the method with its OWN signature+doc passage. Collapsing a method to its
+// enclosing class used to bury the signal: `sendParaplanningRequestEmail` became `FileNoteService` (doc-less
+// class passage) so the LLM couldn't see the "paraplanning" words and picked a worse candidate it COULD read.
+// Anchoring on the method is precisely what works when you pass --symbol explicitly; the grow follows it the same way.
+export function assembleCandidatePool(scored: { def: Def }[], lexical: { name: string; file: string; kind: string }[]): Cand[] {
   const defByKey = new Map<string, Def>(), defByName = new Map<string, Def>();
   for (const { def } of scored) {
     const k = `${def.name}|${def.file}`;
     if (!defByKey.has(k)) defByKey.set(k, def);
     if (!defByName.has(def.name)) defByName.set(def.name, def);
   }
-
-  type Cand = { name: string; file: string; kind: string; def?: Def };
   const pool: Cand[] = [], have = new Set<string>();
   const add = (name: string, file: string, kind: string, def?: Def) => {
     const k = `${name}|${file}`;
     if (have.has(k) || _NON_ANCHOR.has(kind)) return;
     have.add(k); pool.push({ name, file, kind, def });
   };
-  // embed top-K (Def-rich) — add each def AS ITSELF (a strongly-matching METHOD enters the pool as the
-  // method, with its own signature+doc passage). Collapsing a method to its enclosing class used to bury the
-  // signal: `sendParaplanningRequestEmail` became `FileNoteService` (doc-less class passage) so the LLM
-  // couldn't see the "paraplanning" words and picked a worse candidate it COULD read. Anchoring on the
-  // method is precisely what works when you pass --symbol explicitly, and the grow follows it the same way.
   for (const { def } of scored.slice(0, EMBED_TOP)) add(def.name, def.file, def.kind, def);
-  // lexical floor (no LLM expand) — enrich each with its Def so it shows a full passage too
-  for (const c of find_anchor_candidates(repo, [..._content_words(intent)]))
-    add(c.name, c.file, c.kind, defByKey.get(`${c.name}|${c.file}`) ?? defByName.get(c.name));
+  for (const c of lexical) add(c.name, c.file, c.kind, defByKey.get(`${c.name}|${c.file}`) ?? defByName.get(c.name));
+  return pool.slice(0, POOL_CAP);
+}
 
-  const cand = pool.slice(0, POOL_CAP);
+export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
+    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none" }> {
+  if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
+
+  const scored = await embedScoreDefs(repo, intent);   // [] when embeddings absent → caller falls back
+  const cand = assembleCandidatePool(scored, find_anchor_candidates(repo, [..._content_words(intent)]));
   if (!cand.length) return { chosen: null, chosenBy: "none" };
 
   // DIAGNOSTIC (SEAM_ANCHOR_DEBUG=1): dump the embed ranking + the candidate pool so we can see whether the

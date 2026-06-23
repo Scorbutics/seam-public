@@ -4,7 +4,7 @@
 // spread of representative + fuzzed inputs (strings, escapes, line/block comments, comment-shaped text
 // inside strings, unterminated forms, newlines for line-offset preservation).
 import { describe, expect, test } from "bun:test";
-import { maskComments, stringLiteralsOnly } from "../../src/codebase/coupling/adapters/util.js";
+import { maskComments, stringLiteralsOnly, makeMaskCtx } from "../../src/codebase/coupling/adapters/util.js";
 
 // --- reference oracles: the pre-rewrite split("") versions, verbatim ---
 function maskCommentsOld(text: string): string {
@@ -95,5 +95,23 @@ describe("maskComments / stringLiteralsOnly — rewrite matches the old split() 
     expect(out).toContain("SELECT id FROM users");
     expect(out.length).toBe(big.length);
     expect(performance.now() - t0).toBeLessThan(2000);   // generously bounded; the split() version churned ~30× memory
+  });
+});
+
+// makeMaskCtx — the per-file mask cache shared across every adapter (and the param pass) in one scan, so a
+// multi-MB file is masked ONCE not 4×. Contract: .comments / .strings equal the standalone maskers; lazily
+// memoized (repeated access returns the same cached string).
+describe("makeMaskCtx (shared per-file mask cache)", () => {
+  const src = 'var q = "SELECT id FROM users"; // a note\n/* block */ url.getParameter(TOKEN);';
+  test(".comments and .strings match the standalone maskers", () => {
+    const m = makeMaskCtx(src);
+    expect(m.comments).toBe(maskComments(src));
+    expect(m.strings).toBe(stringLiteralsOnly(src));
+  });
+  test("repeated access is memoized (same cached value)", () => {
+    const m = makeMaskCtx(src);
+    const a = m.comments, b = m.comments;
+    expect(a).toBe(b);
+    expect(m.strings).toBe(m.strings);
   });
 });

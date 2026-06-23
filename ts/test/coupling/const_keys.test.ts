@@ -85,6 +85,35 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
     expect(ctx.sharedKey.has(REPO)).toBe(true);
     expect(ctx.paramKeys.has(REPO)).toBe(true);
   });
+
+  test("floor_base_index is the cached merge of shared⊕param — built once, same ref on re-call (perf fix)", async () => {
+    const { floor_base_index } = await import("../../src/codebase/coupling/index.js");
+    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+    const ctx = new EngineCtx();
+    const a = floor_base_index(REPO, new Set(["node_modules", ".git"]), ctx);
+    const b = floor_base_index(REPO, new Set(["node_modules", ".git"]), ctx);
+    expect(b).toBe(a);                       // cached — the per-call mergeGrounding no longer runs per grow step
+    expect(ctx.floorBase.has(REPO)).toBe(true);
+    // the base carries the param keys (it's the merge), so the const-resolved "timeout" key is present
+    expect(a.has("key timeout")).toBe(true);
+  });
+});
+
+// The floor index must be built on the THREADED ctx, not a fresh one — the perf bug was build_class_graph
+// dropping opts.ctx, so every class re-anchor during a grow rebuilt the ~1s floor (4–5× per run).
+describe("ctx threading through build_class_graph (floor built once)", () => {
+  test("build_class_graph populates the PASSED ctx's floor caches (didn't spin up its own)", async () => {
+    if (!available()) return;   // tree-sitter required
+    const { build_class_graph } = await import("../../src/codebase/scan/class_graph.js");
+    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+    const __dir = new URL(".", import.meta.url).pathname;
+    const repoDir = join(__dir, "..", "fixtures", "class-repo");
+    const ctx = new EngineCtx();
+    await build_class_graph(repoDir, "src/payment/service.ts", "PaymentService", { depth: 1, dataCoupling: true, ctx });
+    // if the ctx were dropped (the bug), a throwaway ctx would absorb the build and this stays empty
+    expect(ctx.sharedKey.size).toBeGreaterThan(0);
+    expect(ctx.floorBase.size).toBeGreaterThan(0);
+  });
 });
 
 // The end-to-end win: the consumer, anchored alone, reaches the producer through the const-resolved key
