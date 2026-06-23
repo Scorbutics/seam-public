@@ -152,23 +152,31 @@ function mergeFloor(contribs: { rel: string; data: FloorContribution }[]): { sha
   return { shared, param };
 }
 
-function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
-  if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
+// The per-file floor scan, computed ONCE per run (memoized on the ctx) and shared by the floor build AND the
+// llm-key index's floor reconciliation — so the floor is never scanned twice (the old assemble duplication).
+// Disk-cached + incremental when SEAM_INDEX_CACHE=1; a plain (memory-safe, oversize-skipping) walk otherwise.
+export function floorContributions(repo: string, skipDirs: Set<string>, ctx: EngineCtx): { rel: string; data: FloorContribution }[] {
+  const memo = ctx.floorContribs.get(repo) as { rel: string; data: FloorContribution }[] | undefined;
+  if (memo) return memo;
   let contribs: { rel: string; data: FloorContribution }[];
   if (indexCacheEnabled()) {
-    // INCREMENTAL (opt-in): reuse unchanged files' cached contributions, re-scan only changed/new ones, then
-    // merge. A one-file edit re-reads one file. Same merge as the plain path → byte-identical index.
-    emit("Building shared-key + param-key index (incremental, cached per file)…");
+    emit("Scanning floor (incremental, cached per file)…");
     contribs = incrementalScan(repo, skipDirs, scannableForKeys, floorConfigSalt(), scanFloorFile);
   } else {
-    emit("Building shared-key + param-key index (single floor pass)…");
+    emit("Scanning floor (single pass)…");
     contribs = [];
     let skipped = 0;   // STAT-skip oversized before reading (memory-safe) — a minified bundle never becomes a string
     for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys, { maxBytes: COUPLING.maxScanBytes, onSkip: () => skipped++ }))
       contribs.push({ rel, data: scanFloorFile(rel, text) });
-    if (skipped) emit(`floor index: ${skipped} oversized file(s) skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
+    if (skipped) emit(`floor: ${skipped} oversized file(s) skipped (>${Math.round(COUPLING.maxScanBytes / 1e6)}MB; raise/disable via SEAM_MAX_SCAN_BYTES)`);
   }
-  const { shared, param } = mergeFloor(contribs);
+  ctx.floorContribs.set(repo, contribs);
+  return contribs;
+}
+
+function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
+  if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
+  const { shared, param } = mergeFloor(floorContributions(repo, skipDirs, ctx));
   ctx.sharedKey.set(repo, shared);
   ctx.paramKeys.set(repo, param);
   ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call

@@ -19,6 +19,7 @@ export class EngineCtx {
   llmKey = new Map<string, GroundingIndex>();           // llmKeyIndex: cacheKey → index
   paramKeys = new Map<string, GroundingIndex>();        // param_key_index: repo → const-resolved param grounding
   floorBase = new Map<string, GroundingIndex>();        // floor_base_index: repo → MERGED shared⊕param (cached so the per-call merge runs once, not per grow step)
+  floorContribs = new Map<string, unknown>();           // floorContributions: repo → per-file floor scan (computed ONCE/run, shared by the floor build AND the llm-key floorOf — no duplicate scan)
 
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null

@@ -152,8 +152,13 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const llmKeysOf = new Map<string, KeyHit[]>();       // file → cached LLM keys
   const toSynth: { file: string; text: string; ck: string }[] = [];
   const blindFiles: { file: string; text: string }[] = [];   // floor-blind files → matcher-rule synthesis candidates
+  // REUSE the floor scan (computed once per run, disk-cached) instead of re-scanning every file here — that
+  // was a full DUPLICATE repo scan (≈ the whole assemble cost). floorByRel.get(rel) === scan_file_keys(rel,
+  // text) by construction, so behaviour is identical; `??` is a defensive fallback.
+  const { floorContributions } = await import("./index.js");
+  const floorByRel = new Map<string, KeyHit[]>(floorContributions(repo, SKIP_DIRS, ctx).map((c) => [c.rel, c.data.keys]));
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
-    const floor = scan_file_keys(rel, text);
+    const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
     if (!floor.length && blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: rel, text });
     if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
