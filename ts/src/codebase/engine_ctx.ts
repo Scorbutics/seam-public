@@ -26,6 +26,7 @@ export class EngineCtx {
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
+  complementBudget = COUPLING.complementBudget; // crossBoundary: complement units materialized this run (grow-wide) — bounds a hub's fan
 }
 
 // Canonical cache helper: return the cached value if present, else compute, store, and return it.

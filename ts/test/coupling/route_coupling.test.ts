@@ -154,4 +154,13 @@ describe("cross-stack coupling: JAX-RS relative @Path ⇄ AngularJS $http full U
     expect(files.some((f: string) => f.endsWith("FileNoteService.java"))).toBe(true);   // front-end → back-end
     expect((g.nodes ?? []).some((n: any) => n.kind === "route")).toBe(true);            // a route boundary materialised
   });
+
+  test("the complement budget bounds the data-coupling fanout (a hub anchor can't run for ages)", async () => {
+    if (!available()) return;
+    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+    const ctx = new EngineCtx();
+    ctx.complementBudget = 0;   // exhausted up front → crossBoundary materialises no complement
+    const g = await build_module_graph(REPO, "web/js/fileNoteItem.js", { dataCoupling: true, ctx } as any);
+    expect((g.nodes ?? []).some((n: any) => n.file?.endsWith("FileNoteService.java"))).toBe(false);   // fanout capped
+  });
 });

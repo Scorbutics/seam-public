@@ -11,6 +11,8 @@ import { embedScoreDefs } from "../scan/def_embed.js";
 import { type Def } from "../scan/def_table.js";
 import { find_anchor_candidates, _content_words } from "./anchor_rank.js";
 import { type ProbedAnchor } from "./anchor_select.js";
+import { walkFiles } from "../../core/resolve/walk.js";
+import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
 
 const PASS = registerPass({ tag: "anchor-pick", tier: "strong", note: "direct anchor selection from candidate passages (no probe)" });
 
@@ -50,12 +52,48 @@ export function assembleCandidatePool(scored: { def: Def }[], lexical: { name: s
   return pool.slice(0, POOL_CAP);
 }
 
+// FAN-IN — how many files reference each candidate symbol by name. A symbol used across MANY files is
+// INFRASTRUCTURE (a hub/utility), a poor anchor: an entry point has few callers, a hub yields a generic
+// footprint AND an explosive grow. One repo walk, a single word-boundary alternation regex, size-capped —
+// cheap next to the embed pass anchor selection already runs. (Comments/strings inflate slightly; the
+// RELATIVE threshold in demoteHubs absorbs it.) Names <4 chars are skipped — too ambiguous to count.
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+function fanInByName(repo: string, names: string[]): Map<string, number> {
+  const fan = new Map<string, number>(names.map((n) => [n, 0]));
+  const distinct = [...new Set(names.filter((n) => n.length >= 4))];
+  if (!distinct.length) return fan;
+  const re = new RegExp(`\\b(?:${distinct.map(escapeRe).join("|")})\\b`, "g");
+  for (const { text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt, { maxBytes: 1_000_000 })) {
+    const seen = new Set<string>();
+    let m: RegExpExecArray | null; re.lastIndex = 0;
+    while ((m = re.exec(text)) !== null) seen.add(m[0]);
+    for (const n of seen) fan.set(n, (fan.get(n) ?? 0) + 1);
+  }
+  return fan;
+}
+
+// DEMOTE HUBS — drop candidates referenced in far more files than the pool norm (infrastructure used
+// everywhere — the wrong anchor). RELATIVE threshold so it adapts to the repo (no magic absolute count):
+// a hub = fan-in ≥ max(HUB_FLOOR, HUB_MULT × pool median). Hubs are dropped ONLY while ≥ MIN_KEEP non-hub
+// candidates remain, so a footprint of genuinely-central symbols is never emptied. Pure → unit-testable.
+const _HUB_FLOOR = 8, _HUB_MULT = 4, _MIN_KEEP = 5;
+export function demoteHubs(cand: Cand[], fanIn: Map<string, number>): Cand[] {
+  if (cand.length <= _MIN_KEEP) return cand;
+  const fans = cand.map((c) => fanIn.get(c.name) ?? 0).sort((a, b) => a - b);
+  const median = fans[Math.floor(fans.length / 2)] || 0;
+  const bar = Math.max(_HUB_FLOOR, _HUB_MULT * median);
+  const nonHub = cand.filter((c) => (fanIn.get(c.name) ?? 0) < bar);
+  return nonHub.length >= _MIN_KEEP ? nonHub : cand;   // keep all if dropping would starve the pool
+}
+
 export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
     Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none" }> {
   if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
 
   const scored = await embedScoreDefs(repo, intent);   // [] when embeddings absent → caller falls back
-  const cand = assembleCandidatePool(scored, find_anchor_candidates(repo, [..._content_words(intent)]));
+  const pooled = assembleCandidatePool(scored, find_anchor_candidates(repo, [..._content_words(intent)]));
+  const fanIn = fanInByName(repo, pooled.map((c) => c.name));
+  const cand = demoteHubs(pooled, fanIn);              // a hub anchor (used everywhere) → generic result + slow grow
   if (!cand.length) return { chosen: null, chosenBy: "none" };
 
   // DIAGNOSTIC (SEAM_ANCHOR_DEBUG=1): dump the embed ranking + the candidate pool so we can see whether the
@@ -66,8 +104,10 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
     const e = process.stderr;
     e.write(`\n[anchor-debug] intent: "${intent}"\n[anchor-debug] embed-ranked defs (top 30 of ${scored.length}):\n`);
     scored.slice(0, 30).forEach(({ def, score }, i) => e.write(`   #${i} ${score.toFixed(3)} ${def.name}${def.enclosing ? " in " + def.enclosing : ""} (${def.file})\n`));
+    const dropped = pooled.filter((p) => !cand.includes(p));
+    if (dropped.length) e.write(`[anchor-debug] dropped as HUBS: ${dropped.map((c) => `${c.name}(fan-in ${fanIn.get(c.name) ?? 0})`).join(", ")}\n`);
     e.write(`[anchor-debug] candidate pool (${cand.length}):\n`);
-    cand.forEach((c, i) => e.write(`   c${i} ${c.name} (${c.file})${c.def ? ` [embed#${rankByKey.get(`${c.def.name}|${c.def.file}`) ?? "?"}] passage: ${passage(c.def).slice(0, 160)}` : " [lexical]"}\n`));
+    cand.forEach((c, i) => e.write(`   c${i} ${c.name} (fan-in ${fanIn.get(c.name) ?? 0}) (${c.file})${c.def ? ` [embed#${rankByKey.get(`${c.def.name}|${c.def.file}`) ?? "?"}] passage: ${passage(c.def).slice(0, 160)}` : " [lexical]"}\n`));
   }
 
   const lines = [

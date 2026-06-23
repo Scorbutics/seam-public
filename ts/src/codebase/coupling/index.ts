@@ -431,11 +431,16 @@ function reportUngroundedKey(s: NodeScope, nodeId: string, key: AnchorKey): void
 async function crossBoundary(
   s: NodeScope, boundaryId: string, key: AnchorKey, complementFiles: Map<string, number>, surfacedKeys: Set<string>,
 ): Promise<void> {
-  const { graph, repo, depth, coOccurrence } = s;
+  const { graph, repo, depth, coOccurrence, ctx } = s;
   const adapter = kindOf(key.kind);
   const complementProduces = !key.produces;
   const rankedComplements = orderComplementsByRelevance(complementFiles, coOccurrence);
   for (const [file, line] of rankedComplements.slice(0, READER_CAP)) {
+    // GROW-WIDE FANOUT BUDGET: each complement is a tree-sitter parse (the data-coupling bottleneck). A hub
+    // key/anchor fans out to hundreds — bound the TOTAL across the whole grow so a central anchor can't run
+    // for ages. When exhausted, stop materialising (the over-budget tail is recorded as a fanout blindspot).
+    if (ctx.complementBudget <= 0) break;
+    ctx.complementBudget--;
     const unit = await complement_unit(repo, file, line);
     const complementId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true });
     graph.addEdge({ from: boundaryId, to: complementId, kind: complementProduces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });

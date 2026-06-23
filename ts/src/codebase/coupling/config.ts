@@ -13,6 +13,7 @@ const _keyBudget = process.env.SEAM_KEY_BUDGET !== undefined ? Math.max(0, Math.
 const _maxScanBytes = process.env.SEAM_MAX_SCAN_BYTES !== undefined ? Math.max(0, Math.floor(Number(process.env.SEAM_MAX_SCAN_BYTES) || 0)) : 0;
 export const COUPLING = {
   readerCap: 6,      // index: max complement nodes materialized per shared key
+  complementBudget: Number(process.env.SEAM_COMPLEMENT_BUDGET ?? 250), // grow-wide cap on materialized complement units (tree-sitter parses) — bounds a hub's data-coupling fan so a bad/central anchor can't run for ages; $SEAM_COMPLEMENT_BUDGET
   maxScanBytes: _maxScanBytes, // floor scan: skip files larger than this — OOM backstop, $SEAM_MAX_SCAN_BYTES, 0=off (default: scan all)
   chainDepth: 1,     // index: hops to chain the data-flow boundary past the anchor (reader → its http-route)
   keyBudget: _keyBudget, // llm_key_index: max files sent to the LLM per run (bounds a huge repo; $SEAM_KEY_BUDGET)
