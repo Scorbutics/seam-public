@@ -41,16 +41,35 @@ export function cropOffIntent(clusters: any[]): number {
   return omitted;
 }
 
-// Annotate every seam in the clusters with a deterministic `relevance` (0..1 cosine, embed vs intent) and a
-// rank-banded `tier`. Keyed by the seam's primary def (file::symbol), with a name-only fallback. Mutates in
-// place. No-op without an intent or when embeddings are unavailable.
+// Within a SEAM, flag the most intent-relevant MEMBERS as the spine. The structural floor collapses a
+// tangled (god-object / DI-heavy) closure into one big seam, so seam-level tiering has nothing to separate
+// — but the embedding still tells us WHICH members of that blob answer the intent. Mark the top relevance
+// band (≥ the seam's mean of scored members; capped) as `spine`, so a consumer can surface the intent path
+// inside the tangle. Deterministic, no LLM. No-op on a seam with <2 scored members (nothing to rank).
+const _SPINE_MEMBER_CAP = 12;   // "the path" inside a blob is a handful, not the top third — cap hard
+export function markSpineMembers(hunks: any[]): void {
+  const scored = hunks.filter((h) => typeof h.relevance === "number");
+  if (scored.length < 2) { if (scored.length === 1) scored[0].spine = true; return; }
+  const mean = scored.reduce((a, h) => a + h.relevance, 0) / scored.length;
+  const cap = Math.min(_SPINE_MEMBER_CAP, Math.max(1, Math.ceil(scored.length / 4)));
+  const top = [...scored].sort((a, b) => b.relevance - a.relevance);
+  let n = 0;
+  for (const h of top) h.spine = h.relevance >= mean && n++ < cap;   // top, above-average members only
+}
+
+// Annotate every seam (and its MEMBERS) with a deterministic `relevance` (0..1 cosine, embed vs intent) and a
+// rank-banded `tier`. Keyed by each def (file::symbol), with a name-only fallback. Mutates in place. No-op
+// without an intent or when embeddings are unavailable.
 export async function annotateIntentRelevance(repo: string, intent: string | undefined, clusters: any[]): Promise<boolean> {
   if (!intent || !clusters?.length) return false;
-  // FOOTPRINT-SCOPED: we only score THIS footprint's seams, so embed just the files they live in — not a
-  // whole-repo tree-sitter + embed pass. On a huge repo that turns a 4000-def walk into a few-dozen-file
-  // one (the seams' own files), and the canonical rels keep cache parity with the anchor-recall pass.
+  // FOOTPRINT-SCOPED: embed just the files this footprint lives in (seam primaries AND every member hunk —
+  // so intra-seam members can be ranked, not just the seam reps), not a whole-repo tree-sitter + embed pass.
+  // On a huge repo that turns a 4000-def walk into a footprint-sized one; canonical rels keep cache parity.
   const files = new Set<string>();
-  for (const cl of clusters) for (const s of (cl.seams ?? [])) if (s.primary?.file) files.add(s.primary.file);
+  for (const cl of clusters) for (const s of (cl.seams ?? [])) {
+    if (s.primary?.file) files.add(s.primary.file);
+    for (const h of (s.hunks ?? [])) if (h.file) files.add(h.file);
+  }
   const scored = await embedScoreDefs(repo, intent, files.size ? files : undefined);
   if (!scored.length) return false;   // transformers absent / no defs → leave seams unannotated (graceful)
 
@@ -61,14 +80,22 @@ export async function annotateIntentRelevance(repo: string, intent: string | und
     if (!byKey.has(k)) byKey.set(k, score);
     if (!byName.has(def.name)) byName.set(def.name, score);
   }
+  const round3 = (x: number) => Math.round(x * 1000) / 1000;
+  const scoreOf = (file?: string, sym?: string): number | undefined =>
+    sym ? (byKey.get(`${file}::${sym}`) ?? byName.get(sym)) : undefined;
 
   for (const cl of clusters) {
     const seams = cl.seams ?? [];
     for (const s of seams) {
-      const p = s.primary;
-      if (!p?.symbol) continue;
-      const score = byKey.get(`${p.file}::${p.symbol}`) ?? byName.get(p.symbol);
-      if (score !== undefined) s.relevance = Math.round(score * 1000) / 1000;
+      const ss = scoreOf(s.primary?.file, s.primary?.symbol);
+      if (ss !== undefined) s.relevance = round3(ss);
+      // per-MEMBER relevance (skip synthetic caller/summary hunks — they have no own def to score)
+      for (const h of (s.hunks ?? [])) {
+        if (h.caller || h.summary) continue;
+        const hs = scoreOf(h.file, h.label);
+        if (hs !== undefined) h.relevance = round3(hs);
+      }
+      markSpineMembers(s.hunks ?? []);
     }
     bandTiers(seams);
   }

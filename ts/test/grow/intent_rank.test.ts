@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { bandTiers, annotateIntentRelevance, cropOffIntent } from "../../src/codebase/grow/intent_rank.js";
+import { bandTiers, annotateIntentRelevance, cropOffIntent, markSpineMembers } from "../../src/codebase/grow/intent_rank.js";
 
 describe("rank-banding (pure, deterministic)", () => {
   test("top third → spine, middle → supporting, tail → off", () => {
@@ -22,6 +22,32 @@ describe("rank-banding (pure, deterministic)", () => {
     const seams: any[] = [{ id: "a" }, { id: "b" }];
     bandTiers(seams);
     expect(seams.every((s) => s.tier === undefined)).toBe(true);
+  });
+});
+
+describe("markSpineMembers — surface the intent path INSIDE a collapsed (god-object) seam", () => {
+  test("top, above-average members flagged spine; noise left unflagged", () => {
+    // a tangled blob: a few on-intent members + a long tail of low-relevance noise
+    const hunks = [
+      { label: "deployService", relevance: 0.34 },
+      { label: "registerProvider", relevance: 0.31 },
+      { label: "ServiceConfig", relevance: 0.28 },
+      ...Array.from({ length: 20 }, (_, i) => ({ label: `noise${i}`, relevance: 0.02 + i * 0.001 })),
+    ];
+    markSpineMembers(hunks);
+    expect(hunks.filter((h: any) => h.spine).map((h) => h.label)).toEqual(["deployService", "registerProvider", "ServiceConfig"]);
+    expect((hunks.find((h) => h.label === "noise0") as any).spine).toBe(false);
+  });
+  test("hard cap: never crowns more than 12 even when many score above the mean", () => {
+    const hunks = Array.from({ length: 60 }, (_, i) => ({ label: `m${i}`, relevance: i < 30 ? 0.9 : 0.1 }));   // 30 > mean(0.5), cap = min(12, ceil(60/4)=15) = 12
+    markSpineMembers(hunks);
+    expect(hunks.filter((h: any) => h.spine).length).toBe(12);
+  });
+  test("caller/summary hunks (no relevance) are ignored; a lone scored member is the spine", () => {
+    const hunks: any[] = [{ label: "only", relevance: 0.2 }, { label: "+3 more", summary: true }];
+    markSpineMembers(hunks);
+    expect(hunks[0].spine).toBe(true);
+    expect(hunks[1].spine).toBeUndefined();
   });
 });
 
