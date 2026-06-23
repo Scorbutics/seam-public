@@ -9,6 +9,8 @@
 //   bun ts/src/cli/adapters.ts where                       # print the repo + shared .seam locations
 import { listLearnedAdapters, promoteSignature } from "../codebase/coupling/carrier/cache.js";
 import { listKeyAdapters, promoteKeyAdapter } from "../codebase/coupling/key_cache.js";
+import { listMatchers } from "../codebase/coupling/key_matcher_cache.js";
+import { matcherShape } from "../codebase/coupling/key_ir.js";
 import { builtinAdapters } from "../codebase/coupling/adapters/index.js";
 import { sharedSeamDir } from "../codebase/coupling/seam_dir.js";
 import { join } from "node:path";
@@ -28,7 +30,7 @@ function listJson(repo: string): void {
   const keys = listKeyAdapters(repo);
   const sharedNames = new Set([...carriers, ...keys].filter((a) => a.scope === "shared")
     .map((a) => "sig" in a ? a.sig.name : a.adapter.name));
-  const item = (name: string, type: "key" | "carrier", description: string, detail: string) => ({ name, type, description, detail });
+  const item = (name: string, type: "key" | "carrier" | "matcher", description: string, detail: string) => ({ name, type, description, detail });
   const learnt: ReturnType<typeof item>[] = [];
   const promoted: ReturnType<typeof item>[] = [];
   for (const { adapter, scope } of keys) {
@@ -38,6 +40,11 @@ function listJson(repo: string): void {
   for (const { sig, scope } of carriers) {
     const it = item(sig.name, "carrier", sig.description ?? "", `${sig.direction}/${sig.medium}`);
     (scope === "shared" ? promoted : sharedNames.has(sig.name) ? promoted : learnt).push(it);
+  }
+  // learned RULE adapters (the reusable shared-key matchers — call/assign/attr shapes), not per-file keys
+  for (const { matcher, scope } of listMatchers(repo)) {
+    const it = item(matcher.name ?? matcherShape(matcher), "matcher", matcher.description ?? "", `${matcher.via}: ${matcherShape(matcher)} → ${matcher.role} ${matcher.kind}`);
+    (scope === "shared" || sharedNames.has(it.name) ? promoted : learnt).push(it);
   }
   // a name can appear in both stores (promote copies repo→shared) → keep one entry per (name) per bucket.
   const dedup = (xs: ReturnType<typeof item>[]) => [...new Map(xs.map((x) => [x.name, x])).values()];
@@ -52,12 +59,19 @@ function listJson(repo: string): void {
 function list(repo: string): void {
   const carriers = listLearnedAdapters(repo);
   const keys = listKeyAdapters(repo);
-  if (!carriers.length && !keys.length) { console.log(`no learned adapters yet (run a footprint with --data-coupling llm).\n  repo:   ${join(repo, ".seam")}\n  shared: ${sharedSeamDir()}`); return; }
+  const matchers = listMatchers(repo);
+  if (!carriers.length && !keys.length && !matchers.length) { console.log(`no learned adapters yet (run a footprint with --data-coupling llm).\n  repo:   ${join(repo, ".seam")}\n  shared: ${sharedSeamDir()}`); return; }
   for (const scope of ["repo", "shared"] as const) {
     const cs = carriers.filter((a) => a.scope === scope);
     const ks = keys.filter((a) => a.scope === scope);
-    if (!cs.length && !ks.length) continue;
+    const ms = matchers.filter((a) => a.scope === scope);
+    if (!cs.length && !ks.length && !ms.length) continue;
     console.log(`\n${scope === "repo" ? "REPO" : "SHARED"}:`);
+    // RULE adapters first — the reusable shared-key matchers (call/assign/attr), the real "adapters"
+    for (const { matcher } of ms) {
+      console.log(`  matcher  ${matcher.name}  [${matcher.via}]  ${matcherShape(matcher)} → ${matcher.role} ${matcher.kind}`);
+      if (matcher.description) console.log(`             ${matcher.description}`);
+    }
     for (const { key, sig } of cs) {
       console.log(`  carrier  ${sig.name}  [${sig.direction}/${sig.medium}]  ${key.split(" ")[0]}`);   // drop content hash
       if (sig.description) console.log(`             ${sig.description}`);

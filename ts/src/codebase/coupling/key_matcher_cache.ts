@@ -5,7 +5,7 @@
 // Repo-local store read FIRST, then the shared ~/.config/seam store (promoted/common), like the sibling caches.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { KeyMatcher } from "./key_ir.js";
+import { type KeyMatcher, matcherKey } from "./key_ir.js";
 import { ensureSeamGitignore, sharedSeamDir } from "./seam_dir.js";
 import { recordAdapterUsed, recordAdapterLearned } from "./ledger.js";
 
@@ -17,7 +17,8 @@ const _mem = new Map<string, KeyMatcher[]>();   // path → loaded list
 const _path = (repo: string): string => join(repo, _rel);
 const _sharedPath = (): string => join(sharedSeamDir(), _file);
 // Identity of a rule (so repo+shared merge dedupes) — the executable fields, not the human name/description.
-const _id = (m: KeyMatcher): string => `${m.via} ${m.token} ${m.argIndex} ${m.kind} ${m.role}`;
+const _id = (m: KeyMatcher): string => matcherKey(m);
+const _label = (m: KeyMatcher): string => m.name ?? matcherKey(m);   // human handle for the ledger/adapter view
 
 function _loadFrom(path: string): KeyMatcher[] {
   if (_mem.has(path)) return _mem.get(path)!;
@@ -46,10 +47,19 @@ export function loadMatchers(repo: string): KeyMatcher[] {
       const id = _id(m);
       if (seen.has(id)) continue;
       seen.add(id);
-      recordAdapterUsed(m.name ?? m.token, scope);
+      recordAdapterUsed(_label(m), scope);
       out.push(m);
     }
   }
+  return out;
+}
+
+// All learned matcher RULES with their scope, for inspection (seam-adapters) — PURE (no ledger side
+// effect, unlike loadMatchers). Repo store then shared store, each in stored order.
+export function listMatchers(repo: string): { matcher: KeyMatcher; scope: "repo" | "shared" }[] {
+  const out: { matcher: KeyMatcher; scope: "repo" | "shared" }[] = [];
+  for (const [scope, path] of [["repo", _path(repo)], ["shared", _sharedPath()]] as const)
+    for (const m of _loadFrom(path)) out.push({ matcher: m, scope });
   return out;
 }
 
@@ -62,7 +72,7 @@ export function persistMatchers(repo: string, matchers: KeyMatcher[]): void {
     if (have.has(_id(m))) continue;
     have.add(_id(m));
     list.push(m);
-    recordAdapterLearned(m.name ?? m.token);
+    recordAdapterLearned(_label(m));
   }
   try {
     const p = _path(repo);

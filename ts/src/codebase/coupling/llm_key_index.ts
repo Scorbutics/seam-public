@@ -189,7 +189,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   await learnKeyMatchers(repo, blindFiles, opts, ctx);   // persists survivors into the matcher store
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   if (matchers.length) {
-    for (const [k, v] of applyMatchers(repo, matchers)) {
+    for (const [k, v] of await applyMatchers(repo, matchers)) {
       if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
       idx.get(k)!.producers.push(...v.producers);
       idx.get(k)!.consumers.push(...v.consumers);

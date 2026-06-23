@@ -19,7 +19,7 @@ import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex } from "./types.js";
-import { type KeyMatcher, validateMatcher, runMatcher } from "./key_ir.js";
+import { type KeyMatcher, validateMatcher, runMatcher, matcherKey } from "./key_ir.js";
 import { persistMatchers } from "./key_matcher_cache.js";
 
 const PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
@@ -64,7 +64,7 @@ function _parse(out: Map<string, any>): KeyMatcher[] {
   for (const obj of out.values()) {
     const m = validateMatcher(obj);
     if (!m) continue;
-    const id = `${m.token} ${m.argIndex} ${m.kind} ${m.role}`;
+    const id = matcherKey(m);
     if (seen.has(id)) continue;
     seen.add(id);
     matchers.push(m);
@@ -72,9 +72,15 @@ function _parse(out: Map<string, any>): KeyMatcher[] {
   return matchers;
 }
 
+// The token to echo back as a "matched nothing" hint on the self-correction round (call/assign carry a
+// callee/receiver identifier; attr carries its directive prefix).
+const _feedbackToken = (m: KeyMatcher): string => (m.via === "attr" ? m.directive : m.token);
+
 // A matcher DETECTS if it re-executes to ≥1 key over the candidate files (step 3-4: it actually matches).
-const _detects = (m: KeyMatcher, files: { file: string; text: string }[]): boolean =>
-  files.some((f) => runMatcher(m, f.text).length > 0);
+async function _detects(m: KeyMatcher, files: { file: string; text: string }[]): Promise<boolean> {
+  for (const f of files) if ((await runMatcher(m, f.file, f.text)).length > 0) return true;
+  return false;
+}
 
 // LEARN reusable matchers from floor-blind files: synthesize → validate shape → re-execute → keep only those
 // that detect, with one self-correction retry on the misses → persist + return. No-op without opts.llm/budget.
@@ -102,13 +108,13 @@ export async function learnKeyMatchers(
   emit(`Learning shared-key adapter rule(s) for ${snippets.length} floor-blind file(s) via LLM…`);
   const candidates = synth([]);
   const accepted: KeyMatcher[] = [], failed: KeyMatcher[] = [];
-  for (const m of candidates) (_detects(m, blindFiles) ? accepted : failed).push(m);
+  for (const m of candidates) (await _detects(m, blindFiles) ? accepted : failed).push(m);
 
   // step 5 — ONE self-correction round on the detection misses (don't waste a call if there were none)
   if (failed.length) {
-    for (const m of synth(failed.map((f) => f.token)))
-      if (!accepted.some((a) => a.token === m.token && a.kind === m.kind && a.role === m.role && a.argIndex === m.argIndex) && _detects(m, blindFiles))
-        accepted.push(m);
+    const have = new Set(accepted.map(matcherKey));
+    for (const m of synth(failed.map((f) => _feedbackToken(f))))
+      if (!have.has(matcherKey(m)) && await _detects(m, blindFiles)) { accepted.push(m); have.add(matcherKey(m)); }
   }
 
   persistMatchers(repo, accepted);
@@ -118,12 +124,12 @@ export async function learnKeyMatchers(
 // APPLY matchers deterministically across the repo → a grounding index of their hits MINUS the keys the
 // floor already covers (reconciliation — a learned rule that duplicates an adapter is not double-counted).
 // No LLM. Empty matchers → empty index (and no walk), so a cold det run with no `.seam/` pays nothing.
-export function applyMatchers(repo: string, matchers: KeyMatcher[], skipDirs: Set<string> = SKIP_DIRS): GroundingIndex {
+export async function applyMatchers(repo: string, matchers: KeyMatcher[], skipDirs: Set<string> = SKIP_DIRS): Promise<GroundingIndex> {
   const idx: GroundingIndex = new Map();
   if (!matchers.length) return idx;
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
     const floor = new Set(scan_file_keys(rel, text).map((h) => `${h.kind} ${h.value}`));
-    for (const m of matchers) for (const h of runMatcher(m, text)) {
+    for (const m of matchers) for (const h of await runMatcher(m, rel, text)) {
       const id = `${h.kind} ${h.value}`;
       if (floor.has(id)) continue;                                   // floor already covers it → reconcile away
       if (!idx.has(id)) idx.set(id, { producers: [], consumers: [] });
