@@ -40,6 +40,26 @@ const cosine = (a: number[], b: number[]): number => { let s = 0; for (let i = 0
 // model (MiniLM/mpnet) wants none. Applied to the intent only.
 const QUERY_PREFIX = /bge/i.test(MODEL) ? "Represent this sentence for searching relevant passages: " : "";
 
+// Score raw STRINGS (shared-key values) by cosine similarity to the intent — used to rank which keys a hub
+// node keeps vs demotes to a blindspot, so the demoted ones are the LEAST intent-relevant (not just the
+// most-shared). In-memory cached: key values are short and recur across nodes; the intent vector is memoised.
+// Returns {} when transformers is absent / on any error → the caller falls back to its deterministic order.
+const _strVec = new Map<string, number[]>();          // key value → vector (per process)
+let _intentVec: { intent: string; vec: number[] } | null = null;
+export async function embedScoreStrings(intent: string, values: string[]): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  try {
+    if (!intent || !values.length || !(await transformersAvailable())) return out;
+    if (_intentVec?.intent !== intent) _intentVec = { intent, vec: await embed_one(QUERY_PREFIX + intent) };
+    for (const v of values) {
+      let vec = _strVec.get(v);
+      if (!vec) { vec = await embed_one(v); _strVec.set(v, vec); }
+      out.set(v, cosine(_intentVec.vec, vec));
+    }
+  } catch { /* partial/empty → caller falls back to fanout */ }
+  return out;
+}
+
 // disk cache: embed-string hash → vector, per repo AND MODEL (different models have different dims /
 // spaces). Under the OS cache dir (never written into the target repo). Incremental — only new/changed def
 // strings are embedded; the rest are reused.

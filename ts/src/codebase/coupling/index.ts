@@ -544,11 +544,22 @@ async function runPipeline(
     grounded.push({ key, complementFiles });
   }
   // PER-NODE FAN CAP — a HUB node (a big component emitting dozens of UI events: `input`/`click`/…) surfaces
-  // many keys, each fanning to many files → the coupling explodes (the slow big-file case). Keep the most
-  // SPECIFIC keys (lowest cross-file fanout = real 1-to-1 couplings); demote the high-fanout hub keys (shared
-  // by dozens, usually generic events) to ONE blindspot. Deterministic (fanout, then value). Recall-safe.
-  grounded.sort((a, b) => (a.complementFiles.size - b.complementFiles.size) || (a.key.value < b.key.value ? -1 : a.key.value > b.key.value ? 1 : 0));
+  // many keys, each fanning to many files → the coupling explodes (the slow big-file case). We keep `cap` keys
+  // and demote the rest to ONE blindspot. ORDER, best-first:
+  //   • INTENT-aware (when ctx.rankKeys is set, i.e. an --intent grow with embeddings): most intent-relevant
+  //     first — so the demoted/blindspotted keys are the ones LEAST related to the question (inoffensive).
+  //   • else DETERMINISTIC fallback: most SPECIFIC first (lowest cross-file fanout = real 1-to-1 couplings),
+  //     demoting the high-fanout hub keys (generic events shared by dozens). Both recall-safe (blindspot).
   const cap = Number(process.env.SEAM_NODE_KEY_CAP ?? COUPLING.nodeKeyCap);   // runtime-tunable (per-run)
+  const byFanout = (a: typeof grounded[number], b: typeof grounded[number]) =>
+    (a.complementFiles.size - b.complementFiles.size) || (a.key.value < b.key.value ? -1 : a.key.value > b.key.value ? 1 : 0);
+  if (grounded.length > cap && s.ctx.rankKeys) {
+    const rel = await s.ctx.rankKeys(grounded.map((g) => g.key.value)).catch(() => new Map<string, number>());
+    if (rel.size) grounded.sort((a, b) => ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // most intent-relevant first
+    else grounded.sort(byFanout);
+  } else {
+    grounded.sort(byFanout);
+  }
   // mark the DEMOTED keys seen FIRST, so the chain (crossBoundary's recursion) doesn't re-surface them
   // through a complement — keeping the hub's fan genuinely bounded, not just deferred one hop.
   for (const { key } of grounded.slice(cap)) surfacedKeys.add(keyId(key.kind, key.value));

@@ -537,7 +537,7 @@ async function runCodebase(a: Args): Promise<number> {
       try {
         [data, hist] = a.grow === "llm"
           ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm })
-          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");

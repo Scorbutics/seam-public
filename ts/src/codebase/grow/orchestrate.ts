@@ -11,6 +11,7 @@ import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
+import { embedScoreStrings } from "../scan/def_embed.js";
 import { isFlowSubject } from "../coupling/index.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -173,12 +174,16 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
 // discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   // ctx shared across all grow moves (repo indices built once). A CALLER may pass its OWN ctx to share the
   // expensive repo-wide indices across SEVERAL grows — e.g. the anchor probes (Lever 2) build the
   // data-coupling grounding index ONCE for the whole candidate pool instead of once per candidate.
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
+  // INTENT-AWARE key ranking: give the coupling hub-fan cap a way to keep the most intent-relevant keys
+  // (and demote the least-relevant to a blindspot) instead of the deterministic fanout fallback. The ctx
+  // carries the opaque ranker so coupling needs no embedding import; embeddings absent → it returns {} → fanout.
+  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = (values) => embedScoreStrings(opts.intent!, values);
   // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
   // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
