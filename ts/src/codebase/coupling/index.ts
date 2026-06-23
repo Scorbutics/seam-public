@@ -554,7 +554,12 @@ async function runPipeline(
   const byFanout = (a: typeof grounded[number], b: typeof grounded[number]) =>
     (a.complementFiles.size - b.complementFiles.size) || (a.key.value < b.key.value ? -1 : a.key.value > b.key.value ? 1 : 0);
   if (grounded.length > cap && s.ctx.rankKeys) {
-    const rel = await s.ctx.rankKeys(grounded.map((g) => g.key.value)).catch(() => new Map<string, number>());
+    // intent-rank from the key VALUE, its OTHER SIDE (complement file paths — known without materializing),
+    // and the local PASSAGE (a few lines around the key's use here). MAX over signals → keep if any relevant.
+    const lines = node.text.split("\n");
+    const passageAt = (ln: number) => lines.slice(Math.max(0, ln - 3), ln + 4).join("\n").slice(0, 600);
+    const items = grounded.map((g) => ({ value: g.key.value, otherSide: [...g.complementFiles.keys()], passage: passageAt(g.key.line) }));
+    const rel = await s.ctx.rankKeys(items).catch(() => new Map<string, number>());
     if (rel.size) grounded.sort((a, b) => ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // most intent-relevant first
     else grounded.sort(byFanout);
   } else {

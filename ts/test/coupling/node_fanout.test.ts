@@ -46,7 +46,7 @@ describe("per-node key cap — intent ranker overrides fanout", () => {
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const ctx = new EngineCtx();
     const score: Record<string, number> = { alpha: 0.1, bravo: 0.1, charlie: 0.8, delta: 0.9, echo: 0.9 };
-    ctx.rankKeys = async (values) => new Map(values.map((v) => [v, score[v] ?? 0]));
+    ctx.rankKeys = async (items) => new Map(items.map((it) => [it.value, score[it.value] ?? 0]));
     const prev = process.env.SEAM_NODE_KEY_CAP;
     process.env.SEAM_NODE_KEY_CAP = "3";
     try {

@@ -22,10 +22,11 @@ export class EngineCtx {
   floorContribs = new Map<string, unknown>();           // floorContributions: repo → per-file floor scan (computed ONCE/run, shared by the floor build AND the llm-key floorOf — no duplicate scan)
 
   // --- intent-aware key ranking (set by the grow from --intent; read by the coupling per-node fan cap) ---
-  // An OPAQUE callback so the coupling DAG-leaf needs no scan/embedding import: given key VALUES, return each
-  // one's intent-relevance (0..1). When set, the hub fan cap keeps the most relevant keys and demotes the
-  // LEAST relevant to the blindspot (vs the deterministic fanout fallback). Absent → fanout order.
-  rankKeys?: (values: string[]) => Promise<Map<string, number>>;
+  // An OPAQUE callback so the coupling DAG-leaf needs no scan/embedding import: given each key's value, its
+  // other-side files, and the local-use passage, return its intent-relevance (value → 0..1). When set, the
+  // hub fan cap keeps the most relevant keys and demotes the LEAST relevant to the blindspot (vs the
+  // deterministic fanout fallback). Absent / empty → fanout order. (Impl: grow/key_ranker.ts.)
+  rankKeys?: (items: { value: string; otherSide: string[]; passage?: string }[]) => Promise<Map<string, number>>;
 
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null

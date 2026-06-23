@@ -11,7 +11,7 @@ import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
-import { embedScoreStrings } from "../scan/def_embed.js";
+import { makeIntentKeyRanker } from "./key_ranker.js";
 import { isFlowSubject } from "../coupling/index.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -183,7 +183,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // INTENT-AWARE key ranking: give the coupling hub-fan cap a way to keep the most intent-relevant keys
   // (and demote the least-relevant to a blindspot) instead of the deterministic fanout fallback. The ctx
   // carries the opaque ranker so coupling needs no embedding import; embeddings absent → it returns {} → fanout.
-  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = (values) => embedScoreStrings(opts.intent!, values);
+  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);
   // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
   // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
