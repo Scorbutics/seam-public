@@ -86,8 +86,23 @@ export function demoteHubs(cand: Cand[], fanIn: Map<string, number>): Cand[] {
   return nonHub.length >= _MIN_KEEP ? nonHub : cand;   // keep all if dropping would starve the pool
 }
 
+export type AnchorAlt = { name: string; file: string; score: number };
+// The runner-up anchors (pool minus the chosen) ranked by intent-embed score. Surfaced so an off-intent
+// footprint can OFFER a better-matching anchor to re-run on, instead of silently presenting the wrong flow.
+// Pure → testable. Their scores ALSO disambiguate "wrong pick" (an alt scores high) from "intent has no home
+// here" (all alts score low) for free.
+export function rankAlternatives(cand: Cand[], scored: { def: Def; score: number }[], chosen: { name: string; file: string } | null, cap = 5): AnchorAlt[] {
+  const sc = new Map<string, number>();
+  for (const { def, score } of scored) { const k = `${def.name}|${def.file}`; if (!sc.has(k)) sc.set(k, score); }
+  return cand
+    .filter((c) => !(chosen && c.name === chosen.name && c.file === chosen.file))
+    .map((c) => ({ name: c.name, file: c.file, score: sc.get(`${c.name}|${c.file}`) ?? 0 }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, cap);
+}
+
 export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
-    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none" }> {
+    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none"; alternatives?: AnchorAlt[] }> {
   if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
 
   const scored = await embedScoreDefs(repo, intent);   // [] when embeddings absent → caller falls back
@@ -133,6 +148,7 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
         chosen: { id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: 0, terms: ["~pick"],
                   metrics: null, structScore: 0, signature: c.def?.signature, doc: c.def?.doc },
         chosenBy: "pick",
+        alternatives: rankAlternatives(cand, scored, c),
       };
     }
   }

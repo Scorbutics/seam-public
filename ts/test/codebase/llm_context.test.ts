@@ -46,3 +46,15 @@ describe("renderLlmContext member rendering", () => {
     expect(stars).toBeLessThanOrEqual(8);
   });
 });
+
+describe("renderLlmContext off-intent gate", () => {
+  const base = (intentMatch: any) => ({ mode: "codebase", anchor: "X", resolutionQuality: "FULL", complete: true, blindspots: [], intentMatch, clusters: [{ id: "g1", intent: "X", spine: [], seams: [] }] });
+  test("offIntent → ⚠ warning + ranked alternative anchors", () => {
+    const out = renderLlmContext(base({ max: 0.05, offIntent: true, floor: 0.15, alternatives: [{ name: "betterFn", file: "b.ts", score: 0.42 }] }));
+    expect(out).toContain("Low intent match");
+    expect(out).toContain("--symbol betterFn");
+  });
+  test("on-intent → no warning", () => {
+    expect(renderLlmContext(base({ max: 0.4, offIntent: false, floor: 0.15 }))).not.toContain("Low intent match");
+  });
+});

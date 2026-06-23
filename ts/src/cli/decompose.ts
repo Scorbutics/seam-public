@@ -27,6 +27,21 @@ async function annotateForEmit(repo: string, intent: string | undefined, spineOn
     if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true };
   }
 }
+
+// OFF-INTENT GATE — honest "this anchor's footprint doesn't relate to the intent" + ranked alternative
+// anchors to re-run on. Uses the relevance the annotate pass already set: if the BEST seam is below the floor
+// (nothing in the grown flow matches), flag it and attach the runner-up anchors (their own scores separate
+// "wrong anchor" — an alt scores high — from "intent has no home here" — all low). No-op without relevance.
+const _INTENT_FLOOR = Number(process.env.SEAM_INTENT_FLOOR ?? 0.15);
+function applyIntentMatch(model: any, alternatives?: { name: string; file: string; score: number }[]): void {
+  const rels = (model.clusters ?? []).flatMap((c: any) => (c.seams ?? []).map((s: any) => s.relevance)).filter((r: any) => typeof r === "number");
+  if (!rels.length) return;   // embeddings unavailable → no honest signal to give
+  const max = Math.max(...rels);
+  const offIntent = max < _INTENT_FLOOR;
+  model.intentMatch = { max: Math.round(max * 1000) / 1000, offIntent, floor: _INTENT_FLOOR, ...(alternatives?.length ? { alternatives } : {}) };
+  if (offIntent) process.stderr.write(`[off-intent] the grown footprint barely matches the intent (top relevance ${model.intentMatch.max} < ${_INTENT_FLOOR})`
+    + (alternatives?.length ? ` — try another anchor: ${alternatives.slice(0, 3).map((a) => `--symbol ${a.name}`).join(" | ")}` : "") + "\n");
+}
 import { cacheKey, cacheGet, cachePut } from "../diff/cache.js";
 import { render } from "../diff/report_text.js";
 import {
@@ -468,6 +483,7 @@ async function runCodebase(a: Args): Promise<number> {
   const dcLlm = a.dataCouplingLlm;
   let data: any;
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
+  let anchorAlternatives: { name: string; file: string; score: number }[] | undefined;   // runner-up anchors → offered when the footprint reads off-intent
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
     const { merge_resolved } = await import("../codebase/scan/index.js");
@@ -492,6 +508,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (sel.entryCandidate) process.stderr.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
+      anchorAlternatives = sel.alternatives;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
       process.stderr.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
       // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
@@ -534,6 +551,7 @@ async function runCodebase(a: Args): Promise<number> {
       if (usage) model2.usage = usage;
       emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
       await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
+      applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
       const payload = JSON.stringify(stamped);
       if (a.emitSeams) {                              // FILE sink: write JSON, confirm on stdout (unchanged contract)

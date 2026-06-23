@@ -309,6 +309,15 @@ export function renderLlmContext(model: any): string {
   head.push(`complete: ${model.complete ? "yes" : "no"}`, `seams: ${seams.length}`);
   out.push(`# Intent footprint`, head.join(" | "), "");
 
+  // OFF-INTENT — honest signal that the grown footprint barely matches the intent, with the runner-up anchors
+  // to re-run on (their scores tell you if a better anchor exists vs the intent having no home here).
+  const im = model.intentMatch;
+  if (im?.offIntent) {
+    out.push(`## ⚠ Low intent match (top relevance ${im.max} < ${im.floor}) — this anchor's flow may not answer the question`);
+    if (im.alternatives?.length) for (const a of im.alternatives.slice(0, 5)) out.push(`  try --symbol ${a.name}  (${a.file}, score ${a.score.toFixed(3)})`);
+    out.push("");
+  }
+
   // SPINE — the main path, in trace order (anchor → … → outcome). The one section a consumer reads first.
   const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
   if (spine.length) {

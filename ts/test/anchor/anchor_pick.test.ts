@@ -3,7 +3,7 @@
 // NOT collapsed to its enclosing class (which buried the intent words: `sendParaplanningRequestEmail` →
 // doc-less `FileNoteService`, so the judge picked a JS save it could read). Pure + LLM-free → unit-testable.
 import { describe, expect, test } from "bun:test";
-import { assembleCandidatePool, demoteHubs } from "../../src/codebase/anchor/anchor_pick.js";
+import { assembleCandidatePool, demoteHubs, rankAlternatives } from "../../src/codebase/anchor/anchor_pick.js";
 import type { Def } from "../../src/codebase/scan/def_table.js";
 
 const def = (name: string, file: string, kind: string, enclosing = "", doc = ""): Def =>
@@ -62,5 +62,20 @@ describe("demoteHubs", () => {
     const fan = new Map([["a", 1], ["b", 1], ["h1", 200], ["h2", 200], ["h3", 200], ["h4", 200]]);
     // median is high (200) here, so the bar rises and nothing is flagged — the adaptive guard in action
     expect(demoteHubs(cand, fan).length).toBe(6);
+  });
+});
+
+// rankAlternatives — runner-up anchors offered when a footprint reads off-intent (chosen excluded, by score).
+describe("rankAlternatives", () => {
+  const cand = ["a", "b", "c", "d"].map((n) => ({ name: n, file: `${n}.ts`, kind: "function" }));
+  const scored = [["a", 0.5], ["b", 0.4], ["c", 0.3], ["d", 0.2]].map(([n, s]) => ({ def: def(n as string, `${n}.ts`, "function"), score: s as number }));
+  test("excludes the chosen, returns the rest by embed score desc, capped", () => {
+    expect(rankAlternatives(cand, scored, { name: "a", file: "a.ts" }, 2).map((x) => x.name)).toEqual(["b", "c"]);
+  });
+  test("a candidate with no embed score sorts last (score 0)", () => {
+    const c2 = [...cand, { name: "e", file: "e.ts", kind: "function" }];
+    const alts = rankAlternatives(c2, scored, { name: "a", file: "a.ts" }, 10);
+    expect(alts[alts.length - 1].name).toBe("e");
+    expect(alts[alts.length - 1].score).toBe(0);
   });
 });
