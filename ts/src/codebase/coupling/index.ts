@@ -535,16 +535,30 @@ async function runPipeline(
   const boundaryByKey = new Map<string, string>();   // key identity → boundary node id (one per key)
   const surfacedKeys = new Set(seenKeys);            // ancestor keys + the ones THIS node surfaces (fed to the chain)
 
-  for (const key of [...keys.values()].sort((x, y) => (x.value < y.value ? -1 : x.value > y.value ? 1 : 0))) {
+  // STEP 3 (lookup) — gather each grounded key with its other-side files (ungrounded floor keys dropped here).
+  const grounded: { key: AnchorKey; complementFiles: Map<string, number> }[] = [];
+  for (const key of keys.values()) {
     if (seenKeys.has(keyId(key.kind, key.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
-
-    // STEP 3 (lookup) — which files sit on the other side of this key?
     const complementFiles = collectComplementFiles(p.index, key, anchorPath);
     if (!complementFiles.size) { reportUngroundedKey(s, node.id, key); continue; }
-
+    grounded.push({ key, complementFiles });
+  }
+  // PER-NODE FAN CAP — a HUB node (a big component emitting dozens of UI events: `input`/`click`/…) surfaces
+  // many keys, each fanning to many files → the coupling explodes (the slow big-file case). Keep the most
+  // SPECIFIC keys (lowest cross-file fanout = real 1-to-1 couplings); demote the high-fanout hub keys (shared
+  // by dozens, usually generic events) to ONE blindspot. Deterministic (fanout, then value). Recall-safe.
+  grounded.sort((a, b) => (a.complementFiles.size - b.complementFiles.size) || (a.key.value < b.key.value ? -1 : a.key.value > b.key.value ? 1 : 0));
+  const cap = Number(process.env.SEAM_NODE_KEY_CAP ?? COUPLING.nodeKeyCap);   // runtime-tunable (per-run)
+  // mark the DEMOTED keys seen FIRST, so the chain (crossBoundary's recursion) doesn't re-surface them
+  // through a complement — keeping the hub's fan genuinely bounded, not just deferred one hop.
+  for (const { key } of grounded.slice(cap)) surfacedKeys.add(keyId(key.kind, key.value));
+  for (const { key, complementFiles } of grounded.slice(0, cap)) {
     const boundaryId = drawBoundary(s, boundaryByKey, key, node.file);   // STEP 4
     surfacedKeys.add(keyId(key.kind, key.value));                        // mark before recursing
     wireNear(s, node.id, boundaryId, key);                              // STEP 5 (near)
     await crossBoundary(s, boundaryId, key, complementFiles, surfacedKeys);   // STEP 5 (far) + chain
   }
+  if (grounded.length > cap) s.graph.addBlindspot({ node: node.id, mechanism: "node-key-fanout",
+    evidence: `${node.file} touches ${grounded.length} shared keys (showing the ${cap} most specific) — a coupling hub`,
+    candidates: grounded.slice(cap).map((g) => ({ file: node.file, symbol: g.key.value, provenance: "SUGGESTED" as const })) });
 }
