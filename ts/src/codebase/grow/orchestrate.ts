@@ -184,6 +184,15 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
   // `direction` tags let decompose detect the policy-vs-flow shape. Frontier growth stays consumer-ward.
   let data: any = await build_footprint(repo, anchorFile, symbol, { direction: opts.bidirectional ? "both" : "up", ...co });
+  // COMPONENT FALLBACK: a symbol anchor that reaches NOTHING (a local leaf — e.g. a plain helper inside an
+  // AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing function, not
+  // its own span) yields an isolated 1-node footprint. The real unit is the FILE/component, so re-anchor in
+  // MODULE mode (the whole controller) — it surfaces the component's bindings (ng-scope ⇄ template, routes →
+  // backend). Conservative: only when the symbol footprint is genuinely isolated and the module finds more.
+  if ((data.nodes?.length ?? 0) <= 1) {
+    const mod: any = await build_footprint(repo, anchorFile, null, { ...co });
+    if ((mod.nodes?.length ?? 0) > (data.nodes?.length ?? 0)) data = mod;
+  }
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {

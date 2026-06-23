@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { scan_file_keys, scannableForKeys } from "../../src/codebase/coupling/index.js";
 import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
 import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const ng = (file: string, text: string) => scan_file_keys(file, text).filter((h) => h.kind === "ng-scope");
@@ -76,5 +77,35 @@ describe("cross-boundary: init method → template → sibling $http method → 
     const g = await build_module_graph(REPO, "web/fileNoteItem.js", { dataCoupling: true });
     expect(reaches(g, "fileNoteItem.html")).toBe(true);
     expect(reaches(g, "FileNoteService.java")).toBe(true);
+  });
+});
+
+// COMPONENT FALLBACK: the realistic shape — `initFileNoteItem` is a PLAIN local function with no bindings,
+// called from the controller closure that DEFINES the $scope methods. Anchored on that leaf, the footprint
+// is isolated (1 node); grow_to_terminals must fall back to MODULE mode (the whole controller) so the
+// component's flow (template binding → sibling $http method → backend) still surfaces.
+describe("grow component-fallback: isolated leaf anchor widens to the controller", () => {
+  const REPO = join(tmpdir(), "seam-ngfallback-" + process.pid);
+  const write = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  beforeAll(() => {
+    rmSync(REPO, { recursive: true, force: true });
+    write("web/fileNoteItem.js",
+      "angular.module('app').controller('FileNoteItemCtrl', function($scope, $http) {\n" +
+      "  $scope.refreshSection = function() { $http.put('/manage/rest/fileNote/refreshSection/' + $scope.id, {}); };\n" +
+      "  initFileNoteItem();\n" +
+      "  function initFileNoteItem() { $scope.ready = true; }\n" +   // plain leaf, no bindings — the anchor
+      "});\n");
+    write("web/fileNoteItem.html", '<button ng-click="refreshSection()">Refresh</button>\n');
+    write("src/FileNoteService.java",
+      '@Path("fileNote")\npublic class FileNoteService {\n  @PUT\n  @Path("refreshSection/{id}")\n  public Response refreshSection(String id) { return ok(); }\n}\n');
+  });
+  afterAll(() => rmSync(REPO, { recursive: true, force: true }));
+
+  test("anchored on the isolated init leaf, the grow falls back to the controller and reaches html + backend", async () => {
+    if (!available()) return;
+    const [data] = await grow_to_terminals(REPO, "web/fileNoteItem.js", "initFileNoteItem", { bidirectional: true, dataCoupling: true });
+    const files = [...new Set((data.nodes ?? []).map((n: any) => n.file).filter(Boolean))] as string[];
+    expect(files.some((f: string) => f.endsWith("fileNoteItem.html"))).toBe(true);
+    expect(files.some((f: string) => f.endsWith("FileNoteService.java"))).toBe(true);
   });
 });
