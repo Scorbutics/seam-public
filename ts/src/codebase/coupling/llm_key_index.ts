@@ -170,34 +170,60 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // pass 2 — one batched LLM call per chunk for the uncached files
   if (toSynth.length) { emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`); for (const [f, keys] of await _batchSynthesize(repo, toSynth, opts)) llmKeysOf.set(f, keys); }
 
-  // pass 3 — PER-KEY RECONCILIATION: emit each file's LLM keys MINUS the ones its floor already covered
+  // pass 3 — PER-FILE LITERAL keys (the `files` axis): each file's LLM keys MINUS the ones its floor already
+  // covered. Kept in its OWN sub-index so its grounding contribution can be audited vs the matcher pass.
+  const filesIdx: GroundingIndex = new Map();
   for (const [file, keys] of llmKeysOf) {
     const floorSet = floorOf.get(file) ?? new Set<string>();
     for (const h of keys) {
       if (!plausibleKeyValue(h.value)) continue;            // filter junk already cached in .seam/ (no re-warm needed)
       if (floorSet.has(`${h.kind} ${h.value}`)) continue;   // floor already has this key → don't duplicate
       const k = `${h.kind} ${h.value}`;
-      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-      (h.produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push({ file, line: h.line });
+      if (!filesIdx.has(k)) filesIdx.set(k, { producers: [], consumers: [] });
+      (h.produces ? filesIdx.get(k)!.producers : filesIdx.get(k)!.consumers).push({ file, line: h.line });
     }
   }
 
-  // pass 4 — the MATCHER flywheel: LEARN reusable adapter rules from the floor-blind files (LLM, self-
-  // validated by re-execution; no-op without opts.llm/budget), then apply ALL matchers (newly learned +
-  // cached/shared) DETERMINISTICALLY across the repo and fold their grounded keys into the index. This is
-  // what makes a warm `.seam/` cover a learned framework offline — and what lets the flywheel improve.
+  // pass 4 — the MATCHER flywheel (the `rules` axis): LEARN reusable adapter rules from the floor-blind files
+  // (LLM, self-validated; no-op without opts.llm/budget), then apply ALL matchers (newly learned + cached/
+  // shared) DETERMINISTICALLY across the repo. This is what makes a warm `.seam/` cover a learned framework.
   await learnKeyMatchers(repo, blindFiles, opts, ctx);   // persists survivors into the matcher store
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
-  if (matchers.length) {
-    for (const [k, v] of await applyMatchers(repo, matchers)) {
-      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-      idx.get(k)!.producers.push(...v.producers);
-      idx.get(k)!.consumers.push(...v.consumers);
-    }
+  const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
+
+  for (const sub of [filesIdx, matchersIdx]) for (const [k, v] of sub) {   // union both axes into the result
+    if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
+    idx.get(k)!.producers.push(...v.producers); idx.get(k)!.consumers.push(...v.consumers);
   }
+  // AUDIT (SEAM_KEY_AUDIT=1): how much of the GROUNDED coupling does each LLM pass uniquely enable? Decides
+  // whether the per-file pass still earns its keep now the matcher shapes cover the generalisable cases.
+  if (process.env.SEAM_KEY_AUDIT) await _auditKeySources(repo, ctx, filesIdx, matchersIdx, matchers.length);
 
   ctx.llmKey.set(cacheKey, idx);
   return idx;
+}
+
+// Compare the GROUNDED-key sets (a key with ≥1 producer AND ≥1 consumer, across the floor) with vs without
+// each LLM pass — so we can see how many real couplings the per-file pass enables that the matcher pass does
+// not (and vice-versa). Diagnostic only; emits to stderr under SEAM_KEY_AUDIT.
+async function _auditKeySources(repo: string, ctx: EngineCtx, filesIdx: GroundingIndex, matchersIdx: GroundingIndex, ruleCount: number): Promise<void> {
+  const { floor_base_index } = await import("./index.js");
+  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const merge = (...idxs: GroundingIndex[]): GroundingIndex => {
+    const m: GroundingIndex = new Map();
+    for (const ix of idxs) for (const [k, v] of ix) { if (!m.has(k)) m.set(k, { producers: [], consumers: [] }); m.get(k)!.producers.push(...v.producers); m.get(k)!.consumers.push(...v.consumers); }
+    return m;
+  };
+  const grounded = (m: GroundingIndex): Set<string> => new Set([...m].filter(([, v]) => v.producers.length && v.consumers.length).map(([k]) => k));
+  const gFloor = grounded(floor), gFull = grounded(merge(floor, filesIdx, matchersIdx));
+  const gNoFiles = grounded(merge(floor, matchersIdx)), gNoMatchers = grounded(merge(floor, filesIdx));
+  const uniqFiles = [...gFull].filter((k) => !gNoFiles.has(k));        // grounded couplings LOST if per-file pass removed
+  const uniqMatchers = [...gFull].filter((k) => !gNoMatchers.has(k));  // …if matcher pass removed
+  const w = (s: string) => process.stderr.write(`[key-audit] ${s}\n`);
+  w(`grounded keys: floor=${gFloor.size}  floor+matchers=${gNoFiles.size}  floor+files=${gNoMatchers.size}  FULL=${gFull.size}`);
+  w(`passes: rules(matchers)=${ruleCount}  per-file-key-entries=${filesIdx.size}`);
+  w(`UNIQUE to per-file pass (lost if removed): ${uniqFiles.length}${uniqFiles.length ? ` → ${uniqFiles.slice(0, 25).join(", ")}` : ""}`);
+  w(`UNIQUE to matcher pass (lost if removed): ${uniqMatchers.length}${uniqMatchers.length ? ` → ${uniqMatchers.slice(0, 25).join(", ")}` : ""}`);
 }
 
 // The ANCHOR's own LLM-deduced keys (its `proposed` for attach) — synthesized from the anchor FILE
