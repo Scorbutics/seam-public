@@ -60,3 +60,36 @@ export function incrementalScan<T>(
   if (timingOn()) process.stderr.write(`[index-cache] ${reused} file(s) reused, ${rescanned} re-scanned\n`);
   return out;
 }
+
+// ASYNC sibling of incrementalScan: identical content-SHA per-file caching, but `scanFile` is awaited — for
+// an index whose per-file map needs tree-sitter (an async `makeCtx`), e.g. the interface→impl DI index. The
+// full-repo PARSE that builds that index is the dominant cost of a cold large-repo grow (measured ~6.5s over
+// 4044 Java files); persisting each file's parsed contribution turns every subsequent run into O(changed).
+export async function incrementalScanAsync<T>(
+  repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean, configSalt: string,
+  scanFile: (rel: string, text: string) => Promise<T>, cacheName: string,
+): Promise<{ rel: string; data: T }[]> {
+  const salt = `${_CACHE_VERSION}|${configSalt}`;
+  const path = _cachePath(repo, cacheName);
+  let prev: CacheFile<T>["files"] = {};
+  try { if (existsSync(path)) { const c = JSON.parse(readFileSync(path, "utf-8")) as CacheFile<T>; if (c && c.salt === salt && c.files) prev = c.files; } } catch { /* corrupt → rebuild */ }
+
+  const out: { rel: string; data: T }[] = [];
+  const next: CacheFile<T>["files"] = {};
+  let reused = 0, rescanned = 0;
+  for (const [dir, files] of walk(repo, skipDirs)) for (const fn of files) {
+    const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
+    if (!predicate(rel)) continue;
+    let st; try { st = statSync(join(repo, rel)); } catch { continue; }
+    const m = Math.round(st.mtimeMs), s = st.size;
+    const hit = prev[rel];
+    let data: T;
+    if (hit && hit.m === m && hit.s === s) { data = hit.d; reused++; }       // unchanged → reuse the cached parse
+    else { let text; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; } data = await scanFile(rel, text); rescanned++; }
+    next[rel] = { m, s, d: data };
+    out.push({ rel, data });
+  }
+  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  if (timingOn()) process.stderr.write(`[index-cache] ${cacheName}: ${reused} reused, ${rescanned} re-scanned\n`);
+  return out;
+}

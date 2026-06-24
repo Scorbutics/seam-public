@@ -6,44 +6,73 @@ import { join, relative } from "node:path";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { walk } from "../../core/resolve/walk.js";
 import {
-  type Ctx, makeCtx, available,
+  makeCtx, available, lang_for,
   _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _ANNOTATION,
 } from "../atoms.js";
 import { _name_of, _read } from "./ast_units.js";
+import { incrementalScanAsync, indexCacheEnabled } from "../coupling/index_cache.js";
 
 // {interface name → the concrete in-repo CLASSES that `implement` it} + the set of names declared as
 // interfaces. Cross-language via _IMPLEMENTS (Java super_interfaces / TS implements_clause). Cached per
 // repo (a full-repo parse, so built once). This is the runtime DI binding a static import scan can't
 // see — used to extend a footprint PAST a @Inject/@Autowired interface to its impl, deterministically.
+// Per-FILE contribution (the map half): the interface names this file declares + the (super → class) impl
+// edges it introduces. JSON-serializable so incrementalScanAsync persists it to `.seam/impl-index.json`
+// keyed by file identity — a one-file edit re-parses only that file, the merge (reduce) recombines.
+type ImplContribution = { interfaces: string[]; edges: [string, string][] };   // edges: [implementedInterface, class]
+
+// Parse ONE file → its interface declarations + impl edges. The async unit incrementalScanAsync caches.
+async function _scanImplFile(rel: string, text: string): Promise<ImplContribution> {
+  const grammar = lang_for(rel);
+  if (!grammar) return { interfaces: [], edges: [] };
+  const ctx = await makeCtx(text, grammar);
+  if (!ctx) return { interfaces: [], edges: [] };
+  const interfaces: string[] = [];
+  for (const itf of ctx.collect(ctx.root, (k) => _INTERFACE.has(k))) { const nm = _name_of(ctx, itf); if (nm) interfaces.push(nm); }
+  const edges: [string, string][] = [];
+  for (const cls of ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k))) {
+    const cn = _name_of(ctx, cls);
+    if (!cn) continue;
+    const supers: string[] = [];
+    for (const h of ctx.children(cls)) {
+      if (_IMPLEMENTS.has(h.type)) supers.push(...ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+      else if (h.type === "class_heritage") for (const ec of ctx.children(h).filter((c) => _IMPLEMENTS.has(c.type))) supers.push(...ctx.collect(ec, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
+    }
+    for (const s of supers) edges.push([s, cn]);
+  }
+  return { interfaces, edges };
+}
+
 const _IMPL_CACHE = new Map<string, { interfaces: Set<string>; impls: Map<string, { cls: string; file: string }[]> }>();
+// Clear the per-process memo (the disk cache in `.seam/impl-index.json` stays — it self-invalidates per file
+// by mtime/size). For tests, and any caller that needs a fresh in-process read after files changed mid-run.
+export function _resetImplIndexMem(): void { _IMPL_CACHE.clear(); }
 async function _impl_index(repo: string): Promise<{ interfaces: Set<string>; impls: Map<string, { cls: string; file: string }[]> }> {
-  const cached = _IMPL_CACHE.get(repo);
+  const cached = _IMPL_CACHE.get(repo);   // per-process memo (one build/run, even with the disk cache below)
   if (cached) return cached;
   const interfaces = new Set<string>();
   const impls = new Map<string, { cls: string; file: string }[]>();
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
+  const addEdge = (sup: string, cls: string, file: string) => {
+    const arr = impls.get(sup) ?? [];
+    if (!arr.some((x) => x.cls === cls && x.file === file)) arr.push({ cls, file });
+    impls.set(sup, arr);
+  };
+  // The full-repo PARSE (the cold large-repo cost). incrementalScanAsync persists each file's contribution to
+  // `.seam/impl-index.json` keyed by (mtime,size) → a re-run re-parses only CHANGED files, not all 4000+.
+  if (indexCacheEnabled()) {
+    for (const { rel, data } of await incrementalScanAsync(repo, SKIP_DIRS, endsWithSourceExt, "impl-v1", _scanImplFile, "impl-index")) {
+      for (const itf of data.interfaces) interfaces.add(itf);
+      for (const [sup, cls] of data.edges) addEdge(sup, cls, rel);
+    }
+  } else {   // SEAM_INDEX_CACHE=0 → the plain, byte-identical full walk (no persistence)
+    for (const [dir, files] of walk(repo, SKIP_DIRS)) for (const fn of files) {
       if (!endsWithSourceExt(fn)) continue;
       const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
       const rd = _read(repo, rel);
       if (!rd) continue;
-      const ctx = await makeCtx(rd[0], rd[1]);
-      if (!ctx) continue;
-      for (const itf of ctx.collect(ctx.root, (k) => _INTERFACE.has(k))) { const nm = _name_of(ctx, itf); if (nm) interfaces.add(nm); }
-      for (const cls of ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k))) {
-        const cn = _name_of(ctx, cls);
-        if (!cn) continue;
-        const supers: string[] = [];
-        for (const h of ctx.children(cls)) {
-          if (_IMPLEMENTS.has(h.type)) supers.push(...ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
-          else if (h.type === "class_heritage") for (const ec of ctx.children(h).filter((c) => _IMPLEMENTS.has(c.type))) supers.push(...ctx.collect(ec, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n)));
-        }
-        for (const s of supers) {
-          const arr = impls.get(s) ?? [];
-          if (!arr.some((x) => x.cls === cn && x.file === rel)) arr.push({ cls: cn, file: rel });
-          impls.set(s, arr);
-        }
-      }
+      const data = await _scanImplFile(rel, rd[0]);
+      for (const itf of data.interfaces) interfaces.add(itf);
+      for (const [sup, cls] of data.edges) addEdge(sup, cls, rel);
     }
   }
   const idx = { interfaces, impls };

@@ -15,6 +15,7 @@ import {
 import { expanduser, _read, _named_units, _usage_lines } from "./ast_units.js";
 import { impls_of } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
+import { timingOn } from "../../core/progress.js";
 
 type BuildOpts = {
   anchorLine?: number | null; useLlm?: boolean; model?: string; claudeBin?: string | null;
@@ -200,14 +201,19 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
       repo, anchorFile, symbol, actx, aunits: actx ? _named_units(actx) : [],
       nodes, edges, blindspots, counter: 0, seen: new Set(), depUnits: new Map(), externalPkgs: [],
     };
-    await _importPass(s, ar[0]);
-    await _fileRefPass(s);
-    await _samePackagePass(s);
-    await _interfaceImplPass(s);
+    // Per-pass timing — split a slow large-repo dependency build (interface-impl index vs same-package vs
+    // data-coupling). --verbose / SEAM_TIMING only; same diagnostic style as [dc-timing]/[index-cache].
+    const _dt = () => (timingOn() ? performance.now() : 0);
+    const _de = (l: string, t: number) => { if (t) process.stderr.write(`[dep-pass] ${symbol} ${l}: ${Math.round(performance.now() - t)}ms\n`); };
+    let _t = _dt();
+    await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
+    await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
+    await _samePackagePass(s); _de("samePackage", _t); _t = _dt();
+    await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);
-    await _stringDispatchPass(s, arange[0], arange[1]);
+    await _stringDispatchPass(s, arange[0], arange[1]); _de("stringDispatch", _t); _t = _dt();
     if (opts.useLlm) await _llmDiscoveryPass(s, ar[0], arange[0], arange[1], opts);
-    if (opts.dataCoupling !== false) await _dataCouplingPass(s, ar[0], arange, opts);
+    if (opts.dataCoupling !== false) { await _dataCouplingPass(s, ar[0], arange, opts); _de("dataCoupling", _t); }
   }
 
   return makeGraph({ id: "n1", symbol, file: anchorFile, range: arange }, lang_for(anchorFile) ?? "", nodes, edges, { anchors: ["n1"], blindspots });
