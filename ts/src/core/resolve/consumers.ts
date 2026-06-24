@@ -9,6 +9,7 @@ import type { Provenance } from "../resolution.js";
 import type { ImportRef, NamespaceImport, DefaultImport } from "./languages/base.js";
 import { floor_resolve, endsWithSourceExt, parse_imports, namespace_imports, default_imports, SKIP_DIRS } from "./languages/index.js";
 import { normpath, walkFiles } from "./walk.js";
+import { incrementalScan, indexCacheEnabled } from "./index_cache.js";
 
 // A resolver: resolve_module(repo, importingFile, source) → repo-relative file | null, and
 // optionally resolve_symbol(repo, importingFile, line, col) → [file, line] | null (LSP). ASYNC —
@@ -58,17 +59,29 @@ export interface Consumer { file: string; local: string; source: string; status:
 // repeatedly (per frontier node AND per route-caller in _chain_route_consumers, per step) — which
 // dominates a large-repo grow (measured: ~6s/build, 36s of a 52s run on a real repo). Content-static per
 // run + process-scoped, so memoising is safe (same rationale as the tree-sitter parse cache).
-type ImportEntry = { rel: string; norm: string; refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[]; text: string };
+// Each file's PARSED imports — the JSON-serializable contribution persisted by the incremental cache. `text`
+// is deliberately NOT stored (it would bloat the cache with every file's full contents); the few namespace/
+// default-export consumers re-read it lazily in _scan_direct (`textOf`).
+type ImportContribution = { refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[] };
+type ImportEntry = ImportContribution & { rel: string; norm: string };
 const _repoImportsCache = new Map<string, ImportEntry[]>();
 export function resetRepoImports(): void { _repoImportsCache.clear(); }
+
+// The repo-wide reverse-import index — built ONCE per process AND persisted to `.seam/import-index.json`
+// (content-keyed by mtime/size). Finding consumers is a REVERSE-dependency query (a consumer lives anywhere),
+// so it inherently needs this whole-repo index — but it was rebuilt every PROCESS (in-mem only), parsing
+// imports of every file each cold run. Now a re-run re-parses ONLY changed files (the same incrementalScan
+// pattern as the floor + DI index). `SEAM_INDEX_CACHE=0` falls back to the plain walk.
 function _repoImports(repo: string): ImportEntry[] {
   let idx = _repoImportsCache.get(repo);
   if (idx) return idx;
-  idx = [];
-  for (const { rel, abs, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) {
-    // `text` is cached so the namespace member-access scan can check `X.symbol` without a re-read; the
-    // walk already read it, so this trades memory for avoiding a second pass over the repo.
-    idx.push({ rel, norm: normpath(abs), refs: parse_imports(rel, text), ns: namespace_imports(rel, text), defs: default_imports(rel, text), text });
+  const build = (rel: string, text: string): ImportContribution => ({ refs: parse_imports(rel, text), ns: namespace_imports(rel, text), defs: default_imports(rel, text) });
+  if (indexCacheEnabled()) {
+    idx = incrementalScan(repo, SKIP_DIRS, endsWithSourceExt, "import-v1", build, "import-index")
+      .map(({ rel, data }) => ({ rel, norm: normpath(join(repo, rel)), ...data }));
+  } else {
+    idx = [];
+    for (const { rel, abs, text } of walkFiles(repo, SKIP_DIRS, endsWithSourceExt)) idx.push({ rel, norm: normpath(abs), ...build(rel, text) });
   }
   _repoImportsCache.set(repo, idx);
   return idx;
@@ -125,7 +138,7 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
   const anchorAbs = normpath(join(repo, anchorFile));
   const isDefault = _isDefaultExport(repo, anchorFile, symbol);   // gate default-import matching (recall-safe)
   const out: Consumer[] = [];
-  for (const { rel, norm, refs, ns, defs, text } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
+  for (const { rel, norm, refs, ns, defs } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
     if (norm === anchorAbs) continue;
     for (const ref of refs) {
       if (ref.name !== symbol) continue;
@@ -141,11 +154,14 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
     // module must resolve to the anchor (so when scan_consumers recurses into a re-export barrel, a
     // namespace import of THAT barrel — e.g. `scan.build_footprint` against `scan/index.ts` — is caught).
     // `local: symbol` lets the downstream usage-line scan find `X.symbol` by name, like a named import.
-    for (const n of ns) {
-      const t = await _resolve(repo, rel, n.source);
-      if (!t || normpath(t) !== anchorNorm) continue;
-      const status = _member_use(text, n.local, symbol);
-      if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
+    if (ns.length) {                                          // text is needed ONLY for the namespace member scan → read it lazily (most files have no ns)
+      let text = ""; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { /* unreadable → skip ns */ }
+      for (const n of ns) {
+        const t = await _resolve(repo, rel, n.source);
+        if (!t || normpath(t) !== anchorNorm) continue;
+        const status = _member_use(text, n.local, symbol);
+        if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
+      }
     }
     // DEFAULT-export consumers (only when `symbol` IS the anchor's default export — matched by MODULE, not
     // name, since the binding is the importer's choice). Two forms: a `default as Name` re-export barrel
