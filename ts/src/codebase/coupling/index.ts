@@ -21,7 +21,7 @@ import { type Access, type KeyHit, type AnchorKey, type KeySource, type Groundin
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { type KeyMatcher, matcherKey, runMatcher } from "./key_ir.js";
-import { listMatchers } from "./key_matcher_cache.js";
+import { listMatchers } from "./key_store.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";

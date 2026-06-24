@@ -12,8 +12,8 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { llmKeyIndex } from "../../src/codebase/coupling/llm_key_index.js";
-import { _resetKeyCacheMem } from "../../src/codebase/coupling/key_cache.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_matcher_cache.js";
+import { _resetKeyCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
 

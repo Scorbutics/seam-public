@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
 import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_matcher_cache.js";
+import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { available } from "../../src/codebase/atoms.js";
 
 // the two learned rules ng_scope became — what a warm `.seam/` holds after the flywheel learns AngularJS.

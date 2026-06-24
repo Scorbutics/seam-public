@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { llmKeyIndex, type KeyIndexOpts } from "../../src/codebase/coupling/llm_key_index.js";
-import { _resetKeyCacheMem } from "../../src/codebase/coupling/key_cache.js";
+import { _resetKeyCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { carrierChannelIndex } from "../../src/codebase/coupling/carrier/engine.js";
 import { _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
 

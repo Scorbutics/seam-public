@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { build_footprint } from "../src/codebase/scan/index.js";
 import { isFlowSubject } from "../src/codebase/coupling/index.js";
-import { _resetKeyCacheMem } from "../src/codebase/coupling/key_cache.js";
+import { _resetKeyCacheMem } from "../src/codebase/coupling/key_store.js";
 import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
 import { _resetParseCache } from "../src/languages/ruby/carrier_trace.js";
 

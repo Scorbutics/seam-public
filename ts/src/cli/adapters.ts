@@ -8,8 +8,8 @@
 //   bun ts/src/cli/adapters.ts promote <name> [--repo .]  # copy a repo adapter up into shared ~/.seam
 //   bun ts/src/cli/adapters.ts where                       # print the repo + shared .seam locations
 import { listLearnedAdapters, promoteSignature } from "../codebase/coupling/carrier/cache.js";
-import { listKeyAdapters, promoteKeyAdapter } from "../codebase/coupling/key_cache.js";
-import { listMatchers } from "../codebase/coupling/key_matcher_cache.js";
+import { listKeyAdapters, promoteKeyAdapter } from "../codebase/coupling/key_store.js";
+import { listMatchers } from "../codebase/coupling/key_store.js";
 import { matcherShape } from "../codebase/coupling/key_ir.js";
 import { builtinAdapters } from "../codebase/coupling/adapters/index.js";
 import { sharedSeamDir } from "../codebase/coupling/seam_dir.js";

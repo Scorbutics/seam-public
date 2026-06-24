@@ -20,7 +20,7 @@ import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex } from "./types.js";
 import { type KeyMatcher, validateMatcher, runMatcher, matcherKey } from "./key_ir.js";
-import { persistMatchers } from "./key_matcher_cache.js";
+import { persistMatchers } from "./key_store.js";
 
 const PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
 
