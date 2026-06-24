@@ -12,6 +12,8 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
+import { embedScoreDefs } from "../scan/def_embed.js";
+import { normpath } from "../../core/resolve/walk.js";
 import { isFlowSubject } from "../coupling/index.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -173,6 +175,17 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // the transitive data-coupling chain extend reach. Bounded by steps + a per-move flood cap + a node budget.
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
 // discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
+// Pick the next frontier node to expand, ordered: (1) CROSSINGS — the data-flow chain toward terminals
+// (structural backbone, primary so the grow can't wander off the spine); (2) most INTENT-RELEVANT passage
+// (intent-weighted guided traversal); (3) complexity (final tiebreak). Pure → unit-testable in isolation.
+export function _nextFrontier<T extends { id: string; complexity?: number }>(
+  cand: T[], crossings: Set<string>, iscore: (n: T) => number): T | undefined {
+  return [...cand].sort((a, b) =>
+    (Number(crossings.has(b.id)) - Number(crossings.has(a.id)))
+    || (iscore(b) - iscore(a))
+    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];
+}
+
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
     opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
@@ -202,6 +215,16 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   }
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
+  // INTENT-WEIGHTED FRONTIER: which unexpanded node to grow next is ranked by the intent-relevance of its
+  // PASSAGE (the cached def embeddings — already computed for anchor selection), so the grow follows the
+  // intent like a guided traversal instead of a blind crossings-then-biggest walk. Computed ONCE per grow
+  // (disk-cached vectors → cheap/warm); empty without an intent or embeddings → the old complexity fallback.
+  const intentScore = new Map<string, number>();
+  if (opts.intent) {
+    try { for (const { def, score } of await embedScoreDefs(repo, opts.intent)) { const k = `${def.name} ${normpath(def.file)}`; if (!intentScore.has(k)) intentScore.set(k, score); } }
+    catch { /* embeddings absent → complexity fallback */ }
+  }
+  const _iscore = (n: any): number => intentScore.get(`${n.symbol} ${normpath(n.file)}`) ?? 0;
   for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
     emit(`Growing the footprint to its terminals (step ${step + 1})…`);
     const g = from_resolved_graph(data);
@@ -209,12 +232,13 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
     const crossings = new Set<string>();
     for (const e of g.resolved_edges()) if (_is_crossing(e)) crossings.add(e.dst);
-    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet; crossings first
-    // (the data-flow chain toward terminals), then the largest remaining consumer.
+    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet. Ordered:
+    // (1) crossings first — the data-flow chain toward terminals (structural backbone, kept primary so the
+    // grow can't wander off the spine into on-intent-but-disconnected code); (2) most INTENT-RELEVANT passage
+    // (the guided-traversal lever — was the largest-complexity tiebreak); (3) complexity as the final tiebreak.
     const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
       && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)));
-    cand.sort((a: any, b: any) => (Number(crossings.has(b.id)) - Number(crossings.has(a.id))) || ((b.complexity ?? 0) - (a.complexity ?? 0)));
-    const next = cand[0];
+    const next = _nextFrontier(cand, crossings, _iscore);
     if (!next) break;
     expanded.add(_key(next));
     // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM toward its terminals
