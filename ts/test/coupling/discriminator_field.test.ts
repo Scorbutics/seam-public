@@ -54,7 +54,7 @@ describe("a generic payload is routed to the right handler by a discriminator fi
       { bidirectional: true, dataCoupling: true, intent: "export inventory via JMS DataExport" });
     const nodes = data.nodes ?? [];
     const edges = data.edges ?? [];
-    const byId = new Map(nodes.map((n: any) => [n.id, n]));
+    const byId = new Map<string, any>(nodes.map((n: any) => [n.id, n]));
     // resolve which files a given boundary (kind+symbol) reaches across its consume/handler edges
     const reaches = (kind: string, symbol: string): string[] => {
       const ids = new Set(nodes.filter((n: any) => n.kind === kind && n.symbol === symbol).map((n: any) => n.id));

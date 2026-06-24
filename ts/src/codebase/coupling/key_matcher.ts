@@ -76,6 +76,16 @@ THREE shapes are available — pick the one that fits the evidence:
                (\`@KafkaListener("orders")\`). role = "consumes" (the annotated method LISTENS for the key). PAIR
                it with the producer "call" (\`convertAndSend('export.queue', …)\` → produces queue) that grounds it.
 
+DISCRIMINATOR (payload routing) — a SPECIAL "call" pair. When a GENERIC payload/message/event object carries a
+FIELD whose VALUE selects which handler processes it — a producer SETS a literal on the field
+(\`export.setType("INVENTORY")\`, a builder \`.type("INVENTORY")\`) and a consumer BRANCHES on that same field read
+against the SAME literal (\`export.getType().equals("INVENTORY")\`, \`if (kind.equals("PRICING"))\`) — the KEY is the
+LITERAL, kind "event". Emit the PAIR as two "call" rules: the setter (token "setType") role produces, and the
+comparison (token "equals") role consumes. This is the ONE allowed exception to the "never target a generic API
+like equals" rule below — safe ONLY because both sides must carry the SAME literal to ground. Emit the "equals"
+consumer rule ONLY when a setter producer carrying that SAME literal is ALSO present in the evidence — NEVER the
+\`equals\` rule alone (it would match every comparison in the repo and ground by coincidence).
+
 A coupling needs BOTH sides to ground: whenever you emit a PRODUCER rule (defines/emits the key), also emit
 the matching CONSUMER rule that USES it (and vice-versa) if its evidence is present above — e.g. a class
 "method" producer PAIRED with the template "attr" (key from call) that invokes it. A producer with no
@@ -84,7 +94,8 @@ consumer rule (or the reverse) grounds nothing.
 For every rule with CONCRETE evidence above, output one object. Do NOT invent rules — only constructs
 LITERALLY present. A wrong rule is worse than silence. NEVER target a generic API whose string argument is
 human PROSE — logging (log/info/warn), i18n (t/translate), formatting, exceptions — it extracts words like
-"the" and couples unrelated files by coincidence.
+"the" and couples unrelated files by coincidence. The ONLY generic-API exception is the DISCRIMINATOR pair
+above (a setter literal paired with the equals/comparison of the SAME literal) — never an "equals" rule alone.
 
 Common fields on every object: via, kind (db-table|queue|event|route|cache|key|binding), role
 ("produces"|"consumes"), name (short slug), description (one line).
@@ -99,7 +110,9 @@ Return a JSON array (empty if none). Examples — note the PAIRS (producer + the
  {"id":"r7","via":"call","token":"setItem","argIndex":0,"kind":"cache","role":"produces","name":"localstorage-write","description":"writes a localStorage key"},
  {"id":"r8","via":"call","token":"getItem","argIndex":0,"kind":"cache","role":"consumes","name":"localstorage-read","description":"reads a localStorage key"},
  {"id":"r9","via":"call","token":"convertAndSend","argIndex":0,"kind":"queue","role":"produces","name":"jms-send","description":"publishes to a JMS queue/topic"},
- {"id":"r10","via":"annotation","annotation":"JmsListener","element":"destination","kind":"queue","role":"consumes","name":"jms-listener","description":"a method listening on a JMS queue/topic"}]
+ {"id":"r10","via":"annotation","annotation":"JmsListener","element":"destination","kind":"queue","role":"consumes","name":"jms-listener","description":"a method listening on a JMS queue/topic"},
+ {"id":"r11","via":"call","token":"setType","argIndex":0,"kind":"event","role":"produces","name":"payload-discriminator-set","description":"sets the payload field that routes which handler processes it"},
+ {"id":"r12","via":"call","token":"equals","argIndex":0,"kind":"event","role":"consumes","name":"payload-discriminator-branch","description":"branches on the payload field value (PAIRED with the setter of the same literal)"}]
 ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
 \`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;
