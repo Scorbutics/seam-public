@@ -320,6 +320,35 @@ export async function resolveCoupling(
   const _dct = (label: string, t0: number) => { if (timingOn()) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
+
+  // LOCAL GATE — the repo-wide grounding build (the floor scan over EVERY file, the param + LLM key indices)
+  // only earns its keep when the ANCHOR'S OWN span touches a coupling boundary: only then is there an "other
+  // side" to find. Probe the anchor LOCALLY first — the floor + learned matchers (no repo walk), plus, in LLM
+  // mode, the anchor-only proposed keys (one cached anchor-local call assembleSources would make anyway). No
+  // key here ⇒ no coupling involves the anchor ⇒ skip the whole repo-wide pass. This is "grow from the diff":
+  // a perf/bugfix touching no DB/route/queue/event access pays ~nothing instead of a full-repo scan for a
+  // guaranteed-empty result. (Ruby is exempt — its carrier coupling isn't a span-local key; keep the full path.)
+  const isRubyAnchor = anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake");
+  if (!isRubyAnchor) {
+    const inSpan = (line: number) => line >= lo && line <= hi;
+    let touchesBoundary = scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line));
+    if (!touchesBoundary) {   // param/const coupling sites (getParameter(CONST)/addParameter(CONST)) — a DIFFERENT
+      const sites: ParamSite[] = [];   // local source than the floor adapters; the value resolves repo-wide but the SITE is local
+      scanParamSites(anchorText, anchorFile, sites);
+      touchesBoundary = sites.some((s) => inSpan(s.line));
+    }
+    if (!touchesBoundary) {
+      for (const { matcher } of listMatchers(repo)) {
+        if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) { touchesBoundary = true; break; }
+      }
+    }
+    if (!touchesBoundary && opts.llm) {
+      const lk = await import("./llm_key_index.js");
+      touchesBoundary = (await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx)).length > 0;
+    }
+    if (!touchesBoundary) { _dct("gate: anchor touches no boundary → skipped repo-wide coupling", _t); return graph.result(); }
+  }
+
   const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
   if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
   _dct("assemble", _t); _t = performance.now();

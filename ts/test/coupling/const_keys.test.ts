@@ -106,13 +106,28 @@ describe("ctx threading through build_class_graph (floor built once)", () => {
     if (!available()) return;   // tree-sitter required
     const { build_class_graph } = await import("../../src/codebase/scan/class_graph.js");
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+    const ctx = new EngineCtx();
+    // Anchor on a COUPLING-BEARING class (Provider.addParameter — a param/const boundary). The repo-wide floor
+    // index only builds when the anchor actually touches a boundary (the local gate skips it otherwise, BY
+    // DESIGN), so the ctx-threading is observable here. If the ctx were dropped (the bug this guards), a
+    // throwaway ctx would absorb the build and these stay empty.
+    await build_class_graph(REPO, "Provider.java", "Provider", { depth: 1, dataCoupling: true, ctx });
+    expect(ctx.sharedKey.size).toBeGreaterThan(0);
+    expect(ctx.floorBase.size).toBeGreaterThan(0);
+  });
+
+  test("LOCAL GATE — a coupling-free anchor SKIPS the repo-wide floor scan (grow from the diff, not scan-all)", async () => {
+    if (!available()) return;
+    const { build_class_graph } = await import("../../src/codebase/scan/class_graph.js");
+    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const __dir = new URL(".", import.meta.url).pathname;
     const repoDir = join(__dir, "..", "fixtures", "class-repo");
     const ctx = new EngineCtx();
+    // PaymentService has NO db/route/queue/event/param access → no boundary involves it → the repo-wide
+    // grounding build (floor scan over every file) must be SKIPPED, not paid for a guaranteed-empty result.
     await build_class_graph(repoDir, "src/payment/service.ts", "PaymentService", { depth: 1, dataCoupling: true, ctx });
-    // if the ctx were dropped (the bug), a throwaway ctx would absorb the build and this stays empty
-    expect(ctx.sharedKey.size).toBeGreaterThan(0);
-    expect(ctx.floorBase.size).toBeGreaterThan(0);
+    expect(ctx.sharedKey.size).toBe(0);   // the gate fired: no full-repo scan
+    expect(ctx.floorBase.size).toBe(0);
   });
 });
 
