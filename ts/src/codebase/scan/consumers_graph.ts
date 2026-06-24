@@ -18,6 +18,9 @@ import {
 } from "./ast_units.js";
 import { _class_methods } from "./ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
+import { fileReferencers } from "../../core/resolve/file_ref.js";
+import { normpath } from "../../core/resolve/walk.js";
+import { endsWithSourceExt } from "../../core/resolve/languages/index.js";
 import {
   build_class_graph, build_callsite_graph, _callsite_new_consumers_only, _reconcile_class_attribution,
 } from "./class_graph.js";
@@ -86,6 +89,21 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       seenKeys.set(key, cid);
       nodes.push({ id: cid, symbol: name, kind: _kind_for(con.file, kind), file: con.file, range: [start, end], enclosing: cls, complexity: Math.max(1, end - start + 1) });
       edges.push({ from: cid, to: "n1", kind: "reference", provenance: "RESOLVED_FULL" });
+    }
+  }
+  // REVERSE FILE-PATH REFERENCE — the up/consumers side of file_ref: source files that name THIS file by a
+  // path literal (a controller's `templateUrl`, a component's `styleUrls`, …) are its consumers, so a
+  // template/asset anchor reaches its owner. Gated to NON-source anchors — a code file's users come through
+  // the import scan above; only template/asset files are reached by path and need this (so the repo-wide
+  // reference index is built only when it pays). Framework-agnostic (resolveFileRef, no property names).
+  if (!endsWithSourceExt(anchorFile)) {
+    for (const ref of fileReferencers(repo, anchorFile)) {
+      if (normpath(ref.file) === normpath(anchorFile)) continue;
+      const key = `${ref.file}#fileref`;
+      if (seenKeys.has(key)) continue;
+      counter += 1; const cid = `n${counter}`; seenKeys.set(key, cid);
+      nodes.push({ id: cid, symbol: stem(ref.file), kind: "module", file: ref.file, range: [ref.line, ref.line], enclosing: "", complexity: 1 });
+      edges.push({ from: cid, to: "n1", kind: "file-ref", provenance: "RESOLVED_FULL" });
     }
   }
   // Intra-file usages: a same-file function that USES `symbol` is a real consumer the import scan

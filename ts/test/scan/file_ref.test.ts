@@ -7,8 +7,9 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { isPathLiteral, resolveFileRef } from "../../src/core/resolve/file_ref.js";
+import { isPathLiteral, resolveFileRef, fileReferencers, resetFileRefIndex } from "../../src/core/resolve/file_ref.js";
 import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("isPathLiteral — cheap pre-filter", () => {
@@ -71,5 +72,31 @@ describe("dependency pass — one resolver links every framework's component to 
     expect(t.get("ng2/file-note.component.html")).toBe("file-ref");
     expect(t.get("ng2/file-note.component.css")).toBe("file-ref");
     expect([...t.keys()].some((f) => String(f).includes("example.com"))).toBe(false);
+  });
+});
+
+describe("reverse — a template/asset anchor reaches the components that reference it", () => {
+  const REPO = join(tmpdir(), "seam-fref-rev-" + process.pid);
+  const w = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  beforeAll(() => {
+    rmSync(REPO, { recursive: true, force: true });
+    w("components/fooDirective.js", "angular.module('app').directive('foo', function () {\n  return { templateUrl: 'components/shared.html' };\n});\n");
+    w("components/barDirective.js", "angular.module('app').directive('bar', function () {\n  return { templateUrl: 'components/shared.html' };\n});\n");
+    w("components/shared.html", "<div>shared partial</div>\n");
+    resetFileRefIndex();
+  });
+  afterAll(() => { rmSync(REPO, { recursive: true, force: true }); resetFileRefIndex(); });
+
+  test("fileReferencers lists BOTH directives that name the shared template", () => {
+    expect(fileReferencers(REPO, "components/shared.html").map((r) => r.file).sort())
+      .toEqual(["components/barDirective.js", "components/fooDirective.js"]);
+  });
+  test("consumers graph of the .html surfaces its referencing components (file-ref edge, up)", async () => {
+    if (!available()) return;
+    resetFileRefIndex();
+    const g: any = await build_consumers_graph(REPO, "components/shared.html", "shared", {});
+    const refs = (g.nodes ?? []).filter((n: any) => n.id !== "n1").map((n: any) => n.file).sort();
+    expect(refs).toEqual(["components/barDirective.js", "components/fooDirective.js"]);
+    expect((g.edges ?? []).every((e: any) => e.kind === "file-ref")).toBe(true);
   });
 });

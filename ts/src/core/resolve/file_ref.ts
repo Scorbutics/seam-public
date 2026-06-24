@@ -6,7 +6,8 @@
 // this is the import-resolver category, not the flywheel's shared-key-detection category).
 import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { normpath } from "./walk.js";
+import { normpath, walkFiles } from "./walk.js";
+import { SKIP_DIRS, endsWithSourceExt } from "./languages/index.js";
 
 // Is `s` plausibly a relative file PATH (cheap pre-filter before touching the disk)? Must have a file
 // extension and no scheme/whitespace; a bare word or a URL is not a path reference.
@@ -32,3 +33,30 @@ export function resolveFileRef(repo: string, fromFile: string, lit: string, extr
   }
   return null;
 }
+
+// REVERSE index: target file → the source files that REFERENCE it by a path literal (a controller naming
+// this template via templateUrl, a component naming this stylesheet, …). Built ONCE per repo (cached), by a
+// cheap regex string-literal scan of the source files — the existence-gated `resolveFileRef` discards the
+// non-references, so over-matching in the regex is harmless. Lets a template/asset anchor reach its owners.
+const _STRLIT = /(['"`])([^'"`\n]{1,256}?)\1/g;
+const _refIndex = new Map<string, Map<string, { file: string; line: number }[]>>();
+export function fileRefIndex(repo: string, skipDirs: Set<string> = SKIP_DIRS): Map<string, { file: string; line: number }[]> {
+  if (_refIndex.has(repo)) return _refIndex.get(repo)!;
+  const idx = new Map<string, { file: string; line: number }[]>();
+  for (const { rel, text } of walkFiles(repo, skipDirs, endsWithSourceExt)) {
+    _STRLIT.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = _STRLIT.exec(text)) !== null) {
+      const target = resolveFileRef(repo, rel, m[2]);
+      if (!target || target === rel) continue;
+      const arr = idx.get(target) ?? (idx.set(target, []), idx.get(target)!);
+      if (!arr.some((r) => r.file === rel)) arr.push({ file: rel, line: text.slice(0, m.index).split("\n").length - 1 });
+    }
+  }
+  _refIndex.set(repo, idx);
+  return idx;
+}
+export function fileReferencers(repo: string, target: string, skipDirs: Set<string> = SKIP_DIRS): { file: string; line: number }[] {
+  return fileRefIndex(repo, skipDirs).get(normpath(target)) ?? [];
+}
+export function resetFileRefIndex(): void { _refIndex.clear(); }
