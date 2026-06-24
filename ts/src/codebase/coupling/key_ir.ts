@@ -36,17 +36,27 @@ export type MatcherRole = "produces" | "consumes";
 //   • method — a CLASS METHOD definition, the key being the method NAME — e.g. an Angular2+/React component
 //                method `refreshSection() { … }` that the template then calls. AST (js/ts). Liberal (every
 //                method) → grounding keeps only those a template/other side actually names.
+//   • annotation — a DECORATOR/ANNOTATION whose string-literal argument is the key — `@JmsListener(destination
+//                  ="export.queue")`, `@KafkaListener(topics="orders")`, `@EventListener("user.created")`. The
+//                  CONSUMER (handler) side of a queue/event whose producer is a `call` (`convertAndSend('q')`):
+//                  the annotation marks a method as the listener for a topic/queue NAME. Regex-executed (no
+//                  parser ⇒ offline/.vsix). `annotation` = the bare annotation name; optional `element` = the
+//                  named member to read (`destination`/`topics`) — omitted ⇒ the first positional literal
+//                  (`@KafkaListener("orders")`). This generalises the path-only annotation_route floor to ANY
+//                  annotation-carried key, so the flywheel learns the JMS/Kafka/Spring listener side it couldn't.
 export type KeyMatcher =
   | { via: "call"; token: string; argIndex: number; strip?: string; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "assign"; token: string; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "method"; kind: string; role: MatcherRole; name?: string; description?: string }
-  | { via: "attr"; directive: string; keyFrom: "name" | "call"; kind: string; role: MatcherRole; name?: string; description?: string };
+  | { via: "attr"; directive: string; keyFrom: "name" | "call"; kind: string; role: MatcherRole; name?: string; description?: string }
+  | { via: "annotation"; annotation: string; element?: string; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
   if (m.via === "call") return `${m.token}(arg${m.argIndex})${m.strip ? ` strip "${m.strip}"` : ""}`;
   if (m.via === "assign") return `${m.token}.<member> = fn`;
   if (m.via === "method") return `class method def`;
+  if (m.via === "annotation") return `@${m.annotation}(${m.element ? `${m.element}="…"` : `"…"`})`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -56,6 +66,7 @@ export function matcherKey(m: KeyMatcher): string {
   if (m.via === "call") return `${base}:${m.token}:${m.argIndex}:${m.strip ?? ""}`;
   if (m.via === "assign") return `${base}:${m.token}`;
   if (m.via === "method") return base;
+  if (m.via === "annotation") return `${base}:${m.annotation}:${m.element ?? ""}`;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -124,6 +135,13 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     const keyFrom: "name" | "call" = String(obj.keyFrom ?? "name").toLowerCase() === "call" ? "call" : "name";
     return { via: "attr", directive, keyFrom, kind, role, name: nm(`${_slug(directive)}-attr-${kind}`), description: dsc(`${role} ${kind} via template ${directive}<name> (key from ${keyFrom})`) };
   }
+  if (via === "annotation") {
+    const annotation = String(obj.annotation ?? "").trim().replace(/^@/, "");   // `@JmsListener` or `JmsListener` → bare name
+    if (!_TOKEN_OK.test(annotation)) return null;                              // a bare identifier (no dots/metachars) → safe to embed
+    const elementRaw = String(obj.element ?? "").trim();                       // optional named member (destination/topics)
+    const element = elementRaw && _TOKEN_OK.test(elementRaw) ? elementRaw : undefined;
+    return { via: "annotation", annotation, ...(element ? { element } : {}), kind, role, name: nm(`${_slug(annotation)}-annot-${kind}`), description: dsc(`${role} ${kind} via @${annotation}(${element ? `${element}="…"` : `"…"`})`) };
+  }
   return null;                                                               // unknown shape → not executable
 }
 
@@ -168,7 +186,30 @@ export async function runMatcher(m: KeyMatcher, file: string, text: string): Pro
   if (m.via === "call") return runCall(m, text);
   if (m.via === "assign") return runAssign(m, file, text);
   if (m.via === "method") return runMethod(m, file, text);
+  if (m.via === "annotation") return runAnnotation(m, text);
   return runAttr(m, file, text);
+}
+
+// ANNOTATION — `@Name( … )`: the key is a string literal inside the parens, EITHER `element = "key"` (a named
+// member, e.g. `@JmsListener(destination = "export.queue")`) OR the first positional literal when `element`
+// is omitted (`@KafkaListener("orders")`). Regex-executed (no parser → offline). `annotation`/`element` are
+// validated identifiers (embedded escaped); the literal is pulled by a fixed, bounded sub-pattern. `[^)]` for
+// the arg body matches one annotation's parens (annotation args rarely nest) — same bound as annotation_route.
+function runAnnotation(m: Extract<KeyMatcher, { via: "annotation" }>, text: string): KeyHit[] {
+  const masked = maskComments(text);   // an annotation inside a comment is not a real declaration
+  const esc = m.annotation.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`@${esc}\\s*\\(([^)]*)\\)`, "g");
+  const elemRe = m.element ? new RegExp(`\\b${m.element.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\$&")}\\s*=\\s*["'\`]([^"'\`\\s]+)["'\`]`) : null;
+  const posRe = /["'`]([^"'`\s]+)["'`]/;   // first string literal in the arg body
+  const out: KeyHit[] = [];
+  let mt: RegExpExecArray | null;
+  while ((mt = re.exec(masked)) !== null) {
+    const body = mt[1];
+    const hit = elemRe ? elemRe.exec(body) : posRe.exec(body);
+    const value = hit ? hit[1] : null;
+    if (value && plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  }
+  return out;
 }
 
 // CALL — `(?<![\w$])token(` then the n-th string-literal arg. Member forms (`this.$emit`, `cache.get`) still

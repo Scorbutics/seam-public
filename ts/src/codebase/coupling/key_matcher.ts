@@ -68,6 +68,13 @@ THREE shapes are available — pick the one that fits the evidence:
                \`(click)="…"\` → key = sync/click) OR "call" when a method CALLED in the directive's value is
                the key (\`ng-click="refreshSection()"\`, Angular2+ \`(click)="refreshSection()"\`, \`{{ total() }}\`
                → key = refreshSection/total). role is usually "consumes" (the template USES the binding).
+ 4) "annotation" — a DECORATOR/ANNOTATION whose STRING-LITERAL arg is the key — the CONSUMER (handler) side of
+               a queue/event whose producer is a "call": \`@JmsListener(destination="export.queue")\`,
+               \`@KafkaListener(topics="orders")\`, \`@RabbitListener(queues="q")\`, \`@EventListener("user.created")\`.
+               Fields: annotation = the bare annotation name ("JmsListener"); element = the named member to read
+               ("destination"/"topics"/"queues"), OMIT it when the key is the first positional literal
+               (\`@KafkaListener("orders")\`). role = "consumes" (the annotated method LISTENS for the key). PAIR
+               it with the producer "call" (\`convertAndSend('export.queue', …)\` → produces queue) that grounds it.
 
 A coupling needs BOTH sides to ground: whenever you emit a PRODUCER rule (defines/emits the key), also emit
 the matching CONSUMER rule that USES it (and vice-versa) if its evidence is present above — e.g. a class
@@ -90,7 +97,9 @@ Return a JSON array (empty if none). Examples — note the PAIRS (producer + the
  {"id":"r5","via":"method","kind":"binding","role":"produces","name":"ng2-method","description":"Angular2+/React component class method"},
  {"id":"r6","via":"attr","directive":"(","keyFrom":"call","kind":"binding","role":"consumes","name":"ng2-event-binding","description":"calls a component method from an Angular2+ (event) binding"},
  {"id":"r7","via":"call","token":"setItem","argIndex":0,"kind":"cache","role":"produces","name":"localstorage-write","description":"writes a localStorage key"},
- {"id":"r8","via":"call","token":"getItem","argIndex":0,"kind":"cache","role":"consumes","name":"localstorage-read","description":"reads a localStorage key"}]
+ {"id":"r8","via":"call","token":"getItem","argIndex":0,"kind":"cache","role":"consumes","name":"localstorage-read","description":"reads a localStorage key"},
+ {"id":"r9","via":"call","token":"convertAndSend","argIndex":0,"kind":"queue","role":"produces","name":"jms-send","description":"publishes to a JMS queue/topic"},
+ {"id":"r10","via":"annotation","annotation":"JmsListener","element":"destination","kind":"queue","role":"consumes","name":"jms-listener","description":"a method listening on a JMS queue/topic"}]
 ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
 \`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;
@@ -112,7 +121,7 @@ function _parse(out: Map<string, any>): KeyMatcher[] {
 
 // The token to echo back as a "matched nothing" hint on the self-correction round (call/assign carry a
 // callee/receiver identifier; attr carries its directive prefix).
-const _feedbackToken = (m: KeyMatcher): string => (m.via === "attr" ? m.directive : m.via === "method" ? "method" : m.token);
+const _feedbackToken = (m: KeyMatcher): string => (m.via === "attr" ? m.directive : m.via === "method" ? "method" : m.via === "annotation" ? `@${m.annotation}` : m.token);
 
 // A matcher DETECTS if it re-executes to ≥1 key over the candidate files (step 3-4: it actually matches).
 async function _detects(m: KeyMatcher, files: { file: string; text: string }[]): Promise<boolean> {
