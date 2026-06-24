@@ -17,9 +17,12 @@ import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
 import { EVENT_BINDING } from "./event_binding.js";
-import { NG_SCOPE } from "./ng_scope.js";
 
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING, NG_SCOPE];
+// AngularJS $scope ⇄ template binding is NOT a built-in adapter — it is too framework-specific. It is now a
+// LEARNED adapter (key_ir.ts `assign` + `attr` shapes, synthesized by the flywheel and cached to `.seam/`),
+// the same mechanism that covers Vue / Angular2+ / React without per-framework code. event_binding still
+// provides the .vue/.html walkability the template side needs.
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING];
 
 // The BUILT-IN adapter catalogue (name + one-line blurb), derived FROM the registry — the single source,
 // so adding an adapter to ADAPTERS automatically surfaces it in `seam-adapters` / the extension's adapter

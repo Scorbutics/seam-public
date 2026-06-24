@@ -193,7 +193,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // inside an AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing
   // function, not its own span) can't reach the cross-boundary flow. The real unit is the FILE/component, so
   // re-anchor in MODULE mode (the whole controller) and ADOPT it when the FILE has the coupling the symbol
-  // missed (ng-scope ⇄ template, routes → backend). Conservative: fires only when the symbol footprint has
+  // missed ($scope-binding ⇄ template, routes → backend). Conservative: fires only when the symbol footprint has
   // zero coupling AND the module reveals some — so a symbol that already has data-flow is never widened.
   const hasCoupling = (g: any) => (g.nodes ?? []).some((n: any) => n.coupling);
   if (!hasCoupling(data)) {

@@ -20,6 +20,8 @@ import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { type KeyMatcher, matcherKey, runMatcher } from "./key_ir.js";
+import { listMatchers } from "./key_matcher_cache.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
@@ -329,7 +331,11 @@ export async function resolveCoupling(
   const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
   _dct("index-build", _t); _t = performance.now();
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
-  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats };
+  // LEARNED adapter rules (cached `.seam/`), deduped — run per-node below to SURFACE keys a built-in adapter
+  // no longer covers (e.g. AngularJS $scope bindings, now learned). Pure read (no ledger side-effect).
+  const _seen = new Set<string>();
+  const matchers = listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return _seen.has(k) ? false : (_seen.add(k), true); });
+  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };
 
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
@@ -433,6 +439,7 @@ interface PipelineCtx {
   paramIndex: GroundingIndex;   // const-resolved param grounding, raw — so each node re-derives its own param keys
   ctx: EngineCtx;
   stats: DcStats;          // per-resolveCoupling cost counters (visibility, not behaviour) — see resolveCoupling
+  matchers: KeyMatcher[];  // LEARNED adapter rules (cached `.seam/`), run per-node to SURFACE keys like the floor (see runPipeline)
 }
 // Where the data-coupling crossing actually spends its time. Threaded so the recursion accumulates into one
 // object; printed once (--verbose) at the end of the pipeline so a slow grow's cost is a fact, not a guess.
@@ -533,6 +540,14 @@ async function runPipeline(
   for (const hit of paramKeysForSpan(p.paramIndex, node.file, node.lo, node.hi)) {
     const id = `${hit.kind} ${hit.value} ${hit.produces}`;
     if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { ...hit, source: "scan" });
+  }
+  // STEP 1c — LEARNED adapter rules applied to THIS span, exactly like the floor scan (span-filtered, earliest
+  // line wins). This is what lets a learned rule (a framework Seam has no built-in adapter for — AngularJS
+  // $scope, a custom event bus) surface a node's OWN keys so it can cross on them, not just feed the index.
+  for (const m of p.matchers) for (const hit of await runMatcher(m, node.file, node.text)) {
+    if (hit.line < node.lo || hit.line > node.hi) continue;            // span-local, like scan_file_keys
+    const id = `${hit.kind} ${hit.value} ${hit.produces}`;
+    if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: "scan" });
   }
   // DIAGNOSTIC (--verbose, or the narrow SEAM_COUPLING_DEBUG): why did a node surface (or fail to surface)
   // couplings? Prints every key this span touches, its source, and how many files sit on the OTHER side

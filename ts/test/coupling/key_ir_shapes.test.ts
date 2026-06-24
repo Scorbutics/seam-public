@@ -5,7 +5,6 @@
 // Both shapes parse with tree-sitter (js for assign, html/vue for attr), so they gate on `available()`.
 import { describe, expect, test } from "bun:test";
 import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
-import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const CTRL = `angular.module('app').controller('FileNoteCtrl', function ($scope, $http) {
@@ -23,12 +22,10 @@ const vals = (hits: { value: string }[]) => hits.map((h) => h.value).sort();
 
 describe("assign shape — `$scope.METHOD = function` (controller producer)", () => {
   const m = validateMatcher({ via: "assign", token: "$scope", kind: "binding", role: "produces" })!;
-  test("matches ng_scope's PRODUCER keys exactly (and ignores a non-$scope local)", async () => {
+  test("produces every $scope method binding (and ignores a non-$scope local)", async () => {
     if (!available()) return;
     const got = await runMatcher(m, "ctrl.js", CTRL);
-    const ngProd = scan_file_keys("ctrl.js", CTRL).filter((h) => h.kind === "ng-scope" && h.produces);
-    expect(vals(got)).toEqual(vals(ngProd));                       // same values as the hand-written adapter
-    expect(vals(got)).toEqual(["generateFileNote", "refreshSection"]);
+    expect(vals(got)).toEqual(["generateFileNote", "refreshSection"]);   // the two $scope.* methods, not `local`
     expect(got.every((h) => h.produces)).toBe(true);
   });
   test("a wrong receiver token matches nothing", async () => {
@@ -39,11 +36,9 @@ describe("assign shape — `$scope.METHOD = function` (controller producer)", ()
 
 describe("attr shape — directive call ⇄ interpolation (template consumer)", () => {
   const m = validateMatcher({ via: "attr", directive: "ng-", keyFrom: "call", kind: "binding", role: "consumes" })!;
-  test("matches ng_scope's CONSUMER keys exactly (ng-click calls + {{ }} interpolation)", async () => {
+  test("consumes ng-click calls + {{ }} interpolation methods", async () => {
     if (!available()) return;
     const got = await runMatcher(m, "view.html", VIEW);
-    const ngCons = scan_file_keys("view.html", VIEW).filter((h) => h.kind === "ng-scope" && !h.produces);
-    expect(vals(got)).toEqual(vals(ngCons));                       // same multiset as the hand-written adapter
     expect(vals(got)).toEqual(["generateFileNote", "generateFileNote", "refreshSection"]);   // {{generateFileNote()}} counted too
     expect(got.every((h) => !h.produces)).toBe(true);
   });
