@@ -15,12 +15,11 @@
 // Discipline (this is what keeps a review annotation trustworthy enough to leave ON): cross-stack is
 // INFORMATION, not an assertion ("reads `payments` — verify"), provenance-gated, and gaps are surfaced.
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, basename } from "node:path";
 import { RegexFactsProvider, changed_newside } from "../diff/facts.js";
 import type { Hunk } from "../diff/parser.js";
 import { normpath } from "../core/resolve/walk.js";
 import { run_pass_async, registerPass, available, get_host_bus, ClassifierError as LLMError } from "../core/llm.js";
-import { projectImpact } from "../codebase/grow/impact.js";
 import { EngineCtx } from "../codebase/engine_ctx.js";
 import { scoreRelevanceAst, externalRelevance, type Relevance } from "./review_relevance.js";
 
@@ -56,12 +55,9 @@ export async function annotateReviewImpact(
   model: any, hunks: Hunk[], repo: string,
   opts: { maxSymbols?: number; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {},
 ): Promise<void> {
-  // With the shared ctx the repo-wide coupling index builds ONCE and each symbol after is ~0.2s, so the
-  // budget covers a whole PR rather than the old per-symbol coupling cost. 120 clears virtually every real
-  // PR; still bounded so a runaway mega-diff (a 100s-of-file refactor — split it) truncates HONESTLY (the
-  // `truncated` flag says "impact ≥ shown") instead of running unbounded.
-  const budget = opts.maxSymbols ?? 120;
+  const RUNAWAY = opts.maxSymbols ?? 4000;   // a backstop on the unique-subject COUNT, not a per-PR cap (see below)
   const changed = new Set(hunks.map((h) => normpath(h.file_path)));
+  const stem = (p: string) => basename(p).replace(/\.[^.]+$/, "");
   const byId = new Map(hunks.map((h) => [h.id, h]));
   // Any changed code hunk can ripple — a one-line edit to a DB write is the headline cross-stack case and
   // is often classified `environment`, not `core`. So scope to all CODE roles (skip test/noise). Order
@@ -74,52 +70,48 @@ export async function annotateReviewImpact(
   if (!subjectHunks.length) return;
   const facts = await new RegexFactsProvider().facts(subjectHunks);
 
-  // analyze = pure edge DISCOVERY (cached per symbol); relevance is applied later, per HUNK (it depends on
-  // the change's added lines, which differ by hunk even for the same symbol).
   type RawEdge = { symbol: string; file: string; hop: number; key: string; relation: string; provenance: string };
-  // fanIn/fanInFiles = the FULL blast-radius magnitude (in- AND out-of-PR consumers) — the STRUCTURAL WEIGHT
-  // of the change, so a reviewer calibrates scrutiny by stakes (a 3-line edit to a 40-consumer hub > a
-  // 200-line edit to a leaf). `external` keeps only the out-of-PR slice; the weight keeps the whole.
-  // inPr = consumers (callers) of this symbol that ARE in the PR — the within-change call edges, used to
-  // order seams by FLOW (entry → downstream) so review follows the call path, not file order.
-  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; fanIn: number; fanInFiles: number; inPr: { file: string; symbol: string }[] };
-  const cache = new Map<string, Raw>();
-  let spent = 0;
-  // ONE shared cache context across every symbol's footprints — the data-coupling key index is repo-wide
-  // and ~4s to build, so without sharing it would rebuild per symbol (the measured 1m39s on cal.com).
-  // Shared, it builds once (~4s) and every later symbol reuses it (~0.2s). Same trick the grow loop uses.
-  const ctx = new EngineCtx();
+  // fanIn/fanInFiles = the blast-radius magnitude (#3, STRUCTURAL WEIGHT). `external` = the out-of-PR slice;
+  // `inPr` = the within-change caller FILES (flow edges, #4).
+  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; fanIn: number; fanInFiles: number; inPr: { file: string }[] };
 
+  // BATCHED consumer resolution — the cap-killer. scan_consumers re-walks the whole import index PER symbol, so
+  // N changed symbols cost N× (the redundancy the old 120-budget bounded). scan_consumers_batch resolves ALL of
+  // them in ONE index pass → analysing every changed symbol costs ~the same as one; no per-PR cap, only a
+  // runaway backstop on the unique-subject count.
+  const subjectsByHunk = new Map<string, string[]>();
+  const allSubjects: { file: string; symbol: string }[] = [];
+  const seenSubj = new Set<string>();
+  for (const h of subjectHunks) {
+    const ss = subjectsOf(facts.get(h.id));
+    subjectsByHunk.set(h.id, ss);
+    for (const sym of ss) { const k = `${normpath(h.file_path)}::${sym}`; if (!seenSubj.has(k) && seenSubj.size < RUNAWAY) { seenSubj.add(k); allSubjects.push({ file: h.file_path, symbol: sym }); } }
+  }
+  const { scan_consumers_batch } = await import("../core/resolve/consumers.js");
+  let batch = new Map<string, { file: string; local: string; source: string; status: string }[]>();
+  try { batch = await scan_consumers_batch(repo, allSubjects) as typeof batch; } catch { /* degrade to empty */ }
+
+  const cache = new Map<string, Raw>();
+  const ctx = new EngineCtx();   // shared across the per-symbol couplingOtherSides calls (targeted; file-key cache reused)
+  const { couplingOtherSides } = await import("../codebase/coupling/index.js");
+
+  // analyze = derive a symbol's Raw from the precomputed batch (consumers) + the targeted coupling pass.
   const analyze = async (file: string, symbol: string): Promise<Raw> => {
     const k = `${normpath(file)}#${symbol}`;
     const hit = cache.get(k); if (hit) return hit;
     const res: Raw = { external: [], crossStack: [], gaps: [], fanIn: 0, fanInFiles: 0, inPr: [] };
-    if (spent >= budget) { res.truncated = true; cache.set(k, res); return res; }
-    spent++;
+    const cons = batch.get(`${normpath(file)}::${symbol}`) ?? [];
+    const resolved = cons.filter((c) => c.status === "RESOLVED_FULL");
+    res.fanIn = resolved.length;                                          // blast-radius magnitude (#3) — uncapped, no parse
+    res.fanInFiles = new Set(resolved.map((c) => normpath(c.file))).size;
+    res.external = resolved.filter((c) => !changed.has(normpath(c.file))).map((c) => ({ symbol: stem(c.file), file: c.file, hop: 1, key: "", relation: "", provenance: "RESOLVED_FULL" }));
+    res.inPr = resolved.filter((c) => changed.has(normpath(c.file))).map((c) => ({ file: c.file }));   // in-PR callers → flow edges (#4, file-granular)
+    res.gaps = cons.filter((c) => c.status === "SUGGESTED").map((c) => ({ mechanism: "unresolved-import", evidence: `${c.file} imports ${symbol} from '${c.source}' (module unresolved)` }));
     try {
-      // Review wants what a change DIRECTLY breaks → depth 1 (the immediate consumers). Depth 2's transitive
-      // hop fans out O(impact-tree) consumer resolutions — minutes on a hub symbol in a big repo — for indirect
-      // dependents that are noisier and less actionable in review anyway. Depth 1 is also the truer `fanIn`
-      // (#3): direct dependents, not an inflated transitive count. ctx amortizes the shared import index.
-      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 1, ctx, skipCallsite: true });
-      res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
-      res.fanIn = im.impacted.length;                                       // total blast radius (the structural weight)
-      res.fanInFiles = new Set(im.impacted.map((m) => normpath(m.file))).size;
-      res.inPr = im.impacted.filter((m) => changed.has(normpath(m.file))).map((m) => ({ file: m.file, symbol: m.symbol }));   // in-PR callers → flow edges
-      res.gaps = im.gaps;
-      // NB: we deliberately cap impact at depth 2 (direct breakage) for review — so projectImpact's own
-      // depth-truncation is BY DESIGN, not flagged. Only the SYMBOL budget (couldn't analyze every changed
-      // symbol) is a real incompleteness, set in the `spent >= budget` branch above.
-    } catch { /* leave external empty */ }
-    try {
-      // cross-stack: a data-flow boundary (a shared key) the changed symbol touches, whose other side lives in
-      // a file the PR didn't touch. TARGETED (couplingOtherSides): the change's keys are known LOCALLY, so we
-      // grep the repo for those exact values and scan only the matching files — O(files that mention the key),
-      // NOT a full-repo floor index. An anchor with no key returns instantly (no scan). dataCouplingLlm learns
-      // an unknown-framework key once (cached to `.seam/`). Degrades to the floor with no backend.
-      const { couplingOtherSides } = await import("../codebase/coupling/index.js");
+      // cross-stack: TARGETED (couplingOtherSides) — the change's keys are known locally, so grep the repo for
+      // those exact values and scan only the matching files (O(files that mention the key), not a full index).
       for (const side of await couplingOtherSides(repo, file, symbol, { llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx)) {
-        if (changed.has(normpath(side.file)) || normpath(side.file) === normpath(file)) continue;   // not in the PR, not the anchor file
+        if (changed.has(normpath(side.file)) || normpath(side.file) === normpath(file)) continue;
         res.crossStack.push({ symbol: side.symbol, file: side.file, key: side.value, relation: side.edgeKind, provenance: side.provenance, hop: 1 });
       }
     } catch { /* leave crossStack empty */ }
@@ -132,10 +124,10 @@ export async function annotateReviewImpact(
   const RANK: Record<Relevance, number> = { relevant: 2, unknown: 1, irrelevant: 0 };
   const better = (a: Relevance, b: Relevance) => (RANK[a] >= RANK[b] ? a : b);
 
-  // FLOW bookkeeping (#4): map every core SUBJECT → its seam, and collect each seam's in-PR callers, so the
-  // seams can be topologically ordered along the call path afterwards (entry → downstream).
-  const subjectToSeam = new Map<string, any>();          // "file#symbol" → the seam whose core defines it
-  const seamCallerKeys = new Map<any, Set<string>>();    // seam → "file#symbol" of the in-PR cores that CALL it
+  // FLOW bookkeeping (#4): the batched scan yields consumer FILES (not enclosing symbols), so flow is mapped
+  // file-granular — each changed FILE → the seams owning a core in it, and each seam's in-PR caller FILES.
+  const fileToSeams = new Map<string, Set<any>>();       // normFile → seams owning a core there
+  const seamCallerKeys = new Map<any, Set<string>>();    // seam → normFiles of the in-PR cores that CALL it
   const allSeams: any[] = [];
 
   for (const cluster of model.clusters ?? []) {
@@ -151,12 +143,13 @@ export async function annotateReviewImpact(
         const cn = changed_newside(h);
         const added = [...(cn?.[2].values() ?? [])];              // the change's added line strings
         const changedLines = new Set(cn?.[2].keys() ?? []);       // …and their new-side line numbers (for AST)
-        for (const sym of subjectsOf(facts.get(h.id))) {
-          subjectToSeam.set(`${normpath(h.file_path)}#${sym}`, seam);   // this seam defines `sym`
+        const hf = normpath(h.file_path);
+        fileToSeams.set(hf, (fileToSeams.get(hf) ?? new Set()).add(seam));   // this seam owns a core in hf
+        for (const sym of subjectsByHunk.get(h.id) ?? []) {
           const r = await analyze(h.file_path, sym);
           if (r.truncated) truncated = true;
           if (r.fanIn > maxFan) { maxFan = r.fanIn; maxFanFiles = r.fanInFiles; }   // hottest core wins
-          for (const c of r.inPr) callerKeys.add(`${normpath(c.file)}#${c.symbol}`);   // who (in-PR) calls this seam
+          for (const c of r.inPr) callerKeys.add(normpath(c.file));   // which in-PR FILE calls this seam
           for (const x of r.external) {
             const rel = externalRelevance(added, sym), k = `${x.file}#${x.symbol}`;
             const prev = ext.get(k);
@@ -182,7 +175,7 @@ export async function annotateReviewImpact(
     }
   }
 
-  orderSeamsByFlow(model, allSeams, subjectToSeam, seamCallerKeys);
+  orderSeamsByFlow(model, allSeams, fileToSeams, seamCallerKeys);
 }
 
 // #4 SPINE-ORDERING — order the seams along the CALL FLOW (entry → downstream) instead of file/hunk order, so
@@ -191,17 +184,18 @@ export async function annotateReviewImpact(
 // topologically sort that DAG (Kahn; ties + cycles fall back to the original emit order, stable), stamp each
 // seam's `flowOrder`, then reorder the seams within each cluster and the clusters by their entry's order. Only
 // runs under the bridge (needs the codebase consumer sets); a change with no internal call edges is untouched.
-function orderSeamsByFlow(model: any, allSeams: any[], subjectToSeam: Map<string, any>, seamCallerKeys: Map<any, Set<string>>): void {
+function orderSeamsByFlow(model: any, allSeams: any[], fileToSeams: Map<string, Set<any>>, seamCallerKeys: Map<any, Set<string>>): void {
   if (allSeams.length < 2) return;
   const idx = new Map(allSeams.map((s, i) => [s, i]));               // original emit order — the stable tiebreak
   const callees = new Map<any, Set<any>>(allSeams.map((s) => [s, new Set<any>()]));   // caller → callees
   const indeg = new Map<any, number>(allSeams.map((s) => [s, 0]));   // # of in-PR callers (upstream seams)
   for (const callee of allSeams) {
-    for (const ck of seamCallerKeys.get(callee) ?? []) {
-      const caller = subjectToSeam.get(ck);
-      if (!caller || caller === callee || callees.get(caller)!.has(callee)) continue;
-      callees.get(caller)!.add(callee);
-      indeg.set(callee, indeg.get(callee)! + 1);
+    for (const callerFile of seamCallerKeys.get(callee) ?? []) {
+      for (const caller of fileToSeams.get(callerFile) ?? []) {   // a file may own cores in several seams → each is a caller
+        if (caller === callee || callees.get(caller)!.has(callee)) continue;
+        callees.get(caller)!.add(callee);
+        indeg.set(callee, indeg.get(callee)! + 1);
+      }
     }
   }
   const bySrc = (a: any, b: any) => idx.get(a)! - idx.get(b)!;
@@ -271,10 +265,14 @@ export async function triageUnknowns(model: any, hunks: Hunk[], repo: string, op
 export function renderReviewImpact(model: any): string {
   const out: string[] = ["# Review impact (what this change touches beyond its own lines)", ""];
   let any = false, totalSuppressed = 0;
-  for (const cluster of model.clusters ?? []) {
-    for (const seam of cluster.seams ?? []) {
-      const im: SeamImpact | undefined = seam.impact;
-      if (!im) continue;
+  // RANK by blast radius (#3 fan-in), highest first — the load-bearing seams lead the report, so a reviewer
+  // sees the riskiest changes before the leaf ones (the relevance order that replaces the old hard cap).
+  const rankedSeams = (model.clusters ?? []).flatMap((c: any) => c.seams ?? [])
+    .filter((s: any) => s.impact)
+    .sort((a: any, b: any) => (b.impact.fanIn ?? 0) - (a.impact.fanIn ?? 0));
+  {
+    for (const seam of rankedSeams) {
+      const im: SeamImpact = seam.impact;
       const csRel = im.crossStack.filter((c) => c.relevance === "relevant");
       const csUnk = im.crossStack.filter((c) => c.relevance === "unknown");
       const extRel = im.external.filter((e) => e.relevance === "relevant");

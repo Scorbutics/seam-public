@@ -280,10 +280,17 @@ export async function couplingOtherSides(
 
   // 1. ANCHOR KEYS — local only (floor + learned matchers + LLM-proposed), span-filtered + deduped.
   const matchers = listMatchers(repo).map((x) => x.matcher);
+  // The file's full key scan (floor + matchers) is the same for every symbol IN that file — cache it on the
+  // ctx so a multi-symbol bridge run scans each file ONCE, not once per changed symbol (the measured redundancy).
+  let fileKeys = ctx.fileKeyScan.get(anchorFile);
+  if (!fileKeys) {
+    fileKeys = scan_file_keys(anchorFile, anchorText).slice();
+    for (const m of matchers) for (const h of await runMatcher(m, anchorFile, anchorText)) fileKeys.push(h);
+    ctx.fileKeyScan.set(anchorFile, fileKeys);
+  }
   const anchorKeys = new Map<string, { kind: string; value: string; produces: boolean }>();
   const addKey = (h: KeyHit) => { if (inSpan(h.line) && plausibleKeyValue(h.value)) anchorKeys.set(`${h.kind} ${h.value} ${h.produces}`, { kind: h.kind, value: h.value, produces: h.produces }); };
-  for (const h of scan_file_keys(anchorFile, anchorText)) addKey(h);
-  for (const m of matchers) for (const h of await runMatcher(m, anchorFile, anchorText)) addKey(h);
+  for (const h of fileKeys) addKey(h);
   if (opts.llm) { const lk = await import("./llm_key_index.js"); for (const h of await lk.anchorProposedKeys(repo, anchorFile, anchorText, { llm: true, model: opts.model, claudeBin: opts.claudeBin }, ctx)) addKey({ ...h, line: lo }); }
   if (!anchorKeys.size) return [];   // no boundary in the anchor → nothing to resolve, instantly
 

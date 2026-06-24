@@ -47,7 +47,8 @@ describe("annotateReviewImpact — the diff↔codebase bridge", () => {
     ].join("\n");
     const model = await decompose(diff, repo);
     const ext = seamsOf(model).flatMap((s: any) => s.impact?.external ?? []);
-    expect(ext.some((e: any) => e.symbol === "Page" && e.file === "src/page.ts")).toBe(true);
+    // the batched scan surfaces the consumer FILE (the actionable signal); the symbol is the file-stem
+    expect(ext.some((e: any) => e.file === "src/page.ts")).toBe(true);
   });
 
   test("only changed files are excluded — the signal is what's affected AND untouched", async () => {

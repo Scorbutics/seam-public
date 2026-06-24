@@ -31,6 +31,10 @@ export class EngineCtx {
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null
 
+  // --- coupling: per-FILE key scan (floor + learned matchers), reused across SYMBOLS in that file (the bridge's
+  // targeted couplingOtherSides runs per changed symbol, but the file's keys don't change between symbols) ---
+  fileKeyScan = new Map<string, { kind: string; value: string; line: number; produces: boolean }[]>();
+
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
