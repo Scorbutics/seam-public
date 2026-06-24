@@ -121,3 +121,45 @@ describe("structural weight (fanIn) — review scrutiny calibration", () => {
     expect(renderReviewImpact(model)).toContain("blast radius");
   });
 });
+
+// #4 SPINE-ORDERING — seams are ordered along the CALL FLOW (entry → downstream), not file order, so review
+// follows the path the change runs on. Hermetic chain: entry() → mid() → leaf(), all three modified in the PR.
+describe("spine-ordering (flowOrder) — review follows the call path, not file order", () => {
+  let REPO: string;
+  const w = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  beforeAll(() => {
+    REPO = mkdtempSync(join(tmpdir(), "flow-"));
+    w("entry.ts", 'import { mid } from "./mid";\nexport function entry() {\n  const base = mid();\n  return base;\n}\n');
+    w("mid.ts", 'import { leaf } from "./leaf";\nexport function mid() {\n  const base = leaf();\n  return base;\n}\n');
+    w("leaf.ts", "export function leaf() {\n  const base = 1;\n  return base;\n}\n");
+  });
+  afterAll(() => rmSync(REPO, { recursive: true, force: true }));
+
+  // one hunk per file, each editing the function body so all three are CORES (the @@ scope attributes it)
+  const hunk = (file: string, fn: string) => [
+    `diff --git a/${file} b/${file}`, `--- a/${file}`, `+++ b/${file}`, `@@ -3,2 +3,2 @@ export function ${fn}() {`,
+    "   const base = " + (fn === "leaf" ? "1;" : (fn === "entry" ? "mid();" : "leaf();")),
+    "-  return base;", "+  return base; // tweaked", "",
+  ].join("\n");
+  const DIFF = [hunk("entry.ts", "entry"), hunk("mid.ts", "mid"), hunk("leaf.ts", "leaf")].join("\n");
+
+  test("flowOrder runs entry < mid < leaf (the call direction), regardless of diff/file order", async () => {
+    const model = await decompose(DIFF, REPO);
+    const hunks = parse(DIFF);
+    const fileOf = new Map(hunks.map((h) => [h.id, h.file_path]));
+    const seams = seamsOf(model);
+    const flowOf = (file: string) => seams.find((s: any) => (s.hunks ?? []).some((sh: any) => fileOf.get(sh.id) === file))?.flowOrder;
+    expect(typeof flowOf("entry.ts")).toBe("number");
+    expect(flowOf("entry.ts")).toBeLessThan(flowOf("mid.ts"));   // caller before callee
+    expect(flowOf("mid.ts")).toBeLessThan(flowOf("leaf.ts"));
+  });
+
+  test("the emitted seam order is the flow order (entry first), so a client iterating gets it for free", async () => {
+    const model = await decompose(DIFF, REPO);
+    const hunks = parse(DIFF);
+    const fileOf = new Map(hunks.map((h) => [h.id, h.file_path]));
+    const orderedFiles = seamsOf(model).map((s: any) => fileOf.get((s.hunks ?? [])[0]?.id));
+    expect(orderedFiles.indexOf("entry.ts")).toBeLessThan(orderedFiles.indexOf("mid.ts"));
+    expect(orderedFiles.indexOf("mid.ts")).toBeLessThan(orderedFiles.indexOf("leaf.ts"));
+  });
+});

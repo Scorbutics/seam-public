@@ -8,6 +8,8 @@
 //   fanIn      — the STRUCTURAL WEIGHT: total consumers (in+out of PR) of the seam's hottest core, so the
 //                reviewer calibrates scrutiny by stakes (a hub change is riskier than a leaf change)
 //   gaps       — opaque callers where the impact view is incomplete (so the annotation is honest, not noisy)
+//   flowOrder  — the seams are re-ordered along the CALL FLOW (entry → downstream) so review follows the
+//                path the change runs on, not file order (#4 spine-ordering — see orderSeamsByFlow)
 // The `!changedFiles.has(...)` filter is the whole value: the signal is what's affected AND untouched.
 //
 // Discipline (this is what keeps a review annotation trustworthy enough to leave ON): cross-stack is
@@ -79,7 +81,9 @@ export async function annotateReviewImpact(
   // fanIn/fanInFiles = the FULL blast-radius magnitude (in- AND out-of-PR consumers) — the STRUCTURAL WEIGHT
   // of the change, so a reviewer calibrates scrutiny by stakes (a 3-line edit to a 40-consumer hub > a
   // 200-line edit to a leaf). `external` keeps only the out-of-PR slice; the weight keeps the whole.
-  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; fanIn: number; fanInFiles: number };
+  // inPr = consumers (callers) of this symbol that ARE in the PR — the within-change call edges, used to
+  // order seams by FLOW (entry → downstream) so review follows the call path, not file order.
+  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; fanIn: number; fanInFiles: number; inPr: { file: string; symbol: string }[] };
   const cache = new Map<string, Raw>();
   let spent = 0;
   // ONE shared cache context across every symbol's footprints — the data-coupling key index is repo-wide
@@ -90,7 +94,7 @@ export async function annotateReviewImpact(
   const analyze = async (file: string, symbol: string): Promise<Raw> => {
     const k = `${normpath(file)}#${symbol}`;
     const hit = cache.get(k); if (hit) return hit;
-    const res: Raw = { external: [], crossStack: [], gaps: [], fanIn: 0, fanInFiles: 0 };
+    const res: Raw = { external: [], crossStack: [], gaps: [], fanIn: 0, fanInFiles: 0, inPr: [] };
     if (spent >= budget) { res.truncated = true; cache.set(k, res); return res; }
     spent++;
     try {
@@ -100,6 +104,7 @@ export async function annotateReviewImpact(
       res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
       res.fanIn = im.impacted.length;                                       // total blast radius (the structural weight)
       res.fanInFiles = new Set(im.impacted.map((m) => normpath(m.file))).size;
+      res.inPr = im.impacted.filter((m) => changed.has(normpath(m.file))).map((m) => ({ file: m.file, symbol: m.symbol }));   // in-PR callers → flow edges
       res.gaps = im.gaps;
       // NB: we deliberately cap impact at depth 2 (direct breakage) for review — so projectImpact's own
       // depth-truncation is BY DESIGN, not flagged. Only the SYMBOL budget (couldn't analyze every changed
@@ -129,8 +134,16 @@ export async function annotateReviewImpact(
   const RANK: Record<Relevance, number> = { relevant: 2, unknown: 1, irrelevant: 0 };
   const better = (a: Relevance, b: Relevance) => (RANK[a] >= RANK[b] ? a : b);
 
+  // FLOW bookkeeping (#4): map every core SUBJECT → its seam, and collect each seam's in-PR callers, so the
+  // seams can be topologically ordered along the call path afterwards (entry → downstream).
+  const subjectToSeam = new Map<string, any>();          // "file#symbol" → the seam whose core defines it
+  const seamCallerKeys = new Map<any, Set<string>>();    // seam → "file#symbol" of the in-PR cores that CALL it
+  const allSeams: any[] = [];
+
   for (const cluster of model.clusters ?? []) {
     for (const seam of cluster.seams ?? []) {
+      allSeams.push(seam);
+      const callerKeys = new Set<string>();
       const ext = new Map<string, ExternalImpact>(), cs = new Map<string, CrossStackEdge>();
       const gaps = new Map<string, { mechanism: string; evidence: string }>();
       let truncated = false, maxFan = 0, maxFanFiles = 0;   // the seam's weight = its HOTTEST core's blast radius
@@ -141,9 +154,11 @@ export async function annotateReviewImpact(
         const added = [...(cn?.[2].values() ?? [])];              // the change's added line strings
         const changedLines = new Set(cn?.[2].keys() ?? []);       // …and their new-side line numbers (for AST)
         for (const sym of subjectsOf(facts.get(h.id))) {
+          subjectToSeam.set(`${normpath(h.file_path)}#${sym}`, seam);   // this seam defines `sym`
           const r = await analyze(h.file_path, sym);
           if (r.truncated) truncated = true;
           if (r.fanIn > maxFan) { maxFan = r.fanIn; maxFanFiles = r.fanInFiles; }   // hottest core wins
+          for (const c of r.inPr) callerKeys.add(`${normpath(c.file)}#${c.symbol}`);   // who (in-PR) calls this seam
           for (const x of r.external) {
             const rel = externalRelevance(added, sym), k = `${x.file}#${x.symbol}`;
             const prev = ext.get(k);
@@ -157,6 +172,7 @@ export async function annotateReviewImpact(
           for (const x of r.gaps) gaps.set(`${x.mechanism}\0${x.evidence}`, x);
         }
       }
+      seamCallerKeys.set(seam, callerKeys);
       if (ext.size || cs.size || gaps.size || maxFan > 0) {
         const acc: SeamImpact = {
           external: [...ext.values()].sort((a, b) => a.hop - b.hop || a.file.localeCompare(b.file)),
@@ -167,6 +183,46 @@ export async function annotateReviewImpact(
       }
     }
   }
+
+  orderSeamsByFlow(model, allSeams, subjectToSeam, seamCallerKeys);
+}
+
+// #4 SPINE-ORDERING — order the seams along the CALL FLOW (entry → downstream) instead of file/hunk order, so
+// review follows the path the change actually runs on. The changed cores form a sub-graph: if seam SC's core
+// CALLS seam S's core (S's in-PR consumer set contains SC's subject), SC is upstream → read SC first. We
+// topologically sort that DAG (Kahn; ties + cycles fall back to the original emit order, stable), stamp each
+// seam's `flowOrder`, then reorder the seams within each cluster and the clusters by their entry's order. Only
+// runs under the bridge (needs the codebase consumer sets); a change with no internal call edges is untouched.
+function orderSeamsByFlow(model: any, allSeams: any[], subjectToSeam: Map<string, any>, seamCallerKeys: Map<any, Set<string>>): void {
+  if (allSeams.length < 2) return;
+  const idx = new Map(allSeams.map((s, i) => [s, i]));               // original emit order — the stable tiebreak
+  const callees = new Map<any, Set<any>>(allSeams.map((s) => [s, new Set<any>()]));   // caller → callees
+  const indeg = new Map<any, number>(allSeams.map((s) => [s, 0]));   // # of in-PR callers (upstream seams)
+  for (const callee of allSeams) {
+    for (const ck of seamCallerKeys.get(callee) ?? []) {
+      const caller = subjectToSeam.get(ck);
+      if (!caller || caller === callee || callees.get(caller)!.has(callee)) continue;
+      callees.get(caller)!.add(callee);
+      indeg.set(callee, indeg.get(callee)! + 1);
+    }
+  }
+  const bySrc = (a: any, b: any) => idx.get(a)! - idx.get(b)!;
+  const ready = allSeams.filter((s) => indeg.get(s) === 0).sort(bySrc);   // entry points (nothing in-PR calls them)
+  const order: any[] = [], seen = new Set<any>();
+  while (ready.length) {
+    const s = ready.shift()!;
+    if (seen.has(s)) continue;
+    seen.add(s); order.push(s);
+    const freed: any[] = [];
+    for (const c of callees.get(s)!) { indeg.set(c, indeg.get(c)! - 1); if (indeg.get(c) === 0) freed.push(c); }
+    ready.push(...freed.sort(bySrc));
+  }
+  for (const s of allSeams) if (!seen.has(s)) order.push(s);   // cycle remainder → original order
+  order.forEach((s, i) => { s.flowOrder = i; });               // additive contract field
+  // reorder presentation: seams within a cluster by flow, then clusters by their entry seam's order
+  const minFlow = (cl: any) => Math.min(...((cl.seams ?? []).map((s: any) => s.flowOrder ?? 0)), Infinity);
+  for (const cl of model.clusters ?? []) (cl.seams ?? []).sort((a: any, b: any) => (a.flowOrder ?? 0) - (b.flowOrder ?? 0));
+  (model.clusters ?? []).sort((a: any, b: any) => minFlow(a) - minFlow(b));
 }
 
 // LAYER 3 — LLM triage on the `unknown` RESIDUAL only (never the easy 80% the floor already decided).
