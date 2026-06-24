@@ -807,11 +807,13 @@ async function main(argv: string[]): Promise<number> {
       if (a.emitPrompts) set_host_bus(new HostBus());
       else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
       let recorded: HostBus["recorded"] | undefined;
-      // #5 STRUCTURAL LABEL PRIOR — under --review-impact with LLM clustering, ground the product-intent
-      // labels in how each changed symbol sits in the codebase (fan-in / hub). Composition-root only (the
-      // cli may import codebase/); plain data into classify, so diff/ stays mode-isolated. Degrades to {}.
+      // #5 STRUCTURAL LABEL PRIOR — ground the product-intent labels in how each changed symbol sits in the
+      // codebase (fan-in / hub). Composition-root only (the cli may import codebase/); plain data into classify,
+      // so diff/ stays mode-isolated. Degrades to {}. Fires in the codebase-enrichment workflow: --review-impact
+      // (single-pass CLI) OR --blast-radius (the extension's pass-A classify, where --review-impact lands on the
+      // separate pass-B --from-classified run) — so the prior is integrated by default wherever the others are.
       let structuralContext: Map<string, string> | undefined;
-      if (a.reviewImpact && eng.cluster === "llm" && a.repo) {
+      if ((a.reviewImpact || a.blastRadius) && eng.cluster === "llm" && a.repo) {
         try { const { computeStructuralContext } = await import("./structural_context.js"); structuralContext = await computeStructuralContext(a.repo, hunks); }
         catch (e) { process.stderr.write(`structural prior skipped: ${(e as Error).message}\n`); }
       }
