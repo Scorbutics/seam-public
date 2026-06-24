@@ -21,7 +21,6 @@ import type { Hunk } from "../diff/parser.js";
 import { normpath } from "../core/resolve/walk.js";
 import { run_pass_async, registerPass, available, get_host_bus, ClassifierError as LLMError } from "../core/llm.js";
 import { projectImpact } from "../codebase/grow/impact.js";
-import { build_footprint } from "../codebase/scan/index.js";
 import { EngineCtx } from "../codebase/engine_ctx.js";
 import { scoreRelevanceAst, externalRelevance, type Relevance } from "./review_relevance.js";
 
@@ -98,9 +97,11 @@ export async function annotateReviewImpact(
     if (spent >= budget) { res.truncated = true; cache.set(k, res); return res; }
     spent++;
     try {
-      // Review wants what a change BREAKS (direct + a hop), not the full transitive closure → depth 2 (the
-      // relevance floor is direct-ish anyway); keeps the BFS cheap. ctx amortizes any coupling indices.
-      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 2, ctx });
+      // Review wants what a change DIRECTLY breaks → depth 1 (the immediate consumers). Depth 2's transitive
+      // hop fans out O(impact-tree) consumer resolutions — minutes on a hub symbol in a big repo — for indirect
+      // dependents that are noisier and less actionable in review anyway. Depth 1 is also the truer `fanIn`
+      // (#3): direct dependents, not an inflated transitive count. ctx amortizes the shared import index.
+      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 1, ctx });
       res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
       res.fanIn = im.impacted.length;                                       // total blast radius (the structural weight)
       res.fanInFiles = new Set(im.impacted.map((m) => normpath(m.file))).size;
@@ -111,18 +112,15 @@ export async function annotateReviewImpact(
       // symbol) is a real incompleteness, set in the `spent >= budget` branch above.
     } catch { /* leave external empty */ }
     try {
-      // cross-stack: a data-flow boundary node (a shared key) reached from the changed symbol, whose other
-      // side lives in a file the PR didn't touch. byId of the footprint maps the crossing → the reader.
-      // dataCouplingLlm (default ON in LLM modes) learns + persists a `.seam/` adapter for an unknown
-      // framework's cross-stack key — once, then replayed offline. Repo-wide + cached on the shared ctx
-      // (one batched pass for the whole review, not per symbol). Degrades to floor with no backend.
-      const g: any = await build_footprint(repo, file, symbol, { direction: "up", dataCoupling: true, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx });
-      const gById = new Map<string, any>(g.nodes.map((n: any) => [n.id, n]));
-      for (const e of g.edges) {
-        const to = gById.get(e.to), from = gById.get(e.from);
-        if (!to?.coupling || !to.file) continue;                       // only the boundary's other side
-        if (changed.has(normpath(to.file)) || normpath(to.file) === normpath(file)) continue;   // not in the PR, not the anchor file
-        res.crossStack.push({ symbol: to.symbol, file: to.file, key: from?.symbol ?? "", relation: e.kind, provenance: e.provenance, hop: 1 });
+      // cross-stack: a data-flow boundary (a shared key) the changed symbol touches, whose other side lives in
+      // a file the PR didn't touch. TARGETED (couplingOtherSides): the change's keys are known LOCALLY, so we
+      // grep the repo for those exact values and scan only the matching files — O(files that mention the key),
+      // NOT a full-repo floor index. An anchor with no key returns instantly (no scan). dataCouplingLlm learns
+      // an unknown-framework key once (cached to `.seam/`). Degrades to the floor with no backend.
+      const { couplingOtherSides } = await import("../codebase/coupling/index.js");
+      for (const side of await couplingOtherSides(repo, file, symbol, { llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx)) {
+        if (changed.has(normpath(side.file)) || normpath(side.file) === normpath(file)) continue;   // not in the PR, not the anchor file
+        res.crossStack.push({ symbol: side.symbol, file: side.file, key: side.value, relation: side.edgeKind, provenance: side.provenance, hop: 1 });
       }
     } catch { /* leave crossStack empty */ }
     cache.set(k, res);
