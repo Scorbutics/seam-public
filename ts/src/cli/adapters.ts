@@ -11,7 +11,7 @@ import { listLearnedAdapters, promoteSignature } from "../codebase/coupling/carr
 import { listKeyAdapters, promoteKeyAdapter } from "../codebase/coupling/key_store.js";
 import { listMatchers } from "../codebase/coupling/key_store.js";
 import { matcherShape } from "../codebase/coupling/key_ir.js";
-import { builtinAdapters } from "../codebase/coupling/adapters/index.js";
+import { builtinAdapters, couplingCapabilities } from "../codebase/coupling/adapters/index.js";
 import { sharedSeamDir } from "../codebase/coupling/seam_dir.js";
 import { join } from "node:path";
 
@@ -49,6 +49,7 @@ function listJson(repo: string): void {
   // a name can appear in both stores (promote copies repo→shared) → keep one entry per (name) per bucket.
   const dedup = (xs: ReturnType<typeof item>[]) => [...new Map(xs.map((x) => [x.name, x])).values()];
   console.log(JSON.stringify({
+    capabilities: couplingCapabilities(),   // every boundary archetype + tier (built-in det vs learned-on-review)
     builtin: builtinAdapters(),
     learnt: dedup(learnt.filter((l) => !promoted.some((p) => p.name === l.name))),
     promoted: dedup(promoted),
@@ -56,11 +57,24 @@ function listJson(repo: string): void {
   }));
 }
 
+// The boundary archetypes Seam can couple across, by tier — so "does Seam handle events/queues?" is
+// answerable WITHOUT having warmed a repo: built-in archetypes detect deterministically/offline; learned
+// ones have the same kind semantics but their detection warms on the first LLM-enabled review.
+function printCapabilities(): void {
+  const caps = couplingCapabilities();
+  console.log("COUPLING CAPABILITIES (boundary archetypes Seam grounds across):");
+  for (const c of caps) {
+    const how = c.tier === "built-in" ? `built-in (${c.detectedBy.join(", ")})` : "learned — warms on first --data-coupling llm review";
+    console.log(`  ${c.tier === "built-in" ? "●" : "○"} ${c.kind.padEnd(11)} ${how}`);
+  }
+}
+
 function list(repo: string): void {
   const carriers = listLearnedAdapters(repo);
   const keys = listKeyAdapters(repo);
   const matchers = listMatchers(repo);
-  if (!carriers.length && !keys.length && !matchers.length) { console.log(`no learned adapters yet (run a footprint with --data-coupling llm).\n  repo:   ${join(repo, ".seam")}\n  shared: ${sharedSeamDir()}`); return; }
+  printCapabilities();
+  if (!carriers.length && !keys.length && !matchers.length) { console.log(`\nno learned adapters yet (run a footprint with --data-coupling llm).\n  repo:   ${join(repo, ".seam")}\n  shared: ${sharedSeamDir()}`); return; }
   for (const scope of ["repo", "shared"] as const) {
     const cs = carriers.filter((a) => a.scope === scope);
     const ks = keys.filter((a) => a.scope === scope);

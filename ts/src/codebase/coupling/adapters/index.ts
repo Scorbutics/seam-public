@@ -40,6 +40,19 @@ export function builtinAdapters(): { name: string; kind: string; description: st
   return ADAPTERS.map((a) => ({ name: a.name ?? a.kind, kind: a.kind, description: a.blurb ?? "" }));
 }
 
+// The coupling CAPABILITY CATALOGUE — every boundary archetype + HOW it is detected, derived structurally
+// from the registry (ADAPTERS ∩ ARCHETYPES), never hardcoded. An archetype whose kind a built-in adapter
+// owns is `built-in` (Tier-1: deterministic, offline, always-on — db-table/http-route/data-file). One with
+// NO detection adapter (event/binding/cache/queue) is `learned` (Tier-2): the kind SEMANTICS exist, but
+// detection is synthesised by the flywheel and warms on first LLM-enabled review, then caches to `.seam/`.
+// Surfaced by `seam-adapters` so this conditional coverage is HONEST instead of invisible to a user.
+export function couplingCapabilities(): { kind: string; nodeKind: string; tier: "built-in" | "learned"; detectedBy: string[] }[] {
+  return ARCHETYPE_METAS.map((arch) => {
+    const detectors = ADAPTERS.filter((a) => a.kind === arch.kind);
+    return { kind: arch.kind, nodeKind: arch.nodeKind, tier: detectors.length ? "built-in" : "learned", detectedBy: detectors.map((a) => a.name ?? a.kind) };
+  });
+}
+
 const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-write", consumeEdge: "key-read", scan: () => [] };
 // Kind metadata (node label + edge kinds) for a key kind: a PRESENT detection adapter owns its kind; else
 // the ARCHETYPE registry supplies the semantics (so a learned `event`/`binding`/… matcher grounds with the

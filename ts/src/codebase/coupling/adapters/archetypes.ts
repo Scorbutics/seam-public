@@ -20,9 +20,13 @@ export const ARCHETYPES: Record<string, Archetype> = {
   "db-table": DB_TABLE_META,                                                                              // persistent domain entity
   "http-route": HTTP_ROUTE_META,                                                                          // client fetch ⇄ server handler (handlerEdge → grow downstream)
   "data-file": { kind: "data-file", nodeKind: "data-file", produceEdge: "file-write", consumeEdge: "file-read" },
-  event:   { kind: "event",   nodeKind: "event",   produceEdge: "event-emit",     consumeEdge: "event-on" },        // emit ⇄ listener (was event_binding)
-  binding: { kind: "binding", nodeKind: "binding", produceEdge: "binding-define", consumeEdge: "binding-call" },    // component method ⇄ template call (was ng_scope)
-  queue:   { kind: "queue",   nodeKind: "queue",   produceEdge: "queue-publish",  consumeEdge: "queue-subscribe" }, // message bus / topic
+  // DISPATCH archetypes (event/queue): the producer fires and forgets; the CONSUMER side (listener/subscriber)
+  // IS the downstream handler — structurally the same as a route's server side — so `handlerEdge` = consumeEdge.
+  // Crossing an emit/publish INTO its listener/subscriber then expands DOWNSTREAM (like a route→handler→bean),
+  // not upstream toward "who else emits". (http-route's handler is its PRODUCER side, hence produceEdge there.)
+  event:   { kind: "event",   nodeKind: "event",   produceEdge: "event-emit",     consumeEdge: "event-on",        handlerEdge: "event-on" },        // emit ⇄ listener (was event_binding)
+  binding: { kind: "binding", nodeKind: "binding", produceEdge: "binding-define", consumeEdge: "binding-call" },    // component method ⇄ template call (was ng_scope) — symmetric UI wiring, no downstream handler
+  queue:   { kind: "queue",   nodeKind: "queue",   produceEdge: "queue-publish",  consumeEdge: "queue-subscribe", handlerEdge: "queue-subscribe" }, // publish ⇄ subscriber (the handler)
   cache:   { kind: "cache",   nodeKind: "cache",   produceEdge: "cache-write",    consumeEdge: "cache-read" },      // shared cache key
 };
 
