@@ -48,7 +48,9 @@ THREE shapes are available — pick the one that fits the evidence:
  1) "call"   — a CALL whose STRING-LITERAL argument is the key: $emit('sync'), publish('topic'),
                bus.on('refresh', …), from('users'). Fields: token = the BARE callee method name ONLY, with
                no receiver/dots (\`bus.publish\` → "publish", \`this.$emit\` → "$emit"); argIndex = 0-based
-               index of the string arg that IS the key.
+               index of the string arg that IS the key. OPTIONAL strip: when the string arg is a DIRECTIVE
+               NAME and the key is its suffix — \`el.setAttribute('v-on:open', handler)\` → strip "v-on:",
+               key = "open" (a dynamically-wired listener; the computed handler name is not the key).
  2) "assign" — a method/handler DEFINED on a receiver object, where the MEMBER NAME is the key:
                \`$scope.refreshSection = function …\`, \`this.onSave = () => …\`. The template/other file then
                CALLS that name. Field: token = the RECEIVER identifier ("$scope", "this", "vm"). role =
@@ -77,10 +79,15 @@ human PROSE — logging (log/info/warn), i18n (t/translate), formatting, excepti
 Common fields on every object: via, kind (db-table|queue|event|route|cache|key|binding), role
 ("produces"|"consumes"), name (short slug), description (one line).
 
-Return a JSON array (empty if none). Examples, one per shape:
+Return a JSON array (empty if none). Examples — note the PAIRS (producer + the consumer that grounds it):
 [{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces","name":"vue-emit","description":"emits a component event"},
- {"id":"r2","via":"assign","token":"$scope","kind":"binding","role":"produces","name":"scope-method","description":"defines an AngularJS $scope view method"},
- {"id":"r3","via":"attr","directive":"ng-","keyFrom":"call","kind":"binding","role":"consumes","name":"ng-directive-call","description":"calls a scope method from an ng-* directive"}]
+ {"id":"r2","via":"attr","directive":"@","keyFrom":"name","kind":"event","role":"consumes","name":"vue-listener","description":"@event template listener"},
+ {"id":"r3","via":"assign","token":"$scope","kind":"binding","role":"produces","name":"scope-method","description":"defines an AngularJS $scope view method"},
+ {"id":"r4","via":"attr","directive":"ng-","keyFrom":"call","kind":"binding","role":"consumes","name":"ng-directive-call","description":"calls a scope method from an ng-* directive"},
+ {"id":"r5","via":"method","kind":"binding","role":"produces","name":"ng2-method","description":"Angular2+/React component class method"},
+ {"id":"r6","via":"attr","directive":"(","keyFrom":"call","kind":"binding","role":"consumes","name":"ng2-event-binding","description":"calls a component method from an Angular2+ (event) binding"}]
+ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
+\`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;
 }
 
@@ -136,8 +143,10 @@ export async function learnKeyMatchers(
   const accepted: KeyMatcher[] = [], failed: KeyMatcher[] = [];
   for (const m of candidates) (await _detects(m, blindFiles) ? accepted : failed).push(m);
 
-  // step 5 — ONE self-correction round on the detection misses (don't waste a call if there were none)
-  if (failed.length) {
+  // step 5 — ONE retry: on detection MISSES (feed the dead tokens back to correct them), OR when the first
+  // round produced NOTHING usable at all (an empty / over-conservative reply — a bare re-ask recovers it,
+  // model nondeterminism on small snippets). Skipped once we already have accepted matchers + no misses.
+  if (failed.length || !accepted.length) {
     const have = new Set(accepted.map(matcherKey));
     for (const m of synth(failed.map((f) => _feedbackToken(f))))
       if (!have.has(matcherKey(m)) && await _detects(m, blindFiles)) { accepted.push(m); have.add(matcherKey(m)); }

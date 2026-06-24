@@ -23,6 +23,9 @@ export type MatcherRole = "produces" | "consumes";
 // LLM fills the template, never writes code/regex). Three shapes cover the framework long tail:
 //   • call   — `token('key')`           : a call whose string-literal arg IS the key (db table, event, topic,
 //                                          route, cache). Regex-executed → works with NO tree-sitter (floor).
+//                                          Optional `strip`: the arg is a DIRECTIVE-named string and the key
+//                                          is its suffix — `setAttribute('v-on:open', …)` strip "v-on:" → open
+//                                          (the dynamic/metawidget listener; the computed handler is residual).
 //   • assign — `token.KEY = <function>`  : a method DEFINED on a receiver, the key being the member NAME —
 //                                          e.g. AngularJS `$scope.refreshSection = function`. AST (js/ts).
 //   • attr   — a TEMPLATE directive      : `<directive><NAME>="<expr>"` / `{{ expr }}` — the key is the
@@ -34,14 +37,14 @@ export type MatcherRole = "produces" | "consumes";
 //                method `refreshSection() { … }` that the template then calls. AST (js/ts). Liberal (every
 //                method) → grounding keeps only those a template/other side actually names.
 export type KeyMatcher =
-  | { via: "call"; token: string; argIndex: number; kind: string; role: MatcherRole; name?: string; description?: string }
+  | { via: "call"; token: string; argIndex: number; strip?: string; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "assign"; token: string; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "method"; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "attr"; directive: string; keyFrom: "name" | "call"; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
-  if (m.via === "call") return `${m.token}(arg${m.argIndex})`;
+  if (m.via === "call") return `${m.token}(arg${m.argIndex})${m.strip ? ` strip "${m.strip}"` : ""}`;
   if (m.via === "assign") return `${m.token}.<member> = fn`;
   if (m.via === "method") return `class method def`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
@@ -50,7 +53,7 @@ export function matcherShape(m: KeyMatcher): string {
 // Stable identity for dedup/caching: the shape + the fields that distinguish two rules of that shape.
 export function matcherKey(m: KeyMatcher): string {
   const base = `${m.via}:${m.kind}:${m.role}`;
-  if (m.via === "call") return `${base}:${m.token}:${m.argIndex}`;
+  if (m.via === "call") return `${base}:${m.token}:${m.argIndex}:${m.strip ?? ""}`;
   if (m.via === "assign") return `${base}:${m.token}`;
   if (m.via === "method") return base;
   return `${base}:${m.directive}:${m.keyFrom}`;
@@ -103,7 +106,9 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     const token = (String(obj.token ?? "").trim().split(".").pop() ?? "").trim();
     if (!_TOKEN_OK.test(token)) return null;                                 // not a bare identifier → reject (no regex injection)
     const argIndex = Number.isInteger(obj.argIndex) && obj.argIndex >= 0 ? obj.argIndex : 0;
-    return { via: "call", token, argIndex, kind, role, name: nm(`${_slug(token)}-${kind}`), description: dsc(`${role} ${kind} via ${token}(arg ${argIndex})`) };
+    const stripRaw = String(obj.strip ?? "").trim();                         // optional directive-name prefix on the arg
+    const strip = stripRaw && _DIRECTIVE_OK.test(stripRaw) ? stripRaw : undefined;
+    return { via: "call", token, argIndex, ...(strip ? { strip } : {}), kind, role, name: nm(`${_slug(token)}-${kind}`), description: dsc(`${role} ${kind} via ${token}(arg ${argIndex})${strip ? ` strip "${strip}"` : ""}`) };
   }
   if (via === "assign") {
     const token = String(obj.token ?? "").trim();
@@ -175,7 +180,8 @@ function runCall(m: Extract<KeyMatcher, { via: "call" }>, text: string): KeyHit[
   const out: KeyHit[] = [];
   let mt: RegExpExecArray | null;
   while ((mt = re.exec(masked)) !== null) {
-    const value = nthStringArg(masked, re.lastIndex, m.argIndex);
+    let value = nthStringArg(masked, re.lastIndex, m.argIndex);
+    if (value && m.strip) { if (!value.startsWith(m.strip)) continue; value = value.slice(m.strip.length); }   // directive-named arg → its suffix is the key
     if (value && plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
   }
   return out;

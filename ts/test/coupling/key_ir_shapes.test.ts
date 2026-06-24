@@ -44,6 +44,20 @@ describe("attr shape — directive call ⇄ interpolation (template consumer)", 
   });
 });
 
+describe("call shape — strip (dynamic directive-named listener, the metawidget case)", () => {
+  const m = validateMatcher({ via: "call", token: "setAttribute", argIndex: 0, strip: "v-on:", kind: "event", role: "consumes" })!;
+  test("`setAttribute('v-on:open', handler)` → key 'open' (suffix after the stripped prefix)", async () => {
+    const hits = await runMatcher(m, "metawidget.js",
+      "el.setAttribute('v-on:open', 'onSubEntryOpen' + suffix + '($event)');\nel.setAttribute('class', 'x');");
+    expect(hits.map((h) => h.value)).toEqual(["open"]);          // the `class` setAttribute is NOT a listener (no v-on: prefix)
+    expect(hits[0].produces).toBe(false);
+  });
+  test("validate keeps a safe strip prefix, drops an unsafe one", () => {
+    expect(validateMatcher({ via: "call", token: "setAttribute", argIndex: 0, strip: "@", kind: "event", role: "consumes" })).toMatchObject({ strip: "@" });
+    expect((validateMatcher({ via: "call", token: "x", argIndex: 0, strip: "bad space", kind: "event", role: "consumes" }) as any).strip).toBeUndefined();
+  });
+});
+
 describe("method shape — class method definition (Angular2+/React component producer)", () => {
   const m = validateMatcher({ via: "method", kind: "binding", role: "produces" })!;
   const COMPONENT = `@Component({ selector: 'fn', templateUrl: './fn.html' })
