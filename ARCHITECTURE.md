@@ -28,12 +28,13 @@ ts/src/
                classifier_llm · engine (per-pass orchestrator) · noise_filter · seams (assembly) ·
                report_text (ASCII/markdown render) · blast_radius · cache · subgroup · seam_types
   codebase/    CODEBASE-MODE — anchor on a symbol (or auto-select one from an intent) → intent
-               FOOTPRINT (consumers + deps) → seams. scan/ (footprint build) · codebase (decompose) ·
-               anchor/ (rank · intent_expand · anchor_select: probe → judge) · llm_discovery ·
-               atoms (tree-sitter facts) · coupling/ (data-coupling adapters) · grow/ — the FOOTPRINT
-               PROJECTIONS: orchestrate (grow the spine) + the non-spine SHAPES (project_set ·
-               reach · contract · neighborhood · compare) + name_consumers (name-grounded recall) +
-               route (the NL→shape router) — §8.6
+               FOOTPRINT (consumers + deps) → seams. scan/ (footprint build; interface→impl DI index) ·
+               codebase (decompose) · anchor/ (rank · intent_expand · anchor_select: probe → judge) ·
+               llm_discovery · atoms (tree-sitter facts) · engine_ctx (the per-run cache/budget context,
+               §8.8) · coupling/ (the cross-boundary MOAT: archetype registry + built-in floor adapters
+               + the LEARNED flywheel — §8.7) · grow/ — the FOOTPRINT PROJECTIONS: orchestrate (grow the
+               spine) + the non-spine SHAPES (project_set · reach · contract · neighborhood · compare) +
+               name_consumers (name-grounded recall) + route (the NL→shape router) — §8.6
   cli/         decompose.ts (the one CLI entry) · anchor_rank.ts (standalone ranker / --select)
 ```
 
@@ -59,10 +60,12 @@ LLM-judges split as the rest of the engine, applied to the output.
 `--expand-graph` to `runCodebase`, everything else (`--file` / `--git` / `--from-classified`) to the
 diff path. (The Python original used a `Mode` strategy Protocol; the TS port collapsed it to the branch.)
 
-The rest of this document details **diff-mode** (§1–§9), except **§8.5 (LLM call sites)** which maps
-*both* modes. Codebase-mode shares `core/graph_ir` (the IR), `core/llm`, and `core/treesitter`, but
-forks role assignment (anchor-relative BFS over a RESOLVED graph, not the `HunkFacts` ladder) — see
-§8.5 and the **Codebase mode** section of [`README.md`](README.md).
+The rest of this document details **diff-mode** (§1–§7), then turns to **codebase-mode**: §8.5 maps the
+LLM call sites of *both*; §8.6 the structural shapes + router; **§8.7 the cross-boundary coupling moat
+(the flywheel)**; **§8.8 the per-run context + incremental caching that lets it scale**. Codebase-mode
+shares `core/graph_ir` (the IR), `core/llm`, and `core/treesitter`, but forks role assignment
+(anchor-relative BFS over a RESOLVED graph, not the `HunkFacts` ladder) — see the **Codebase mode**
+section of [`README.md`](README.md).
 
 ### Clients & the contract boundary
 
@@ -271,7 +274,9 @@ CLI default = the **deterministic floor** (anchor → footprint → intent floor
 | **anchor judge** — `judge_anchor_llm` | `anchor_select.ts` | `anchor-judge` | auto-anchor selection (≥2 connected candidates) | picks WHICH probed footprint is the intent's entry point — the semantic call structure can't make (a data-heavy helper out-crosses the real gate) |
 | **seam refine** — `refine_seams_llm` | `codebase.ts` | `seam-refine` | `useLlm` (`--classifier llm\|hybrid`) | F4: refines the deterministic floor into named technical-intent seams (a *proposed* partition over verified carriers; never invents an edge) |
 | **seam intent / relevance** — `label_focus_relevance_llm` | `codebase.ts` | `seam-intent` | `useLlm` **and** `--intent` | F5: labels + TIERS each seam spine/supporting/off and marks the answer seam, primed by topology + db-table priors (additive — dims, never drops) |
-| **residual discovery** — `discover` / `discover_keys` | `llm_discovery.ts` | `discover` / `discover-keys` | `--data-coupling llm` / tier-3 DOWN-expansion | proposes residual couplings (or shared-key boundaries) the deterministic scan missed → SUGGESTED edges |
+| **residual discovery** — `discover` | `scan/llm_discovery.ts` | `discover` | tier-3 DOWN-expansion (`--data-coupling llm`) | proposes residual string-couplings the deterministic scan missed → SUGGESTED edges (cheap tier) |
+| **flywheel — per-file keys** — `llmKeyIndex` | `coupling/llm_key_index.ts` | `discover-keys-batch` | `--data-coupling llm` (module-scoped) | a floor-blind file's shared keys (producer/consumer literals) → grounded boundaries; cached to `.seam/` (§8.7) |
+| **flywheel — rule synthesis** — `learnKeyMatchers` | `coupling/key_matcher.ts` | `discover-key-matchers` | `--data-coupling llm` | synthesizes a CLOSED-shape matcher IR (a reusable detection rule) → re-executed + grounded → cached repo-wide (§8.7); LLM-once, det-forever |
 | **auto-orchestrate** — `auto_orchestrate` | `orchestrate.ts` | `orchestrate` | `--auto --grow llm` | legacy LLM grow: the LLM picks the next node + direction; default `--grow det` (`grow_to_terminals`) follows crossings to terminals with **no** LLM |
 | **shape route** — `routeQuestion` | `grow/route.ts` | `shape-route` | `--ask "<q>"` | the router (§8.6): JUDGES which shape answers the NL question + extracts the target name(s); the only LLM in the `--ask` path (the shape it picks then runs deterministically) |
 
@@ -342,6 +347,103 @@ redirecting *to* Seam trustworthy.
 
 ---
 
+## 8.7 Cross-boundary coupling — the data-flow moat (`codebase/coupling/`)
+
+The edge **no symbol connects**: a producer and a consumer that share a *value*, not a reference — a
+db write ↔ a read, `fetch('/x')` ↔ the handler for `/x`, `convertAndSend('q')` ↔ `@JmsListener("q")`.
+Neither an AST call-graph (the symbols differ → no edge) nor an embedding (the SQL string isn't
+semantically close to the `.tsx` screen) sees it. The coupling subsystem grounds the two sides on the
+shared key and emits a **crossing** the grow follows like any other edge. It is the one capability
+that is purely Seam's, so its design is the most load-bearing in codebase mode.
+
+**The A/B split — detection vs semantics (deliberately separated).**
+- **A — detection** ("is a key here?"): per-repo, framework-specific, the noisy part. A *deterministic
+  floor* (built-in `adapters/`) plus a *learned* tier (the flywheel, below).
+- **B — semantics** ("how do the two sides wire / where does the grow continue?"): a **closed,
+  structural vocabulary** in `adapters/archetypes.ts` — `kind → {nodeKind, produceEdge, consumeEdge,
+  handlerEdge?}`. A small fixed set every detection rule reuses, so a *learned* `event` rule still
+  grounds on the `event` boundary with the right edges even though **no built-in adapter detects
+  events**. `kindOf(kind)` resolves a present adapter → its archetype → `GENERIC`.
+
+**The archetypes + tiers (`couplingCapabilities()` = the catalogue).** db-table / http-route /
+data-file are **built-in** (deterministic floor adapters: Supabase / raw-SQL / ActiveRecord / jOOQ;
+the file-routed + annotation route; the carrier channel). event / queue / cache / binding are
+**learned-only** — identical B-semantics, but A-detection is synthesized by the flywheel and cached.
+`seam-adapters list` prints both tiers, derived structurally from `ARCHETYPES ∩ ADAPTERS` (never a
+hand-synced list — CLAUDE.md).
+
+**`handlerEdge` — the dispatch downstream hop.** For a *dispatch* archetype the consumer side **is a
+downstream handler**: a route's server, a queue's subscriber, an event's listener. The archetype names
+the edge whose far side to keep exploring downstream (route→`route-serve`, queue→`queue-subscribe`,
+event→`event-on`); `crossBoundary` tags that complement `direction:"backward"` so the grow descends
+into the handler's own deps — the AngularJS service→`@Inject`'d-bean hop a consumers-only walk
+dead-ends on. A *symmetric* archetype (db-table, binding) declares none — its reader continues
+**upstream** toward where the value is displayed.
+
+**The flywheel (`key_matcher.ts`, `key_ir.ts`, `key_store.ts`) — LLM-once, deterministic-forever.**
+Detection of the framework long-tail is LEARNED, not hardcoded:
+1. a floor-blind file has a data edge no adapter keys;
+2. the LLM synthesizes a **constrained IR** — one of five **CLOSED shapes** (`key_ir.ts`): `call` (a
+   string-literal key arg — `$emit('x')`, `convertAndSend('q')`; regex, **offline**), `assign` /
+   `method` / `attr` (AST), and `annotation` (a literal in a decorator arg — `@JmsListener(destination=…)`,
+   `@KafkaListener(topics=…)`; regex). **The model picks the SHAPE; the engine EXECUTES it** — it never
+   writes a regex (a ReDoS / repo-wide-correctness hazard);
+3. the matcher is **re-executed** over the files it was derived from and kept only if it detects ≥1 key
+   (a hallucinated rule matches nothing), with one self-correction retry;
+4. survivors persist to `.seam/key-adapters.json` — the **rules** tier (reusable, repo-wide) + a
+   per-file keys tier (`llm_key_index.ts`).
+
+**Grounding is the validator — no human gate.** A `GroundingIndex` maps `keyId → {producers,
+consumers}`; a key becomes a boundary only when a producer **and** a consumer co-occur on the same
+value. A wrong learned rule that doesn't co-occur is silently dropped — *the deterministic layer
+validates the LLM*, which is why "LLM-learned" never means "LLM-trusted." It also tames a deliberately
+**liberal** rule: a generic `.equals()` consumer can't fabricate edges, because only a literal that
+*also* appears as a producer (a setter) grounds. That is exactly how the **payload discriminator**
+resolves *structurally* — `setType("INVENTORY")` ↔ `getType().equals("INVENTORY")` on the `event`
+archetype, a fine edge layered on the coarse queue that reaches every subscriber — with **no data-flow
+analysis** when the literal is present at both ends (the residual, a value flowing through a variable,
+is genuinely out of the structural floor's reach → LLM).
+
+**Lazy, module-scoped warming.** The per-file LLM synthesis is bounded to the anchor's build module
+(`module_scope`, from the registry's root markers), not the whole repo — other modules warm only when
+a grow re-anchors into them (`SEAM_WARM_ADAPTERS=1` forces whole-repo). The **rules** tier applies
+repo-wide regardless: a rule learned in one module grounds the same pattern elsewhere with zero further
+LLM. (The two flywheel passes are in the §8.5 map; everything downstream of them is deterministic.)
+
+## 8.8 Per-run context & incremental caching — how codebase mode scales (`engine_ctx.ts`, `coupling/index_cache.ts`)
+
+Codebase mode is **footprint-local** — a grow touches one intent's blast radius, not the repo — so it
+scales by being *bounded*, not by indexing everything (the inverse of a RAG engine). What *does* scale
+with repo size is the handful of **O(repo)** whole-repo index builds; the design pushes each to
+**build-once-per-run** and **persist-across-runs**.
+
+- **`EngineCtx` — the per-run cache made explicit.** One context is created at a run entry
+  (`grow_to_terminals`) and threaded down, so a cache-using function is pure w.r.t. (its inputs + this
+  context) instead of reading module globals. It holds the coupling grounding indices, the floor
+  contributions, the per-run **LLM budgets** (`keyBudget` / `complementBudget` / `synthBudget` — what
+  bounds a hub's fan and the flywheel's spend), and the intent key-ranker — each built **once per
+  grow**, not per frontier move. Tests construct a fresh `EngineCtx` per case instead of calling
+  scattered reset hooks.
+- **Incremental, content-keyed disk caches (`index_cache.ts`).** A repo-wide index is a **map-reduce**:
+  map(file → contribution), reduce(merge). `incrementalScan` (sync) and `incrementalScanAsync` (for an
+  index whose per-file map needs an async tree-sitter parse) cache each file's contribution by
+  `(mtime,size)` to `.seam/<name>.json`, so a one-file edit re-scans only that file. Two indices ride
+  it: the **deterministic floor** (`floor-files.json`) and the **interface→impl DI index**
+  (`impl-index.json`). The latter was the *measured* wall on a 4044-file Java monorepo — a full-repo
+  tree-sitter parse re-paid on every cold run (~6.5s); persisted, a re-run is **O(changed)** (9.7s →
+  3.2s warm). `.seam/*` self-ignores, but `git add -f` commits a CI warm-up for the team (the
+  cross-machine tier). `SEAM_INDEX_CACHE=0` forces a plain byte-identical walk.
+- **Registry-sourced parse pre-gate.** The genuinely-cold first parse is cut further by a cheap textual
+  gate *before* tree-sitter: `LanguageProvider.implMarkers` (`["interface","implements"]` Java/TS, `[]`
+  for a language with no interface→impl concept → skip all its files, `undefined` → parse) — sourced
+  from the provider, not a hardcoded keyword list, and **sound** (an `interface_declaration` /
+  `implements_clause` node is impossible without the keyword present textually). Cold Dubbo 9.7s → 6.8s.
+
+The discipline throughout: **profile the measured bottleneck on a real repo, don't assume** — the first
+hypothesis here (anchor-recall embeddings) was wrong; the wall was the DI-index parse.
+
+---
+
 ## 9. Key decisions & rationale (the load-bearing "why")
 
 - **Deterministic-first, LLM on the residual.** Roles + wiring are deterministic (better, instant, reproducible); the LLM is spent only where it's the reliable engine (grouping) or where determinism's tail fails (over-wired containers).
@@ -349,6 +451,9 @@ redirecting *to* Seam trustworthy.
 - **"LLM-first wiring is bad" was a measurement artifact** — the ~0.24 A/B ran LLM *roles* too (wiring is role-dominated) and the standalone Pass C was prompt-fragile. Given a good draw prompt the LLM wires fine, which is what makes the LLM-first hybrid sound.
 - **Hubs vs containers.** A header/barrel with many *correct* edges looks "over-wired" by count; it's protected (no owned edge ⇒ not pruned/escalated). The inverted draw is hub-safe (LLM keeps real relations; det grounding re-adds owned edges).
 - **Facts IR isolates language-specificity** to one swappable producer — the honest path to tree-sitter / VS Code AST without touching the classifier (§4).
+- **Coupling = detection (A) split from semantics (B), grounding validates the LLM** (§8.7). Detection is the noisy, framework-specific, *learnable* half; the wiring semantics are a small closed archetype set. A learned rule is **never trusted** — it only emits an edge if its key co-occurs at a producer *and* a consumer, so the deterministic grounding layer is the gate (no human review needed). This is what lets the flywheel use deliberately *liberal* shapes (`method`, `equals`) safely, and resolve the value-level discriminator structurally.
+- **Closed IR shapes, not generated code.** The LLM fills one of five structural templates (`call`/`assign`/`method`/`attr`/`annotation`); the engine executes it. The model never writes a regex run repo-wide — correctness/ReDoS stays the engine's, the per-framework *judgement* stays the model's (CLAUDE.md: structure deterministic, meaning LLM).
+- **Scale by being bounded, not by indexing** (§8.8). The per-intent grow is footprint-local; the only repo-global costs are a few index builds, made build-once-per-run (`EngineCtx`) and persist-across-runs (`incrementalScan`). Found by **profiling a real monorepo** — the wall was the DI-index parse, not the assumed anchor-recall — and fixed with the same content-keyed cache the floor already used.
 
 ### Known limits / open
 
