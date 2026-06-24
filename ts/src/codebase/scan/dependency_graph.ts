@@ -6,6 +6,7 @@ import { basename } from "node:path";
 import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath } from "../../core/resolve/walk.js";
+import { resolveFileRef } from "../../core/resolve/file_ref.js";
 import { type Ctx, makeCtx, available, lang_for, _TYPE_REF } from "../atoms.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
@@ -47,7 +48,7 @@ async function _anchorNode(anchorFile: string, symbol: string, ar: [string, stri
 // the same-package pass. Skips a target whose symbol is neither a recognised def nor has a line (can't
 // place it), and self-references back to the anchor file.
 async function _addDep(s: DepScan, refName: string, depFile: string, depLine: number | null,
-    edgeKind = "import", provenance: Provenance = "RESOLVED_FULL"): Promise<void> {
+    edgeKind = "import", provenance: Provenance = "RESOLVED_FULL", kindHint?: string): Promise<void> {
   if (s.seen.has(`${refName} ${depFile}`) || normpath(depFile) === normpath(s.anchorFile)) return;
   if (!s.depUnits.has(depFile)) {
     const rd = _read(s.repo, depFile);
@@ -57,7 +58,7 @@ async function _addDep(s: DepScan, refName: string, depFile: string, depLine: nu
   const defu = s.depUnits.get(depFile)!.find((u) => u[0] === refName);
   let kind: string, rng: number[];
   if (defu) { kind = defu[1]; rng = [defu[2], defu[3]]; }
-  else if (depLine != null) { kind = "symbol"; rng = [depLine, depLine]; }
+  else if (depLine != null) { kind = kindHint ?? "symbol"; rng = [depLine, depLine]; }
   else return;
   s.seen.add(`${refName} ${depFile}`);
   s.counter += 1;
@@ -80,6 +81,25 @@ async function _importPass(s: DepScan, anchorSrc: string): Promise<void> {
       continue;
     }
     await _addDep(s, ref.name, target[0], target[1]);
+  }
+}
+
+// 1b) FILE-PATH REFERENCE pass — a string literal in the anchor file that resolves to an EXISTING repo file
+// is a dependency on that file: a component's view/style declaration (`templateUrl`/`styleUrls`), an asset
+// `require('./logo.svg')`, a config path. FRAMEWORK-AGNOSTIC: the signal is "a path that points at a real
+// file", never a property name — the same deterministic resolution as imports, just for non-code targets
+// (so it links a `.js`/`.ts` component to its `.html`/`.css` regardless of framework). RESOLVED_FULL.
+async function _fileRefPass(s: DepScan): Promise<void> {
+  if (!s.actx) return;
+  const seen = new Set<string>();
+  for (const node of s.actx.collect(s.actx.root, (k: string) => k.includes("string"))) {
+    const raw = s.actx.text(node);
+    if (raw.includes("${") || raw.includes("\n")) continue;            // interpolated / multiline → not a clean literal
+    const lit = raw.replace(/^[`'"]+|[`'"]+$/g, "").trim();
+    if (!lit || seen.has(lit)) continue;
+    seen.add(lit);
+    const target = resolveFileRef(s.repo, s.anchorFile, lit);
+    if (target) await _addDep(s, basename(target), target, 0, "file-ref", "RESOLVED_FULL", "file");
   }
 }
 
@@ -181,6 +201,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
       nodes, edges, blindspots, counter: 0, seen: new Set(), depUnits: new Map(), externalPkgs: [],
     };
     await _importPass(s, ar[0]);
+    await _fileRefPass(s);
     await _samePackagePass(s);
     await _interfaceImplPass(s);
     _externalLibsBlindspot(s);
