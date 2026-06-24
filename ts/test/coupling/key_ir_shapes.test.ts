@@ -49,6 +49,37 @@ describe("attr shape — directive call ⇄ interpolation (template consumer)", 
   });
 });
 
+describe("method shape — class method definition (Angular2+/React component producer)", () => {
+  const m = validateMatcher({ via: "method", kind: "binding", role: "produces" })!;
+  const COMPONENT = `@Component({ selector: 'fn', templateUrl: './fn.html' })
+export class FileNoteComponent {
+  constructor(private http: HttpClient) {}
+  refreshSection() { return this.http.put('/r', {}); }
+  generateFileNote = () => this.http.put('/g', {});   // field-arrow method also counts
+  ngOnInit() {}                                       // a lifecycle method — emitted, but grounds only if a template names it
+}`;
+  test("every class method name is produced; constructor excluded", async () => {
+    if (!available()) return;
+    const got = await runMatcher(m, "fn.component.ts", COMPONENT);
+    expect(vals(got)).toEqual(["generateFileNote", "ngOnInit", "refreshSection"]);   // no `constructor`
+    expect(got.every((h) => h.produces)).toBe(true);
+  });
+});
+
+describe("Angular2+ template grounding — (event) binding directive", () => {
+  test("attr directive='(' keyFrom='call' reads the called method from `(click)=\"x()\"`", async () => {
+    if (!available()) return;
+    const cons = validateMatcher({ via: "attr", directive: "(", keyFrom: "call", kind: "binding", role: "consumes" })!;
+    const tpl = `<button (click)="refreshSection()">x</button><span>{{ generateFileNote() }}</span>`;
+    expect(vals(await runMatcher(cons, "fn.component.html", tpl))).toEqual(["generateFileNote", "refreshSection"]);
+  });
+  test("keyFrom='name' strips the sigils: `(click)` → click", async () => {
+    if (!available()) return;
+    const ev = validateMatcher({ via: "attr", directive: "(", keyFrom: "name", kind: "event", role: "consumes" })!;
+    expect(vals(await runMatcher(ev, "c.html", `<b (click)="h()" (save)="s()">x</b>`))).toEqual(["click", "save"]);
+  });
+});
+
 describe("attr shape — directive NAME (event listener)", () => {
   test("keyFrom='name' extracts the directive suffix (@event / v-on:event)", async () => {
     if (!available()) return;

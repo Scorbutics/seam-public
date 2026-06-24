@@ -29,15 +29,20 @@ export type MatcherRole = "produces" | "consumes";
 //                                          (a scope-method call). AST (html/vue).
 // `token`/`directive` are validated to safe identifiers/prefixes; the kind stays the structural archetype so
 // a learned producer + consumer ground on the SAME boundary as the floor.
+//   • method — a CLASS METHOD definition, the key being the method NAME — e.g. an Angular2+/React component
+//                method `refreshSection() { … }` that the template then calls. AST (js/ts). Liberal (every
+//                method) → grounding keeps only those a template/other side actually names.
 export type KeyMatcher =
   | { via: "call"; token: string; argIndex: number; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "assign"; token: string; kind: string; role: MatcherRole; name?: string; description?: string }
+  | { via: "method"; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "attr"; directive: string; keyFrom: "name" | "call"; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
   if (m.via === "call") return `${m.token}(arg${m.argIndex})`;
   if (m.via === "assign") return `${m.token}.<member> = fn`;
+  if (m.via === "method") return `class method def`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -46,6 +51,7 @@ export function matcherKey(m: KeyMatcher): string {
   const base = `${m.via}:${m.kind}:${m.role}`;
   if (m.via === "call") return `${base}:${m.token}:${m.argIndex}`;
   if (m.via === "assign") return `${base}:${m.token}`;
+  if (m.via === "method") return base;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -79,8 +85,9 @@ export function plausibleKeyValue(value: string): boolean {
 // Validate ONE LLM object → a KeyMatcher, or null (malformed / unsupported shape). The gate that keeps a
 // free-text model answer from becoming an executable rule unless it fits the closed template exactly.
 // A directive prefix is matched by String.startsWith (NEVER embedded in a regex), so a permissive but safe
-// charset is fine: `ng-` / `@` / `v-on:` / `on-` / `data-ng-`. Bounded length keeps a pathological value out.
-const _DIRECTIVE_OK = /^[@a-zA-Z][\w:@-]{0,23}$/;
+// charset is fine: `ng-` / `@` / `v-on:` / `on-` / `data-ng-`, plus Angular2+ binding sigils `(event)` /
+// `[prop]` / `*ngIf`. Bounded length keeps a pathological value out.
+const _DIRECTIVE_OK = /^[-\w@:()[\]*]{1,24}$/;
 
 export function validateMatcher(obj: any): KeyMatcher | null {
   if (!obj || typeof obj !== "object") return null;
@@ -90,7 +97,9 @@ export function validateMatcher(obj: any): KeyMatcher | null {
   const nm = (fallback: string) => _slug(String(obj.name ?? "")) || fallback;
   const dsc = (fallback: string) => String(obj.description ?? "").trim().slice(0, 200) || fallback;
   if (via === "call") {
-    const token = String(obj.token ?? "").trim();
+    // the CALLEE may be written qualified (`bus.publish`, `this.$emit`, `cache.get`) — keep the last segment,
+    // the bare method name. runMatcher matches member forms anyway (`.` is allowed before the token).
+    const token = (String(obj.token ?? "").trim().split(".").pop() ?? "").trim();
     if (!_TOKEN_OK.test(token)) return null;                                 // not a bare identifier → reject (no regex injection)
     const argIndex = Number.isInteger(obj.argIndex) && obj.argIndex >= 0 ? obj.argIndex : 0;
     return { via: "call", token, argIndex, kind, role, name: nm(`${_slug(token)}-${kind}`), description: dsc(`${role} ${kind} via ${token}(arg ${argIndex})`) };
@@ -99,6 +108,9 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     const token = String(obj.token ?? "").trim();
     if (!_TOKEN_OK.test(token)) return null;                                 // the receiver must be a bare identifier ($scope, this, vm)
     return { via: "assign", token, kind, role, name: nm(`${_slug(token)}-assign-${kind}`), description: dsc(`${role} ${kind} via ${token}.<member> = function`) };
+  }
+  if (via === "method") {
+    return { via: "method", kind, role, name: nm(`class-method-${kind}`), description: dsc(`${role} ${kind} via a class method definition`) };
   }
   if (via === "attr") {
     const directive = String(obj.directive ?? "").trim();
@@ -149,6 +161,7 @@ function nthStringArg(text: string, start: number, n: number): string | null {
 export async function runMatcher(m: KeyMatcher, file: string, text: string): Promise<KeyHit[]> {
   if (m.via === "call") return runCall(m, text);
   if (m.via === "assign") return runAssign(m, file, text);
+  if (m.via === "method") return runMethod(m, file, text);
   return runAttr(m, file, text);
 }
 
@@ -188,6 +201,28 @@ async function runAssign(m: Extract<KeyMatcher, { via: "assign" }>, file: string
   return out;
 }
 
+const _CLASS_MEMBER = new Set(["method_definition", "public_field_definition"]);   // a class method, or a field = arrow/fn
+
+// METHOD — every CLASS METHOD definition's name is a key (Angular2+/React component methods the template
+// calls). LIBERAL (matches all methods) → grounding keeps only the names a consumer actually references; the
+// `constructor` is excluded (never a binding). AST (js/ts), comment-safe for free.
+async function runMethod(m: Extract<KeyMatcher, { via: "method" }>, file: string, text: string): Promise<KeyHit[]> {
+  const lang = lang_for(file);
+  if (!lang || !available()) return [];
+  const ctx = await makeCtx(text, lang);
+  if (!ctx) return [];
+  const out: KeyHit[] = [];
+  for (const node of ctx.collect(ctx.root, (k) => _CLASS_MEMBER.has(k))) {
+    if (node.type === "public_field_definition") { const v = field(node, "value"); if (!v || !_FUNCLIKE.has(v.type)) continue; }   // a field is a method only if it holds a function
+    const nameNode = field(node, "name");
+    if (!nameNode) continue;
+    const value = ctx.text(nameNode);
+    if (value === "constructor" || !plausibleKeyValue(value)) continue;
+    out.push({ kind: m.kind, value, line: ctx.span(node)[0], produces: m.role === "produces" });
+  }
+  return out;
+}
+
 const _TPL_GRAMMAR = (file: string): string | null => (/\.vue$/i.test(file) ? "vue" : /\.html?$/i.test(file) ? "html" : null);
 const _CALLEE = /([A-Za-z_$][\w$]*)\s*\(/g;        // FIXED, bounded — pull callee identifiers from a template expression
 const _INTERP = /\{\{([^}]*)\}\}/g;                // `{{ expr }}` mustache interpolation
@@ -218,7 +253,7 @@ async function runAttr(m: Extract<KeyMatcher, { via: "attr" }>, file: string, te
       if (!nameNode) continue;
       const name = ctx.text(nameNode);
       if (!name.startsWith(m.directive)) continue;
-      if (m.keyFrom === "name") push(name.slice(m.directive.length).replace(/^[^\w$]+/, ""), line);   // `@sync` → sync
+      if (m.keyFrom === "name") push(name.slice(m.directive.length).replace(/^[^\w$]+|[^\w$]+$/g, ""), line);   // `@sync`→sync, `(click)`→click
       else value(attr, line);
     }
   }

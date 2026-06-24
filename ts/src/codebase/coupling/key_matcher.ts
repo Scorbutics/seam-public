@@ -36,25 +36,51 @@ function _prompt(files: { file: string; snippet: string }[], deadTokens: string[
       + `${deadTokens.join(", ")}. Either correct the token/argIndex to a call that LITERALLY appears above, or omit it.\n`
     : "";
   return `You are LEARNING reusable DETECTION RULES for DATA-FLOW couplings carried by a SHARED KEY — an
-identifier two files share with NO import/call between them (a DB table, queue/topic, event name, cache
-key, route). Each RULE describes a CALL with a string-literal key argument: emit('evt'), publish('topic'),
-cache.get('k'), from('table'). You describe the rule's SHAPE, not the value.
+identifier (event name, scope/component method, DB table, queue/topic, cache key, route) that two files
+share with NO import/call between them. One side PRODUCES the key (defines/emits/writes it), the other
+CONSUMES it (calls/listens/reads it); they wire up because the SAME key string appears on both sides. You
+describe each rule's SHAPE — a small structural template the engine runs deterministically — not the value.
 ${retry}
 ${blocks}
 
-For every rule with CONCRETE evidence above, output one object. Do NOT invent rules — only calls literally
-present. A wrong rule is worse than silence. The token MUST be a SPECIFIC data-coupling API (emit/publish/
-subscribe/on/send/dispatch/topic/channel-style), NEVER a generic call whose string argument is human
-PROSE or a message — e.g. logging (log/info/warn), i18n/translation (t/translate), formatting, or
-exceptions. Such a rule extracts words like "the" and couples unrelated files by coincidence.
-  via       — "call"
-  token     — the callee identifier EXACTLY as written (e.g. "$emit", "publish", "from")
-  argIndex  — 0-based index of the string argument that IS the key
-  kind      — db-table | queue | event | route | cache | key
-  role      — "produces" if the call WRITES/EMITS/PUBLISHES the key, "consumes" if it READS/SUBSCRIBES/HANDLES it
+THREE shapes are available — pick the one that fits the evidence:
 
-Return a JSON array (empty if none):
-[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces","name":"vue-emit","description":"emits a component event"}]
+ 1) "call"   — a CALL whose STRING-LITERAL argument is the key: $emit('sync'), publish('topic'),
+               bus.on('refresh', …), from('users'). Fields: token = the BARE callee method name ONLY, with
+               no receiver/dots (\`bus.publish\` → "publish", \`this.$emit\` → "$emit"); argIndex = 0-based
+               index of the string arg that IS the key.
+ 2) "assign" — a method/handler DEFINED on a receiver object, where the MEMBER NAME is the key:
+               \`$scope.refreshSection = function …\`, \`this.onSave = () => …\`. The template/other file then
+               CALLS that name. Field: token = the RECEIVER identifier ("$scope", "this", "vm"). role =
+               "produces" (it defines the binding).
+ 2b) "method" — a CLASS METHOD definition where the METHOD NAME is the key — \`refreshSection() { … }\` inside
+               an Angular2+/React component class, which the template then calls. NO fields beyond the common
+               ones. role = "produces". Use this (not "assign") when the handler is a plain class method, not
+               an explicit \`receiver.x = fn\` assignment.
+ 3) "attr"   — a TEMPLATE/markup directive binding (HTML, .vue, AngularJS/Angular templates). Fields:
+               directive = the attribute-name prefix EXACTLY as written ("ng-", "@", "v-on:", "(", "on"),
+               keyFrom = "name" when the directive's OWN name is the key (an event listener: \`@sync="…"\`,
+               \`(click)="…"\` → key = sync/click) OR "call" when a method CALLED in the directive's value is
+               the key (\`ng-click="refreshSection()"\`, Angular2+ \`(click)="refreshSection()"\`, \`{{ total() }}\`
+               → key = refreshSection/total). role is usually "consumes" (the template USES the binding).
+
+A coupling needs BOTH sides to ground: whenever you emit a PRODUCER rule (defines/emits the key), also emit
+the matching CONSUMER rule that USES it (and vice-versa) if its evidence is present above — e.g. a class
+"method" producer PAIRED with the template "attr" (key from call) that invokes it. A producer with no
+consumer rule (or the reverse) grounds nothing.
+
+For every rule with CONCRETE evidence above, output one object. Do NOT invent rules — only constructs
+LITERALLY present. A wrong rule is worse than silence. NEVER target a generic API whose string argument is
+human PROSE — logging (log/info/warn), i18n (t/translate), formatting, exceptions — it extracts words like
+"the" and couples unrelated files by coincidence.
+
+Common fields on every object: via, kind (db-table|queue|event|route|cache|key|binding), role
+("produces"|"consumes"), name (short slug), description (one line).
+
+Return a JSON array (empty if none). Examples, one per shape:
+[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces","name":"vue-emit","description":"emits a component event"},
+ {"id":"r2","via":"assign","token":"$scope","kind":"binding","role":"produces","name":"scope-method","description":"defines an AngularJS $scope view method"},
+ {"id":"r3","via":"attr","directive":"ng-","keyFrom":"call","kind":"binding","role":"consumes","name":"ng-directive-call","description":"calls a scope method from an ng-* directive"}]
 `;
 }
 
@@ -74,7 +100,7 @@ function _parse(out: Map<string, any>): KeyMatcher[] {
 
 // The token to echo back as a "matched nothing" hint on the self-correction round (call/assign carry a
 // callee/receiver identifier; attr carries its directive prefix).
-const _feedbackToken = (m: KeyMatcher): string => (m.via === "attr" ? m.directive : m.token);
+const _feedbackToken = (m: KeyMatcher): string => (m.via === "attr" ? m.directive : m.via === "method" ? "method" : m.token);
 
 // A matcher DETECTS if it re-executes to ≥1 key over the candidate files (step 3-4: it actually matches).
 async function _detects(m: KeyMatcher, files: { file: string; text: string }[]): Promise<boolean> {
