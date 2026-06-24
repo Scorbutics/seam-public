@@ -109,6 +109,13 @@ export function table_access(file: string, text: string): TableAccess[] {
   return p?.tableAccess ? p.tableAccess(text) : [];
 }
 
+// The interface→impl PARSE pre-gate markers for `file`'s language (see LanguageProvider.implMarkers):
+// `["interface","implements"]` for Java/TS, `[]` for languages with no interface→impl concept (skip all),
+// `undefined` for an unknown language (parse to be safe). Sourced from the provider — no hardcoded list here.
+export function impl_markers(file: string): string[] | undefined {
+  return provider_for(file)?.implMarkers;
+}
+
 // True if `file`'s basename marks a module ENTRY in ANY language (TS index.*, Python __init__.py).
 export function is_module_entry(file: string): boolean {
   const base = file.split("/").pop() ?? file;

@@ -68,6 +68,13 @@ export interface LanguageProvider {
   // The verb classification (write vs read) is the framework adapter's job, not the language's.
   tableAccess?: (text: string) => TableAccess[];
   moduleEntry?: RegExp;  // basename regex marking a module entry (TS index.*, Python __init__.py)
+  // CHEAP textual pre-gate for the interface→impl (DI) index parse: the tokens whose PRESENCE is necessary
+  // for a file to declare an interface or an `implements` clause in THIS language. A file containing none
+  // cannot contribute, so it is skipped BEFORE the (expensive) tree-sitter parse. `["interface","implements"]`
+  // for Java/TS; `[]` for languages with NO interface→impl concept (Python/Ruby) ⇒ skip ALL their files;
+  // `undefined` ⇒ unknown, parse to be safe. SOUND: an actual interface_declaration/implements_clause is
+  // impossible without the keyword textually present, so the gate never drops a real impl edge.
+  implMarkers?: string[];
   // the MAIN-entry line inside a module entry (ctx = an atoms Ctx, duck-typed). null ⇒ can't decide.
   entrypoint?: (ctx: any) => number | null;
   lsp?: ServerSpec;      // how to launch the language's LSP server (undefined ⇒ no server, floor only)

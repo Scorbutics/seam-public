@@ -48,7 +48,7 @@ function _entrypoint(ctx: any): number | null {
 }
 
 export const PROVIDER: LanguageProvider = {
-  name: "python", extensions: [".py", ".pyi"], imports, moduleEntry: /^__init__\.py$/, entrypoint: _entrypoint,
+  name: "python", extensions: [".py", ".pyi"], imports, moduleEntry: /^__init__\.py$/, entrypoint: _entrypoint, implMarkers: [],
   lsp: {
     language: "python",
     command: bun_x("--package", "pyright", "pyright-langserver", "--stdio"),

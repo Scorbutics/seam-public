@@ -111,7 +111,7 @@ export function floor_resolve(repo: string, importingFile: string, source: strin
 }
 
 export const PROVIDER: LanguageProvider = {
-  name: "java", extensions: EXTENSIONS, resolve: floor_resolve, imports,
+  name: "java", extensions: EXTENSIONS, resolve: floor_resolve, imports, implMarkers: ["interface", "implements"],
   lsp: {
     language: "java", command: system("jdtls"), languageId: "java",
     rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts", ".project"],

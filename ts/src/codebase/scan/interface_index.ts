@@ -3,7 +3,7 @@
 // (@Inject/@Autowired/CDI), and whether a symbol is a declaratively-wired framework callback. Cross-
 // language via ../atoms node SETS. Cached per repo (a full-repo parse, built once).
 import { join, relative } from "node:path";
-import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { endsWithSourceExt, SKIP_DIRS, impl_markers } from "../../core/resolve/languages/index.js";
 import { walk } from "../../core/resolve/walk.js";
 import {
   makeCtx, available, lang_for,
@@ -23,6 +23,12 @@ type ImplContribution = { interfaces: string[]; edges: [string, string][] };   /
 
 // Parse ONE file → its interface declarations + impl edges. The async unit incrementalScanAsync caches.
 async function _scanImplFile(rel: string, text: string): Promise<ImplContribution> {
+  // PARSE PRE-GATE (registry-sourced): skip the expensive tree-sitter parse for files that cannot declare an
+  // interface or implements-clause in their language — `[]` markers (Python/Ruby: no such concept) skip ALL;
+  // Java/TS skip unless the keyword is textually present. Sound: the node kinds require the keyword. Cuts the
+  // COLD first-run parse set (the persisted index then makes re-runs O(changed) regardless).
+  const markers = impl_markers(rel);
+  if (markers !== undefined && !markers.some((m) => text.includes(m))) return { interfaces: [], edges: [] };
   const grammar = lang_for(rel);
   if (!grammar) return { interfaces: [], edges: [] };
   const ctx = await makeCtx(text, grammar);
