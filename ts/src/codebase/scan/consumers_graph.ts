@@ -28,6 +28,9 @@ import {
 type BuildOpts = {
   depth?: number; verified?: any; anchorLine?: number | null;
   dataCoupling?: boolean; dataCouplingLlm?: boolean; ctx?: EngineCtx; model?: string; claudeBin?: string | null;
+  skipCallsite?: boolean;   // skip the receiver-agnostic call-site pass (an UNCACHED repo walk parsing every file
+                            // with the symbol's method names — minutes for a hub class). For blast-radius counts
+                            // (review-impact) the import-resolved consumers suffice; DI-dispatched callers are lost.
 };
 
 export async function build_resolved_graph(repo: string, anchorFile: string, symbol: string, opts: BuildOpts = {}): Promise<ResolvedGraph> {
@@ -185,7 +188,7 @@ export async function build_consumers_graph(repo: string, anchorFile: string, sy
       // those consumers surface as RESOLVED_PARTIAL call edges — a followable lead, not a candidate-less
       // blind spot — then reconcile the two blind spots against what the pass recovered.
       const isClass = !isInterface && !isMethod && ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k)).some((c) => _name_of(ctx, c) === symbol);
-      if (isInterface || isMethod || isClass) {
+      if (!opts.skipCallsite && (isInterface || isMethod || isClass)) {
         const { merge_resolved } = await import("./expand.js");
         let callsite = await build_callsite_graph(repo, anchorFile, symbol,
           { anchorLine: opts.anchorLine, methodNames: isMethod ? new Set([symbol]) : undefined, ownerClass: isClass ? symbol : undefined });

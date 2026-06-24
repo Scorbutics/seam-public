@@ -80,6 +80,7 @@ export interface FootprintOpts {
   useLlm?: boolean;                      // dependency: tier-3 LLM coupling discovery
   dataCoupling?: boolean;                // shared-key boundary overlay (default on)
   dataCouplingLlm?: boolean;             // use the LLM key front-end for the overlay
+  skipCallsite?: boolean;                // skip the uncached receiver-agnostic call-site walk (blast-radius counts)
   ctx?: EngineCtx;
   model?: string;
   claudeBin?: string | null;

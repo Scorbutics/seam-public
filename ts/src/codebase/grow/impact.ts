@@ -31,7 +31,7 @@ const key = (file: string, symbol: string) => `${normpath(file)}#${symbol}`;
 
 export async function projectImpact(
   repo: string, anchorFile: string, symbol: string,
-  opts: { depth?: number; maxExpansions?: number; dataCoupling?: boolean; ctx?: EngineCtx } = {},
+  opts: { depth?: number; maxExpansions?: number; dataCoupling?: boolean; ctx?: EngineCtx; skipCallsite?: boolean } = {},
 ): Promise<Impact> {
   const depth = opts.depth ?? 6;
   const budget = opts.maxExpansions ?? 80;
@@ -52,7 +52,7 @@ export async function projectImpact(
       if (hops >= budget) { truncated = true; break; }
       hops++;
       let g;
-      try { g = await build_footprint(repo, node.file, node.symbol, { direction: "up", depth: 1, dataCoupling: dc, ctx: opts.ctx }); }
+      try { g = await build_footprint(repo, node.file, node.symbol, { direction: "up", depth: 1, dataCoupling: dc, ctx: opts.ctx, skipCallsite: opts.skipCallsite }); }
       catch { continue; }
       const aid = g.anchor.id;
       let any = false;

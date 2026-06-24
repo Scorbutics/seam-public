@@ -20,6 +20,8 @@ import {
 } from "./ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
 
+const _CLASS_CONSUMER_PARSE_CAP = 120;   // parse at most this many consumers for method attribution (rest = module nodes); bounds a hub class's per-run parse cost
+
 // CALL-SITE discovery: anchor (class/interface/method) + every place a consumer CALLS one of its
 // methods, regardless of how the receiver was obtained (DI/factory/interface/base class). Edges are
 // RESOLVED_PARTIAL by default; when `opts.ownerClass` is given (a METHOD anchor), a call whose
@@ -232,17 +234,29 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
   const blindspots: Blindspot[] = [], unresolved: Unresolved[] = [];
   const pending: [string, string, string, number, number, Record<string, number>, string][] = [];
   const usedMethods = new Set<string>();
-  for (const con of await scan_consumers(repo, anchorFile, className)) {
+  // PARSE CAP — a HUB class (e.g. a Repository consumed by 500+ files) would otherwise tree-sitter-parse
+  // every consumer just to attribute method calls — minutes on a big repo, EVERY run (the parse isn't disk-
+  // cached). Parse the first N for precise method attribution; emit the rest as lightweight MODULE nodes
+  // (no parse) so the consumer COUNT / fan-in stays accurate. Method-level precision degrades past the cap
+  // (a `method-attribution-capped` blind spot says so), the blast-radius magnitude does not.
+  const allCons = await scan_consumers(repo, anchorFile, className);
+  let parsed = 0, capped = 0;
+  for (const con of allCons) {
     if (con.status === "SUGGESTED") {
       blindspots.push({ node: className, mechanism: "unresolved-import",
         evidence: `${con.file} imports ${className} from '${con.source}' (module unresolved)`, candidates: [{ symbol: con.file }] });
       unresolved.push({ node: className, query: "resolveModule", reason: `unresolved:${con.source}` });
       continue;
     }
+    if (parsed >= _CLASS_CONSUMER_PARSE_CAP) {   // past the cap → a lightweight module node (counts, but no method attribution)
+      pending.push([con.file, stem(con.file), "module", 0, 0, {}, "RESOLVED_FULL"]); capped++;
+      continue;
+    }
     const rd = _read(repo, con.file);
     if (!rd) continue;
     const cctx = await makeCtx(rd[0], rd[1]);
     if (!cctx) continue;
+    parsed++;
     let usage: Record<string, number>;
     const v = opts.verified ? Object.fromEntries(Object.entries(opts.verified[con.file] ?? {}).filter(([m]) => methodNames.has(m))) : {};
     if (opts.verified != null && Object.keys(v).length) usage = v as Record<string, number>;
@@ -255,6 +269,8 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
     pending.push([con.file, sym, kind, start, end, usage, prov]);
     for (const m of Object.keys(usage)) usedMethods.add(m);
   }
+  if (capped) blindspots.push({ node: className, mechanism: "method-attribution-capped",
+    evidence: `${className} has ${allCons.length} consumers; method-level usage was attributed for the first ${_CLASS_CONSUMER_PARSE_CAP} (the other ${capped} are counted but not method-traced — a hub, review by impact)`, candidates: [] });
 
   const nodes: GraphNode[] = [{ id: className, symbol: className, kind: "class", file: anchorFile, range: crange, enclosing: "", complexity: Math.max(1, crange[1] - crange[0] + 1) }];
   const edges: GraphEdge[] = [];

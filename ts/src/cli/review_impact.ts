@@ -101,7 +101,7 @@ export async function annotateReviewImpact(
       // hop fans out O(impact-tree) consumer resolutions — minutes on a hub symbol in a big repo — for indirect
       // dependents that are noisier and less actionable in review anyway. Depth 1 is also the truer `fanIn`
       // (#3): direct dependents, not an inflated transitive count. ctx amortizes the shared import index.
-      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 1, ctx });
+      const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 1, ctx, skipCallsite: true });
       res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
       res.fanIn = im.impacted.length;                                       // total blast radius (the structural weight)
       res.fanInFiles = new Set(im.impacted.map((m) => normpath(m.file))).size;
