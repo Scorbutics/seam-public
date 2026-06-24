@@ -36,7 +36,7 @@ import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
 
-export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null }
+export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null; scope?: string }
 
 const SNIPPET_CAP = COUPLING.snippetCap;
 const PER_FILE = COUPLING.perFile;
@@ -144,7 +144,14 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
 
 export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx()): Promise<GroundingIndex> {
   const augment = !!opts.augment || process.env.SEAM_KEY_AUGMENT === "1";
-  const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}`;
+  // SCOPE: the per-file LLM synthesis is bounded to the anchor's MODULE (opts.scope, a repo-relative prefix),
+  // not the whole repo — so a big monorepo costs the LLM only its relevant module, and other modules are
+  // warmed LAZILY as the grow re-anchors into them. The deterministic floor + the learned matcher RULES still
+  // ground repo-wide (applyMatchers below is unscoped), so a coupling whose other side sits in an unscanned
+  // module still grounds via a rule. `SEAM_WARM_ADAPTERS=1` (or an empty scope) restores the whole-repo pass.
+  const scope = process.env.SEAM_WARM_ADAPTERS === "1" ? "" : (opts.scope ?? "");
+  const inScope = (rel: string): boolean => !scope || rel === scope.slice(0, -1) || rel.startsWith(scope);
+  const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}::${scope}`;
   if (ctx.llmKey.has(cacheKey)) return ctx.llmKey.get(cacheKey)!;
   const idx: GroundingIndex = new Map();
   if (!opts.llm && !hasKeyCache(repo) && !hasMatcherCache(repo)) { ctx.llmKey.set(cacheKey, idx); return idx; }
@@ -162,6 +169,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
     const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
+    if (!inScope(rel)) continue;                     // out-of-module → no per-file LLM (floor + rules still ground it)
     if (!floor.length && blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: rel, text });
     if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;

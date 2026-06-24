@@ -281,8 +281,10 @@ async function assembleSources(
 ): Promise<AssembledSources> {
 
   const lk = await import("./llm_key_index.js");
+  const { module_scope } = await import("../../core/resolve/languages/index.js");
+  const scope = module_scope(repo, anchorFile);   // bound the per-file LLM synthesis to the anchor's module (lazy, per-module warm)
   const [llmKeyIndex, proposedKeys] = await Promise.all([
-    lk.llmKeyIndex(repo, llmOpts, ctx),
+    lk.llmKeyIndex(repo, { ...llmOpts, scope }, ctx),
     lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
   ]);
 

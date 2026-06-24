@@ -2,7 +2,7 @@
 // deterministic floor + import parsing; the remaining minimal providers (c/cpp/kotlin/ruby) have no
 // floor yet (LSP-only) and just contribute their extensions to SOURCE_EXTS.
 import { existsSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join, resolve, relative } from "node:path";
 import { SKIP_DIRS, system, type DefaultImport, type ImportRef, type LanguageProvider, type NamespaceImport, type ServerSpec, type TableAccess } from "./base.js";
 export type { TableAccess };
 import { PROVIDER as TS } from "../../../languages/typescript/resolve.js";
@@ -59,6 +59,29 @@ export function project_root(repo: string, file: string, spec: ServerSpec): stri
     d = dirname(d);
   }
   return repoAbs;
+}
+
+// Build-MODULE manifests: a CLOSED structural set — the per-language root markers from the registry, plus a
+// few universal build files not tied to an LSP server. A module = a build unit (language-agnostic).
+const MODULE_MARKERS: string[] = [...new Set([
+  ...PROVIDERS.flatMap((p) => p.lsp?.rootMarkers ?? []),
+  "package.json", "pom.xml", "build.gradle", "go.mod", "Cargo.toml", "pyproject.toml", "BUILD.bazel",
+])];
+
+// The repo-RELATIVE prefix of the SMALLEST enclosing module of `file` (the nearest ancestor with a build
+// manifest), e.g. `dubbo-cluster/` in a Maven monorepo — or "" when none (the whole repo is one module).
+// Used to SCOPE the per-file LLM key synthesis to the anchor's module instead of feeding the whole repo.
+export function module_scope(repo: string, file: string): string {
+  const repoAbs = resolve(repo);
+  let d = dirname(join(repoAbs, file));
+  while (resolve(d).startsWith(repoAbs) && resolve(d) !== repoAbs) {
+    if (MODULE_MARKERS.some((m) => existsSync(join(d, m)))) {
+      const rel = relative(repoAbs, resolve(d)).replace(/\\/g, "/");
+      return rel ? rel + "/" : "";
+    }
+    d = dirname(d);
+  }
+  return "";
 }
 
 // the file's imports as ImportRefs, via its language provider.
