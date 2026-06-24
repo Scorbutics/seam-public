@@ -18,7 +18,13 @@ export const COUPLING = {
   maxScanBytes: _maxScanBytes, // floor scan: skip files larger than this — OOM backstop, $SEAM_MAX_SCAN_BYTES, 0=off (default: scan all)
   chainDepth: 1,     // index: hops to chain the data-flow boundary past the anchor (reader → its http-route)
   keyBudget: _keyBudget, // llm_key_index: max files sent to the LLM per run (bounds a huge repo; $SEAM_KEY_BUDGET)
-  snippetCap: 8000,  // llm_key_index: chars of file snippets per batched LLM call (chunk boundary)
-  perFile: 4000,     // llm_key_index: chars of one file's snippet
+  snippetCap: 8000,  // llm_key_index PER-FILE pass: chars of file snippets per batched LLM call (chunk boundary)
+  perFile: 4000,     // llm_key_index PER-FILE pass: chars of one file's snippet (DEPTH — list every key in a file)
+  // key_matcher RULE pass wants BREADTH not depth: a reusable shape is spotted by RECURRENCE across files, and
+  // each occurrence is short (`getItem('x')`), so use small per-file snippets + a larger total → many more
+  // files visible in one call. (private-app audit: the matcher synth saw only ~2 files, missing the localStorage
+  // `cache` pattern recurring across ~6 — which the per-file pass then had to list literally instead.)
+  matcherPerFile: 1400,    // chars of one file's snippet for the matcher synth
+  matcherSnippetCap: 16000, // total snippet budget for the matcher synth (≈ 11 files vs the old ~2)
   synthBudget: 16,   // carrier/synth: max opaque carriers synthesized via LLM per run
 };

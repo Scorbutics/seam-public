@@ -24,8 +24,8 @@ import { persistMatchers } from "./key_store.js";
 
 const PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
 
-const SNIPPET_CAP = COUPLING.snippetCap;
-const PER_FILE = COUPLING.perFile;
+const MATCHER_SNIPPET_CAP = COUPLING.matcherSnippetCap;
+const MATCHER_PER_FILE = COUPLING.matcherPerFile;
 
 export interface MatcherOpts { llm?: boolean; model?: string; claudeBin?: string | null }
 
@@ -46,7 +46,10 @@ ${blocks}
 THREE shapes are available — pick the one that fits the evidence:
 
  1) "call"   — a CALL whose STRING-LITERAL argument is the key: $emit('sync'), publish('topic'),
-               bus.on('refresh', …), from('users'). Fields: token = the BARE callee method name ONLY, with
+               bus.on('refresh', …), from('users'). ALSO storage/cache channels where a string KEY is shared
+               by a writer and a reader across files: localStorage/sessionStorage.setItem('k')/getItem('k'),
+               cache.set('k')/get('k') → kind "cache" (setItem/set = produces, getItem/get = consumes).
+               Fields: token = the BARE callee method name ONLY, with
                no receiver/dots (\`bus.publish\` → "publish", \`this.$emit\` → "$emit"); argIndex = 0-based
                index of the string arg that IS the key. OPTIONAL strip: when the string arg is a DIRECTIVE
                NAME and the key is its suffix — \`el.setAttribute('v-on:open', handler)\` → strip "v-on:",
@@ -85,7 +88,9 @@ Return a JSON array (empty if none). Examples — note the PAIRS (producer + the
  {"id":"r3","via":"assign","token":"$scope","kind":"binding","role":"produces","name":"scope-method","description":"defines an AngularJS $scope view method"},
  {"id":"r4","via":"attr","directive":"ng-","keyFrom":"call","kind":"binding","role":"consumes","name":"ng-directive-call","description":"calls a scope method from an ng-* directive"},
  {"id":"r5","via":"method","kind":"binding","role":"produces","name":"ng2-method","description":"Angular2+/React component class method"},
- {"id":"r6","via":"attr","directive":"(","keyFrom":"call","kind":"binding","role":"consumes","name":"ng2-event-binding","description":"calls a component method from an Angular2+ (event) binding"}]
+ {"id":"r6","via":"attr","directive":"(","keyFrom":"call","kind":"binding","role":"consumes","name":"ng2-event-binding","description":"calls a component method from an Angular2+ (event) binding"},
+ {"id":"r7","via":"call","token":"setItem","argIndex":0,"kind":"cache","role":"produces","name":"localstorage-write","description":"writes a localStorage key"},
+ {"id":"r8","via":"call","token":"getItem","argIndex":0,"kind":"cache","role":"consumes","name":"localstorage-read","description":"reads a localStorage key"}]
 ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
 \`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;
@@ -121,13 +126,15 @@ export async function learnKeyMatchers(
   repo: string, blindFiles: { file: string; text: string }[], opts: MatcherOpts, ctx: EngineCtx,
 ): Promise<KeyMatcher[]> {
   if (!opts.llm || !blindFiles.length || ctx.keyBudget <= 0) return [];
-  // bound the snippet payload (the LLM derives tokens from the visible code) — first files up to the cap
+  // bound the snippet payload (the LLM derives the SHAPE from the visible code). BREADTH over depth: a small
+  // per-file snippet from MANY files, so a recurring pattern (the same `getItem('…')` across files) is visible
+  // and generalises into ONE rule — instead of each file's keys being listed literally by the per-file pass.
   const snippets: { file: string; snippet: string }[] = [];
   let size = 0;
   for (const f of blindFiles) {
-    const len = Math.min(f.text.length, PER_FILE);
-    if (size + len > SNIPPET_CAP && snippets.length) break;
-    snippets.push({ file: f.file, snippet: f.text.slice(0, PER_FILE) });
+    const len = Math.min(f.text.length, MATCHER_PER_FILE);
+    if (size + len > MATCHER_SNIPPET_CAP && snippets.length) break;
+    snippets.push({ file: f.file, snippet: f.text.slice(0, MATCHER_PER_FILE) });
     size += len;
   }
 

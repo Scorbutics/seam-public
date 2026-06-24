@@ -17,6 +17,8 @@
 // LAZY + cached: results persist to `.seam/key-adapters.json` (LLM once → deterministic forever; CI warm-up
 // commits it). A normal det run with no `.seam/` does zero work.
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
 
@@ -187,7 +189,20 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // pass 4 — the MATCHER flywheel (the `rules` axis): LEARN reusable adapter rules from the floor-blind files
   // (LLM, self-validated; no-op without opts.llm/budget), then apply ALL matchers (newly learned + cached/
   // shared) DETERMINISTICALLY across the repo. This is what makes a warm `.seam/` cover a learned framework.
-  await learnKeyMatchers(repo, blindFiles, opts, ctx);   // persists survivors into the matcher store
+  // CHAIN the per-file pass → the matcher synth: feed it the files where couplings were actually FOUND
+  // (the per-file hits) FIRST, then other blind files. Otherwise the synth sees an arbitrary first-N
+  // alphabetical slice (on a Next.js app: the `app/api/...` routes, never the component files holding the
+  // recurring localStorage/cache pattern) and generalises nothing — leaving the per-file pass to list those
+  // keys literally. Generalising from where the couplings ARE is what moves a recurring key from the
+  // (LLM-per-file) `files` tier up to the (cached, deterministic, repo-wide) `rules` tier.
+  const matcherFiles: { file: string; text: string }[] = [];
+  const _mseen = new Set<string>();
+  for (const [file, keys] of llmKeysOf) {
+    if (!keys.length || _mseen.has(file)) continue;
+    try { matcherFiles.push({ file, text: readFileSync(join(repo, file), "utf-8") }); _mseen.add(file); } catch { /* unreadable → skip */ }
+  }
+  for (const f of blindFiles) if (!_mseen.has(f.file)) matcherFiles.push(f);
+  await learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx);   // persists survivors into the matcher store
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 
