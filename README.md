@@ -146,6 +146,50 @@ graded by *whether the change touched the part the consumer actually uses*:
 Same discipline as everywhere: structure proves what it can, the LLM judges the rest — here applied to
 the *output*, so the human sees only what couldn't be ruled out.
 
+## Cross-boundary coupling — where the symbol graph goes dark
+
+This is the edge Seam draws that grep and embeddings **both** miss: a data flow that crosses a
+boundary **no symbol connects**. A frontend `fetch('/api/payments')` and the file-routed handler that
+serves it; a `localStorage.setItem('compactMode')` and the `getItem('compactMode')` that reads it
+back; a `convertAndSend('export.queue', …)` and the `@JmsListener(destination="export.queue")` that
+handles it. **Same *value*, different *symbol*** — so an AST call-graph sees no edge (the symbols
+differ) and a vector engine sees no similarity (`payments` in a SQL string vs a `.tsx` screen aren't
+semantically close). Seam grounds the two sides on the shared key and makes the crossing a
+**first-class edge the grow follows** — the same machinery in diff mode (the `--review-impact` flag
+above) and codebase mode (the footprint crosses it to reach the other side).
+
+The boundaries are a **closed, structural vocabulary of archetypes**, each declaring how its two sides
+wire — and, for the *dispatch* archetypes, that the consumer side is a **downstream handler** the grow
+keeps exploring (a route into its server, a queue into its subscriber, an event into its listener —
+the service→bean hop a consumers-only view dead-ends on):
+
+| archetype | producer ⇄ consumer | tier |
+|---|---|---|
+| **db-table** | a write ⇄ a read of the same table | **built-in** — deterministic, offline |
+| **http-route** | `fetch('/x')` ⇄ the handler serving `/x`  *(→ explore downstream)* | **built-in** |
+| **data-file** | a file written ⇄ the file read | **built-in** |
+| **queue** | `convertAndSend('q')` / `@JmsListener("q")` ⇄ the subscriber  *(→ downstream)* | learned |
+| **event** | `emit('x')` ⇄ a listener for `x`  *(→ downstream)* | learned |
+| **cache** | `setItem('k')` ⇄ `getItem('k')` of the same key | learned |
+| **binding** | a component method ⇄ the template that calls it | learned |
+
+**Built-in** archetypes detect deterministically in every run; **learned** ones share the same wiring
+semantics but their *detection* is synthesized once by the flywheel (`--data-coupling llm`), grounded
+by cross-site co-occurrence, then cached to `.seam/` — **LLM-once, deterministic-forever** (see
+[§Learned adapters](#learned-adapters--transparent-named-promotable-seam-adapters)). `seam-adapters
+list` prints the catalogue with each archetype's tier, so *"does Seam couple JMS queues?"* is
+answerable without first warming a repo. The detection long-tail (any `@Listener` annotation, an event
+emitter, a cache key) is **closed IR shapes** the LLM fills, never free-form code — `call` / `assign` /
+`method` / `attr` / `annotation` — so a learned rule runs deterministically forever after.
+
+Because grounding is **value-level, it resolves more than the transport.** A generic payload routed by
+a *field value* — `export.setType("INVENTORY")` on the producer, `export.getType().equals("INVENTORY")`
+on the consumer — couples the *specific* producer to the *specific* handler on the shared literal
+`INVENTORY` (a fine edge layered on the coarse queue that reaches every subscriber). No data-flow
+analysis is needed when the literal is present at both ends: it grounds **structurally**, and a generic
+`.equals()` can't over-couple because only a literal appearing as **both** a setter argument and a
+comparison argument becomes an edge.
+
 ## The five roles
 
 | Role | What it is | Trust mechanism |
@@ -541,7 +585,7 @@ Unlike an always-on hosted index, the learned adapters are **plain, named, revie
 inspect and promote them with `seam-adapters`:
 
 ```bash
-bun ts/src/cli/adapters.ts list             # learned adapters (repo .seam + shared store), named + described
+bun ts/src/cli/adapters.ts list             # the capability catalogue (built-in vs learned archetypes) + learned adapters (repo .seam + shared store), named + described
 bun ts/src/cli/adapters.ts promote <name>   # copy one up into the shared store ($SEAM_ADAPTERS_DIR-overridable)
 bun ts/src/cli/adapters.ts where            # print the repo + shared store locations
 ```
@@ -618,6 +662,18 @@ Seam is strong — and Seam's edge is **verifiable**, not probabilistic.
 sources. The honest read is **same goal, opposite philosophy** — learned-embedding / always-on /
 invisible-plumbing vs deterministic-structural / on-demand / transparent-and-honest — so the two are
 arguably **complementary** (both speak MCP), not strictly competing.
+
+**The broader placement.** The whole index/RAG camp — Augment, **Sourcegraph** (Zoekt + SCIP) —
+**composes** with Seam rather than competing: a different layer (they *retrieve*, Seam *traces*), so
+concede scale and consume their index for anchor recall where it helps. The genuine head-to-head is
+the **agentic coding tool reconstructing a flow with grep + read** — Cursor, Copilot, Claude Code
+itself; Seam's play is to be the tool that agent **calls** (over MCP), doing the
+[cross-boundary trace](#cross-boundary-coupling--where-the-symbol-graph-goes-dark) its lexical grep
+can't see, deterministically, at a fraction of the model cost of four exploratory greps. AI code-review
+tools (CodeRabbit, Greptile, …) play an **adjacent** game — they *find bugs*; Seam *decomposes by
+intent*. The part **no one else builds** is static, cross-boundary, intent-level data flow — which is
+why the moat deepens *there* (gRPC service↔stub, GraphQL resolver↔field, config/env keys next), not in
+scale.
 
 ## Status & limits
 
