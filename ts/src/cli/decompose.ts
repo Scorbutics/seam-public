@@ -807,9 +807,17 @@ async function main(argv: string[]): Promise<number> {
       if (a.emitPrompts) set_host_bus(new HostBus());
       else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
       let recorded: HostBus["recorded"] | undefined;
+      // #5 STRUCTURAL LABEL PRIOR — under --review-impact with LLM clustering, ground the product-intent
+      // labels in how each changed symbol sits in the codebase (fan-in / hub). Composition-root only (the
+      // cli may import codebase/); plain data into classify, so diff/ stays mode-isolated. Degrades to {}.
+      let structuralContext: Map<string, string> | undefined;
+      if (a.reviewImpact && eng.cluster === "llm" && a.repo) {
+        try { const { computeStructuralContext } = await import("./structural_context.js"); structuralContext = await computeStructuralContext(a.repo, hunks); }
+        catch (e) { process.stderr.write(`structural prior skipped: ${(e as Error).message}\n`); }
+      }
       try {
         await engine.classify(hunks, { cluster: eng.cluster, roles: eng.roles, wiring: eng.wiring,
-          facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin });
+          facts_provider: factsProvider, repo: a.repo, model: a.model, claudeBin: a.claudeBin, structuralContext });
       } catch (e) { err((e as Error).message); }
       finally {
         if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); }

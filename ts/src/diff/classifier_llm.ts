@@ -78,10 +78,17 @@ Every hunk in the same group MUST repeat the same intent string.
 === HUNKS ===
 `;
 
-export function build_cluster_prompt(hunks: Hunk[]): string {
-  const parts = [_PROMPT_CLUSTER];
+// #5 — a structural PRIOR (per-hunk: how the changed symbol sits in the WIDER codebase) injected by the
+// composition root (cli/structural_context.ts). Plain data → diff/ stays codebase-ignorant. Only ADDED when a
+// context map is supplied, so a no-context run is byte-identical to before (oracle/harness-safe).
+const _STRUCTURAL_INSTR = `Some hunks carry a \`structure:\` note — how the changed symbol sits in the WIDER codebase (e.g. "consumed by 40 site(s) — HUB"). Use it to make the product-intent label ACCURATE and STAKES-AWARE (a change to a load-bearing hub reads differently than a leaf tweak); it does NOT change the grouping rules above.`;
+
+export function build_cluster_prompt(hunks: Hunk[], structuralContext?: Map<string, string>): string {
+  const hasCtx = !!structuralContext && structuralContext.size > 0;
+  const parts = [hasCtx ? _PROMPT_CLUSTER.replace("=== HUNKS ===", `${_STRUCTURAL_INSTR}\n\n=== HUNKS ===`) : _PROMPT_CLUSTER];
   for (const h of hunks) {
-    parts.push(`\n--- HUNK ${h.id} | file: ${h.file_path} | change: ${h.change_type} ---\n`
+    const note = structuralContext?.get(h.id);
+    parts.push(`\n--- HUNK ${h.id} | file: ${h.file_path} | change: ${h.change_type}${note ? ` | structure: ${note}` : ""} ---\n`
       + `${h.text.replace(/\s+$/, "")}\n`);
   }
   parts.push("\n=== END HUNKS ===\nReturn the JSON array now.");
@@ -589,10 +596,10 @@ export async function reconcile_llm(cores: Map<string, Hunk>, targets: Hunk[], h
 }
 
 // LLM Pass A (cluster) only: fill group/intent (product intent). Mirrors classifier.assign_clusters.
-export async function assign_clusters(hunks: Hunk[], opts: { model?: string; claudeBin?: string | null } = {}): Promise<void> {
+export async function assign_clusters(hunks: Hunk[], opts: { model?: string; claudeBin?: string | null; structuralContext?: Map<string, string> } = {}): Promise<void> {
   if (!hunks.length) return;
   const [kind, binary] = resolve_backend(opts.claudeBin);
-  const labels = await runPassRawAsync(kind, binary, build_cluster_prompt(hunks), opts.model ?? "claude-haiku-4-5",
+  const labels = await runPassRawAsync(kind, binary, build_cluster_prompt(hunks, opts.structuralContext), opts.model ?? "claude-haiku-4-5",
     CLUSTER_THINKING, PASS_CLUSTER.tag);
   const groupIntent = new Map<string, string>();
   const groups = new Map<string, [string, string]>();

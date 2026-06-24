@@ -22,6 +22,8 @@ export async function classify(hunks: Hunk[], opts: {
   repo?: string; model?: string; claudeBin?: string | null; roleVotes?: number;
   fixedRoles?: Map<string, string>;   // pin roles (e.g. from gold) and SKIP the role pass — lets the
                                        // eval score wiring/clustering with role errors removed
+  structuralContext?: Map<string, string>;   // #5: per-hunk codebase prior for the LLM cluster/label pass
+                                              // (computed by the composition root; plain data, no codebase import)
 } = {}): Promise<void> {
   const cluster = opts.cluster ?? "llm", roles = opts.roles ?? "det", wiring = opts.wiring ?? "hybrid";
   for (const [k, v] of Object.entries({ cluster, roles, wiring }))
@@ -85,7 +87,7 @@ export async function classify(hunks: Hunk[], opts: {
   // graph), so when both are LLM we run reconcile ∥ cluster concurrently — the latency win. The det
   // cluster pass READS h.wires, so it must wait for wiring to finish first.
   if (cluster === "llm") {
-    const clusterPromise = llm.assign_clusters(work, llmOpts);
+    const clusterPromise = llm.assign_clusters(work, { ...llmOpts, structuralContext: opts.structuralContext });
     const [wres] = await Promise.all([wiringPromise ?? Promise.resolve(mergePlan), clusterPromise]);
     mergePlan = wres ?? mergePlan;
   } else {
