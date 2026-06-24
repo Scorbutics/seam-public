@@ -2,14 +2,15 @@
 // verified end-to-end through the real pipeline (parse → classify det → emit → annotate):
 //   1. cross-stack: a backend-only change to a DB write flags the FRONTEND reader that isn't in the PR.
 //   2. external impact: a change to a symbol surfaces its consumers in files outside the diff.
-import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { parse } from "../../src/diff/parser.js";
 import * as noise from "../../src/diff/noise_filter.js";
 import * as engine from "../../src/diff/engine.js";
 import { emit_seams_json } from "../../src/diff/seams.js";
-import { annotateReviewImpact, triageUnknowns } from "../../src/cli/review_impact.js";
+import { annotateReviewImpact, renderReviewImpact, triageUnknowns } from "../../src/cli/review_impact.js";
 import { HostBus, set_host_bus } from "../../src/core/llm.js";
 
 async function decompose(diff: string, repo: string) {
@@ -80,5 +81,43 @@ describe("annotateReviewImpact — the diff↔codebase bridge", () => {
     const billing = cs.find((c: any) => c.symbol === "Billing");
     expect(billing.relevance).toBe("irrelevant");          // unknown → triaged
     expect(cs.find((c: any) => c.symbol === "Receipt").relevance).toBe("relevant");   // floor verdict untouched
+  });
+});
+
+// STRUCTURAL WEIGHT (fanIn) — calibrate review scrutiny by blast-radius magnitude. A change to a symbol many
+// files depend on is riskier than one to a leaf; the bridge already resolves the consumer set (projectImpact)
+// — this surfaces its SIZE (in+out of PR) so the reviewer knows the stakes, and elevates a HUB even when the
+// change looks contained. Hermetic tmp repo: one hub function consumed by 3 files + a body edit to the hub.
+describe("structural weight (fanIn) — review scrutiny calibration", () => {
+  let REPO: string;
+  const w = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
+  beforeAll(() => {
+    REPO = mkdtempSync(join(tmpdir(), "weight-"));
+    w("hub.ts", "export function hubCompute(x: number) {\n  const base = x;\n  return base + 1;\n}\n");
+    for (const c of ["a", "b", "c"]) w(`${c}.ts`, `import { hubCompute } from "./hub";\nexport function ${c}() { return hubCompute(1); }\n`);
+  });
+  afterAll(() => rmSync(REPO, { recursive: true, force: true }));
+
+  const DIFF = [
+    "--- a/hub.ts",
+    "+++ b/hub.ts",
+    "@@ -2,2 +2,2 @@ export function hubCompute(x: number) {",
+    "   const base = x;",
+    "-  return base + 1;",
+    "+  return base + 2;",
+    "",
+  ].join("\n");
+
+  test("the seam's blast radius (fanIn) counts ALL consumers of the changed hub, across files", async () => {
+    const model = await decompose(DIFF, REPO);
+    const seam = seamsOf(model).find((s: any) => s.impact?.fanIn);
+    expect(seam).toBeDefined();
+    expect(seam.impact.fanIn).toBeGreaterThanOrEqual(3);        // a, b, c all depend on hubCompute
+    expect(seam.impact.fanInFiles).toBeGreaterThanOrEqual(3);   // …across 3 files
+  });
+
+  test("the human report surfaces the blast radius so scrutiny tracks stakes", async () => {
+    const model = await decompose(DIFF, REPO);
+    expect(renderReviewImpact(model)).toContain("blast radius");
   });
 });

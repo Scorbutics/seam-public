@@ -5,6 +5,8 @@
 //   external   — the transitive codebase impact (consumers of the changed symbol) in files NOT in the PR
 //   crossStack — data-flow readers/writers (a shared DB table / route) in files NOT in the PR: the
 //                "you changed the write, not the read" signal no diff-only or codebase-only tool can give
+//   fanIn      — the STRUCTURAL WEIGHT: total consumers (in+out of PR) of the seam's hottest core, so the
+//                reviewer calibrates scrutiny by stakes (a hub change is riskier than a leaf change)
 //   gaps       — opaque callers where the impact view is incomplete (so the annotation is honest, not noisy)
 // The `!changedFiles.has(...)` filter is the whole value: the signal is what's affected AND untouched.
 //
@@ -23,6 +25,11 @@ import { scoreRelevanceAst, externalRelevance, type Relevance } from "./review_r
 
 const TRIAGE_PASS = registerPass({ tag: "review-triage", tier: "strong", note: "judge if a change is relevant to an unknown consumer — semantic" });
 
+// A seam whose hottest core has ≥ this many consumers is a HUB — worth surfacing for scrutiny even when the
+// change looks contained (many things depend on it, so a subtle break is costly). Tuned high enough that a
+// run-of-the-mill util doesn't trip it; the JSON carries the exact `fanIn` regardless.
+const HUB_FANIN = 8;
+
 export interface ExternalImpact { symbol: string; file: string; hop: number; relevance: Relevance }
 export interface CrossStackEdge { symbol: string; file: string; key: string; relation: string; provenance: string; relevance: Relevance }
 export interface SeamImpact {
@@ -30,6 +37,8 @@ export interface SeamImpact {
   crossStack: CrossStackEdge[];
   gaps: { mechanism: string; evidence: string }[];
   truncated?: boolean;
+  fanIn?: number;        // STRUCTURAL WEIGHT — total consumers (in+out of PR) of the seam's hottest core
+  fanInFiles?: number;   // …across this many files (the blast-radius magnitude for scrutiny calibration)
 }
 
 // Per core hunk, the symbols a change to it ripples FROM: newly-defined symbols + the modified enclosing
@@ -67,7 +76,10 @@ export async function annotateReviewImpact(
   // analyze = pure edge DISCOVERY (cached per symbol); relevance is applied later, per HUNK (it depends on
   // the change's added lines, which differ by hunk even for the same symbol).
   type RawEdge = { symbol: string; file: string; hop: number; key: string; relation: string; provenance: string };
-  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean };
+  // fanIn/fanInFiles = the FULL blast-radius magnitude (in- AND out-of-PR consumers) — the STRUCTURAL WEIGHT
+  // of the change, so a reviewer calibrates scrutiny by stakes (a 3-line edit to a 40-consumer hub > a
+  // 200-line edit to a leaf). `external` keeps only the out-of-PR slice; the weight keeps the whole.
+  type Raw = { external: RawEdge[]; crossStack: RawEdge[]; gaps: { mechanism: string; evidence: string }[]; truncated?: boolean; fanIn: number; fanInFiles: number };
   const cache = new Map<string, Raw>();
   let spent = 0;
   // ONE shared cache context across every symbol's footprints — the data-coupling key index is repo-wide
@@ -78,7 +90,7 @@ export async function annotateReviewImpact(
   const analyze = async (file: string, symbol: string): Promise<Raw> => {
     const k = `${normpath(file)}#${symbol}`;
     const hit = cache.get(k); if (hit) return hit;
-    const res: Raw = { external: [], crossStack: [], gaps: [] };
+    const res: Raw = { external: [], crossStack: [], gaps: [], fanIn: 0, fanInFiles: 0 };
     if (spent >= budget) { res.truncated = true; cache.set(k, res); return res; }
     spent++;
     try {
@@ -86,6 +98,8 @@ export async function annotateReviewImpact(
       // relevance floor is direct-ish anyway); keeps the BFS cheap. ctx amortizes any coupling indices.
       const im = await projectImpact(repo, file, symbol, { dataCoupling: false, depth: 2, ctx });
       res.external = im.impacted.filter((m) => !changed.has(normpath(m.file))).map((m) => ({ symbol: m.symbol, file: m.file, hop: m.hop, key: "", relation: "", provenance: "RESOLVED_FULL" }));
+      res.fanIn = im.impacted.length;                                       // total blast radius (the structural weight)
+      res.fanInFiles = new Set(im.impacted.map((m) => normpath(m.file))).size;
       res.gaps = im.gaps;
       // NB: we deliberately cap impact at depth 2 (direct breakage) for review — so projectImpact's own
       // depth-truncation is BY DESIGN, not flagged. Only the SYMBOL budget (couldn't analyze every changed
@@ -119,7 +133,7 @@ export async function annotateReviewImpact(
     for (const seam of cluster.seams ?? []) {
       const ext = new Map<string, ExternalImpact>(), cs = new Map<string, CrossStackEdge>();
       const gaps = new Map<string, { mechanism: string; evidence: string }>();
-      let truncated = false;
+      let truncated = false, maxFan = 0, maxFanFiles = 0;   // the seam's weight = its HOTTEST core's blast radius
       for (const sh of seam.hunks ?? []) {
         const h = byId.get(sh.id);
         if (!h || !h.role || !ROLES.has(h.role)) continue;
@@ -129,6 +143,7 @@ export async function annotateReviewImpact(
         for (const sym of subjectsOf(facts.get(h.id))) {
           const r = await analyze(h.file_path, sym);
           if (r.truncated) truncated = true;
+          if (r.fanIn > maxFan) { maxFan = r.fanIn; maxFanFiles = r.fanInFiles; }   // hottest core wins
           for (const x of r.external) {
             const rel = externalRelevance(added, sym), k = `${x.file}#${x.symbol}`;
             const prev = ext.get(k);
@@ -142,10 +157,11 @@ export async function annotateReviewImpact(
           for (const x of r.gaps) gaps.set(`${x.mechanism}\0${x.evidence}`, x);
         }
       }
-      if (ext.size || cs.size || gaps.size) {
+      if (ext.size || cs.size || gaps.size || maxFan > 0) {
         const acc: SeamImpact = {
           external: [...ext.values()].sort((a, b) => a.hop - b.hop || a.file.localeCompare(b.file)),
           crossStack: [...cs.values()], gaps: [...gaps.values()], ...(truncated ? { truncated: true } : {}),
+          ...(maxFan > 0 ? { fanIn: maxFan, fanInFiles: maxFanFiles } : {}),
         };
         seam.impact = acc;   // additive contract field — clients that don't know it ignore it
       }
@@ -211,9 +227,19 @@ export function renderReviewImpact(model: any): string {
       const extUnk = im.external.filter((e) => e.relevance === "unknown");
       const suppressed = im.crossStack.length - csRel.length - csUnk.length + (im.external.length - extRel.length - extUnk.length);
       totalSuppressed += suppressed;
-      if (!csRel.length && !csUnk.length && !extRel.length && !extUnk.length && !im.gaps.length) continue;
+      const fanIn = im.fanIn ?? 0, isHub = fanIn >= HUB_FANIN;
+      // show a seam if it has a flag to verify OR it's a structural HUB (many depend on it — review even a
+      // contained-looking change). A non-hub, no-flag seam stays out of the human view (its weight is in JSON).
+      if (!csRel.length && !csUnk.length && !extRel.length && !extUnk.length && !im.gaps.length && !isHub) continue;
       any = true;
       out.push(`## ${seam.label ?? seam.id ?? "seam"}`);
+      // STRUCTURAL WEIGHT first — it calibrates how seriously to take the flags below (a relevant flag on a
+      // 40-consumer hub matters more than on a 2-consumer leaf). A hub with no relevant flag is reassuring-
+      // but-attentive: "looks contained, but a lot rides on this."
+      if (fanIn > 0) {
+        const contained = isHub && !csRel.length && !extRel.length;
+        out.push(`  ${isHub ? "⚖ high blast radius" : "blast radius"}: ${fanIn} consumer(s) across ${im.fanInFiles ?? 0} file(s)${contained ? " — change looks contained, but many depend on this" : ""}`);
+      }
       if (csRel.length) {
         out.push("  ⚠ cross-stack (the change touches a field this reader uses — verify):");
         for (const c of csRel) out.push(`     ${c.relation} of '${c.key}' → ${c.symbol} (${c.file})`);
