@@ -3,9 +3,10 @@
 // LLM synthesizes once and the engine then runs DETERMINISTICALLY over every file, forever (cached to
 // `.seam/`). This is the "LLM picks the SHAPE, the engine EXECUTES it" split: the model never writes a
 // regex (a ReDoS / correctness hazard run repo-wide) — it fills a small, closed structural template, and a
-// safe matcher does the scanning. Today the supported shape is a CALL with a string-literal key argument
-// (`$emit('sync')`, `publish('topic')`, `cache.get('k')`, `from('table')`) — the dominant key-carrying
-// shape across frameworks; template/attribute shapes stay the hand-written adapters' job (e.g. event_binding).
+// safe matcher does the scanning. Four CLOSED shapes cover the framework long tail — call (a string-literal
+// key arg: `$emit('sync')`, `from('table')`), assign (`$scope.x = fn`), method (a class method def), and
+// attr (a template directive: `@sync`, `ng-click="x()"`). This is what lets a learned rule replace what used
+// to be hand-written framework adapters (ng_scope, event_binding) — no per-framework code in the engine.
 import type { KeyHit } from "./types.js";
 import { lineOf, maskComments } from "./adapters/util.js";
 import { makeCtx, lang_for, available } from "../atoms.js";

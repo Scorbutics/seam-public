@@ -16,13 +16,21 @@ import { JOOQ } from "./jooq.js";
 import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
-import { EVENT_BINDING } from "./event_binding.js";
+import { ARCHETYPES, ARCHETYPE_METAS } from "./archetypes.js";
 
-// AngularJS $scope ⇄ template binding is NOT a built-in adapter — it is too framework-specific. It is now a
-// LEARNED adapter (key_ir.ts `assign` + `attr` shapes, synthesized by the flywheel and cached to `.seam/`),
-// the same mechanism that covers Vue / Angular2+ / React without per-framework code. event_binding still
-// provides the .vue/.html walkability the template side needs.
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, EVENT_BINDING];
+// FRAMEWORK UI couplings (AngularJS $scope bindings, Vue/Angular events, component methods) are NOT built-in
+// adapters — too framework-specific. They are LEARNED via the flywheel's closed IR shapes (key_ir.ts:
+// call/assign/method/attr) and cached to `.seam/`, the same mechanism that covers Vue/Angular2+/React with
+// no per-framework code. The built-in floor keeps only the cross-language, stable, common couplings (DB
+// table, HTTP route, file channel). ng_scope + event_binding were ported into this learned path and removed.
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL];
+
+// MARKUP/TEMPLATE file extensions that carry framework couplings (Vue SFC, HTML/AngularJS/Angular
+// templates). STRUCTURAL: which file types can hold a shared key is a fact about the file type, independent
+// of the (now learned) DETECTION logic — so the coupling walk scans them for the learned `attr` matchers
+// even though the rest of the pipeline doesn't treat them as source. This is the source of truth; a learned
+// rule never needs to re-declare it.
+export const TEMPLATE_EXTS = [".vue", ".html", ".htm"];
 
 // The BUILT-IN adapter catalogue (name + one-line blurb), derived FROM the registry — the single source,
 // so adding an adapter to ADAPTERS automatically surfaces it in `seam-adapters` / the extension's adapter
@@ -33,15 +41,24 @@ export function builtinAdapters(): { name: string; kind: string; description: st
 }
 
 const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-write", consumeEdge: "key-read", scan: () => [] };
-// Kind metadata (node label + edge kinds) for a key kind — shared by all adapters of that kind.
-export const kindOf = (kind: string): KeyKind => ADAPTERS.find((a) => a.kind === kind) ?? GENERIC;
+// Kind metadata (node label + edge kinds) for a key kind: a PRESENT detection adapter owns its kind; else
+// the ARCHETYPE registry supplies the semantics (so a learned `event`/`binding`/… matcher grounds with the
+// right boundary + edges even though no built-in adapter detects it); else GENERIC.
+export const kindOf = (kind: string): KeyKind => {
+  const adapter = ADAPTERS.find((a) => a.kind === kind);
+  if (adapter) return adapter;
+  const arch = ARCHETYPES[kind];
+  return arch ? { ...arch, scan: () => [] } : GENERIC;
+};
 
+// Engine-wide edge/node-kind sets are derived from BOTH the present detection adapters AND the archetype
+// registry (+ GENERIC) — so a learned-only kind's edges/nodes still count as key crossings / flow subjects.
+const _ALL_METAS = [...ADAPTERS, ...ARCHETYPE_METAS, GENERIC];
 // Edge kinds the rung emits — codebase._is_crossing unions these so each becomes a grow-frontier crossing.
-export const KEY_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].flatMap((k) => [k.produceEdge, k.consumeEdge]));
-// Boundary NODE kinds the rung emits (table/route/resource/…). A footprint that contains one has a data
-// SUBJECT → it's a FLOW (a pipeline), not a cross-cutting POLICY. Sourced from the registry (not a hard-
-// coded list) so a new adapter's kind (queue/event/cache) auto-counts — see codebase._detect_shape.
-export const KEY_NODE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => k.nodeKind));
+export const KEY_EDGE_KINDS = new Set(_ALL_METAS.flatMap((k) => [k.produceEdge, k.consumeEdge]));
+// Boundary NODE kinds the rung emits (table/route/event/binding/resource/…). A footprint that contains one
+// has a data SUBJECT → it's a FLOW (a pipeline), not a cross-cutting POLICY — see codebase._detect_shape.
+export const KEY_NODE_KINDS = new Set(_ALL_METAS.map((k) => k.nodeKind));
 // PERSISTENT domain-entity subjects (db tables: payments, members, …) — the registry's db-table family,
 // as opposed to TRANSPORT (routes) or generic resources. Subject-continuity keys on the domain ENTITY, so
 // a payment seam touching its own `/api/payments` route isn't mistaken for a fork into another domain.
@@ -68,10 +85,10 @@ export function scan_file_keys(file: string, text: string, masked?: MaskCtx): Ke
   return ADAPTERS.flatMap((a) => a.scan(file, text, m)).filter((h) => plausibleKeyValue(h.value));
 }
 
-// Non-source file extensions some adapter ALSO scans (e.g. .vue/.html templates — where event listeners
-// live). Sourced from the registry (each adapter's `extraExts`), not a hardcoded list, so a new adapter's
-// template format auto-extends the walk. SEAM_NO_ADAPTERS disables the floor → no extra exts either.
-const EXTRA_EXTS = [...new Set(ADAPTERS.flatMap((a) => a.extraExts ?? []))].map((e) => e.toLowerCase());
+// Non-source file extensions the coupling walk ALSO scans for shared keys: the structural TEMPLATE_EXTS
+// (markup that carries framework bindings — for the learned `attr` matchers) UNION any adapter's own
+// `extraExts`. SEAM_NO_ADAPTERS disables the floor → no extra exts either.
+const EXTRA_EXTS = [...new Set([...TEMPLATE_EXTS, ...ADAPTERS.flatMap((a) => a.extraExts ?? [])])].map((e) => e.toLowerCase());
 
 // The "is this file worth scanning for shared keys" predicate — SOURCE_EXTS (the global source set) PLUS
 // the adapters' template extras. The coupling walks (shared_key_index, llmKeyIndex) use THIS instead of

@@ -6,6 +6,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
+import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_matcher_cache.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(tmpdir(), "seam-nodefan-" + process.pid);
@@ -13,10 +14,16 @@ const write = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), 
 beforeAll(() => {
   rmSync(REPO, { recursive: true, force: true });
   // hub.js emits 5 events. `a`/`b`/`c` have ONE consumer each (specific); `d`/`e` have THREE (hub-ish).
+  // Events are a LEARNED coupling (no built-in adapter) → prime `.seam` with the emit/listener rules.
   write("hub.js", "this.$emit('alpha'); this.$emit('bravo'); this.$emit('charlie'); this.$emit('delta'); this.$emit('echo');\n");
   write("one.vue", '<x @alpha="h" @bravo="h" @charlie="h" @delta="h" @echo="h"/>\n');
   write("two.vue", '<x @delta="h" @echo="h"/>\n');
   write("three.vue", '<x @delta="h" @echo="h"/>\n');
+  write(".seam/key-matchers.json", JSON.stringify({ schema: 1, matchers: [
+    { via: "call", token: "$emit", argIndex: 0, kind: "event", role: "produces", name: "emit" },
+    { via: "attr", directive: "@", keyFrom: "name", kind: "event", role: "consumes", name: "listen" },
+  ] }));
+  _resetMatcherCacheMem();
 });
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 

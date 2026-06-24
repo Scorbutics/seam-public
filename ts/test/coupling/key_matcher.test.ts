@@ -146,9 +146,10 @@ describe("applyMatchers — deterministic grounding (LLM-free)", () => {
   });
 
   test("a learned matcher that duplicates the deterministic floor is reconciled away (not double-counted)", async () => {
-    // $emit IS covered by the built-in event adapter → a learned $emit rule must contribute nothing here
-    write("c.js", "this.$emit('sync', data);");
-    const dupe: KeyMatcher = validateMatcher({ via: "call", token: "$emit", argIndex: 0, kind: "event", role: "produces" })!;
-    expect((await applyMatchers(REPO, [dupe])).get("event sync")).toBeUndefined();
+    // a Supabase `.from('t')` write IS covered by the built-in db-table floor → a learned rule for the same
+    // call must contribute nothing (events/$emit are no longer floor — that's the learned path's job now).
+    write("c.ts", "await supabase.from('payments').insert(row);");
+    const dupe: KeyMatcher = validateMatcher({ via: "call", token: "from", argIndex: 0, kind: "db-table", role: "produces" })!;
+    expect((await applyMatchers(REPO, [dupe])).get("db-table payments")).toBeUndefined();
   });
 });
