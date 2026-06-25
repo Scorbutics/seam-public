@@ -13,12 +13,19 @@ import { embedScoreDefs } from "../scan/def_embed.js";
 // cutoff that drifts per repo/model): the top band is the spine, the middle is supporting, the tail is off.
 // Deterministic given the scores. A coarse 3-band split — the consumer refines if it wants.
 export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
-  const scored = seams.filter((s) => typeof s.relevance === "number").sort((a, b) => (b.relevance! - a.relevance!));
+  // A STRUCTURAL spine (the crossing backbone, locked in emit_seams — tier-independent) takes precedence:
+  // never re-band a spine seam, and don't mint MORE spine from text similarity. The embeddings then only
+  // split the REMAINDER into supporting/off (a 2-band). Only when there's NO structural spine (a policy fan
+  // / a same-language flow with no boundary) does the embedding band define the spine itself (the 3-band).
+  const lockedSpine = seams.some((s) => (s as any).tier === "spine");
+  const scored = seams.filter((s) => typeof s.relevance === "number" && (s as any).tier !== "spine").sort((a, b) => (b.relevance! - a.relevance!));
   const n = scored.length;
   if (!n) return;
-  scored.forEach((s, i) => {
-    (s as any).tier = i < Math.ceil(n / 3) ? "spine" : i < Math.ceil((2 * n) / 3) ? "supporting" : "off";
-  });
+  if (lockedSpine) {
+    scored.forEach((s, i) => { (s as any).tier = i < Math.ceil(n / 2) ? "supporting" : "off"; });
+  } else {
+    scored.forEach((s, i) => { (s as any).tier = i < Math.ceil(n / 3) ? "spine" : i < Math.ceil((2 * n) / 3) ? "supporting" : "off"; });
+  }
 }
 
 // Rebuild each cluster's `spine` array from its spine-TIER seams when it's empty. `cl.spine` is computed in

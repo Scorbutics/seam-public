@@ -560,7 +560,11 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
 // Order the spine (main-path) seams as a TRACE from the anchor outward: BFS distance over the seam
 // adjacency (two seams are adjacent when a resolved edge crosses between them), then by original order.
 // Seams with no LLM tier (no intent pass) stay untiered → no spine → caller leaves the order untouched.
-function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
+// Seam-level BFS from the anchor seam along the resolved edges, directed by the flow `lead` so the spine
+// reads anchor→…→terminal. Shared by _spine_order (ORDERS the spine-tier seams) and _structural_spine
+// (decides spine MEMBERSHIP from the crossing backbone) — one adjacency/BFS, two readers.
+function _seam_graph(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"):
+    { nodeSeam: Map<string, string>; dist: Map<string, number>; anchorSeam?: string } {
   const nodeSeam = new Map<string, string>();
   for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
   const adj = new Map<string, Set<string>>();
@@ -583,20 +587,20 @@ function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "
     const q = [anchorSeam];
     while (q.length) { const cur = q.shift()!; const d = dist.get(cur)!; for (const nb of adj.get(cur) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
   }
+  return { nodeSeam, dist, anchorSeam };
+}
+
+function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
+  const { dist } = _seam_graph(g, seams, lead);
   const idx = new Map(seams.map((s, i) => [s.id, i]));
   return seams.filter((s) => s.tier === "spine")
     .sort((a, b) => ((dist.get(a.id) ?? 1e9) - (dist.get(b.id) ?? 1e9)) || (idx.get(a.id)! - idx.get(b.id)!))
     .map((s) => s.id);
 }
 
-// STEP 2 — promote the SUPPORTING seams that lie on the shortest seam-path between the two confirmed spine
-// endpoints (anchor → culmination). Pure topology: a seam structurally BETWEEN the two ends of the main
-// path IS the main path. Promote-only (never demotes the model's calls) and path-bounded (an off-concern
-// hanging off the side is not on the anchor→outcome path, so it's never pulled in) → safe for the payments
-// case (a `members` side-write is off-path → stays supporting) while it rescues a buried compute table
-// (pair_weights on a weekly_tasks flow → on-path → spine). Undirected seam adjacency: connectivity between
-// the endpoints is all the path needs.
-function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: string): void {
+// The shortest seam-path between two endpoints over UNDIRECTED seam adjacency (connectivity is all a path
+// needs) — returns the seams from `fromId` to `toId` inclusive, in order, or [] when disconnected.
+function _seam_path(g: Graph, seams: Seam[], fromId: string, toId: string): string[] {
   const nodeSeam = new Map<string, string>();
   for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
   const adj = new Map<string, Set<string>>();
@@ -608,10 +612,44 @@ function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: stri
   }
   const prev = new Map<string, string>(); const seen = new Set([fromId]); const q = [fromId];
   while (q.length) { const c = q.shift()!; if (c === toId) break; for (const nb of adj.get(c) ?? []) if (!seen.has(nb)) { seen.add(nb); prev.set(nb, c); q.push(nb); } }
-  if (!seen.has(toId)) return;                          // endpoints disconnected → nothing on a path
+  if (!seen.has(toId)) return [];                        // endpoints disconnected → nothing on a path
+  const path: string[] = [];
+  for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { path.unshift(cur); if (cur === fromId) break; }
+  return path;
+}
+
+// STRUCTURAL spine — the data-flow BACKBONE, decided by topology not text: the seam-path from the anchor to
+// the CULMINATION. The culmination is the seam the LLM marked as the answer (`selected`) when an LLM pass
+// ran, else — under skeleton — the BFS-FARTHEST reachable seam (the deepest point of the flow). Tier-
+// INDEPENDENT, so the main path holds even with no LLM/embedding tiers. Path-BOUNDED (like _promote_spine_
+// path), so an off-concern hanging off the side is excluded: a role-authorisations enum (a leaf, not on the
+// anchor→outcome path) can't be on it however database-y its doc reads, and a `members` side-write branch
+// stays off it (payments-safe) — while the UI→service→repo→DB chain is included even where its identifiers
+// embed weakly. "Structure → the spine; embeddings → only rank the rest." Returns [] when the footprint has
+// NO boundary crossing (a same-language call chain / a policy fan), so the caller falls back to the
+// embedding relevance band rather than crowning an arbitrary call depth as a spine.
+function _structural_spine(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
+  if (![...g.resolved_edges()].some((e) => e.kind !== "contains" && _is_crossing(e))) return [];
+  const { dist, anchorSeam } = _seam_graph(g, seams, lead);
+  if (!anchorSeam) return [];
+  const selected = seams.find((s) => (s as any).selected)?.id;
+  let culm = selected && dist.has(selected) && selected !== anchorSeam ? selected : undefined;
+  if (!culm) {   // skeleton (no LLM answer): the deepest reachable seam IS the culmination
+    let best = 0;
+    for (const [id, d] of dist) if (id !== anchorSeam && d > best) { best = d; culm = id; }
+  }
+  if (!culm) return [];
+  return _seam_path(g, seams, anchorSeam, culm);
+}
+
+// STEP 2 — promote the SUPPORTING seams on the anchor→culmination path up to spine. Now that emit_seams
+// locks that same structural path for every intent footprint, this is the LLM-path's belt-and-braces
+// (promote-only: it never demotes the model's calls). Path-bounded → an off-concern hanging off the side is
+// never pulled in (a `members` side-write stays supporting; a buried on-path compute table is rescued).
+function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: string): void {
   const byId = new Map(seams.map((s) => [s.id, s]));
-  for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) {
-    const s = byId.get(cur); if (s && s.tier === "supporting") s.tier = "spine";   // promote-only
+  for (const id of _seam_path(g, seams, fromId, toId)) {
+    const s = byId.get(id); if (s && s.tier === "supporting") s.tier = "spine";   // promote-only
   }
 }
 
@@ -820,7 +858,7 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
   const lead = shape ? _lead_slice(g, seams, shape) : undefined;
   // Emit the model UNCOLLAPSED — off-seam collapsing is a human-render concern, applied by each client
   // (see collapse_off_seams), so an LLM consumer of seams.json gets the full recall, not a "+N more" stub.
-  const model = emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined });
+  const model = emit_seams(g, health, seams, { shape, lead, lineageRepo: opts.lineage ? opts.repo : undefined, intent: Boolean(opts.intent) });
   if (opts.skeleton) model.skeleton = true;          // tells the renderer to list the untiered seams flat
   return model;
 }
@@ -899,7 +937,7 @@ function _seam_contracts(g: Graph, seams: Seam[]): any[] {
   return out;
 }
 
-export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both"; lineageRepo?: string } = {}): any {
+export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both"; lineageRepo?: string; intent?: boolean } = {}): any {
   const edgeProv = new Map<string, string>();
   for (const e of g.resolved_edges()) edgeProv.set(`${e.src} ${e.dst}`, e.provenance);
   const seamWarnings: Map<string, string[]> = health.seam_warnings;
@@ -995,6 +1033,17 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
       ...(s.writes && s.writes.length ? { writes: s.writes } : {}), ...(s.dir ? { dir: s.dir } : {}) });
   }
 
+  // STRUCTURAL spine (intent footprints only): lock the crossing-backbone seams to tier=spine BEFORE the
+  // tier-based ordering, so the main path is decided by topology (the data-flow boundaries grow traced) and
+  // holds even under skeleton — when the LLM seam-intent pass is skipped and the embedding tiers land
+  // AFTER emit. Without this the spine was whatever the embedding banded top-third, so a role-enum whose
+  // doc says "database" out-ranked the actual UI→DB chain. Locked on BOTH the raw seams (read by
+  // _spine_order) and the emitted copies (read by the renderer + the embedding banding, which preserves a
+  // locked spine and only bands the rest). Gated on `intent` → non-intent *_seams oracles stay byte-identical.
+  if (opts.intent) {
+    const sp = new Set(_structural_spine(g, seams, opts.lead));
+    if (sp.size) { for (const s of seams) if (sp.has(s.id)) s.tier = "spine"; for (const s of outSeams) if (sp.has(s.id)) s.tier = "spine"; }
+  }
   // INTENT MAP: tier each seam and order them as a trace — the spine (main path, anchor→…→display) first,
   // then supporting, then off-intent side-effects last. Untiered (no intent pass) → all rank equal → the
   // original order is preserved (no regression). The spine is BFS-ordered so the path reads top-to-bottom.

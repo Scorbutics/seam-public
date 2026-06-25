@@ -193,11 +193,13 @@ describe("pinned gold: Step-1 culmination grounding (flow writer vs admin endpoi
   });
 });
 
-describe("Step 2: promote on-path supporting seams to spine (--promote-spine-path)", () => {
+describe("structural spine: the anchor→culmination data-flow path is spine by default", () => {
   // Flow: n1 → persistTask → weekly_tasks(write) → showMissions(read = the culmination screen). A SIDE
   // branch n1 → notifyMember → members(write). The model demotes EVERY non-answer seam to supporting —
   // including the on-path `weekly_tasks` step (the compute/persist a single-table domain prior buries) AND
-  // the off-path `members` side-write. Only the structural path pass can tell them apart.
+  // the off-path `members` side-write. The STRUCTURAL spine (emit_seams, default-on for intent footprints)
+  // locks the anchor→culmination path back to spine — path-bounded, so it tells the two apart without an
+  // LLM judgement and without the (now-redundant) --promote-spine-path flag.
   const data = {
     version: 1, anchor: { id: "n1", symbol: "generateMissions", file: "gen.ts", range: [1, 9] },
     language: "typescript", resolutionQuality: "FULL", complete: true,
@@ -239,14 +241,54 @@ describe("Step 2: promote on-path supporting seams to spine (--promote-spine-pat
   const wtWriteSeam = (m: any) => m.clusters[0].seams.find((s: any) => labels(s).has("weekly_tasks") && labels(s).has("persistTask") && !labels(s).has("generateMissions"));
   const sideSeam = (m: any) => m.clusters[0].seams.find((s: any) => labels(s).has("members") && !labels(s).has("generateMissions"));
 
-  test("off (flag absent): the on-path weekly_tasks write step stays supporting", async () => {
+  test("default (no flag): the on-path weekly_tasks step is spine; the off-path members side-write is not", async () => {
     const m = await run(false);
-    expect(wtWriteSeam(m)?.tier).toBe("supporting");
+    expect(wtWriteSeam(m)?.tier).toBe("spine");    // on the anchor→culmination path → structural spine (default)
+    expect(sideSeam(m)?.tier).toBe("supporting");  // side branch → off the path → not promoted (payments-safe)
   });
-  test("on: the on-path weekly_tasks step is promoted to spine; the off-path members side-write is not", async () => {
+  test("--promote-spine-path yields the same (now redundant with the structural default)", async () => {
     const m = await run(true);
-    expect(wtWriteSeam(m)?.tier).toBe("spine");    // on anchor→culmination path → promoted
-    expect(sideSeam(m)?.tier).toBe("supporting");  // side branch → never promoted (payments-safe)
+    expect(wtWriteSeam(m)?.tier).toBe("spine");
+    expect(sideSeam(m)?.tier).toBe("supporting");
+  });
+});
+
+describe("structural spine under SKELETON (no LLM) — the real bug: a leaf enum off the data path", () => {
+  // The reported failure: intent "how an adviser manages bookings from the UI to the database", and the
+  // skeleton spine crowned `Role` (a leaf enum that merely LISTS authorisations — its doc says "database",
+  // a token the embedding matched) over the actual UI→service→repo→DB booking chain. The structural spine
+  // must exclude Role (it is off the anchor→culmination path) and include the chain — with NO LLM and NO
+  // embeddings (pure topology), so it holds in the blazing-fast skeleton path.
+  const data = {
+    version: 1, anchor: { id: "ctl", symbol: "listBookings", file: "BookingController.java", range: [1, 9] },
+    language: "java", resolutionQuality: "FULL", complete: true,
+    nodes: [
+      { id: "ctl", symbol: "listBookings", file: "BookingController.java", kind: "method", range: [1, 9] },
+      { id: "svc", symbol: "fetchForAdviser", file: "BookingService.java", kind: "method", range: [1, 9] },
+      { id: "repo", symbol: "findByAdviser", file: "BookingRepository.java", kind: "method", range: [1, 9] },
+      { id: "tbl", symbol: "bookings", file: "BookingRepository.java", kind: "table", range: [5, 5] },
+      { id: "role", symbol: "Role", file: "Role.java", kind: "enum", range: [1, 40] },
+    ],
+    edges: [
+      { from: "ctl", to: "svc", kind: "reference", provenance: "RESOLVED_FULL" },
+      { from: "svc", to: "repo", kind: "reference", provenance: "RESOLVED_FULL" },
+      { from: "repo", to: "tbl", kind: "db-read", provenance: "RESOLVED_PARTIAL" },  // the boundary crossing
+      { from: "ctl", to: "role", kind: "reference", provenance: "RESOLVED_FULL" },   // auth leaf — off the data path
+    ],
+  };
+  test("the booking chain (→ bookings table) is the spine; Role is NOT on it", async () => {
+    const m = await decompose(from_resolved_graph(data), { intent: "how an adviser manages bookings from the UI to the database", skeleton: true });
+    const spine: string[] = m.clusters[0].spine ?? [];
+    const byId = new Map<string, any>(m.clusters[0].seams.map((s: any) => [s.id, s]));
+    const labelsIn = (ids: string[]) => new Set(ids.flatMap((id) => (byId.get(id)?.hunks ?? []).map((h: any) => h.label)));
+    const spineLabels = labelsIn(spine);
+    expect(spine.length).toBeGreaterThan(0);              // a spine exists under skeleton (no LLM)
+    expect(spineLabels.has("bookings")).toBe(true);       // the DB culmination IS the main path
+    expect(spineLabels.has("Role")).toBe(false);          // the off-path leaf enum is NOT crowned
+    // and Role's seam still exists in the footprint (excluded from the spine, not dropped)
+    const roleSeam = m.clusters[0].seams.find((s: any) => (s.hunks ?? []).some((h: any) => h.label === "Role"));
+    expect(roleSeam).toBeDefined();
+    expect(spine).not.toContain(roleSeam.id);
   });
 });
 
