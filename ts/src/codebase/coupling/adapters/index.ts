@@ -16,14 +16,17 @@ import { JOOQ } from "./jooq.js";
 import { HTTP_ROUTE } from "./http_route.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
+import { VUE_INJECT } from "./vue_inject.js";
 import { ARCHETYPES, ARCHETYPE_METAS } from "./archetypes.js";
 
-// FRAMEWORK UI couplings (AngularJS $scope bindings, Vue/Angular events, component methods) are NOT built-in
-// adapters — too framework-specific. They are LEARNED via the flywheel's closed IR shapes (key_ir.ts:
-// call/assign/method/attr) and cached to `.seam/`, the same mechanism that covers Vue/Angular2+/React with
-// no per-framework code. The built-in floor keeps only the cross-language, stable, common couplings (DB
-// table, HTTP route, file channel). ng_scope + event_binding were ported into this learned path and removed.
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL];
+// FRAMEWORK UI couplings (AngularJS $scope bindings, Vue/Angular EVENTS, component-method↔template) are NOT
+// built-in — too framework-specific and varied — they are LEARNED via the flywheel's closed IR shapes
+// (key_ir.ts: call/assign/method/attr) and cached to `.seam/`. ng_scope + event_binding were ported there.
+// The EXCEPTION is service INJECTION (Vue.prototype.$x / globalProperties.$x ⇄ this.$x): a single closed,
+// `$`-discriminated shape stable across Vue 2/3, common enough that the LLM flywheel being off by default
+// (cold-grow stability) AND the local coupling gate skipping a `this.$x` anchor left it undetected. It's
+// deterministic floor (VUE_INJECT) so it works without the flywheel and the gate sees the boundary.
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, VUE_INJECT];
 
 // MARKUP/TEMPLATE file extensions that carry framework couplings (Vue SFC, HTML/AngularJS/Angular
 // templates). STRUCTURAL: which file types can hold a shared key is a fact about the file type, independent

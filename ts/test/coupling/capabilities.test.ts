@@ -24,10 +24,17 @@ describe("couplingCapabilities — tier is derived from whether a detection adap
     expect(caps.find((c) => c.kind === "db-table")!.detectedBy.length).toBeGreaterThan(0);
   });
 
-  test("event / binding / cache / queue are LEARNED — no detection adapter, warm on first review", () => {
-    for (const kind of ["event", "binding", "cache", "queue"]) {
+  test("event / cache / queue are LEARNED — no detection adapter, warm on first review", () => {
+    for (const kind of ["event", "cache", "queue"]) {
       expect(tierOf(kind)).toBe("learned");
       expect(caps.find((c) => c.kind === kind)!.detectedBy).toEqual([]);
     }
+  });
+
+  test("binding is now BUILT-IN for service injection (vue-inject) — the rest of the kind stays learned", () => {
+    // a deterministic detector (Vue.prototype.$x / globalProperties.$x ⇄ this.$x) flips `binding` to built-in;
+    // component-method↔template bindings still warm via the flywheel, but the kind has an offline floor now.
+    expect(tierOf("binding")).toBe("built-in");
+    expect(caps.find((c) => c.kind === "binding")!.detectedBy).toContain("vue-inject");
   });
 });
