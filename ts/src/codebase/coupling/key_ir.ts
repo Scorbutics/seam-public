@@ -55,7 +55,13 @@ export type KeyMatcher =
   // repo.<entity>.save) — Prisma/Drizzle/TypeORM AND a project's own layer. role fixed per rule (read verbs
   // → consumes, write verbs → produces), so a layer needs two rules. This is what lets the flywheel FACTOR a
   // repeated receiver-member layer into ONE rule instead of an LLM call per file.
-  | { via: "member"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
+  | { via: "member"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string }
+  // repository — `<token>.<verb>(…)` where the RECEIVER ITSELF is the table/entity (a single-entity
+  // repository: `users.create()`, `featuresRepository.setTeamFeatureState()`). The 2-part counterpart of
+  // `member`: there the key is the member between receiver and verb; here the receiver IS the key. Synthesised
+  // by the receiver-CLASSIFIER (idiom/embedding) for a `database`-classified 2-part receiver — the layer
+  // member_access (3-part) can't see. role fixed per rule (read verbs → consumes, write → produces).
+  | { via: "repository"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
@@ -64,6 +70,7 @@ export function matcherShape(m: KeyMatcher): string {
   if (m.via === "method") return `class method def`;
   if (m.via === "annotation") return `@${m.annotation}(${m.element ? `${m.element}="…"` : `"…"`})`;
   if (m.via === "member") return `${m.token}.<member>.{${m.verbs.join("|")}}()`;
+  if (m.via === "repository") return `${m.token}.{${m.verbs.join("|")}}() → table ${m.token}`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -75,6 +82,7 @@ export function matcherKey(m: KeyMatcher): string {
   if (m.via === "method") return base;
   if (m.via === "annotation") return `${base}:${m.annotation}:${m.element ?? ""}`;
   if (m.via === "member") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
+  if (m.via === "repository") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -84,7 +92,7 @@ export function matcherKey(m: KeyMatcher): string {
 // method definition → no discriminating literal → null (must still be parsed). Never causes a false miss:
 // if the rule matches, the literal is present by construction.
 export function matcherLiteral(m: KeyMatcher): string | null {
-  if (m.via === "call" || m.via === "assign" || m.via === "member") return m.token;
+  if (m.via === "call" || m.via === "assign" || m.via === "member" || m.via === "repository") return m.token;
   if (m.via === "attr") return m.directive;
   if (m.via === "annotation") return m.annotation;
   return null;   // method
@@ -169,6 +177,13 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     if (!verbs.length) return null;                                          // need ≥1 access verb to bound the match (else it'd match any member)
     return { via: "member", token, verbs, kind, role, name: nm(`${_slug(token)}-member-${kind}`), description: dsc(`${role} ${kind} via ${token}.<member>.{${verbs.join("|")}}()`) };
   }
+  if (via === "repository") {
+    const token = String(obj.token ?? "").trim();
+    if (!_TOKEN_OK.test(token)) return null;                                  // the receiver (= the table) must be a bare identifier
+    const verbs = [...new Set<string>((Array.isArray(obj.verbs) ? obj.verbs : []).map((v: any) => String(v).trim()).filter((v: string) => _TOKEN_OK.test(v)))];
+    if (!verbs.length) return null;                                          // need ≥1 access verb (else it'd match any call on the receiver)
+    return { via: "repository", token, verbs, kind, role, name: nm(`${_slug(token)}-repo-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}() (receiver = table)`) };
+  }
   return null;                                                               // unknown shape → not executable
 }
 
@@ -215,7 +230,23 @@ export async function runMatcher(m: KeyMatcher, file: string, text: string): Pro
   if (m.via === "method") return runMethod(m, file, text);
   if (m.via === "annotation") return runAnnotation(m, text);
   if (m.via === "member") return runMember(m, text);
+  if (m.via === "repository") return runRepository(m, text);
   return runAttr(m, file, text);
+}
+
+// `<token>.<verb>(` — the 2-part repository shape: the RECEIVER `token` IS the table/entity, verb ∈ m.verbs.
+// Pure regex (offline); token + verbs are identifier-safe. Mirrors runMember but the key is the receiver, not
+// a member. The lookbehind allows a path prefix (`this.users.create` → receiver `users`), like runMember.
+function runRepository(m: Extract<KeyMatcher, { via: "repository" }>, text: string): KeyHit[] {
+  const masked = maskComments(text);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const verbs = m.verbs.map(esc).join("|");
+  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*(?:${verbs})\\s*[(<]`, "g");
+  const out: KeyHit[] = [];
+  let mt: RegExpExecArray | null;
+  while ((mt = re.exec(masked)) !== null)
+    if (plausibleKeyValue(m.token)) out.push({ kind: m.kind, value: m.token, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  return out;
 }
 
 // `<token>.<KEY>.<verb>(` — KEY is the member identifier (the table/entity/topic), verb ∈ m.verbs. Pure
