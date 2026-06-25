@@ -19,7 +19,7 @@ import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex } from "./types.js";
-import { type KeyMatcher, validateMatcher, runMatcher, matcherKey } from "./key_ir.js";
+import { type KeyMatcher, validateMatcher, runMatcher, matcherKey, matcherLiteral } from "./key_ir.js";
 import { persistMatchers, loadMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
 import { createHash } from "node:crypto";
 
@@ -212,12 +212,19 @@ export async function applyMatchers(repo: string, matchers: KeyMatcher[], skipDi
   const idx: GroundingIndex = new Map();
   if (!matchers.length) return idx;
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
-    const floor = new Set(scan_file_keys(rel, text).map((h) => `${h.kind} ${h.value}`));
-    for (const m of matchers) for (const h of await runMatcher(m, rel, text)) {
-      const id = `${h.kind} ${h.value}`;
-      if (floor.has(id)) continue;                                   // floor already covers it → reconcile away
-      if (!idx.has(id)) idx.set(id, { producers: [], consumers: [] });
-      (h.produces ? idx.get(id)!.producers : idx.get(id)!.consumers).push({ file: rel, line: h.line });
+    let floor: Set<string> | null = null;   // floor reconcile is itself a scan — defer it until a matcher actually hits
+    for (const m of matchers) {
+      const lit = matcherLiteral(m);
+      if (lit && !text.includes(lit)) continue;                      // file can't contain this rule → skip the (tree-sitter) parse
+      const hits = await runMatcher(m, rel, text);
+      if (!hits.length) continue;
+      floor ??= new Set(scan_file_keys(rel, text).map((h) => `${h.kind} ${h.value}`));
+      for (const h of hits) {
+        const id = `${h.kind} ${h.value}`;
+        if (floor.has(id)) continue;                                 // floor already covers it → reconcile away
+        if (!idx.has(id)) idx.set(id, { producers: [], consumers: [] });
+        (h.produces ? idx.get(id)!.producers : idx.get(id)!.consumers).push({ file: rel, line: h.line });
+      }
     }
   }
   return idx;

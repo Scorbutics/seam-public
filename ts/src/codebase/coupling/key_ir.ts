@@ -78,6 +78,18 @@ export function matcherKey(m: KeyMatcher): string {
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
+// A rule's required LITERAL — a substring that MUST appear in any file the rule can match (the callee/
+// receiver token, the directive prefix, the annotation name). A cheap `text.includes()` pre-filter: a file
+// lacking it can never match, so skip the (expensive, tree-sitter) runMatcher. `method` matches any class
+// method definition → no discriminating literal → null (must still be parsed). Never causes a false miss:
+// if the rule matches, the literal is present by construction.
+export function matcherLiteral(m: KeyMatcher): string | null {
+  if (m.via === "call" || m.via === "assign" || m.via === "member") return m.token;
+  if (m.via === "attr") return m.directive;
+  if (m.via === "annotation") return m.annotation;
+  return null;   // method
+}
+
 const _TOKEN_OK = /^[A-Za-z_$][\w$]*$/;   // a single identifier (member chains/metachars rejected → safe to embed)
 const _slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 
