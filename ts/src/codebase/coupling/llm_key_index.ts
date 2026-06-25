@@ -36,7 +36,7 @@ import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
 
-export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null; scope?: string }
+export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null; scope?: string; scopeFiles?: Set<string> }
 
 const SNIPPET_CAP = COUPLING.snippetCap;
 const PER_FILE = COUPLING.perFile;
@@ -150,8 +150,13 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // ground repo-wide (applyMatchers below is unscoped), so a coupling whose other side sits in an unscanned
   // module still grounds via a rule. `SEAM_WARM_ADAPTERS=1` (or an empty scope) restores the whole-repo pass.
   const scope = process.env.SEAM_WARM_ADAPTERS === "1" ? "" : (opts.scope ?? "");
-  const inScope = (rel: string): boolean => !scope || rel === scope.slice(0, -1) || rel.startsWith(scope);
-  const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}::${scope}`;
+  // FOOTPRINT-SCOPED (opts.scopeFiles, set from a floor pre-grow's reached files): bound the per-file LLM
+  // synthesis to exactly the flow's files — across every module the grow spans — instead of the anchor's
+  // module directory. The floor scan below stays repo-wide so producers in any module still ground.
+  const inScope = opts.scopeFiles
+    ? (rel: string): boolean => opts.scopeFiles!.has(rel)
+    : (rel: string): boolean => !scope || rel === scope.slice(0, -1) || rel.startsWith(scope);
+  const cacheKey = `${repo}::${opts.llm ? "llm" : "det"}::${augment ? "aug" : "blind"}::${opts.scopeFiles ? "fp" + opts.scopeFiles.size : scope}`;
   if (ctx.llmKey.has(cacheKey)) return ctx.llmKey.get(cacheKey)!;
   const idx: GroundingIndex = new Map();
   if (!opts.llm && !hasKeyCache(repo) && !hasMatcherCache(repo)) { ctx.llmKey.set(cacheKey, idx); return idx; }

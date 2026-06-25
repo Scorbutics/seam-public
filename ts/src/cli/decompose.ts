@@ -439,10 +439,24 @@ async function runCodebase(a: Args): Promise<number> {
       // FILE anchor (a module.exports/Vue-plugin with no named symbol): grow file-level — an empty symbol
       // makes build_footprint use build_module_graph (the whole file's exports as the seed).
       const growSymbol = fileAnchor ? "" : a.symbol!;
+      const gOpts = { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling };
       try {
-        [data, hist] = a.grow === "llm"
-          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, growSymbol, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm })
-          : await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+        if (a.grow === "llm") {
+          [data, hist] = await orch.auto_orchestrate(a.repo, a.anchorFile!, growSymbol, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+        } else if (dcLlm) {
+          // FOOTPRINT-SCOPED coupling discovery: a cheap deterministic FLOOR pre-grow yields the flow's files
+          // (across every module it spans); the real LLM grow then scopes its per-file coupling discovery to
+          // THOSE — bounded by the answer's size, cross-module complete — instead of the anchor's whole module.
+          const { EngineCtx } = await import("../codebase/engine_ctx.js");
+          const ctx = new EngineCtx();
+          emit("Floor pre-grow to scope coupling discovery to the footprint…");
+          const [floorData] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: false, ctx });
+          ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
+          process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
+          [data, hist] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: true, ctx });
+        } else {
+          [data, hist] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: false });
+        }
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");

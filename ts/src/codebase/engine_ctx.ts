@@ -35,6 +35,11 @@ export class EngineCtx {
   // targeted couplingOtherSides runs per changed symbol, but the file's keys don't change between symbols) ---
   fileKeyScan = new Map<string, { kind: string; value: string; line: number; produces: boolean }[]>();
 
+  // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
+  // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory
+  // — bounded by the answer's size, complete across every module the grow spans. Unset → module scope.
+  footprintFiles?: Set<string>;
+
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run

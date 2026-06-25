@@ -375,9 +375,12 @@ async function assembleSources(
 
   const lk = await import("./llm_key_index.js");
   const { module_scope } = await import("../../core/resolve/languages/index.js");
-  const scope = module_scope(repo, anchorFile);   // bound the per-file LLM synthesis to the anchor's module (lazy, per-module warm)
+  // FOOTPRINT-scoped when a floor pre-grow set ctx.footprintFiles (the flow's files, cross-module); else the
+  // anchor's module directory (lazy, per-module warm).
+  const scope = module_scope(repo, anchorFile);
+  const scopeFiles = ctx.footprintFiles;
   const [llmKeyIndex, proposedKeys] = await Promise.all([
-    lk.llmKeyIndex(repo, { ...llmOpts, scope }, ctx),
+    lk.llmKeyIndex(repo, { ...llmOpts, scope, scopeFiles }, ctx),
     lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
   ]);
 
@@ -427,7 +430,12 @@ export async function resolveCoupling(
   // a perf/bugfix touching no DB/route/queue/event access pays ~nothing instead of a full-repo scan for a
   // guaranteed-empty result. (Ruby is exempt — its carrier coupling isn't a span-local key; keep the full path.)
   const isRubyAnchor = anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake");
-  if (!isRubyAnchor) {
+  // The local gate skips the repo-wide build when the ANCHOR SPAN touches no boundary — a perf guard for the
+  // unbounded module scope. But under FOOTPRINT-SCOPED discovery the scope is already bounded to the flow's
+  // files, AND the gate is chicken-and-egg cold (the anchor is floor-blind precisely because the rule that
+  // would key it hasn't been learned yet — Prisma/a custom layer). So bypass the gate when footprint-scoped:
+  // the bounded discovery bootstraps the rules the gate was waiting for.
+  if (!isRubyAnchor && !ctx.footprintFiles) {
     const inSpan = (line: number) => line >= lo && line <= hi;
     let touchesBoundary = scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line));
     if (!touchesBoundary) {   // param/const coupling sites (getParameter(CONST)/addParameter(CONST)) — a DIFFERENT
