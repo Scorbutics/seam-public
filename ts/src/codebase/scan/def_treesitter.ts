@@ -6,7 +6,7 @@
 // doc extraction works across the five required languages. Async (web-tree-sitter) and graceful: any
 // missing grammar / parse failure returns null so the caller falls back to the regex floor.
 import { getParser, langForExt } from "../../core/treesitter.js";
-import type { Def } from "./def_table.js";
+import { type Def, _body_window } from "./def_table.js";
 
 // Tree-sitter node TYPES that declare a unit. These are grammar-specific structural constants (a closed
 // set per grammar, not free text) — listed here as the cross-grammar UNION for the supported languages.
@@ -110,7 +110,9 @@ export async function defs_in_file_treesitter(file: string, text: string): Promi
       if (name) { out.push(mk(name, n.type.includes("interface") ? "interface" : n.type.includes("enum") ? "enum" : "class", n, enclosing)); nextEnclosing = name; }
     } else if (CALLABLE.has(n.type)) {
       const name = _fieldName(n) ?? _declaratorName(n);
-      if (name) out.push(mk(name, enclosing ? "method" : "function", n, enclosing));
+      // the BODY passage (calls/identifiers the signature+doc omit) — a forward line window from the
+      // declaration row, shared with the regex extractor so both producers embed the same shape.
+      if (name) out.push({ ...mk(name, enclosing ? "method" : "function", n, enclosing), body: _body_window(lines, n.startPosition.row) });
     } else if (_ARROW_HOLDERS.has(n.type)) {
       // const x = () => … : pull the declarator whose value is a function; name it like a function.
       for (let i = 0; i < n.namedChildCount; i++) {

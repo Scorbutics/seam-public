@@ -55,7 +55,7 @@ export function candidate_source_files(repo: string): string[] {
   return out;
 }
 
-export interface Def { name: string; kind: string; file: string; signature: string; enclosing: string; doc: string; }
+export interface Def { name: string; kind: string; file: string; signature: string; enclosing: string; doc: string; body?: string; }
 
 const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
 
@@ -76,12 +76,29 @@ const _DOC_CAP = SCAN.docCap;   // a leading doc-comment carries the CONCEPT the
 const _isComment = (t: string) => /^(\/\/|\/\*|\*)/.test(t);
 const _stripComment = (t: string) => t.replace(/^\/\*+|\*+\/$/g, "").replace(/^\*\s?/, "").replace(/^\/\/\s?/, "").trim();
 
+// The BODY passage = the next `bodyLines` code lines after a callable's signature (the calls/identifiers
+// that say what it DOES — the concept the signature+doc omit), comment-stripped + whitespace-collapsed,
+// capped. A forward window, not a brace-matched body: cheap, and the head of a body carries the salient
+// calls. Callables only (a container's "body" is its member list — noise for relevance).
+export function _body_window(lines: string[], from: number): string {
+  const parts: string[] = [];
+  for (let i = from + 1; i < lines.length && i <= from + SCAN.bodyLines; i++) {
+    const t = lines[i].trim();
+    if (!t || _isComment(t) || /^[{}()[\];,]+$/.test(t)) continue;   // skip blank / comment / brace-only lines
+    parts.push(t);
+    if (parts.join(" ").length >= SCAN.bodyCap) break;
+  }
+  return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, SCAN.bodyCap);
+}
+
 export function defs_in_file(file: string, text: string): Def[] {
   const out: Def[] = [];
   const stack: { name: string; depth: number }[] = [];
   let depth = 0, pendingDoc = "";
   const take = () => { const d = pendingDoc.trim().slice(0, _DOC_CAP); pendingDoc = ""; return d; };
-  for (const raw of text.split("\n")) {
+  const lines = text.split("\n");
+  for (let li = 0; li < lines.length; li++) {
+    const raw = lines[li];
     const line = raw.length > 300 ? raw.slice(0, 300) : raw;
     const trimmed = line.trim();
     if (_isComment(trimmed)) { if (pendingDoc.length < _DOC_CAP) pendingDoc += " " + _stripComment(trimmed); continue; }
@@ -92,11 +109,11 @@ export function defs_in_file(file: string, text: string): Def[] {
       out.push({ name: m[2], kind: m[1], file, signature: sig, enclosing, doc: take() });
       if (/\{/.test(line)) stack.push({ name: m[2], depth });
     } else if ((m = _FN_RE.exec(line))) {
-      out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take() });
+      out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if ((m = _ARROW_RE.exec(line))) {
-      out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take() });
+      out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if (enclosing && (m = _METHOD_RE.exec(line)) && !_METHOD_SKIP.has(m[1])) {
-      out.push({ name: m[1], kind: "method", file, signature: sig, enclosing, doc: take() });
+      out.push({ name: m[1], kind: "method", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if (trimmed) { pendingDoc = ""; }   // a non-comment, non-decl code line breaks the doc run
     for (const ch of line) { if (ch === "{") depth++; else if (ch === "}") { depth--; if (stack.length && depth <= stack[stack.length - 1].depth) stack.pop(); } }
   }
@@ -110,7 +127,8 @@ export function embedString(d: Def): string {
   // a method's signature has no leading keyword, so tag it; class/function/const already carry theirs.
   const prefix = d.kind === "method" ? "method " : "";
   const doc = d.doc ? ` :: ${d.doc}` : "";   // the concept the name omits — the recall lever
-  return `${prefix}${d.signature || d.name}${encl} — ${d.file}${doc}`;
+  const body = d.body ? ` { ${d.body} }` : "";   // the passage AROUND the symbol — the calls/identifiers that say what it does
+  return `${prefix}${d.signature || d.name}${encl} — ${d.file}${doc}${body}`;
 }
 
 // `files` (repo-relative, normpath-matched) scopes extraction to just those files — the footprint-local

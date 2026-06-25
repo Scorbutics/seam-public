@@ -31,6 +31,40 @@ describe("def_table enumeration", () => {
   });
 });
 
+// BODY passage — the calls/identifiers AROUND a callable (the concept the signature+doc omit). Callables
+// only; bounded; brace-only/comment/blank lines skipped. This is what answers "are you using the passage
+// around each symbol" for the embedding ranking.
+describe("def_table body passage (callables only, bounded)", () => {
+  const SRC2 = `
+export function memberBookings(adviserId) {
+  // fetch the adviser's bookings
+  const rows = bookingRepository.findByAdviser(adviserId);
+  return rows.map(mapBookingToDto);
+}
+export class Role {
+  ADMINISTRATOR;
+}
+`;
+  const defs = defs_in_file("svc/bookings.ts", SRC2);
+  const by = (n: string) => defs.find((d) => d.name === n);
+
+  test("a callable embeds the calls in its body (the salient 'what it does')", () => {
+    const e = embedString(by("memberBookings")!);
+    expect(e).toContain("bookingRepository.findByAdviser");
+    expect(e).toContain("mapBookingToDto");
+  });
+  test("body is brace/comment-free and bounded (no lone `}`, no doc-comment line)", () => {
+    const b = by("memberBookings")!.body!;
+    expect(b).not.toMatch(/^[{}]|[{}]$/);            // no leading/trailing brace
+    expect(b).not.toContain("fetch the adviser");    // comment line skipped
+    expect(b.length).toBeLessThanOrEqual(240);       // SCAN.bodyCap
+  });
+  test("a CONTAINER (class/enum) has NO body — its members are relevance noise", () => {
+    expect(by("Role")?.kind).toBe("class");
+    expect(by("Role")?.body).toBeUndefined();
+  });
+});
+
 // enumerate_defs `files` filter — the footprint-scoped embedding lever (#3). annotateIntentRelevance only
 // needs the seams' OWN files, so we embed just those, not a whole-repo tree-sitter walk. The emitted
 // Def.file stays the canonical rel (we FILTER candidate_source_files), so cache keys match the unscoped pass.
