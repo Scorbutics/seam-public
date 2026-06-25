@@ -20,7 +20,7 @@ import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { listMatchers } from "./key_store.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
@@ -36,6 +36,7 @@ export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js"
 // Consumers (the grow loop, the seam assembler) ask coupling "is this edge a crossing? this node a flow
 // subject? this a produce-edge?" instead of importing the Sets, so coupling's representation stays private.
 export const isCouplingCrossing = (edgeKind: string): boolean => KEY_EDGE_KINDS.has(edgeKind);
+export const isHandlerEdge = (edgeKind: string): boolean => HANDLER_EDGE_KINDS.has(edgeKind);   // points AT a cross-stack handler endpoint
 export const isFlowSubject = (nodeKind: string): boolean => KEY_NODE_KINDS.has(nodeKind);
 export const isProduceEdge = (edgeKind: string): boolean => KEY_PRODUCE_EDGE_KINDS.has(edgeKind);
 export const isDomainSubject = (nodeKind: string): boolean => DOMAIN_SUBJECT_KINDS.has(nodeKind);

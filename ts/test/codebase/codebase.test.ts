@@ -325,6 +325,41 @@ describe("flow terminals are auto-promoted to co-anchors", () => {
   });
 });
 
+describe("cross-stack handler is promoted to a co-anchor (visible propagation, not swept into the caller)", () => {
+  // The reported miss: a frontend caller reaches a backend route HANDLER across a route-serve crossing, but
+  // the handler has in-degree ≥1 (the route boundary points at it), so the in-degree-0 terminal rule misses
+  // it and it gets swept into the caller's seam — the cross-stack hop (bookingService.js → BookingsService.
+  // java) vanishes from the render. Promoting the handler-edge dst to a co-anchor makes it a first-class
+  // core so the propagation is visible.
+  const data = {
+    version: 1, anchor: { id: "caller", symbol: "getBookings", file: "web/bookingService.js", range: [1, 9] },
+    language: "javascript", resolutionQuality: "FULL", complete: true,
+    nodes: [
+      { id: "caller", symbol: "getBookings", file: "web/bookingService.js", kind: "function", range: [1, 9] },
+      { id: "route", symbol: "/acme/booking/v1", file: "web/bookingService.js", kind: "route", range: [3, 3] },
+      { id: "handler", symbol: "getExistingBookings", file: "api/BookingsService.java", kind: "method", range: [1, 9] },
+    ],
+    edges: [
+      { from: "caller", to: "route", kind: "route-fetch", provenance: "RESOLVED_PARTIAL" },     // frontend → route boundary
+      { from: "route", to: "handler", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },    // route boundary → backend handler
+    ],
+  };
+  const handlerNode = (g: any) => [...g.nodes.values()].find((n: any) => n.id === "handler") as any;
+
+  test("WITHOUT intent → no promotion (the handler stays a non-core leaf)", async () => {
+    const g = from_resolved_graph(JSON.parse(JSON.stringify(data)));
+    await decompose(g, {});
+    expect(handlerNode(g).role).not.toBe("core");
+  });
+  test("WITH intent → the route-serve handler becomes a core co-anchor, surfaced in the model", async () => {
+    const g = from_resolved_graph(JSON.parse(JSON.stringify(data)));
+    const m = await decompose(g, { intent: "how bookings are fetched from the backend", skeleton: true });
+    expect(handlerNode(g).role).toBe("core");   // promoted by topology (the route-serve crossing), no intent words
+    const handlerHunk = m.clusters[0].seams.flatMap((s: any) => s.hunks ?? []).find((h: any) => h.file === "api/BookingsService.java" && h.role === "core");
+    expect(handlerHunk).toBeDefined();   // the cross-stack handler is visible in the footprint, not hidden
+  });
+});
+
 describe("bidirectional footprint: policy vs flow shape", () => {
   // A synthetic ResolvedGraph: an anchor consumed by N route files (forward, import-only) + one
   // dependency (backward). No data subject → a cross-cutting POLICY, not a flow with a spine.

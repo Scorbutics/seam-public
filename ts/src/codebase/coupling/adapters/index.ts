@@ -72,6 +72,10 @@ export const kindOf = (kind: string): KeyKind => {
 const _ALL_METAS = [...ADAPTERS, ...ARCHETYPE_METAS, GENERIC];
 // Edge kinds the rung emits — codebase._is_crossing unions these so each becomes a grow-frontier crossing.
 export const KEY_EDGE_KINDS = new Set(_ALL_METAS.flatMap((k) => [k.produceEdge, k.consumeEdge]));
+// HANDLER edges (route-serve / event-on / queue-subscribe) — the consumer side an archetype declares as the
+// downstream HANDLER. The node a handler edge points AT is a cross-stack ENDPOINT (a backend route handler /
+// a queue subscriber) reached across the boundary — a distinct seam, not part of the caller's seam.
+export const HANDLER_EDGE_KINDS = new Set(ARCHETYPE_METAS.map((k) => (k as any).handlerEdge).filter(Boolean) as string[]);
 // Boundary NODE kinds the rung emits (table/route/event/binding/resource/…). A footprint that contains one
 // has a data SUBJECT → it's a FLOW (a pipeline), not a cross-cutting POLICY — see codebase._detect_shape.
 export const KEY_NODE_KINDS = new Set(_ALL_METAS.map((k) => k.nodeKind));

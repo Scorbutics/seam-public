@@ -82,7 +82,7 @@ function _mk_seam(sid: string, label: string, nodeIds: string[], linkOnly: boole
   return { id: sid, label: label || sid, linkOnly, node_ids: [...nodeIds], proposedBy };
 }
 
-import { isCouplingCrossing, isFlowSubject, isDomainSubject, isProduceEdge } from "./coupling/index.js";
+import { isCouplingCrossing, isHandlerEdge, isFlowSubject, isDomainSubject, isProduceEdge } from "./coupling/index.js";
 import { git_lineage } from "./lineage.js";
 // Crossings = the grow frontier: string-dispatch + every shared-key edge kind (db-write/db-read/…),
 // plus anything explicitly SUGGESTED. The key edge kinds are sourced from the data-coupling rung so a
@@ -696,6 +696,16 @@ function _promote_terminals(g: Graph): void {
     .sort((a, b) => b.complexity - a.complexity)
     .slice(0, _TERMINAL_CAP);
   for (const t of terminals) if (!g.anchors.includes(t.id)) g.anchors.push(t.id);
+  // CROSS-STACK HANDLERS: a node reached across a HANDLER edge (route-serve / event-on / queue-subscribe) is
+  // the backend handler a frontend call lands on — a distinct endpoint in another stack/file, NOT part of
+  // the caller's seam. It has in-degree ≥ 1 (the boundary node points at it), so the terminal rule above
+  // misses it and assign_intent_seams sweeps it into the anchor's seam, hiding the cross-stack hop. Promote
+  // it to a co-anchor so the flow renders as caller-seam → boundary → handler-seam (a readable spine).
+  for (const e of g.resolved_edges()) {
+    if (!isHandlerEdge(e.kind)) continue;
+    const dst = g.nodes.get(e.dst);
+    if (dst && !boundary.has(dst.kind) && !g.anchors.includes(e.dst)) g.anchors.push(e.dst);
+  }
 }
 
 // --------------------------------------------------------------------------- detect_* (C3)
