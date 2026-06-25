@@ -23,7 +23,7 @@ const _file = "key-adapters.json";
 const _legacyMatchers = "key-matchers.json";
 const _rel = `${SEAM_DIR}/${_file}`;
 
-type Store = { rules: KeyMatcher[]; files: Map<string, KeyAdapter> };
+type Store = { rules: KeyMatcher[]; files: Map<string, KeyAdapter>; learnedSigs: Set<string> };
 const _mem = new Map<string, Store>();     // DIR → loaded store
 
 const _repoDir = (repo: string): string => join(repo, SEAM_DIR);
@@ -38,10 +38,11 @@ function _readJson(path: string): any | null {
 // Load (and memoise) the unified store for a DIR, folding in the legacy split files for backward-compat.
 function _loadStore(dir: string): Store {
   if (_mem.has(dir)) return _mem.get(dir)!;
-  const store: Store = { rules: [], files: new Map() };
+  const store: Store = { rules: [], files: new Map(), learnedSigs: new Set() };
   const main = _readJson(join(dir, _file));
   if (main && main.schema === SCHEMA) {
     if (Array.isArray(main.rules)) store.rules.push(...(main.rules as KeyMatcher[]));
+    if (Array.isArray(main.learnedSigs)) for (const s of main.learnedSigs) store.learnedSigs.add(s);
     if (main.files && typeof main.files === "object")
       for (const [k, v] of Object.entries<any>(main.files)) if (v && Array.isArray(v.keys)) store.files.set(k, v as KeyAdapter);
   } else if (main && main.schema === 2 && main.adapters && typeof main.adapters === "object") {
@@ -62,7 +63,7 @@ function _writeStore(dir: string): void {
   const files: Record<string, KeyAdapter> = {};
   for (const [k, v] of store.files) files[k] = v;
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, _file), JSON.stringify({ schema: SCHEMA, rules: store.rules, files }, null, 2));
+  writeFileSync(join(dir, _file), JSON.stringify({ schema: SCHEMA, rules: store.rules, files, learnedSigs: [...store.learnedSigs] }, null, 2));
   try { if (existsSync(join(dir, _legacyMatchers))) unlinkSync(join(dir, _legacyMatchers)); } catch { /* best-effort */ }
 }
 
@@ -70,6 +71,19 @@ function _writeStore(dir: string): void {
 // True if EITHER store holds a learned matcher rule (so an offline det run applies them — the warm path).
 export function hasMatcherCache(repo: string): boolean {
   return _loadStore(_repoDir(repo)).rules.length > 0 || _loadStore(_sharedDir()).rules.length > 0;
+}
+
+// Matcher LEARNING is keyed by a signature of its blind-file input: once we've LLM-learned rules for a given
+// set of floor-blind files, re-running over the SAME set (a re-run with the same intent) must NOT re-call the
+// LLM — it replays the cached rules. The signature folds in file content, so editing a blind file re-learns.
+export function hasLearnedMatchersFor(repo: string, sig: string): boolean {
+  return _loadStore(_repoDir(repo)).learnedSigs.has(sig);
+}
+export function recordLearnedMatchers(repo: string, sig: string): void {
+  const store = _loadStore(_repoDir(repo));
+  if (store.learnedSigs.has(sig)) return;
+  store.learnedSigs.add(sig);
+  try { ensureSeamGitignore(repo); _writeStore(_repoDir(repo)); } catch { /* read-only repo → in-memory only */ }
 }
 
 // All learned rules (repo FIRST, then shared), deduped by executable identity; records a usage-ledger hit.

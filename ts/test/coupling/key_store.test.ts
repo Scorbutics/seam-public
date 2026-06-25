@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import {
   loadMatchers, listMatchers, persistMatchers, hasMatcherCache,
   cachedFileKeys, persistFileKeys, hasKeyCache, listKeyAdapters,
-  promoteKeyAdapter, _resetKeyStoreMem,
+  promoteKeyAdapter, hasLearnedMatchersFor, recordLearnedMatchers, _resetKeyStoreMem,
 } from "../../src/codebase/coupling/key_store.js";
 
 let REPO: string, SHARED: string;
@@ -78,5 +78,23 @@ describe("unified store — promote (repo → shared)", () => {
     const shared = JSON.parse(readFileSync(join(SHARED, "key-adapters.json"), "utf-8"));
     expect(shared.rules.map((r: any) => r.name)).toContain("pub-rule");
     expect(Object.values(shared.files).map((a: any) => a.name)).toContain("z-file");
+  });
+});
+
+// LEARNED-INPUT SIGNATURE — what stops `--data-coupling llm` from re-calling the LLM every run. Matcher
+// learning records a signature of its blind-file INPUT; a re-run with the same input replays the cache.
+describe("learned-matcher signatures (the --llm re-run / no-regenerate gate)", () => {
+  test("record → persists across a fresh load; a different sig is not learned", () => {
+    expect(hasLearnedMatchersFor(REPO, "sigA")).toBe(false);
+    recordLearnedMatchers(REPO, "sigA");
+    _resetKeyStoreMem();                                  // simulate a brand-new process (offline re-run)
+    expect(hasLearnedMatchersFor(REPO, "sigA")).toBe(true);   // replayed from disk → the LLM is skipped
+    expect(hasLearnedMatchersFor(REPO, "sigB")).toBe(false);  // a changed blind-file input → re-learn
+  });
+  test("recording the same sig twice is idempotent", () => {
+    recordLearnedMatchers(REPO, "sigX");
+    recordLearnedMatchers(REPO, "sigX");
+    _resetKeyStoreMem();
+    expect(readUnified().learnedSigs).toEqual(["sigX"]);
   });
 });

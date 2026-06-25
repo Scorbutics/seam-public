@@ -20,7 +20,8 @@ import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex } from "./types.js";
 import { type KeyMatcher, validateMatcher, runMatcher, matcherKey } from "./key_ir.js";
-import { persistMatchers } from "./key_store.js";
+import { persistMatchers, loadMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
+import { createHash } from "node:crypto";
 
 const PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
 
@@ -148,6 +149,12 @@ export async function learnKeyMatchers(
   repo: string, blindFiles: { file: string; text: string }[], opts: MatcherOpts, ctx: EngineCtx,
 ): Promise<KeyMatcher[]> {
   if (!opts.llm || !blindFiles.length || ctx.keyBudget <= 0) return [];
+  // ALREADY-LEARNED gate: matcher learning is the expensive LLM step. Key it by a signature of its blind-file
+  // INPUT (path + content hash) — a re-run with the same intent sees the same blind files, so we replay the
+  // cached rules instead of paying the LLM AGAIN. The content hash means editing a blind file re-learns. This
+  // is what stops `--data-coupling llm` from regenerating every run.
+  const sig = createHash("sha1").update(blindFiles.map((f) => `${f.file}:${createHash("sha1").update(f.text).digest("hex")}`).sort().join("\n")).digest("hex");
+  if (hasLearnedMatchersFor(repo, sig)) return loadMatchers(repo);
   // bound the snippet payload (the LLM derives the SHAPE from the visible code). BREADTH over depth: a small
   // per-file snippet from MANY files, so a recurring pattern (the same `getItem('…')` across files) is visible
   // and generalises into ONE rule — instead of each file's keys being listed literally by the per-file pass.
@@ -182,6 +189,7 @@ export async function learnKeyMatchers(
   }
 
   persistMatchers(repo, accepted);
+  recordLearnedMatchers(repo, sig);   // mark this blind-file input learned → a same-intent re-run replays, no LLM
   return accepted;
 }
 
