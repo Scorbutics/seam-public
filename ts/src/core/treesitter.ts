@@ -43,16 +43,19 @@ export function collectByType(node: any, type: string, out: any[] = []): any[] {
 // tracer (each otherwise re-read + re-parsed the same files across hops). Content-static per run +
 // process-scoped, so memoising is safe. `resetParseCache` is the test/CI hook (a real re-run is a
 // fresh process; tests simulate that).
+// Caches the TREE (not just rootNode) so resetParseCache can FREE the WASM memory — web-tree-sitter trees
+// are not GC'd, so an un-freed cache on a big repo (thousands of files) exhausts the WASM heap → an
+// out-of-bounds crash. A long-lived process (MCP) calls resetParseCache between grows to release it.
 const _astCache = new Map<string, any>();
-export function resetParseCache(): void { _astCache.clear(); }
+export function resetParseCache(): void { for (const t of _astCache.values()) t?.delete?.(); _astCache.clear(); }
 export async function parseFile(repo: string, file: string, grammar: string): Promise<any | null> {
   const key = `${grammar}\0${repo}\0${file}`;
-  if (_astCache.has(key)) return _astCache.get(key);
+  if (_astCache.has(key)) return _astCache.get(key)?.rootNode ?? null;
   const parser = await getParser(grammar);
-  let root: any = null;
-  if (parser) { try { root = parser.parse(readFileSync(join(repo, file), "utf-8")).rootNode; } catch { root = null; } }
-  _astCache.set(key, root);
-  return root;
+  let tree: any = null;
+  if (parser) { try { tree = parser.parse(readFileSync(join(repo, file), "utf-8")); } catch { tree = null; } }
+  _astCache.set(key, tree);
+  return tree?.rootNode ?? null;
 }
 
 export function isCommentOrString(kind: string): boolean {

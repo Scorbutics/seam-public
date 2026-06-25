@@ -381,15 +381,12 @@ async function assembleSources(
     lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
   ]);
 
-  // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). For OTHER
-  // languages it runs only when there's a reason: `--llm` (cold learning of a project's custom call-types,
-  // e.g. a Vue.http / apiClient HTTP wrapper) OR a WARM learned-signature cache (auto-reuse a learned
-  // adapter deterministically, no LLM, before it's ever promoted). A cold non-Ruby floor with no learned
-  // adapter pays nothing — the carrier walk is skipped, so existing behaviour is unchanged.
-  const isRuby = anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake");
-  const { carrierProviderFor } = await import("./carrier/engine.js");
-  const { hasLearnedCarrier } = await import("./carrier/cache.js");
-  if (!isRuby && !(carrierProviderFor(anchorFile) && (llmOpts.llm || hasLearnedCarrier(repo)))) {
+  // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). It is gated to
+  // Ruby anchors: enabling it for JS/TS made the carrier walk PARSE every JS file tree-sitter-wide, which on
+  // a big repo exhausts the web-tree-sitter WASM heap (the `_astCache` keeps every tree) → an out-of-bounds
+  // crash. And it was redundant there: JS/TS cross-stack couplings (a custom Vue.http / DI) are carried by
+  // the MATCHER flywheel (llmKeyIndex, above), not the carrier. So keep the carrier Ruby-only.
+  if (!anchorFile.endsWith(".rb") && !anchorFile.endsWith(".rake")) {
     return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
   }
 

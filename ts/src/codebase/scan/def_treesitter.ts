@@ -95,8 +95,13 @@ export async function defs_in_file_treesitter(file: string, text: string): Promi
   if (!grammar) return null;
   const parser = await getParser(grammar);
   if (!parser) return null;
-  let root: any;
-  try { root = parser.parse(text).rootNode; } catch { return null; }
+  // KEEP the Tree (not just rootNode) so we can FREE its WASM memory below — this extractor runs once per
+  // repo file (thousands on a big repo), and web-tree-sitter trees are NOT GC'd; leaking them exhausts the
+  // WASM heap → an out-of-bounds crash mid-grow. The extracted Defs are plain objects (no node refs), so the
+  // tree is safe to delete once extraction is done.
+  let tree: any;
+  try { tree = parser.parse(text); } catch { return null; }
+  const root = tree.rootNode;
 
   const lines = text.split("\n");
   const comments = _collectComments(root);
@@ -128,5 +133,6 @@ export async function defs_in_file_treesitter(file: string, text: string): Promi
     for (let i = 0; i < n.namedChildCount; i++) visit(n.namedChild(i), nextEnclosing);
   };
   visit(root, "");
+  tree.delete?.();   // free the WASM tree (Defs are plain objects — no live node refs)
   return out;
 }
