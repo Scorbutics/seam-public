@@ -13,7 +13,7 @@ export interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
-  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   reviewImpact?: boolean; triage?: boolean;
@@ -30,7 +30,7 @@ export function resolveEngines(a: Args): { cluster: string; roles: string; wirin
 }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, cache: false, bidirectional: false, grow: "det" };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, grow: "det" };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -97,11 +97,13 @@ export function parseArgs(argv: string[]): Args {
       case "--triage": a.triage = true; break;   // review-impact: LLM triage of the `unknown` relevance residual
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint
       case "--no-interface-consumers": a.interfaceConsumers = false; break;   // disable the default interface-consumer enrichment
-      case "--no-data-coupling": a.dataCoupling = false; a.dataCouplingExplicit = true; break;
+      case "--no-data-coupling": a.dataCoupling = false; a.dataCouplingAuto = false; a.dataCouplingExplicit = true; break;
       case "--cache": a.cache = true; break;
-      // --data-coupling off|floor|llm : off=disabled, floor=deterministic adapters (default),
-      // llm=floor + the LLM shared-key front-end (cross-framework key proposals).
-      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingExplicit = true; break; }
+      // --data-coupling off|floor|llm|auto : off=disabled, floor=deterministic adapters only,
+      // llm=floor + the LLM shared-key front-end (always), auto (DEFAULT)=floor + LLM front-end WHEN an LLM
+      // backend resolves (learn-once → cached → deterministic warm), else floor. `auto` makes cross-stack
+      // coupling on-by-default without paying the LLM when there's no backend or it's disabled.
+      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingAuto = m === "auto"; a.dataCouplingExplicit = true; break; }
       case "-v": case "--verbose": a.verbose = true; break;
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths

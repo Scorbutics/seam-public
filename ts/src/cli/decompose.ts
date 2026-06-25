@@ -367,12 +367,19 @@ async function runCodebase(a: Args): Promise<number> {
 
 
   const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";
-  // The GROW/footprint path stays FLOOR-only by default (explicit `--data-coupling llm` opts in). The
-  // autogrow harness showed that default-on data-coupling-LLM breaks deterministic grow on a COLD `.seam/`
-  // (the LLM deduces different keys each run → different footprints → the spine destabilises). The flywheel
-  // is turned on by default only in the review-impact ANNOTATION path (additive "verify" leads, not a gated
-  // spine, and it warms `.seam/` for later runs); the grow opts in explicitly so its determinism holds.
-  const dcLlm = a.dataCouplingLlm;
+  // DATA-COUPLING mode resolution. `auto` (the default) turns the LLM shared-key front-end ON when an LLM
+  // backend resolves — so cross-stack coupling (a custom Vue.http / DI / queue the deterministic floor can't
+  // see) is found out of the box — and OFF (pure deterministic floor) when there's no backend. The cold
+  // instability that made FLOOR the old default (the LLM deducing different keys each run → an unstable
+  // spine) is now bounded: the learning is content-keyed and cached, so a scope is learned ONCE then replays
+  // deterministically (see key_matcher's learnedSig gate). `SEAM_COUPLING=floor` forces determinism (CI /
+  // reproducible runs); explicit `--data-coupling floor|llm` overrides auto entirely.
+  let dcLlm = a.dataCouplingLlm;
+  if (a.dataCoupling && a.dataCouplingAuto) {
+    const { available } = await import("../core/llm.js");
+    dcLlm = process.env.SEAM_COUPLING !== "floor" && available(a.claudeBin);
+    process.stderr.write(`[data-coupling] auto → ${dcLlm ? "llm (backend available; learn-once, cached)" : "floor (no backend / disabled)"}\n`);
+  }
   let data: any;
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   let anchorAlternatives: { name: string; file: string; score: number }[] | undefined;   // runner-up anchors → offered when the footprint reads off-intent

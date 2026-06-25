@@ -24,3 +24,31 @@ describe("parseArgs — llm-context defaults the LLM seam-ranking pass OFF (skel
     expect(parseArgs(["--skeleton"]).skeleton).toBe(true);
   });
 });
+
+describe("parseArgs — data-coupling mode (auto is the default)", () => {
+  test("no flag → auto (cross-stack on when a backend resolves, floor otherwise)", () => {
+    const a = parseArgs([]);
+    expect(a.dataCoupling).toBe(true);
+    expect(a.dataCouplingAuto).toBe(true);
+    expect(a.dataCouplingLlm).toBe(false);   // resolved at runtime by backend availability, not here
+  });
+  test("--data-coupling floor → deterministic, auto OFF", () => {
+    const a = parseArgs(["--data-coupling", "floor"]);
+    expect(a.dataCouplingAuto).toBe(false);
+    expect(a.dataCouplingLlm).toBe(false);
+  });
+  test("--data-coupling llm → always-on LLM, auto OFF", () => {
+    const a = parseArgs(["--data-coupling", "llm"]);
+    expect(a.dataCouplingAuto).toBe(false);
+    expect(a.dataCouplingLlm).toBe(true);
+  });
+  test("--data-coupling auto → explicit auto", () => {
+    expect(parseArgs(["--data-coupling", "auto"]).dataCouplingAuto).toBe(true);
+  });
+  test("--data-coupling off / --no-data-coupling → disabled, auto OFF", () => {
+    expect(parseArgs(["--data-coupling", "off"]).dataCoupling).toBe(false);
+    const n = parseArgs(["--no-data-coupling"]);
+    expect(n.dataCoupling).toBe(false);
+    expect(n.dataCouplingAuto).toBe(false);
+  });
+});
