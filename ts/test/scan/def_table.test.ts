@@ -94,6 +94,39 @@ describe("enumerate_defs files-scope", () => {
   });
 });
 
+// FILE-LEVEL def — a file whose identity is NOT a named symbol (a module.exports/Vue-plugin/config) must
+// still be a recall candidate. The reported miss: a bookingService.js Vue plugin whose only extracted def
+// was a nested `transformResultError` arrow, so the booking entry was never listed.
+import { module_def } from "../../src/codebase/scan/def_table.js";
+
+describe("module_def — file identity as a candidate (the bookingService.js miss)", () => {
+  const SVC = `const apiWrapper = require("../utils/apiWrapper");
+/**
+ * Service for booking-related API calls.
+ */
+module.exports = {
+  install( Vue ) {
+    const transformResultError = ( result ) => { if (result.error) return result; };
+  }
+};
+`;
+  test("names the file, kind=module, carries the leading doc", () => {
+    const md = module_def("web-acmecheck/bookingService.js", SVC);
+    expect(md.name).toBe("bookingService");
+    expect(md.kind).toBe("module");
+    expect(md.doc).toContain("booking-related API calls");
+  });
+  test("enumerate_defs default = only the nested arrow (the bug); with moduleDefs = the file is a candidate", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "seam-moddef-"));
+    writeFileSync(join(repo, "bookingService.js"), SVC);
+    const plain = (await enumerate_defs(repo)).map((d) => d.name);
+    expect(plain).toEqual(["transformResultError"]);                         // file identity invisible (the reported miss)
+    const withMod = await enumerate_defs(repo, 4000, undefined, { moduleDefs: true });
+    expect(withMod.some((d) => d.name === "bookingService" && d.kind === "module")).toBe(true);
+    rmSync(repo, { recursive: true, force: true });
+  });
+});
+
 // RETRIEVE-then-rerank pre-filter — narrows a large def set to the M most intent-overlapping BEFORE the
 // (expensive) embed, so cold cost is bounded by M not the repo size. The relevant def must SURVIVE even when
 // buried among many low-overlap ones; pure + LLM-free.

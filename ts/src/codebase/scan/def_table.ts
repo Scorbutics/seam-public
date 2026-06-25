@@ -135,7 +135,25 @@ export function embedString(d: Def): string {
 // embedding path (intent-relevance ranking) only needs its own seams' defs, not a whole-repo tree-sitter
 // walk. The emitted `Def.file` stays the canonical rel (we FILTER candidate_source_files, not iterate the
 // raw set), so cache keys match the unscoped recall pass and warm entries are reused.
-export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>): Promise<Def[]> {
+// A FILE-LEVEL def so a source file is recallable by its IDENTITY even when it declares no top-level named
+// symbol the extractors catch — a `module.exports = {…}` / `export default {…}` / Vue-plugin / config /
+// route file whose meaning lives in the FILENAME + leading doc + path, not in a class/function name (the
+// reported miss: a `bookingService.js` Vue plugin whose only extracted def was a nested `transformResultError`
+// arrow, so the booking flow's entry was never a candidate). Name = basename; doc = the first comment block;
+// body = the file head. kind "module" so the CLI grows it FILE-LEVEL (build_module_graph) when chosen.
+export function module_def(rel: string, text: string): Def {
+  const base = (rel.split("/").pop() ?? rel).replace(/\.[^.]+$/, "");
+  const lines = text.split("\n");
+  let doc = "";
+  for (let i = 0; i < Math.min(lines.length, 40) && doc.length < _DOC_CAP; i++) {
+    const t = lines[i].trim();
+    if (_isComment(t)) doc += " " + _stripComment(t);
+    else if (doc) break;   // first contiguous comment block ended
+  }
+  return { name: base, kind: "module", file: rel, signature: `module ${base}`, enclosing: "", doc: doc.trim().slice(0, _DOC_CAP), body: _body_window(lines, -1) };
+}
+
+export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>, opts: { moduleDefs?: boolean } = {}): Promise<Def[]> {
   repo = expanduser(repo);
   const want = files && files.size ? new Set([...files].map(normpath)) : null;
   const out: Def[] = [];
@@ -153,6 +171,9 @@ export async function enumerate_defs(repo: string, limit = 4000, files?: Set<str
       ? defs_in_file(rel, text)
       : (await defs_in_file_treesitter(rel, text)) ?? defs_in_file(rel, text);
     for (const d of defs) { out.push(d); if (out.length >= limit) return out; }
+    // file-level def AFTER the real ones, so a file with a same-named class (Java) keeps the class on
+    // dedup and only files lacking a representative symbol gain a new candidate. Opt-in (recall path only).
+    if (opts.moduleDefs) { out.push(module_def(rel, text)); if (out.length >= limit) return out; }
   }
   return out;
 }

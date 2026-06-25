@@ -135,7 +135,9 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
   const _et0 = timingOn() ? performance.now() : 0;   // embed-recall wall-clock (--verbose / SEAM_TIMING)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
-    let defs = await enumerate_defs(repo, DEF_LIMIT, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
+    // moduleDefs (whole-repo recall only): add a file-level candidate per file so a file whose identity
+    // isn't a named symbol (a module.exports/Vue-plugin/config) is still recallable by its name+doc+path.
+    let defs = await enumerate_defs(repo, DEF_LIMIT, files, { moduleDefs: !files });   // `files` scopes to a footprint; omitted = whole-repo recall
     if (!defs.length) return [];
     // LOUD truncation: candidate_source_files is ALPHABETICAL, so hitting the cap whole-repo silently drops
     // every module sorted later (a monorepo's web-z never enumerated → never a candidate). Never silently

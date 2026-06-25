@@ -376,6 +376,7 @@ async function runCodebase(a: Args): Promise<number> {
   let data: any;
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   let anchorAlternatives: { name: string; file: string; score: number }[] | undefined;   // runner-up anchors → offered when the footprint reads off-intent
+  let fileAnchor = false;   // chosen anchor is a FILE/module (no named symbol — a module.exports/Vue plugin) → grow FILE-LEVEL
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
     const { merge_resolved } = await import("../codebase/scan/index.js");
@@ -401,9 +402,10 @@ async function runCodebase(a: Args): Promise<number> {
       if (sel.entryCandidate) process.stderr.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
       if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
+      fileAnchor = (sel.chosen as any).kind === "module";   // a file-identity anchor → grow the whole file
       anchorAlternatives = sel.alternatives;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
-      process.stderr.write(`[auto-anchor:${via}] ${sel.chosen!.name} (${sel.chosen!.file})\n`);
+      process.stderr.write(`[auto-anchor:${via}] ${fileAnchor ? "file " : ""}${sel.chosen!.name} (${sel.chosen!.file})\n`);
       // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
       // message until AFTER the decompose — if the grow + seam-intent actually find a culmination, the
       // guess was wrong (conservative on controllers), so don't print a contradictory [no-flow].
@@ -427,10 +429,13 @@ async function runCodebase(a: Args): Promise<number> {
       // `--grow det` (default) follows the resolved crossings to the terminals deterministically — no LLM
       // move-picker (the intent is still used downstream, by the tier pass). `--grow llm` = the old
       // LLM-orchestrated grow.
+      // FILE anchor (a module.exports/Vue-plugin with no named symbol): grow file-level — an empty symbol
+      // makes build_footprint use build_module_graph (the whole file's exports as the seed).
+      const growSymbol = fileAnchor ? "" : a.symbol!;
       try {
         [data, hist] = a.grow === "llm"
-          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, a.symbol!, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm })
-          : await orch.grow_to_terminals(a.repo, a.anchorFile!, a.symbol!, { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+          ? await orch.auto_orchestrate(a.repo, a.anchorFile!, growSymbol, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm })
+          : await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
