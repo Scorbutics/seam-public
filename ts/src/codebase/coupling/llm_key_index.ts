@@ -20,7 +20,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
-import { emit } from "../../core/progress.js";
+import { emit, verbose } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "discover-keys-batch", tier: "strong", note: "shared-key producer/consumer discovery (semantic, learn-once → .seam)" });
 import { walkFiles } from "../../core/resolve/walk.js";
@@ -178,7 +178,11 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }
   }
   // pass 2 — one batched LLM call per chunk for the uncached files
-  if (toSynth.length) { emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`); for (const [f, keys] of await _batchSynthesize(repo, toSynth, opts)) llmKeysOf.set(f, keys); }
+  if (toSynth.length) {
+    emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`);
+    if (verbose()) process.stderr.write(`[coupling] ${toSynth.length} floor-blind file(s) → LLM (scope: ${scope || "repo"}; cap SEAM_KEY_BUDGET=${COUPLING.keyBudget}):\n${toSynth.map((t) => `   · ${t.file}`).join("\n")}\n`);
+    for (const [f, keys] of await _batchSynthesize(repo, toSynth, opts)) llmKeysOf.set(f, keys);
+  }
 
   // pass 3 — PER-FILE LITERAL keys (the `files` axis): each file's LLM keys MINUS the ones its floor already
   // covered. Kept in its OWN sub-index so its grounding contribution can be audited vs the matcher pass.
