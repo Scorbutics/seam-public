@@ -94,6 +94,36 @@ describe("enumerate_defs files-scope", () => {
   });
 });
 
+// RETRIEVE-then-rerank pre-filter — narrows a large def set to the M most intent-overlapping BEFORE the
+// (expensive) embed, so cold cost is bounded by M not the repo size. The relevant def must SURVIVE even when
+// buried among many low-overlap ones; pure + LLM-free.
+import { lexicalPreFilter } from "../../src/codebase/scan/def_embed.js";
+import type { Def } from "../../src/codebase/scan/def_table.js";
+
+describe("lexicalPreFilter (retrieve-then-rerank candidate generation)", () => {
+  const d = (name: string, doc = ""): Def => ({ name, kind: "function", file: `${name}.ts`, signature: `function ${name}()`, enclosing: "", doc });
+  const terms = ["adviser", "manages", "bookings", "database"];
+
+  test("a buried high-overlap def survives over many low-overlap ones (the monorepo case)", () => {
+    const defs = [
+      ...Array.from({ length: 500 }, (_, i) => d(`renderWidget${i}`)),   // zero overlap, sorted first
+      d("bookingService", "fetch the adviser's bookings from the database"),   // high overlap, LAST
+    ];
+    const kept = lexicalPreFilter(defs, terms, 50);
+    expect(kept.some((x) => x.name === "bookingService")).toBe(true);   // not crowded out despite being last
+    expect(kept.length).toBe(50);                                       // bounded to M
+  });
+  test("prefix overlap bridges morphology (booking ↔ bookings)", () => {
+    const defs = [d("listBookingsForAdviser"), ...Array.from({ length: 100 }, (_, i) => d(`misc${i}`))];
+    expect(lexicalPreFilter(defs, terms, 5)[0].name).toBe("listBookingsForAdviser");   // ranks first by overlap
+  });
+  test("small sets (≤M) pass through untouched; no terms → no filtering", () => {
+    const defs = [d("a"), d("b")];
+    expect(lexicalPreFilter(defs, terms, 50)).toHaveLength(2);
+    expect(lexicalPreFilter(Array.from({ length: 100 }, (_, i) => d(`f${i}`)), [], 50)).toHaveLength(50);
+  });
+});
+
 // The whole-repo def LIMIT truncates ALPHABETICALLY — the monorepo recall trap: a module sorted late
 // (web-acmecheck after web-manage) is cut off and never becomes an anchor candidate. The limit is the
 // knob (SEAM_DEF_LIMIT in embedScoreDefs) — raising it recovers the late module.

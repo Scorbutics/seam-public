@@ -11,11 +11,49 @@ import { enumerate_defs, embedString, type Def } from "./def_table.js";
 import { timingOn } from "../../core/progress.js";
 
 const MODEL = process.env.SEAM_EMBED_MODEL || "Xenova/all-MiniLM-L6-v2";
-// Whole-repo recall enumerates up to this many defs (ALPHABETICAL order) before embedding them. The cap
-// bounds first-run embed cost; raise it on a big monorepo where a module sorted late (web-acmecheck after
-// web-manage) would otherwise be cut off entirely. Env-overridable; the disk cache makes the re-run cheap.
+// Whole-repo recall ENUMERATES up to this many defs (ALPHABETICAL order). Enumeration is just a parse
+// (~0.005 ms/def — cheap), and the retrieve-then-rerank pre-filter below bounds the EXPENSIVE embed to
+// PREFILTER_M regardless, so this can be generous: it only guards a module sorted late (web-acmecheck
+// after web-manage) from being cut off the candidate set entirely. Env-overridable; warns if hit.
 const _envInt = (k: string, d: number): number => { const v = parseInt(process.env[k] ?? "", 10); return Number.isFinite(v) && v > 0 ? v : d; };
-const DEF_LIMIT = _envInt("SEAM_DEF_LIMIT", 4000);
+const DEF_LIMIT = _envInt("SEAM_DEF_LIMIT", 15000);
+// RETRIEVE-then-rerank: embedding every whole-repo def is O(N) CPU (~15 ms/def — minutes at a raised
+// DEF_LIMIT), while the cosine SEARCH is ~instant. So when the def set is large, a cheap lexical pre-filter
+// narrows it to the top-M most intent-overlapping defs and ONLY those are embedded — bounding the cold cost
+// to M regardless of repo size, with the embedding still doing the fine semantic re-rank on the shortlist.
+const PREFILTER_M = _envInt("SEAM_EMBED_PREFILTER", 800);
+
+// Morphology-tolerant tokens of a string: split camelCase + non-alnum, lowercase, ≥3 chars. "bookingService"
+// → {booking, service}. A RECALL net (candidate generation), not a meaning judgement — the embedding judges
+// meaning; this only decides which defs are cheap-enough-to-be-worth embedding.
+function _tokens(s: string): Set<string> {
+  const out = new Set<string>();
+  for (const raw of s.split(/[^A-Za-z0-9]+/))
+    for (const part of raw.replace(/([a-z0-9])([A-Z])/g, "$1 $2").split(/\s+/)) {
+      const w = part.toLowerCase();
+      if (w.length >= 3) out.add(w);
+    }
+  return out;
+}
+// Generous overlap: an intent term scores a def if any def token shares its 4-char prefix (bridges
+// booking/bookings/booked without a stemmer). Counts distinct matching terms.
+function _overlap(defTokens: Set<string>, terms: string[]): number {
+  let s = 0;
+  for (const t of terms) {
+    const p = t.length >= 4 ? t.slice(0, 4) : t;
+    for (const dt of defTokens) if (dt === t || (t.length >= 4 && dt.length >= 4 && (dt.startsWith(p) || t.startsWith(dt.slice(0, 4))))) { s++; break; }
+  }
+  return s;
+}
+// Keep the top-M defs by lexical overlap with the intent terms (highest-overlap first; ties keep input
+// order). Pure + LLM-free → unit-testable. Always returns min(M, defs.length) — high-overlap defs are
+// guaranteed in; remaining slots fill deterministically so a purely-semantic def still gets a chance.
+export function lexicalPreFilter(defs: Def[], terms: string[], m: number): Def[] {
+  if (defs.length <= m || !terms.length) return defs.slice(0, m);
+  const scored = defs.map((d, i) => ({ d, i, s: _overlap(_tokens(embedString(d)), terms) }));
+  scored.sort((a, b) => (b.s - a.s) || (a.i - b.i));
+  return scored.slice(0, m).map((x) => x.d);
+}
 const h = (s: string) => createHash("md5").update(s).digest("hex").slice(0, 16);
 
 let _embedder: any = null;
@@ -97,13 +135,20 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
   const _et0 = timingOn() ? performance.now() : 0;   // embed-recall wall-clock (--verbose / SEAM_TIMING)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
-    const defs = await enumerate_defs(repo, DEF_LIMIT, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
+    let defs = await enumerate_defs(repo, DEF_LIMIT, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
     if (!defs.length) return [];
     // LOUD truncation: candidate_source_files is ALPHABETICAL, so hitting the cap whole-repo silently drops
     // every module sorted later (a monorepo's web-z never enumerated → never a candidate). Never silently
     // cap recall — tell the user the knob. (Footprint-scoped `files` runs are already bounded, so skip then.)
     if (!files && defs.length >= DEF_LIMIT)
       process.stderr.write(`[anchor] WARNING: def enumeration hit the ${DEF_LIMIT}-def cap (alphabetical) — modules sorted after the cut are NOT recalled. Raise it with SEAM_DEF_LIMIT=<n>.\n`);
+    // RETRIEVE-then-rerank (whole-repo only — footprint-scoped `files` is already bounded): narrow a large
+    // def set to the M most intent-overlapping before the expensive embed, so cold cost is bounded by M.
+    if (!files && defs.length > PREFILTER_M) {
+      const before = defs.length;
+      defs = lexicalPreFilter(defs, [..._tokens(intent)], PREFILTER_M);
+      if (timingOn()) process.stderr.write(`[timing] lexical pre-filter: ${before} → ${defs.length} defs (SEAM_EMBED_PREFILTER)\n`);
+    }
     const strings = defs.map(embedString);
     const cp = cachePath(repo);
     const cache = loadCache(cp);
