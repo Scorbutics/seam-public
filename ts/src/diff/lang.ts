@@ -32,14 +32,25 @@ export function _added(text: string): string {
   return text.split("\n").filter((l) => l.startsWith("+")).map((l) => l.slice(1)).join("\n");
 }
 
+// MEMOIZED: pure function of `text`, but called 4–5× per hunk across the passes (facts, external_refs,
+// distinctive-subjects, seam wiring) — each re-running every def/ident regex over the (possibly 600-line)
+// body. Caching by text collapses that to once per unique hunk. Treat the returned Sets as READ-ONLY (every
+// caller does; they union/intersect into fresh sets). Bounded so a long-lived process (MCP) can't grow it
+// unboundedly; within one decompose the hunk set is small, so the cap never trips.
+const _defsRefsCache = new Map<string, [Set<string>, Set<string>]>();
 export function _defs_refs(text: string): [Set<string>, Set<string>] {
+  const cached = _defsRefsCache.get(text);
+  if (cached) return cached;
   const body = _added(text);
   const defs = new Set<string>();
   for (const pat of _DEF_PATTERNS)
     for (const m of findGroup1(pat, body)) if (m && !_STOP.has(m)) defs.add(m);
   const refs = new Set<string>();
   for (const t of findAll(_IDENT, body)) if (!_STOP.has(t)) refs.add(t);
-  return [defs, refs];
+  const result: [Set<string>, Set<string>] = [defs, refs];
+  if (_defsRefsCache.size >= 8000) _defsRefsCache.clear();   // soft bound (per-run sets are tiny; this only guards a daemon)
+  _defsRefsCache.set(text, result);
+  return result;
 }
 
 // import { A, B as C } from "src";  /  import D from "src";  /  import * as E from "src"
