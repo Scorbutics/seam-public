@@ -93,3 +93,24 @@ describe("enumerate_defs files-scope", () => {
     rmSync(repo2, { recursive: true, force: true });
   });
 });
+
+// The whole-repo def LIMIT truncates ALPHABETICALLY — the monorepo recall trap: a module sorted late
+// (web-acmecheck after web-manage) is cut off and never becomes an anchor candidate. The limit is the
+// knob (SEAM_DEF_LIMIT in embedScoreDefs) — raising it recovers the late module.
+describe("enumerate_defs limit truncates alphabetically (the SEAM_DEF_LIMIT trap)", () => {
+  const repo = mkdtempSync(join(tmpdir(), "seam-deflimit-"));
+  // sorts first, fills the budget:
+  writeFileSync(join(repo, "web-manage.ts"), "export function m1(){}\nexport function m2(){}\nexport function m3(){}\n");
+  // sorts LATE — the symbol the user expects:
+  writeFileSync(join(repo, "web-acmecheck.ts"), "export function bookingService(){}\n");
+
+  test("a low limit drops the late-sorted module's symbol", async () => {
+    const names = (await enumerate_defs(repo, 3)).map((d) => d.name);
+    expect(names).not.toContain("bookingService");   // cut off — exactly the reported failure
+  });
+  test("raising the limit recalls it", async () => {
+    const names = (await enumerate_defs(repo, 100)).map((d) => d.name);
+    expect(names).toContain("bookingService");
+    rmSync(repo, { recursive: true, force: true });
+  });
+});

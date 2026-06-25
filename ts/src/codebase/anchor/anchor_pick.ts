@@ -18,8 +18,12 @@ import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index
 const PASS = registerPass({ tag: "anchor-pick", tier: "strong", note: "direct anchor selection from candidate passages (no probe)" });
 
 const _NON_ANCHOR = new Set(["interface", "type", "enum"]);   // data shapes, never a starting point
-const EMBED_TOP = 28;   // rich (Def-carrying) embed candidates — wide enough that a sibling module (a
-const POOL_CAP = 44;    // monorepo's web-x vs web-y) still reaches the judge to honor a scope constraint
+// Recall breadth into the judge prompt — env-overridable for a big monorepo where a sibling module (web-x
+// vs web-y) needs more room to reach the judge. NOTE: these only widen the pool AFTER embed recall; if a
+// symbol isn't enumerated at all (the whole-repo def cap — SEAM_DEF_LIMIT in def_embed), raise THAT instead.
+const _envInt = (k: string, d: number): number => { const v = parseInt(process.env[k] ?? "", 10); return Number.isFinite(v) && v > 0 ? v : d; };
+const EMBED_TOP = _envInt("SEAM_ANCHOR_EMBED_TOP", 28);   // rich (Def-carrying) embed candidates
+const POOL_CAP = _envInt("SEAM_ANCHOR_POOL", 44);         // bound the prompt
 
 // The candidate's embed PASSAGE — declaration + enclosing + file path + doc. The path is the domain signal.
 function passage(d: Def): string {

@@ -11,6 +11,11 @@ import { enumerate_defs, embedString, type Def } from "./def_table.js";
 import { timingOn } from "../../core/progress.js";
 
 const MODEL = process.env.SEAM_EMBED_MODEL || "Xenova/all-MiniLM-L6-v2";
+// Whole-repo recall enumerates up to this many defs (ALPHABETICAL order) before embedding them. The cap
+// bounds first-run embed cost; raise it on a big monorepo where a module sorted late (web-acmecheck after
+// web-manage) would otherwise be cut off entirely. Env-overridable; the disk cache makes the re-run cheap.
+const _envInt = (k: string, d: number): number => { const v = parseInt(process.env[k] ?? "", 10); return Number.isFinite(v) && v > 0 ? v : d; };
+const DEF_LIMIT = _envInt("SEAM_DEF_LIMIT", 4000);
 const h = (s: string) => createHash("md5").update(s).digest("hex").slice(0, 16);
 
 let _embedder: any = null;
@@ -92,8 +97,13 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
   const _et0 = timingOn() ? performance.now() : 0;   // embed-recall wall-clock (--verbose / SEAM_TIMING)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
-    const defs = await enumerate_defs(repo, 4000, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
+    const defs = await enumerate_defs(repo, DEF_LIMIT, files);   // `files` scopes to a footprint (intent-relevance); omitted = whole-repo recall
     if (!defs.length) return [];
+    // LOUD truncation: candidate_source_files is ALPHABETICAL, so hitting the cap whole-repo silently drops
+    // every module sorted later (a monorepo's web-z never enumerated → never a candidate). Never silently
+    // cap recall — tell the user the knob. (Footprint-scoped `files` runs are already bounded, so skip then.)
+    if (!files && defs.length >= DEF_LIMIT)
+      process.stderr.write(`[anchor] WARNING: def enumeration hit the ${DEF_LIMIT}-def cap (alphabetical) — modules sorted after the cut are NOT recalled. Raise it with SEAM_DEF_LIMIT=<n>.\n`);
     const strings = defs.map(embedString);
     const cp = cachePath(repo);
     const cache = loadCache(cp);
