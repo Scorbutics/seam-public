@@ -32,6 +32,7 @@ import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
 import { hasMatcherCache, loadMatchers } from "./key_store.js";
 import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
 import { plausibleKeyValue } from "./key_ir.js";
+import { clusterBlindFiles } from "./key_cluster.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex, KeyHit } from "./types.js";
@@ -171,17 +172,31 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // text) by construction, so behaviour is identical; `??` is a defensive fallback.
   const { floorContributions } = await import("./index.js");
   const floorByRel = new Map<string, KeyHit[]>(floorContributions(repo, SKIP_DIRS, ctx).map((c) => [c.rel, c.data.keys]));
+  const blindCandidates: { file: string; text: string; ck: string }[] = [];   // floor-blind in-scope → clustered below
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
     const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
     if (!inScope(rel)) continue;                     // out-of-module → no per-file LLM (floor + rules still ground it)
-    if (!floor.length && blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: rel, text });
     if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
     const disk = cachedFileKeys(repo, ck);
     if (disk.hit) { llmKeysOf.set(rel, disk.keys); continue; }
-    if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }
+    if (!floor.length) { if (blindCandidates.length < COUPLING.keyBudget) blindCandidates.push({ file: rel, text, ck }); continue; }
+    if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }   // augment floor-COVERED file (not clustered — its keys are file-specific gaps)
   }
+  // STRUCTURAL pre-clustering: floor-blind files sharing a data-access SHAPE (`prisma.<x>.<verb>()`) are one
+  // pattern — LLM ONLY a representative per cluster; the rest ground via the learned rule (applyMatchers,
+  // repo-wide, deterministic). Cuts the LLM INPUT (vs the cache, which only avoids re-paying it). Degrades to
+  // one-cluster-per-file when tree-sitter is unavailable. The non-rep members are reported, not silently dropped.
+  const clusters = await clusterBlindFiles(blindCandidates);
+  const collapsed = blindCandidates.length - clusters.length;
+  if (collapsed > 0) emit(`Clustered ${blindCandidates.length} floor-blind file(s) → ${clusters.length} pattern representative(s) (−${collapsed} covered by shared shape)…`);
+  for (const c of clusters) {
+    if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth sees one rep per pattern
+    if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push(c.rep); }                        // per-file pass LLMs only the reps
+  }
+  if (verbose() && collapsed > 0)
+    process.stderr.write(`[coupling] clustered blind files by shape:\n${clusters.filter((c) => c.members.length > 1).map((c) => `   · ${c.signature || "(shapeless)"} ×${c.members.length} → rep ${c.rep.file}`).join("\n")}\n`);
   // pass 2 — one batched LLM call per chunk for the uncached files
   if (toSynth.length) {
     emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`);
