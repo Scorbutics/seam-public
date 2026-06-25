@@ -394,6 +394,7 @@ async function runCodebase(a: Args): Promise<number> {
       // not a preemptive override; embed recall is the default (degrades to lexical where transformers.js
       // is absent). The CLI only does presentation (logging/err) on the returned data.
       const { find_anchor } = await import("../codebase/anchor/index.js");
+      emit(`Selecting the entry point for "${a.intent}" (LLM anchoring)…`);
       const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", select: a.anchorSelect === "probe" ? "probe" : "pick" });
       // Diagnostics go to STDERR (alongside the @@SEAM_PROGRESS@@ markers) so STDOUT can carry pure JSON
       // when no --emit-seams file is given (a clean `seam … > out.json`).

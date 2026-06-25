@@ -6,7 +6,7 @@
 // (entrypoint-select + intent-expand + judge) + 16 probes → 1 LLM pick. The pick reads each candidate's
 // PASSAGE (declaration + enclosing + file path + doc — the same signal embedScoreDefs ranks on; the path
 // carries the domain words). Degrades to none when no LLM / no candidates (caller falls back to probe→judge).
-import { verbose } from "../../core/progress.js";
+import { verbose, emit } from "../../core/progress.js";
 import { available, run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { type Def } from "../scan/def_table.js";
@@ -18,8 +18,8 @@ import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index
 const PASS = registerPass({ tag: "anchor-pick", tier: "strong", note: "direct anchor selection from candidate passages (no probe)" });
 
 const _NON_ANCHOR = new Set(["interface", "type", "enum"]);   // data shapes, never a starting point
-const EMBED_TOP = 20;   // rich (Def-carrying) embed candidates
-const POOL_CAP = 30;    // bound the prompt
+const EMBED_TOP = 28;   // rich (Def-carrying) embed candidates — wide enough that a sibling module (a
+const POOL_CAP = 44;    // monorepo's web-x vs web-y) still reaches the judge to honor a scope constraint
 
 // The candidate's embed PASSAGE — declaration + enclosing + file path + doc. The path is the domain signal.
 function passage(d: Def): string {
@@ -102,10 +102,33 @@ export function rankAlternatives(cand: Cand[], scored: { def: Def; score: number
     .slice(0, cap);
 }
 
+// The judge prompt — pure (intent + candidates → lines), so the SCOPE contract is testable: every
+// candidate carries its file path, and the model is told to treat a developer-named location (a module /
+// app / directory / path to USE or AVOID) as a HARD constraint. Detecting that the developer meant a scope
+// is a SEMANTIC read of free text → the model's job (a path filter would die on phrasing/typos); the path
+// is right there in each candidate for it to apply.
+export function _pick_prompt(intent: string, cand: Cand[]): string[] {
+  const lines = [
+    `A developer asks: "${intent}". Pick the SINGLE best STARTING POINT to answer it — the symbol whose`,
+    "code is the mechanism/entry the question is about (where you'd start reading the flow), NOT a leaf",
+    "helper, a test, or a class that merely participates. Each candidate shows its declaration, enclosing",
+    "class, file path, and doc-comment — judge by what it IS and DOES, matched to the question (the name",
+    "alone can mislead; the path is a strong hint).",
+    "If the question names a MODULE, APP, DIRECTORY, or PATH to use or to AVOID (e.g. \"only in web-x\",",
+    "\"not from web-y\"), treat it as a HARD constraint: NEVER pick a candidate whose file path violates it,",
+    "even if a violating one looks more relevant. Pick the best among the candidates the constraint allows.",
+    "",
+  ];
+  cand.forEach((c, i) => lines.push(`  c${i}: ${c.def ? passage(c.def) : `${c.name} — ${c.file}`}`));
+  lines.push("", 'Output ONLY a JSON array, one object per candidate: [{"id":"c<n>","best":true|false}] with `best` true for exactly ONE.');
+  return lines;
+}
+
 export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
     Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none"; alternatives?: AnchorAlt[] }> {
   if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
 
+  emit("Recalling candidate anchors by intent (embeddings)…");
   const scored = await embedScoreDefs(repo, intent);   // [] when embeddings absent → caller falls back
   const pooled = assembleCandidatePool(scored, find_anchor_candidates(repo, [..._content_words(intent)]));
   const fanIn = fanInByName(repo, pooled.map((c) => c.name));
@@ -126,17 +149,10 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
     cand.forEach((c, i) => e.write(`   c${i} ${c.name} (fan-in ${fanIn.get(c.name) ?? 0}) (${c.file})${c.def ? ` [embed#${rankByKey.get(`${c.def.name}|${c.def.file}`) ?? "?"}] passage: ${passage(c.def).slice(0, 160)}` : " [lexical]"}\n`));
   }
 
-  const lines = [
-    `A developer asks: "${intent}". Pick the SINGLE best STARTING POINT to answer it — the symbol whose`,
-    "code is the mechanism/entry the question is about (where you'd start reading the flow), NOT a leaf",
-    "helper, a test, or a class that merely participates. Each candidate shows its declaration, enclosing",
-    "class, file path, and doc-comment — judge by what it IS and DOES, matched to the question (the name",
-    "alone can mislead; the path is a strong hint).", "",
-  ];
-  cand.forEach((c, i) => lines.push(`  c${i}: ${c.def ? passage(c.def) : `${c.name} — ${c.file}`}`));
-  lines.push("", 'Output ONLY a JSON array, one object per candidate: [{"id":"c<n>","best":true|false}] with `best` true for exactly ONE.');
+  const lines = _pick_prompt(intent, cand);
 
   let out: Map<string, any>;
+  emit(`Judging the entry point among ${cand.length} candidate(s) (LLM)…`);
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag }); }
   catch (e) { if (e instanceof LLMError) return { chosen: null, chosenBy: "none" }; throw e; }
 

@@ -170,6 +170,9 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
     "Pick the ONE whose declaration + doc most directly answers the question as the place to start reading.",
     "Prefer the symbol that GOVERNS or DEFINES the mechanism the question is about over a peripheral helper",
     "that only participates in it.",
+    "If the question names a MODULE, APP, DIRECTORY, or PATH to use or to AVOID (e.g. \"only in web-x\", \"not",
+    "from web-y\"), treat it as a HARD constraint: NEVER pick a candidate whose file path (shown in parens)",
+    "violates it, even if a violating one looks more relevant — choose the best among those it allows.",
     'Output ONLY a JSON array, one object per candidate: [{"id":"<candidate id>","best":true|false}]',
     "with `best` true for exactly ONE.");
 

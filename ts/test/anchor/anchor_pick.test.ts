@@ -3,7 +3,8 @@
 // NOT collapsed to its enclosing class (which buried the intent words: `sendParaplanningRequestEmail` →
 // doc-less `FileNoteService`, so the judge picked a JS save it could read). Pure + LLM-free → unit-testable.
 import { describe, expect, test } from "bun:test";
-import { assembleCandidatePool, demoteHubs, rankAlternatives } from "../../src/codebase/anchor/anchor_pick.js";
+import { assembleCandidatePool, demoteHubs, rankAlternatives, _pick_prompt } from "../../src/codebase/anchor/anchor_pick.js";
+import type { Cand } from "../../src/codebase/anchor/anchor_pick.js";
 import type { Def } from "../../src/codebase/scan/def_table.js";
 
 const def = (name: string, file: string, kind: string, enclosing = "", doc = ""): Def =>
@@ -77,5 +78,44 @@ describe("rankAlternatives", () => {
     const alts = rankAlternatives(c2, scored, { name: "a", file: "a.ts" }, 10);
     expect(alts[alts.length - 1].name).toBe("e");
     expect(alts[alts.length - 1].score).toBe(0);
+  });
+});
+
+// SCOPE CONTRACT — the developer's intent may name a module/path to use or avoid ("only web-acmecheck,
+// not web-manage"). The judge can only honor that if (a) it is TOLD to treat it as hard and (b) every
+// candidate's file PATH is in the prompt for it to apply. This asserts the structural contract; whether the
+// model then complies is its (semantic) job. The recall breadth (EMBED_TOP/POOL_CAP) is what gets the
+// in-scope candidate in front of it.
+describe("_pick_prompt scope contract", () => {
+  const cand: Cand[] = [
+    { name: "ManageController", file: "web-manage/src/ManageController.java", kind: "class", def: { name: "ManageController", file: "web-manage/src/ManageController.java", kind: "class", enclosing: "", signature: "class ManageController", doc: "" } },
+    { name: "AcmeCheckController", file: "web-acmecheck/src/AcmeCheckController.java", kind: "class", def: { name: "AcmeCheckController", file: "web-acmecheck/src/AcmeCheckController.java", kind: "class", enclosing: "", signature: "class AcmeCheckController", doc: "" } },
+  ];
+  const prompt = _pick_prompt("manage bookings — only from web-acmecheck, not web-manage", cand).join("\n");
+
+  test("tells the model a named module/path is a HARD constraint to honor", () => {
+    expect(prompt).toContain("HARD constraint");
+    expect(/AVOID|never pick a candidate whose file path/i.test(prompt)).toBe(true);
+  });
+  test("includes EVERY candidate's file path so a path constraint is applicable", () => {
+    expect(prompt).toContain("web-manage/src/ManageController.java");
+    expect(prompt).toContain("web-acmecheck/src/AcmeCheckController.java");
+  });
+  test("the developer's own scope phrasing is carried verbatim into the prompt", () => {
+    expect(prompt).toContain("only from web-acmecheck, not web-manage");
+  });
+});
+
+// RECALL BREADTH — a sibling module must reach the judge. With one app dominating the embed top, an
+// in-scope candidate ranked just past the old EMBED_TOP=20 would never enter the pool; the raised breadth
+// keeps it in so the judge can honor the scope.
+describe("pool surfaces a sibling-module candidate past the old cap", () => {
+  test("a web-acmecheck def at embed-rank 24 is still pooled (EMBED_TOP raised)", () => {
+    const scored = [
+      ...Array.from({ length: 24 }, (_, i) => ({ def: def(`manageHandler${i}`, `web-manage/src/H${i}.java`, "method"), score: 0.9 - i * 0.01 })),
+      { def: def("acmeCheckBookings", "web-acmecheck/src/Bookings.java", "method"), score: 0.6 },
+    ];
+    const pool = assembleCandidatePool(scored, []);
+    expect(pool.some((c) => c.file === "web-acmecheck/src/Bookings.java")).toBe(true);
   });
 });
