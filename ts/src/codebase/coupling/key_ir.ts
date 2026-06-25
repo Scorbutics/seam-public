@@ -49,7 +49,13 @@ export type KeyMatcher =
   | { via: "assign"; token: string; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "method"; kind: string; role: MatcherRole; name?: string; description?: string }
   | { via: "attr"; directive: string; keyFrom: "name" | "call"; kind: string; role: MatcherRole; name?: string; description?: string }
-  | { via: "annotation"; annotation: string; element?: string; kind: string; role: MatcherRole; name?: string; description?: string };
+  | { via: "annotation"; annotation: string; element?: string; kind: string; role: MatcherRole; name?: string; description?: string }
+  // member — `<token>.<KEY>.<verb>(…)`: the KEY is a MEMBER of a known receiver, accessed via one of `verbs`.
+  // The single most common data shape (an ORM/repo layer: prisma.eventType.findMany / db.user.update /
+  // repo.<entity>.save) — Prisma/Drizzle/TypeORM AND a project's own layer. role fixed per rule (read verbs
+  // → consumes, write verbs → produces), so a layer needs two rules. This is what lets the flywheel FACTOR a
+  // repeated receiver-member layer into ONE rule instead of an LLM call per file.
+  | { via: "member"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
@@ -57,6 +63,7 @@ export function matcherShape(m: KeyMatcher): string {
   if (m.via === "assign") return `${m.token}.<member> = fn`;
   if (m.via === "method") return `class method def`;
   if (m.via === "annotation") return `@${m.annotation}(${m.element ? `${m.element}="…"` : `"…"`})`;
+  if (m.via === "member") return `${m.token}.<member>.{${m.verbs.join("|")}}()`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -67,6 +74,7 @@ export function matcherKey(m: KeyMatcher): string {
   if (m.via === "assign") return `${base}:${m.token}`;
   if (m.via === "method") return base;
   if (m.via === "annotation") return `${base}:${m.annotation}:${m.element ?? ""}`;
+  if (m.via === "member") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -142,6 +150,13 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     const element = elementRaw && _TOKEN_OK.test(elementRaw) ? elementRaw : undefined;
     return { via: "annotation", annotation, ...(element ? { element } : {}), kind, role, name: nm(`${_slug(annotation)}-annot-${kind}`), description: dsc(`${role} ${kind} via @${annotation}(${element ? `${element}="…"` : `"…"`})`) };
   }
+  if (via === "member") {
+    const token = String(obj.token ?? "").trim();
+    if (!_TOKEN_OK.test(token)) return null;                                  // the receiver must be a bare identifier (prisma/db/repo)
+    const verbs = [...new Set<string>((Array.isArray(obj.verbs) ? obj.verbs : []).map((v: any) => String(v).trim()).filter((v: string) => _TOKEN_OK.test(v)))];
+    if (!verbs.length) return null;                                          // need ≥1 access verb to bound the match (else it'd match any member)
+    return { via: "member", token, verbs, kind, role, name: nm(`${_slug(token)}-member-${kind}`), description: dsc(`${role} ${kind} via ${token}.<member>.{${verbs.join("|")}}()`) };
+  }
   return null;                                                               // unknown shape → not executable
 }
 
@@ -187,7 +202,25 @@ export async function runMatcher(m: KeyMatcher, file: string, text: string): Pro
   if (m.via === "assign") return runAssign(m, file, text);
   if (m.via === "method") return runMethod(m, file, text);
   if (m.via === "annotation") return runAnnotation(m, text);
+  if (m.via === "member") return runMember(m, text);
   return runAttr(m, file, text);
+}
+
+// `<token>.<KEY>.<verb>(` — KEY is the member identifier (the table/entity/topic), verb ∈ m.verbs. Pure
+// regex (no parser) like runCall, so it works offline; token + verbs are validated bare identifiers, so the
+// only embedded user data is identifier-safe (no regex injection). The member IS the key.
+function runMember(m: Extract<KeyMatcher, { via: "member" }>, text: string): KeyHit[] {
+  const masked = maskComments(text);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const verbs = m.verbs.map(esc).join("|");
+  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*(?:${verbs})\\s*[(<]`, "g");
+  const out: KeyHit[] = [];
+  let mt: RegExpExecArray | null;
+  while ((mt = re.exec(masked)) !== null) {
+    const value = mt[1];
+    if (plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  }
+  return out;
 }
 
 // ANNOTATION — `@Name( … )`: the key is a string literal inside the parens, EITHER `element = "key"` (a named

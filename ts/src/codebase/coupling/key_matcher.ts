@@ -76,6 +76,16 @@ THREE shapes are available — pick the one that fits the evidence:
                ("destination"/"topics"/"queues"), OMIT it when the key is the first positional literal
                (\`@KafkaListener("orders")\`). role = "consumes" (the annotated method LISTENS for the key). PAIR
                it with the producer "call" (\`convertAndSend('export.queue', …)\` → produces queue) that grounds it.
+ 5) "member" — a data-access LAYER where the key is a MEMBER of a fixed receiver: \`<token>.<KEY>.<verb>(…)\`.
+               This is the dominant ORM/repository shape — \`prisma.eventType.findMany()\`, \`db.user.update()\`,
+               \`repo.booking.save()\`, \`knex('x')\` (no — that's "call"). The receiver token is the SAME across
+               files; the MEMBER (eventType/user/booking) is the key (kind "db-table"); the VERB selects
+               read vs write. Fields: token = the receiver identifier ("prisma","db","repo","tx"); verbs =
+               the access methods for THIS rule's role (read verbs → role "consumes", write verbs →
+               "produces"). Emit TWO rules for a layer: one read, one write. Verbs you see literally only —
+               e.g. read {findUnique,findFirst,findMany,count,aggregate,groupBy}, write {create,createMany,
+               update,updateMany,upsert,delete,deleteMany}. Use this whenever a file accesses many entities
+               through ONE receiver object — it factors the whole layer into 2 rules instead of per-file keys.
 
 DISCRIMINATOR (payload routing) — a SPECIAL "call" pair. When a GENERIC payload/message/event object carries a
 FIELD whose VALUE selects which handler processes it — a producer SETS a literal on the field
@@ -113,7 +123,9 @@ Return a JSON array (empty if none). Examples — note the PAIRS (producer + the
  {"id":"r9","via":"call","token":"convertAndSend","argIndex":0,"kind":"queue","role":"produces","name":"jms-send","description":"publishes to a JMS queue/topic"},
  {"id":"r10","via":"annotation","annotation":"JmsListener","element":"destination","kind":"queue","role":"consumes","name":"jms-listener","description":"a method listening on a JMS queue/topic"},
  {"id":"r11","via":"call","token":"setType","argIndex":0,"kind":"event","role":"produces","name":"payload-discriminator-set","description":"sets the payload field that routes which handler processes it"},
- {"id":"r12","via":"call","token":"equals","argIndex":0,"kind":"event","role":"consumes","name":"payload-discriminator-branch","description":"branches on the payload field value (PAIRED with the setter of the same literal)"}]
+ {"id":"r12","via":"call","token":"equals","argIndex":0,"kind":"event","role":"consumes","name":"payload-discriminator-branch","description":"branches on the payload field value (PAIRED with the setter of the same literal)"},
+ {"id":"r13","via":"member","token":"prisma","verbs":["findUnique","findFirst","findMany","count","aggregate"],"kind":"db-table","role":"consumes","name":"prisma-read","description":"reads a Prisma model (prisma.<model>.find…)"},
+ {"id":"r14","via":"member","token":"prisma","verbs":["create","createMany","update","updateMany","upsert","delete","deleteMany"],"kind":"db-table","role":"produces","name":"prisma-write","description":"writes a Prisma model (prisma.<model>.create/update/…)"}]
 ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
 \`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;
