@@ -5,8 +5,12 @@
 // call under the SAME `http-route <path>` key the deterministic adapters use — meeting the backend handler.
 // This unit-tests the grounding pass (expandAndIndexHits): the medium → kind mapping, URL normalisation,
 // and that http-route URLs and data-file paths NEVER cross-ground. Pure + LLM-free.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, afterEach } from "bun:test";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { expandAndIndexHits } from "../../src/codebase/coupling/carrier/engine.js";
+import { hasLearnedCarrier, _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
 
 const hit = (value: string, produces: boolean, medium: string | undefined, file: string, partial = false) =>
   ({ value, produces, partial, medium, access: { file, line: 1 } });
@@ -18,7 +22,7 @@ describe("expandAndIndexHits — http-route medium", () => {
       hit("/acme/rest/member/booking/v1", false, "http-route", "web/src/bookingService.js"),   // learned Vue.http consumer
       hit("/acme/rest/member/booking/v1", true, "http-route", "api/BookingsService.java"),       // backend handler producer
     ] as any);
-    const g = idx.get("http-route /acme/rest/member/booking/v1");
+    const g = idx.get("http-route /acme/rest/member/booking/v1")!;
     expect(g).toBeDefined();
     expect(g.consumers.map((a: any) => a.file)).toContain("web/src/bookingService.js");
     expect(g.producers.map((a: any) => a.file)).toContain("api/BookingsService.java");   // grounded across the stack
@@ -43,5 +47,35 @@ describe("expandAndIndexHits — http-route medium", () => {
     const route = idx.get("http-route /data/*");
     expect(route?.producers ?? []).toHaveLength(0);
     expect(idx.has("data-file /data/users.json")).toBe(true);
+  });
+});
+
+// AUTO-REUSE GATE — a learned carrier signature must apply on the NEXT (warm) pass WITHOUT --llm and WITHOUT
+// promotion. `hasLearnedCarrier` is the gate that opens the carrier engine for a non-Ruby anchor on a warm
+// floor pass; an empty repo keeps it shut (cold non-Ruby floor pays nothing → existing behaviour unchanged).
+describe("hasLearnedCarrier — the warm auto-reuse gate (reuse before promote)", () => {
+  let REPO: string;
+  afterEach(() => { if (REPO) rmSync(REPO, { recursive: true, force: true }); _resetCarrierCacheMem(); });
+
+  test("a repo with no learned adapter → gate shut (false)", () => {
+    REPO = mkdtempSync(join(tmpdir(), "carrier-gate-"));
+    _resetCarrierCacheMem();
+    expect(hasLearnedCarrier(REPO)).toBe(false);
+  });
+  test("a repo-local learned signature → gate open (true), no promotion needed", () => {
+    REPO = mkdtempSync(join(tmpdir(), "carrier-gate-"));
+    mkdirSync(join(REPO, ".seam"), { recursive: true });
+    writeFileSync(join(REPO, ".seam", "carrier-signatures.json"), JSON.stringify({
+      schema: 1, signatures: { "VueHttp#get h1": { direction: "read", medium: "http-route", keyArg: 0, name: "vue-http", description: "project HTTP client" } },
+    }));
+    _resetCarrierCacheMem();
+    expect(hasLearnedCarrier(REPO)).toBe(true);
+  });
+  test("only a null (known-NON-carrier) entry → still shut (no real adapter to reuse)", () => {
+    REPO = mkdtempSync(join(tmpdir(), "carrier-gate-"));
+    mkdirSync(join(REPO, ".seam"), { recursive: true });
+    writeFileSync(join(REPO, ".seam", "carrier-signatures.json"), JSON.stringify({ schema: 1, signatures: { "Foo#noop h2": null } }));
+    _resetCarrierCacheMem();
+    expect(hasLearnedCarrier(REPO)).toBe(false);
   });
 });

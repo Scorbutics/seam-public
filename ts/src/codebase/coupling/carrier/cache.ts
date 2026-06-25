@@ -42,6 +42,15 @@ export function cachedSignature(repo: string, key: string): { hit: boolean; sig:
   return { hit: false, sig: null };
 }
 
+// Does this repo have ANY learned (non-null) carrier adapter — repo-local OR shared? The gate that lets the
+// carrier engine run for a NON-Ruby anchor on a warm pass: a learned adapter auto-applies deterministically
+// (no LLM, no promotion) the next time it's seen — "reuse before promote". Cheap (reads the two cache maps).
+export function hasLearnedCarrier(repo: string): boolean {
+  for (const v of _load(repo).values()) if (v) return true;
+  for (const v of _loadShared().values()) if (v) return true;
+  return false;
+}
+
 // All LEARNED (non-null) carrier adapters — repo-local + shared — for `seam-adapters list`.
 export function listLearnedAdapters(repo: string): { key: string; sig: CarrierSignature; scope: "repo" | "shared" }[] {
   const out: { key: string; sig: CarrierSignature; scope: "repo" | "shared" }[] = [];

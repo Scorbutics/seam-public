@@ -380,7 +380,15 @@ async function assembleSources(
     lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
   ]);
 
-  if (!anchorFile.endsWith(".rb") && !anchorFile.endsWith(".rake")) {
+  // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). For OTHER
+  // languages it runs only when there's a reason: `--llm` (cold learning of a project's custom call-types,
+  // e.g. a Vue.http / apiClient HTTP wrapper) OR a WARM learned-signature cache (auto-reuse a learned
+  // adapter deterministically, no LLM, before it's ever promoted). A cold non-Ruby floor with no learned
+  // adapter pays nothing — the carrier walk is skipped, so existing behaviour is unchanged.
+  const isRuby = anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake");
+  const { carrierProviderFor } = await import("./carrier/engine.js");
+  const { hasLearnedCarrier } = await import("./carrier/cache.js");
+  if (!isRuby && !(carrierProviderFor(anchorFile) && (llmOpts.llm || hasLearnedCarrier(repo)))) {
     return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
   }
 
