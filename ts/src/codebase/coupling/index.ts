@@ -245,7 +245,7 @@ export interface CouplingOtherSide { kind: string; value: string; file: string; 
 
 // Files containing `value` literally — ripgrep (gitignore-aware, instant) with a walk+substring fallback. The
 // value is a plausible key (identifier/path), matched as a FIXED string, so there's no regex/shell hazard.
-function grepFiles(repo: string, value: string): string[] {
+export function grepFiles(repo: string, value: string): string[] {
   try {
     const r = spawnSync("rg", ["-l", "-F", "--no-messages", "--", value, "."], { cwd: repo, encoding: "utf-8", maxBuffer: 1 << 27 });
     if (r.status === 0 && r.stdout) return r.stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, ""));

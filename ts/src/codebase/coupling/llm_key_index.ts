@@ -31,7 +31,7 @@ import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
 import { hasMatcherCache, loadMatchers } from "./key_store.js";
 import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
-import { plausibleKeyValue } from "./key_ir.js";
+import { plausibleKeyValue, runMatcher } from "./key_ir.js";
 import { clusterBlindFiles } from "./key_cluster.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -254,12 +254,82 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
     idx.get(k)!.producers.push(...v.producers); idx.get(k)!.consumers.push(...v.consumers);
   }
+  // pass 5 — DANGLING COUNTERPART reach (footprint-scoped only): a key a footprint file PRODUCES that nothing
+  // CONSUMES (or vice-versa) is a half-grounded boundary — the cross-stack case (a backend producer whose UI
+  // consumer sits OUTSIDE the footprint, so footprint-scoping never discovered it). Use the dangling literal
+  // to SEED the other module's file that holds it (the FE wrapper carries the literal even when the component
+  // call site reaches it through indirection), LLM-discover THOSE, and merge — so the counterpart grounds and
+  // crossBoundary can pull it in. Dangling-only + grep-bounded → cheap; baked into the cached idx (warm-safe).
+  if (opts.scopeFiles && opts.llm && ctx.keyBudget > 0)
+    for (const [k, v] of await _reachDanglingCounterparts(repo, idx, opts, ctx)) {
+      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
+      idx.get(k)!.producers.push(...v.producers); idx.get(k)!.consumers.push(...v.consumers);
+    }
   // AUDIT (SEAM_KEY_AUDIT=1): how much of the GROUNDED coupling does each LLM pass uniquely enable? Decides
   // whether the per-file pass still earns its keep now the matcher shapes cover the generalisable cases.
   if (process.env.SEAM_KEY_AUDIT) await _auditKeySources(repo, ctx, filesIdx, matchersIdx, matchers.length);
 
   ctx.llmKey.set(cacheKey, idx);
   return idx;
+}
+
+// DANGLING COUNTERPART reach (pass 5). A key with a SCOPE-file on ONE side and NOTHING on the other (across
+// the floor ⊕ the footprint LLM idx) is a cross-module boundary the footprint scope cut in half. Grep the
+// literal → the file(s) in another module that hold it (out of the footprint) → discover them (cluster +
+// per-file LLM + learn rules, reusing the machinery) → return the grounding delta so the counterpart side
+// appears in the index. ONE hop, dangling-only, grep- and budget-bounded.
+async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opts: KeyIndexOpts, ctx: EngineCtx): Promise<GroundingIndex> {
+  const scope = opts.scopeFiles!;
+  const { floor_base_index, grepFiles } = await import("./index.js");
+  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const inScope = (a: { file: string }) => scope.has(a.file);
+  // dangling literals: a scope file is the ONLY side present (no counterpart anywhere)
+  const dangling = new Map<string, { kind: string; value: string }>();
+  for (const [k, v] of idx) {
+    const fl = floor.get(k) ?? { producers: [], consumers: [] };
+    const producers = [...v.producers, ...fl.producers], consumers = [...v.consumers, ...fl.consumers];
+    const sep = k.indexOf(" "); const kind = k.slice(0, sep), value = k.slice(sep + 1);
+    if (!plausibleKeyValue(value)) continue;
+    if (!consumers.length && producers.some(inScope)) dangling.set(value, { kind, value });        // produced here, consumed nowhere
+    else if (!producers.length && consumers.some(inScope)) dangling.set(value, { kind, value });   // consumed here, produced nowhere
+  }
+  if (!dangling.size) return new Map();
+  // grep each dangling literal → candidate counterpart files OUTSIDE the footprint (the wrapper that carries it)
+  const cands = new Map<string, { file: string; text: string; ck: string }>();
+  for (const d of [...dangling.values()].slice(0, COUPLING.keyBudget)) {
+    for (const f of grepFiles(repo, d.value)) {
+      if (scope.has(f) || cands.has(f) || !scannableForKeys(f)) continue;
+      let text: string; try { text = readFileSync(join(repo, f), "utf-8"); } catch { continue; }
+      cands.set(f, { file: f, text, ck: `${f} ${createHash("sha1").update(text).digest("hex")}` });
+    }
+  }
+  if (!cands.size) return new Map();
+  emit(`Reaching ${cands.size} cross-module counterpart file(s) for ${dangling.size} dangling key(s) via LLM…`);
+  if (verbose()) process.stderr.write(`[coupling] dangling-counterpart reach: ${dangling.size} dangling key(s) → ${cands.size} candidate(s):\n${[...cands.keys()].slice(0, 25).map((f) => `   · ${f}`).join("\n")}\n`);
+  // discover the counterparts (cluster → per-file LLM → learn rules), caching the whole cluster as before
+  const candList = [...cands.values()];
+  const toSynth: typeof candList = [];
+  for (const c of await clusterBlindFiles(candList)) {
+    if (ctx.keyBudget <= 0) break;
+    ctx.keyBudget -= 1; toSynth.push(c.rep);
+    for (const m of c.members) if (m.ck !== c.rep.ck)
+      persistFileKeys(repo, m.ck, { name: "cluster-covered", description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
+  }
+  const counterKeys = await _batchSynthesize(repo, toSynth, opts);
+  await learnKeyMatchers(repo, toSynth.map((t) => ({ file: t.file, text: t.text })), opts, ctx);
+  // delta = the counterpart files' per-file keys + their hits under ALL matchers (incl. any newly learned),
+  // scoped to the candidate files so we don't double-count the repo-wide matcher pass already in `idx`.
+  const matchers = loadMatchers(repo);
+  const delta: GroundingIndex = new Map();
+  const add = (kind: string, value: string, file: string, line: number, produces: boolean) => {
+    if (!plausibleKeyValue(value)) return;
+    const k = `${kind} ${value}`;
+    if (!delta.has(k)) delta.set(k, { producers: [], consumers: [] });
+    (produces ? delta.get(k)!.producers : delta.get(k)!.consumers).push({ file, line });
+  };
+  for (const [file, keys] of counterKeys) for (const h of keys) add(h.kind, h.value, file, h.line, h.produces);
+  for (const c of candList) for (const m of matchers) for (const h of await runMatcher(m, c.file, c.text)) add(h.kind, h.value, c.file, h.line, h.produces);
+  return delta;
 }
 
 // Compare the GROUNDED-key sets (a key with ≥1 producer AND ≥1 consumer, across the floor) with vs without
