@@ -142,24 +142,6 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
   return result;
 }
 
-// Does a file carry a DISTINCTIVE key literal — the necessary mark of a shared-key coupling? plausibleKeyValue
-// drops prose/generic/too-short; we additionally require the literal LOOK like a key (a path, or a structured
-// identifier: dotted/snake/camel/CONST/kebab) so a pure UI file's labels don't all qualify. Kebab is included
-// (event/topic names) even though it also matches CSS classes — recall over precision (a missed coupling is
-// worse than a wasted LLM call on one file).
-export function _hasKeyLiteral(text: string): boolean {
-  for (const m of text.matchAll(/['"`]([^'"`\n]{2,100})['"`]/g)) {
-    const v = m[1].trim();
-    if (!plausibleKeyValue(v)) continue;
-    if (v.includes("/")) return true;                                     // a route/path
-    if (/[._:]/.test(v) && /[A-Za-z]/.test(v)) return true;               // table.col / topic:name / a.b.c
-    if (/[a-z][A-Z]/.test(v)) return true;                                // camelCase
-    if (/^[A-Z][A-Z0-9_]{3,}$/.test(v)) return true;                      // CONSTANT_KEY
-    if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(v)) return true;           // kebab (event/topic; incl. CSS — recall>precision)
-  }
-  return false;
-}
-
 export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx()): Promise<GroundingIndex> {
   const augment = !!opts.augment || process.env.SEAM_KEY_AUGMENT === "1";
   // SCOPE: the per-file LLM synthesis is bounded to the anchor's MODULE (opts.scope, a repo-relative prefix),
@@ -179,8 +161,6 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const llmKeysOf = new Map<string, KeyHit[]>();       // file → cached LLM keys
   const toSynth: { file: string; text: string; ck: string }[] = [];
   const blindFiles: { file: string; text: string }[] = [];   // floor-blind files → matcher-rule synthesis candidates
-  const prefilter = process.env.SEAM_KEY_PREFILTER !== "off";   // the key-literal pre-filter (on by default)
-  let skipped = 0;
   // REUSE the floor scan (computed once per run, disk-cached) instead of re-scanning every file here — that
   // was a full DUPLICATE repo scan (≈ the whole assemble cost). floorByRel.get(rel) === scan_file_keys(rel,
   // text) by construction, so behaviour is identical; `??` is a defensive fallback.
@@ -190,13 +170,6 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
     if (!inScope(rel)) continue;                     // out-of-module → no per-file LLM (floor + rules still ground it)
-    // KEY-LITERAL PRE-FILTER: a shared-key coupling REQUIRES a distinctive key literal in the file (a route
-    // path, a table/topic/event/cache name). A floor-blind file with none (pure UI/render/util) cannot carry
-    // one, so it isn't worth an LLM scan — this cuts a module's floor-blind set to the handful that could be
-    // edges WITHOUT needing an import graph (works on globally-registered code). Recall-safe for the common
-    // case (the key literal lives in the coupling file, incl. an in-file `const baseUrl="/…"`); a key defined
-    // in ANOTHER file is the known gap (that file gets scanned where the literal lives). `SEAM_KEY_PREFILTER=off`.
-    if (!floor.length && prefilter && !_hasKeyLiteral(text)) { skipped++; continue; }
     if (!floor.length && blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: rel, text });
     if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
@@ -207,7 +180,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // pass 2 — one batched LLM call per chunk for the uncached files
   if (toSynth.length) {
     emit(`Deducing data-coupling keys for ${toSynth.length} floor-blind file(s) via LLM (batched)…`);
-    if (verbose()) process.stderr.write(`[coupling] ${toSynth.length} floor-blind file(s) → LLM (scope: ${scope || "repo"}; cap SEAM_KEY_BUDGET=${COUPLING.keyBudget}; pre-filter skipped ${skipped} with no key literal):\n${toSynth.map((t) => `   · ${t.file}`).join("\n")}\n`);
+    if (verbose()) process.stderr.write(`[coupling] ${toSynth.length} floor-blind file(s) → LLM (scope: ${scope || "repo"}; cap SEAM_KEY_BUDGET=${COUPLING.keyBudget}):\n${toSynth.map((t) => `   · ${t.file}`).join("\n")}\n`);
     for (const [f, keys] of await _batchSynthesize(repo, toSynth, opts)) llmKeysOf.set(f, keys);
   }
 
