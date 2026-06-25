@@ -30,10 +30,12 @@ describe("applyMatchers pre-filter is behaviour-preserving", () => {
   test("a file containing the token is STILL matched (pre-filter doesn't over-skip); one without grounds nothing", async () => {
     if (!available()) return;   // member rule executes via regex but the repo walk + parse path wants tree-sitter
     const w = (rel: string, t: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), t); };
-    w("reader.ts", `export const f = () => prisma.booking.findMany();`);   // contains "prisma" → must match
+    // use a verb the member-access FLOOR adapter does NOT cover (`load` is generic, excluded), so the matcher's
+    // hit isn't reconciled away by the floor — this isolates the pre-filter, not the floor.
+    w("reader.ts", `export const f = () => prisma.booking.load();`);      // contains "prisma" → must match
     w("other.ts", `export const g = () => doStuff();`);                    // no "prisma" → skipped, contributes nothing
 
-    const rule = validateMatcher({ via: "member", token: "prisma", verbs: ["findMany"], kind: "db-table", role: "consumes" })!;
+    const rule = validateMatcher({ via: "member", token: "prisma", verbs: ["load"], kind: "db-table", role: "consumes" })!;
     const idx = await applyMatchers(REPO, [rule]);
     const k = idx.get("db-table booking");
     expect(k).toBeDefined();
