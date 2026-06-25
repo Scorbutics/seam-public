@@ -121,7 +121,10 @@ export function hasKeyCache(repo: string): boolean {
 export function cachedFileKeys(repo: string, key: string): { hit: boolean; keys: KeyHit[] } {
   for (const [scope, dir] of [["repo", _repoDir(repo)], ["shared", _sharedDir()]] as const) {
     const a = _loadStore(dir).files.get(key);
-    if (a) { recordAdapterUsed(a.name, scope); return { hit: true, keys: a.keys }; }
+    // An EMPTY entry is a cluster-COVERED marker (a non-rep member whose keys come from the learned rule, not
+    // a per-file synth) — it's a real cache HIT (so a warm run skips the file) but grounds nothing, so it is
+    // NOT a "used adapter" for the ledger.
+    if (a) { if (a.keys.length) recordAdapterUsed(a.name, scope); return { hit: true, keys: a.keys }; }
   }
   return { hit: false, keys: [] };
 }

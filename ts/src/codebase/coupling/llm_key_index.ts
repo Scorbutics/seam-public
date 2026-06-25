@@ -193,7 +193,16 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   if (collapsed > 0) emit(`Clustered ${blindCandidates.length} floor-blind file(s) → ${clusters.length} pattern representative(s) (−${collapsed} covered by shared shape)…`);
   for (const c of clusters) {
     if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth sees one rep per pattern
-    if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push(c.rep); }                        // per-file pass LLMs only the reps
+    if (opts.llm && ctx.keyBudget > 0) {
+      ctx.keyBudget -= 1; toSynth.push(c.rep);                                                              // per-file pass LLMs only the reps
+      // CACHE THE WHOLE CLUSTER (not just the rep): the non-rep members are covered by the rule the rep
+      // teaches, so persist an empty COVERED marker for each. Without this a warm run finds them uncached →
+      // re-blind → re-clusters → a DIFFERENT member becomes rep → the LLM re-fires; the cache never settles.
+      // (Content-keyed, so editing a member still re-processes it.) Only when the rep is actually sent — a
+      // budget-skipped cluster stays uncached so a later run retries it.
+      for (const m of c.members) if (m.ck !== c.rep.ck)
+        persistFileKeys(repo, m.ck, { name: `cluster-covered`, description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
+    }
   }
   if (verbose() && collapsed > 0)
     process.stderr.write(`[coupling] clustered blind files by shape:\n${clusters.filter((c) => c.members.length > 1).map((c) => `   · ${c.signature || "(shapeless)"} ×${c.members.length} → rep ${c.rep.file}`).join("\n")}\n`);
@@ -234,7 +243,10 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     try { matcherFiles.push({ file, text: readFileSync(join(repo, file), "utf-8") }); _mseen.add(file); } catch { /* unreadable → skip */ }
   }
   for (const f of blindFiles) if (!_mseen.has(f.file)) matcherFiles.push(f);
-  await learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx);   // persists survivors into the matcher store
+  // SETTLE warm runs: only LEARN when this run surfaced NEW blind files. With every cluster member cached
+  // (blindCandidates empty) the rep set is empty, so a re-learn would feed the learner an unstable cached-rep
+  // subset → a needless LLM call each run. No new blind work → the rules are already learned; replay them.
+  if (blindCandidates.length) await learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx);   // persists survivors into the matcher store
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 

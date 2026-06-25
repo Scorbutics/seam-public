@@ -11,6 +11,7 @@ import {
   cachedFileKeys, persistFileKeys, hasKeyCache, listKeyAdapters,
   promoteKeyAdapter, hasLearnedMatchersFor, recordLearnedMatchers, _resetKeyStoreMem,
 } from "../../src/codebase/coupling/key_store.js";
+import { ledgerSnapshot, resetLedger } from "../../src/codebase/coupling/ledger.js";
 
 let REPO: string, SHARED: string;
 const seam = (rel: string, data: unknown) => { mkdirSync(join(REPO, ".seam"), { recursive: true }); writeFileSync(join(REPO, ".seam", rel), JSON.stringify(data)); };
@@ -96,5 +97,22 @@ describe("learned-matcher signatures (the --llm re-run / no-regenerate gate)", (
     recordLearnedMatchers(REPO, "sigX");
     _resetKeyStoreMem();
     expect(readUnified().learnedSigs).toEqual(["sigX"]);
+  });
+});
+
+describe("cluster-COVERED markers (cache all files of a cluster, not just the rep)", () => {
+  test("an EMPTY entry is a cache HIT (warm run skips the file) but is NOT a used adapter", () => {
+    resetLedger();
+    // rep = real keys; a non-rep member = empty covered-marker (its keys come from the learned rule)
+    persistFileKeys(REPO, "rep.ts sha", { name: "rep-keys", description: "", keys: [{ kind: "db-table", value: "booking", line: 3, produces: true }] });
+    persistFileKeys(REPO, "member.ts sha", { name: "cluster-covered", description: "keys via cluster rule (recv:prisma)", keys: [] });
+    _resetKeyStoreMem();
+
+    // BOTH hit → on a warm pass-1 walk both are skipped (never re-blind, never re-clustered, never re-LLM'd)
+    expect(cachedFileKeys(REPO, "rep.ts sha")).toMatchObject({ hit: true });
+    expect(cachedFileKeys(REPO, "member.ts sha")).toEqual({ hit: true, keys: [] });
+
+    // only the keys-bearing rep is surfaced as a used adapter; the empty marker is ledger-silent
+    expect(ledgerSnapshot().used.map((u) => u.name)).toEqual(["rep-keys"]);
   });
 });
