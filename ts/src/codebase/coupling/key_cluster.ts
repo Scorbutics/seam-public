@@ -36,16 +36,29 @@ function _rootId(ctx: Ctx, node: any): string | null {
   return n && _NAME_KINDS.has(n.type) ? ctx.text(n) : null;
 }
 
-// Does the call carry a STRING-LITERAL argument (the key for a `call:`-shape — publish('topic'),
-// getItem('k'), from('users'))? Callees hold no string literals, so scanning the whole call is safe.
+// Does the call carry a STRING-LITERAL argument of ITS OWN (the key for a string-keyed channel —
+// publish('topic'), getItem('k'), from('users'))? Descends the arguments but STOPS at a nested call, so
+// `JSON.parse(getItem('k'))` does not credit the inner key to the outer `parse`.
 function _hasStringArg(ctx: Ctx, call: any): boolean {
   const args = ctx.children(call).find((c) => _ARGS.has(c.type));
-  return ctx.collect(args ?? call, (k) => _STRING_KINDS.has(k)).length > 0;
+  if (!args) return false;
+  const stack = ctx.children(args);   // the actual arguments, not the wrapper node
+  while (stack.length) {
+    const n = stack.pop();
+    if (_STRING_KINDS.has(n.type)) return true;
+    if (_CALL.has(n.type)) continue;   // a nested call's string belongs to THAT call, not this one
+    stack.push(...ctx.children(n));
+  }
+  return false;
 }
 
-// The structural shape-tokens a file exhibits, e.g. `member:prisma` (a `prisma.<x>.<verb>()` data layer)
-// or `call:getItem` (a `<recv>.getItem('k')` / `getItem('k')` channel). These are CANDIDATE shapes — the
-// closed vocabulary the matcher IR can generalise — never the value/meaning. Returns the multiset.
+// The structural shape-tokens a file exhibits — clustered by the DATA OBJECT (the receiver), so a whole
+// channel's methods land together: `recv:prisma` covers `prisma.<x>.find()` AND `prisma.<x>.create()`,
+// `recv:localStorage` covers `getItem('k')` AND `setItem('k')` (the producer+consumer pair grounding needs).
+// These are CANDIDATE shapes — the closed vocabulary the matcher IR generalises — never the value/meaning.
+// A call only counts as a data shape when it's either a member CHAIN (`recv.member.verb()` — the member is
+// the key, ORM/repo) or carries a STRING-LITERAL key arg (`recv.method('k')`); a bare `arr.map(fn)` doesn't.
+// Returns the multiset.
 async function _shapeTokens(ctx: Ctx): Promise<string[]> {
   const tokens: string[] = [];
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
@@ -54,16 +67,13 @@ async function _shapeTokens(ctx: Ctx): Promise<string[]> {
     if (!callee) continue;
     if (_MEMBER.has(callee.type)) {
       const obj = ctx.children(callee)[0];
-      const nameNode = [...ctx.children(callee)].reverse().find((c) => _MEMBER_NAME.has(c.type) || _NAME_KINDS.has(c.type));
-      if (obj && _MEMBER.has(obj.type)) {
-        // `recv.member.verb(…)` — the ORM/repository shape; the ROOT receiver is the cluster signature
-        const root = _rootId(ctx, obj);
-        if (root && !_SELF_REFS.has(root)) tokens.push(`member:${root}`);
-      } else if (nameNode && _hasStringArg(ctx, call)) {
-        tokens.push(`call:${ctx.text(nameNode)}`);   // `recv.method('lit')` — a string-keyed channel
+      const deep = obj && _MEMBER.has(obj.type);                  // `recv.member.verb(…)` — the member is the key
+      if (deep || _hasStringArg(ctx, call)) {                     // a data shape (ORM chain OR string-keyed channel)
+        const root = _rootId(ctx, callee);                        // cluster by the ROOT RECEIVER, not the method
+        if (root && !_SELF_REFS.has(root)) tokens.push(`recv:${root}`);
       }
     } else if (_NAME_KINDS.has(callee.type) && _hasStringArg(ctx, call)) {
-      tokens.push(`call:${ctx.text(callee)}`);        // bare `f('lit')`
+      tokens.push(`call:${ctx.text(callee)}`);        // bare `f('lit')` — no receiver, cluster by callee name
     }
   }
   return tokens;

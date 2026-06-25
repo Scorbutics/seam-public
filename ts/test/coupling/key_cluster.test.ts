@@ -27,14 +27,27 @@ describe("structural pre-clustering of floor-blind files", () => {
     // 3 prisma → 1, bus → 1, plain → 1  ⇒  3 clusters total (collapsed 2 of 5 files)
     expect(clusters.length).toBe(3);
 
-    const prismaCluster = clusters.find((c) => c.signature === "member:prisma");
+    // clustered by the RECEIVER (the data object): prisma.eventType.findMany / prisma.user.update /
+    // prisma.booking.create all collapse to recv:prisma regardless of model or verb
+    const prismaCluster = clusters.find((c) => c.signature === "recv:prisma");
     expect(prismaCluster).toBeDefined();
     expect(prismaCluster!.members.map((m) => m.file).sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
     expect(["a.ts", "b.ts", "c.ts"]).toContain(prismaCluster!.rep.file);   // the rep is one of the cluster's files
 
-    // the bus file clusters on its call shape, the plain file is its own shapeless singleton
-    expect(clusters.some((c) => c.signature === "call:publish" && c.members.length === 1)).toBe(true);
+    // the bus channel clusters on its receiver, the plain file is its own shapeless singleton
+    expect(clusters.some((c) => c.signature === "recv:bus" && c.members.length === 1)).toBe(true);
     expect(clusters.some((c) => c.signature === "" && c.members[0].file === "plain.ts")).toBe(true);
+  });
+
+  test("clusters a channel's read AND write by receiver (so one rep teaches the producer+consumer pair)", async () => {
+    if (!available()) return;
+    const reader = { file: "r.ts", text: `export function load() { return JSON.parse(localStorage.getItem("draft")); }` };
+    const writer = { file: "w.ts", text: `export function save(v) { localStorage.setItem("draft", JSON.stringify(v)); }` };
+    const clusters = await clusterBlindFiles([reader, writer]);
+    // getItem (consumes) and setItem (produces) share receiver localStorage → ONE cluster (was two by method)
+    expect(clusters.length).toBe(1);
+    expect(clusters[0].signature).toBe("recv:localStorage");
+    expect(clusters[0].members.map((m) => m.file).sort()).toEqual(["r.ts", "w.ts"]);
   });
 
   test("a `this.*` chain is NOT a distinctive signature (no over-merge of unrelated files)", async () => {
