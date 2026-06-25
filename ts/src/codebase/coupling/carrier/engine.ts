@@ -13,6 +13,7 @@ import { walkFiles } from "../../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../../core/resolve/languages/base.js";
 import { resolveCarrierSignature, prefetchCarrierSignatures } from "./synth.js";
 import { globMatch, type CarrierProvider, type CarrierObservation } from "./provider.js";
+import { normPath } from "../adapters/http_route.js";
 import { RUBY_CARRIER } from "../../../languages/ruby/carrier.js";
 import { JAVA_CARRIER } from "../../../languages/java/carrier.js";
 import { TS_CARRIER } from "../../../languages/typescript/carrier.js";
@@ -34,7 +35,7 @@ async function _indexFor(repo: string, provider: CarrierProvider<any>, ctx: Engi
   return getOrSet(ctx.langIndex, `${repo}::${provider.name}`, () => provider.buildIndex(repo));
 }
 
-type CarrierHit = { value: string; produces: boolean; partial: boolean; access: Access };
+type CarrierHit = { value: string; produces: boolean; partial: boolean; access: Access; medium?: string };
 interface PendingObs { provider: CarrierProvider<any>; index: any; className: string; method: string; value: string; partial: boolean; access: Access }
 
 // Async flatMap: walk carrier files, scan each for observations, yield one observation at a time.
@@ -57,7 +58,7 @@ async function resolveObservations(repo: string, opts: CarrierOpts, ctx: EngineC
   for await (const { o, provider, index, access } of scanCarrierObservations(repo, ctx)) {
     if (o.direction) { hits.push({ value: o.value, produces: o.direction === "write", partial: o.partial, access }); continue; }
     const sig = await resolveCarrierSignature(repo, provider, index, o.callee.className, o.callee.method, ctx);   // cache-only
-    if (sig) hits.push({ value: o.value, produces: sig.direction === "write", partial: o.partial, access });
+    if (sig) hits.push({ value: o.value, produces: sig.direction === "write", partial: o.partial, access, medium: sig.medium });
     else if (opts.llm) pending.push({ provider, index, className: o.callee.className, method: o.callee.method, value: o.value, partial: o.partial, access });
   }
   return { hits, pending };
@@ -79,27 +80,40 @@ async function resolvePending(repo: string, pending: PendingObs[], opts: Carrier
   const hits: CarrierHit[] = [];
   for (const p of pending) {
     const sig = await resolveCarrierSignature(repo, p.provider, p.index, p.className, p.method, ctx);   // cache-only (prefetched)
-    if (sig) hits.push({ value: p.value, produces: sig.direction === "write", partial: p.partial, access: p.access });
+    if (sig) hits.push({ value: p.value, produces: sig.direction === "write", partial: p.partial, access: p.access, medium: sig.medium });
   }
   return hits;
 }
 
+// A hit's grounding KIND + normalised value, from its learned medium. `http-route` grounds under the SAME
+// `http-route <path>` key the deterministic adapters use (so a learned custom HTTP client meets a backend
+// `@Path`/file-routed handler), with the URL normalised (`{id}`→`*`, query/hash dropped) to that key shape.
+// Everything else is a `data-file` channel (the original behaviour — default when no medium is recorded).
+function hitKind(h: CarrierHit): { kind: string; value: string } {
+  return h.medium === "http-route" ? { kind: "http-route", value: normPath(h.value) } : { kind: "data-file", value: h.value };
+}
+
 // Pass 2 — index each hit under its own key, then TEACHER-2 expand: a partial family pattern also grounds
 // on every concrete literal it matches, and a literal grounds on every pattern that matches it, so a
-// pattern reader couples to a literal writer (and vice versa) at the shared meeting key.
-function expandAndIndexHits(hits: CarrierHit[]): GroundingIndex {
+// pattern reader couples to a literal writer (and vice versa) at the shared meeting key. PARTITIONED by
+// grounding kind so a URL glob never matches a file-path literal (the two media never cross-ground).
+export function expandAndIndexHits(hits: CarrierHit[]): GroundingIndex {
   const idx: GroundingIndex = new Map();
-  const concrete = [...new Set(hits.filter((h) => !h.partial).map((h) => h.value))];
-  const patterns = [...new Set(hits.filter((h) => h.partial).map((h) => h.value))];
-  const add = (value: string, produces: boolean, access: Access) => {
-    const k = `data-file ${value}`;
-    if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
-    (produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push(access);
-  };
-  for (const h of hits) {
-    add(h.value, h.produces, h.access);                                              // own key
-    if (h.partial) for (const c of concrete) { if (globMatch(h.value, c)) add(c, h.produces, h.access); }      // pattern → matching literals
-    else for (const p of patterns) { if (globMatch(p, h.value)) add(p, h.produces, h.access); }                // literal → matching patterns
+  const byKind = new Map<string, { h: CarrierHit; kind: string; value: string }[]>();
+  for (const h of hits) { const kv = hitKind(h); (byKind.get(kv.kind) ?? byKind.set(kv.kind, []).get(kv.kind)!).push({ h, ...kv }); }
+  for (const [kind, group] of byKind) {
+    const concrete = [...new Set(group.filter((g) => !g.h.partial).map((g) => g.value))];
+    const patterns = [...new Set(group.filter((g) => g.h.partial).map((g) => g.value))];
+    const add = (value: string, produces: boolean, access: Access) => {
+      const k = `${kind} ${value}`;
+      if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
+      (produces ? idx.get(k)!.producers : idx.get(k)!.consumers).push(access);
+    };
+    for (const { h, value } of group) {
+      add(value, h.produces, h.access);                                            // own key
+      if (h.partial) for (const c of concrete) { if (globMatch(value, c)) add(c, h.produces, h.access); }   // pattern → matching literals
+      else for (const p of patterns) { if (globMatch(p, value)) add(p, h.produces, h.access); }             // literal → matching patterns
+    }
   }
   return idx;
 }

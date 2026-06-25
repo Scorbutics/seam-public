@@ -24,7 +24,11 @@ export interface CarrierSignature { direction: "read" | "write"; medium: string;
 const _slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 
 const _DIRS = new Set(["read", "write"]);
-const _MEDIA = new Set(["file", "db", "serialized", "blob", "cache", "data"]);
+// CHANNEL media a learned carrier signature can declare. `http-route` makes the carrier framework ground a
+// custom HTTP client (a project's own `Vue.http`/`apiClient`/`gateway.call` wrapper) under the SAME key as
+// the deterministic http-route adapter — so a learned "this receiver is our HTTP layer" rule grounds the
+// frontend call to the backend handler, the project-specific-call-type lever. The rest are data channels.
+const _MEDIA = new Set(["file", "db", "serialized", "blob", "cache", "data", "http-route"]);
 // in-mem signature cache (ctx.carrierSig) + the run budget (ctx.synthBudget) now live on the EngineCtx —
 // a fresh ctx is a clean slate, so the old resetCarrierSynthBudget() hook is gone.
 
@@ -64,7 +68,8 @@ ${blocks}
 For each carrier give a short kebab-case "name" and a one-line "description" (for human review).
 
 Return a JSON array (one object per CARRIER method, by its m-id):
-[{"id":"m0","direction":"read|write","medium":"file|db|serialized|blob|cache","keyArg":<0-based arg index naming the channel, or null>,"name":"short-kebab-name","description":"one line"}]
+[{"id":"m0","direction":"read|write","medium":"file|db|serialized|blob|cache|http-route","keyArg":<0-based arg index naming the channel (an HTTP method's URL/path arg, a file path, …), or null>,"name":"short-kebab-name","description":"one line"}]
+(Use medium "http-route" for a method that makes an HTTP request to a backend — a custom http/api/request/gateway client wrapper — with keyArg = the URL/path argument; direction "read" for GET-like, "write" for POST/PUT/DELETE-like.)
 `;
 }
 
