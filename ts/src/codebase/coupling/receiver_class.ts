@@ -22,9 +22,11 @@ import { ORM_READ_VERBS, ORM_WRITE_VERBS } from "./adapters/member_access.js";
 import { DB_TABLE_META } from "./adapters/db_table.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
 import { persistMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
+import { _ROUTE_ANNOT as _BUILTIN_ROUTE_ANNOT } from "./adapters/annotation_route.js";
 import { EngineCtx } from "../engine_ctx.js";
 
 const PASS = registerPass({ tag: "classify-receivers", tier: "strong", note: "receiver→type classification (database/http/store/…); learn-once → .seam" });
+const ANNOT_PASS = registerPass({ tag: "classify-annotations", tier: "strong", note: "annotation→type (route/queue/event) — custom route/listener annotations a hardcoded set misses; learn-once → .seam" });
 
 const SELF = new Set(["this", "self", "super"]);
 const CHAIN = /(?<![\w$.])((?:[A-Za-z_$][\w$]*\s*\.\s*)+[A-Za-z_$][\w$]*)\s*\(/g;
@@ -163,5 +165,78 @@ export async function classifyAndPersistRepositories(
   persistMatchers(repo, matchers);          // join the matcher store → loadMatchers/applyMatchers ground them
   recordLearnedMatchers(repo, sig);         // gate: same candidates next run → replay, no LLM
   ctx.repoMatchers.set(repo, matchers);
+  return matchers;
+}
+
+// ── ANNOTATION CLASSIFICATION ────────────────────────────────────────────────────────────────────────
+// The same ladder for ANNOTATIONS: a `@Name("literal")` decorator is to a route/queue/event what a receiver
+// is to a data layer — a recurring named pattern carrying a key, that structure surfaces and the LLM judges.
+// The builtin route-annotation set (annotation_route._ROUTE_ANNOT) is the floor IDIOM; this learns a project's
+// CUSTOM ones. Many annotations share the `@Name("lit")` shape (route vs @Param/@DocsTags/@Roles) — the
+// discriminator is MEANING (a path vs a field name vs a doc tag), so the LLM is needed (validated: 100% on
+// cal.com). Emits `annotation` matchers (kind http-route/queue/event) applied via applyMatchers — no floor
+// integration. NOTE: this handles SINGLE-annotation custom routes; a custom class+method COMPOSITION still
+// relies on the builtin set (the floor `scan` is sync/repo-less, can't read learned state — deferred).
+const _ANNOT_RE = /@(\w+)\s*\(\s*["'`]([^"'`\s][^"'`]*)["'`]/g;
+interface AnnotProfile { name: string; lits: Set<string>; files: number }
+
+function _annotInventory(repo: string, skipDirs: Set<string>): AnnotProfile[] {
+  const inv = new Map<string, { files: Set<string>; lits: Set<string> }>();
+  for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
+    const code = makeMaskCtx(text).comments; let m: RegExpExecArray | null; _ANNOT_RE.lastIndex = 0;
+    while ((m = _ANNOT_RE.exec(code)) !== null) {
+      let e = inv.get(m[1]); if (!e) { e = { files: new Set(), lits: new Set() }; inv.set(m[1], e); }
+      e.files.add(rel); e.lits.add(m[2]);
+    }
+  }
+  return [...inv].filter(([, e]) => e.files.size >= MIN_FILES).map(([name, e]) => ({ name, lits: e.lits, files: e.files.size }))
+    .sort((a, b) => b.files - a.files).slice(0, MAX_CANDIDATES);
+}
+
+function _annotPrompt(cands: AnnotProfile[]): string {
+  const lines = cands.map((c) => `@${c.name}: ${[...c.lits].slice(0, 6).map((l) => `"${l.slice(0, 28)}"`).join(" ")}`).join("\n");
+  return `Classify each ANNOTATION/decorator by what KIND of cross-service coupling its STRING-LITERAL arg
+declares — judging by MEANING, not the name. Is the literal a URL ROUTE PATH, a message QUEUE/topic, an EVENT
+name — or NONE of those (a param/header name, a doc tag, a role/enum, a config flag, a bean name)?
+  route — the literal is a URL path: "/", "/:id", "v1", "member/booking" (an HTTP endpoint the handler serves)
+  queue — a message queue / topic name (JMS/Kafka/AMQP listener: @JmsListener("orders.export"))
+  event — an application event name (@EventListener("user.created"), @OnEvent("order.placed"))
+  none  — a param/header NAME ("userId","Authorization"), a doc tag ("Bookings"), a role/enum ("TEAM_ADMIN",
+          "SCALE"), a config flag, a bean/DI name — NOT a cross-service key.
+
+${lines}
+
+Return a JSON array, id = the annotation name (no @): [{"id":"Get","type":"route"},{"id":"Param","type":"none"}]`;
+}
+
+// Classify recurring annotations (LLM) and PERSIST `annotation` matchers for the route/queue/event ones.
+// Mirrors classifyAndPersistRepositories: idempotent per run + gated per candidate-set signature.
+export async function classifyAndPersistAnnotations(
+  repo: string, opts: { llm?: boolean; model?: string; claudeBin?: string | null }, ctx: EngineCtx,
+): Promise<KeyMatcher[]> {
+  if (ctx.annotMatchers.has(repo)) return ctx.annotMatchers.get(repo) as KeyMatcher[];
+  if (!opts.llm) { ctx.annotMatchers.set(repo, []); return []; }
+  const cands = _annotInventory(repo, SKIP_DIRS);
+  if (!cands.length) { ctx.annotMatchers.set(repo, []); return []; }
+  const sig = "ra:" + createHash("sha1").update(cands.map((c) => `${c.name}:${[...c.lits].sort().join(",")}`).sort().join("\n")).digest("hex");
+  if (hasLearnedMatchersFor(repo, sig)) { ctx.annotMatchers.set(repo, []); return []; }
+
+  emit(`Classifying ${cands.length} recurring annotation(s) by type (route/queue/event) via LLM…`);
+  let types = new Map<string, string>();
+  try { types = _parse(run_pass(_annotPrompt(cands), { model: opts.model, claudeBin: opts.claudeBin, tag: ANNOT_PASS.tag })); }
+  catch (e) { if (!(e instanceof LLMError)) throw e; ctx.annotMatchers.set(repo, []); return []; }
+
+  const matchers: KeyMatcher[] = [];
+  const push = (m: KeyMatcher | null) => { if (m) matchers.push(m); };
+  for (const c of cands) {
+    const t = types.get(c.name);
+    if (t === "route" && !_BUILTIN_ROUTE_ANNOT.has(c.name)) push(validateMatcher({ via: "annotation", annotation: c.name, kind: "http-route", role: "produces" }));   // CUSTOM route annot only — the floor already handles @Get/@Path
+    else if (t === "queue") push(validateMatcher({ via: "annotation", annotation: c.name, kind: "queue", role: "consumes" }));        // a listener consumes the queue
+    else if (t === "event") push(validateMatcher({ via: "annotation", annotation: c.name, kind: "event", role: "consumes" }));        // a handler consumes the event
+  }
+  if (verbose()) { const by = (t: string) => cands.filter((c) => types.get(c.name) === t).map((c) => "@" + c.name); process.stderr.write(`[annot-class] route: ${by("route").join(", ")} | queue: ${by("queue").join(", ")} | event: ${by("event").join(", ")}\n`); }
+  persistMatchers(repo, matchers);
+  recordLearnedMatchers(repo, sig);
+  ctx.annotMatchers.set(repo, matchers);
   return matchers;
 }

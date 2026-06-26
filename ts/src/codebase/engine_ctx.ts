@@ -39,6 +39,7 @@ export class EngineCtx {
   // codebase's recurring receivers (idiom → LLM type-confirmation). Built once/run, persisted + applied like
   // learned matchers. Empty array = classified, none were `database`.
   repoMatchers = new Map<string, unknown>();
+  annotMatchers = new Map<string, unknown>();   // annotation→type classification → route/queue/event `annotation` matchers
 
   // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
   // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory

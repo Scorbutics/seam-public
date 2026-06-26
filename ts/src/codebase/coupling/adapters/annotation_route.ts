@@ -16,7 +16,7 @@ import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 // regex pass below is name-AGNOSTIC (it judges the literal), but a route SPLIT across a class @Path + a method
 // @Path with PLAIN relative literals (`member/booking` + `v1`, no slash, no path-var) is invisible to it — the
 // only signal that `member/booking` IS a route is the annotation NAME. So COMPOSITION keys on this vocabulary.
-const _ROUTE_ANNOT = new Set(["Path", "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH",
+export const _ROUTE_ANNOT = new Set(["Path", "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH",
   "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping",
   "Get", "Post", "Put", "Delete", "Patch", "route", "WebServlet", "RequestLine"]);
 const _NAMED_ANNOT = /@(\w+)\s*\(\s*["'`]([^"'`\s]+)["'`]/g;        // @Name("literal") — name + the literal

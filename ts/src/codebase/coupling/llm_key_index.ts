@@ -290,7 +290,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // TYPE-ADAPTER classification: synthesise `repository` matchers for database-classified receivers (the
   // custom 2-part data layers member_access misses). Persists into the same store → picked up by loadMatchers
   // below. Gated on opts.llm + the candidate-set signature (warm runs replay, no call).
-  { const { classifyAndPersistRepositories } = await import("./receiver_class.js"); await classifyAndPersistRepositories(repo, opts, ctx); }
+  { const { classifyAndPersistRepositories, classifyAndPersistAnnotations } = await import("./receiver_class.js"); await classifyAndPersistRepositories(repo, opts, ctx); await classifyAndPersistAnnotations(repo, opts, ctx); }
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 

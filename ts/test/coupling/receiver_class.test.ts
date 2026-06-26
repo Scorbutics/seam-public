@@ -59,3 +59,37 @@ describe("receiver classification — LLM confirms type, drops the http look-ali
     expect(ms).toEqual([]);
   });
 });
+
+import { classifyAndPersistAnnotations } from "../../src/codebase/coupling/receiver_class.js";
+import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
+
+describe("annotation classification — custom route annotation the builtin set misses", () => {
+  let REPO2: string, SHARED2: string;
+  beforeEach(() => {
+    REPO2 = mkdtempSync(join(tmpdir(), "ac-repo-")); SHARED2 = mkdtempSync(join(tmpdir(), "ac-shared-"));
+    process.env.SEAM_ADAPTERS_DIR = SHARED2; _resetKeyStoreMem(); set_host_bus(null);
+    for (let i = 0; i < 5; i++) {   // ≥MIN_FILES, a project-specific @GlobexRoute + a noise @Audit
+      mkdirSync(join(REPO2, "be"), { recursive: true });
+      writeFileSync(join(REPO2, "be", `R${i}.java`), `@GlobexRoute("/api/bookings/${i}")\n@Audit("booking")\npublic void h${i}() {}\n`);
+    }
+  });
+  afterEach(() => { rmSync(REPO2, { recursive: true, force: true }); rmSync(SHARED2, { recursive: true, force: true }); delete process.env.SEAM_ADAPTERS_DIR; _resetKeyStoreMem(); set_host_bus(null); });
+
+  test("@GlobexRoute → route → annotation matcher that extracts the route; @Audit → none → dropped", async () => {
+    class Bus extends HostBus {
+      serve(tag: string): string {
+        if (tag !== "classify-annotations") return "[]";
+        return JSON.stringify([{ id: "GlobexRoute", type: "route" }, { id: "Audit", type: "none" }]);
+      }
+    }
+    set_host_bus(new Bus());
+    const ms = await classifyAndPersistAnnotations(REPO2, { llm: true }, new EngineCtx());
+    const route = ms.find((m: any) => m.annotation === "GlobexRoute");
+    expect(route).toBeDefined();
+    expect((route as any).kind).toBe("http-route");
+    expect(ms.some((m: any) => m.annotation === "Audit")).toBe(false);                  // noise → not a matcher
+    // the matcher extracts the route literal → grounds with a front-end fetch of the same path
+    const hits = await runMatcher(route!, "R.java", `@GlobexRoute("/api/bookings/7")\npublic void h() {}`);
+    expect(hits.some((h) => h.kind === "http-route" && h.value === "/api/bookings/7" && h.produces)).toBe(true);
+  });
+});
