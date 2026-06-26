@@ -45,6 +45,12 @@ export class EngineCtx {
   // — bounded by the answer's size, complete across every module the grow spans. Unset → module scope.
   footprintFiles?: Set<string>;
 
+  // STABLE-FLOOR mode (set during the footprint PRE-GROW): ground from the DETERMINISTIC floor only — skip the
+  // learned/LLM adapters (matcher rules, per-file keys, the receiver classifier) that ACCUMULATE in `.seam`
+  // across runs. Without this the pre-grow's footprint EXPANDS every run as adapters are learned (warm never
+  // settles); the deterministic floor is identical run-to-run, so the scope is stable and the LLM grow settles.
+  stableFloor = false;
+
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run

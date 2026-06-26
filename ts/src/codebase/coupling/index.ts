@@ -373,6 +373,10 @@ async function assembleSources(
   llmOpts: _LlmOpts, ctx: EngineCtx,
 ): Promise<AssembledSources> {
 
+  // STABLE-FLOOR pre-grow: the footprint must be computed from the DETERMINISTIC floor ONLY, so the scope is
+  // identical run-to-run (else the learned adapters below expand it every run → warm never settles). Return no
+  // assembled sources → resolveCoupling uses just floor_base_index (the built-in adapters, incl. member_access).
+  if (ctx.stableFloor) return { proposedKeys: [] };
   const lk = await import("./llm_key_index.js");
   const { module_scope } = await import("../../core/resolve/languages/index.js");
   // FOOTPRINT-scoped when a floor pre-grow set ctx.footprintFiles (the flow's files, cross-module); else the
@@ -443,7 +447,7 @@ export async function resolveCoupling(
       scanParamSites(anchorText, anchorFile, sites);
       touchesBoundary = sites.some((s) => inSpan(s.line));
     }
-    if (!touchesBoundary) {
+    if (!touchesBoundary && !ctx.stableFloor) {   // learned matchers are the accumulating part → not in a stable-floor probe
       for (const { matcher } of listMatchers(repo)) {
         if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) { touchesBoundary = true; break; }
       }
@@ -471,7 +475,7 @@ export async function resolveCoupling(
   // LEARNED adapter rules (cached `.seam/`), deduped — run per-node below to SURFACE keys a built-in adapter
   // no longer covers (e.g. AngularJS $scope bindings, now learned). Pure read (no ledger side-effect).
   const _seen = new Set<string>();
-  const matchers = listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return _seen.has(k) ? false : (_seen.add(k), true); });
+  const matchers = ctx.stableFloor ? [] : listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return _seen.has(k) ? false : (_seen.add(k), true); });
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };
 
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },

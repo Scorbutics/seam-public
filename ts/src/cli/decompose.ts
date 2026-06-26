@@ -450,7 +450,11 @@ async function runCodebase(a: Args): Promise<number> {
           const { EngineCtx } = await import("../codebase/engine_ctx.js");
           const ctx = new EngineCtx();
           emit("Floor pre-grow to scope coupling discovery to the footprint…");
+          // DETERMINISTIC floor only → the footprint is identical run-to-run (else learned adapters expand it
+          // each run and warm never settles). Reset before the real grow so it discovers normally.
+          ctx.stableFloor = true;
           const [floorData] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: false, ctx });
+          ctx.stableFloor = false;
           ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
           process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
           [data, hist] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: true, ctx });
