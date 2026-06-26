@@ -34,11 +34,11 @@ class CrossStackBus extends HostBus {
 
 beforeEach(() => {
   REPO = mkdtempSync(join(tmpdir(), "dangling-repo-")); SHARED = mkdtempSync(join(tmpdir(), "dangling-shared-"));
-  process.env.SEAM_ADAPTERS_DIR = SHARED; process.env.SEAM_PER_FILE_KEYS = "1"; set_host_bus(null);   // pass 5 + producer discovery use the per-file literal axis
+  process.env.SEAM_ADAPTERS_DIR = SHARED; process.env.SEAM_PER_FILE_KEYS = "1"; process.env.SEAM_DANGLING_REACH = "1"; set_host_bus(null);   // pass 5 + producer discovery use the per-file literal axis; reach is opt-in (temporarily off by default)
 });
 afterEach(() => {
   rmSync(REPO, { recursive: true, force: true }); rmSync(SHARED, { recursive: true, force: true });
-  delete process.env.SEAM_ADAPTERS_DIR; delete process.env.SEAM_PER_FILE_KEYS; set_host_bus(null);
+  delete process.env.SEAM_ADAPTERS_DIR; delete process.env.SEAM_PER_FILE_KEYS; delete process.env.SEAM_DANGLING_REACH; set_host_bus(null);
 });
 
 describe("dangling-counterpart reach (backend producer → UI consumer recall)", () => {

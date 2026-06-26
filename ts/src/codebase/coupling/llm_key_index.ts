@@ -313,7 +313,10 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // to SEED the other module's file that holds it (the FE wrapper carries the literal even when the component
   // call site reaches it through indirection), LLM-discover THOSE, and merge — so the counterpart grounds and
   // crossBoundary can pull it in. Dangling-only + grep-bounded → cheap; baked into the cached idx (warm-safe).
-  if (opts.scopeFiles && opts.llm && ctx.keyBudget > 0)
+  // TEMPORARILY DISABLED by default: the dangling-counterpart reach is slow on real repos and not landing the
+  // counterpart reliably (the cross-stack recall it's meant to add). Off until that's fixed; opt back in with
+  // SEAM_DANGLING_REACH=1 (the regression tests set it). The rest of pass 5 (the bounded grep-seed) stays intact.
+  if (process.env.SEAM_DANGLING_REACH === "1" && opts.scopeFiles && opts.llm && ctx.keyBudget > 0)
     for (const [k, v] of await _reachDanglingCounterparts(repo, idx, opts, ctx)) {
       if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
       idx.get(k)!.producers.push(...v.producers); idx.get(k)!.consumers.push(...v.consumers);
