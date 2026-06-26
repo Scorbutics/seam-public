@@ -17,12 +17,14 @@
       "/api/orders|backend/OrderController.java|route|C",
       "App|frontend/App.tsx|function|C",
       "OrderController|backend/OrderController.java|class",
-      "OrdersPage|frontend/OrdersPage.tsx|function|C"
+      "OrdersPage|frontend/OrdersPage.tsx|function|C",
+      "listOrders|backend/OrderController.java|method|backward"
     ],
     "edges": [
       "/api/orders->OrdersPage:route-fetch",
       "App->OrdersPage:reference",
-      "OrderController->/api/orders:route-serve"
+      "OrderController->/api/orders:route-serve",
+      "OrderController->listOrders:contains"
     ]
   },
   "app/api/admin/payments/route.ts:GET": {

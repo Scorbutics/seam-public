@@ -12,7 +12,7 @@
 // later LLM pass. The degenerate isolated case is killed here, structurally, with no model in the loop.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { from_resolved_graph } from "../../core/graph_ir.js";
+import { from_resolved_graph, undirected_adjacency } from "../../core/graph_ir.js";
 import { emit, timingOn } from "../../core/progress.js";
 import { run_pass, available, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
@@ -68,8 +68,11 @@ export function footprint_metrics(data: any): ProbeMetrics {
   const edges = g.resolved_edges();
   const anchorId = g.nodes.has(g.anchor) ? g.anchor : (g.anchors.find((a) => g.nodes.has(a)) ?? g.anchor);
 
-  // undirected reach from the anchor over ALL resolved edges (crossings included — a crossing IS a link)
-  const adj = g.adjacency();
+  // undirected reach from the anchor over resolved LINK edges (crossings included — a crossing IS a link),
+  // but NOT `contains`: a class's own member is intra-structure, not a connection to OTHER code. Counting
+  // contains would make a route handler with a single un-called method (its DOWN footprint is now its own
+  // methods) look connected/non-isolated and surface that member as a bogus "terminal".
+  const adj = undirected_adjacency(edges.filter((e) => e.kind !== "contains"));
   const seen = new Set<string>([anchorId]);
   const stack = [anchorId];
   while (stack.length) for (const nb of adj.get(stack.pop()!) ?? []) if (!seen.has(nb)) { seen.add(nb); stack.push(nb); }

@@ -23,8 +23,9 @@ describe("findReach", () => {
     expect(r.path).toHaveLength(0);
   });
 
-  test("no-out-edges: a leaf class (PaymentService) has undefined reachability", async () => {
-    const r = await findReach(repo, "src/payment/service.ts", "PaymentService", "Page");
+  test("no-out-edges: a leaf method (audit, no deps) has undefined reachability", async () => {
+    // A CLASS is no longer a down-leaf (it decomposes into its methods); a depless METHOD still is.
+    const r = await findReach(repo, "src/payment/service.ts", "audit", "Page");
     expect(r.reachable).toBe(false);
     expect(r.reason).toBe("no-out-edges");
     expect(r.noStructure).toBe(true);

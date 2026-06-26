@@ -109,8 +109,17 @@ describe("projectDependencySet (the OUT-edge mirror of consumers)", () => {
     expect(set.noStructure).toBeUndefined();
   });
 
-  test("a leaf has no dependencies → noStructure 'none'", async () => {
+  test("a CLASS decomposes DOWN into its own methods (not a leaf, not its return types)", async () => {
     const g = await build_footprint(repo, "src/payment/service.ts", "PaymentService", { direction: "down", dataCoupling: false });
+    const set = projectDependencySet(g as any);
+    expect(set.shape).toBe("deps");
+    expect(set.members.map((m) => m.symbol).sort()).toEqual(["audit", "charge", "refund"]);   // its methods — constructor excluded
+    expect(set.members.every((m) => m.kind === "method")).toBe(true);
+    expect(set.noStructure).toBeUndefined();
+  });
+
+  test("a genuine leaf (a method with no deps) → noStructure 'none'", async () => {
+    const g = await build_footprint(repo, "src/payment/service.ts", "audit", { direction: "down", dataCoupling: false });
     const set = projectDependencySet(g as any);
     expect(set.noStructure).toBe(true);
     expect(set.reason).toBe("none");

@@ -7,12 +7,13 @@ import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { resolveFileRef } from "../../core/resolve/file_ref.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF } from "../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "./graph.js";
-import { expanduser, _read, _named_units, _usage_lines } from "./ast_units.js";
+import { expanduser, _read, _name_of, _named_units, _usage_lines } from "./ast_units.js";
+import { _type_methods } from "./ast_class.js";
 import { impls_of } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
 import { timingOn } from "../../core/progress.js";
@@ -118,6 +119,35 @@ async function _samePackagePass(s: DepScan): Promise<void> {
   }
 }
 
+// 2b) CLASS/INTERFACE anchor — its "down" footprint is its OWN methods (how it works), NOT the return TYPES
+// a body-wide _TYPE_REF scan surfaces. In a typed language the same-package pass sweeps up every method's
+// return/param type (Java `BookingData loadBooking()` → BookingData / SubList / User), so the down spine read
+// as those DTO types instead of the methods. Names come from the tree-sitter `name` field (cross-language via
+// _named_units / _type_methods → _name_of), mirroring the consumers (UP) path, which already lists a class's
+// methods. Runs INSTEAD of the same-package pass for a type anchor; imports + interface-impl still run.
+async function _typeMethodsPass(s: DepScan): Promise<void> {
+  if (!s.actx) return;
+  const cls = s.actx.collect(s.actx.root, (k) => _CLASS_KINDS.has(k) || _INTERFACE.has(k)).find((c) => _name_of(s.actx!, c) === s.symbol);
+  if (!cls) return;
+  const [cs, ce] = s.actx.span(cls);
+  // In-class methods (cross-language: Ruby `def`, C++ in-body function_definition, Java/TS methods) from the
+  // unit scan, UNIONed with the interface-member fallback (_type_methods) so an interface's signatures
+  // (TS `method_signature` / Java method_declaration) are covered too. Spans dedup by name.
+  const spans = new Map<string, [number, number]>();
+  // Exclude constructors as the UP path does: TS names them "constructor", Java/C++/C# name them after the
+  // class (== s.symbol). _type_methods already drops `constructor_declaration` structurally.
+  for (const [name, kind, ms, me] of s.aunits) if (kind === "method" && ms >= cs && me <= ce && name !== "constructor" && name !== s.symbol) spans.set(name, [ms, me]);
+  for (const [name, ms, me] of _type_methods(s.actx, s.symbol)) if (!spans.has(name)) spans.set(name, [ms, me]);
+  for (const [name, [ms, me]] of spans) {
+    if (s.seen.has(`${name} ${s.anchorFile}`)) continue;
+    s.seen.add(`${name} ${s.anchorFile}`);
+    s.counter += 1;
+    const did = `d${s.counter}`;
+    s.nodes.push({ id: did, symbol: name, kind: "method", file: s.anchorFile, range: [ms, me], enclosing: s.symbol, complexity: Math.max(1, me - ms + 1) });
+    s.edges.push({ from: "n1", to: did, kind: "contains", provenance: "RESOLVED_FULL" });
+  }
+}
+
 // 3) INTERFACE→IMPL pass — extend the footprint PAST a DI interface (@Inject/@Autowired/CDI) to its
 // concrete implementation: the runtime binding a static scan can't see, recovered structurally from the
 // `implements` relation. SOLE impl → a RESOLVED_PARTIAL `interface-impl` edge (it IS the runtime binding,
@@ -205,10 +235,15 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     // data-coupling). --verbose / SEAM_TIMING only; same diagnostic style as [dc-timing]/[index-cache].
     const _dt = () => (timingOn() ? performance.now() : 0);
     const _de = (l: string, t: number) => { if (t) process.stderr.write(`[dep-pass] ${symbol} ${l}: ${Math.round(performance.now() - t)}ms\n`); };
+    // A CLASS/INTERFACE anchor decomposes DOWN into its own methods; a function/method anchor into the
+    // same-package types its body references. Detected structurally from the parse (not the def-table kind,
+    // which labels interfaces "class" too) — covers any class/interface/struct/enum/record in _CLASS_KINDS.
+    const isType = !!actx && actx.collect(actx.root, (k) => _CLASS_KINDS.has(k) || _INTERFACE.has(k)).some((c) => _name_of(actx, c) === symbol);
     let _t = _dt();
     await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
     await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
-    await _samePackagePass(s); _de("samePackage", _t); _t = _dt();
+    if (isType) { await _typeMethodsPass(s); _de("typeMethods", _t); } else { await _samePackagePass(s); _de("samePackage", _t); }
+    _t = _dt();
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);
     await _stringDispatchPass(s, arange[0], arange[1]); _de("stringDispatch", _t); _t = _dt();

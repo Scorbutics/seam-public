@@ -25,7 +25,9 @@ describe("projectCompare", () => {
   });
 
   test("nothing to compare: two leaf symbols with no resolved deps → noStructure", async () => {
-    const c = await projectCompare(repo, "src/payment/service.ts", "PaymentService", "src/payment/service.ts", "charge");
+    // Two leaf METHODS (each just returns its arg) — a class is no longer a down-leaf (it decomposes into
+    // its methods), so compare two genuinely depless symbols.
+    const c = await projectCompare(repo, "src/payment/service.ts", "charge", "src/payment/service.ts", "audit");
     expect(c.noStructure).toBe(true);
     expect(c.shared.length + c.aOnly.length + c.bOnly.length).toBe(0);
   });
