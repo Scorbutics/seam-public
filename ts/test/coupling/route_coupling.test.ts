@@ -21,6 +21,14 @@ describe("annotation-route adapter (handler side, agnostic)", () => {
     const hits = keys("X.java", '@WebServlet("/document/*")\npublic class X {}');
     expect(hits).toContainEqual({ kind: "http-route", value: "/document/*", line: 0, produces: true });
   });
+  test("JAX-RS class @Path + method @Path COMPOSE into the full endpoint (plain relative literals)", () => {
+    const hits = keys("BookingResource.java",
+      '@Path("member/booking")\n@Produces(X)\npublic class BookingResource {\n  @GET\n  @Path("v1")\n  public Response get() { return repo.findAll(); }\n}');
+    // neither literal has a slash or path-var → the literal pass can't see them; composition keys on the @Path name
+    expect(hits.some((h) => h.kind === "http-route" && h.value === "/member/booking/v1" && h.produces)).toBe(true);
+    expect(hits.some((h) => h.value === "/member/booking")).toBe(false);   // the class base alone is NOT emitted
+  });
+
   test("Spring @GetMapping with a path param normalises to a wildcard", () => {
     const hits = keys("C.java", '@GetMapping("/owners/{id}")\nvoid get() {}');
     expect(hits).toContainEqual({ kind: "http-route", value: "/owners/*", line: 0, produces: true });

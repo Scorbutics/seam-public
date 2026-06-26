@@ -11,6 +11,47 @@ import { HTTP_ROUTE_META, normPath } from "./http_route.js";
 import { lineOf, maskComments } from "./util.js";
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 
+// ROUTE-annotation idiom — a closed cross-framework set of annotation NAMES that declare an HTTP route (JAX-RS
+// @Path/@GET…, Spring @*Mapping, Nest @Get…, Flask @route, Feign @RequestLine, Servlet @WebServlet). The bare
+// regex pass below is name-AGNOSTIC (it judges the literal), but a route SPLIT across a class @Path + a method
+// @Path with PLAIN relative literals (`member/booking` + `v1`, no slash, no path-var) is invisible to it — the
+// only signal that `member/booking` IS a route is the annotation NAME. So COMPOSITION keys on this vocabulary.
+const _ROUTE_ANNOT = new Set(["Path", "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH",
+  "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping",
+  "Get", "Post", "Put", "Delete", "Patch", "route", "WebServlet", "RequestLine"]);
+const _NAMED_ANNOT = /@(\w+)\s*\(\s*["'`]([^"'`\s]+)["'`]/g;        // @Name("literal") — name + the literal
+const _join = (base: string, sub: string) => normPath("/" + [base, sub].map((s) => s.replace(/^\/+|\/+$/g, "")).filter(Boolean).join("/"));
+// the next non-annotation/non-blank code line AFTER the annotation at `at` — to tell a CLASS base from a METHOD
+// path. Starts at the line FOLLOWING the annotation's own line (so the annotation's own `)` isn't misread).
+function _nextDecl(text: string, at: number): string {
+  const nl = text.indexOf("\n", at);
+  for (const raw of text.slice(nl < 0 ? text.length : nl + 1).split("\n")) {
+    const l = raw.trim();
+    if (!l || l.startsWith("@")) continue;
+    return l;
+  }
+  return "";
+}
+
+// COMPOSE a class-level route annotation with each method's — the JAX-RS/Spring `@Path("member/booking")` class
+// + `@Path("v1")` method ⇒ `/member/booking/v1`, the full endpoint the front-end's URL grounds to. Stateful
+// top-to-bottom scan (a route annotation followed by a `class` decl is the BASE; otherwise it's a method path
+// composed onto the current base). Catches the PLAIN-relative split the literal-only pass can't see.
+function composedRoutes(text: string): KeyHit[] {
+  const out: KeyHit[] = [];
+  let classBase: string | null = null;
+  let m: RegExpExecArray | null;
+  _NAMED_ANNOT.lastIndex = 0;
+  while ((m = _NAMED_ANNOT.exec(text)) !== null) {
+    const [name, lit] = [m[1], m[2]];
+    if (!_ROUTE_ANNOT.has(name)) continue;
+    if (/\b(class|interface|enum|record)\b/.test(_nextDecl(text, m.index))) { classBase = lit; continue; }   // class base
+    const full = lit.startsWith("/") ? normPath(lit) : _join(classBase ?? "", lit);   // method path (absolute overrides the base)
+    if (full && full !== "/") out.push({ kind: "http-route", value: full, line: lineOf(text, m.index), produces: true });
+  }
+  return out;
+}
+
 // `@Name( …anything… "<literal>" …anything… )` — the annotation name only ANCHORS the match (`@\w[\w.]*`);
 // we judge the LITERAL, framework-agnostically (no per-framework name list). A literal is a route when it is:
 //   • ABSOLUTE — `/x/y` (`@WebServlet("/x")`, `@GetMapping("/x")`, `@RequestMapping(path="/x")`), OR
@@ -40,6 +81,9 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     const path = routeValue(m[1]);
     if (path && path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, m.index), produces: true });
   }
+  // ⊕ class@Path + method@Path COMPOSED endpoints (the plain-relative split the literal pass can't recognise)
+  const seen = new Set(out.map((h) => h.value));
+  for (const h of composedRoutes(text)) if (!seen.has(h.value)) { seen.add(h.value); out.push(h); }
   return out;
 }
 
