@@ -226,7 +226,6 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   }
   const _iscore = (n: any): number => intentScore.get(`${n.symbol} ${normpath(n.file)}`) ?? 0;
   for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
-    emit(`Growing the footprint to its terminals (step ${step + 1})…`);
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -247,6 +246,9 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     // (a handler whose work is all downstream) traces the full path, not just its zero consumers.
     // Dep resolution is LOCAL (the file's imports) — cheap; consumers are the repo scan.
     const dir: string | undefined = next.direction;
+    // report the chosen node + the direction we're expanding it (up = consumers / down = deps), so a slow
+    // grow on a real repo shows WHERE it's heading — the "is it climbing to consumers or descending?" question.
+    emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
     let add: any;
     try {
       add = await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...co });
