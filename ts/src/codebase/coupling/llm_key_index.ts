@@ -211,11 +211,17 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
     if (!inScope(rel)) continue;                     // out-of-module → no per-file LLM (floor + rules still ground it)
-    if (floor.length && !augment) continue;          // floor covers + not augmenting → leave to shared_key_index
+    // BRIDGE file: floor-covered ONLY by a DI `binding` (a service wrapper like a Vue plugin) — it almost
+    // always ALSO does I/O the floor can't read (a composed/templated route). Without this it's "floor-covered
+    // → skipped", so the I/O is never examined and a consumer-anchored cross-stack grow stalls at the wrapper
+    // (the globex bookingService GAP B). NARROW (binding-only) so it does NOT re-augment member_access-keyed
+    // db files. Treated as blind below → its non-binding keys (the route) get discovered, the binding stays floor.
+    const isBridge = floor.length > 0 && floor.every((h) => h.kind === "binding");
+    if (floor.length && !augment && !isBridge) continue;   // floor covers + not augmenting/bridge → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
     const disk = cachedFileKeys(repo, ck);
     if (disk.hit) { llmKeysOf.set(rel, disk.keys); continue; }
-    if (!floor.length) { if (blindCandidates.length < COUPLING.keyBudget) blindCandidates.push({ file: rel, text, ck }); continue; }
+    if (!floor.length || isBridge) { if (blindCandidates.length < COUPLING.keyBudget) blindCandidates.push({ file: rel, text, ck }); continue; }   // blind OR bridge → discover its (other) keys
     if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }   // augment floor-COVERED file (not clustered — its keys are file-specific gaps)
   }
   // STRUCTURAL pre-clustering: floor-blind files sharing a data-access SHAPE (`prisma.<x>.<verb>()`) are one

@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
-import { floor_base_index } from "../../src/codebase/coupling/index.js";
+import { floor_base_index, mergeGrounding } from "../../src/codebase/coupling/index.js";
 import { llmKeyIndex } from "../../src/codebase/coupling/llm_key_index.js";
 import { SKIP_DIRS } from "../../src/core/resolve/languages/index.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
@@ -64,22 +64,28 @@ describe("globex acmeBooking → $bookingService → indirect endpoint (hardest 
     expect(routeKeys("axios.get(`${API_BASE}/bookings`);")).toEqual([]);                  // template → blind (the indirection)
   });
 
-  test("GAP B: the wrapper is floor-COVERED (the binding) so Tier-2 never examines it for the route", async () => {
+  test("GAP B FIXED: the binding-only wrapper IS examined, the resolved route grounds with the backend", async () => {
     const shown: string[] = [];
+    // the wrapper is floor-covered ONLY by the $bookingService binding → now a BRIDGE file → still discovered.
+    // The LLM resolves the composed `${API_BASE}/bookings` to its route segment (here: "/bookings"), the
+    // segment the backend's @GetMapping("/bookings") produces.
     class Bus extends HostBus {
       serve(tag: string, prompt: string): string {
         if (tag !== "discover-keys-batch") return "[]";
-        if (prompt.includes("bookingService.js")) shown.push("bookingService.js");   // record IF the LLM is asked about it
-        return "[]";
+        if (!prompt.includes("bookingService.js")) return "[]";
+        shown.push("bookingService.js");
+        return JSON.stringify([{ id: "r", file: "web/services/bookingService.js", kind: "route", value: "/bookings", role: "consumes" }]);
       }
     }
     set_host_bus(new Bus());
     try {
-      // scope the per-file LLM to exactly the wrapper the grow reaches from the component
-      await llmKeyIndex(REPO, { llm: true, scopeFiles: new Set(["web/services/bookingService.js"]) }, new EngineCtx());
-      // it is NOT shown: floor-covered (binding) → skipped → the template route is never discovered → the
-      // backend is unreachable from a consumer anchor. This is the committed blindspot of the hardest case.
-      expect(shown).toEqual([]);
+      const ctx = new EngineCtx();
+      const idx = await llmKeyIndex(REPO, { llm: true, scopeFiles: new Set(["web/services/bookingService.js"]) }, ctx);
+      expect(shown).toContain("bookingService.js");                                      // NOW examined (was skipped)
+      // the discovered FE route consumer ⊕ the backend @GetMapping producer (floor) → GROUNDED → crossable
+      const route = mergeGrounding(floor_base_index(REPO, SKIP_DIRS, ctx), idx).get("http-route /bookings");
+      expect(route?.consumers.some((c) => c.file.endsWith("bookingService.js"))).toBe(true);   // FE wrapper, discovered
+      expect(route?.producers.some((p) => p.file.endsWith(".java"))).toBe(true);               // Spring handler, floor
     } finally { set_host_bus(null); }
   });
 });
