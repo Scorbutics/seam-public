@@ -21,7 +21,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
-import { floor_base_index, mergeGrounding } from "../../src/codebase/coupling/index.js";
+import { floor_base_index, mergeGrounding, routeSuffixMatch } from "../../src/codebase/coupling/index.js";
 import { llmKeyIndex } from "../../src/codebase/coupling/llm_key_index.js";
 import { SKIP_DIRS } from "../../src/core/resolve/languages/index.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
@@ -87,5 +87,13 @@ describe("globex acmeBooking → $bookingService → indirect endpoint (hardest 
       expect(route?.consumers.some((c) => c.file.endsWith("bookingService.js"))).toBe(true);   // FE wrapper, discovered
       expect(route?.producers.some((p) => p.file.endsWith(".java"))).toBe(true);               // Spring handler, floor
     } finally { set_host_bus(null); }
+  });
+
+  test("route NORMALISATION: a FE full path reconciles with the backend's composed segment (already handled)", () => {
+    // if the LLM instead resolves the const to the FULL path, the route-suffix aliasing grounds it against the
+    // backend's @GetMapping segment — so the globex chain completes either way the LLM extracts the route.
+    expect(routeSuffixMatch("/api/acmecheck/bookings", "/bookings")).toBe(true);   // full FE ⇄ BE segment
+    expect(routeSuffixMatch("/api/acmecheck/bookings", "/api/acmecheck/bookings")).toBe(true);   // exact
+    expect(routeSuffixMatch("/api/acmecheck/bookings", "/payments")).toBe(false);  // unrelated → no false ground
   });
 });

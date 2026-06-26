@@ -64,7 +64,7 @@ const _HTTP_ROUTE = "http-route";
 // http-route keys ONLY, couple a handler to a caller when one path's segments are a whole-SEGMENT SUFFIX
 // of the other's (after dropping a trailing `/*` wildcard) — whole-segment so `/doc` ≁ `/mydoc`.
 const routeSegs = (value: string): string[] => value.replace(/\/\*+$/, "").split("/").filter(Boolean);
-function routeSuffixMatch(a: string, b: string): boolean {
+export function routeSuffixMatch(a: string, b: string): boolean {
   const A = routeSegs(a), B = routeSegs(b);
   if (!A.length || !B.length) return false;
   const [long, short] = A.length >= B.length ? [A, B] : [B, A];
