@@ -1,79 +1,64 @@
-# P3 coupling strategy — design (#2′)
+# P3 coupling strategy — design
 
 > The grow's **P3** phase (docs/grow-architecture.md) finds cross-boundary data-flow bridges. This doc is
-> about P3's **internals** — which we can now change without touching P2/P4. It exists because Brice's feeling
-> is right: coupling discovery is *harder than it should be*, and the reason is architectural, not essential.
+> about P3's **internals**. Decision (Brice): **keep every feature and the cache; redraw boundaries only; do
+> not impact performance.** An earlier draft proposed removing the flywheel — that was wrong; see the impact
+> analysis below.
 
-## The core realisation
+## Do NOT remove the flywheel — impact analysis
 
-**Discovering a coupling is easy; the flywheel is hard.** The LLM is excellent at "what key does this code
-produce/consume, who's the counterpart." What hurts is the machinery built around it to make the answer
-**deterministic, cached, and warm-free**:
+Discovering a coupling is easy (the LLM is great at it). The flywheel — constrained-IR adapter + self-
+validation loop + matcher store — looks like "extra machinery", but removing it costs exactly what we must
+not spend:
 
-- a **constrained-IR adapter** the LLM must emit (not "the keys" but "a reusable rule"),
-- a **self-validation loop** (synth → re-execute → ground → feed back the misses → retry),
-- a **matcher store** persisted to `.seam` so warm runs replay.
+1. **Performance.** The matcher store is a CACHE: warm runs replay learned adapters at **0 LLM calls**.
+   Remove it → every run re-pays the LLM. The engine is already slow; this makes it slower. Disqualifying.
+2. **Features.** Lose learned custom adapters (data layers the floor can't match), cross-framework synthesis,
+   the self-validation harness (guarantees a learned adapter actually grounds — reliability), and determinism.
+3. **Capitalisation.** The flywheel IS "capitalise on the LLM passes" — learn once, reuse forever via the
+   cache. Removing it re-does the LLM work every run.
 
-That's the flywheel, and it's most of the complexity. It buys *warm-free determinism at scale*. The question
-is whether you need that, given the LLM calls are the Claude **subscription**, not the paid API.
+So the LLM passes + cache stay. The work is **boundaries, not strategy**.
 
-## Current P3 layers
+## The principle, applied inside P3
 
-| Layer | Kind | Cost | Notes |
-| --- | --- | --- | --- |
-| Floor adapters (Supabase `.from`, member-access ORM, http_route, annotation_route) | deterministic | free | covers the common shapes; keep |
-| Carrier trace | deterministic | free | follows a value through assigns; keep |
-| `discover-keys-batch` (per-file) | LLM | N calls | "list the keys in this file" — simple; **opt-in today** (`SEAM_PER_FILE_KEYS`) |
-| `discover-key-matchers` (cluster→shape) | LLM + **flywheel** | few calls | the constrained-IR synth + self-validate + cache; **default today** |
-| `classify-receivers` / `classify-annotations` | LLM | few calls | receiver/annotation → repository/channel/annotation matchers |
-| Grounding (literal co-occurrence) | deterministic | free | a key is real only if it appears on BOTH sides; keep |
+The grow's problem was that coupling had no *boundary* (it ran inside the traversal). The decoupling fixed
+the big one. The same discipline applies *within* P3: name its layers as clean, contracted components so each
+is reasoned about and tuned in isolation — **with zero behaviour / feature / perf change.**
 
-The floor + grounding are cheap and good. The **three LLM front-ends overlap**, and the matcher one carries
-the flywheel weight.
+```
+P3 coupling
+├─ FLOOR      deterministic adapters (Supabase/.from, member-access ORM, http_route, annotation) + carrier trace
+├─ LEARN      the flywheel — LLM synth → self-validate → IR adapter        [the LLM passes]
+├─ GROUND     literal co-occurrence (a key is real only if both sides name it)
+├─ APPLY      run adapters (floor ∪ learned) over the footprint → bridges
+└─ CACHE      .seam matcher store — warm-free replay                       [the capitalisation]
+```
 
-## The key fact that makes this safe
+These exist in `coupling/` today; they are just not drawn as contracts. Drawing them means: a function
+boundary + a typed in/out + a behaviour pin per layer — exactly the grow phase extraction, one level down.
 
-`SEAM_KEY_AUDIT` on cal.com (from earlier this session): the per-file pass and the matcher pass produce the
-**same grounded couplings** — `UNIQUE to per-file pass: 0`. So the flywheel and the simple per-file path are
-**recall-equivalent** on that corpus. The flywheel's only edge is *fewer LLM calls* (clustering) and
-*warm-free determinism* (the cache) — not better discovery.
+### Why this is what's wanted
 
-## The options
+- **Granularity becomes one knob in one place.** Coupling cost scales with how many LLM calls LEARN makes;
+  that is set by its **clustering coarseness** (the "300 files → 15 shapes" lever). With LEARN behind a
+  boundary, coarseness is tuned there — measured, before/after — without touching FLOOR / GROUND / APPLY.
+- **A coupling bug is localisable.** "wrong key" → GROUND; "missed a custom adapter" → LEARN; "the `String`
+  complement mislabel" → APPLY (complement_unit). Same payoff as the grow phases.
+- **No regression risk.** Behaviour-preserving extraction, pinned. Nothing about discovery, the cache, or the
+  cost changes.
 
-**A — Keep everything (status quo).** Flywheel default. Fewest LLM calls, warm-free, but the complexity you're
-fighting stays.
+## Migration — boundaries only, behaviour-pinned
 
-**B — Simplify to floor + ONE simple LLM pass (LLM-per-run).** Keep floor + grounding. Replace the matcher
-flywheel *and* the classifiers with a single pass: over the footprint's uncovered files, **cluster by shape**
-(keep the cheap clustering — it's what cuts 300 files → ~15 calls), then ask the LLM per cluster *"what keys
-does this produce/consume, and the kind"* — plain JSON, **no constrained IR, no self-validation, no matcher
-store**. Ground by co-occurrence. Cache the per-cluster answer by **content hash** (simple warm skip, not a
-compiled adapter). The flywheel stays in the tree behind `SEAM_COUPLING=flywheel` for scale/determinism, but
-is no longer the default.
+1. **Pin** current coupling grounding on the fixtures: a P3 oracle of *keys produced/consumed per case* AND
+   *LLM call count* (so "identical recall + identical calls" — no silent feature/perf change — is provable).
+2. **Extract** FLOOR / LEARN / GROUND / APPLY / CACHE as named functions behind typed contracts, behaviour-
+   preserving, validated against step 1. No strategy change.
+3. **Stop.** Granularity tuning is a *separate, later, measured* step inside the LEARN boundary — not part of
+   the boundary draw.
 
-**C — Rip the flywheel out entirely.** Smaller tree, but throws away the warm-free path with no fallback.
+## Explicitly NOT doing
 
-## Recommendation
-
-**B.** It directly answers "let the LLM work for me": you ask, it tells you, you ground it — the clustering
-keeps it cheap, content-hash caching keeps warm runs free for unchanged files, and you keep the deterministic
-floor for the common cases. It's recall-equivalent to the flywheel (audited), reversible (flywheel stays
-opt-in), and it's a **P3-internal change** — P2/P4 and `_anchorCouplingDelta`'s contract are untouched, so the
-grow_contract oracle stays green and any change is a reviewed P3 diff.
-
-Not C: keeping the flywheel opt-in costs nothing and preserves the scale path for a future big-monorepo case.
-
-## The one decision for Brice
-
-**Do we go B (simple LLM-per-cluster default; flywheel demoted to opt-in)?** If yes, the migration is:
-
-1. **Pin** current coupling grounding on the fixtures (a P3 oracle — keys produced/consumed per case), so the
-   strategy swap is provably recall-equivalent, not a silent drop.
-2. **Add** the simple per-cluster LLM pass (mostly already present as the per-file path + the clusterer).
-3. **Flip** the default: simple pass ON, flywheel behind `SEAM_COUPLING=flywheel`. Validate recall on cal.com
-   against the Step-1 pin (must match).
-4. **Leave** floor + grounding + carrier untouched.
-
-Open sub-question for step 2: per-**file** vs per-**cluster** LLM granularity. Per-cluster is the cheap one
-(the globex "300 files → 15 shapes" win) and is the recommended default; per-file stays available for a repo
-where clustering misfires.
+- Not removing or demoting the flywheel.
+- Not changing which LLM passes run, or when, or how many (that is the perf step, done later, measured).
+- Not changing the floor adapters or grounding.
