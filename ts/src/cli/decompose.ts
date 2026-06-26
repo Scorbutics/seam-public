@@ -439,7 +439,9 @@ async function runCodebase(a: Args): Promise<number> {
       // FILE anchor (a module.exports/Vue-plugin with no named symbol): grow file-level — an empty symbol
       // makes build_footprint use build_module_graph (the whole file's exports as the seed).
       const growSymbol = fileAnchor ? "" : a.symbol!;
-      const gOpts = { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests };
+      // bidirectional is OPT-IN (--bidirectional): default climbs UP (consumers) and adds deps only for a true
+      // entry point — descending a mid-spine method's deps gets lost in the data-model type tree (see grow seed).
+      const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests };
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       try {
         if (a.grow === "llm") {

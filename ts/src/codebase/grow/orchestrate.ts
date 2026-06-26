@@ -223,11 +223,21 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // (and demote the least-relevant to a blindspot) instead of the deterministic fanout fallback. The ctx
   // carries the opaque ranker so coupling needs no embedding import; embeddings absent → it returns {} → fanout.
   if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);
-  // Bidirectional SEED (consumers + deps): a flow anchor's consumers reach its terminals, but an
-  // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
-  // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
-  // `direction` tags let decompose detect the policy-vs-flow shape. Frontier growth stays consumer-ward.
-  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: opts.bidirectional ? "both" : "up", ...co }));
+  // SEED: climb UP (consumers) — the flow toward the terminals (controllers, screens, entry points). We do
+  // NOT seed the DEPS by default. Descending a mid-spine method's dependencies pulls in the DATA-MODEL TYPE
+  // TREE — Java's same-package resolution makes every referenced type a "dependency", so the grow gets lost
+  // `BookingData → MemberBooking → User`; that's on-intent by NAME, so even intent-ranking follows it. The
+  // downstream that MATTERS — persistence / the UI — is reached by DATA-COUPLING (shared key/route),
+  // independent of this dep walk. So we add the deps ONLY when the anchor is a true ENTRY POINT (no in-repo
+  // consumers — a route/webhook the framework invokes), so its all-downstream work isn't a dead end. The
+  // `backward` tag makes those deps expand DOWNSTREAM. `--bidirectional` forces both regardless.
+  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...co }));
+  const consumerCount = (data.nodes ?? []).filter((n: any) => n.id !== "n1" && !n.coupling).length;
+  if (opts.bidirectional || consumerCount === 0) {
+    const down: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...co }));
+    for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";
+    data = merge_resolved(data, down, down.anchor?.id);
+  }
   // COMPONENT FALLBACK: a symbol anchor that surfaces NO data-coupling (a local leaf — e.g. a plain helper
   // inside an AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing
   // function, not its own span) can't reach the cross-boundary flow. The real unit is the FILE/component, so
