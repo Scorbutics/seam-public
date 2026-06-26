@@ -61,7 +61,13 @@ export type KeyMatcher =
   // `member`: there the key is the member between receiver and verb; here the receiver IS the key. Synthesised
   // by the receiver-CLASSIFIER (idiom/embedding) for a `database`-classified 2-part receiver — the layer
   // member_access (3-part) can't see. role fixed per rule (read verbs → consumes, write → produces).
-  | { via: "repository"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
+  | { via: "repository"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string }
+  // channel — `<token>.<verb>('key')` where the RECEIVER is a classified event/store/cache channel and the
+  // STRING-LITERAL arg is the key (`bus.emit('orders.sync')`, `store.set('draft')`). Receiver-SCOPED (unlike
+  // the method-scoped `call` shape) so a classified `bus`/`store` is matched, NOT every generic `.get('x')` —
+  // that scoping is the precision the cheap `call` shape lacked. Synthesised by the receiver-CLASSIFIER for an
+  // event/store-classified receiver; role fixed per rule (emit/set → produces, on/get → consumes).
+  | { via: "channel"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
@@ -71,6 +77,7 @@ export function matcherShape(m: KeyMatcher): string {
   if (m.via === "annotation") return `@${m.annotation}(${m.element ? `${m.element}="…"` : `"…"`})`;
   if (m.via === "member") return `${m.token}.<member>.{${m.verbs.join("|")}}()`;
   if (m.via === "repository") return `${m.token}.{${m.verbs.join("|")}}() → table ${m.token}`;
+  if (m.via === "channel") return `${m.token}.{${m.verbs.join("|")}}('<key>')`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -83,6 +90,7 @@ export function matcherKey(m: KeyMatcher): string {
   if (m.via === "annotation") return `${base}:${m.annotation}:${m.element ?? ""}`;
   if (m.via === "member") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   if (m.via === "repository") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
+  if (m.via === "channel") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -92,7 +100,7 @@ export function matcherKey(m: KeyMatcher): string {
 // method definition → no discriminating literal → null (must still be parsed). Never causes a false miss:
 // if the rule matches, the literal is present by construction.
 export function matcherLiteral(m: KeyMatcher): string | null {
-  if (m.via === "call" || m.via === "assign" || m.via === "member" || m.via === "repository") return m.token;
+  if (m.via === "call" || m.via === "assign" || m.via === "member" || m.via === "repository" || m.via === "channel") return m.token;
   if (m.via === "attr") return m.directive;
   if (m.via === "annotation") return m.annotation;
   return null;   // method
@@ -184,6 +192,13 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     if (!verbs.length) return null;                                          // need ≥1 access verb (else it'd match any call on the receiver)
     return { via: "repository", token, verbs, kind, role, name: nm(`${_slug(token)}-repo-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}() (receiver = table)`) };
   }
+  if (via === "channel") {
+    const token = String(obj.token ?? "").trim();
+    if (!_TOKEN_OK.test(token)) return null;                                  // the receiver must be a bare identifier (bus/store)
+    const verbs = [...new Set<string>((Array.isArray(obj.verbs) ? obj.verbs : []).map((v: any) => String(v).trim()).filter((v: string) => _TOKEN_OK.test(v)))];
+    if (!verbs.length) return null;                                          // need ≥1 verb (else it'd match any call on the receiver)
+    return { via: "channel", token, verbs, kind, role, name: nm(`${_slug(token)}-channel-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}('<key>')`) };
+  }
   return null;                                                               // unknown shape → not executable
 }
 
@@ -231,6 +246,7 @@ export async function runMatcher(m: KeyMatcher, file: string, text: string): Pro
   if (m.via === "annotation") return runAnnotation(m, text);
   if (m.via === "member") return runMember(m, text);
   if (m.via === "repository") return runRepository(m, text);
+  if (m.via === "channel") return runChannel(m, text);
   return runAttr(m, file, text);
 }
 
@@ -246,6 +262,22 @@ function runRepository(m: Extract<KeyMatcher, { via: "repository" }>, text: stri
   let mt: RegExpExecArray | null;
   while ((mt = re.exec(masked)) !== null)
     if (plausibleKeyValue(m.token)) out.push({ kind: m.kind, value: m.token, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  return out;
+}
+
+// `<token>.<verb>('key')` — RECEIVER-SCOPED string-key extraction: the receiver `token` is a classified
+// channel, verb ∈ m.verbs, and the STRING-LITERAL arg is the key. Regex (offline); token/verbs are
+// identifier-safe. The receiver scope is the precision the method-scoped `call` shape lacks (no generic
+// `.get('x')` false-matches). Path prefix allowed (`this.bus.emit('x')` → receiver `bus`).
+function runChannel(m: Extract<KeyMatcher, { via: "channel" }>, text: string): KeyHit[] {
+  const masked = maskComments(text);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const verbs = m.verbs.map(esc).join("|");
+  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*(?:${verbs})\\s*\\(\\s*['"\`]([^'"\`]{1,80})['"\`]`, "g");
+  const out: KeyHit[] = [];
+  let mt: RegExpExecArray | null;
+  while ((mt = re.exec(masked)) !== null)
+    if (plausibleKeyValue(mt[1])) out.push({ kind: m.kind, value: mt[1], line: lineOf(masked, mt.index), produces: m.role === "produces" });
   return out;
 }
 

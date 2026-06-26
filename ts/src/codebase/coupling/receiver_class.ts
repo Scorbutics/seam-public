@@ -38,6 +38,13 @@ const _READ_PRE = ["get", "find", "fetch", "load", "list", "read", "query", "cou
 const _WRITE_PRE = ["set", "create", "insert", "add", "save", "update", "delete", "remove", "destroy", "upsert", "put", "patch", "write", "store", "persist"];
 const _reads = (vs: string[]) => vs.filter((v) => _ORM_R.has(v) || _READ_PRE.some((p) => v.toLowerCase().startsWith(p)));
 const _writes = (vs: string[]) => vs.filter((v) => _ORM_W.has(v) || _WRITE_PRE.some((p) => v.toLowerCase().startsWith(p)));
+// EVENT verbs are matched EXACTLY (not by prefix — `on`/`handle` as prefixes would catch onClick/handler):
+// producer side (emit) vs consumer side (listen). `store` reuses the read/write conventions (get/set).
+const _EVENT_P = new Set(["emit", "publish", "dispatch", "fire", "trigger", "broadcast", "next", "send"]);
+const _EVENT_C = new Set(["on", "once", "subscribe", "listen", "addeventlistener", "addlistener", "handle"]);
+const _lc = (v: string) => v.toLowerCase();
+const _isProd = (v: string) => _writes([v]).length > 0 || _EVENT_P.has(_lc(v));
+const _isCons = (v: string) => _reads([v]).length > 0 || _EVENT_C.has(_lc(v));
 
 interface Profile { receiver: string; verbs: Map<string, number>; files: number }
 
@@ -58,9 +65,10 @@ function _inventory(repo: string, skipDirs: Set<string>): Profile[] {
   return [...inv].filter(([, e]) => e.files.size >= MIN_FILES).map(([receiver, e]) => ({ receiver, verbs: e.verbs, files: e.files.size }));
 }
 
-// a CANDIDATE both reads AND writes data-shaped verbs (a data layer) — the broad net the LLM then confirms.
+// a CANDIDATE both PRODUCES and CONSUMES (a data layer / channel that's written AND read) — the broad net the
+// LLM then confirms + types (database / event / store / …). emit⇄on and set⇄get both qualify.
 function _candidates(profs: Profile[]): Profile[] {
-  return profs.filter((p) => { const vs = [...p.verbs.keys()]; return _reads(vs).length > 0 && _writes(vs).length > 0; })
+  return profs.filter((p) => { const vs = [...p.verbs.keys()]; return vs.some(_isProd) && vs.some(_isCons); })
     .sort((a, b) => b.files - a.files).slice(0, MAX_CANDIDATES);
 }
 
@@ -119,15 +127,23 @@ export async function classifyAndPersistRepositories(
   catch (e) { if (!(e instanceof LLMError)) throw e; ctx.repoMatchers.set(repo, []); return []; }
 
   const matchers: KeyMatcher[] = [];
+  const push = (m: KeyMatcher | null) => { if (m) matchers.push(m); };
   for (const p of cands) {
-    if (types.get(p.receiver) !== "database") continue;   // the LLM confirms — drops axios/session/external
-    const reads = _reads([...p.verbs.keys()]), writes = _writes([...p.verbs.keys()]);
-    const r = validateMatcher({ via: "repository", token: p.receiver, verbs: reads, kind: DB_TABLE_META.kind, role: "consumes" });
-    const w = validateMatcher({ via: "repository", token: p.receiver, verbs: writes, kind: DB_TABLE_META.kind, role: "produces" });
-    if (r) matchers.push(r);
-    if (w) matchers.push(w);
+    const t = types.get(p.receiver);                      // the LLM confirms the type — drops axios/session/none
+    const vs = [...p.verbs.keys()];
+    if (t === "database") {
+      // 2-part repository: the RECEIVER is the table (member_access covers the 3-part case)
+      push(validateMatcher({ via: "repository", token: p.receiver, verbs: _reads(vs), kind: DB_TABLE_META.kind, role: "consumes" }));
+      push(validateMatcher({ via: "repository", token: p.receiver, verbs: _writes(vs), kind: DB_TABLE_META.kind, role: "produces" }));
+    } else if (t === "event" || t === "store") {
+      // receiver-scoped channel: the STRING-LITERAL arg is the key (bus.emit('e') ⇄ bus.on('e'))
+      const kind = t === "event" ? "event" : "cache";
+      const prod = vs.filter(_isProd), cons = vs.filter(_isCons);
+      if (prod.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: prod, kind, role: "produces" }));
+      if (cons.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: cons, kind, role: "consumes" }));
+    }
   }
-  if (verbose()) process.stderr.write(`[receiver-class] ${cands.length} candidate(s) → ${[...new Set(matchers.map((m: any) => m.token))].length} database receiver(s): ${[...new Set(matchers.map((m: any) => m.token))].join(", ")}\n`);
+  if (verbose()) { const by = (t: string) => cands.filter((c) => types.get(c.receiver) === t).map((c) => c.receiver); process.stderr.write(`[receiver-class] ${cands.length} candidate(s) → db: ${by("database").join(", ")} | event: ${by("event").join(", ")} | store: ${by("store").join(", ")}\n`); }
   persistMatchers(repo, matchers);          // join the matcher store → loadMatchers/applyMatchers ground them
   recordLearnedMatchers(repo, sig);         // gate: same candidates next run → replay, no LLM
   ctx.repoMatchers.set(repo, matchers);

@@ -30,3 +30,21 @@ describe("repository matcher shape (receiver = table)", () => {
     expect(w.sort()).toEqual(["userRepository:P", "userRepository:P"]);   // create + deleteByEmail → produces
   });
 });
+
+describe("channel matcher shape (receiver-scoped string key)", () => {
+  const emit = validateMatcher({ via: "channel", token: "bus", verbs: ["emit", "publish"], kind: "event", role: "produces" });
+  const on = validateMatcher({ via: "channel", token: "bus", verbs: ["on", "subscribe"], kind: "event", role: "consumes" });
+
+  test("the STRING-LITERAL arg is the key; scoped to the receiver (no generic .emit elsewhere)", async () => {
+    const code = `
+      bus.emit('orders.sync', payload);
+      bus.on('orders.sync', handler);
+      this.bus.publish('user.created');     // path prefix → still bus
+      other.emit('ignored');                // different receiver → ignored
+    `;
+    const p = (await runMatcher(emit!, "x.ts", code)).map((h) => `${h.value}:${h.produces ? "P" : "C"}`).sort();
+    const c = (await runMatcher(on!, "x.ts", code)).map((h) => `${h.value}:${h.produces ? "P" : "C"}`).sort();
+    expect(p).toEqual(["orders.sync:P", "user.created:P"]);   // emit/publish on bus → produces
+    expect(c).toEqual(["orders.sync:C"]);                      // on → consumes
+  });
+});
