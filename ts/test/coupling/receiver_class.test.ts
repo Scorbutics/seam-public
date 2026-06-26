@@ -40,16 +40,17 @@ afterEach(() => {
 });
 
 describe("receiver classification — LLM confirms type, drops the http look-alike", () => {
-  test("userRepository (database) → repository matcher; axios (http) is dropped despite create/delete", async () => {
+  test("userRepository → repository (db-table); axios → http-route channel, NOT a database table", async () => {
     const bus = new ClsBus(); set_host_bus(bus);
     const ms = await classifyAndPersistRepositories(REPO, { llm: true }, new EngineCtx());
     expect(bus.asked).toBe(1);                                   // the LLM was consulted
-    const recv = [...new Set(ms.map((m: any) => m.token))];
-    expect(recv).toContain("userRepository");                   // database-confirmed → kept
-    expect(recv).not.toContain("axios");                        // http-confirmed → dropped (no 3-part guard needed)
-    // the kept rules split read vs write (the receiver is the table)
-    const roles = ms.filter((m: any) => m.token === "userRepository").map((m: any) => m.role).sort();
-    expect(roles).toEqual(["consumes", "produces"]);
+    const kindsOf = (tok: string) => [...new Set(ms.filter((m: any) => m.token === tok).map((m: any) => `${m.via}/${m.kind}`))];
+    // database-confirmed → repository (the receiver is the table), split read/write
+    expect(kindsOf("userRepository")).toEqual(["repository/db-table"]);
+    expect(ms.filter((m: any) => m.token === "userRepository").map((m: any) => m.role).sort()).toEqual(["consumes", "produces"]);
+    // http-confirmed → an http-route CHANNEL (the route is the key), NOT mis-typed as a db-table (P1's win:
+    // no 3-part guard, but the LLM separates the http client from the data layer)
+    expect(kindsOf("axios")).toEqual(["channel/http-route"]);
   });
 
   test("no LLM backend → no classification (degrades to member_access only)", async () => {

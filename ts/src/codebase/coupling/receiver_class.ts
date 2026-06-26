@@ -42,8 +42,13 @@ const _writes = (vs: string[]) => vs.filter((v) => _ORM_W.has(v) || _WRITE_PRE.s
 // producer side (emit) vs consumer side (listen). `store` reuses the read/write conventions (get/set).
 const _EVENT_P = new Set(["emit", "publish", "dispatch", "fire", "trigger", "broadcast", "next", "send"]);
 const _EVENT_C = new Set(["on", "once", "subscribe", "listen", "addeventlistener", "addlistener", "handle"]);
+// HTTP CLIENT verbs — a `<client>.<verb>('/route')` call; all CONSUME the endpoint (the route literal is the
+// key, kind http-route → grounds with the backend handler that PRODUCES it). `post`/`request` also count as
+// a produce-ish verb for CANDIDACY (so a pure get/post client qualifies as both-sided).
+const _HTTP_CLIENT = new Set(["get", "post", "put", "delete", "patch", "request", "fetch", "head", "options"]);
+const _HTTP_W = new Set(["post", "put", "patch", "request"]);
 const _lc = (v: string) => v.toLowerCase();
-const _isProd = (v: string) => _writes([v]).length > 0 || _EVENT_P.has(_lc(v));
+const _isProd = (v: string) => _writes([v]).length > 0 || _EVENT_P.has(_lc(v)) || _HTTP_W.has(_lc(v));
 const _isCons = (v: string) => _reads([v]).length > 0 || _EVENT_C.has(_lc(v));
 
 interface Profile { receiver: string; verbs: Map<string, number>; files: number }
@@ -81,14 +86,19 @@ is the http client"). For each receiver below you get its name and the methods c
 
 Classify each as exactly one of:
   database — a DB / ORM / repository data layer (entities read & written: create/findMany/update/delete/save)
-  http     — an HTTP client or request/response object (get/post/put/delete a URL, fetch, status, json, redirect)
+  http     — an HTTP CLIENT that CALLS a remote endpoint BY ROUTE PATH (\`axios.get('/api/x')\`, fetch, a custom
+             \`$http.post('/url')\`). The string arg is a route. NOT a request/response/url/params object that
+             reads headers/params/body LOCALLY (\`req.get('header')\`, \`res.json()\`, \`params.get('id')\`,
+             \`searchParams.get\`, \`url.get\`) — those carry no cross-service route, classify them \`none\`.
   config   — configuration access (get/set of settings, flags, environment)
   store    — in-memory / client state, cache, or session store (get/set/dispatch of state, not persisted records)
   event    — an event / message bus (emit/publish/subscribe/listen)
-  none     — none of the above: logging, test mocks/assertions, stdlib, local collections, generic utilities
+  none     — none of the above: logging, test mocks/assertions, stdlib, local collections, request/response/url
+             objects, generic utilities
 
 Judge by MEANING, not just verb names — \`axios.create\`/\`axios.delete\` are HTTP (a client + an HTTP DELETE),
-NOT database; \`session.get\`/\`set\` is a store, not a database; a \`*Repository\`/\`*Fixture\` of entities is database.
+NOT database; \`session.get\`/\`set\` is a store, not a database; a \`*Repository\`/\`*Fixture\` of entities is
+database; \`req\`/\`res\`/\`params\`/\`searchParams\`/\`url\` are \`none\` (they read local request data, not a route).
 
 ${cands.map(_profileLine).join("\n")}
 
@@ -141,6 +151,12 @@ export async function classifyAndPersistRepositories(
       const prod = vs.filter(_isProd), cons = vs.filter(_isCons);
       if (prod.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: prod, kind, role: "produces" }));
       if (cons.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: cons, kind, role: "consumes" }));
+    } else if (t === "http") {
+      // an http CLIENT consumes a route — `client.get('/route')`; the route literal grounds with the backend
+      // handler that PRODUCES it (annotation-route / next-route). The cross-stack hop, framework-agnostic
+      // (any client name). A RESPONSE receiver (res/json/status — no client verbs) yields no rule here.
+      const httpVerbs = vs.filter((v) => _HTTP_CLIENT.has(_lc(v)));
+      if (httpVerbs.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: httpVerbs, kind: "http-route", role: "consumes" }));
     }
   }
   if (verbose()) { const by = (t: string) => cands.filter((c) => types.get(c.receiver) === t).map((c) => c.receiver); process.stderr.write(`[receiver-class] ${cands.length} candidate(s) → db: ${by("database").join(", ")} | event: ${by("event").join(", ")} | store: ${by("store").join(", ")}\n`); }
