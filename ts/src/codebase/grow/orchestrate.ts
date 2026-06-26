@@ -14,10 +14,53 @@ import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
-import { isTestFile } from "../../core/resolve/consumers.js";
-import { isFlowSubject } from "../coupling/index.js";
+import { isTestFile, } from "../../core/resolve/consumers.js";
+import { isFlowSubject, resolveCoupling } from "../coupling/index.js";
+import { _read } from "../scan/ast_units.js";
+import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
+
+// ── COUPLING as a SEPARATE OVERLAY (decoupled from the grow traversal) ───────────────────────────────────
+// The grow used to run data-coupling INSIDE every per-node build_footprint, so each expansion re-coupled its
+// new node → the complements became frontier candidates → the grow re-anchored them → coupling ran again: a
+// compounding loop, with the coupling crossings, intent, fan-in and direction all fighting in ONE frontier.
+// Now the grow TRAVERSAL is purely structural (consumers/deps + intent) and coupling is computed ONCE on the
+// anchor and merged onto the SETTLED footprint — a bridge over a finished map, never an ingredient of it. The
+// two subsystems can now be judged and fixed in isolation. Mirrors the old consumers_graph invocation.
+async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+  const empty = { nodes: [], edges: [], blindspots: [], counter: 0 };
+  const ar = _read(repo, anchorFile);
+  if (!ar) return empty;
+  // the REAL anchor id (a class anchor is keyed by its name, not "n1") so the bridge edges attach to the
+  // footprint's anchor node and stay reachable — not orphaned.
+  const anchorId = data.anchor?.id ?? "n1";
+  const arange: number[] = data.anchor?.range ?? [0, 0];
+  const resolved = arange[1] > 0;                                  // a real def span vs a name-only anchor (whole file)
+  const keyLo = resolved ? _annotationLo(ar[0], arange[0]) : 0;
+  const keyHi = resolved ? arange[1] : (ar[0].match(/\n/g) ?? []).length;
+  const delta = await resolveCoupling(repo, anchorId, anchorFile, ar[0], keyLo, keyHi, (data.nodes ?? []).length, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
+  delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);   // route → its consumers (2nd hop), as before
+  return delta;
+}
+
+// Merge the coupling overlay onto the settled footprint. Re-id any complement that would collide with a
+// structural node id (the grow assigned its own ids while the overlay was held aside); the anchor `n1` and the
+// overlay's internal references stay consistent through the remap.
+function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges: any[]; blindspots: any[] }): void {
+  if (!overlay?.nodes?.length) return;
+  const used = new Set<string>((data.nodes ?? []).map((n: any) => n.id));
+  const remap = new Map<string, string>();
+  let k = (data.nodes ?? []).length;
+  for (const n of overlay.nodes) {
+    let id = n.id;
+    while (used.has(id)) id = `dc${k++}`;
+    if (id !== n.id) remap.set(n.id, id);
+    used.add(id); data.nodes.push({ ...n, id });
+  }
+  for (const e of overlay.edges) data.edges.push({ ...e, from: remap.get(e.from) ?? e.from, to: remap.get(e.to) ?? e.to });
+  (data.blindspots ??= []).push(...(overlay.blindspots ?? []));
+}
 
 // The current footprint as {id, symbol, role, file, crossing} — deterministic roles only (fast, no
 // LLM). `crossing` flags a node reached across a heuristic boundary: the frontier the LLM should
@@ -231,24 +274,33 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // independent of this dep walk. So we add the deps ONLY when the anchor is a true ENTRY POINT (no in-repo
   // consumers — a route/webhook the framework invokes), so its all-downstream work isn't a dead end. The
   // `backward` tag makes those deps expand DOWNSTREAM. `--bidirectional` forces both regardless.
-  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...co }));
+  const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the separate overlay below
+  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
   const consumerCount = (data.nodes ?? []).filter((n: any) => n.id !== "n1" && !n.coupling).length;
   if (opts.bidirectional || consumerCount === 0) {
-    const down: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...co }));
+    const down: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
     for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";
     data = merge_resolved(data, down, down.anchor?.id);
   }
+  // COUPLING OVERLAY — computed ONCE on the anchor, HELD aside (merged after the grow so complements never
+  // enter the frontier). off when dataCoupling is disabled. This is the only place coupling touches the grow.
+  const wantCoupling = co.dataCoupling !== false;
+  let overlay = wantCoupling ? await _anchorCouplingDelta(repo, anchorFile, data, opts, co.ctx) : { nodes: [], edges: [], blindspots: [], counter: 0 };
   // COMPONENT FALLBACK: a symbol anchor that surfaces NO data-coupling (a local leaf — e.g. a plain helper
   // inside an AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing
   // function, not its own span) can't reach the cross-boundary flow. The real unit is the FILE/component, so
-  // re-anchor in MODULE mode (the whole controller) and ADOPT it when the FILE has the coupling the symbol
-  // missed ($scope-binding ⇄ template, routes → backend). Conservative: fires only when the symbol footprint has
-  // zero coupling AND the module reveals some — so a symbol that already has data-flow is never widened.
-  const hasCoupling = (g: any) => (g.nodes ?? []).some((n: any) => n.coupling);
-  if (!hasCoupling(data)) {
-    const mod: any = _pruneExcluded(await build_footprint(repo, anchorFile, null, { ...co }));
-    if (hasCoupling(mod)) data = mod;
+  // re-anchor in MODULE mode and ADOPT it when the FILE has the coupling the symbol missed. Now expressed on
+  // the OVERLAY (the only coupling signal): fires only when the symbol overlay is empty and the module's isn't.
+  if (wantCoupling && !overlay.nodes.length) {
+    const mod: any = _pruneExcluded(await build_footprint(repo, anchorFile, null, { ...coStruct }));
+    const modOverlay = await _anchorCouplingDelta(repo, anchorFile, mod, opts, co.ctx);
+    if (modOverlay.nodes.length) { data = mod; overlay = modOverlay; }
   }
+  // Merge the coupling bridges into the footprint BEFORE the grow so a complement can be CHAINED — grown
+  // STRUCTURALLY to its downstream (a route handler → its @Inject'd bean; a queue subscriber → its delegate).
+  // The grow expands it with structural builds only, so it chains WITHOUT re-coupling (no compounding loop):
+  // coupling was computed exactly once, up front. That is the decoupling — one coupling pass, structural walk.
+  _mergeCouplingOverlay(data, overlay);
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   // INTENT-WEIGHTED FRONTIER: which unexpanded node to grow next is ranked by the intent-relevance of its
@@ -287,7 +339,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
     let add: any;
     try {
-      add = _pruneExcluded(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...co }));
+      add = _pruneExcluded(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...coStruct }));
     } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
