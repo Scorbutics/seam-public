@@ -238,75 +238,71 @@ export function _nextFrontier<T extends { id: string; complexity?: number }>(
     || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];              // (3) complexity (final tiebreak)
 }
 
-export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
-  const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
-  // FOOTPRINT EXCLUSION: drop test files (default — verification, not the spine; opt back in with includeTests)
-  // and any node under an --exclude folder (matched as a path PREFIX or as a whole path SEGMENT, so `--exclude
-  // generated` drops `a/generated/x` and `--exclude src/legacy` drops that prefix). Applied to the seed, each
-  // expansion, AND the frontier — so an excluded subtree is never re-anchored (no wasted budget) nor rendered.
+// FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
+// budget): drop test files (default; opt back with includeTests) and any node under an --exclude folder
+// (matched as a path PREFIX or a whole path SEGMENT, so `--exclude generated` drops `a/generated/x`).
+function _makeExclusion(opts: { excludeDirs?: string[]; includeTests?: boolean }): { excludedFile: (f?: string) => boolean; prune: (g: any) => any } {
   const exDirs = (opts.excludeDirs ?? []).map((d) => normpath(d.replace(/\\/g, "/")));
-  const _excludedFile = (file: string | undefined): boolean => {
+  const excludedFile = (file?: string): boolean => {
     if (!file) return false;
     const f = file.replace(/\\/g, "/");
     if (!opts.includeTests && isTestFile(f)) return true;
     return exDirs.some((d) => f === d || f.startsWith(d + "/") || f.split("/").includes(d));
   };
-  const _pruneExcluded = (g: any): any => {
+  const prune = (g: any): any => {
     if (!g?.nodes?.length) return g;
-    const drop = new Set<string>(g.nodes.filter((n: any) => n.id !== "n1" && _excludedFile(n.file)).map((n: any) => n.id));
+    const drop = new Set<string>(g.nodes.filter((n: any) => n.id !== "n1" && excludedFile(n.file)).map((n: any) => n.id));
     if (!drop.size) return g;
     return { ...g, nodes: g.nodes.filter((n: any) => !drop.has(n.id)), edges: (g.edges ?? []).filter((e: any) => !drop.has(e.from) && !drop.has(e.to)) };
   };
-  // ctx shared across all grow moves (repo indices built once). A CALLER may pass its OWN ctx to share the
-  // expensive repo-wide indices across SEVERAL grows — e.g. the anchor probes (Lever 2) build the
-  // data-coupling grounding index ONCE for the whole candidate pool instead of once per candidate.
-  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
-  // INTENT-AWARE key ranking: give the coupling hub-fan cap a way to keep the most intent-relevant keys
-  // (and demote the least-relevant to a blindspot) instead of the deterministic fanout fallback. The ctx
-  // carries the opaque ranker so coupling needs no embedding import; embeddings absent → it returns {} → fanout.
-  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);
-  // SEED: climb UP (consumers) — the flow toward the terminals (controllers, screens, entry points). We do
-  // NOT seed the DEPS by default. Descending a mid-spine method's dependencies pulls in the DATA-MODEL TYPE
-  // TREE — Java's same-package resolution makes every referenced type a "dependency", so the grow gets lost
-  // `BookingData → MemberBooking → User`; that's on-intent by NAME, so even intent-ranking follows it. The
-  // downstream that MATTERS — persistence / the UI — is reached by DATA-COUPLING (shared key/route),
-  // independent of this dep walk. So we add the deps ONLY when the anchor is a true ENTRY POINT (no in-repo
-  // consumers — a route/webhook the framework invokes), so its all-downstream work isn't a dead end. The
-  // `backward` tag makes those deps expand DOWNSTREAM. `--bidirectional` forces both regardless.
-  const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the separate overlay below
-  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
+  return { excludedFile, prune };
+}
+
+// ── P1 + SEED (docs/grow-architecture.md) ────────────────────────────────────────────────────────────────
+// The structural root: climb UP (consumers) — the flow toward the terminals (controllers, screens). We do NOT
+// seed the DEPS by default: descending a mid-spine method's deps pulls in the DATA-MODEL TYPE TREE (Java's
+// same-package resolution makes every referenced type a "dependency", so the grow gets lost `BookingData →
+// MemberBooking → User`; that is on-intent by NAME, so even ranking follows it). The downstream that MATTERS —
+// persistence / the UI — is reached by COUPLING (P3), independent of this dep walk. So add the deps ONLY for a
+// true ENTRY POINT (no in-repo consumers — a route/webhook the framework invokes); `--bidirectional` forces both.
+async function _phaseSeed(repo: string, anchorFile: string, symbol: string, opts: any, coStruct: any, prune: (g: any) => any): Promise<any> {
+  let data: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
   const consumerCount = (data.nodes ?? []).filter((n: any) => n.id !== "n1" && !n.coupling).length;
   if (opts.bidirectional || consumerCount === 0) {
-    const down: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
-    for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";
+    const down: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
+    for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";   // deps expand DOWNSTREAM
     data = merge_resolved(data, down, down.anchor?.id);
   }
-  // COUPLING OVERLAY — computed ONCE on the anchor, HELD aside (merged after the grow so complements never
-  // enter the frontier). off when dataCoupling is disabled. This is the only place coupling touches the grow.
-  const wantCoupling = co.dataCoupling !== false;
-  let overlay = wantCoupling ? await _anchorCouplingDelta(repo, anchorFile, data, opts, co.ctx) : { nodes: [], edges: [], blindspots: [], counter: 0 };
-  // COMPONENT FALLBACK: a symbol anchor that surfaces NO data-coupling (a local leaf — e.g. a plain helper
-  // inside an AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing
-  // function, not its own span) can't reach the cross-boundary flow. The real unit is the FILE/component, so
-  // re-anchor in MODULE mode and ADOPT it when the FILE has the coupling the symbol missed. Now expressed on
-  // the OVERLAY (the only coupling signal): fires only when the symbol overlay is empty and the module's isn't.
-  if (wantCoupling && !overlay.nodes.length) {
-    const mod: any = _pruneExcluded(await build_footprint(repo, anchorFile, null, { ...coStruct }));
+  return data;
+}
+
+// ── P3 COUPLING BRIDGES (docs/grow-architecture.md) ──────────────────────────────────────────────────────
+// One overlay, computed ONCE over the (anchor of the) settled structural seed and merged BEFORE the walk so a
+// bridge can be CHAINED — grown STRUCTURALLY to its downstream (route handler → its @Inject'd bean; queue
+// subscriber → its delegate) — WITHOUT re-coupling. This is the only place coupling touches the grow.
+// COMPONENT FALLBACK: a symbol that surfaces no coupling but whose MODULE does → re-anchor as the module.
+async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts: any, co: any, coStruct: any, prune: (g: any) => any): Promise<any> {
+  if (co.dataCoupling === false) return data;
+  let overlay = await _anchorCouplingDelta(repo, anchorFile, data, opts, co.ctx);
+  if (!overlay.nodes.length) {
+    const mod: any = prune(await build_footprint(repo, anchorFile, null, { ...coStruct }));
     const modOverlay = await _anchorCouplingDelta(repo, anchorFile, mod, opts, co.ctx);
     if (modOverlay.nodes.length) { data = mod; overlay = modOverlay; }
   }
-  // Merge the coupling bridges into the footprint BEFORE the grow so a complement can be CHAINED — grown
-  // STRUCTURALLY to its downstream (a route handler → its @Inject'd bean; a queue subscriber → its delegate).
-  // The grow expands it with structural builds only, so it chains WITHOUT re-coupling (no compounding loop):
-  // coupling was computed exactly once, up front. That is the decoupling — one coupling pass, structural walk.
   _mergeCouplingOverlay(data, overlay);
+  return data;
+}
+
+// ── P2 STRUCTURAL EXPANSION (docs/grow-architecture.md) ──────────────────────────────────────────────────
+// Reach the flow's terminals via consumer/dependency edges, bounded by budget. The frontier is INTENT-GUIDED
+// (`_nextFrontier` orders by relevance, then crossing, then complexity) and the excluded set is dropped here.
+// NOTE: per the contract this should be intent-GUIDED, not intent-PRUNED; today the ranking + exclusion still
+// live in the loop (the discover-vs-prune split is the Step-2 change). Structural builds only — never couples.
+async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, prune: (g: any) => any, excludedFile: (f?: string) => boolean, maxSteps: number, maxNodes: number): Promise<[any, any[]]> {
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
-  // INTENT-WEIGHTED FRONTIER: which unexpanded node to grow next is ranked by the intent-relevance of its
-  // PASSAGE (the cached def embeddings — already computed for anchor selection), so the grow follows the
-  // intent like a guided traversal instead of a blind crossings-then-biggest walk. Computed ONCE per grow
-  // (disk-cached vectors → cheap/warm); empty without an intent or embeddings → the old complexity fallback.
+  // INTENT-WEIGHTED FRONTIER: rank the next node to grow by its passage's intent-relevance (cached def
+  // embeddings); empty without an intent or embeddings → the complexity fallback. Computed ONCE per grow.
   const intentScore = new Map<string, number>();
   if (opts.intent) {
     try { for (const { def, score } of await embedScoreDefs(repo, opts.intent)) { const k = `${def.name} ${normpath(def.file)}`; if (!intentScore.has(k)) intentScore.set(k, score); } }
@@ -319,48 +315,53 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
     const crossings = new Set<string>();
     for (const e of g.resolved_edges()) if (_is_crossing(e)) crossings.add(e.dst);
-    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet. Ordered:
-    // (1) crossings first — the data-flow chain toward terminals (structural backbone, kept primary so the
-    // grow can't wander off the spine into on-intent-but-disconnected code); (2) most INTENT-RELEVANT passage
-    // (the guided-traversal lever — was the largest-complexity tiebreak); (3) complexity as the final tiebreak.
+    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet, not excluded.
     const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
-      && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !_excludedFile(n.file));
+      && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !excludedFile(n.file));
     const next = _nextFrontier(cand, crossings, _iscore);
     if (!next) break;
     expanded.add(_key(next));
-    // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM toward its terminals
-    // (screens, entry points) via its own consumers; a DEPENDENCY (backward — from the bidirectional
-    // seed) extends DOWNSTREAM toward the processing it drives via ITS deps. So an entry-point anchor
-    // (a handler whose work is all downstream) traces the full path, not just its zero consumers.
-    // Dep resolution is LOCAL (the file's imports) — cheap; consumers are the repo scan.
+    // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM via its own consumers; a
+    // DEPENDENCY (backward) extends DOWNSTREAM via ITS deps, so an entry-point anchor traces the full path.
     const dir: string | undefined = next.direction;
-    // report the chosen node + the direction we're expanding it (up = consumers / down = deps), so a slow
-    // grow on a real repo shows WHERE it's heading — the "is it climbing to consumers or descending?" question.
     emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
     let add: any;
     try {
-      add = _pruneExcluded(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...coStruct }));
+      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...coStruct }));
     } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
     if (flood > _MOVE_CAP) { history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
-    // carry the grow direction outward so the chain keeps extending the same way (consumers further up,
-    // deps further down); the seed tagged the anchor's two sides, this propagates past one hop.
+    // carry the grow direction outward so the chain keeps extending the same way (consumers up, deps down).
     const tag = dir ?? "forward";
     for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
     history.push({ node: next.symbol, added: data.nodes.length - before, ...(dir === "backward" ? { dir: "down" } : {}) });
   }
-  // TRUNCATION HONESTY (real grow only — keep the shallow probe's footprint clean; struct_score ignores
-  // blindspots so selection is unaffected). Flag a node the resolver COULD NOT expand — an unsupported
-  // file / parse failure — whose path beyond is silently unmapped (the precise "stopped at a boundary I
-  // couldn't follow" case, e.g. cross-language). A `grow-truncated` budget signal was tried too but
-  // dropped: on data-coupling-heavy repos the node budget is hit on nearly every footprint, so it fired
-  // ~always (≈0 bits) and diluted this precise signal. The calibrated replacement = a cross-package
-  // UNFOLLOWED-REFERENCE blindspot via the (currently-unpopulated) `unresolved` channel — deferred.
+  return [data, history];
+}
+
+// ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
+// concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
+// frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
+export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
+  const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
+  const { excludedFile, prune } = _makeExclusion(opts);
+  // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
+  // expensive repo-wide indices across SEVERAL grows (e.g. the anchor probes build the coupling index ONCE).
+  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
+  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap
+  const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the P3 overlay only
+  let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
+  data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune);            // P3 coupling bridges
+  const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // P2 expand
+  data = grown;
+  // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
+  // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {
     data.blindspots = data.blindspots ?? [];
     for (const h of history) if (h.skipped === "build failed")
