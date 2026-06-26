@@ -62,7 +62,7 @@ testable and independently fixable. The `Footprint` is the contract object passe
 | Concern | Today | Target |
 | --- | --- | --- |
 | Coupling ↔ grow | **Decoupled** — structural walk + one anchor overlay (`_anchorCouplingDelta`) | P3 overlay over **all** footprint nodes |
-| Discovery vs relevance | **Mixed** — intent-first frontier prunes during expansion (P2 does P4's job) | P2 guides, P4 prunes |
+| Discovery vs relevance | **Split (Step 2 #1)** — P2 frontier is CONNECTIVITY-first (crossings), intent only a secondary guide that can't prune a crossing; authoritative intent ranking is P4 (decompose tiers). The hub fan that justified intent-first is capped in P3. | done |
 | Direction | up-default + entry-point down | same (P2 policy) |
 | Tests / `--exclude` | pruned during the walk (`_excludedFile`) | P4 rule |
 | Hub fan | fan-in cap in the coupling materialiser | P3 cap (same place, named) |

@@ -218,24 +218,19 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // crossing-reached one first (that's the chain toward the terminals), else the largest consumer — letting
 // the transitive data-coupling chain extend reach. Bounded by steps + a per-move flood cap + a node budget.
 // Reproducible, offline, no orchestrate LLM passes. The intent TIER pass then prunes which terminals matter:
-// discovery is complete & deterministic; relevance stays the one semantic (LLM) call.
-// Pick the next frontier node to expand. INTENT-FIRST when we have relevance signal: rank by how on-intent
-// the candidate's passage is, so the grow climbs toward what answers the question instead of chasing whatever
-// data-flow crossing happens to be wired — an OFF-INTENT crossing (a shared-infra hub's fan: an EntityManager
-// touched by half the repo) no longer outranks an ON-INTENT consumer. A CROSSING then breaks ties WITHIN a
-// relevance band (so among equally-relevant candidates the grow still follows the structural data-flow spine,
-// not a random leaf — the backbone the old crossings-first order protected). Intent is BUCKETED (~0.05) so
-// tiny embedding-score wobble can't flip the order run-to-run (grow stability) — only a clear relevance gap
-// leads. No relevance signal (offline / no --intent → iscore≡0) → degrades to the prior crossings-first order
-// exactly, so the deterministic oracles are unaffected. (2) crossing, (3) complexity stay the lower tiebreaks.
+// Pick the next frontier node to expand. P2 discovers for CONNECTIVITY (docs/grow-architecture.md): a CROSSING
+// (a data-flow edge toward the terminals) is followed FIRST, so the spine is always traced and a high-intent
+// terminal sitting behind a LOW-intent transit is never starved out of the budget — the pathfinding failure
+// intent-first caused. Intent is a SECONDARY guide: it orders among equally-connected candidates but can NEVER
+// prune a crossing (so a transit is safe). The off-intent HUB fan that briefly justified intent-first is now
+// capped in P3 (the coupling overlay), not refereed here; AUTHORITATIVE intent ranking is P4 (decompose tiers
+// spine/supporting/off). No relevance signal (offline / no --intent → iscore≡0) → crossings-then-complexity.
 export function _nextFrontier<T extends { id: string; complexity?: number }>(
   cand: T[], crossings: Set<string>, iscore: (n: T) => number): T | undefined {
-  const anyIntent = cand.some((n) => iscore(n) > 0);
-  const band = (n: T): number => Math.round(iscore(n) * 20);   // ~0.05 relevance bands → stable across score wobble
   return [...cand].sort((a, b) =>
-    (anyIntent ? band(b) - band(a) : 0)                              // (1) INTENT relevance (primary, when we have it)
-    || (Number(crossings.has(b.id)) - Number(crossings.has(a.id)))   // (2) crossing — structural spine, ties within a band
-    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];              // (3) complexity (final tiebreak)
+    (Number(crossings.has(b.id)) - Number(crossings.has(a.id)))     // (1) CONNECTIVITY — crossings toward terminals
+    || (iscore(b) - iscore(a))                                      // (2) intent — a guide/tiebreak, never prunes a crossing
+    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];             // (3) complexity (final tiebreak)
 }
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
