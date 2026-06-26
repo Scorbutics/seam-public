@@ -339,6 +339,20 @@ function _emitTiming(t0: number, tag: string, model: string, promptLen: number):
   if (t0) process.stderr.write(`[timing] LLM ${tag} (${model}): ${Math.round(performance.now() - t0)}ms, prompt ${promptLen} chars\n`);
 }
 
+// Log EVERY LLM pass at the moment it's called, with the data injected into its prompt. At --verbose: a line
+// per call (#seq, tag, model, prompt size). Set SEAM_LLM_DUMP=<dir> to also write each pass's FULL prompt to
+// `<dir>/NNN-<tag>.txt` — so you can read exactly what each pass was asked (debugging + granularity tuning).
+let _passSeq = 0;
+function _logPass(tag: string, model: string, prompt: string): void {
+  const seq = ++_passSeq;
+  const dir = process.env.SEAM_LLM_DUMP;
+  if (verbose() || dir) process.stderr.write(`[llm] #${seq} ${tag} (${model}) ← ${prompt.length} chars${dir ? ` → ${tag}` : ""}\n`);
+  if (dir) {
+    try { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, `${String(seq).padStart(3, "0")}-${tag}.txt`), `# pass #${seq}: ${tag}\n# model: ${model}\n# prompt: ${prompt.length} chars\n\n${prompt}`); }
+    catch { /* best-effort dump */ }
+  }
+}
+
 // Run ONE LLM pass (with one retry on malformed JSON) → {id: item}. Serves the host bus when set.
 export function runPassRaw(kind: string, binary: string, prompt: string, model: string,
                            thinking: number | null, tag: string): Map<string, any> {
@@ -346,6 +360,7 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
   const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
+  _logPass(tag, model, prompt);
   for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
@@ -369,6 +384,7 @@ export async function runPassRawAsync(kind: string, binary: string, prompt: stri
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
   const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
+  _logPass(tag, model, prompt);
   for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
