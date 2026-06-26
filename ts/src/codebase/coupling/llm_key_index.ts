@@ -247,6 +247,10 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // (blindCandidates empty) the rep set is empty, so a re-learn would feed the learner an unstable cached-rep
   // subset → a needless LLM call each run. No new blind work → the rules are already learned; replay them.
   if (blindCandidates.length) await learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx);   // persists survivors into the matcher store
+  // TYPE-ADAPTER classification: synthesise `repository` matchers for database-classified receivers (the
+  // custom 2-part data layers member_access misses). Persists into the same store → picked up by loadMatchers
+  // below. Gated on opts.llm + the candidate-set signature (warm runs replay, no call).
+  { const { classifyAndPersistRepositories } = await import("./receiver_class.js"); await classifyAndPersistRepositories(repo, opts, ctx); }
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 

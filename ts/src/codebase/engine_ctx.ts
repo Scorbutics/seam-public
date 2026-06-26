@@ -35,6 +35,11 @@ export class EngineCtx {
   // targeted couplingOtherSides runs per changed symbol, but the file's keys don't change between symbols) ---
   fileKeyScan = new Map<string, { kind: string; value: string; line: number; produces: boolean }[]>();
 
+  // RECEIVER CLASSIFICATION (type-adapters): repo → the `repository` matchers synthesised by classifying the
+  // codebase's recurring receivers (idiom → LLM type-confirmation). Built once/run, persisted + applied like
+  // learned matchers. Empty array = classified, none were `database`.
+  repoMatchers = new Map<string, unknown>();
+
   // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
   // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory
   // — bounded by the answer's size, complete across every module the grow spans. Unset → module scope.
