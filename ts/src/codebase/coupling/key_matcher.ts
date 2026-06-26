@@ -11,7 +11,7 @@
 // shared-key index, exactly as for the floor — so a detected-but-uncorroborated key still can't fabricate
 // an edge. Gated on `--data-coupling llm` + budget; the LLM seam is the shared run_pass (host-bus/claude/
 // copilot), no API key.
-import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass_async, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
@@ -171,15 +171,15 @@ export async function learnKeyMatchers(
     size += len;
   }
 
-  const synth = (deadTokens: string[]): KeyMatcher[] => {
+  const synth = async (deadTokens: string[]): Promise<KeyMatcher[]> => {
     if (ctx.keyBudget <= 0) return [];
     ctx.keyBudget -= 1;
-    try { return _parse(run_pass(_prompt(snippets, deadTokens), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
+    try { return _parse(await run_pass_async(_prompt(snippets, deadTokens), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
     catch (e) { if (!(e instanceof LLMError)) throw e; return []; }
   };
 
   emit(`Learning shared-key adapter rule(s) for ${snippets.length} floor-blind file(s) via LLM…`);
-  const candidates = synth([]);
+  const candidates = await synth([]);
   const accepted: KeyMatcher[] = [], failed: KeyMatcher[] = [];
   for (const m of candidates) (await _detects(m, blindFiles) ? accepted : failed).push(m);
 
@@ -188,7 +188,7 @@ export async function learnKeyMatchers(
   // model nondeterminism on small snippets). Skipped once we already have accepted matchers + no misses.
   if (failed.length || !accepted.length) {
     const have = new Set(accepted.map(matcherKey));
-    for (const m of synth(failed.map((f) => _feedbackToken(f))))
+    for (const m of await synth(failed.map((f) => _feedbackToken(f))))
       if (!have.has(matcherKey(m)) && await _detects(m, blindFiles)) { accepted.push(m); have.add(matcherKey(m)); }
   }
 

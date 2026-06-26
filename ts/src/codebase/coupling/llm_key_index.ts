@@ -288,11 +288,18 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // SETTLE warm runs: only LEARN when this run surfaced NEW blind files. With every cluster member cached
   // (blindCandidates empty) the rep set is empty, so a re-learn would feed the learner an unstable cached-rep
   // subset → a needless LLM call each run. No new blind work → the rules are already learned; replay them.
-  if (blindCandidates.length) await learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx);   // persists survivors into the matcher store
-  // TYPE-ADAPTER classification: synthesise `repository` matchers for database-classified receivers (the
-  // custom 2-part data layers member_access misses). Persists into the same store → picked up by loadMatchers
-  // below. Gated on opts.llm + the candidate-set signature (warm runs replay, no call).
-  { const { classifyAndPersistRepositories, classifyAndPersistAnnotations } = await import("./receiver_class.js"); await classifyAndPersistRepositories(repo, opts, ctx); await classifyAndPersistAnnotations(repo, opts, ctx); }
+  // The three LEARNING passes are INDEPENDENT (matcher synth reads blind snippets; the two classifiers read the
+  // receiver / annotation inventories) and each only APPENDS to the matcher store (persistMatchers = fresh
+  // load-merge-write, dedup by id → concurrent-safe in single-threaded JS). Run them concurrently: on the
+  // `claude -p`/copilot path run_pass_async overlaps the subprocesses, so the cold cost is the SLOWEST pass
+  // (the matcher synth+retry) instead of their SUM — the sequential `synth(43) + recv(21) + annot(13)` the
+  // globex run showed. (The host-bus/MCP path serves serially, so it stays correct, just doesn't overlap.)
+  const { classifyAndPersistRepositories, classifyAndPersistAnnotations } = await import("./receiver_class.js");
+  await Promise.all([
+    blindCandidates.length ? learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx) : Promise.resolve([]),
+    classifyAndPersistRepositories(repo, opts, ctx),   // `repository` matchers for database-classified receivers (custom 2-part data layers)
+    classifyAndPersistAnnotations(repo, opts, ctx),    // `annotation` matchers for custom route/queue/event annotations a hardcoded set misses
+  ]);
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 

@@ -14,7 +14,7 @@
 import { createHash } from "node:crypto";
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
-import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass_async, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit, verbose } from "../../core/progress.js";
 import { makeMaskCtx } from "./adapters/util.js";
 import { scannableForKeys } from "./adapters/index.js";
@@ -135,7 +135,7 @@ export async function classifyAndPersistRepositories(
 
   emit(`Classifying ${cands.length} recurring receiver(s) by type (database/http/store/…) via LLM…`);
   let types = new Map<string, string>();
-  try { types = _parse(run_pass(_prompt(cands), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
+  try { types = _parse(await run_pass_async(_prompt(cands), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
   catch (e) { if (!(e instanceof LLMError)) throw e; ctx.repoMatchers.set(repo, []); return []; }
 
   const matchers: KeyMatcher[] = [];
@@ -223,7 +223,7 @@ export async function classifyAndPersistAnnotations(
 
   emit(`Classifying ${cands.length} recurring annotation(s) by type (route/queue/event) via LLM…`);
   let types = new Map<string, string>();
-  try { types = _parse(run_pass(_annotPrompt(cands), { model: opts.model, claudeBin: opts.claudeBin, tag: ANNOT_PASS.tag })); }
+  try { types = _parse(await run_pass_async(_annotPrompt(cands), { model: opts.model, claudeBin: opts.claudeBin, tag: ANNOT_PASS.tag })); }
   catch (e) { if (!(e instanceof LLMError)) throw e; ctx.annotMatchers.set(repo, []); return []; }
 
   const matchers: KeyMatcher[] = [];
