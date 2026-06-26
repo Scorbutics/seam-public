@@ -53,8 +53,9 @@ export async function _resolve_import(repo: string, importingFile: string, ref: 
 
 // A consumer in a test file is VERIFICATION (the `test` role). Mirrors resolver.ts TEST_PATH.
 const _TEST_RE = /(\.(test|spec)\.[a-z]+$)|((^|\/)(tests?|__tests__|spec)\/)/i;
+export function isTestFile(file: string): boolean { return _TEST_RE.test(file.replace(/\\/g, "/")); }
 export function _kind_for(file: string, kind: string): string {
-  return _TEST_RE.test(file.replace(/\\/g, "/")) ? "test" : kind;
+  return isTestFile(file) ? "test" : kind;
 }
 
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };

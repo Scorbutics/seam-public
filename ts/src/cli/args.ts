@@ -15,6 +15,7 @@ export interface Args {
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
+  excludeDirs?: string[]; includeTests: boolean;   // footprint exclusion: folders to drop; tests dropped unless --include-tests
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   reviewImpact?: boolean; triage?: boolean;
 }
@@ -30,7 +31,7 @@ export function resolveEngines(a: Args): { cluster: string; roles: string; wirin
 }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, grow: "det" };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, grow: "det", includeTests: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -66,6 +67,8 @@ export function parseArgs(argv: string[]): Args {
       case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)
       case "--promote-spine-path": a.promoteSpinePath = true; break;   // Step 2: promote on-path supporting seams to spine
       case "--lineage": a.lineage = true; break;   // attach per-seam git lineage (last-touching commit) to the footprint
+      case "--exclude": a.excludeDirs = (next() ?? "").split(",").map((s) => s.trim().replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean); break;   // drop footprint nodes under these folders (name or path prefix)
+      case "--include-tests": a.includeTests = true; break;   // keep test files in the footprint (default: dropped)
       case "--anchor-recall": a.anchorRecall = (next() ?? "embed").toLowerCase(); break;   // embed (default) | lexical
       case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
       case "--expand-graph": a.expandGraph = next(); break;

@@ -14,6 +14,7 @@ import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
+import { isTestFile } from "../../core/resolve/consumers.js";
 import { isFlowSubject } from "../coupling/index.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -187,8 +188,25 @@ export function _nextFrontier<T extends { id: string; complexity?: number }>(
 }
 
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
+  // FOOTPRINT EXCLUSION: drop test files (default — verification, not the spine; opt back in with includeTests)
+  // and any node under an --exclude folder (matched as a path PREFIX or as a whole path SEGMENT, so `--exclude
+  // generated` drops `a/generated/x` and `--exclude src/legacy` drops that prefix). Applied to the seed, each
+  // expansion, AND the frontier — so an excluded subtree is never re-anchored (no wasted budget) nor rendered.
+  const exDirs = (opts.excludeDirs ?? []).map((d) => normpath(d.replace(/\\/g, "/")));
+  const _excludedFile = (file: string | undefined): boolean => {
+    if (!file) return false;
+    const f = file.replace(/\\/g, "/");
+    if (!opts.includeTests && isTestFile(f)) return true;
+    return exDirs.some((d) => f === d || f.startsWith(d + "/") || f.split("/").includes(d));
+  };
+  const _pruneExcluded = (g: any): any => {
+    if (!g?.nodes?.length) return g;
+    const drop = new Set<string>(g.nodes.filter((n: any) => n.id !== "n1" && _excludedFile(n.file)).map((n: any) => n.id));
+    if (!drop.size) return g;
+    return { ...g, nodes: g.nodes.filter((n: any) => !drop.has(n.id)), edges: (g.edges ?? []).filter((e: any) => !drop.has(e.from) && !drop.has(e.to)) };
+  };
   // ctx shared across all grow moves (repo indices built once). A CALLER may pass its OWN ctx to share the
   // expensive repo-wide indices across SEVERAL grows — e.g. the anchor probes (Lever 2) build the
   // data-coupling grounding index ONCE for the whole candidate pool instead of once per candidate.
@@ -201,7 +219,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // ENTRY POINT (a route / webhook handler invoked by the framework) has NO in-repo consumers — its
   // work is DOWNSTREAM (deps). Seeding both directions means a source isn't a dead end, and the
   // `direction` tags let decompose detect the policy-vs-flow shape. Frontier growth stays consumer-ward.
-  let data: any = await build_footprint(repo, anchorFile, symbol, { direction: opts.bidirectional ? "both" : "up", ...co });
+  let data: any = _pruneExcluded(await build_footprint(repo, anchorFile, symbol, { direction: opts.bidirectional ? "both" : "up", ...co }));
   // COMPONENT FALLBACK: a symbol anchor that surfaces NO data-coupling (a local leaf — e.g. a plain helper
   // inside an AngularJS controller closure, whose $scope methods + $http siblings live in the enclosing
   // function, not its own span) can't reach the cross-boundary flow. The real unit is the FILE/component, so
@@ -210,7 +228,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // zero coupling AND the module reveals some — so a symbol that already has data-flow is never widened.
   const hasCoupling = (g: any) => (g.nodes ?? []).some((n: any) => n.coupling);
   if (!hasCoupling(data)) {
-    const mod: any = await build_footprint(repo, anchorFile, null, { ...co });
+    const mod: any = _pruneExcluded(await build_footprint(repo, anchorFile, null, { ...co }));
     if (hasCoupling(mod)) data = mod;
   }
   const history: any[] = [];
@@ -236,7 +254,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     // grow can't wander off the spine into on-intent-but-disconnected code); (2) most INTENT-RELEVANT passage
     // (the guided-traversal lever — was the largest-complexity tiebreak); (3) complexity as the final tiebreak.
     const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
-      && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)));
+      && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !_excludedFile(n.file));
     const next = _nextFrontier(cand, crossings, _iscore);
     if (!next) break;
     expanded.add(_key(next));
@@ -251,7 +269,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
     let add: any;
     try {
-      add = await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...co });
+      add = _pruneExcluded(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...co }));
     } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).

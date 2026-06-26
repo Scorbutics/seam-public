@@ -439,7 +439,8 @@ async function runCodebase(a: Args): Promise<number> {
       // FILE anchor (a module.exports/Vue-plugin with no named symbol): grow file-level — an empty symbol
       // makes build_footprint use build_module_graph (the whole file's exports as the seed).
       const growSymbol = fileAnchor ? "" : a.symbol!;
-      const gOpts = { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling };
+      const gOpts = { bidirectional: true, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests };
+      process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       try {
         if (a.grow === "llm") {
           [data, hist] = await orch.auto_orchestrate(a.repo, a.anchorFile!, growSymbol, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
