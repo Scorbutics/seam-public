@@ -633,7 +633,11 @@ async function crossBoundary(
   const adapter = kindOf(key.kind);
   const complementProduces = !key.produces;
   const rankedComplements = orderComplementsByRelevance(complementFiles, coOccurrence);
-  for (const [file, line] of rankedComplements.slice(0, READER_CAP)) {
+  // HUB DAMPING: a key shared by a flood of files is infra (a shared EntityManager/session), not a domain
+  // channel — materialize only hubReaderCap of it (the tail stays a fanout blindspot below). Bounds the
+  // sprawl AT EACH re-anchor, so the grow stops chasing the hub fan instead of compounding it step over step.
+  const cap = complementFiles.size > COUPLING.hubFan ? COUPLING.hubReaderCap : READER_CAP;
+  for (const [file, line] of rankedComplements.slice(0, cap)) {
     // GROW-WIDE FANOUT BUDGET: each complement is a tree-sitter parse (the data-coupling bottleneck). A hub
     // key/anchor fans out to hundreds — bound the TOTAL across the whole grow so a central anchor can't run
     // for ages. When exhausted, stop materialising (the over-budget tail is recorded as a fanout blindspot).
@@ -658,10 +662,11 @@ async function crossBoundary(
       if (complementText) await runPipeline(s, { id: complementId, file, text: complementText, lo: unit.start, hi: unit.end }, depth - 1, surfacedKeys);
     }
   }
-  if (rankedComplements.length > READER_CAP) {
+  if (rankedComplements.length > cap) {
+    const isHub = complementFiles.size > COUPLING.hubFan;
     graph.addBlindspot({ node: boundaryId, mechanism: "shared-key-fanout",
-      evidence: `'${key.value}' (${key.kind}) is ${complementProduces ? "written" : "read"} in ${rankedComplements.length} files (showing ${READER_CAP}) — a data-flow boundary, not a call`,
-      candidates: rankedComplements.slice(READER_CAP).map(([file]) => ({ file, symbol: key.value, provenance: "SUGGESTED" })) });
+      evidence: `'${key.value}' (${key.kind}) is ${complementProduces ? "written" : "read"} in ${rankedComplements.length} files (showing ${cap}${isHub ? " — infra hub, damped" : ""}) — a data-flow boundary, not a call`,
+      candidates: rankedComplements.slice(cap).map(([file]) => ({ file, symbol: key.value, provenance: "SUGGESTED" })) });
   }
 }
 

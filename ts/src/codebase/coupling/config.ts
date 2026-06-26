@@ -13,6 +13,14 @@ const _keyBudget = process.env.SEAM_KEY_BUDGET !== undefined ? Math.max(0, Math.
 const _maxScanBytes = process.env.SEAM_MAX_SCAN_BYTES !== undefined ? Math.max(0, Math.floor(Number(process.env.SEAM_MAX_SCAN_BYTES) || 0)) : 0;
 export const COUPLING = {
   readerCap: 6,      // index: max complement nodes materialized per shared key
+  // HUB DAMPING: a key whose far-side fan-in (distinct complement files) exceeds `hubFan` is INFRASTRUCTURE,
+  // not a domain channel — a shared EntityManager / session / audit log touched by half the codebase. Coupling
+  // on it is generic noise that floods (and, through grow re-anchoring, COMPOUNDS) the footprint. So it
+  // materializes only `hubReaderCap` complement(s) instead of `readerCap`; the rest is recorded as the
+  // existing shared-key-fanout blindspot (honest, not silent). A domain table with a handful of users is
+  // unaffected. Structural (degree), not a name match — tunable via env for big monorepos.
+  hubFan: Number(process.env.SEAM_HUB_FAN ?? 16),          // fan-in above which a key is treated as an infra hub
+  hubReaderCap: Number(process.env.SEAM_HUB_READER_CAP ?? 1),  // complements materialized for a hub key
   nodeKeyCap: Number(process.env.SEAM_NODE_KEY_CAP ?? 16),  // index: max shared keys ONE node surfaces (caps a hub file emitting dozens of UI events — keeps the most specific; $SEAM_NODE_KEY_CAP)
   complementBudget: Number(process.env.SEAM_COMPLEMENT_BUDGET ?? 250), // grow-wide cap on materialized complement units (tree-sitter parses) — bounds a hub's data-coupling fan so a bad/central anchor can't run for ages; $SEAM_COMPLEMENT_BUDGET
   maxScanBytes: _maxScanBytes, // floor scan: skip files larger than this — OOM backstop, $SEAM_MAX_SCAN_BYTES, 0=off (default: scan all)
