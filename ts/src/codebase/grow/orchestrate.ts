@@ -4,7 +4,7 @@
 // advances toward the answer, expand+merge, repeat — until done or a step budget. The LLM only
 // CHOOSES moves over the deterministic primitives; it never invents an edge.
 import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
-import { emit } from "../../core/progress.js";
+import { emit, dbg } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow move picker (node + direction per step)" });
 import { from_resolved_graph } from "../../core/graph_ir.js";
@@ -320,20 +320,22 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // DEPENDENCY (backward) extends DOWNSTREAM via ITS deps, so an entry-point anchor traces the full path.
     const dir: string | undefined = next.direction;
     emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
+    const arrow = dir === "backward" ? "↓down" : "↑up";
     let add: any;
     try {
       add = prune(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...coStruct }));
-    } catch { history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
+    } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
-    if (flood > _MOVE_CAP) { history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
+    if (flood > _MOVE_CAP) { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
     // carry the grow direction outward so the chain keeps extending the same way (consumers up, deps down).
     const tag = dir ?? "forward";
     for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
+    dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} → +${data.nodes.length - before} node(s)`);
     history.push({ node: next.symbol, added: data.nodes.length - before, ...(dir === "backward" ? { dir: "down" } : {}) });
   }
   return [data, history];
@@ -352,9 +354,13 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap
   const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the P3 overlay only
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
+  const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
+  dbg(`[grow] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
   data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune);            // P3 coupling bridges
+  dbg(`[grow] P3 coupling: +${data.nodes.length - seedN} bridge node(s)`);
   const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // P2 expand
   data = grown;
+  dbg(`[grow] P2 expand: ${history.length} step(s) → ${data.nodes.length} node(s) total (budget ${maxSteps} steps / ${maxNodes} nodes)`);
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {

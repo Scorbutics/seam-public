@@ -16,6 +16,7 @@ export interface Args {
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   excludeDirs?: string[]; includeTests: boolean;   // footprint exclusion: folders to drop; tests dropped unless --include-tests
+  trace?: boolean;   // --trace: --verbose + the per-node timing firehose (SEAM_TIMING)
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   reviewImpact?: boolean; triage?: boolean;
 }
@@ -108,6 +109,7 @@ export function parseArgs(argv: string[]): Args {
       // coupling on-by-default without paying the LLM when there's no backend or it's disabled.
       case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingAuto = m === "auto"; a.dataCouplingExplicit = true; break; }
       case "-v": case "--verbose": a.verbose = true; break;
+      case "--trace": a.verbose = true; a.trace = true; break;   // --verbose + the per-node timing firehose
       case "--context-window": case "-o": case "--out":
         next(); break; // accepted-and-ignored on the ported paths
       case "--open": case "--debug": break; // boolean, ignored on the ported paths

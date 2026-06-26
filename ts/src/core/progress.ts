@@ -13,8 +13,16 @@ export const TIMING_PREFIX = "@@SEAM_TIMING@@";
 // still work as dev-only narrow toggles (e.g. coupling-debug WITHOUT the timing firehose). The engine is
 // threaded over `process` for these cross-cutting stderr channels (as PROGRESS/TIMING already are), so a
 // flag → env hand-off keeps the diagnostic sites loose-coupled (no opts threading through every layer).
+// THREE diagnostic levels, so the firehose stops drowning the signal:
+//   default    — phase PROGRESS markers only (emit() below); what a normal run / the extension shows
+//   --verbose  — + one IMPORTANT debug line per grow STEP and per coupling STAGE (dbg() below): the
+//                "what did each step decide, and why" view you read to DEBUG a footprint
+//   --trace    — + the per-NODE timing firehose (build-timing/dep-pass/dc-timing): a dev deep-dive
 export const verbose = (): boolean => process.env.SEAM_VERBOSE === "1";
-export const timingOn = (): boolean => verbose() || !!process.env.SEAM_TIMING;   // perf instrumentation: --verbose or the narrow SEAM_TIMING
+export const timingOn = (): boolean => !!process.env.SEAM_TIMING;   // the --trace per-node firehose ONLY (no longer fired by --verbose)
+// Important, human-readable debug — one line per grow step / coupling stage, at --verbose. NOT the
+// @@PROGRESS@@ marker the extension parses, and NOT the per-node timing firehose (that is --trace).
+export function dbg(message: string): void { if (verbose()) process.stderr.write(`${message}\n`); }
 
 // An emit() marks a phase's START; its duration is measured FORWARD (until the next phase begins, or
 // the run ends). This is what lets the dominant cost show up correctly even when it's the LAST phase

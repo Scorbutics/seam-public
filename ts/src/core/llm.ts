@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
-import { timingOn } from "./progress.js";
+import { timingOn, verbose } from "./progress.js";
 
 export class ClassifierError extends Error {}
 export const LLMError = ClassifierError;
@@ -345,7 +345,7 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
   model = _route_model(tag, model);   // strong-tier upgrade, sourced from the pass registry
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
-  const t0 = timingOn() ? performance.now() : 0;   // per-pass wall-clock (--verbose / SEAM_TIMING)
+  const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
   for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null
@@ -368,7 +368,7 @@ export async function runPassRawAsync(kind: string, binary: string, prompt: stri
   model = _route_model(tag, model);   // strong-tier upgrade, sourced from the pass registry
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
-  const t0 = timingOn() ? performance.now() : 0;   // per-pass wall-clock (--verbose / SEAM_TIMING)
+  const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
   for (const _attempt of [1, 2]) {
     try {
       const raw = _HOST_BUS !== null

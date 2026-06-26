@@ -27,7 +27,7 @@ import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, ty
 import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
 import { COUPLING } from "./config.js";
-import { emit, verbose, timingOn } from "../../core/progress.js";
+import { emit, verbose, timingOn, dbg } from "../../core/progress.js";
 
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
@@ -454,19 +454,21 @@ export async function resolveCoupling(
 
   const graph = new CouplingGraph(counter);
   if (opts.dataCoupling === false) return graph.result();
-  const _dct = (label: string, t0: number) => { if (timingOn()) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
+  // STAGE diagnostics at --verbose (the FLOOR/LEARN/GROUND/APPLY timing + counts you read to debug coupling);
+  // the per-NODE timing firehose stays at --trace (timingOn).
+  const _stage = (label: string, t0: number) => dbg(`[coupling] ${anchorFile}: ${label} (${Math.round(performance.now() - t0)}ms)`);
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
 
   // GATE
   if (!(await _gateTouchesBoundary(repo, anchorFile, anchorText, lo, hi, llmOpts, opts, ctx))) {
-    _dct("gate: anchor touches no boundary → skipped repo-wide coupling", _t); return graph.result();
+    _stage("GATE: anchor touches no boundary → skipped", _t); return graph.result();
   }
 
   // LEARN — the flywheel: LLM passes synthesise adapter rules + per-file/carrier grounding; persisted to .seam.
   const learned = await _learn(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
   if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
-  _dct("learn (assemble)", _t); _t = performance.now();
+  _stage(`LEARN: ${learned.groundingIndex?.size ?? 0} learned key(s)`, _t); _t = performance.now();
 
   // FLOOR — deterministic adapters → the repo-wide key index (cached). The param floor is threaded raw too, so
   // each node can re-derive its OWN const-resolved param keys (the per-file scan doesn't const-resolve).
@@ -476,15 +478,16 @@ export async function resolveCoupling(
   // GROUND — one grounding index from FLOOR ∪ LEARN. Only re-merge when there's per-anchor LLM grounding to
   // fold in; the det floor path reuses the cached `floor` as-is (no copy).
   const index = learned.groundingIndex ? mergeGrounding(floor, learned.groundingIndex) : floor;
-  _dct("ground (index-build)", _t); _t = performance.now();
+  _stage(`FLOOR+GROUND: ${index.size} grounded key(s)`, _t); _t = performance.now();
 
   // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters.
   const matchers = _loadAdapters(repo, ctx);
+  _stage(`CACHE: ${matchers.length} cached adapter(s) loaded`, _t); _t = performance.now();
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), learned.carrierAccesses ?? [], learned.proposedKeys ?? []);
-  _dct("apply (pipeline)", _t);
+  _stage(`APPLY: ${graph.result().nodes.length} bridge node(s), ${stats.parses} complement parse(s)`, _t);
   if (timingOn()) process.stderr.write(`[dc-timing] pipeline breakdown: ${stats.nodes} nodes · ${stats.parses} complement parses ${Math.round(stats.parseMs)}ms · ${stats.ranks} key-ranks ${Math.round(stats.rankMs)}ms\n`);
 
   return graph.result();
