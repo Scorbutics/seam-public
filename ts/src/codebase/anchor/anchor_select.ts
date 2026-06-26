@@ -24,6 +24,17 @@ import { grow_to_terminals } from "../grow/orchestrate.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
 import { expand_intent_terms } from "./intent_expand.js";
+import { embedScoreDefs } from "../scan/def_embed.js";
+
+// Round-robin merge of two ranked pools — take one from each, alternately. Used to fold the EMBED-recalled
+// candidates into the lexical pool BEFORE the probe-budget slice, so the semantically-recalled symbols a
+// "how is X created" intent needs (createBooking / save / persist) get probe slots instead of being appended
+// after a flood of lexical name-matches and sliced off. Order-preserving within each pool; deterministic.
+export function _rrMerge<T>(a: T[], b: T[]): T[] {
+  const out: T[] = [];
+  for (let i = 0; i < Math.max(a.length, b.length); i++) { if (i < a.length) out.push(a[i]); if (i < b.length) out.push(b[i]); }
+  return out;
+}
 
 // Structural facts of a probed footprint. All deterministic, topology-only (no intent words).
 export interface ProbeMetrics {
@@ -46,9 +57,15 @@ export interface ProbedAnchor {
   metrics: ProbeMetrics | null;   // null = the probe grow failed
   structScore: number;    // the connectedness ranking (reaches-terminals weighted)
   rescued?: boolean;      // was isolated on the cheap (call/import) probe, un-isolated only via data-coupling
+  relevance?: number;     // intent-relevance (embedding cosine vs the intent) — a deterministic tiebreak among
+                          // equally-connected candidates; the LLM judge still makes the final semantic pick
   signature?: string;     // the candidate's own declaration line (its CODE identity) — what a reader judges by
   doc?: string;           // its leading doc-comment, the concept the name omits — fed to the judge as MEANING
 }
+
+// A recall candidate before it is probed (lexical, seed, or embed-recalled). `rank_anchors` returns these
+// loosely-typed; this names the shape the probe budget orders and tags with relevance.
+type ProbedCand = { name: string; file: string; kind: string; score: number; terms?: string[]; relevance?: number };
 
 // The data-flow boundary kinds are plumbing, never an "end" of the flow — mirrors _promote_terminals.
 const _BOUNDARY = new Set(["table", "route", "resource"]);
@@ -173,6 +190,9 @@ export function judge_anchor_llm(intent: string, connected: ProbedAnchor[],
     "Pick the ONE whose declaration + doc most directly answers the question as the place to start reading.",
     "Prefer the symbol that GOVERNS or DEFINES the mechanism the question is about over a peripheral helper",
     "that only participates in it.",
+    "Honor the ACTION the question implies: a 'how is X created / written / saved / sent' question wants the",
+    "symbol that PRODUCES or WRITES X (create/save/persist/publish), NOT one that merely reads or displays it",
+    "(load/list/get/render) — and vice-versa for a read question. Match the verb, not just the noun.",
     "If the question names a MODULE, APP, DIRECTORY, or PATH to use or to AVOID (e.g. \"only in web-x\", \"not",
     "from web-y\"), treat it as a HARD constraint: NEVER pick a candidate whose file path (shown in parens)",
     "violates it, even if a violating one looks more relevant — choose the best among those it allows.",
@@ -224,19 +244,42 @@ export async function select_anchor(repo: string, intent: string,
     const key = `${s.name}|${s.file}`;
     if (!have.has(key)) { have.add(key); probeList.unshift({ name: s.name, file: s.file, kind: s.kind, score: 0, terms: ["~entry"] }); }
   }
+  // INTENT RELEVANCE (deterministic, embeddings) — computed ONCE, reused for BOTH recall (the EMBED candidates
+  // the lexical name-net can't reach) AND ranking (a relevance tiebreak among equally-connected candidates).
+  // Default-ON path (`anchorRecall === "embed"`); degrades cleanly to lexical-only when transformers are absent.
+  const relByKey = new Map<string, number>(), relByName = new Map<string, number>();
+  const embedCands: ProbedCand[] = [];
   if (opts.anchorRecall === "embed") {
-    const { embed_anchor_candidates } = await import("./anchor_embed.js");
-    for (const d of await embed_anchor_candidates(repo, intent, { k: topK })) {
-      // a METHOD is rarely a standalone anchor — anchor on its enclosing CLASS instead (the lexical recall
-      // only ever yields classes/functions, so this keeps the embed pool to the same anchor granularity).
-      const name = (d.kind === "method" && d.enclosing) ? d.enclosing : d.name;
-      const kind = d.kind === "method" ? "class" : d.kind;
-      const key = `${name}|${d.file}`;
-      if (!have.has(key)) { have.add(key); probeList.push({ name, file: d.file, kind, score: 0, terms: ["~embed"] }); }
-    }
+    try {
+      const scored = await embedScoreDefs(repo, intent);
+      for (const { def, score } of scored) {
+        const k = `${def.file}::${def.name}`;
+        if (!relByKey.has(k)) relByKey.set(k, score);
+        if (!relByName.has(def.name)) relByName.set(def.name, score);
+      }
+      for (const d of scored.slice(0, topK).map((x) => x.def)) {
+        // a METHOD is rarely a standalone anchor — anchor on its enclosing CLASS instead (the lexical recall
+        // only ever yields classes/functions, so this keeps the embed pool to the same anchor granularity).
+        const name = (d.kind === "method" && d.enclosing) ? d.enclosing : d.name;
+        const kind = d.kind === "method" ? "class" : d.kind;
+        const key = `${name}|${d.file}`;
+        if (!have.has(key) && !_NON_ANCHOR_KINDS.has(kind)) { have.add(key); embedCands.push({ name, file: d.file, kind, score: 0, terms: ["~embed"] }); }
+      }
+    } catch { /* transformers absent → lexical-only recall */ }
   }
+  const relOf = (c: { name: string; file: string }): number => relByKey.get(`${c.file}::${c.name}`) ?? relByName.get(c.name) ?? 0;
+
+  // PROBE BUDGET — interleave the lexical and embed pools (round-robin) BEFORE the slice, so the semantically-
+  // recalled candidates aren't starved by a flood of lexical name-matches (the bug that let a "how are bookings
+  // CREATED" intent anchor on a read hub: createBooking was embed-recalled but appended past the 16-slot cut).
+  // SEEDS stay at the FRONT (structural entries the name-net can't see, never dropped). Relevance tagged for the
+  // ranking tiebreak.
+  const seedCands = probeList.filter((c) => (c.terms ?? []).includes("~entry"));
+  const lexCands = probeList.filter((c) => !(c.terms ?? []).includes("~entry"));
+  const merged = [...seedCands, ..._rrMerge(lexCands, embedCands)];
+  for (const c of merged) (c as ProbedCand).relevance = relOf(c);
   // drop data-shape candidates (never anchors) BEFORE probing — a free probe-count cut — then bound the budget.
-  const toProbe = probeList.filter((c) => !_NON_ANCHOR_KINDS.has(c.kind)).slice(0, 16);
+  const toProbe = merged.filter((c) => !_NON_ANCHOR_KINDS.has(c.kind)).slice(0, 16);
 
   // TWO-TIER PROBE (Lever 1). The probe's job is to RANK candidates by connectedness and DROP the
   // isolated ones. Data-coupling's carrier-trace overlay DETONATES on hub classes (~100s each on cal.com
@@ -266,7 +309,7 @@ export async function select_anchor(repo: string, intent: string,
     if (alwaysCouple) couplingProbes++;
     const metrics = await probe_anchor(repo, c.file, c.name, { dataCoupling: alwaysCouple, maxNodes: opts.maxNodes, maxSteps: opts.maxSteps, ctx });
     probed.push({ id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: c.score, terms: c.terms ?? [],
-      metrics, structScore: struct_score(metrics, c.score) });
+      relevance: (c as ProbedCand).relevance ?? 0, metrics, structScore: struct_score(metrics, c.score) });
   }
   // RESCUE pass — re-probe only the would-be-isolated WITH data-coupling; a candidate that becomes
   // connected (its sole link was a shared key/route) is rescued back into the pool, marked `rescued`.
@@ -285,10 +328,13 @@ export async function select_anchor(repo: string, intent: string,
   // (cross-stack-only; ranked among themselves by their coupled structScore, but AFTER the call-connected,
   // since a direct caller is stronger evidence than a shared key). If the probe disqualified everything
   // (e.g. resolver gap), fall back to the full probed list by name so the ramp never empties out.
-  const connected = probed.filter((p) => p.metrics && !p.metrics.isolated && !p.rescued)
-    .sort((a, b) => b.structScore - a.structScore || b.score - a.score);
-  const rescued = probed.filter((p) => p.rescued)
-    .sort((a, b) => b.structScore - a.structScore || b.score - a.score);
+  // Tiebreak among equally-connected candidates by INTENT RELEVANCE (deterministic embedding cosine) before
+  // the lexical name score — so a "how X is created" intent leans toward the write/create mechanism when two
+  // candidates are equally central. The LLM judge still makes the final semantic pick over `alive`.
+  const byConn = (a: ProbedAnchor, b: ProbedAnchor) =>
+    b.structScore - a.structScore || (b.relevance ?? 0) - (a.relevance ?? 0) || b.score - a.score;
+  const connected = probed.filter((p) => p.metrics && !p.metrics.isolated && !p.rescued).sort(byConn);
+  const rescued = probed.filter((p) => p.rescued).sort(byConn);
   const alive = [...connected, ...rescued];
   const pool = alive.length ? alive : [...probed].sort((a, b) => b.score - a.score);
   const dead = probed.filter((p) => !pool.includes(p)).sort((a, b) => b.score - a.score);
