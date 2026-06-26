@@ -231,13 +231,20 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const clusters = await clusterBlindFiles(blindCandidates);
   const collapsed = blindCandidates.length - clusters.length;
   if (collapsed > 0) emit(`Clustered ${blindCandidates.length} floor-blind file(s) → ${clusters.length} pattern representative(s) (−${collapsed} covered by shared shape)…`);
+  // The cluster is the unit of LLM work: ONE rep per cluster → the MATCHER pass (pass 4) learns the SHAPE and
+  // grounds it repo-wide. The per-file `discover-keys-batch` extraction on the SAME reps is OFF by default —
+  // SEAM_KEY_AUDIT (cal.com) shows it adds ZERO unique grounded couplings (the matcher pass covers them all),
+  // i.e. it was a redundant SECOND LLM pass over the same files. `SEAM_PER_FILE_KEYS=1` restores it (the
+  // framework-agnostic regeneration opt-in / the literal-axis fallback).
+  const perFileKeys = process.env.SEAM_PER_FILE_KEYS === "1";
   for (const c of clusters) {
-    if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth sees one rep per pattern
-    if (opts.llm && ctx.keyBudget > 0) {
-      ctx.keyBudget -= 1; toSynth.push(c.rep);                                                              // per-file pass LLMs only the reps
-      for (const m of c.members) if (m.ck !== c.rep.ck)
-        persistFileKeys(repo, m.ck, { name: `cluster-covered`, description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
-    }
+    if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth: one rep per pattern
+    if (!opts.llm) continue;
+    if (perFileKeys && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push(c.rep); }                      // per-file pass (opt-in) — persists the rep's keys
+    // cache the cluster MEMBERS as covered so a warm run skips them (the rule grounds them). The rep is cached
+    // by the per-file pass when on; matcher-only → cache the rep too (its keys come from the rule).
+    for (const m of c.members) if (!(perFileKeys && m.ck === c.rep.ck))
+      persistFileKeys(repo, m.ck, { name: `cluster-covered`, description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
   }
   if (verbose() && collapsed > 0)
     process.stderr.write(`[coupling] clustered blind files by shape:\n${clusters.filter((c) => c.members.length > 1).map((c) => `   · ${c.signature || "(shapeless)"} ×${c.members.length} → rep ${c.rep.file}`).join("\n")}\n`);

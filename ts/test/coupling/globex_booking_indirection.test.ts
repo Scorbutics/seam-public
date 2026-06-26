@@ -30,6 +30,7 @@ let REPO: string;
 const w = (rel: string, t: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), t); };
 
 beforeAll(() => {
+  process.env.SEAM_PER_FILE_KEYS = "1";   // GAP B reaches the bridge via the per-file literal axis (opt-in; default = matcher-only)
   REPO = mkdtempSync(join(tmpdir(), "globex-booking-"));
   // the ANCHOR: consumer component — knows ONLY this.$bookingService, no route literal at all
   w("web/components/acmeBooking.js", `export default {\n  name: 'AcmeBooking',\n  async mounted() { this.bookings = await this.$bookingService.getBookings(); },\n};\n`);
@@ -38,7 +39,7 @@ beforeAll(() => {
   // the Spring backend — route ALSO composed (@RequestMapping base + @GetMapping suffix)
   w("backend/AcmeCheckBookingsService.java", `@RestController\n@RequestMapping("/api/acmecheck")\npublic class AcmeCheckBookingsService {\n  @GetMapping("/bookings")\n  public List<Booking> getBookings() { return bookingRepository.findAll(); }\n}\n`);
 });
-afterAll(() => rmSync(REPO, { recursive: true, force: true }));
+afterAll(() => { rmSync(REPO, { recursive: true, force: true }); delete process.env.SEAM_PER_FILE_KEYS; });
 
 describe("globex acmeBooking → $bookingService → indirect endpoint (hardest cross-stack case)", () => {
   test("HOP 1 (DI): the component ⇄ plugin couples deterministically via vue-inject", () => {

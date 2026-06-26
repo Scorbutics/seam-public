@@ -28,8 +28,8 @@ class BatchBus extends HostBus {
   serve(tag: string): string { if (tag === "discover-keys-batch") { this.calls += 1; return this.answer; } return "[]"; }
 }
 
-beforeEach(() => { _resetKeyCacheMem(); _resetCarrierCacheMem(); delete process.env.SEAM_KEY_AUGMENT; set_host_bus(null); });
-afterAll(() => set_host_bus(null));
+beforeEach(() => { _resetKeyCacheMem(); _resetCarrierCacheMem(); delete process.env.SEAM_KEY_AUGMENT; set_host_bus(null); process.env.SEAM_PER_FILE_KEYS = "1"; });   // augment IS the per-file pass (opt-in; default = matcher-only)
+afterAll(() => { set_host_bus(null); delete process.env.SEAM_PER_FILE_KEYS; });
 
 const run = async (files: Record<string, string>, opts: KeyIndexOpts) => {
   _resetKeyCacheMem();

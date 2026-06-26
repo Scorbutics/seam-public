@@ -46,11 +46,11 @@ beforeEach(() => {
   process.env.SEAM_ADAPTERS_DIR = SHARED;
   mkdirSync(REPO, { recursive: true });
   writeFileSync(join(REPO, "MessageBean.java"), JAVA);
-  _resetKeyCacheMem(); _resetMatcherCacheMem(); set_host_bus(null);
+  _resetKeyCacheMem(); _resetMatcherCacheMem(); set_host_bus(null); process.env.SEAM_PER_FILE_KEYS = "1";   // tests the per-file pass's symbol-echo guard (opt-in; default = matcher-only)
 });
 afterEach(() => {
   rmSync(REPO, { recursive: true, force: true }); rmSync(SHARED, { recursive: true, force: true });
-  delete process.env.SEAM_ADAPTERS_DIR; set_host_bus(null); _resetKeyCacheMem(); _resetMatcherCacheMem();
+  delete process.env.SEAM_ADAPTERS_DIR; set_host_bus(null); _resetKeyCacheMem(); _resetMatcherCacheMem(); delete process.env.SEAM_PER_FILE_KEYS;
 });
 
 describe("per-file LLM key synthesis — code-symbol & generic-word guards", () => {

@@ -15,8 +15,8 @@ import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 let REPO: string;
 const w = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
 
-beforeEach(() => { REPO = mkdtempSync(join(tmpdir(), "scope-")); _resetKeyStoreMem(); set_host_bus(null); });
-afterEach(() => { rmSync(REPO, { recursive: true, force: true }); _resetKeyStoreMem(); set_host_bus(null); });
+beforeEach(() => { REPO = mkdtempSync(join(tmpdir(), "scope-")); _resetKeyStoreMem(); set_host_bus(null); process.env.SEAM_PER_FILE_KEYS = "1"; });   // pin the per-file pass scoping (opt-in; default = matcher-only)
+afterEach(() => { rmSync(REPO, { recursive: true, force: true }); _resetKeyStoreMem(); set_host_bus(null); delete process.env.SEAM_PER_FILE_KEYS; });
 
 describe("module_scope — smallest enclosing build module (registry markers + universal manifests)", () => {
   test("a Maven-style module → its dir prefix; the repo root has its own pom too (nearest wins)", () => {

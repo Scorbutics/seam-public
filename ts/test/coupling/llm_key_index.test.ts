@@ -34,8 +34,8 @@ const produces = '[{"id":"k1","kind":"db-table","value":"payments","role":"produ
 const batchBoth = '[{"id":"k1","file":"billing.rb","kind":"db-table","value":"payments","role":"produces"},{"id":"k2","file":"report.rb","kind":"db-table","value":"payments","role":"consumes"}]';
 const batchProducerOnly = '[{"id":"k1","file":"billing.rb","kind":"db-table","value":"payments","role":"produces"}]';
 
-beforeEach(() => { _resetKeyCacheMem(); set_host_bus(null); });
-afterAll(() => set_host_bus(null));
+beforeEach(() => { _resetKeyCacheMem(); set_host_bus(null); process.env.SEAM_PER_FILE_KEYS = "1"; });   // pin the per-file literal-axis pass (opt-in; default = matcher-only)
+afterAll(() => { set_host_bus(null); delete process.env.SEAM_PER_FILE_KEYS; });
 
 describe("framework-agnostic regeneration (adapters unlinked + LLM)", () => {
   test("the LLM regenerates the db-table coupling the adapter used to provide → recall back to 100%", async () => {
