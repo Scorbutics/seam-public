@@ -36,10 +36,9 @@ export function _class_methods(ctx: Ctx, className: string): [string, number, nu
   const cls = ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k)).find((c) => _name_of(ctx, c) === className);
   if (!cls) return [];
   const out: [string, number, number][] = [];
-  for (const m of ctx.collect(cls, (k) => _METHOD_KINDS.has(k))) {
-    const nameNode = ctx.children(m).find((c) => _MEMBER_NAME.has(c.type));
-    const nm = nameNode ? ctx.text(nameNode) : null;
-    if (nm && nm !== "constructor") { const [s, e] = ctx.span(m); out.push([nm, s, e]); }
+  for (const m of ctx.collect(cls, (k) => _METHOD_KINDS.has(k) && k !== "constructor_declaration")) {
+    const nm = _name_of(ctx, m);   // the tree-sitter `name` FIELD — Java method names are `identifier`, which
+    if (nm && nm !== "constructor") { const [s, e] = ctx.span(m); out.push([nm, s, e]); }   // `_MEMBER_NAME` (property_identifier) missed entirely
   }
   const seen = new Set<string>();
   return out.filter((x) => (seen.has(x[0]) ? false : (seen.add(x[0]), true)));
@@ -102,8 +101,8 @@ export function _type_methods(ctx: Ctx, name: string): [string, number, number][
   if (!iface) return [];
   const out: [string, number, number][] = [];
   for (const m of ctx.collect(iface, (k) => _INTERFACE_MEMBER.has(k))) {
-    const nameNode = ctx.children(m).find((c) => _MEMBER_NAME.has(c.type));
-    if (nameNode) { const [s, e] = ctx.span(m); out.push([ctx.text(nameNode), s, e]); }
+    const nm = _name_of(ctx, m);   // field-based — Java interface method names are `identifier`, not property_identifier
+    if (nm) { const [s, e] = ctx.span(m); out.push([nm, s, e]); }
   }
   const seen = new Set<string>();
   return out.filter((x) => (seen.has(x[0]) ? false : (seen.add(x[0]), true)));
