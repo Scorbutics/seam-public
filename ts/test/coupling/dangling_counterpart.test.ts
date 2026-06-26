@@ -59,6 +59,19 @@ describe("dangling-counterpart reach (backend producer → UI consumer recall)",
     expect(k!.consumers.map((c) => c.file)).toContain("web/store.ts");        // RECALLED via the dangling reach
   });
 
+  test("a NON-DISTINCTIVE dangling literal (in many files) is NOT reached — bounds the 717 explosion", async () => {
+    if (!available()) return;
+    // a generic event 'data' produced in scope, with NO consumer, but the literal appears in 20+ files →
+    // it is a generic word, not a distinctive cross-module key, so the reach must SKIP it (not LLM 20 files)
+    write("api/handler.ts", `export function emit() { bus.fire("syncChannel"); }\n`);
+    for (let i = 0; i < 25; i++) write(`web/noise${i}.ts`, `export const x${i} = "syncChannel" + ${i};\n`);   // 'data' everywhere, no coupling
+    let shown = 0;
+    class Bus extends HostBus { serve(tag: string, prompt: string): string { if (tag === "discover-keys-batch") shown += (prompt.match(/=== FILE:/g) || []).length; return "[]"; } }
+    set_host_bus(new Bus());
+    await llmKeyIndex(REPO, { llm: true, scopeFiles: new Set(["api/handler.ts"]) }, new EngineCtx());
+    expect(shown).toBeLessThan(10);   // the 25 noise files are NOT all sent (the >12 grep is skipped)
+  });
+
   test("no dangling reach when the key is not footprint-scoped (off by default)", async () => {
     if (!available()) return;
     write("api/handler.ts", `export function publishOrders() { bus.fire("orders.sync", payload); }\n`);

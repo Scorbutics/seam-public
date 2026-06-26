@@ -235,11 +235,6 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth sees one rep per pattern
     if (opts.llm && ctx.keyBudget > 0) {
       ctx.keyBudget -= 1; toSynth.push(c.rep);                                                              // per-file pass LLMs only the reps
-      // CACHE THE WHOLE CLUSTER (not just the rep): the non-rep members are covered by the rule the rep
-      // teaches, so persist an empty COVERED marker for each. Without this a warm run finds them uncached →
-      // re-blind → re-clusters → a DIFFERENT member becomes rep → the LLM re-fires; the cache never settles.
-      // (Content-keyed, so editing a member still re-processes it.) Only when the rep is actually sent — a
-      // budget-skipped cluster stays uncached so a later run retries it.
       for (const m of c.members) if (m.ck !== c.rep.ck)
         persistFileKeys(repo, m.ck, { name: `cluster-covered`, description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
     }
@@ -338,10 +333,17 @@ async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opt
     else if (!producers.length && consumers.some(inScope)) dangling.set(value, { kind, value });   // consumed here, produced nowhere
   }
   if (!dangling.size) return new Map();
-  // grep each dangling literal → candidate counterpart files OUTSIDE the footprint (the wrapper that carries it)
+  // grep each dangling literal → candidate counterpart files OUTSIDE the footprint (the wrapper that carries it).
+  // BOUNDED: a DISTINCTIVE coupling key appears in FEW files (a producer + a consumer); a literal that greps to
+  // many is a generic word, NOT a cross-module coupling — skip it (else 37 keys × hundreds = the 717 explosion).
+  const MAX_PER_KEY = 12;   // a dangling literal in >12 files is too generic to be a distinctive counterpart
+  const CAND_CAP = 40;      // hard cap on total counterpart candidates across all dangling keys
   const cands = new Map<string, { file: string; text: string; ck: string }>();
-  for (const d of [...dangling.values()].slice(0, COUPLING.keyBudget)) {
-    for (const f of grepFiles(repo, d.value)) {
+  outer: for (const d of [...dangling.values()].slice(0, COUPLING.keyBudget)) {
+    const hits = grepFiles(repo, d.value);
+    if (hits.length > MAX_PER_KEY) continue;   // non-distinctive literal → not a real cross-module key
+    for (const f of hits) {
+      if (cands.size >= CAND_CAP) break outer;
       if (scope.has(f) || cands.has(f) || !scannableForKeys(f)) continue;
       let text: string; try { text = readFileSync(join(repo, f), "utf-8"); } catch { continue; }
       cands.set(f, { file: f, text, ck: `${f} ${createHash("sha1").update(text).digest("hex")}` });
@@ -361,8 +363,6 @@ async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opt
   }
   const counterKeys = await _batchSynthesize(repo, toSynth, opts);
   await learnKeyMatchers(repo, toSynth.map((t) => ({ file: t.file, text: t.text })), opts, ctx);
-  // delta = the counterpart files' per-file keys + their hits under ALL matchers (incl. any newly learned),
-  // scoped to the candidate files so we don't double-count the repo-wide matcher pass already in `idx`.
   const matchers = loadMatchers(repo);
   const delta: GroundingIndex = new Map();
   const add = (kind: string, value: string, file: string, line: number, produces: boolean) => {
