@@ -368,7 +368,7 @@ type _LlmOpts = Pick<CouplingOpts, 'llm' | 'model' | 'claudeBin'>;
 // anchor's LLM proposed keys (in parallel), and for Ruby the carrier-channel index + carrier accesses;
 // the two repo-wide indexes are merged into one groundingIndex. `accesses`/`proposed` are anchor-only.
 interface AssembledSources { carrierAccesses?: KeyHit[]; groundingIndex?: GroundingIndex; proposedKeys?: KeyHit[] }
-async function assembleSources(
+async function _learn(
   repo: string, anchorFile: string, anchorText: string, lo: number, hi: number,
   llmOpts: _LlmOpts, ctx: EngineCtx,
 ): Promise<AssembledSources> {
@@ -408,12 +408,45 @@ async function assembleSources(
   };
 }
 
-// PUBLIC per-anchor ENTRYPOINT, as a TWO-PHASE pipeline:
-//   STEP 1 (assemble)  — gather the expensive repo-wide sources ONCE (assembleSources)
-//   build the STEP-3 grounding index ONCE (scan floor ⊕ the assembled carrier/LLM grounding)
-//   STEPS 2-5          — run the recursive per-node pipeline from the anchor (runPipeline)
-// Returns the graph delta. The expensive half can't live inside the recursion (a chained hop must reuse
-// the index, never re-assemble), which is why phase 1 sits out here and runPipeline is the recursive body.
+// P3 GATE (perf guard) — the repo-wide grounding build only earns its keep when the ANCHOR's span touches a
+// coupling boundary: only then is there an "other side" to find. Probe LOCALLY — floor keys, then param sites,
+// then learned matchers (no repo walk), then in LLM mode the anchor's proposed keys. No key ⇒ skip the whole
+// repo-wide pass ("grow from the diff": a change touching no DB/route/queue/event pays ~nothing). Returns true
+// = PROCEED. Ruby is exempt (carrier coupling isn't span-local) and footprint-scoped is already bounded AND the
+// gate is chicken-and-egg cold (the rule that would key the anchor isn't learned yet) — both bypass to true.
+async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText: string, lo: number, hi: number, llmOpts: _LlmOpts, opts: CouplingOpts, ctx: EngineCtx): Promise<boolean> {
+  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake") || ctx.footprintFiles) return true;
+  const inSpan = (line: number) => line >= lo && line <= hi;
+  if (scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;
+  const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);   // getParameter(CONST)/addParameter(CONST) sites
+  if (sites.some((s) => inSpan(s.line))) return true;
+  if (!ctx.stableFloor) for (const { matcher } of listMatchers(repo)) {   // learned matchers — not in a stable-floor probe
+    if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) return true;
+  }
+  if (opts.llm) {
+    const lk = await import("./llm_key_index.js");
+    if ((await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx)).length > 0) return true;
+  }
+  return false;
+}
+
+// P3 CACHE (load) — the LEARNED adapter rules from the `.seam` store (persisted by LEARN, replayed warm = 0
+// LLM — the capitalisation). Deduped; empty under a stable-floor probe (learned rules are the accumulating part).
+function _loadAdapters(repo: string, ctx: EngineCtx): KeyMatcher[] {
+  if (ctx.stableFloor) return [];
+  const seen = new Set<string>();
+  return listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return seen.has(k) ? false : (seen.add(k), true); });
+}
+
+// PUBLIC per-anchor ENTRYPOINT — the P3 coupling pipeline (docs/coupling-strategy.md):
+//   GATE    skip the whole pass when the anchor touches no boundary (perf)
+//   LEARN   the flywheel — LLM passes synthesise adapter rules + per-file/carrier grounding (persisted: CACHE)
+//   FLOOR   deterministic adapters → repo-wide key index (cached, no LLM)
+//   GROUND  co-occurrence — one grounding index from FLOOR ∪ LEARN (a key is real only where both sides name it)
+//   CACHE   the `.seam` matcher store — LEARN persists, APPLY replays (warm-free) — load the adapters here
+//   APPLY   materialise the anchor's cross-boundary bridges from the grounded index + matchers (runPipeline)
+// The expensive FLOOR/LEARN/GROUND build sits out here (computed once); APPLY's recursive body reuses the index
+// so a chained hop never re-assembles.
 export async function resolveCoupling(
   repo: string, anchorId: string, anchorFile: string, anchorText: string, lo: number, hi: number,
   counter: number, opts: CouplingOpts = {}, ctx: EngineCtx = new EngineCtx(),
@@ -421,66 +454,37 @@ export async function resolveCoupling(
 
   const graph = new CouplingGraph(counter);
   if (opts.dataCoupling === false) return graph.result();
-
   const _dct = (label: string, t0: number) => { if (timingOn()) process.stderr.write(`[dc-timing] ${label} ${Math.round(performance.now() - t0)}ms\n`); };
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
 
-  // LOCAL GATE — the repo-wide grounding build (the floor scan over EVERY file, the param + LLM key indices)
-  // only earns its keep when the ANCHOR'S OWN span touches a coupling boundary: only then is there an "other
-  // side" to find. Probe the anchor LOCALLY first — the floor + learned matchers (no repo walk), plus, in LLM
-  // mode, the anchor-only proposed keys (one cached anchor-local call assembleSources would make anyway). No
-  // key here ⇒ no coupling involves the anchor ⇒ skip the whole repo-wide pass. This is "grow from the diff":
-  // a perf/bugfix touching no DB/route/queue/event access pays ~nothing instead of a full-repo scan for a
-  // guaranteed-empty result. (Ruby is exempt — its carrier coupling isn't a span-local key; keep the full path.)
-  const isRubyAnchor = anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake");
-  // The local gate skips the repo-wide build when the ANCHOR SPAN touches no boundary — a perf guard for the
-  // unbounded module scope. But under FOOTPRINT-SCOPED discovery the scope is already bounded to the flow's
-  // files, AND the gate is chicken-and-egg cold (the anchor is floor-blind precisely because the rule that
-  // would key it hasn't been learned yet — Prisma/a custom layer). So bypass the gate when footprint-scoped:
-  // the bounded discovery bootstraps the rules the gate was waiting for.
-  if (!isRubyAnchor && !ctx.footprintFiles) {
-    const inSpan = (line: number) => line >= lo && line <= hi;
-    let touchesBoundary = scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line));
-    if (!touchesBoundary) {   // param/const coupling sites (getParameter(CONST)/addParameter(CONST)) — a DIFFERENT
-      const sites: ParamSite[] = [];   // local source than the floor adapters; the value resolves repo-wide but the SITE is local
-      scanParamSites(anchorText, anchorFile, sites);
-      touchesBoundary = sites.some((s) => inSpan(s.line));
-    }
-    if (!touchesBoundary && !ctx.stableFloor) {   // learned matchers are the accumulating part → not in a stable-floor probe
-      for (const { matcher } of listMatchers(repo)) {
-        if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) { touchesBoundary = true; break; }
-      }
-    }
-    if (!touchesBoundary && opts.llm) {
-      const lk = await import("./llm_key_index.js");
-      touchesBoundary = (await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx)).length > 0;
-    }
-    if (!touchesBoundary) { _dct("gate: anchor touches no boundary → skipped repo-wide coupling", _t); return graph.result(); }
+  // GATE
+  if (!(await _gateTouchesBoundary(repo, anchorFile, anchorText, lo, hi, llmOpts, opts, ctx))) {
+    _dct("gate: anchor touches no boundary → skipped repo-wide coupling", _t); return graph.result();
   }
 
-  const sources = await assembleSources(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
+  // LEARN — the flywheel: LLM passes synthesise adapter rules + per-file/carrier grounding; persisted to .seam.
+  const learned = await _learn(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
   if (!available()) return graph.result();   // no tree-sitter → can't resolve boundary/complement units
-  _dct("assemble", _t); _t = performance.now();
+  _dct("learn (assemble)", _t); _t = performance.now();
 
-  // STEP 3 index, built once: the repo-wide scan floor extended with the const-resolved param floor and the
-  // assembled carrier+LLM grounding. `paramIndex` is also threaded raw so each node can re-derive its OWN
-  // const-resolved param keys (the per-file scan in collectAnchorKeys doesn't const-resolve — see runPipeline).
-  const paramIndex = param_key_index(repo, SKIP_DIRS, ctx);   // cached; threaded raw for paramKeysForSpan
-  const base = floor_base_index(repo, SKIP_DIRS, ctx);        // cached merge (shared⊕param) — built once, not per node
-  // Only re-merge when there's per-anchor LLM grounding to fold in; the det floor path reuses `base` as-is.
-  const index = sources.groundingIndex ? mergeGrounding(base, sources.groundingIndex) : base;
-  _dct("index-build", _t); _t = performance.now();
+  // FLOOR — deterministic adapters → the repo-wide key index (cached). The param floor is threaded raw too, so
+  // each node can re-derive its OWN const-resolved param keys (the per-file scan doesn't const-resolve).
+  const paramIndex = param_key_index(repo, SKIP_DIRS, ctx);
+  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+
+  // GROUND — one grounding index from FLOOR ∪ LEARN. Only re-merge when there's per-anchor LLM grounding to
+  // fold in; the det floor path reuses the cached `floor` as-is (no copy).
+  const index = learned.groundingIndex ? mergeGrounding(floor, learned.groundingIndex) : floor;
+  _dct("ground (index-build)", _t); _t = performance.now();
+
+  // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters.
+  const matchers = _loadAdapters(repo, ctx);
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
-  // LEARNED adapter rules (cached `.seam/`), deduped — run per-node below to SURFACE keys a built-in adapter
-  // no longer covers (e.g. AngularJS $scope bindings, now learned). Pure read (no ledger side-effect).
-  const _seen = new Set<string>();
-  const matchers = ctx.stableFloor ? [] : listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return _seen.has(k) ? false : (_seen.add(k), true); });
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };
-
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
-    CHAIN_DEPTH, new Set(), sources.carrierAccesses ?? [], sources.proposedKeys ?? []);
-  _dct("pipeline(attach)", _t);
+    CHAIN_DEPTH, new Set(), learned.carrierAccesses ?? [], learned.proposedKeys ?? []);
+  _dct("apply (pipeline)", _t);
   if (timingOn()) process.stderr.write(`[dc-timing] pipeline breakdown: ${stats.nodes} nodes · ${stats.parses} complement parses ${Math.round(stats.parseMs)}ms · ${stats.ranks} key-ranks ${Math.round(stats.rankMs)}ms\n`);
 
   return graph.result();
