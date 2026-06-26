@@ -81,6 +81,9 @@ export interface FootprintOpts {
   dataCoupling?: boolean;                // shared-key boundary overlay (default on)
   dataCouplingLlm?: boolean;             // use the LLM key front-end for the overlay
   skipCallsite?: boolean;                // skip the uncached receiver-agnostic call-site walk (blast-radius counts)
+  callerFiles?: string[];                // dependency/class: files that REACHED this type anchor — restricts its
+                                         // DOWN methods to the ones those callers actually invoke (walk de-noise).
+                                         // Absent (seed / direct query) → ALL methods (the full class decomposition).
   ctx?: EngineCtx;
   model?: string;
   claudeBin?: string | null;

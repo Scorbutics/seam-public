@@ -13,14 +13,14 @@ import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "./graph.js";
 import { expanduser, _read, _name_of, _named_units, _usage_lines } from "./ast_units.js";
-import { _type_methods } from "./ast_class.js";
+import { _type_methods, _class_method_usage } from "./ast_class.js";
 import { impls_of } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
 import { timingOn } from "../../core/progress.js";
 
 type BuildOpts = {
   anchorLine?: number | null; useLlm?: boolean; model?: string; claudeBin?: string | null;
-  dataCoupling?: boolean; dataCouplingLlm?: boolean; ctx?: EngineCtx;
+  dataCoupling?: boolean; dataCouplingLlm?: boolean; callerFiles?: string[]; ctx?: EngineCtx;
 };
 
 // The mutable accumulator every dependency pass shares: the growing graph (nodes/edges/blindspots), the
@@ -125,7 +125,13 @@ async function _samePackagePass(s: DepScan): Promise<void> {
 // as those DTO types instead of the methods. Names come from the tree-sitter `name` field (cross-language via
 // _named_units / _type_methods → _name_of), mirroring the consumers (UP) path, which already lists a class's
 // methods. Runs INSTEAD of the same-package pass for a type anchor; imports + interface-impl still run.
-async function _typeMethodsPass(s: DepScan): Promise<void> {
+//
+// METHOD SCOPE — `callerFiles` (the files that REACHED this type during the grow walk) restricts the emitted
+// methods to the ones those callers actually INVOKE (via a provable instance — _class_method_usage). This is
+// the de-noise guard: the SEED/direct anchor (no callerFiles) shows the FULL class decomposition (the display
+// fix), but a value/util class reached as a mere DEPENDENCY (a return type with no calls) no longer explodes
+// into all of equals/hashCode/toString/serialize — only the method the caller really calls survives.
+async function _typeMethodsPass(s: DepScan, callerFiles?: string[]): Promise<void> {
   if (!s.actx) return;
   const cls = s.actx.collect(s.actx.root, (k) => _CLASS_KINDS.has(k) || _INTERFACE.has(k)).find((c) => _name_of(s.actx!, c) === s.symbol);
   if (!cls) return;
@@ -138,7 +144,22 @@ async function _typeMethodsPass(s: DepScan): Promise<void> {
   // class (== s.symbol). _type_methods already drops `constructor_declaration` structurally.
   for (const [name, kind, ms, me] of s.aunits) if (kind === "method" && ms >= cs && me <= ce && name !== "constructor" && name !== s.symbol) spans.set(name, [ms, me]);
   for (const [name, ms, me] of _type_methods(s.actx, s.symbol)) if (!spans.has(name)) spans.set(name, [ms, me]);
+
+  // Reached as a DEPENDENCY during the walk → keep only the methods the reaching callers actually invoke on a
+  // provable instance of this class. Empty (a pure return-type ref, no call) → no method nodes at all.
+  let allow: Set<string> | null = null;
+  if (callerFiles && callerFiles.length) {
+    allow = new Set<string>();
+    const methodNames = new Set(spans.keys());
+    if (methodNames.size) for (const cf of callerFiles) {
+      const rd = _read(s.repo, cf);
+      const cctx = rd ? await makeCtx(rd[0], rd[1]) : null;
+      if (cctx) for (const m of Object.keys(_class_method_usage(cctx, s.symbol, methodNames))) allow.add(m);
+    }
+  }
+
   for (const [name, [ms, me]] of spans) {
+    if (allow && !allow.has(name)) continue;
     if (s.seen.has(`${name} ${s.anchorFile}`)) continue;
     s.seen.add(`${name} ${s.anchorFile}`);
     s.counter += 1;
@@ -242,7 +263,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     let _t = _dt();
     await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
     await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
-    if (isType) { await _typeMethodsPass(s); _de("typeMethods", _t); } else { await _samePackagePass(s); _de("samePackage", _t); }
+    if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); } else { await _samePackagePass(s); _de("samePackage", _t); }
     _t = _dt();
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);

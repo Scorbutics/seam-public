@@ -321,9 +321,23 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const dir: string | undefined = next.direction;
     emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
     const arrow = dir === "backward" ? "↓down" : "↑up";
+    // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
+    // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
+    // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
+    let callerFiles: string[] | undefined;
+    if (dir === "backward" && (next.kind === "class" || next.kind === "interface")) {
+      const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
+      const cf = new Set<string>();
+      for (const e of data.edges as any[]) {
+        if (e.from !== next.id && e.to !== next.id) continue;
+        const f = fileById.get(e.from === next.id ? e.to : e.from);
+        if (f && f !== next.file) cf.add(f);
+      }
+      callerFiles = [...cf];
+    }
     let add: any;
     try {
-      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], ...coStruct }));
+      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
     } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
