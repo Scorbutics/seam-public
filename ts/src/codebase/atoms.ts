@@ -21,11 +21,24 @@ export const _CALL = new Set(["call_expression", "method_invocation", "call", "i
 // concrete classes. Without this, an imported interface (the common DI/abstraction target, e.g. a
 // repository or service interface) isn't recognised as a def, so the dependency edge to it is dropped.
 export const _CLASS_KINDS = new Set(["class_declaration", "abstract_class_declaration", "class_definition",
-  "class_specifier", "struct_specifier", "interface_declaration", "enum_declaration", "record_declaration"]);
+  "class_specifier", "struct_specifier", "interface_declaration", "enum_declaration", "record_declaration",
+  "class"]);   // Ruby's class node is the bare kind `class` (others use class_declaration/_definition/_specifier) —
+               // without it Ruby methods aren't seen as in-class, so they're mislabelled functions (no call-site pass)
 export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration"]);
 export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_identifier"]);
+// The identifier LEAVES a declared name resolves to once the C/C++ declarator chain is unwrapped — the
+// terminal a `name`/`declarator` field points at. Used to read the real NAME off a typed declaration
+// (`Type name()` / `int f()`) instead of positionally grabbing the leading return TYPE.
+export const _NAME_LEAVES = new Set(["identifier", "field_identifier", "qualified_identifier", "destructor_name", "operator_name", "type_identifier", "property_identifier"]);
 export const _MEMBER = new Set(["member_expression", "attribute", "field_access", "selector_expression", "field_expression"]);
 export const _MEMBER_NAME = new Set(["property_identifier", "field_identifier"]);
+// Call-node FIELD names for the (method name, receiver) of a method call on grammars whose call node is
+// FLAT — the callee lives in named fields, NOT a nested member node: Java method_invocation (name/object),
+// Ruby `call` (method/receiver), C# invocation (name). The nested-member grammars (JS/TS/Python/C++) have
+// no such name field, so reading these first cleanly discriminates the shape. Tree-sitter field names are
+// the grammar's stable structural interface — this is the call-shape registry, not a literal-kind guess.
+export const _CALL_NAME_FIELD = ["name", "method"];
+export const _CALL_RECV_FIELD = ["object", "receiver"];
 export const _NEW = new Set(["new_expression", "object_creation_expression"]);
 export const _TYPE_REF = new Set(["type_identifier"]);
 export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",

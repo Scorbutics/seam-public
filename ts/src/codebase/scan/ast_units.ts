@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import {
   type Ctx, lang_for,
-  _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _CALL, _EXPORT, _VAR_DECL,
+  _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _NAME_LEAVES, _CALL, _EXPORT, _VAR_DECL,
 } from "../atoms.js";
 import type { Unit } from "./graph.js";
 
@@ -21,6 +21,21 @@ export function _read(repo: string, rel: string): [string, string] | null {
 }
 
 export function _name_of(ctx: Ctx, node: any): string | null {
+  // (1) the tree-sitter `name` FIELD — the declared name, NOT a leading return type. A positional scan
+  // grabs the wrong child on every typed language that writes the type first: Java/C++ `Booking
+  // createBooking(...)` → the return type's `type_identifier` precedes the method `identifier`, so the
+  // old scan returned "Booking". The field is exact across grammars (method/class/function `name`).
+  const nf = node.childForFieldName?.("name");
+  if (nf) return ctx.text(nf);
+  // (2) C/C++ have NO `name` field — the name is buried in the `declarator` field chain (function_definition
+  // → function_declarator → … → identifier). Follow ONLY that field (never `parameters`, or a param name is
+  // mistaken for the function). Mirrors def_treesitter._declaratorName.
+  let x: any = node.childForFieldName?.("declarator");
+  for (let g = 0; x && g < 16; g++) {
+    if (_NAME_LEAVES.has(x.type)) return ctx.text(x);
+    x = x.childForFieldName?.("declarator") ?? null;
+  }
+  // (3) positional fallback — grammars without a `name` field / anonymous-ish nodes.
   for (const c of ctx.children(node)) if (_NAME_KINDS.has(c.type)) return ctx.text(c);
   return null;
 }
@@ -28,11 +43,15 @@ export function _name_of(ctx: Ctx, node: any): string | null {
 // Every named function/method/class/assigned-function def in the parse, as [name, kind, start, end].
 export function _named_units(ctx: Ctx): Unit[] {
   const units: Unit[] = [];
-  const visit = (n: any) => {
+  // `inClass` = this node sits DIRECTLY in a class body (not nested inside a function). A funclike there is a
+  // METHOD even when its node kind isn't in _METHOD_KINDS — Ruby `def` parses as `method`, a C++ in-class body
+  // as `function_definition`; both are otherwise mislabelled "function", which skips the receiver-agnostic
+  // call-site pass (methods are called `obj.m()`, never imported, so the import scan can't find their callers).
+  const visit = (n: any, inClass: boolean) => {
     const k = n.type;
     if (_FUNCLIKE.has(k) && !_ANON_FUNC.has(k)) {
       const nm = _name_of(ctx, n);
-      if (nm) { const [s, e] = ctx.span(n); units.push([nm, _METHOD_KINDS.has(k) ? "method" : "function", s, e]); }
+      if (nm) { const [s, e] = ctx.span(n); units.push([nm, (_METHOD_KINDS.has(k) || inClass) ? "method" : "function", s, e]); }
     } else if (_CLASS_KINDS.has(k)) {
       const nm = _name_of(ctx, n);
       if (nm) { const [s, e] = ctx.span(n); units.push([nm, "class", s, e]); }
@@ -41,9 +60,12 @@ export function _named_units(ctx: Ctx): Unit[] {
       const fl = ch.find((c) => _FUNCLIKE.has(c.type));
       if (fl && ch.length && _NAME_KINDS.has(ch[0].type)) { const [s, e] = ctx.span(fl); units.push([ctx.text(ch[0]), "function", s, e]); }
     }
-    for (const c of ctx.children(n)) visit(c);
+    // descend: a class body makes its children in-class; entering a funclike resets (a nested local function's
+    // own children are NOT class methods); otherwise carry the flag through intermediate nodes (the class body).
+    const childInClass = _CLASS_KINDS.has(k) ? true : (_FUNCLIKE.has(k) ? false : inClass);
+    for (const c of ctx.children(n)) visit(c, childInClass);
   };
-  visit(ctx.root);
+  visit(ctx.root, false);
   return units;
 }
 

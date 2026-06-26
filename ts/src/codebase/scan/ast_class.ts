@@ -4,9 +4,32 @@
 import {
   type Ctx,
   _CLASS_KINDS, _METHOD_KINDS, _MEMBER, _MEMBER_NAME, _NEW, _INSTANCE_BINDER, _TYPE_REF,
-  _INTERFACE, _INTERFACE_MEMBER, _HERITAGE, _BASE_NAME, _NAME_KINDS, _CALL,
+  _INTERFACE, _INTERFACE_MEMBER, _HERITAGE, _BASE_NAME, _NAME_KINDS, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD,
 } from "../atoms.js";
 import { _name_of } from "./ast_units.js";
+
+// The (method name + its node + receiver) of a call site, across the two call-grammar shapes. NESTED
+// (JS/TS/Python/C++): the callee is a member node `obj.prop`. FLAT (Java/Ruby/C#): `name`/`object` are
+// direct FIELDS of the call node, no member node — so the nested branch skips every Java/Ruby method call,
+// and dispatching on the first child is unreliable (a `this.x.m()` receiver is itself a member node). Read
+// the flat name field FIRST (definitive — nested grammars have none). `obj` is null for an unqualified call.
+function _callee(ctx: Ctx, call: any): { nameNode: any; name: string; obj: any | null } | null {
+  for (const nf of _CALL_NAME_FIELD) {
+    const n = call.childForFieldName?.(nf);
+    if (n) {
+      let obj: any = null;
+      for (const of of _CALL_RECV_FIELD) { const o = call.childForFieldName?.(of); if (o) { obj = o; break; } }
+      return { nameNode: n, name: ctx.text(n), obj };
+    }
+  }
+  const fn = ctx.children(call)[0] ?? null;
+  if (fn && _MEMBER.has(fn.type)) {
+    const mch = ctx.children(fn);
+    const prop = mch.find((c) => _MEMBER_NAME.has(c.type)) ?? null;
+    if (prop) return { nameNode: prop, name: ctx.text(prop), obj: mch[0] ?? null };
+  }
+  return null;
+}
 
 // The methods declared on class `className` (excluding the constructor), deduped → [name, start, end].
 export function _class_methods(ctx: Ctx, className: string): [string, number, number][] {
@@ -46,15 +69,9 @@ export function _class_method_usage(ctx: Ctx, className: string, methods: Set<st
   const inst = _instances_of(ctx, className);
   const used: Record<string, number> = {};
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    const ch = ctx.children(call);
-    const fn = ch.length ? ch[0] : null;
-    if (!fn || !_MEMBER.has(fn.type)) continue;
-    const mch = ctx.children(fn);
-    const obj = mch.length ? mch[0] : null;
-    const prop = mch.find((c) => _MEMBER_NAME.has(c.type)) ?? null;
-    if (!obj || !prop) continue;
-    const m = ctx.text(prop);
-    if (!methods.has(m)) continue;
+    const c = _callee(ctx, call);
+    if (!c || !c.obj || !methods.has(c.name)) continue;
+    const obj = c.obj, m = c.name;
     let hit = false;
     if (obj.type === "identifier" && inst.has(ctx.text(obj))) hit = true;
     else if (_NEW.has(obj.type) && _is_new_of(ctx, obj, className)) hit = true;
@@ -71,11 +88,8 @@ export function _class_method_usage(ctx: Ctx, className: string, methods: Set<st
 export function _class_call_sites(ctx: Ctx, methods: Set<string>): [string, number, number][] {
   const out: [string, number, number][] = [];
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    const ch = ctx.children(call);
-    const fn = ch.length ? ch[0] : null;
-    if (!fn || !_MEMBER.has(fn.type)) continue;
-    const prop = ctx.children(fn).find((c) => _MEMBER_NAME.has(c.type)) ?? null;
-    if (prop && methods.has(ctx.text(prop))) out.push([ctx.text(prop), ctx.span(prop)[0], ctx.col(prop.startIndex)]);
+    const c = _callee(ctx, call);   // receiver-agnostic: name is enough (no `obj` requirement)
+    if (c && methods.has(c.name)) out.push([c.name, ctx.span(c.nameNode)[0], ctx.col(c.nameNode.startIndex)]);
   }
   return out;
 }
@@ -141,15 +155,9 @@ export function _instance_types(ctx: Ctx): Map<string, Set<string>> {
 export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: string; line: number; recvId: string | null; recvNew: string | null }[] {
   const out: { method: string; line: number; recvId: string | null; recvNew: string | null }[] = [];
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    const ch = ctx.children(call);
-    const fn = ch.length ? ch[0] : null;
-    if (!fn || !_MEMBER.has(fn.type)) continue;
-    const mch = ctx.children(fn);
-    const obj = mch.length ? mch[0] : null;
-    const prop = mch.find((c) => _MEMBER_NAME.has(c.type)) ?? null;
-    if (!obj || !prop) continue;
-    const m = ctx.text(prop);
-    if (!methods.has(m)) continue;
+    const c = _callee(ctx, call);
+    if (!c || !c.obj || !methods.has(c.name)) continue;
+    const obj = c.obj, m = c.name;
     let recvId: string | null = null, recvNew: string | null = null;
     if (obj.type === "identifier") recvId = ctx.text(obj);
     else if (_NEW.has(obj.type)) { const c = ctx.children(obj).find((x) => x.type === "identifier" || _MEMBER.has(x.type)); recvNew = c ? ctx.text(c) : null; }
