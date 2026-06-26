@@ -27,6 +27,7 @@ import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _NAME_KINDS } from "../atoms.js";
 import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
+import { makeMaskCtx, lineOf } from "./adapters/util.js";
 import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
 import { hasMatcherCache, loadMatchers } from "./key_store.js";
@@ -116,18 +117,51 @@ async function _definedNames(files: { file: string; text: string }[]): Promise<S
   return names;
 }
 
+// FILE SNIPPET = the structural HEAD ⊕ the deep string-key windows. The per-file pass infers couplings two
+// ways: (a) STRUCTURAL ones near the top — a class/model decl, a controller, imports (ActiveRecord
+// `Payment.where`, an implicit Rails route) — and (b) STRING-KEYED ones (queue/event/cache/route/config) at a
+// call site with a string-literal arg, which can sit ANYWHERE in the file. The old "first 4 KB" caught (a)
+// but truncated (b) past the cut. So we ALWAYS keep the head (preserves (a)) and ADD the windows around the
+// string-key sites (closes (b)'s recall hole), dropping only the inert middle. Comment-masked so a literal in
+// a comment isn't a site.
+const _ARG_STRING = /[(,]\s*['"`]/g;   // a string literal as a call argument
+export function candidatePassages(text: string, maxChars: number, context = 3, headChars = 700): string {
+  const lines = text.split("\n");
+  const code = makeMaskCtx(text).comments;
+  const sites = new Set<number>();
+  let m: RegExpExecArray | null; _ARG_STRING.lastIndex = 0;
+  while ((m = _ARG_STRING.exec(code)) !== null) sites.add(lineOf(code, m.index));
+  // window 0 = the HEAD (structural context); subsequent windows = string-key sites beyond it
+  let headEnd = 0, hc = 0;
+  while (headEnd < lines.length - 1 && hc < headChars) { hc += lines[headEnd].length + 1; headEnd++; }
+  const windows: [number, number][] = [[0, headEnd]];
+  for (const s of [...sites].sort((a, b) => a - b)) {
+    const lo = Math.max(0, s - context), hi = Math.min(lines.length - 1, s + context);
+    const last = windows[windows.length - 1];
+    if (lo <= last[1] + 1) last[1] = Math.max(last[1], hi);   // merge into the head / previous window
+    else windows.push([lo, hi]);
+  }
+  let out = "", size = 0;
+  for (const [lo, hi] of windows) {
+    const block = (lo > 0 ? `… (line ${lo + 1})\n` : "") + lines.slice(lo, hi + 1).join("\n") + "\n";
+    if (size + block.length > maxChars && size > 0) break;
+    out += block; size += block.length;
+  }
+  return out;
+}
+
 // Batch-synthesize keys for the given (uncached) files — chunked by snippet size, one LLM call per chunk,
 // each file's result persisted as a named KeyAdapter. Returns file → KeyHit[] (empty if the LLM found none).
 async function _batchSynthesize(repo: string, files: { file: string; text: string; ck: string }[], opts: KeyIndexOpts): Promise<Map<string, KeyHit[]>> {
   const result = new Map<string, KeyHit[]>();
-  let chunk: { file: string; text: string; ck: string }[] = [], size = 0;
+  let chunk: { file: string; text: string; ck: string; snippet: string }[] = [], size = 0;
   const flush = async () => {
     if (!chunk.length) return;
-    const prompt = _batchPrompt(chunk.map((c) => ({ file: c.file, snippet: c.text.slice(0, PER_FILE) })));
+    const prompt = _batchPrompt(chunk.map((c) => ({ file: c.file, snippet: c.snippet })));
     let byFile = new Map<string, KeyHit[]>();
     try { byFile = _parseBatch(run_pass(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag })); }
     catch (e) { if (!(e instanceof LLMError)) throw e; }
-    const defNames = await _definedNames(chunk);   // code symbols the model could be echoing as keys
+    const defNames = await _definedNames(chunk);   // code symbols the model could be echoing as keys (full text)
     for (const c of chunk) {
       const keys = (byFile.get(c.file) ?? []).filter((h) => !defNames.has(h.value));   // drop code-symbol echoes
       result.set(c.file, keys); persistFileKeys(repo, c.ck, { ..._keyAdapterMeta(c.file, keys), keys });
@@ -135,9 +169,9 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
     chunk = []; size = 0;
   };
   for (const f of files) {
-    const len = Math.min(f.text.length, PER_FILE);
-    if (size + len > SNIPPET_CAP && chunk.length) await flush();
-    chunk.push(f); size += len;
+    const snippet = candidatePassages(f.text, PER_FILE);   // head ⊕ deep string-key windows (always ≥ the head)
+    if (size + snippet.length > SNIPPET_CAP && chunk.length) await flush();
+    chunk.push({ ...f, snippet }); size += snippet.length;
   }
   await flush();
   return result;
