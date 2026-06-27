@@ -67,6 +67,18 @@ const _FN_RE = /^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?functi
 const _ARROW_RE = /^[ \t]*(?:export[ \t]+)?(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)[ \t]*(?::[^\n]+?)?=>/;
 const _METHOD_RE = /^[ \t]+(?:public|private|protected|static|async|readonly|get|set|\*|[ \t])*([A-Za-z_$][\w$]*)[ \t]*\([^)]*\)[ \t]*(?::[^={\n]+)?[ \t]*\{/;
 const _METHOD_SKIP = new Set(["if", "for", "while", "switch", "catch", "return", "function", "constructor"]);
+// DECLARATIVE ENDPOINT-MAP entry — `"createBooking": { endpoint: baseUrl, method: 'post' }`. A config-driven
+// API client lists its OPERATIONS as object KEYS whose value is a route descriptor, not as functions — so the
+// fn/method patterns miss them and the screen is invisible to anchor recall. The value carrying BOTH a route
+// key (endpoint/url/path/route) AND a verb key (method/verb) is the structural signature of an operation.
+const _ENDPOINT_MAP_RE = /^[ \t]*["']?([A-Za-z_$][\w$]*)["']?[ \t]*:[ \t]*\{[^}]*\b(?:endpoint|url|path|route)\b[^}]*\b(?:method|verb)\b/i;
+// OBJECT-LITERAL ASSIGNMENT that opens a block — `Vue.prototype.bookingService = {`, `module.exports = {`,
+// `const svc = {`. Its shorthand methods (`async createBooking(vm, …) {`) are real defs, but they only get
+// extracted when an enclosing scope is on the stack — a class does that, a plain object literal did NOT, so a
+// service object's methods were invisible. Treating the assignment as an enclosing scope fixes it (its name is
+// the last identifier before `= {`; brace-depth pops it like a class). The config-key map (handled above) is
+// also `= {` but its entries are `key: {…}`, not `name(…) {`, so the method pattern still won't false-fire.
+const _OBJ_OPEN_RE = /(?:^|[ \t.])([A-Za-z_$][\w$]*)[ \t]*=[ \t]*\{[ \t]*$/;
 
 // A best-effort enclosing-class tracker by brace depth: a `class X {` owns everything until its brace
 // closes. Good enough for embedding signal (it doesn't need to be a parser).
@@ -114,6 +126,12 @@ export function defs_in_file(file: string, text: string): Def[] {
       out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if (enclosing && (m = _METHOD_RE.exec(line)) && !_METHOD_SKIP.has(m[1])) {
       out.push({ name: m[1], kind: "method", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
+    } else if ((m = _ENDPOINT_MAP_RE.exec(line))) {
+      // a declarative API operation (object key → { endpoint, method }) — anchorable like a function.
+      out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
+    } else if ((m = _OBJ_OPEN_RE.exec(line))) {
+      // an object literal assigned to a name → an enclosing scope, so its shorthand methods are extracted.
+      if (/\{/.test(line)) stack.push({ name: m[1], depth });
     } else if (trimmed) { pendingDoc = ""; }   // a non-comment, non-decl code line breaks the doc run
     for (const ch of line) { if (ch === "{") depth++; else if (ch === "}") { depth--; if (stack.length && depth <= stack[stack.length - 1].depth) stack.pop(); } }
   }

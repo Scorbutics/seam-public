@@ -116,13 +116,28 @@ module.exports = {
     expect(md.kind).toBe("module");
     expect(md.doc).toContain("booking-related API calls");
   });
-  test("enumerate_defs default = only the nested arrow (the bug); with moduleDefs = the file is a candidate", async () => {
+  test("object-literal methods ARE extracted (the fix); moduleDefs still adds file identity", async () => {
     const repo = mkdtempSync(join(tmpdir(), "seam-moddef-"));
     writeFileSync(join(repo, "bookingService.js"), SVC);
     const plain = (await enumerate_defs(repo)).map((d) => d.name);
-    expect(plain).toEqual(["transformResultError"]);                         // file identity invisible (the reported miss)
+    expect(plain).toContain("install");              // the object-literal method is now visible (was the miss)
+    expect(plain).toContain("transformResultError");
     const withMod = await enumerate_defs(repo, 4000, undefined, { moduleDefs: true });
     expect(withMod.some((d) => d.name === "bookingService" && d.kind === "module")).toBe(true);
+    rmSync(repo, { recursive: true, force: true });
+  });
+  test("a service object's real async CRUD methods are extracted (the declarative-client anchor unlock)", async () => {
+    const repo = mkdtempSync(join(tmpdir(), "seam-svc-"));
+    writeFileSync(join(repo, "bookingService.js"),
+      `module.exports = { install( Vue ) {\n` +
+      `  const baseUrl = '/acme/rest/member/booking/v1';\n` +
+      `  Vue.prototype.bookingService = {\n` +
+      `    async createBooking( vm, data ) { return Vue.http.post( baseUrl, data ); },\n` +
+      `    async updateBooking( vm, id, data ) { return Vue.http.put( baseUrl + '/' + id, data ); }\n` +
+      `  };\n} };\n`);
+    const names = new Set((await enumerate_defs(repo)).map((d) => d.name));
+    expect(names.has("createBooking")).toBe(true);   // the real async object methods — anchorable now
+    expect(names.has("updateBooking")).toBe(true);
     rmSync(repo, { recursive: true, force: true });
   });
 });
