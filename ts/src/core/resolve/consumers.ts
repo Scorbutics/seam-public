@@ -34,7 +34,9 @@ export function get_resolver(): Resolver | null { return _ACTIVE_RESOLVER; }
 const _resolveCache = new Map<string, string | null>();
 export async function _resolve(repo: string, importingFile: string, source: string): Promise<string | null> {
   if (_ACTIVE_RESOLVER) return _ACTIVE_RESOLVER.resolve_module(repo, importingFile, source);
-  const k = `${importingFile}\0${source}`;
+  // KEY by repo too — a resolution is per-(repo, file, source). Without the repo, two repos with the same
+  // RELATIVE file + import (common across test fixtures) collide in this process-global memo.
+  const k = `${repo}\0${importingFile}\0${source}`;
   let hit = _resolveCache.get(k);
   if (hit === undefined) { hit = floor_resolve(repo, importingFile, source); _resolveCache.set(k, hit); }
   return hit;
