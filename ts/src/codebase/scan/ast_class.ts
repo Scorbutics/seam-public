@@ -28,6 +28,10 @@ function _callee(ctx: Ctx, call: any): { nameNode: any; name: string; obj: any |
     const prop = mch.find((c) => _MEMBER_NAME.has(c.type)) ?? null;
     if (prop) return { nameNode: prop, name: ctx.text(prop), obj: mch[0] ?? null };
   }
+  // UNQUALIFIED call — a bare `foo(...)` whose callee is a direct identifier (JS/TS `call_expression`, where the
+  // callee is the `function` field, not `name`/`method`). No receiver. Without this the call-spine signal misses
+  // every plain function call in JS/TS (a free `formatOrders(...)` reads as a payload type, not a delegation).
+  if (fn && _NAME_KINDS.has(fn.type)) return { nameNode: fn, name: ctx.text(fn), obj: null };
   return null;
 }
 

@@ -1,8 +1,8 @@
-// The grow SEEDS UP (consumers) and only descends into DEPS for a true entry point. A mid-spine method anchor
-// (one WITH in-repo consumers) must NOT descend into its data-model type tree — Java's same-package resolution
-// turns every referenced type into a "dependency", so an unguarded down-seed gets lost
-// `BookingBean → BookingData → MemberBooking → User`. Assert it climbs to the consumer and does not descend.
-// `--bidirectional` (opts.bidirectional) restores the deps. Guards on tree-sitter.
+// The grow seeds the anchor's full SURROUNDINGS — UP (consumers) AND DOWN (direct deps) — from the single
+// anchor, because an intent is a multi-call graph, not a one-way climb. The old type-tree-explosion risk
+// (Java same-package turns every referenced type into a "dependency" → BookingData → MemberBooking → User) is
+// held in check NOT by refusing to descend, but by demoting payload type-refs in the frontier (B): the DIRECT
+// deps appear, the TRANSITIVE data-model tree is not chased. Guards on tree-sitter.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
@@ -29,18 +29,18 @@ const files = async (opts: any): Promise<string[]> => {
   return data.nodes.filter((n: any) => n.id !== "n1").map((n: any) => n.file as string);
 };
 
-describe("grow seed: climb up by default, descend only for entry points", () => {
-  test("a mid-spine anchor climbs to its consumer and does NOT descend the data-model tree", async () => {
+describe("grow seed: explore the anchor's full surroundings (up + down), without chasing the type tree", () => {
+  test("a mid-spine anchor climbs to its consumer AND descends to its direct deps", async () => {
     if (!available()) return;
     const f = await files({});
-    expect(f).toContain("src/BookingsResource.java");        // climbed to the consumer
-    expect(f).not.toContain("src/MemberBooking.java");       // did NOT descend the type tree
-    expect(f).not.toContain("src/User.java");
+    expect(f).toContain("src/BookingsResource.java");        // UP — climbed to the consumer
+    expect(f).toContain("src/BookingData.java");             // DOWN — its direct dependency is now seeded
   });
 
-  test("--bidirectional restores the deps (down) for those who want both", async () => {
+  test("the TRANSITIVE data-model tree is still not chased (payload type-refs demoted, B)", async () => {
     if (!available()) return;
-    const f = await files({ bidirectional: true });
-    expect(f).toContain("src/BookingData.java");             // the direct dep is back
+    const f = await files({});
+    // MemberBooking is a dep of BookingData (a payload) — the frontier does NOT descend the transitive tree.
+    expect(f).not.toContain("src/MemberBooking.java");
   });
 });

@@ -255,21 +255,20 @@ function _makeExclusion(opts: { excludeDirs?: string[]; includeTests?: boolean }
 }
 
 // ── P1 + SEED (docs/grow-architecture.md) ────────────────────────────────────────────────────────────────
-// The structural root: climb UP (consumers) — the flow toward the terminals (controllers, screens). We do NOT
-// seed the DEPS by default: descending a mid-spine method's deps pulls in the DATA-MODEL TYPE TREE (Java's
-// same-package resolution makes every referenced type a "dependency", so the grow gets lost `BookingData →
-// MemberBooking → User`; that is on-intent by NAME, so even ranking follows it). The downstream that MATTERS —
-// persistence / the UI — is reached by COUPLING (P3), independent of this dep walk. So add the deps ONLY for a
-// true ENTRY POINT (no in-repo consumers — a route/webhook the framework invokes); `--bidirectional` forces both.
-async function _phaseSeed(repo: string, anchorFile: string, symbol: string, opts: any, coStruct: any, prune: (g: any) => any): Promise<any> {
-  let data: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
-  const consumerCount = (data.nodes ?? []).filter((n: any) => n.id !== "n1" && !n.coupling).length;
-  if (opts.bidirectional || consumerCount === 0) {
-    const down: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
-    for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";   // deps expand DOWNSTREAM
-    data = merge_resolved(data, down, down.anchor?.id);
-  }
-  return data;
+// The structural root: the anchor's full SURROUNDINGS — UP (consumers — who triggers it: controllers, screens)
+// AND DOWN (dependencies — how it works / its outbound calls, the loading path closest to the anchor). An
+// intent is a multi-call graph, not a one-way climb, so we explore both from the single anchor.
+//
+// DOWN used to be gated to entry points (0 consumers): descending a method's deps pulled in the DATA-MODEL TYPE
+// TREE (Java same-package makes every referenced type a "dependency" → `BookingData → MemberBooking → User`).
+// That fan is now defused — payload type-refs are demoted in the frontier (B), the class→method explosion is
+// bounded (A), and the off-intent tail is cropped in tiering (D) — so a bidirectional neighborhood is the right
+// default. (The deepest reach — UI ⇄ backend across an HTTP route — is still the COUPLING overlay's job, P3.)
+async function _phaseSeed(repo: string, anchorFile: string, symbol: string, _opts: any, coStruct: any, prune: (g: any) => any): Promise<any> {
+  const up: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
+  const down: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
+  for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";   // deps expand DOWNSTREAM
+  return merge_resolved(up, down, down.anchor?.id);
 }
 
 // ── P3 COUPLING BRIDGES (docs/grow-architecture.md) ──────────────────────────────────────────────────────
