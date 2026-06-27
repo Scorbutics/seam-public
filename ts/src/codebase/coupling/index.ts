@@ -106,9 +106,12 @@ function otherSide(index: GroundingIndex, kind: string, value: string, produces:
   const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
   if (kind !== _HTTP_ROUTE) return out;
   const prefix = `${_HTTP_ROUTE} `;
-  // Score every fuzzy route match by SPECIFICITY (shared literal segments) and keep only the BEST tier, so a
-  // generic sub-path (a bare `/summarize/*` served by an unrelated service) can't ground a caller that also
-  // has a fuller, more-specific match (`/manage/rest/booking/summarize/*/*`) — the false-coupling fix.
+  // Score every fuzzy route match by SPECIFICITY (shared literal segments). ALWAYS keep the SPECIFIC matches
+  // (≥2 shared literals — a real cross-stack reach), and keep a GENERIC 1-literal fragment (a bare
+  // `/summarize/*`, shared by booking AND adviser) ONLY when no specific match exists — so the generic can't
+  // ground a caller that also has a fuller match, but a legitimate specific match (or a sole generic, like a
+  // `/document/*` servlet mount) is NEVER dropped. (The old "keep only the single best tier" was too
+  // aggressive — it could discard a valid multi-literal match whenever anything scored higher.)
   const scored: { spec: number; accesses: Access[] }[] = [];
   for (const [k, v] of index) {
     if (!k.startsWith(prefix)) continue;
@@ -117,10 +120,8 @@ function otherSide(index: GroundingIndex, kind: string, value: string, produces:
     const spec = routeMatchSpecificity(val, value);
     if (spec >= 1) scored.push({ spec, accesses: produces ? v.consumers : v.producers });
   }
-  if (scored.length) {
-    const best = Math.max(...scored.map((s) => s.spec));
-    for (const s of scored) if (s.spec === best) out.push(...s.accesses);
-  }
+  const hasSpecific = scored.some((s) => s.spec >= 2);
+  for (const s of scored) if (s.spec >= 2 || !hasSpecific) out.push(...s.accesses);
   return out;
 }
 

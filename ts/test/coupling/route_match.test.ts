@@ -71,11 +71,13 @@ describe("specificity filtering — a generic shared sub-path doesn't pull in an
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-  test("the booking grow reaches BookingsService but NOT the unrelated CompanyAdviserService", async () => {
+  test("the booking grow reaches BookingsService (the specific match) but NOT the unrelated CompanyAdviserService", async () => {
     if (!available()) return;
     const [data]: any = await grow_to_terminals(repo, "web/memberBookings.js", "loadBookings",
       { maxSteps: 12, maxNodes: 40, dataCoupling: true } as any);
-    expect(data.nodes.some((n: any) => n.file.endsWith("BookingsService.java"))).toBe(true);   // the right one
-    expect(data.nodes.some((n: any) => n.file.endsWith("CompanyAdviserService.java"))).toBe(false);   // the false one is gone
+    // the SPECIFIC (≥2-literal) cross-stack match is ALWAYS kept (the regression: it must not be dropped)…
+    expect(data.nodes.some((n: any) => n.file.endsWith("BookingsService.java"))).toBe(true);
+    // …while the GENERIC 1-literal fragment from the unrelated service stays excluded.
+    expect(data.nodes.some((n: any) => n.file.endsWith("CompanyAdviserService.java"))).toBe(false);
   });
 });
