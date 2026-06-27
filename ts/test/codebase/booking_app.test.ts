@@ -12,6 +12,8 @@ import { dirname, join } from "node:path";
 import { defs_in_file } from "../../src/codebase/scan/def_table.js";
 import { scan as endpointMapScan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
 import { routeMatchSpecificity } from "../../src/codebase/coupling/index.js";
+import { inferHttpClientMatchers } from "../../src/codebase/coupling/effect_inference.js";
+import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "booking-app");
@@ -36,5 +38,15 @@ describe("booking-app fixture — the declarative-client + route contract", () =
     expect(routeMatchSpecificity("/acme/rest/member/booking/v1/summarize/0/*", "/acme/rest/member/booking/v1/summarize/*/*")).toBeGreaterThanOrEqual(4);
     // … but the archived CompanyAdviserService's bare /adviser/summarize/* shares only the generic 'summarize' (1).
     expect(routeMatchSpecificity("/acme/rest/member/booking/v1/summarize/0/*", "/adviser/summarize/*")).toBeLessThanOrEqual(1);
+  });
+
+  test("a custom http client (MyFramework.http, wrapping fetch) is detected transitively and grounds its route", async () => {
+    if (!available()) return;
+    const webFiles = ["web/httpService.js", "web/frameworkClient.js"].map((rel) => ({ rel, text: read(rel) }));
+    const matchers = await inferHttpClientMatchers(webFiles);
+    const m = matchers.find((x: any) => x.token === "MyFramework.http");
+    expect(m).toBeDefined();   // deduced via the fetch sink → alias, NOT by the name
+    const hits = await runMatcher(m!, "web/frameworkClient.js", read("web/frameworkClient.js"));
+    expect(hits.some((h) => h.kind === "http-route" && h.value === "/acme/rest/member/booking/v1" && !h.produces)).toBe(true);
   });
 });

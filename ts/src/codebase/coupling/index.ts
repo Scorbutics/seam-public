@@ -22,6 +22,8 @@ import { type Access, type KeyHit, type AnchorKey, type KeySource, type Groundin
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
+import { inferHttpClientMatchers } from "./effect_inference.js";
+import { getOrSet } from "../engine_ctx.js";
 import { listMatchers } from "./key_store.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
@@ -481,6 +483,21 @@ function _loadAdapters(repo: string, ctx: EngineCtx): KeyMatcher[] {
   return listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return seen.has(k) ? false : (seen.add(k), true); });
 }
 
+// Effect-inference matchers — DETERMINISTIC (no LLM), cached per repo on the ctx. Footprint-scoped when a
+// pre-grow set ctx.footprintFiles (cheap); else a bounded repo walk (reusing the floor's scannable-file set).
+// Skipped under stableFloor so the pre-grow footprint stays pure-floor (mirrors _loadAdapters).
+async function _effectMatchers(repo: string, ctx: EngineCtx): Promise<KeyMatcher[]> {
+  if (ctx.stableFloor) return [];
+  return getOrSet(ctx.effectMatchers as Map<string, KeyMatcher[]>, repo, async () => {
+    const scope = ctx.footprintFiles;
+    const files: { rel: string; text: string }[] = [];
+    for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys, { maxBytes: COUPLING.maxScanBytes })) {
+      if (!scope || scope.has(rel)) files.push({ rel, text });
+    }
+    return inferHttpClientMatchers(files);
+  });
+}
+
 // PUBLIC per-anchor ENTRYPOINT — the P3 coupling pipeline (docs/coupling-strategy.md):
 //   GATE    skip the whole pass when the anchor touches no boundary (perf)
 //   LEARN   the flywheel — LLM passes synthesise adapter rules + per-file/carrier grounding (persisted: CACHE)
@@ -523,8 +540,10 @@ export async function resolveCoupling(
   const index = learned.groundingIndex ? mergeGrounding(floor, learned.groundingIndex) : floor;
   _stage(`FLOOR+GROUND: ${index.size} grounded key(s)`, _t); _t = performance.now();
 
-  // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters.
-  const matchers = _loadAdapters(repo, ctx);
+  // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters,
+  // PLUS the deterministic effect-inference matchers (custom http-client receivers deduced transitively from a
+  // grounded fetch/axios sink — so `MyFramework.http.get('/route')` grounds like a built-in fetch caller).
+  const matchers = [..._loadAdapters(repo, ctx), ...await _effectMatchers(repo, ctx)];
   _stage(`CACHE: ${matchers.length} cached adapter(s) loaded`, _t); _t = performance.now();
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };

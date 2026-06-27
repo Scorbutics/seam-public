@@ -107,6 +107,7 @@ export function matcherLiteral(m: KeyMatcher): string | null {
 }
 
 const _TOKEN_OK = /^[A-Za-z_$][\w$]*$/;   // a single identifier (member chains/metachars rejected → safe to embed)
+const _RECEIVER_OK = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;   // an identifier or a dotted receiver path (no metachars)
 const _slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48);
 
 // Generic tokens that can never be a real coupling key. A bare common word ("the") carries no
@@ -194,7 +195,9 @@ export function validateMatcher(obj: any): KeyMatcher | null {
   }
   if (via === "channel") {
     const token = String(obj.token ?? "").trim();
-    if (!_TOKEN_OK.test(token)) return null;                                  // the receiver must be a bare identifier (bus/store)
+    // the receiver is a bare identifier (bus/store) OR a dotted RECEIVER PATH (`MyFramework.http`) — the latter
+    // for effect-inferred custom clients. Dots are escaped in runChannel's regex, so still injection-safe.
+    if (!_RECEIVER_OK.test(token)) return null;
     const verbs = [...new Set<string>((Array.isArray(obj.verbs) ? obj.verbs : []).map((v: any) => String(v).trim()).filter((v: string) => _TOKEN_OK.test(v)))];
     if (!verbs.length) return null;                                          // need ≥1 verb (else it'd match any call on the receiver)
     return { via: "channel", token, verbs, kind, role, name: nm(`${_slug(token)}-channel-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}('<key>')`) };
