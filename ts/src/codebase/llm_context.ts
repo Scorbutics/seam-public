@@ -318,12 +318,27 @@ export function renderLlmContext(model: any): string {
     out.push("");
   }
 
-  // SPINE — the main path, in trace order (anchor → … → outcome). The one section a consumer reads first.
-  const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
-  if (spine.length) {
-    out.push("## Spine (main path, read in order)");
-    spine.forEach((s, i) => { out.push(`${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); for (const ml of memberLines(s)) out.push(ml); });
+  // PATHS — an intent is a multi-call graph (a load path, a create path, …), each crossing the UI⇄DB boundary
+  // once. When the footprint spans more than one such path, render each as its own ordered trace; a single-flow
+  // footprint falls back to the one SPINE below. The path closest to the anchor is listed first.
+  const paths: any[] = cl.paths ?? [];
+  const renderStep = (s: Seam, i: number) => { out.push(`  ${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); for (const ml of memberLines(s)) out.push(ml); };
+  if (paths.length > 1) {
+    out.push(`## Paths (this intent spans ${paths.length} flows, read each in order)`);
+    paths.forEach((p, pi) => {
+      const cross = p.crossingValue || p.crossingKind ? ` · via ${p.crossingKind ?? "crossing"}${p.crossingValue ? ` ${p.crossingValue}` : ""}` : "";
+      out.push(`### Path ${pi + 1}: ${p.label}${cross}`);
+      (p.steps ?? []).map((id: string) => byId.get(id)).filter(Boolean).forEach((s: Seam, i: number) => renderStep(s, i));
+    });
     out.push("");
+  } else {
+    // SPINE — the main path, in trace order (anchor → … → outcome). The one section a consumer reads first.
+    const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
+    if (spine.length) {
+      out.push("## Spine (main path, read in order)");
+      spine.forEach((s, i) => renderStep(s, i));
+      out.push("");
+    }
   }
 
   // CULMINATION — ranked with confidence, NOT a single boolean. The selected pick is flagged but the
@@ -350,7 +365,9 @@ export function renderLlmContext(model: any): string {
     for (const s of items) { out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); if (withMembers) for (const ml of memberLines(s)) out.push(ml); }
     out.push("");
   };
-  const spineSet = new Set(spineIds);
+  // count a seam as "already shown" if it's in the spine OR in any rendered path, so multi-path output
+  // doesn't re-list its own steps under "Other spine seams".
+  const spineSet = new Set<string>([...spineIds, ...paths.flatMap((p: any) => p.steps ?? [])]);
   list("Supporting", seams.filter((s) => s.tier === "supporting"), true);
   // OFF-path: every one, never collapsed (the deliberate difference from the human view).
   list("Off-path (full — not collapsed)", seams.filter((s) => s.tier === "off"));
@@ -415,7 +432,8 @@ export function renderLlmContext(model: any): string {
       "two together — that's faster and more complete than a manual grep sweep.");
   else
     out.push(
-      "Read the Spine top-to-bottom for the mechanism. Treat the Culmination ranking as confidence, not",
+      paths.length > 1 ? "Read each Path top-to-bottom — they are the intent's distinct flows (one per crossing). Treat the Culmination ranking as confidence, not"
+      : "Read the Spine top-to-bottom for the mechanism. Treat the Culmination ranking as confidence, not",
       "fact — verify the top pick (the single climax is unreliable on backend cron/queue flows). Off-path",
       "seams are related but a different concern. Blindspot candidates are unproven leads to chase.",
       "Seam footprints COMPOSE: when one ends at a cross-stack blindspot you care about (a data-flow",

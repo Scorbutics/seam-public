@@ -618,6 +618,58 @@ function _seam_path(g: Graph, seams: Seam[], fromId: string, toId: string): stri
   return path;
 }
 
+// A PATH through one data-flow CROSSING: the ordered seam-chain anchor → … → crossing → … → sink.
+export interface SeamPath { id: string; label: string; crossingKind?: string; crossingValue?: string; steps: string[]; }
+
+// Extract the intent's PATHS — one per data-flow CROSSING (route / db-table / resource boundary). An intent is
+// a multi-call graph (a load path, a create path, …), each crossing the UI⇄DB boundary once, so a single
+// linear spine can't represent it. PURE post-pass over the ALREADY-grown footprint: it re-structures existing
+// seams and grows NOTHING — it cannot expand the DB graph or cost reach (the bounded-growth invariant). Capped
+// at _PATH_CAP, ordered by proximity to the anchor (the closest crossing is the primary path — the one nearest
+// the anchor the user reads first). Returns [] when there is no crossing (caller keeps the single spine).
+const _PATH_CAP = 8;
+export function extract_paths(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): SeamPath[] {
+  const byId = new Map(seams.map((s) => [s.id, s]));
+  const nodeSeam = new Map<string, string>();
+  for (const s of seams) for (const nid of s.node_ids) if (!nodeSeam.has(nid)) nodeSeam.set(nid, s.id);
+  // directed seam adjacency along the flow lead (same rule as _seam_graph) for the downstream walk.
+  const adj = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+  for (const e of g.resolved_edges()) {
+    if (e.kind === "contains") continue;
+    const a = nodeSeam.get(e.src), b = nodeSeam.get(e.dst);
+    if (!a || !b || a === b) continue;
+    if (lead === "backward") link(a, b); else if (lead === "forward") link(b, a); else { link(a, b); link(b, a); }
+  }
+  const { dist } = _seam_graph(g, seams, lead);
+  const anchorSeam = nodeSeam.get(g.anchor) ?? seams.find((s) => s.tier === "spine")?.id;
+  const boundaryOf = (s: Seam) => { for (const nid of s.node_ids) { const n = g.nodes.get(nid); if (n && isFlowSubject(n.kind)) return n; } return null; };
+  const crossings = seams.map((s) => ({ s, b: boundaryOf(s) })).filter((x) => x.b)
+    .sort((a, b) => (dist.get(a.s.id) ?? 1e9) - (dist.get(b.s.id) ?? 1e9));   // closest crossing first
+  // from a crossing, follow the seam adjacency OUTWARD (away from the anchor — strictly increasing distance) to
+  // the furthest sink. Outward-only so it never walks BACK through the anchor into a sibling path. Cycle-guarded,
+  // bounded by |seams|.
+  const downstream = (from: string): string[] => {
+    const out: string[] = []; const seen = new Set([from]); let cur = from;
+    for (let i = 0; i < seams.length; i++) {
+      const d = dist.get(cur) ?? 0;
+      const next = [...(adj.get(cur) ?? [])].filter((n) => !seen.has(n) && (dist.get(n) ?? -1) > d)
+        .sort((a, b) => (dist.get(b) ?? 0) - (dist.get(a) ?? 0))[0];
+      if (!next) break; out.push(next); seen.add(next); cur = next;
+    }
+    return out;
+  };
+  const paths: SeamPath[] = [];
+  for (const { s, b } of crossings.slice(0, _PATH_CAP)) {
+    const head = anchorSeam ? _seam_path(g, seams, anchorSeam, s.id) : [];
+    const steps = head.length ? [...head] : [s.id];
+    for (const t of downstream(s.id)) if (!steps.includes(t)) steps.push(t);
+    paths.push({ id: `p${paths.length + 1}`, label: byId.get(s.id)?.label ?? (b!.label || b!.kind),
+      crossingKind: b!.kind, crossingValue: b!.label ?? "", steps });
+  }
+  return paths;
+}
+
 // STRUCTURAL spine — the data-flow BACKBONE, decided by topology not text: the seam-path from the anchor to
 // the CULMINATION. The culmination is the seam the LLM marked as the answer (`selected`) when an LLM pass
 // ran, else — under skeleton — the BFS-FARTHEST reachable seam (the deepest point of the flow). Tier-
@@ -1085,8 +1137,12 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     .map((s) => ({ id: s.id, label: s.label, score: s.culmination as number, tier: s.tier,
       writes: s.writes ?? [], dir: s.dir ?? null }))
     .sort((a, b) => b.score - a.score);
+  // MULTI-PATH (intent only): the intent's distinct flows, one per crossing (load / create / … each cross the
+  // UI⇄DB boundary once). A pure post-pass over the grown seams (no new growth). Only emitted when there's
+  // more than one path — a single-flow footprint keeps just the spine, so existing renders are unchanged.
+  const paths = opts.intent ? extract_paths(g, seams, opts.lead) : [];
   const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams,
-    ...(spine.length ? { spine } : {}), ...(culminationRanked.length ? { culminationRanked } : {}) }];
+    ...(spine.length ? { spine } : {}), ...(paths.length > 1 ? { paths } : {}), ...(culminationRanked.length ? { culminationRanked } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
   // policy-vs-flow `shape` + the `lead` slice — only on a BIDIRECTIONAL footprint (decompose passes them);
   // single-direction footprints (the oracle fixtures) emit neither, so byte-identical parity is preserved.
