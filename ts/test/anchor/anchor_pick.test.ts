@@ -3,7 +3,7 @@
 // NOT collapsed to its enclosing class (which buried the intent words: `sendParaplanningRequestEmail` →
 // doc-less `FileNoteService`, so the judge picked a JS save it could read). Pure + LLM-free → unit-testable.
 import { describe, expect, test } from "bun:test";
-import { assembleCandidatePool, demoteHubs, rankAlternatives, _pick_prompt } from "../../src/codebase/anchor/anchor_pick.js";
+import { assembleCandidatePool, demoteHubs, rankAlternatives, _pick_prompt, _pickSet } from "../../src/codebase/anchor/anchor_pick.js";
 import type { Cand } from "../../src/codebase/anchor/anchor_pick.js";
 import type { Def } from "../../src/codebase/scan/def_table.js";
 
@@ -117,5 +117,37 @@ describe("pool surfaces a sibling-module candidate past the old cap", () => {
     ];
     const pool = assembleCandidatePool(scored, []);
     expect(pool.some((c) => c.file === "web-acmecheck/src/Bookings.java")).toBe(true);
+  });
+});
+
+// MULTI-ANCHOR — the LLM may name a covering SET (a list screen AND a CRUD screen in different files).
+describe("_pick_prompt set contract", () => {
+  const cand: Cand[] = [{ name: "loadBookings", file: "memberBookings.js", kind: "function" }];
+  const prompt = _pick_prompt("how bookings are CRUDed across the UI", cand).join("\n");
+  test("asks for a primary + a covering set, minimal, one anchor per file", () => {
+    expect(/primary/i.test(prompt)).toBe(true);
+    expect(/pick/i.test(prompt)).toBe(true);
+    expect(/SAME file|same flow|DISTINCT/i.test(prompt)).toBe(true);   // the "different screens" rule
+    expect(prompt).toContain("HARD constraint");   // scope contract preserved
+  });
+});
+
+describe("_pickSet — build the covering set from the LLM verdict", () => {
+  const cand: Cand[] = [
+    { name: "loadBookings", file: "memberBookings.js", kind: "function" },
+    { name: "createBooking", file: "bookingService.js", kind: "function" },
+    { name: "updateBooking", file: "bookingService.js", kind: "function" },   // same file as createBooking
+    { name: "helper", file: "util.js", kind: "function" },
+  ];
+  const out = (o: Record<string, any>) => new Map(Object.entries(o));
+  test("primary first, complementary picks across DIFFERENT files, same-file dupes dropped", () => {
+    const set = _pickSet(out({ c0: { pick: true }, c1: { pick: true, primary: true }, c2: { pick: true } }), cand);
+    expect(set.map((s) => s.name)).toEqual(["createBooking", "loadBookings"]);   // primary first; c2 dropped (same file as c1)
+  });
+  test("legacy single `best` still yields a one-anchor set", () => {
+    expect(_pickSet(out({ c0: { best: true } }), cand).map((s) => s.name)).toEqual(["loadBookings"]);
+  });
+  test("no picks → empty set", () => {
+    expect(_pickSet(out({ c0: { pick: false } }), cand)).toEqual([]);
   });
 });

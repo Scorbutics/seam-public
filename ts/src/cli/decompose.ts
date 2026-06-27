@@ -384,6 +384,7 @@ async function runCodebase(a: Args): Promise<number> {
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
   let anchorAlternatives: { name: string; file: string; score: number }[] | undefined;   // runner-up anchors → offered when the footprint reads off-intent
   let fileAnchor = false;   // chosen anchor is a FILE/module (no named symbol — a module.exports/Vue plugin) → grow FILE-LEVEL
+  let anchorSet: { name: string; file: string; kind: string }[] | null = null;   // multi-anchor covering set (primary first), or null for single
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
     const { merge_resolved } = await import("../codebase/scan/index.js");
@@ -411,8 +412,11 @@ async function runCodebase(a: Args): Promise<number> {
       a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
       fileAnchor = (sel.chosen as any).kind === "module";   // a file-identity anchor → grow the whole file
       anchorAlternatives = sel.alternatives;
+      // MULTI-ANCHOR: the LLM may return a SET of complementary entry points (a list screen AND a CRUD screen
+      // in different files). The primary is the back-compat single anchor; the rest are grown + merged below.
+      anchorSet = (sel.anchors && sel.anchors.length > 1) ? sel.anchors : null;
       const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
-      process.stderr.write(`[auto-anchor:${via}] ${fileAnchor ? "file " : ""}${sel.chosen!.name} (${sel.chosen!.file})\n`);
+      process.stderr.write(`[auto-anchor:${via}] ${fileAnchor ? "file " : ""}${sel.chosen!.name} (${sel.chosen!.file})${anchorSet ? ` + ${anchorSet.length - 1} more anchor(s): ${anchorSet.slice(1).map((x: any) => x.name).join(", ")}` : ""}\n`);
       // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
       // message until AFTER the decompose — if the grow + seam-intent actually find a culmination, the
       // guess was wrong (conservative on controllers), so don't print a contradictory [no-flow].
@@ -432,7 +436,6 @@ async function runCodebase(a: Args): Promise<number> {
       // P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
       if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
       const orch = await import("../codebase/grow/index.js");
-      let hist: any[];
       // `--grow det` (default) follows the resolved crossings to the terminals deterministically — no LLM
       // move-picker (the intent is still used downstream, by the tier pass). `--grow llm` = the old
       // LLM-orchestrated grow.
@@ -443,26 +446,40 @@ async function runCodebase(a: Args): Promise<number> {
       // entry point — descending a mid-spine method's deps gets lost in the data-model type tree (see grow seed).
       const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests };
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
-      try {
-        if (a.grow === "llm") {
-          [data, hist] = await orch.auto_orchestrate(a.repo, a.anchorFile!, growSymbol, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
-        } else if (dcLlm) {
+      const { EngineCtx } = await import("../codebase/engine_ctx.js");
+      const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
+      // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
+      const growAnchorFootprint = async (af: string, sym: string, ctx: any): Promise<[any, any[]]> => {
+        if (a.grow === "llm") return orch.auto_orchestrate(a.repo, af, sym, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+        if (dcLlm) {
           // FOOTPRINT-SCOPED coupling discovery: a cheap deterministic FLOOR pre-grow yields the flow's files
           // (across every module it spans); the real LLM grow then scopes its per-file coupling discovery to
           // THOSE — bounded by the answer's size, cross-module complete — instead of the anchor's whole module.
-          const { EngineCtx } = await import("../codebase/engine_ctx.js");
-          const ctx = new EngineCtx();
           emit("Floor pre-grow to scope coupling discovery to the footprint…");
-          // DETERMINISTIC floor only → the footprint is identical run-to-run (else learned adapters expand it
-          // each run and warm never settles). Reset before the real grow so it discovers normally.
           ctx.stableFloor = true;
-          const [floorData] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: false, ctx });
+          const [floorData] = await orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: false, ctx });
           ctx.stableFloor = false;
           ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
           process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
-          [data, hist] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: true, ctx });
-        } else {
-          [data, hist] = await orch.grow_to_terminals(a.repo, a.anchorFile!, growSymbol, { ...gOpts, dataCouplingLlm: false });
+          return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: true, ctx });
+        }
+        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: false, ctx });
+      };
+      const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
+      let hist: any[] = [];
+      try {
+        // MULTI-ANCHOR: grow each entry point in the covering set through ONE shared ctx and MERGE — the model
+        // already carries multiple anchor roots and P3 emits a path per crossing, so the merged footprint shows
+        // every screen's flows (memberBookings' summary AND bookingService's CRUD). A GLOBAL node budget bounds
+        // it: once the merge reaches maxNodes, stop adding anchors (no K× blow-up; coverage dedup does the rest).
+        const anchors = anchorSet ?? [{ name: a.symbol!, file: a.anchorFile!, kind: fileAnchor ? "module" : "function" }];
+        const ctx = new EngineCtx();
+        const maxNodes = 80;   // grow_to_terminals' own per-anchor default — reused as the GLOBAL merged budget
+        for (const anc of anchors) {
+          if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
+          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx);
+          hist = hist.concat(h.map((x: any) => ({ ...x, anchor: anc.name })));
+          data = data ? mergeFootprints(data, d, d.anchor?.id) : d;
         }
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }

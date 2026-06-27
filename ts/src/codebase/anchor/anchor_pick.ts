@@ -111,25 +111,31 @@ export function rankAlternatives(cand: Cand[], scored: { def: Def; score: number
 // app / directory / path to USE or AVOID) as a HARD constraint. Detecting that the developer meant a scope
 // is a SEMANTIC read of free text → the model's job (a path filter would die on phrasing/typos); the path
 // is right there in each candidate for it to apply.
+export const ANCHOR_SET_CAP = (() => { const v = parseInt(process.env.SEAM_ANCHORS ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 3; })();
 export function _pick_prompt(intent: string, cand: Cand[]): string[] {
   const lines = [
-    `A developer asks: "${intent}". Pick the SINGLE best STARTING POINT to answer it — the symbol whose`,
-    "code is the mechanism/entry the question is about (where you'd start reading the flow), NOT a leaf",
-    "helper, a test, or a class that merely participates. Each candidate shows its declaration, enclosing",
-    "class, file path, and doc-comment — judge by what it IS and DOES, matched to the question (the name",
-    "alone can mislead; the path is a strong hint).",
+    `A developer asks: "${intent}". Pick the STARTING POINT(s) to answer it — the symbol(s) whose code is the`,
+    "mechanism/entry the question is about (where you'd start reading the flow), NOT a leaf helper, a test, or",
+    "a class that merely participates. Each candidate shows its declaration, enclosing class, file path, and",
+    "doc-comment — judge by what it IS and DOES, matched to the question (the name alone can mislead; the path",
+    "is a strong hint).",
+    "USUALLY ONE entry point is right. Add MORE only when the intent genuinely spans SEPARATE entry points that",
+    "each cover a DISTINCT part — e.g. a LIST/summary screen in one file AND a CREATE/EDIT (CRUD) screen in",
+    "another. NEVER pick two symbols on the SAME flow or in the SAME file (that is one anchor, not two); keep",
+    `the set MINIMAL — at most ${ANCHOR_SET_CAP}.`,
     "If the question names a MODULE, APP, DIRECTORY, or PATH to use or to AVOID (e.g. \"only in web-x\",",
     "\"not from web-y\"), treat it as a HARD constraint: NEVER pick a candidate whose file path violates it,",
     "even if a violating one looks more relevant. Pick the best among the candidates the constraint allows.",
     "",
   ];
   cand.forEach((c, i) => lines.push(`  c${i}: ${c.def ? passage(c.def) : `${c.name} — ${c.file}`}`));
-  lines.push("", 'Output ONLY a JSON array, one object per candidate: [{"id":"c<n>","best":true|false}] with `best` true for exactly ONE.');
+  lines.push("", 'Output ONLY a JSON array, one object per candidate: [{"id":"c<n>","pick":true|false,"primary":true|false}]',
+    "with `primary` true for EXACTLY ONE (the best place to start reading) and `pick` true for every entry point in the covering set.");
   return lines;
 }
 
 export async function pick_anchor(repo: string, intent: string, opts: { model?: string; claudeBin?: string | null } = {}):
-    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none"; alternatives?: AnchorAlt[] }> {
+    Promise<{ chosen: ProbedAnchor | null; chosenBy: "pick" | "none"; alternatives?: AnchorAlt[]; set?: ProbedAnchor[] }> {
   if (!available(opts.claudeBin)) return { chosen: null, chosenBy: "none" };
 
   emit("Recalling candidate anchors by intent (embeddings)…");
@@ -160,18 +166,33 @@ export async function pick_anchor(repo: string, intent: string, opts: { model?: 
   try { out = run_pass(lines.join("\n"), { model: opts.model, claudeBin: opts.claudeBin, tag: PASS.tag }); }
   catch (e) { if (e instanceof LLMError) return { chosen: null, chosenBy: "none" }; throw e; }
 
+  const set = _pickSet(out, cand);
+  if (!set.length) return { chosen: null, chosenBy: "none" };
+  if (verbose() || process.env.SEAM_ANCHOR_DEBUG) process.stderr.write(`[anchor-debug] LLM picked set: ${set.map((a) => `${a.name} (${a.file})`).join(" | ")}\n`);
+  return { chosen: set[0], chosenBy: "pick", set, alternatives: rankAlternatives(cand, scored, set[0]) };
+}
+
+// Build the covering anchor SET from the LLM verdict (pure → testable): every `pick` (or legacy `best`)
+// candidate, the `primary` one FIRST, ONE anchor per file (the set covers DIFFERENT screens — a second pick in
+// the same file is the same flow, dropped), capped at ANCHOR_SET_CAP (bounds the multi-anchor grow).
+export function _pickSet(out: Map<string, any>, cand: Cand[]): ProbedAnchor[] {
+  const truthy = (v: any) => [true, "true", "True"].includes(v);
+  const picks: { i: number; primary: boolean }[] = [];
   for (let i = 0; i < cand.length; i++) {
     const o = out.get(`c${i}`);
-    if (o && typeof o === "object" && [true, "true", "True"].includes(o.best)) {
-      const c = cand[i];
-      if (verbose() || process.env.SEAM_ANCHOR_DEBUG) process.stderr.write(`[anchor-debug] LLM picked c${i}: ${c.name} (${c.file})\n`);
-      return {
-        chosen: { id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: 0, terms: ["~pick"],
-                  metrics: null, structScore: 0, signature: c.def?.signature, doc: c.def?.doc },
-        chosenBy: "pick",
-        alternatives: rankAlternatives(cand, scored, c),
-      };
-    }
+    if (!o || typeof o !== "object") continue;
+    const primary = truthy(o.primary) || truthy(o.best);
+    if (primary || truthy(o.pick)) picks.push({ i, primary });
   }
-  return { chosen: null, chosenBy: "none" };
+  picks.sort((a, b) => Number(b.primary) - Number(a.primary));   // primary first (stable for the rest)
+  const seenFiles = new Set<string>(), set: ProbedAnchor[] = [];
+  for (const { i } of picks) {
+    const c = cand[i];
+    if (seenFiles.has(c.file)) continue;   // one anchor per file
+    seenFiles.add(c.file);
+    set.push({ id: `c${i}`, name: c.name, file: c.file, kind: c.kind, score: 0, terms: ["~pick"],
+               metrics: null, structScore: 0, signature: c.def?.signature, doc: c.def?.doc });
+    if (set.length >= ANCHOR_SET_CAP) break;
+  }
+  return set;
 }

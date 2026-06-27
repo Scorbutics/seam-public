@@ -17,6 +17,7 @@ export interface FindAnchorResult {
   noFlow?: boolean;
   entryCandidate?: { path: string; symbol: string; file: string };   // the HTTP entry seed, for a [entry-candidate] log
   alternatives?: AnchorAlt[];   // runner-up anchors (pick path) — offered when the footprint reads off-intent
+  anchors?: ProbedAnchor[];     // the covering SET (multi-anchor): primary first, ≥1. Grown + merged by the caller.
 }
 
 export async function find_anchor(repo: string, intent: string, opts: FindAnchorOpts = {}): Promise<FindAnchorResult> {
@@ -27,7 +28,7 @@ export async function find_anchor(repo: string, intent: string, opts: FindAnchor
   // with select:"probe" (CLI `--anchor-select probe`) — the probe path is kept, just no longer default.
   if (opts.select !== "probe") {
     const p = await pick_anchor(repo, intent, { model: opts.model, claudeBin: opts.claudeBin });
-    if (p.chosen) return { chosen: p.chosen, chosenBy: "pick", alternatives: p.alternatives };
+    if (p.chosen) return { chosen: p.chosen, chosenBy: "pick", alternatives: p.alternatives, anchors: p.set ?? [p.chosen] };
   }
   const seeds: { name: string; file: string; kind: string }[] = [];
   let expandTerms: string[] | undefined;
