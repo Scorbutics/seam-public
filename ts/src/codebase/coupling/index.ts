@@ -63,12 +63,24 @@ const _HTTP_ROUTE = "http-route";
 // mounted under a context path the caller spells in full (`/manage/rest/member/document`). So for
 // http-route keys ONLY, couple a handler to a caller when one path's segments are a whole-SEGMENT SUFFIX
 // of the other's (after dropping a trailing `/*` wildcard) — whole-segment so `/doc` ≁ `/mydoc`.
-const routeSegs = (value: string): string[] => value.replace(/\/\*+$/, "").split("/").filter(Boolean);
+const routeSegs = (value: string): string[] => value.split("/").filter(Boolean);   // keep "*" (a path param) as a wildcard segment
+const _segEq = (a: string, b: string): boolean => a === b || a === "*" || b === "*";   // a `{param}`/`*` matches any literal segment
+// Two route paths COUPLE when the shorter aligns CONTIGUOUSLY inside the longer from a shared anchor segment —
+// a param `*` matching any literal — accepting EITHER the shorter as a complete sub-path of the longer (a full-
+// URL caller ⇄ a relative handler) OR a caller TRUNCATED by string concatenation, where the overlap ends at the
+// longer's boundary (`$http.get("/x/summarize/0/" + id)` loses its tail → `/x/summarize/0`, grounding to
+// `@Path("summarize/{page}/{id}")` → `…/summarize/*/*`). A truncated match needs ≥2 contiguous segments so a
+// single shared word can't ground unrelated routes. Every crossing it grounds is RESOLVED_PARTIAL (relevance prunes).
 export function routeSuffixMatch(a: string, b: string): boolean {
   const A = routeSegs(a), B = routeSegs(b);
   if (!A.length || !B.length) return false;
   const [long, short] = A.length >= B.length ? [A, B] : [B, A];
-  return short.every((s, i) => long[long.length - short.length + i] === s);
+  for (let off = 0; off < long.length; off++) {
+    let i = 0;
+    while (i < short.length && off + i < long.length && _segEq(long[off + i], short[i])) i++;
+    if ((i === short.length && i >= 1) || (off + i === long.length && i >= 2)) return true;
+  }
+  return false;
 }
 // The OTHER side of an access — its COMPLEMENTS. If the anchor PRODUCES the key we return its consumers;
 // if it CONSUMES, we return its producers:

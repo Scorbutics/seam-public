@@ -15,7 +15,7 @@ import { makeIntentKeyRanker } from "./key_ranker.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
-import { isFlowSubject, resolveCoupling } from "../coupling/index.js";
+import { isFlowSubject, isHandlerEdge, resolveCoupling } from "../coupling/index.js";
 import { _read } from "../scan/ast_units.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -318,9 +318,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     for (const e of data.edges) { (edgeKinds.get(e.from) ?? edgeKinds.set(e.from, []).get(e.from))!.push(e.kind); (edgeKinds.get(e.to) ?? edgeKinds.set(e.to, []).get(e.to))!.push(e.kind); }
     const typeRefOnly = new Set<string>();
     for (const [id, kinds] of edgeKinds) if (kinds.length && kinds.every((k) => k === "type-ref")) typeRefOnly.add(id);
-    // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet, not excluded.
+    // frontier = a real symbol (not a boundary node) we haven't re-anchored yet, not excluded. CORE nodes are
+    // excluded on the FORWARD/consumer side (the central seam is already covered — re-growing it adds noise), but
+    // a DOWNSTREAM (backward) core node IS expanded: the mechanism chain (handler → service → repo → DB) is a
+    // run of core nodes, and stopping at the first one is what left the spine thin and never reached the DB.
     const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
-      && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !excludedFile(n.file));
+      && (roleById.get(n.id) !== "core" || n.direction === "backward") && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !excludedFile(n.file));
     const next = _nextFrontier(cand, crossings, _iscore, typeRefOnly);
     if (!next) break;
     expanded.add(_key(next));
@@ -332,16 +335,24 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
     // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
     // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
+    // A class reached as a DEPENDENCY shows only its CALLED methods (de-noise, A). EXCEPTION — a class reached
+    // as a cross-stack ROUTE/QUEUE HANDLER (an incident handler edge) is container-invoked: its handler method
+    // has no in-repo caller, so restricting to called methods would hide it. Surface ALL its methods (the
+    // handler entry + sibling operations) so the grow lands on the handler and chains DOWN into its backend
+    // delegation (paginate → getUpcomingBookings → DB) — and so the sibling @POST/@PUT handlers become paths.
     let callerFiles: string[] | undefined;
     if (dir === "backward" && (next.kind === "class" || next.kind === "interface")) {
-      const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
-      const cf = new Set<string>();
-      for (const e of data.edges as any[]) {
-        if (e.from !== next.id && e.to !== next.id) continue;
-        const f = fileById.get(e.from === next.id ? e.to : e.from);
-        if (f && f !== next.file) cf.add(f);
+      const isHandler = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && isHandlerEdge(e.kind));
+      if (!isHandler) {
+        const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
+        const cf = new Set<string>();
+        for (const e of data.edges as any[]) {
+          if (e.from !== next.id && e.to !== next.id) continue;
+          const f = fileById.get(e.from === next.id ? e.to : e.from);
+          if (f && f !== next.file) cf.add(f);
+        }
+        callerFiles = [...cf];
       }
-      callerFiles = [...cf];
     }
     let add: any;
     try {

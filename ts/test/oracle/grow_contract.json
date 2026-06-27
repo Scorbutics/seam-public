@@ -5,6 +5,7 @@
       "App|frontend/App.tsx|function",
       "OrdersPage|frontend/OrdersPage.tsx|function",
       "String|backend/OrderController.java|method|C|backward",
+      "String|backend/OrderController.java|symbol",
       "formatOrders|lib/format.ts|function|backward"
     ],
     "edges": [
