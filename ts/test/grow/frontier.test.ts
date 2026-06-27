@@ -7,8 +7,8 @@ import { describe, expect, test } from "bun:test";
 import { _nextFrontier } from "../../src/codebase/grow/orchestrate.js";
 
 type N = { id: string; complexity?: number };
-const pick = (cand: N[], crossings: string[], score: Record<string, number>) =>
-  _nextFrontier(cand, new Set(crossings), (n) => score[n.id] ?? 0)?.id;
+const pick = (cand: N[], crossings: string[], score: Record<string, number>, typeRefOnly: string[] = []) =>
+  _nextFrontier(cand, new Set(crossings), (n) => score[n.id] ?? 0, new Set(typeRefOnly))?.id;
 
 describe("_nextFrontier — connectivity (crossings) first, then intent, then complexity", () => {
   const A = { id: "A", complexity: 1 }, B = { id: "B", complexity: 9 }, C = { id: "C", complexity: 5 };
@@ -25,5 +25,13 @@ describe("_nextFrontier — connectivity (crossings) first, then intent, then co
   });
   test("empty frontier → undefined", () => {
     expect(_nextFrontier([], new Set(), () => 0)).toBeUndefined();
+  });
+  test("a DELEGATION node is followed before a payload type-ref node (B), but a crossing still wins", () => {
+    // B is a payload type-ref; A is a normal (call/import) node. Same crossing-status & intent → A (delegation) first.
+    expect(pick([A, B, C], [], { A: 0.5, B: 0.5, C: 0.5 }, ["B"])).not.toBe("B");
+    // a type-ref node that IS a crossing still wins (demotion never prunes a crossing)
+    expect(pick([A, B, C], ["B"], { A: 0.9, B: 0.1, C: 0.2 }, ["B"])).toBe("B");
+    // among two payload type-refs, intent still decides
+    expect(pick([A, B], [], { A: 0.1, B: 0.9 }, ["A", "B"])).toBe("B");
   });
 });

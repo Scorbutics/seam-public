@@ -226,11 +226,12 @@ export async function auto_orchestrate(repo: string, anchorFile: string, symbol:
 // capped in P3 (the coupling overlay), not refereed here; AUTHORITATIVE intent ranking is P4 (decompose tiers
 // spine/supporting/off). No relevance signal (offline / no --intent → iscore≡0) → crossings-then-complexity.
 export function _nextFrontier<T extends { id: string; complexity?: number }>(
-  cand: T[], crossings: Set<string>, iscore: (n: T) => number): T | undefined {
+  cand: T[], crossings: Set<string>, iscore: (n: T) => number, typeRefOnly: Set<string> = new Set()): T | undefined {
   return [...cand].sort((a, b) =>
     (Number(crossings.has(b.id)) - Number(crossings.has(a.id)))     // (1) CONNECTIVITY — crossings toward terminals
-    || (iscore(b) - iscore(a))                                      // (2) intent — a guide/tiebreak, never prunes a crossing
-    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];             // (3) complexity (final tiebreak)
+    || (Number(!typeRefOnly.has(b.id)) - Number(!typeRefOnly.has(a.id)))  // (2) DELEGATION (calls) before payload type-refs
+    || (iscore(b) - iscore(a))                                      // (3) intent — a guide/tiebreak, never prunes a crossing
+    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];             // (4) complexity (final tiebreak)
 }
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
@@ -310,10 +311,18 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
     const crossings = new Set<string>();
     for (const e of g.resolved_edges()) if (_is_crossing(e)) crossings.add(e.dst);
+    // PAYLOAD TYPE-REFS — a node reached ONLY by `type-ref` edges is a data-model DTO the anchor never calls a
+    // method on (not the delegation spine). Demote it in the frontier so the budget follows calls/crossings
+    // first; it's still expanded if budget remains. A node with ANY non-type-ref edge (a call/import/crossing)
+    // is NOT demoted.
+    const edgeKinds = new Map<string, string[]>();
+    for (const e of data.edges) { (edgeKinds.get(e.from) ?? edgeKinds.set(e.from, []).get(e.from))!.push(e.kind); (edgeKinds.get(e.to) ?? edgeKinds.set(e.to, []).get(e.to))!.push(e.kind); }
+    const typeRefOnly = new Set<string>();
+    for (const [id, kinds] of edgeKinds) if (kinds.length && kinds.every((k) => k === "type-ref")) typeRefOnly.add(id);
     // frontier = a real symbol (not a boundary node, not a core) we haven't re-anchored yet, not excluded.
     const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
       && roleById.get(n.id) !== "core" && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !excludedFile(n.file));
-    const next = _nextFrontier(cand, crossings, _iscore);
+    const next = _nextFrontier(cand, crossings, _iscore, typeRefOnly);
     if (!next) break;
     expanded.add(_key(next));
     // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM via its own consumers; a

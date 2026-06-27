@@ -50,13 +50,24 @@ export function _is_new_of(ctx: Ctx, node: any, className: string): boolean {
   return !!cons && ctx.text(cons) === className;
 }
 
-// The local names bound to an instance of `className` (typed `x: C` OR `x = new C()`).
+// The declared type NAMES of a binder. Types written INSIDE the binder (TS `x: C`, an `= new C()` initializer,
+// generics) PLUS the type on the binder's PARENT declaration — Java/C++ write the type on the field_declaration
+// / local_variable_declaration, NOT inside the variable_declarator, so a bare `BookingRepo repo;` (the @Inject
+// bean — the central delegation target) is otherwise invisible. Parent's `type` field, cross-language.
+function _binderTypes(ctx: Ctx, binder: any): string[] {
+  const out = ctx.collect(binder, (k) => _TYPE_REF.has(k)).map((t) => ctx.text(t));
+  const tf = binder.parent?.childForFieldName?.("type");
+  if (tf) for (const t of (_TYPE_REF.has(tf.type) ? [tf] : ctx.collect(tf, (k) => _TYPE_REF.has(k)))) out.push(ctx.text(t));
+  return out;
+}
+
+// The local names bound to an instance of `className` (typed `x: C` / `C x` / `x = new C()`).
 export function _instances_of(ctx: Ctx, className: string): Set<string> {
   const names = new Set<string>();
   for (const node of ctx.collect(ctx.root, (k) => _INSTANCE_BINDER.has(k))) {
     const nameNode = ctx.children(node).find((c) => _NAME_KINDS.has(c.type));
     if (!nameNode) continue;
-    const typed = ctx.collect(node, (k) => _TYPE_REF.has(k)).some((t) => ctx.text(t) === className);
+    const typed = _binderTypes(ctx, node).includes(className);
     const newed = ctx.collect(node, (k) => _NEW.has(k)).some((nx) => _is_new_of(ctx, nx, className));
     if (typed || newed) names.add(ctx.text(nameNode));
   }
@@ -138,8 +149,7 @@ export function _instance_types(ctx: Ctx): Map<string, Set<string>> {
   for (const node of ctx.collect(ctx.root, (k) => _INSTANCE_BINDER.has(k))) {
     const nameNode = ctx.children(node).find((c) => _NAME_KINDS.has(c.type));
     if (!nameNode) continue;
-    const types = new Set<string>();
-    for (const t of ctx.collect(node, (k) => _TYPE_REF.has(k))) types.add(ctx.text(t));
+    const types = new Set<string>(_binderTypes(ctx, node));   // within + parent-declared (Java/C++ field/local type)
     for (const nx of ctx.collect(node, (k) => _NEW.has(k))) {
       const cons = ctx.children(nx).find((c) => c.type === "identifier" || _MEMBER.has(c.type));
       if (cons) types.add(ctx.text(cons));
@@ -162,6 +172,26 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
     else if (_NEW.has(obj.type)) { const c = ctx.children(obj).find((x) => x.type === "identifier" || _MEMBER.has(x.type)); recvNew = c ? ctx.text(c) : null; }
     else if (_MEMBER.has(obj.type)) { const ip = ctx.children(obj).find((c) => _MEMBER_NAME.has(c.type)); recvId = ip ? ctx.text(ip) : null; }
     out.push({ method: m, line: ctx.span(call)[0], recvId, recvNew });
+  }
+  return out;
+}
+
+// The set of names this file DELEGATES to (a call spine), vs names it only references as a TYPE (the data
+// model / payload): the receiver TYPE of every `x.m()` / `new X().m()` call (resolved via the instance-type
+// map) UNION the callee of every unqualified `foo()` call. A same-package/imported type that NEVER appears
+// here is a pure payload (a DTO returned/passed but not invoked) — the dependency walk demotes it so the
+// budget follows the delegation spine (service → repo → entityManager), not the data-model type tree.
+export function _called_types(ctx: Ctx): Set<string> {
+  const out = new Set<string>();
+  const instTypes = _instance_types(ctx);
+  for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
+    const c = _callee(ctx, call);
+    if (!c) continue;
+    if (!c.obj) { out.add(c.name); continue; }                                  // unqualified foo() → foo
+    const obj = c.obj;
+    if (obj.type === "identifier") { const ts = instTypes.get(ctx.text(obj)); if (ts) for (const t of ts) out.add(t); }
+    else if (_NEW.has(obj.type)) { const cons = ctx.children(obj).find((x) => x.type === "identifier" || _MEMBER.has(x.type)); if (cons) out.add(ctx.text(cons)); }
+    else if (_MEMBER.has(obj.type)) { const ip = ctx.children(obj).find((x) => _MEMBER_NAME.has(x.type)); if (ip) { const ts = instTypes.get(ctx.text(ip)); if (ts) for (const t of ts) out.add(t); } }
   }
   return out;
 }

@@ -13,7 +13,7 @@ import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "./graph.js";
 import { expanduser, _read, _name_of, _named_units, _usage_lines } from "./ast_units.js";
-import { _type_methods, _class_method_usage } from "./ast_class.js";
+import { _type_methods, _class_method_usage, _called_types } from "./ast_class.js";
 import { impls_of } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
 import { timingOn } from "../../core/progress.js";
@@ -30,7 +30,12 @@ interface DepScan {
   actx: Ctx | null; aunits: Unit[];
   nodes: GraphNode[]; edges: GraphEdge[]; blindspots: Blindspot[];
   counter: number; seen: Set<string>; depUnits: Map<string, Unit[]>; externalPkgs: string[];
+  calledTypes: Set<string>;   // names the anchor DELEGATES to (called) — vs payload type-refs (see _called_types)
 }
+
+// A dependency is DELEGATION (the call spine — `import`) when the anchor actually invokes it; otherwise it is a
+// pure TYPE reference (a DTO/payload — `type-ref`), which the walk demotes so the budget follows the spine.
+const _depEdgeKind = (s: DepScan, name: string): string => (s.calledTypes.has(name) ? "import" : "type-ref");
 
 // Build the anchor (n1) node and its line range. Parses the anchor file to locate the symbol's def
 // (kind + span), then narrows to an explicit anchorLine when one is given.
@@ -82,7 +87,7 @@ async function _importPass(s: DepScan, anchorSrc: string): Promise<void> {
       if (!s.externalPkgs.includes(ext)) s.externalPkgs.push(ext);
       continue;
     }
-    await _addDep(s, ref.name, target[0], target[1]);
+    await _addDep(s, ref.name, target[0], target[1], _depEdgeKind(s, ref.name));
   }
 }
 
@@ -115,7 +120,7 @@ async function _samePackagePass(s: DepScan): Promise<void> {
   refNames.delete(s.symbol);
   for (const name of [...refNames].sort()) {
     const f = await _resolve(s.repo, s.anchorFile, name);
-    if (f) await _addDep(s, name, f, null);
+    if (f) await _addDep(s, name, f, null, _depEdgeKind(s, name));
   }
 }
 
@@ -251,6 +256,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     const s: DepScan = {
       repo, anchorFile, symbol, actx, aunits: actx ? _named_units(actx) : [],
       nodes, edges, blindspots, counter: 0, seen: new Set(), depUnits: new Map(), externalPkgs: [],
+      calledTypes: actx ? _called_types(actx) : new Set<string>(),
     };
     // Per-pass timing — split a slow large-repo dependency build (interface-impl index vs same-package vs
     // data-coupling). --verbose / SEAM_TIMING only; same diagnostic style as [dc-timing]/[index-cache].
