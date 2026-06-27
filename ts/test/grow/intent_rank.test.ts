@@ -23,6 +23,23 @@ describe("rank-banding (pure, deterministic)", () => {
     bandTiers(seams);
     expect(seams.every((s) => s.tier === undefined)).toBe(true);
   });
+  test("off-intent floor: a seam far below the top relevance is OFF however it ranks", () => {
+    // top 1.0 → floor 0.5; the long tail (≤ 0.3) is off even though by raw rank some would be 'supporting'.
+    const seams = [1.0, 0.95, 0.9, 0.3, 0.2, 0.1, 0.05].map((relevance, i) => ({ id: `s${i}`, relevance }));
+    bandTiers(seams);
+    const tierOf = (r: number) => (seams.find((s) => s.relevance === r) as any).tier;
+    expect(tierOf(1.0)).toBe("spine");
+    expect(tierOf(0.95)).toBe("spine");
+    expect(tierOf(0.3)).toBe("off");    // 0.3 < 0.5 floor → off (would be 'supporting' by raw 3-band rank)
+    expect(tierOf(0.2)).toBe("off");
+    expect(tierOf(0.05)).toBe("off");
+    expect(seams.filter((s: any) => s.tier === "off").length).toBe(4);   // the whole sub-floor tail
+  });
+  test("compressed scores (all near the top) keep the normal bands — floor only crops a real gap", () => {
+    const seams = [0.9, 0.88, 0.86, 0.84, 0.82, 0.8].map((relevance, i) => ({ id: `s${i}`, relevance }));
+    bandTiers(seams);   // floor = 0.45; none below it → pure rank bands, nothing force-dropped
+    expect(seams.filter((s: any) => s.tier === "off").length).toBe(2);   // bottom third only (rank, not floor)
+  });
 });
 
 describe("markSpineMembers — surface the intent path INSIDE a collapsed (god-object) seam", () => {

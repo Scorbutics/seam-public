@@ -12,6 +12,10 @@ import { embedScoreDefs } from "../scan/def_embed.js";
 // Rank-banded tier from a seam's position in the relevance ordering — threshold-free (no magic cosine
 // cutoff that drifts per repo/model): the top band is the spine, the middle is supporting, the tail is off.
 // Deterministic given the scores. A coarse 3-band split — the consumer refines if it wants.
+// Fraction of the run's TOP relevance below which a seam is OFF-intent regardless of its rank. RELATIVE (to
+// this run's best seam), NOT an absolute cosine — so it's reproducible and does NOT drift per repo/model. It
+// only ever DEMOTES (crops the long mildly-relevant tail out of supporting); the top seam is always kept.
+const _OFF_INTENT_FLOOR = 0.5;
 export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   // A STRUCTURAL spine (the crossing backbone, locked in emit_seams — tier-independent) takes precedence:
   // never re-band a spine seam, and don't mint MORE spine from text similarity. The embeddings then only
@@ -21,11 +25,14 @@ export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   const scored = seams.filter((s) => typeof s.relevance === "number" && (s as any).tier !== "spine").sort((a, b) => (b.relevance! - a.relevance!));
   const n = scored.length;
   if (!n) return;
-  if (lockedSpine) {
-    scored.forEach((s, i) => { (s as any).tier = i < Math.ceil(n / 2) ? "supporting" : "off"; });
-  } else {
-    scored.forEach((s, i) => { (s as any).tier = i < Math.ceil(n / 3) ? "spine" : i < Math.ceil((2 * n) / 3) ? "supporting" : "off"; });
-  }
+  // RELATIVE off-intent floor: a seam far below the most-relevant one is off-intent however it ranks — so a
+  // long tail of mildly-related infrastructure lands in OFF (croppable) instead of bloating supporting.
+  const floor = scored[0].relevance! * _OFF_INTENT_FLOOR;
+  const isOff = (s: T) => (s.relevance ?? 0) < floor;
+  const band = lockedSpine
+    ? (i: number) => (i < Math.ceil(n / 2) ? "supporting" : "off")
+    : (i: number) => (i < Math.ceil(n / 3) ? "spine" : i < Math.ceil((2 * n) / 3) ? "supporting" : "off");
+  scored.forEach((s, i) => { (s as any).tier = isOff(s) ? "off" : band(i); });
 }
 
 // Rebuild each cluster's `spine` array from its spine-TIER seams when it's empty. `cl.spine` is computed in
