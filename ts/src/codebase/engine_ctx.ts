@@ -41,6 +41,7 @@ export class EngineCtx {
   repoMatchers = new Map<string, unknown>();
   annotMatchers = new Map<string, unknown>();   // annotation→type classification → route/queue/event `annotation` matchers
   effectMatchers = new Map<string, unknown>();  // effect_inference: custom http-client receivers → http-route channel matchers (deterministic)
+  httpClients = new Map<string, Set<string>>(); // effect_inference: repo → inferred custom http-client receiver tokens (the indirected-call resolver reads this)
 
   // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
   // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory

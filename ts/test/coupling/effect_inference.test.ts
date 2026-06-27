@@ -3,7 +3,7 @@
 // (aliased to an httpService that calls fetch) is recognised as an http client even though its name isn't
 // fetch/axios — the prerequisite for treating its call sites as data-coupling edges. Guards on tree-sitter.
 import { describe, expect, test } from "bun:test";
-import { inferHttpClients, inferHttpClientMatchers } from "../../src/codebase/coupling/effect_inference.js";
+import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites } from "../../src/codebase/coupling/effect_inference.js";
 import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -51,5 +51,35 @@ describe("inferHttpClientMatchers — a custom client's literal-route call emits
     expect(m).toBeDefined();
     const hits = await runMatcher(m!, "web/page.js", `MyFramework.http.get( '/acme/rest/member/booking/v1', state );`);
     expect(hits.some((h) => h.kind === "http-route" && h.value === "/acme/rest/member/booking/v1" && !h.produces)).toBe(true);
+  });
+});
+
+describe("resolveHttpCallSites — indirected route resolution on a proven edge (no LLM)", () => {
+  const clients = new Set(["MyFramework.http"]);
+
+  test("a descriptor-ref arg (dynamic verb + config reference) resolves against the in-file endpoint map", () => {
+    if (!available()) return;
+    const text = [
+      `const baseUrl = '/acme/rest/member/booking/v1';`,
+      `const endpoints = { createBooking: { endpoint: baseUrl, method: 'post' }, updateBooking: { endpoint: baseUrl + '/{id}', method: 'put' } };`,
+      `function create( s ) { return MyFramework.http[ m ]( endpoints.createBooking.endpoint, s ); }`,
+      `function update( s ) { return MyFramework.http[ m ]( endpoints.updateBooking, s ); }`,   // bare descriptor (no .endpoint)
+    ].join("\n");
+    const hits = resolveHttpCallSites("web/svc.js", text, clients);
+    const vals = new Set(hits.map((h) => h.value));
+    expect(vals.has("/acme/rest/member/booking/v1")).toBe(true);     // baseUrl
+    expect(vals.has("/acme/rest/member/booking/v1/*")).toBe(true);   // baseUrl + '/{id}' (normPath → /*)
+    expect(hits.every((h) => h.kind === "http-route" && !h.produces)).toBe(true);
+  });
+
+  test("a literal arg still resolves; an opaque arg and a non-client receiver are left alone", () => {
+    if (!available()) return;
+    const text = [
+      `function a() { return MyFramework.http.post( '/acme/rest/x', body ); }`,   // literal → resolved
+      `function b() { return MyFramework.http.post( someRuntimeVar, body ); }`, // opaque → not resolved (LLM's job)
+      `function c() { return plainHelper.get( '/acme/rest/y' ); }`,              // not a known client → ignored
+    ].join("\n");
+    const hits = resolveHttpCallSites("web/svc.js", text, clients);
+    expect(hits.map((h) => h.value)).toEqual(["/acme/rest/x"]);
   });
 });

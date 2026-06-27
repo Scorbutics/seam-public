@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { defs_in_file } from "../../src/codebase/scan/def_table.js";
 import { scan as endpointMapScan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
 import { routeMatchSpecificity } from "../../src/codebase/coupling/index.js";
-import { inferHttpClientMatchers } from "../../src/codebase/coupling/effect_inference.js";
+import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites } from "../../src/codebase/coupling/effect_inference.js";
 import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -48,5 +48,20 @@ describe("booking-app fixture — the declarative-client + route contract", () =
     expect(m).toBeDefined();   // deduced via the fetch sink → alias, NOT by the name
     const hits = await runMatcher(m!, "web/frameworkClient.js", read("web/frameworkClient.js"));
     expect(hits.some((h) => h.kind === "http-route" && h.value === "/acme/rest/member/booking/v1" && !h.produces)).toBe(true);
+  });
+
+  test("the INDIRECTED call (MyFramework.http[method](endpoints.createBooking.endpoint)) resolves its route on the proven edge", async () => {
+    if (!available()) return;
+    const text = read("web/frameworkClient.js");
+    // the receiver is a proven http client (deduced from httpService's fetch sink) …
+    const clients = await inferHttpClients(["web/httpService.js", "web/frameworkClient.js"].map((rel) => ({ rel, text: read(rel) })));
+    expect(clients.has("MyFramework.http")).toBe(true);
+    // … so the descriptor-ref arg — a DYNAMIC verb + a config reference, no literal — resolves against the
+    // in-file endpoint map to the route, surfaced at the call line (the calling method owns the crossing).
+    const hits = resolveHttpCallSites("web/frameworkClient.js", text, clients);
+    const indirect = hits.find((h) => h.value === "/acme/rest/member/booking/v1" && h.line >= text.split("\n").findIndex((l) => l.includes("MyFramework.http[ method ]")));
+    expect(indirect).toBeDefined();
+    expect(indirect!.kind).toBe("http-route");
+    expect(indirect!.produces).toBe(false);   // a consumer — grounds to the backend @Path producer
   });
 });

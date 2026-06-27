@@ -22,7 +22,7 @@ import { type Access, type KeyHit, type AnchorKey, type KeySource, type Groundin
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
-import { inferHttpClientMatchers } from "./effect_inference.js";
+import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
 import { listMatchers } from "./key_store.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
@@ -465,6 +465,7 @@ async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText
   if (scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;
   const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);   // getParameter(CONST)/addParameter(CONST) sites
   if (sites.some((s) => inSpan(s.line))) return true;
+  if (!ctx.stableFloor && resolveHttpCallSites(anchorFile, anchorText, await _effectClients(repo, ctx)).some((h) => inSpan(h.line))) return true;
   if (!ctx.stableFloor) for (const { matcher } of listMatchers(repo)) {   // learned matchers — not in a stable-floor probe
     if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) return true;
   }
@@ -483,18 +484,20 @@ function _loadAdapters(repo: string, ctx: EngineCtx): KeyMatcher[] {
   return listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return seen.has(k) ? false : (seen.add(k), true); });
 }
 
-// Effect-inference matchers — DETERMINISTIC (no LLM), cached per repo on the ctx. Footprint-scoped when a
-// pre-grow set ctx.footprintFiles (cheap); else a bounded repo walk (reusing the floor's scannable-file set).
-// Skipped under stableFloor so the pre-grow footprint stays pure-floor (mirrors _loadAdapters).
-async function _effectMatchers(repo: string, ctx: EngineCtx): Promise<KeyMatcher[]> {
-  if (ctx.stableFloor) return [];
-  return getOrSet(ctx.effectMatchers as Map<string, KeyMatcher[]>, repo, async () => {
+// Effect inference (DETERMINISTIC, no LLM) — the SET of custom http-client receiver tokens deduced transitively
+// from grounded fetch/axios sinks, cached per repo on the ctx. Footprint-scoped when a pre-grow set
+// ctx.footprintFiles (cheap); else a bounded repo walk (reusing the floor's scannable-file set). Empty under
+// stableFloor so the pre-grow footprint stays pure-floor (mirrors _loadAdapters). Drives BOTH the literal-call
+// channel matchers (_effectMatchers) and the indirected-call resolver (resolveHttpCallSites in runPipeline).
+async function _effectClients(repo: string, ctx: EngineCtx): Promise<Set<string>> {
+  if (ctx.stableFloor) return new Set();
+  return getOrSet(ctx.httpClients, repo, async () => {
     const scope = ctx.footprintFiles;
     const files: { rel: string; text: string }[] = [];
     for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys, { maxBytes: COUPLING.maxScanBytes })) {
       if (!scope || scope.has(rel)) files.push({ rel, text });
     }
-    return inferHttpClientMatchers(files);
+    return inferHttpClients(files);
   });
 }
 
@@ -543,10 +546,11 @@ export async function resolveCoupling(
   // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters,
   // PLUS the deterministic effect-inference matchers (custom http-client receivers deduced transitively from a
   // grounded fetch/axios sink — so `MyFramework.http.get('/route')` grounds like a built-in fetch caller).
-  const matchers = [..._loadAdapters(repo, ctx), ...await _effectMatchers(repo, ctx)];
+  const httpClients = await _effectClients(repo, ctx);
+  const matchers = [..._loadAdapters(repo, ctx), ...httpClientMatchers(httpClients)];
   _stage(`CACHE: ${matchers.length} cached adapter(s) loaded`, _t); _t = performance.now();
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
-  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers };
+  const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers, httpClients };
   await runPipeline(p, { id: anchorId, file: anchorFile, text: anchorText, lo, hi },
     CHAIN_DEPTH, new Set(), learned.carrierAccesses ?? [], learned.proposedKeys ?? []);
   _stage(`APPLY: ${graph.result().nodes.length} bridge node(s), ${stats.parses} complement parse(s)`, _t);
@@ -650,6 +654,7 @@ interface PipelineCtx {
   ctx: EngineCtx;
   stats: DcStats;          // per-resolveCoupling cost counters (visibility, not behaviour) — see resolveCoupling
   matchers: KeyMatcher[];  // LEARNED adapter rules (cached `.seam/`), run per-node to SURFACE keys like the floor (see runPipeline)
+  httpClients: Set<string>; // effect_inference: inferred custom http-client receivers — for the indirected-call route resolver (runPipeline)
 }
 // Where the data-coupling crossing actually spends its time. Threaded so the recursion accumulates into one
 // object; printed once (--verbose) at the end of the pipeline so a slow grow's cost is a fact, not a guess.
@@ -761,6 +766,14 @@ async function runPipeline(
   // $scope, a custom event bus) surface a node's OWN keys so it can cross on them, not just feed the index.
   for (const m of p.matchers) for (const hit of await runMatcher(m, node.file, node.text)) {
     if (hit.line < node.lo || hit.line > node.hi) continue;            // span-local, like scan_file_keys
+    const id = `${hit.kind} ${hit.value} ${hit.produces}`;
+    if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: "scan" });
+  }
+  // STEP 1d — INDIRECTED http calls on a proven edge: a call to an inferred custom http client with a descriptor
+  // ref instead of a literal (`MyFramework.http[method](endpoints.createBooking)`) — resolved against the in-file
+  // endpoint-map config (deterministic), surfaced at the call line so THIS method node owns the route crossing.
+  for (const hit of resolveHttpCallSites(node.file, node.text, p.httpClients)) {
+    if (hit.line < node.lo || hit.line > node.hi) continue;
     const id = `${hit.kind} ${hit.value} ${hit.produces}`;
     if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: "scan" });
   }

@@ -12,15 +12,20 @@ import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 const _CLIENT_EXT = /\.(?:m|c)?[jt]sx?$|\.vue$/;
 // A const STRING declaration — `const baseUrl = '/acme/rest/member/booking/v1'` — for resolving an endpoint that
 // concatenates a base (`baseUrl + '/{id}'`). Same-file scope only (the common case); unresolved → skipped.
-const _CONST_RE = /(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*['"`]([^'"`\n]+)['"`]/g;
+// Exported as a SOURCE string (not a compiled /g RegExp) so reusers compile their own stateless instance — the
+// indirected effect-inference call-site resolver builds the same const map without sharing this one's lastIndex.
+export const CONST_RE_SRC = "(?:const|let|var)[ \\t]+([A-Za-z_$][\\w$]*)[ \\t]*=[ \\t]*['\"`]([^'\"`\\n]+)['\"`]";
+const _CONST_RE = new RegExp(CONST_RE_SRC, "g");
 // A concatenation TOKEN: an identifier/member (`baseUrl`) OR a string literal (which may contain `{id}` — the
 // quoted sub-pattern consumes the braces, so a route template doesn't truncate the match the way `[^}]*` did).
 const _TOKEN = `(?:[A-Za-z_$][\\w$.]*|['"\`][^'"\`]*['"\`])`;
-const _ENDPOINT_RE = new RegExp(`\\b(?:endpoint|url|path|route)\\b[ \\t]*:[ \\t]*(${_TOKEN}(?:[ \\t]*\\+[ \\t]*${_TOKEN})*)`, "g");
+export const ENDPOINT_RE_SRC = `\\b(?:endpoint|url|path|route)\\b[ \\t]*:[ \\t]*(${_TOKEN}(?:[ \\t]*\\+[ \\t]*${_TOKEN})*)`;
+const _ENDPOINT_RE = new RegExp(ENDPOINT_RE_SRC, "g");
 
 // Resolve `baseUrl + '/{id}'` to `/…/{id}` against the const map. A literal contributes its content; a known
 // const its value; an unresolved token (a member access, a foreign symbol) aborts → null (never a partial route).
-function _resolveExpr(expr: string, consts: Map<string, string>): string | null {
+// Exported so the effect-inference call-site resolver resolves an endpoint expression identically (no duplicate).
+export function resolveExpr(expr: string, consts: Map<string, string>): string | null {
   let out = "";
   for (const rawTok of expr.split("+")) {
     const tok = rawTok.trim();
@@ -50,7 +55,7 @@ export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     const le = src.indexOf("\n", em.index);
     const lineText = src.slice(ls, le === -1 ? src.length : le);
     if (!/\b(?:method|verb)\b[ \t]*:/.test(lineText)) continue;
-    const route = _resolveExpr(em[1], consts);
+    const route = resolveExpr(em[1], consts);
     if (!route || !route.startsWith("/")) continue;
     const value = normPath(route);
     if (value === "/" || seen.has(value)) continue;

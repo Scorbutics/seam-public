@@ -9,9 +9,11 @@
 // Deterministic, no LLM, no keyword guessing: the seed is concrete I/O PRIMITIVES (not verbs like get/http),
 // and the propagation rides real in-repo definitions/assignments (not blind call-site resolution).
 import { makeCtx, available, lang_for, _CALL, _NEW, _CLASS_KINDS, _FUNCLIKE, _VAR_DECLARATOR, _NAME_KINDS, type Ctx } from "../atoms.js";
-import { makeMaskCtx } from "./adapters/util.js";
+import { makeMaskCtx, lineOf } from "./adapters/util.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
-import { HTTP_ROUTE_META } from "./adapters/http_route.js";
+import { HTTP_ROUTE_META, normPath } from "./adapters/http_route.js";
+import { CONST_RE_SRC, ENDPOINT_RE_SRC, resolveExpr } from "./adapters/endpoint_map.js";
+import type { KeyHit } from "./types.js";
 
 // The HTTP-method verbs a client is called with — `client.get('/route')`. So an inferred client's literal-route
 // call sites emit an http-route CONSUME key (the route grounds to the backend handler, like any fetch caller).
@@ -74,16 +76,91 @@ export async function inferHttpClients(files: { rel: string; text: string }[]): 
   return httpEffect;
 }
 
-// Channel http-route matchers for the inferred custom clients — so a `<client>.<verb>('/route')` call emits an
+// Channel http-route matchers for a set of custom clients — so a `<client>.<verb>('/route')` call emits an
 // http-route CONSUME key, exactly like a built-in fetch/axios caller (the route then grounds to the backend
-// handler). Deterministic; no LLM, no persistence (cheap to re-derive per grow). Detection only: the route KEY
-// still resolves via the literal arg here / the endpoint-map adapter / a scoped LLM for the indirected shape.
-export async function inferHttpClientMatchers(files: { rel: string; text: string }[]): Promise<KeyMatcher[]> {
-  const clients = await inferHttpClients(files);
+// handler). Deterministic; no LLM, no persistence (cheap to re-derive per grow). Handles the LITERAL-route arg;
+// the INDIRECTED arg (`<client>[method](endpoints.createBooking)`) is resolved by resolveHttpCallSites below.
+export function httpClientMatchers(clients: Set<string>): KeyMatcher[] {
   const out: KeyMatcher[] = [];
   for (const token of clients) {
     const m = validateMatcher({ via: "channel", token, verbs: _HTTP_VERBS, kind: HTTP_ROUTE_META.kind, role: "consumes" });
     if (m) out.push(m);
+  }
+  return out;
+}
+export async function inferHttpClientMatchers(files: { rel: string; text: string }[]): Promise<KeyMatcher[]> {
+  return httpClientMatchers(await inferHttpClients(files));
+}
+
+// ── INDIRECTED route resolution — the "resolve the route on a proven edge" half ──────────────────────────────
+// A declarative client calls its custom http client with a DESCRIPTOR ref, not a literal: a dynamic verb AND a
+// config reference — `MyFramework.http[method]( bookingEndpoints.createBooking, state )`. The channel matcher
+// (which wants `.verb('/literal')`) can't see this. But the EDGE is already proven (the receiver is an inferred
+// http client) and the ROUTE is GROUNDED data (the `{ endpoint, method }` config map in the same module). So we
+// resolve the descriptor against that map — no LLM, no blind call resolution, no keyword guessing.
+
+// `<mapVar>.<key>` → its resolved endpoint route, from the file's `const <mapVar> = { <key>: { endpoint: … } }`
+// descriptor maps (brace-balanced so a nested object doesn't truncate). Reuses the endpoint-map adapter's const
+// resolution + endpoint regex — same route extraction, keyed by the map.key a call site references.
+const _balancedFrom = (s: string, open: number): string | null => {   // s[open] === '{' → the inner text
+  let depth = 0;
+  for (let i = open; i < s.length; i++) {
+    if (s[i] === "{") depth++;
+    else if (s[i] === "}" && --depth === 0) return s.slice(open + 1, i);
+  }
+  return null;
+};
+function _endpointMapIndex(src: string): Map<string, string> {
+  const consts = new Map<string, string>();
+  const cre = new RegExp(CONST_RE_SRC, "g"); let cm: RegExpExecArray | null;
+  while ((cm = cre.exec(src))) if (!consts.has(cm[1])) consts.set(cm[1], cm[2]);
+  const out = new Map<string, string>();
+  const decl = /(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*\{/g; let dm: RegExpExecArray | null;
+  while ((dm = decl.exec(src)) !== null) {
+    const body = _balancedFrom(src, dm.index + dm[0].length - 1);
+    if (!body) continue;
+    const entry = /(['"]?)([A-Za-z_$][\w$]*)\1[ \t]*:[ \t]*\{/g; let em: RegExpExecArray | null;
+    while ((em = entry.exec(body)) !== null) {
+      const entBody = _balancedFrom(body, em.index + em[0].length - 1);
+      if (!entBody) continue;
+      const e2 = new RegExp(ENDPOINT_RE_SRC, "g").exec(entBody);
+      if (!e2) continue;
+      const route = resolveExpr(e2[1], consts);
+      if (route && route.startsWith("/")) out.set(`${dm[1]}.${em[2]}`, normPath(route));
+    }
+  }
+  return out;
+}
+
+const _STR_LIT_RE = /^['"`]([^'"`]*)['"`]$/;
+// HTTP-route CONSUME keys for a file's calls to an inferred http client, resolving the FIRST argument to a route:
+// a string literal directly, or a `<map>.<key>`/`<map>.<key>.endpoint` descriptor ref against the in-file config.
+// Surfaced at the CALL line (so the calling method node owns the crossing), complementing the channel matcher's
+// literal path. An opaque arg (neither literal nor a known descriptor) is left unresolved — a scoped-LLM job,
+// out of this deterministic slice. Pure → unit-testable on the fixture.
+export function resolveHttpCallSites(file: string, text: string, clients: Set<string>): KeyHit[] {
+  if (!clients.size || !lang_for(file)) return [];
+  const src = makeMaskCtx(text).comments;
+  const cfg = _endpointMapIndex(src);
+  const out: KeyHit[] = [];
+  const seen = new Set<string>();
+  for (const client of clients) {
+    const esc = client.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // `<client>.verb( ARG` OR `<client>[verb]( ARG` — dynamic verb included; ARG = the first arg up to , or ).
+    const re = new RegExp(`(?<![\\w$.])${esc}[ \\t]*(?:\\.[ \\t]*[A-Za-z_$]\\w*|\\[[^\\]]+\\])[ \\t]*\\([ \\t]*([^,)]+)`, "g");
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) {
+      const arg = m[1].trim();
+      const lit = arg.match(_STR_LIT_RE);
+      const route = lit
+        ? (lit[1].startsWith("/") ? normPath(lit[1]) : null)
+        : (cfg.get(arg.replace(/\.endpoint$/, "")) ?? null);   // a descriptor ref or its .endpoint
+      if (!route || route === "/") continue;
+      const line = lineOf(src, m.index);
+      const id = `${route}@${line}`;
+      if (seen.has(id)) continue; seen.add(id);
+      out.push({ kind: HTTP_ROUTE_META.kind, value: route, line, produces: false });
+    }
   }
   return out;
 }
