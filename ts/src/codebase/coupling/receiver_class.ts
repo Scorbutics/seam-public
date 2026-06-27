@@ -54,11 +54,32 @@ const _isProd = (v: string) => _writes([v]).length > 0 || _EVENT_P.has(_lc(v)) |
 const _isCons = (v: string) => _reads([v]).length > 0 || _EVENT_C.has(_lc(v));
 
 interface Profile { receiver: string; verbs: Map<string, number>; files: number }
+interface Inventory { profiles: Profile[]; isExternal: (receiver: string) => boolean }
 
-function _inventory(repo: string, skipDirs: Set<string>): Profile[] {
+// BLINDSPOT GATE — a data-coupling adapter is warranted ONLY for an EXTERNAL/opaque layer (one the static
+// resolver can't follow, so a producer↔consumer link across it would otherwise be a blindspot). A receiver
+// DEFINED in the repo — a local `const savings = …`, an in-repo class, a relative import — is local data flow
+// the graph already traces (`savings.get('rate')` → the in-repo Savings class), NOT a boundary: it's the noise
+// (savings/loan/superannuation channel-cache). So a receiver is EXTERNAL iff it is a node_modules import
+// (`redis`, `fs`, `axios`) OR a never-declared global (`localStorage`, `sessionStorage`, `window`). An in-house
+// WRAPPER (in-repo) is correctly dropped — the graph follows it down to the real external call inside it.
+const _LOCAL_DECL_RE = /\b(?:const|let|var|function|class)[ \t]+([A-Za-z_$][\w$]*)/g;
+const _IMPORT_RE = /\bimport\b([^'"]*?)\bfrom[ \t]*['"]([^'"]+)['"]/g;
+const _REQUIRE_RE = /\b(?:const|let|var)[ \t]+(\{[^}]*\}|[A-Za-z_$][\w$]*)[ \t]*=[ \t]*require\([ \t]*['"]([^'"]+)['"]/g;
+const _DECL_INIT_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*([^\n;]+)/g;   // a binding + its initializer
+const _isBare = (src: string) => !src.startsWith(".") && !src.startsWith("/");   // node_modules specifier
+const _idsIn = (s: string): string[] => [...s.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]);
+const _clauseNames = (clause: string): string[] => _idsIn(clause).filter((n) => n !== "as");
+
+function _inventory(repo: string, skipDirs: Set<string>): Inventory {
   const inv = new Map<string, { files: Set<string>; verbs: Map<string, number> }>();
+  const localDef = new Set<string>();      // declared/defined in-repo (const/let/var/class/function, relative import)
+  const bareImport = new Set<string>();    // imported from node_modules → an external layer
+  const declRHS = new Map<string, Set<string>>();   // a binding → the identifiers in its initializer
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
-    const code = makeMaskCtx(text).comments; let m: RegExpExecArray | null; CHAIN.lastIndex = 0;
+    const code = makeMaskCtx(text).comments;
+    let m: RegExpExecArray | null;
+    CHAIN.lastIndex = 0;
     while ((m = CHAIN.exec(code)) !== null) {
       let p = m[1].split(".").map((s) => s.trim()).filter(Boolean);
       while (p.length && SELF.has(p[0])) p.shift();
@@ -68,14 +89,24 @@ function _inventory(repo: string, skipDirs: Set<string>): Profile[] {
       let e = inv.get(root); if (!e) { e = { files: new Set(), verbs: new Map() }; inv.set(root, e); }
       e.files.add(rel); e.verbs.set(verb, (e.verbs.get(verb) ?? 0) + 1);
     }
+    _LOCAL_DECL_RE.lastIndex = 0; while ((m = _LOCAL_DECL_RE.exec(code)) !== null) localDef.add(m[1]);
+    _IMPORT_RE.lastIndex = 0; while ((m = _IMPORT_RE.exec(code)) !== null) for (const n of _clauseNames(m[1])) (_isBare(m[2]) ? bareImport : localDef).add(n);
+    _REQUIRE_RE.lastIndex = 0; while ((m = _REQUIRE_RE.exec(code)) !== null) for (const n of _clauseNames(m[1])) (_isBare(m[2]) ? bareImport : localDef).add(n);
+    _DECL_INIT_RE.lastIndex = 0; while ((m = _DECL_INIT_RE.exec(code)) !== null) { const s = declRHS.get(m[1]) ?? new Set<string>(); for (const id of _idsIn(m[2])) s.add(id); declRHS.set(m[1], s); }
   }
-  return [...inv].filter(([, e]) => e.files.size >= MIN_FILES).map(([receiver, e]) => ({ receiver, verbs: e.verbs, files: e.files.size }));
+  const profiles = [...inv].filter(([, e]) => e.files.size >= MIN_FILES).map(([receiver, e]) => ({ receiver, verbs: e.verbs, files: e.files.size }));
+  // EXTERNAL (a real boundary) = a node_modules import, OR a binding INITIALISED from one (`const cache = new
+  // Redis()` — declared locally yet backed by an external lib), OR a never-declared free global (`localStorage`).
+  // In-repo-declared with an in-repo initialiser (`const savings = makeSavings()`) → local data flow → drop.
+  const externalBacked = (r: string) => { const s = declRHS.get(r); return !!s && [...s].some((id) => bareImport.has(id)); };
+  const isExternal = (r: string) => bareImport.has(r) || externalBacked(r) || !localDef.has(r);
+  return { profiles, isExternal };
 }
 
 // a CANDIDATE both PRODUCES and CONSUMES (a data layer / channel that's written AND read) — the broad net the
-// LLM then confirms + types (database / event / store / …). emit⇄on and set⇄get both qualify.
-function _candidates(profs: Profile[]): Profile[] {
-  return profs.filter((p) => { const vs = [...p.verbs.keys()]; return vs.some(_isProd) && vs.some(_isCons); })
+// LLM then confirms + types — AND is an EXTERNAL layer (the blindspot gate: drop in-repo local data flow).
+function _candidates(inv: Inventory): Profile[] {
+  return inv.profiles.filter((p) => { const vs = [...p.verbs.keys()]; return inv.isExternal(p.receiver) && vs.some(_isProd) && vs.some(_isCons); })
     .sort((a, b) => b.files - a.files).slice(0, MAX_CANDIDATES);
 }
 
@@ -93,14 +124,20 @@ Classify each as exactly one of:
              reads headers/params/body LOCALLY (\`req.get('header')\`, \`res.json()\`, \`params.get('id')\`,
              \`searchParams.get\`, \`url.get\`) — those carry no cross-service route, classify them \`none\`.
   config   — configuration access (get/set of settings, flags, environment)
-  store    — in-memory / client state, cache, or session store (get/set/dispatch of state, not persisted records)
+  store    — a SHARED, EXTERNAL/INFRASTRUCTURE state layer: browser localStorage/sessionStorage, a cache
+             (Redis/memcached), a session store, or a global app store (vuex/redux/pinia). The thing it
+             reads/writes lives OUTSIDE this code's call graph — coupling it links readers to writers across an
+             opaque boundary. NOT a DOMAIN MODEL with field accessors (\`savings.get('rate')\`, \`account.set(…)\`,
+             \`loan.getAmount()\`): those are an in-code object whose data the call graph already follows — \`none\`.
   event    — an event / message bus (emit/publish/subscribe/listen)
   none     — none of the above: logging, test mocks/assertions, stdlib, local collections, request/response/url
-             objects, generic utilities
+             objects, a DOMAIN MODEL / entity with getters/setters, UI framework scopes, generic utilities
 
-Judge by MEANING, not just verb names — \`axios.create\`/\`axios.delete\` are HTTP (a client + an HTTP DELETE),
-NOT database; \`session.get\`/\`set\` is a store, not a database; a \`*Repository\`/\`*Fixture\` of entities is
-database; \`req\`/\`res\`/\`params\`/\`searchParams\`/\`url\` are \`none\` (they read local request data, not a route).
+Judge by MEANING — the test is "is this an EXTERNAL layer the call graph CANNOT follow (a blindspot), or an
+in-code object it can?". \`axios.create\`/\`axios.delete\` are HTTP (a client + an HTTP DELETE), NOT database;
+\`localStorage.getItem\`/\`cache.set\` is a store; a domain \`savings\`/\`loan\`/\`account\` with get/set of its OWN
+fields is \`none\` (local data flow, not a boundary); a \`*Repository\`/\`*Fixture\` of entities is database;
+\`req\`/\`res\`/\`params\`/\`searchParams\`/\`url\`/\`$scope\` are \`none\`.
 
 ${cands.map(_profileLine).join("\n")}
 
