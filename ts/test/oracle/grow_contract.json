@@ -4,12 +4,11 @@
       "/api/orders|frontend/OrdersPage.tsx|route|C",
       "App|frontend/App.tsx|function",
       "OrdersPage|frontend/OrdersPage.tsx|function",
-      "String|backend/OrderController.java|method|C|backward",
-      "String|backend/OrderController.java|symbol",
-      "formatOrders|lib/format.ts|function|backward"
+      "formatOrders|lib/format.ts|function|backward",
+      "listOrders|backend/OrderController.java|method|C|backward"
     ],
     "edges": [
-      "/api/orders->String:route-serve",
+      "/api/orders->listOrders:route-serve",
       "App->OrdersPage:reference",
       "OrdersPage->/api/orders:route-fetch",
       "OrdersPage->formatOrders:import"

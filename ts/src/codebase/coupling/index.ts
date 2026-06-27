@@ -15,7 +15,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS } from "../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
@@ -71,17 +71,27 @@ const _segEq = (a: string, b: string): boolean => a === b || a === "*" || b === 
 // longer's boundary (`$http.get("/x/summarize/0/" + id)` loses its tail → `/x/summarize/0`, grounding to
 // `@Path("summarize/{page}/{id}")` → `…/summarize/*/*`). A truncated match needs ≥2 contiguous segments so a
 // single shared word can't ground unrelated routes. Every crossing it grounds is RESOLVED_PARTIAL (relevance prunes).
-export function routeSuffixMatch(a: string, b: string): boolean {
+// The SPECIFICITY of the best alignment between two routes: the count of LITERAL segments they agree on (a
+// `*` param is not distinctive), or -1 when they don't align at all. Alignment = the shorter occurs contiguously
+// in the longer (param-aware), either fully consumed or running to the longer's boundary (a concat-truncated
+// caller). Used both as the boolean match (≥1 shared literal) AND, in otherSide, to keep only the MOST specific
+// match — so a generic `/summarize/*` can't ground a caller that also has a fuller `/…/booking/summarize/*/*`.
+export function routeMatchSpecificity(a: string, b: string): number {
   const A = routeSegs(a), B = routeSegs(b);
-  if (!A.length || !B.length) return false;
+  if (!A.length || !B.length) return -1;
   const [long, short] = A.length >= B.length ? [A, B] : [B, A];
+  let best = -1;
   for (let off = 0; off < long.length; off++) {
-    let i = 0;
-    while (i < short.length && off + i < long.length && _segEq(long[off + i], short[i])) i++;
-    if ((i === short.length && i >= 1) || (off + i === long.length && i >= 2)) return true;
+    let i = 0, lit = 0;
+    while (i < short.length && off + i < long.length && _segEq(long[off + i], short[i])) {
+      if (short[i] !== "*" && long[off + i] !== "*") lit++;
+      i++;
+    }
+    if ((i === short.length || off + i === long.length) && i >= 1) best = Math.max(best, lit);
   }
-  return false;
+  return best;
 }
+export function routeSuffixMatch(a: string, b: string): boolean { return routeMatchSpecificity(a, b) >= 1; }
 // The OTHER side of an access — its COMPLEMENTS. If the anchor PRODUCES the key we return its consumers;
 // if it CONSUMES, we return its producers:
 //   produces `payments`  → [report.rb:12, dash.tsx:88]   (the readers)
@@ -96,11 +106,20 @@ function otherSide(index: GroundingIndex, kind: string, value: string, produces:
   const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
   if (kind !== _HTTP_ROUTE) return out;
   const prefix = `${_HTTP_ROUTE} `;
+  // Score every fuzzy route match by SPECIFICITY (shared literal segments) and keep only the BEST tier, so a
+  // generic sub-path (a bare `/summarize/*` served by an unrelated service) can't ground a caller that also
+  // has a fuller, more-specific match (`/manage/rest/booking/summarize/*/*`) — the false-coupling fix.
+  const scored: { spec: number; accesses: Access[] }[] = [];
   for (const [k, v] of index) {
     if (!k.startsWith(prefix)) continue;
     const val = k.slice(prefix.length);
-    if (val === value || !routeSuffixMatch(val, value)) continue;
-    out.push(...(produces ? v.consumers : v.producers));
+    if (val === value) continue;   // exact already counted
+    const spec = routeMatchSpecificity(val, value);
+    if (spec >= 1) scored.push({ spec, accesses: produces ? v.consumers : v.producers });
+  }
+  if (scored.length) {
+    const best = Math.max(...scored.map((s) => s.spec));
+    for (const s of scored) if (s.spec === best) out.push(...s.accesses);
   }
   return out;
 }
@@ -216,7 +235,18 @@ export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: Engin
   return ctx.floorBase.get(repo)!;
 }
 
+// The declared NAME of a def — the tree-sitter `name` FIELD first (NOT a leading return type: a Java/C++
+// `SubList paginate(...)` writes the type before the name, so a positional scan grabbed `SubList`), then the
+// C/C++ declarator-field chain, then a positional fallback. Mirrors scan/ast_units._name_of — duplicated here
+// because coupling can't import scan (scan→coupling already exists; importing back would cycle).
 function _name_of(ctx: Ctx, node: any): string | null {
+  const nf = node.childForFieldName?.("name");
+  if (nf) return ctx.text(nf);
+  let x: any = node.childForFieldName?.("declarator");
+  for (let g = 0; x && g < 16; g++) {
+    if (_NAME_LEAVES.has(x.type)) return ctx.text(x);
+    x = x.childForFieldName?.("declarator") ?? null;
+  }
   for (const c of ctx.children(node)) if (_NAME_KINDS.has(c.type)) return ctx.text(c);
   return null;
 }

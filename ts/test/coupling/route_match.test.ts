@@ -5,7 +5,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { routeSuffixMatch } from "../../src/codebase/coupling/index.js";
+import { routeSuffixMatch, routeMatchSpecificity } from "../../src/codebase/coupling/index.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -25,6 +25,13 @@ describe("routeSuffixMatch — wildcard params + concat-truncated callers", () =
     expect(routeSuffixMatch("/api/acmecheck/bookings", "/payments")).toBe(false);
     expect(routeSuffixMatch("/api/users", "/api/orders")).toBe(false);       // differ at the distinctive segment
     expect(routeSuffixMatch("/orders/list", "/orders/create/draft")).toBe(false);   // diverge after 'orders'
+  });
+  test("specificity ranks a fuller path above a generic fragment (drives the false-coupling fix)", () => {
+    // the bare `/summarize/*` aligns (1 shared literal) but the full booking path is far more specific (4).
+    expect(routeMatchSpecificity("/manage/rest/booking/summarize/*", "/summarize/*")).toBe(1);
+    expect(routeMatchSpecificity("/manage/rest/booking/summarize/*", "/manage/rest/booking/summarize/*/*")).toBeGreaterThanOrEqual(4);
+    // unrelated stays unmatched (-1)
+    expect(routeMatchSpecificity("/api/acmecheck/bookings", "/payments")).toBe(-1);
   });
 });
 
@@ -49,5 +56,26 @@ describe("cross-stack route crossing grounds the Angular caller to the JAX-RS ha
     expect(syms.has("paginate")).toBe(true);            // landed on the HANDLER METHOD (not just the class)
     expect(syms.has("getUpcomingBookings")).toBe(true); // …and chained DOWN through its backend delegation
     expect(syms.has("find") || syms.has("RecordRepo")).toBe(true);   // …to the repository (the DB edge)
+  });
+});
+
+describe("specificity filtering — a generic shared sub-path doesn't pull in an unrelated service", () => {
+  const repo = join(tmpdir(), "seam-p2-false-" + process.pid);
+  const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, t); };
+  beforeAll(() => {
+    w("web/memberBookings.js", `function loadBookings(){\n  $http.get('/manage/rest/booking/summarize/0/' + member._id).then(function(r){ scope.bookings = r.data; });\n}\n`);
+    w("ejb/BookingsService.java", `package a;\nimport javax.ws.rs.*;\n@Path("/manage/rest/booking")\npublic class BookingsService {\n  @GET @Path("summarize/{page}/{id}")\n  public SubList paginate(@PathParam("id") String id){ return null; }\n}\n`);
+    // an UNRELATED service whose method-relative route is a bare `summarize/{id}` — shares only the generic
+    // 'summarize' segment with the booking route; it must NOT be coupled to the booking screen.
+    w("ejb/CompanyAdviserService.java", `package a;\nimport javax.ws.rs.*;\n@Path("/adviser")\npublic class CompanyAdviserService {\n  @GET @Path("summarize/{id}")\n  public String adviserSummary(@PathParam("id") String id){ return null; }\n}\n`);
+  });
+  afterAll(() => rmSync(repo, { recursive: true, force: true }));
+
+  test("the booking grow reaches BookingsService but NOT the unrelated CompanyAdviserService", async () => {
+    if (!available()) return;
+    const [data]: any = await grow_to_terminals(repo, "web/memberBookings.js", "loadBookings",
+      { maxSteps: 12, maxNodes: 40, dataCoupling: true } as any);
+    expect(data.nodes.some((n: any) => n.file.endsWith("BookingsService.java"))).toBe(true);   // the right one
+    expect(data.nodes.some((n: any) => n.file.endsWith("CompanyAdviserService.java"))).toBe(false);   // the false one is gone
   });
 });
