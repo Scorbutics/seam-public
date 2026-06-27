@@ -141,4 +141,21 @@ describe("blindspot gate — drop in-repo local receivers, keep external layers"
     expect(prompt).toMatch(/(?:^|\n)cache:/);          // lib-backed binding survives the gate
     expect(prompt).not.toMatch(/(?:^|\n)savings:/);    // in-repo-backed binding does not
   });
+
+  test("a DI-injected repository (typed by an in-repo class) is dropped; a library-typed ORM survives", async () => {
+    mkdirSync(join(REPO3, "be"), { recursive: true });
+    writeFileSync(join(REPO3, "be", "SavingsManager.java"), `public class SavingsManager { }\n`);   // in-repo class
+    for (let i = 0; i < 5; i++) writeFileSync(join(REPO3, "be", `Svc${i}.java`),
+      `public class Svc${i} {\n` +
+      `  @Inject SavingsManager savingsManager;\n` +                  // typed by an in-repo class → in-repo → drop
+      `  @Inject EntityManager entityManager;\n` +                    // javax type, no in-repo class → external → keep
+      `  void run${i}() { savingsManager.get("rate"); savingsManager.set("rate", 1); entityManager.persist(x); entityManager.find(x); }\n` +
+      `}\n`);
+    let prompt = "";
+    class Bus extends HostBus { serve(tag: string, p: string): string { if (tag !== "classify-receivers") return "[]"; prompt = p; return "[]"; } }
+    set_host_bus(new Bus());
+    await classifyAndPersistRepositories(REPO3, { llm: true }, new EngineCtx());
+    expect(prompt).not.toMatch(/(?:^|\n)savingsManager:/);   // the repository wrapper is gated (grow follows it)
+    expect(prompt).toMatch(/(?:^|\n)entityManager:/);        // the ORM is the single surviving boundary
+  });
 });

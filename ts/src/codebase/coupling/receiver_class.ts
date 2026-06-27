@@ -67,6 +67,13 @@ const _LOCAL_DECL_RE = /\b(?:const|let|var|function|class)[ \t]+([A-Za-z_$][\w$]
 const _IMPORT_RE = /\bimport\b([^'"]*?)\bfrom[ \t]*['"]([^'"]+)['"]/g;
 const _REQUIRE_RE = /\b(?:const|let|var)[ \t]+(\{[^}]*\}|[A-Za-z_$][\w$]*)[ \t]*=[ \t]*require\([ \t]*['"]([^'"]+)['"]/g;
 const _DECL_INIT_RE = /\b(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*([^\n;]+)/g;   // a binding + its initializer
+// A TYPED binding — `SavingsManager savingsManager;` (Java/C#/C++ field/param/local, incl. `@Inject`-ed DI
+// beans) or `savings: Savings` (TS). The capitalised side is the TYPE, the lower-camel side the INSTANCE. If
+// the type is an in-repo class, the instance is an in-repo object — a repository/manager the grow already
+// traverses, NOT a boundary. This is what makes the gate catch DI-injected repositories the const/import scan
+// misses (the *Manager/*Bean channel/repository noise).
+const _TYPED_DECL_RE = /(?:^|[\s(,;])([A-Z][\w$]*)[ \t]+([a-z_$][\w$]*)[ \t]*[;=,)]/g;
+const _TS_TYPED_RE = /\b([a-z_$][\w$]*)[ \t]*:[ \t]*([A-Z][\w$]*)/g;
 const _isBare = (src: string) => !src.startsWith(".") && !src.startsWith("/");   // node_modules specifier
 const _idsIn = (s: string): string[] => [...s.matchAll(/[A-Za-z_$][\w$]*/g)].map((m) => m[0]);
 const _clauseNames = (clause: string): string[] => _idsIn(clause).filter((n) => n !== "as");
@@ -76,6 +83,7 @@ function _inventory(repo: string, skipDirs: Set<string>): Inventory {
   const localDef = new Set<string>();      // declared/defined in-repo (const/let/var/class/function, relative import)
   const bareImport = new Set<string>();    // imported from node_modules → an external layer
   const declRHS = new Map<string, Set<string>>();   // a binding → the identifiers in its initializer
+  const typedAs = new Map<string, Set<string>>();   // instance name → the TYPE name(s) it is declared as
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
     const code = makeMaskCtx(text).comments;
     let m: RegExpExecArray | null;
@@ -93,13 +101,20 @@ function _inventory(repo: string, skipDirs: Set<string>): Inventory {
     _IMPORT_RE.lastIndex = 0; while ((m = _IMPORT_RE.exec(code)) !== null) for (const n of _clauseNames(m[1])) (_isBare(m[2]) ? bareImport : localDef).add(n);
     _REQUIRE_RE.lastIndex = 0; while ((m = _REQUIRE_RE.exec(code)) !== null) for (const n of _clauseNames(m[1])) (_isBare(m[2]) ? bareImport : localDef).add(n);
     _DECL_INIT_RE.lastIndex = 0; while ((m = _DECL_INIT_RE.exec(code)) !== null) { const s = declRHS.get(m[1]) ?? new Set<string>(); for (const id of _idsIn(m[2])) s.add(id); declRHS.set(m[1], s); }
+    const addType = (inst: string, type: string) => { const s = typedAs.get(inst) ?? new Set<string>(); s.add(type); typedAs.set(inst, s); };
+    _TYPED_DECL_RE.lastIndex = 0; while ((m = _TYPED_DECL_RE.exec(code)) !== null) addType(m[2], m[1]);
+    _TS_TYPED_RE.lastIndex = 0; while ((m = _TS_TYPED_RE.exec(code)) !== null) addType(m[1], m[2]);
   }
   const profiles = [...inv].filter(([, e]) => e.files.size >= MIN_FILES).map(([receiver, e]) => ({ receiver, verbs: e.verbs, files: e.files.size }));
   // EXTERNAL (a real boundary) = a node_modules import, OR a binding INITIALISED from one (`const cache = new
   // Redis()` — declared locally yet backed by an external lib), OR a never-declared free global (`localStorage`).
-  // In-repo-declared with an in-repo initialiser (`const savings = makeSavings()`) → local data flow → drop.
+  // In-repo-declared with an in-repo initialiser (`const savings = makeSavings()`), OR an instance whose declared
+  // TYPE is an in-repo class (`SavingsManager savingsManager` — a DI-injected repository) → local data flow the
+  // grow already traverses → drop. (A library-typed receiver like JPA `EntityManager entityManager` survives:
+  // its type isn't an in-repo class, so the ORM stays the SINGLE boundary instead of one matcher per repository.)
   const externalBacked = (r: string) => { const s = declRHS.get(r); return !!s && [...s].some((id) => bareImport.has(id)); };
-  const isExternal = (r: string) => bareImport.has(r) || externalBacked(r) || !localDef.has(r);
+  const inRepoTyped = (r: string) => { const s = typedAs.get(r); return !!s && [...s].some((t) => localDef.has(t)); };
+  const isExternal = (r: string) => bareImport.has(r) || externalBacked(r) || (!localDef.has(r) && !inRepoTyped(r));
   return { profiles, isExternal };
 }
 
