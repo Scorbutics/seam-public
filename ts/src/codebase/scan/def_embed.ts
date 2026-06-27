@@ -23,6 +23,15 @@ const DEF_LIMIT = _envInt("SEAM_DEF_LIMIT", 15000);
 // to M regardless of repo size, with the embedding still doing the fine semantic re-rank on the shortlist.
 const PREFILTER_M = _envInt("SEAM_EMBED_PREFILTER", 800);
 
+// WHY-ANCHOR tracer — set SEAM_WHY_ANCHOR=<path-or-name-substring> to learn why a file/symbol is (not) a
+// candidate. It reports the target's fate at EACH recall stage — enumerated? within the def cap? survived the
+// lexical pre-filter? what embed rank? — so a "missing candidate" is DIAGNOSED (size crop vs not-extracted vs
+// low relevance), not guessed. Decision table printed alongside so the right knob is unambiguous. Diagnostic
+// only (stderr); matches a def by file path OR symbol name (substring, case-insensitive).
+const WHY = (process.env.SEAM_WHY_ANCHOR || "").toLowerCase();
+const _whyMatch = (d: Def) => !!WHY && (d.file.toLowerCase().includes(WHY) || d.name.toLowerCase().includes(WHY));
+const _why = (msg: string) => process.stderr.write(`[why-anchor] ${msg}\n`);
+
 // Morphology-tolerant tokens of a string: split camelCase + non-alnum, lowercase, ≥3 chars. "bookingService"
 // → {booking, service}. A RECALL net (candidate generation), not a meaning judgement — the embedding judges
 // meaning; this only decides which defs are cheap-enough-to-be-worth embedding.
@@ -139,17 +148,32 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
     // isn't a named symbol (a module.exports/Vue-plugin/config) is still recallable by its name+doc+path.
     let defs = await enumerate_defs(repo, DEF_LIMIT, files, { moduleDefs: !files });   // `files` scopes to a footprint; omitted = whole-repo recall
     if (!defs.length) return [];
+    const capHit = !files && defs.length >= DEF_LIMIT;
     // LOUD truncation: candidate_source_files is ALPHABETICAL, so hitting the cap whole-repo silently drops
     // every module sorted later (a monorepo's web-z never enumerated → never a candidate). Never silently
     // cap recall — tell the user the knob. (Footprint-scoped `files` runs are already bounded, so skip then.)
-    if (!files && defs.length >= DEF_LIMIT)
+    if (capHit)
       process.stderr.write(`[anchor] WARNING: def enumeration hit the ${DEF_LIMIT}-def cap (alphabetical) — modules sorted after the cut are NOT recalled. Raise it with SEAM_DEF_LIMIT=<n>.\n`);
+    if (WHY) {
+      const hits = defs.filter(_whyMatch);
+      _why(`'${process.env.SEAM_WHY_ANCHOR}': STAGE 1 enumerate — ${hits.length} matching def(s) of ${defs.length}${capHit ? ` (cap ${DEF_LIMIT} HIT)` : ""}.`);
+      if (hits.length) _why(`  e.g. ${hits.slice(0, 6).map((d) => `${d.name} (${d.file})`).join(", ")}`);
+      else _why(capHit
+        ? `  → 0 enumerated AND the alphabetical cap was hit ⇒ likely a SIZE crop: re-run with SEAM_DEF_LIMIT=${DEF_LIMIT * 5}. If it appears, that was it.`
+        : `  → 0 enumerated and the cap was NOT hit ⇒ NOT a size crop: the file's symbols aren't EXTRACTED as defs (a scan/extraction gap for this file shape), or the substring is wrong.`);
+    }
     // RETRIEVE-then-rerank (whole-repo only — footprint-scoped `files` is already bounded): narrow a large
     // def set to the M most intent-overlapping before the expensive embed, so cold cost is bounded by M.
     if (!files && defs.length > PREFILTER_M) {
       const before = defs.length;
+      const whyBefore = WHY ? defs.filter(_whyMatch).length : 0;
       defs = lexicalPreFilter(defs, [..._tokens(intent)], PREFILTER_M);
       if (timingOn()) process.stderr.write(`[timing] lexical pre-filter: ${before} → ${defs.length} defs (SEAM_EMBED_PREFILTER)\n`);
+      if (WHY && whyBefore) {
+        const whyAfter = defs.filter(_whyMatch).length;
+        _why(`STAGE 2 lexical pre-filter — kept ${whyAfter}/${whyBefore} matching def(s) (${before}→${defs.length} of cap ${PREFILTER_M}).`);
+        if (!whyAfter) _why(`  → dropped here: the target's TOKENS don't overlap the intent "${intent}". SIZE-triggered (>${PREFILTER_M} defs). Re-run with SEAM_EMBED_PREFILTER=${Math.max(before, PREFILTER_M * 10)} to embed it anyway (slower) — if it then ranks, reword the intent or raise this knob.`);
+      }
     }
     const strings = defs.map(embedString);
     const cp = cachePath(repo);
@@ -163,6 +187,17 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
     const scored = defs.map((d, i) => ({ def: d, score: cosine(iv, cache[h(strings[i])]) }));
     scored.sort((a, b) => b.score - a.score);
     if (_et0) process.stderr.write(`[timing] embed score: ${Math.round(performance.now() - _et0)}ms (${defs.length} defs, ${misses.length} newly embedded)\n`);
+    if (WHY) {
+      const rank = scored.findIndex((s) => _whyMatch(s.def));
+      if (rank < 0) _why(`STAGE 3 embed rank — target NOT in the embedded set (dropped at an earlier stage; see above).`);
+      else {
+        const ANCHOR_EMBED_TOP = _envInt("SEAM_ANCHOR_EMBED_TOP", 28);
+        _why(`STAGE 3 embed rank — best match at #${rank} of ${scored.length} (score ${scored[rank].score.toFixed(3)}): ${scored[rank].def.name} (${scored[rank].def.file}).`);
+        _why(rank < ANCHOR_EMBED_TOP
+          ? `  → within SEAM_ANCHOR_EMBED_TOP (${ANCHOR_EMBED_TOP}) ⇒ it IS recalled into the pool. If still not a final candidate, it was hub-demoted or the LLM judge dropped it (not a recall/size issue).`
+          : `  → ranked BELOW SEAM_ANCHOR_EMBED_TOP (${ANCHOR_EMBED_TOP}) ⇒ NOT a size crop: a RELEVANCE crop. Raise SEAM_ANCHOR_EMBED_TOP, or the intent wording genuinely matches other files better.`);
+      }
+    }
     return scored;
   } catch { return []; }
 }
