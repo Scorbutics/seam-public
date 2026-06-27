@@ -17,6 +17,28 @@ Semantic vs structural — never confuse them:
  - A SEMANTIC judgement (understanding natural language: an intent, a goal, a direction, "what does the user mean") belongs to the LLM or embeddings. NEVER keyword-match / regex / string-parse free text in the engine to approximate meaning — it dies on typos, other languages, and indirect wording. If a real signal isn't available, accept it as non-deterministic (delegate to the model) rather than faking determinism with a brittle proxy.
  - A STRUCTURAL classification (a known, closed set: node kinds, edge kinds, roles, languages) is deterministic — but source it from the registry / source-of-truth, never a hardcoded list that has to be kept in sync.
 
+Deduce, don't guess — propagate from GROUNDED data (the core engine philosophy). When the engine must KNOW
+something it can't read at the site — is this a data-coupling edge? what external layer is this receiver? what
+does this wrapper ultimately do? — DEDUCE it by propagating a small set of GROUNDED facts along relations that
+are ALREADY resolved. Not by name/keyword heuristics, not by defaulting to the LLM, not by blindly resolving a
+call. The four invariants, in order:
+ - SEED on grounded, CLOSED facts — a runtime/platform primitive, a node_modules import, a registry node-kind —
+   never a generic name. `fetch` / `localStorage` / `fs` / a `@Entity` are grounded sinks; `http` / `get` /
+   `save` / `*Service` / `*Repository` are NAME GUESSES. A function that CALLS `fetch` does HTTP; a function
+   NAMED `getHttp` that touches no sink does not. The structural blindspot test ("would this be opaque to the
+   resolver?") is the canonical seed: couple only what the static graph CAN'T already follow.
+ - PROPAGATE transitively over edges that ARE resolved (calls, aliases, assignments the graph already follows)
+   and HALT at the grounded boundary (the external sink, the repo edge). Never blind-resolve a call site to
+   manufacture a fact; an in-repo wrapper is followed THROUGH to the real boundary, not flagged itself.
+ - Apply the LLM/embeddings ONLY to the irreducibly SEMANTIC residue — what a name MEANS, which grounded
+   candidate the dev intends, an opaque key — LAST, and SCOPED to a question the deduction has already framed.
+   Never to DECIDE what structure can deduce; never as a blanket fallback; once per closed candidate set, cached.
+ - Make it GENERAL — one mechanism per concept, serving every boundary kind (http / store / db / file / queue)
+   from its own grounded seed, not a per-case hack.
+This is the structural↔semantic rule in MOTION: STRUCTURE deduces the FACT (this IS an edge / a boundary), the
+model only judges the MEANING (which key, which intent). If a change pushes "everything to the LLM", matches a
+keyword, or blind-resolves to fabricate an edge, it violates this — redesign it as grounded propagation.
+
 In plan and agent modes, do not hesitate to ask questions if you need more information, in particular for huge complex tasks.
 
 For the architecture / high complexity code related tasks, behave like a Senior Software engineer / an architect.
