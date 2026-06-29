@@ -57,4 +57,14 @@ describe("multi-consumer fan-out — a backend hub reaches BOTH the direct and t
     const files = await reach("ejb/MemberBookingResource.java", "create");
     expect(files.has("web/bookingService.js")).toBe(true);   // member route → its indirected client
   });
+
+  test("a UI anchor reaches the SIBLING UI through the shared backend (bidirectional up-climb + deep coupling)", async () => {
+    if (!available()) return;
+    // anchor on the ADVISER ui — the member ui is a SIBLING: only reachable by descending to the shared bean,
+    // climbing back UP to the member resource (the bean is a dependency node that must reverse direction), then
+    // coupling THAT resource (reached during expand, not the seed) to its route's client.
+    const files = await reach("web/adviserBookings.js", "");
+    expect(files.has("ejb/MemberBookingResource.java")).toBe(true);   // up-climb from the shared bean to the sibling resource
+    expect(files.has("web/bookingService.js")).toBe(true);            // deep-couple that resource's route to the sibling UI
+  });
 });

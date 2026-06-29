@@ -249,6 +249,29 @@ export function _nextFrontier<T extends { id: string; complexity?: number }>(
     || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];             // (4) complexity (final tiebreak)
 }
 
+// BIDIRECTIONAL move selection — pick the next (node, direction) to expand. The one-directional walk tagged each
+// node with a single direction (a dependency only ever descended), so a SHARED backend node never climbed back
+// UP to its other consumers and the sibling entry points (e.g. a second UI behind a second route) were starved.
+// Here every reached node may go EITHER way; the explosion that monotonicity prevented is now bounded by two
+// terms the developer's instinct named — CLOSENESS (hop distance from the anchor) and INTENT — so the fan
+// radiates locally and the node budget caps it. Order: connectivity (crossings) first (never prune the spine),
+// then delegation-over-typeref, then NEAREST, then intent, then a node's ORIGINAL direction before its REVERSE
+// hop (take the reverse — the climb-up — only once the near forward frontier is spent), then complexity.
+// A core node at or beyond this hop-distance from the anchor is treated as a SHARED backend hub (its up-climb
+// reaches sibling entry points), not the central seam (whose up-climb is redundant). Env-tunable.
+const _UPCLIMB_MIN_DIST = (() => { const v = parseInt(process.env.SEAM_UPCLIMB_MIN_DIST ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 2; })();
+export type Move = { node: any; dir: "up" | "down" };
+export function _nextMove(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move | undefined {
+  const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
+  return [...moves].sort((a, b) =>
+    (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY
+    || (Number(!typeRefOnly.has(b.node.id)) - Number(!typeRefOnly.has(a.node.id)))        // (2) DELEGATION over type-ref
+    || (dist(a.node.id) - dist(b.node.id))                                                // (3) CLOSENESS — nearer first (the bound)
+    || (iscore(b.node) - iscore(a.node))                                                  // (4) INTENT
+    || (fwd(b) - fwd(a))                                                                  // (5) original direction before the reverse hop
+    || ((b.node.complexity ?? 0) - (a.node.complexity ?? 0)))[0];                         // (6) complexity
+}
+
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
 // budget): drop test files (default; opt back with includeTests) and any node under an --exclude folder
 // (matched as a path PREFIX or a whole path SEGMENT, so `--exclude generated` drops `a/generated/x`).
@@ -291,7 +314,7 @@ async function _phaseSeed(repo: string, anchorFile: string, symbol: string, _opt
 // bridge can be CHAINED — grown STRUCTURALLY to its downstream (route handler → its @Inject'd bean; queue
 // subscriber → its delegate) — WITHOUT re-coupling. This is the only place coupling touches the grow.
 // COMPONENT FALLBACK: a symbol that surfaces no coupling but whose MODULE does → re-anchor as the module.
-async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts: any, co: any, coStruct: any, prune: (g: any) => any): Promise<any> {
+async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts: any, co: any, coStruct: any, prune: (g: any) => any, coupled: Set<string>): Promise<any> {
   if (co.dataCoupling === false) return data;
   let overlay = await _anchorCouplingDelta(repo, anchorFile, data, opts, co.ctx);
   if (!overlay.nodes.length) {
@@ -299,23 +322,31 @@ async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts:
     const modOverlay = await _anchorCouplingDelta(repo, anchorFile, mod, opts, co.ctx);
     if (modOverlay.nodes.length) { data = mod; overlay = modOverlay; }
   }
-  // FAN over the seed's OTHER reached files — couple each distinct one (whole-file) so a boundary on a REACHED
-  // node (not the anchor) still crosses to its consumers. Without this a hub anchor surfaces no boundary itself
-  // and the resources it reaches never bridge — the footprint narrows to whatever the anchor's own chain found.
-  const anchorNorm = normpath(anchorFile);
-  const seen = new Set<string>([anchorNorm]);
-  let counter = (data.nodes ?? []).length + overlay.nodes.length;
+  _mergeCouplingOverlay(data, overlay);
+  coupled.add(normpath(anchorFile));
+  await _fanCouple(repo, data, opts, co.ctx, coupled);
+  return data;
+}
+
+// FAN — couple each distinct REACHED file not yet coupled (whole-file), so a boundary on a reached node (not the
+// anchor) still crosses to its consumers. Run after the SEED (the resources a hub anchor reaches) AND again
+// after EXPAND (the resources the bidirectional walk climbs to) — the `coupled` set carries across so each file
+// is coupled ONCE. Without the post-expand pass a sibling resource reached during the walk never bridges to its
+// UI. Bounded: the resolveCoupling gate skips a no-boundary file cheaply; the grounding index is built once.
+async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, coupled: Set<string>): Promise<void> {
+  let counter = (data.nodes ?? []).length;
+  let overlay: { nodes: any[]; edges: any[]; blindspots: any[] } = { nodes: [], edges: [], blindspots: [] };
   for (const n of (data.nodes ?? [])) {
+    if (n.coupling) continue;   // a coupling-overlay complement (e.g. a hub-fan member) — re-coupling it re-fans the hub; only couple STRUCTURAL files
     const f = n.file ? normpath(n.file) : "";
-    if (!f || seen.has(f)) continue;
-    seen.add(f);
-    const d = await _fileCouplingDelta(repo, n.file, n.id, counter, opts, co.ctx);
+    if (!f || coupled.has(f)) continue;
+    coupled.add(f);
+    const d = await _fileCouplingDelta(repo, n.file, n.id, counter, opts, ctx);
     if (!d.nodes.length) continue;
     counter = d.counter;
-    overlay = { nodes: [...overlay.nodes, ...d.nodes], edges: [...overlay.edges, ...d.edges], blindspots: [...overlay.blindspots, ...d.blindspots], counter };
+    overlay = { nodes: [...overlay.nodes, ...d.nodes], edges: [...overlay.edges, ...d.edges], blindspots: [...overlay.blindspots, ...d.blindspots] };
   }
   _mergeCouplingOverlay(data, overlay);
-  return data;
 }
 
 // ── P2 STRUCTURAL EXPANSION (docs/grow-architecture.md) ──────────────────────────────────────────────────
@@ -352,16 +383,38 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // excluded on the FORWARD/consumer side (the central seam is already covered — re-growing it adds noise), but
     // a DOWNSTREAM (backward) core node IS expanded: the mechanism chain (handler → service → repo → DB) is a
     // run of core nodes, and stopping at the first one is what left the spine thin and never reached the DB.
-    const cand = data.nodes.filter((n: any) => n.id !== "n1" && n.file && n.symbol
-      && (roleById.get(n.id) !== "core" || n.direction === "backward") && !isFlowSubject(n.kind) && !expanded.has(_key(n)) && !excludedFile(n.file));
-    const next = _nextFrontier(cand, crossings, _iscore, typeRefOnly);
-    if (!next) break;
-    expanded.add(_key(next));
-    // DIRECTION-AWARE expansion: a CONSUMER (forward / untagged) extends UPSTREAM via its own consumers; a
-    // DEPENDENCY (backward) extends DOWNSTREAM via ITS deps, so an entry-point anchor traces the full path.
-    const dir: string | undefined = next.direction;
-    emit(`Growing the footprint to its terminals (step ${step + 1}): ${dir === "backward" ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
-    const arrow = dir === "backward" ? "↓down" : "↑up";
+    // CLOSENESS — hop distance from the anchor (undirected BFS over the current footprint). The bound on
+    // bidirectional expansion: nearer moves win, so the fan radiates from the anchor and the node budget caps a
+    // LOCAL neighbourhood rather than a deep one-directional dive (which starved the sibling UIs).
+    const anchorId = data.anchor?.id ?? "n1";
+    const adj = new Map<string, string[]>();
+    for (const e of data.edges as any[]) { (adj.get(e.from) ?? adj.set(e.from, []).get(e.from))!.push(e.to); (adj.get(e.to) ?? adj.set(e.to, []).get(e.to))!.push(e.from); }
+    const dist = new Map<string, number>([[anchorId, 0]]);
+    for (const queue = [anchorId]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
+    const distOf = (id: string) => dist.get(id) ?? 999;
+    // BIDIRECTIONAL MOVES — each reached node offers BOTH directions (a dependency may climb back UP to its other
+    // consumers — the sibling entry points — not only descend). UP of a CORE node is still skipped (the central
+    // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
+    const moves: Move[] = [];
+    for (const n of data.nodes as any[]) {
+      if (n.id === "n1" || n.id === anchorId || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
+      const isCore = roleById.get(n.id) === "core";
+      for (const d of ["up", "down"] as const) {
+        if (expanded.has(`${_key(n)}::${d}`)) continue;
+        // Skip the UP-climb of a NEAR core node (the central seam — already covered, re-growing it is noise), but
+        // ALLOW it for a FAR core node: a shared backend service reached deep in the walk, whose other consumers
+        // are the SIBLING entry points (the second UI behind a second route). Distance is the discriminator.
+        if (d === "up" && isCore && distOf(n.id) < _UPCLIMB_MIN_DIST) continue;
+        moves.push({ node: n, dir: d });
+      }
+    }
+    const move = _nextMove(moves, crossings, _iscore, typeRefOnly, distOf);
+    if (!move) break;
+    const next = move.node;
+    const down = move.dir === "down";
+    expanded.add(`${_key(next)}::${move.dir}`);
+    emit(`Growing the footprint to its terminals (step ${step + 1}): ${down ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
+    const arrow = down ? "↓down" : "↑up";
     // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
     // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
     // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
@@ -371,7 +424,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // handler entry + sibling operations) so the grow lands on the handler and chains DOWN into its backend
     // delegation (paginate → getUpcomingBookings → DB) — and so the sibling @POST/@PUT handlers become paths.
     let callerFiles: string[] | undefined;
-    if (dir === "backward" && (next.kind === "class" || next.kind === "interface")) {
+    if (down && (next.kind === "class" || next.kind === "interface")) {
       const isHandler = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && isHandlerEdge(e.kind));
       if (!isHandler) {
         const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
@@ -386,20 +439,21 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     }
     let add: any;
     try {
-      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: dir === "backward" ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
+      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
     } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
     if (flood > _MOVE_CAP) { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
-    // carry the grow direction outward so the chain keeps extending the same way (consumers up, deps down).
-    const tag = dir ?? "forward";
+    // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
+    // continues the same way (consumers up, deps down), but each new node may still later reverse.
+    const tag = down ? "backward" : "forward";
     for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
     dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} → +${data.nodes.length - before} node(s)`);
-    history.push({ node: next.symbol, added: data.nodes.length - before, ...(dir === "backward" ? { dir: "down" } : {}) });
+    history.push({ node: next.symbol, added: data.nodes.length - before, ...(down ? { dir: "down" } : {}) });
   }
   return [data, history];
 }
@@ -416,14 +470,18 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
   if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap
   const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the P3 overlay only
+  const coupled = new Set<string>();   // files already coupled — carried across the seed + post-expand fans (couple each once)
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
   dbg(`[grow] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
-  data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune);            // P3 coupling bridges
+  data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune, coupled);   // P3 coupling bridges (seed)
   dbg(`[grow] P3 coupling: +${data.nodes.length - seedN} bridge node(s)`);
   const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // P2 expand
   data = grown;
   dbg(`[grow] P2 expand: ${history.length} step(s) → ${data.nodes.length} node(s) total (budget ${maxSteps} steps / ${maxNodes} nodes)`);
+  // P3 (deep) — couple the boundary files the bidirectional walk CLIMBED to (sibling resources reached during
+  // expand, not in the seed), so their routes cross to their UIs. `coupled` skips the seed files already done.
+  if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[grow] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); }
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {
