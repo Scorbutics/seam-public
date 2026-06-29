@@ -75,7 +75,29 @@ export interface Consumer { file: string; local: string; source: string; status:
 type ImportContribution = { refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[] };
 type ImportEntry = ImportContribution & { rel: string; norm: string };
 const _repoImportsCache = new Map<string, ImportEntry[]>();
-export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); }
+export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); _invImportsCache.clear(); }
+
+// INVERTED import index — `symbol → the entries that import a binding of that name`, plus the (small) subsets
+// that have namespace / default imports. `_scan_direct` (finding a symbol's consumers) used to walk the WHOLE
+// repo import index PER call — on a 7411-file repo that is ~400ms/up-build and was MEASURED as ~68% of a grow.
+// Inverting it once (cached per repo, derived from the already-cached `_repoImports`) makes the common NAMED
+// lookup O(matches), and the ns/default passes iterate only the few files that actually have those imports.
+interface InvImports { byName: Map<string, ImportEntry[]>; nsEntries: ImportEntry[]; defaultEntries: ImportEntry[]; }
+const _invImportsCache = new Map<string, InvImports>();
+function _importIndex(repo: string): InvImports {
+  let inv = _invImportsCache.get(repo);
+  if (inv) return inv;
+  const byName = new Map<string, ImportEntry[]>(), nsEntries: ImportEntry[] = [], defaultEntries: ImportEntry[] = [];
+  for (const e of _repoImports(repo)) {
+    const seen = new Set<string>();   // one entry per (binding name) — the named loop re-finds the first matching ref
+    for (const ref of e.refs) if (!seen.has(ref.name)) { seen.add(ref.name); const a = byName.get(ref.name); if (a) a.push(e); else byName.set(ref.name, [e]); }
+    if (e.ns.length) nsEntries.push(e);
+    if (e.defs.length || e.refs.some((r) => r.name === "default" && r.reexport)) defaultEntries.push(e);
+  }
+  inv = { byName, nsEntries, defaultEntries };
+  _invImportsCache.set(repo, inv);
+  return inv;
+}
 
 // The repo-wide reverse-import index — built ONCE per process AND persisted to `.seam/import-index.json`
 // (content-keyed by mtime/size). Finding consumers is a REVERSE-dependency query (a consumer lives anywhere),
@@ -147,8 +169,10 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
   const anchorBase = stem(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
   const isDefault = _isDefaultExport(repo, anchorFile, symbol);   // gate default-import matching (recall-safe)
+  const inv = _importIndex(repo);
   const out: Consumer[] = [];
-  for (const { rel, norm, refs, ns, defs } of _repoImports(repo)) {   // cached index — no per-call repo walk/parse
+  // NAMED — only the files that import a binding called `symbol` (inverted lookup, not a whole-repo walk).
+  for (const { rel, norm, refs } of inv.byName.get(symbol) ?? []) {
     if (norm === anchorAbs) continue;
     for (const ref of refs) {
       if (ref.name !== symbol) continue;
@@ -160,32 +184,32 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
       }
       break;
     }
-    // Namespace-member consumers: `const X = await import("…anchor module…")` then `X.symbol(...)`. The
-    // module must resolve to the anchor (so when scan_consumers recurses into a re-export barrel, a
-    // namespace import of THAT barrel — e.g. `scan.build_footprint` against `scan/index.ts` — is caught).
-    // `local: symbol` lets the downstream usage-line scan find `X.symbol` by name, like a named import.
-    if (ns.length) {                                          // text is needed ONLY for the namespace member scan → read it lazily (most files have no ns)
-      let text = ""; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { /* unreadable → skip ns */ }
-      for (const n of ns) {
-        const t = await _resolve(repo, rel, n.source);
-        if (!t || normpath(t) !== anchorNorm) continue;
-        const status = _member_use(text, n.local, symbol);
-        if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
-      }
+  }
+  // NAMESPACE-member consumers: `const X = await import("…anchor module…")` then `X.symbol(...)`. The module
+  // must resolve to the anchor. Only the (few) files that HAVE namespace imports — text read lazily.
+  for (const { rel, norm, ns } of inv.nsEntries) {
+    if (norm === anchorAbs) continue;
+    let text = ""; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { /* unreadable → skip ns */ }
+    for (const n of ns) {
+      const t = await _resolve(repo, rel, n.source);
+      if (!t || normpath(t) !== anchorNorm) continue;
+      const status = _member_use(text, n.local, symbol);
+      if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
     }
-    // DEFAULT-export consumers (only when `symbol` IS the anchor's default export — matched by MODULE, not
-    // name, since the binding is the importer's choice). Two forms: a `default as Name` re-export barrel
-    // (followed transitively under Name), and a direct `import Name from "anchor"` (Name = the local used).
-    if (isDefault) {
-      for (const ref of refs) {
-        if (ref.name !== "default" || !ref.reexport) continue;
-        const t = await _resolve_import(repo, rel, ref);
-        if (t?.[0] && normpath(t[0]) === anchorNorm) { out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: true }); break; }
-      }
-      for (const d of defs) {
-        const t = await _resolve(repo, rel, d.source);
-        if (t && normpath(t) === anchorNorm) { out.push({ file: rel, local: d.local, source: d.source, status: "RESOLVED_FULL" }); break; }
-      }
+  }
+  // DEFAULT-export consumers (only when `symbol` IS the anchor's default export — matched by MODULE). A
+  // `default as Name` re-export barrel (followed transitively) and a direct `import Name from "anchor"`. Only
+  // the files that have default imports / default re-exports.
+  if (isDefault) for (const { rel, norm, refs, defs } of inv.defaultEntries) {
+    if (norm === anchorAbs) continue;
+    for (const ref of refs) {
+      if (ref.name !== "default" || !ref.reexport) continue;
+      const t = await _resolve_import(repo, rel, ref);
+      if (t?.[0] && normpath(t[0]) === anchorNorm) { out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: true }); break; }
+    }
+    for (const d of defs) {
+      const t = await _resolve(repo, rel, d.source);
+      if (t && normpath(t) === anchorNorm) { out.push({ file: rel, local: d.local, source: d.source, status: "RESOLVED_FULL" }); break; }
     }
   }
   return out;

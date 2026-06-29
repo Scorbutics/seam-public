@@ -180,6 +180,15 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
   return out;
 }
 
+// The distinct method-call names this file makes (`obj.name()` → name) — method calls only (has a receiver),
+// mirroring _method_call_sites' filter. Feeds the inverted call-site index so a consumer scan finds caller
+// files by lookup instead of re-walking + re-reading the whole repo per build.
+export function _called_method_names(ctx: Ctx): string[] {
+  const out = new Set<string>();
+  for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) { const c = _callee(ctx, call); if (c && c.obj) out.add(c.name); }
+  return [...out];
+}
+
 // The set of names this file DELEGATES to (a call spine), vs names it only references as a TYPE (the data
 // model / payload): the receiver TYPE of every `x.m()` / `new X().m()` call (resolved via the instance-type
 // map) UNION the callee of every unqualified `foo()` call. A same-package/imported type that NEVER appears

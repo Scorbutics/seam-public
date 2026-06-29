@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { incrementalScanAsync } from "../../core/resolve/index_cache.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
 import { makeCtx, available, lang_for, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
 import { dbg } from "../../core/progress.js";
@@ -17,11 +18,36 @@ import {
 import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _usage_lines } from "./ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
-  _instance_types, _method_call_sites, _subclass_family,
+  _instance_types, _method_call_sites, _subclass_family, _called_method_names,
 } from "./ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
 
 const _CLASS_CONSUMER_PARSE_CAP = 120;   // parse at most this many consumers for method attribution (rest = module nodes); bounds a hub class's per-run parse cost
+
+// INVERTED CALL-SITE INDEX — `method name → files that call it` + the repo's `class → base classes` map.
+// build_callsite_graph used to WALK + readFileSync + text-scan the WHOLE repo on EVERY method/class up-build to
+// find caller files and the inheritance map — MEASURED at ~400ms/up-build, ~68% of a grow on a 7411-file repo.
+// Built ONCE per repo (cached + persisted to `.seam/callsite-index.json`, content-keyed, O(changed) warm), so a
+// build looks up its candidate consumers instead of re-reading the repo. Same `makeCtx` parse cache as the rest.
+interface CallIndex { callers: Map<string, string[]>; bases: Map<string, string[]>; }
+const _callIndexCache = new Map<string, CallIndex>();
+export function resetCallIndex(): void { _callIndexCache.clear(); }
+async function _callIndex(repo: string): Promise<CallIndex> {
+  let ci = _callIndexCache.get(repo);
+  if (ci) return ci;
+  const scan = async (rel: string, text: string): Promise<{ calls: string[]; bases: [string, string[]][] }> => {
+    const cctx = await makeCtx(text, lang_for(rel) ?? "");
+    return cctx ? { calls: _called_method_names(cctx), bases: _class_bases(cctx) } : { calls: [], bases: [] };
+  };
+  const callers = new Map<string, string[]>(), bases = new Map<string, string[]>();
+  for (const { rel, data } of await incrementalScanAsync(repo, SKIP_DIRS, endsWithSourceExt, "callsite-v1", scan, "callsite-index")) {
+    for (const m of data.calls) { const a = callers.get(m); if (a) a.push(rel); else callers.set(m, [rel]); }
+    for (const [cls, bs] of data.bases) bases.set(cls, bs);
+  }
+  ci = { callers, bases };
+  _callIndexCache.set(repo, ci);
+  return ci;
+}
 
 // CALL-SITE discovery: anchor (class/interface/method) + every place a consumer CALLS one of its
 // methods, regardless of how the receiver was obtained (DI/factory/interface/base class). Edges are
@@ -62,31 +88,22 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   const owner = opts.ownerClass ?? (opts.methodNames && aencl ? aencl : null);
   const anchorAbs = normpath(join(repo, anchorFile));
 
-  // One walk: parse a file if it CALLS the method (a candidate consumer) or DECLARES a subclass
-  // (`extends`, needed for the repo-wide inheritance map even when that file never calls the method).
-  const globalBases = new Map<string, string[]>();
+  // Candidate consumer files come from the cached inverted index (files that CALL one of the methods); the
+  // repo's class→bases map is cached too — so we parse only the candidates (makeCtx-cached) instead of walking +
+  // re-reading the whole repo. A candidate that won't parse is surfaced (its calls then never resolve).
+  const idx = await _callIndex(repo);
+  const globalBases = idx.bases;
+  const candidates = new Set<string>();
+  for (const m of methods) for (const rel of idx.callers.get(m) ?? []) candidates.add(rel);
   const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; sites: ReturnType<typeof _method_call_sites> }[] = [];
-  for (const [dir, files] of walk(repo, SKIP_DIRS)) {
-    for (const fn of files) {
-      if (!endsWithSourceExt(fn)) continue;
-      const path = join(dir, fn);
-      let text: string;
-      try { text = readFileSync(path, "utf-8"); } catch { continue; }
-      const hasMethod = normpath(path) !== anchorAbs && [...methods].some((m) => text.includes(m));
-      const hasExtends = !!owner && text.includes("extends");
-      if (!hasMethod && !hasExtends) continue;
-      const rel = relative(repo, path);
-      const cctx = await makeCtx(text, lang_for(rel)!);
-      // A candidate CONSUMER file that won't parse (tree-sitter failed / oversized) is silently dropped — its
-      // call sites then never resolve, so a real caller vanishes from the consumer set with no trace. Surface it:
-      // this is exactly how a same-named caller can go missing while a smaller sibling file resolves fine.
-      if (!cctx) { if (hasMethod) dbg(`[callsite] SKIPPED unparseable candidate consumer ${rel} (${text.length} bytes) — its calls to ${[...methods].join("/")} are NOT resolved`); continue; }
-      if (hasExtends) for (const [name, bases] of _class_bases(cctx)) globalBases.set(name, bases);
-      if (hasMethod) {
-        const sites = _method_call_sites(cctx, methods);
-        if (sites.length) pending.push({ rel, fn, units: _named_units(cctx), instTypes: owner ? _instance_types(cctx) : new Map(), sites });
-      }
-    }
+  for (const rel of candidates) {
+    if (normpath(join(repo, rel)) === anchorAbs) continue;
+    const rd = _read(repo, rel);
+    if (!rd) continue;
+    const cctx = await makeCtx(rd[0], rd[1]);
+    if (!cctx) { dbg(`[callsite] SKIPPED unparseable candidate consumer ${rel} — its calls to ${[...methods].join("/")} are NOT resolved`); continue; }
+    const sites = _method_call_sites(cctx, methods);
+    if (sites.length) pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes: owner ? _instance_types(cctx) : new Map(), sites });
   }
 
   const family = owner ? _subclass_family(globalBases, owner) : null;
