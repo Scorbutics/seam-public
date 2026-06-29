@@ -514,3 +514,28 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   }
   return [data, history];
 }
+
+// FOOTPRINT-SCOPED grow (the `--data-coupling llm` path). A cheap deterministic FLOOR pre-grow yields the
+// flow's files (across every module it spans); the real LLM grow then scopes its per-file coupling discovery
+// to THOSE — bounded by the answer's size, cross-module complete — instead of the anchor's whole module.
+// The probe's footprint is DISCARDED (only its files are kept). CRITICALLY, the probe's deterministic coupling
+// still materialises complements, which DECREMENT the grow-wide consumable budgets (complement/key/synth) on
+// the shared ctx. Left undone, the throwaway probe permanently STARVES the REAL grow's crossing materialisation
+// (`crossBoundary` stops at `complementBudget <= 0`) — so a coupling-reached resource the floor found is
+// INDEXED but never materialised into the answer. Snapshot + restore those budgets so the probe is free; the
+// repo-wide index CACHES on ctx persist (built once), only the per-run consumable budgets reset.
+export async function grow_footprint_scoped(repo: string, anchorFile: string, symbol: string,
+    opts: { ctx: EngineCtx; [k: string]: any }): Promise<[any, any[]]> {
+  const ctx = opts.ctx;
+  emit("Floor pre-grow to scope coupling discovery to the footprint…");
+  ctx.stableFloor = true;
+  const budget0 = { complementBudget: ctx.complementBudget, keyBudget: ctx.keyBudget, synthBudget: ctx.synthBudget };
+  const [floorData] = await grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: false, ctx });
+  ctx.stableFloor = false;
+  ctx.complementBudget = budget0.complementBudget;   // RESTORE: the scoping probe must not starve the answer
+  ctx.keyBudget = budget0.keyBudget;
+  ctx.synthBudget = budget0.synthBudget;
+  ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
+  process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
+  return grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: true, ctx });
+}

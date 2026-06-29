@@ -456,18 +456,9 @@ async function runCodebase(a: Args): Promise<number> {
       // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
       const growAnchorFootprint = async (af: string, sym: string, ctx: any): Promise<[any, any[]]> => {
         if (a.grow === "llm") return orch.auto_orchestrate(a.repo, af, sym, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
-        if (dcLlm) {
-          // FOOTPRINT-SCOPED coupling discovery: a cheap deterministic FLOOR pre-grow yields the flow's files
-          // (across every module it spans); the real LLM grow then scopes its per-file coupling discovery to
-          // THOSE — bounded by the answer's size, cross-module complete — instead of the anchor's whole module.
-          emit("Floor pre-grow to scope coupling discovery to the footprint…");
-          ctx.stableFloor = true;
-          const [floorData] = await orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: false, ctx });
-          ctx.stableFloor = false;
-          ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
-          process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
-          return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: true, ctx });
-        }
+        // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
+        // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
+        if (dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx });
         return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: false, ctx });
       };
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
