@@ -418,15 +418,18 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
     // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
     // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
-    // A class reached as a DEPENDENCY shows only its CALLED methods (de-noise, A). EXCEPTION — a class reached
-    // as a cross-stack ROUTE/QUEUE HANDLER (an incident handler edge) is container-invoked: its handler method
-    // has no in-repo caller, so restricting to called methods would hide it. Surface ALL its methods (the
-    // handler entry + sibling operations) so the grow lands on the handler and chains DOWN into its backend
-    // delegation (paginate → getUpcomingBookings → DB) — and so the sibling @POST/@PUT handlers become paths.
+    // A class reached as a DEPENDENCY shows only its CALLED methods (de-noise, A). EXCEPTION — a CONTAINER-
+    // INVOKED class, whose methods have no in-repo CALLER, so restricting to caller-invoked methods empties it:
+    //   • a cross-stack ROUTE/QUEUE HANDLER (an incident handler edge) — container-invoked, and
+    //   • an INTERFACE IMPL reached via the interface→impl edge — the "caller" is the INTERFACE, which DECLARES
+    //     the methods but never INVOKES them, so caller-files de-noise hides EVERY method (the EJB/DI data-hub
+    //     bean lands as a bare class node, its CRUD + the DB calls inside them unreachable).
+    // For both, surface ALL methods so the grow lands on each operation and chains DOWN to the DB (and the
+    // bidirectional climb can reach the other operations' callers).
     let callerFiles: string[] | undefined;
     if (down && (next.kind === "class" || next.kind === "interface")) {
-      const isHandler = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && isHandlerEdge(e.kind));
-      if (!isHandler) {
+      const containerInvoked = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && (isHandlerEdge(e.kind) || e.kind === "interface-impl"));
+      if (!containerInvoked) {
         const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
         const cf = new Set<string>();
         for (const e of data.edges as any[]) {
