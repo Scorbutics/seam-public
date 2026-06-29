@@ -4,7 +4,7 @@
 // never prune a crossing; complexity is the final tiebreak. The off-intent hub fan is capped in P3, not here.
 // Pure → injected scores.
 import { describe, expect, test } from "bun:test";
-import { _nextFrontier } from "../../src/codebase/grow/orchestrate.js";
+import { _nextFrontier, _nextMove, type Move } from "../../src/codebase/grow/orchestrate.js";
 
 type N = { id: string; complexity?: number };
 const pick = (cand: N[], crossings: string[], score: Record<string, number>, typeRefOnly: string[] = []) =>
@@ -33,5 +33,29 @@ describe("_nextFrontier — connectivity (crossings) first, then intent, then co
     expect(pick([A, B, C], ["B"], { A: 0.9, B: 0.1, C: 0.2 }, ["B"])).toBe("B");
     // among two payload type-refs, intent still decides
     expect(pick([A, B], [], { A: 0.1, B: 0.9 }, ["A", "B"])).toBe("B");
+  });
+});
+
+// _nextMove — the BIDIRECTIONAL frontier: intent BAND outranks CLOSENESS so a clearly-relevant FAR node beats a
+// near generic (the acme failure: a far data-hub consumer starved while near generics ate the budget),
+// while closeness still orders nodes of SIMILAR relevance (the explosion bound). Pure → injected scores/dist.
+describe("_nextMove — intent band beats closeness; closeness breaks ties within a band", () => {
+  const mv = (id: string, dir: "up" | "down" = "up", direction?: string): Move => ({ node: { id, direction }, dir });
+  const pickMove = (moves: Move[], crossings: string[], score: Record<string, number>, dist: Record<string, number>, typeRefOnly: string[] = []) =>
+    _nextMove(moves, new Set(crossings), (n) => score[n.id] ?? 0, new Set(typeRefOnly), (id) => dist[id] ?? 99)?.node.id;
+
+  test("a clearly-relevant FAR node beats a near GENERIC node (the fix)", () => {
+    const near = mv("near"), far = mv("far");
+    // near is generic (low intent, dist 1); far is on-intent (high intent, dist 6). The far one must win.
+    expect(pickMove([near, far], [], { near: 0.1, far: 0.5 }, { near: 1, far: 6 })).toBe("far");
+  });
+  test("among SIMILAR-relevance nodes, the NEAREST wins (closeness is still the bound)", () => {
+    const a = mv("a"), b = mv("b");
+    // same intent band (≈0.5) → closeness decides → the nearer one.
+    expect(pickMove([a, b], [], { a: 0.5, b: 0.52 }, { a: 5, b: 1 })).toBe("b");
+  });
+  test("a CROSSING still leads regardless of intent/closeness (the spine is never starved)", () => {
+    const x = mv("x"), y = mv("y");
+    expect(pickMove([x, y], ["x"], { x: 0.0, y: 0.9 }, { x: 9, y: 1 })).toBe("x");
   });
 });

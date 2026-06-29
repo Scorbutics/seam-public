@@ -260,16 +260,23 @@ export function _nextFrontier<T extends { id: string; complexity?: number }>(
 // A core node at or beyond this hop-distance from the anchor is treated as a SHARED backend hub (its up-climb
 // reaches sibling entry points), not the central seam (whose up-climb is redundant). Env-tunable.
 const _UPCLIMB_MIN_DIST = (() => { const v = parseInt(process.env.SEAM_UPCLIMB_MIN_DIST ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 2; })();
+// Intent BANDS — coarse buckets of the (0..1) intent score so a MEANINGFULLY-more-relevant node jumps the
+// frontier, while CLOSENESS still orders nodes of SIMILAR relevance. Raw intent-before-closeness would let a
+// hair-more-relevant FAR node thrash the budget (and undo the bound); banding only promotes a clearly-relevant
+// one. Env-tunable; the default (8) buckets typical MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent).
+const _INTENT_BANDS = (() => { const v = parseInt(process.env.SEAM_INTENT_BANDS ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 8; })();
 export type Move = { node: any; dir: "up" | "down" };
 export function _nextMove(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move | undefined {
   const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
+  const band = (n: any) => Math.round(iscore(n) * _INTENT_BANDS);                          // coarse intent bucket
   return [...moves].sort((a, b) =>
-    (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY
+    (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY — never prune the spine
     || (Number(!typeRefOnly.has(b.node.id)) - Number(!typeRefOnly.has(a.node.id)))        // (2) DELEGATION over type-ref
-    || (dist(a.node.id) - dist(b.node.id))                                                // (3) CLOSENESS — nearer first (the bound)
-    || (iscore(b.node) - iscore(a.node))                                                  // (4) INTENT
-    || (fwd(b) - fwd(a))                                                                  // (5) original direction before the reverse hop
-    || ((b.node.complexity ?? 0) - (a.node.complexity ?? 0)))[0];                         // (6) complexity
+    || (band(b.node) - band(a.node))                                                      // (3) INTENT band — a clearly-relevant node first (incl. a FAR one)
+    || (dist(a.node.id) - dist(b.node.id))                                                // (4) CLOSENESS — nearest among similar-relevance (the bound)
+    || (iscore(b.node) - iscore(a.node))                                                  // (5) fine intent
+    || (fwd(b) - fwd(a))                                                                  // (6) original direction before the reverse hop
+    || ((b.node.complexity ?? 0) - (a.node.complexity ?? 0)))[0];                         // (7) complexity
 }
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
