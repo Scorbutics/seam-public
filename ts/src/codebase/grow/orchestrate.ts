@@ -15,7 +15,7 @@ import { makeIntentKeyRanker } from "./key_ranker.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
-import { isFlowSubject, isHandlerEdge, resolveCoupling } from "../coupling/index.js";
+import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
 import { _read } from "../scan/ast_units.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -343,8 +343,16 @@ async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts:
 async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, coupled: Set<string>): Promise<void> {
   let counter = (data.nodes ?? []).length;
   let overlay: { nodes: any[]; edges: any[]; blindspots: any[] } = { nodes: [], edges: [], blindspots: [] };
+  // A coupling-overlay node is coupled ONLY if it PRODUCES a boundary — a route/queue/event HANDLER or a data
+  // WRITER (incident produce/handler edge). Such a node is a RESOURCE: reached via ONE of its routes, its file
+  // may serve OTHERS whose consumers we still want (a REST resource reached via its summary route, whose create/
+  // update routes lead to the UI). A pure CONSUMER coupling node (a hub-fan member reading a shared table) is
+  // skipped — re-coupling it only re-fans the hub (keeps hub_damping intact). This is the fix for "the grow
+  // reaches the data bean + its REST resource via one route but never its OTHER routes' UI consumers".
+  const producer = new Set<string>();
+  for (const e of (data.edges ?? [])) if (isHandlerEdge(e.kind) || isProduceEdge(e.kind)) { producer.add(e.from); producer.add(e.to); }
   for (const n of (data.nodes ?? [])) {
-    if (n.coupling) continue;   // a coupling-overlay complement (e.g. a hub-fan member) — re-coupling it re-fans the hub; only couple STRUCTURAL files
+    if (n.coupling && !producer.has(n.id)) continue;   // skip pure-consumer coupling nodes; couple producer/resource ones
     const f = n.file ? normpath(n.file) : "";
     if (!f || coupled.has(f)) continue;
     coupled.add(f);
