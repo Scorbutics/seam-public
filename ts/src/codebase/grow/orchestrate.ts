@@ -266,7 +266,10 @@ const _UPCLIMB_MIN_DIST = (() => { const v = parseInt(process.env.SEAM_UPCLIMB_M
 // one. Env-tunable; the default (8) buckets typical MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent).
 const _INTENT_BANDS = (() => { const v = parseInt(process.env.SEAM_INTENT_BANDS ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 8; })();
 export type Move = { node: any; dir: "up" | "down" };
-export function _nextMove(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move | undefined {
+// ORDER the whole frontier best-first by the same criteria the single-pick walk used. Single-pick takes [0];
+// the WAVEFRONT (flood) mode processes the WHOLE ordered list per wave — same priority, so under a node budget
+// the flood still fills the most-relevant region first (the "spine" is just the degenerate linear flood).
+export function _orderMoves(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move[] {
   const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
   const band = (n: any) => Math.round(iscore(n) * _INTENT_BANDS);                          // coarse intent bucket
   return [...moves].sort((a, b) =>
@@ -276,7 +279,10 @@ export function _nextMove(moves: Move[], crossings: Set<string>, iscore: (n: any
     || (dist(a.node.id) - dist(b.node.id))                                                // (4) CLOSENESS — nearest among similar-relevance (the bound)
     || (iscore(b.node) - iscore(a.node))                                                  // (5) fine intent
     || (fwd(b) - fwd(a))                                                                  // (6) original direction before the reverse hop
-    || ((b.node.complexity ?? 0) - (a.node.complexity ?? 0)))[0];                         // (7) complexity
+    || ((b.node.complexity ?? 0) - (a.node.complexity ?? 0)));                            // (7) complexity
+}
+export function _nextMove(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move | undefined {
+  return _orderMoves(moves, crossings, iscore, typeRefOnly, dist)[0];
 }
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
@@ -369,6 +375,74 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
 // (`_nextFrontier` orders by relevance, then crossing, then complexity) and the excluded set is dropped here.
 // NOTE: per the contract this should be intent-GUIDED, not intent-PRUNED; today the ranking + exclusion still
 // live in the loop (the discover-vs-prune split is the Step-2 change). Structural builds only — never couples.
+
+// Apply ONE (node, direction) expansion to the footprint: build that node's directional footprint, reject a
+// flood (a widely-used util), and merge. Shared by the single-pick walk and the wavefront flood so the two
+// modes differ ONLY in how the frontier is SCHEDULED (one best move per step vs the whole ordered frontier per
+// wave), not in how a move is executed. Returns the (possibly unchanged) footprint and how many nodes it added.
+async function _applyMove(repo: string, data: any, move: Move, label: string, coStruct: any, prune: (g: any) => any, history: any[]): Promise<{ data: any; added: number }> {
+  const next = move.node;
+  const down = move.dir === "down";
+  // QUALIFY with the enclosing class so same-named methods in different classes are distinguishable in the
+  // progress trace (BookingsBean.createBooking vs AcmeCheckBookingsService.createBooking) — grounded on the
+  // node's own `enclosing`, not a file-name guess; omitted when absent or redundant (a class node).
+  const qual = next.enclosing && next.enclosing !== next.symbol ? `${next.enclosing}.${next.symbol}` : next.symbol;
+  emit(`Growing the footprint to its terminals (${label}): ${down ? "↓ down (deps)" : "↑ up (consumers)"} via ${qual}…`);
+  const arrow = down ? "↓down" : "↑up";
+  // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
+  // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
+  // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
+  // A class reached as a DEPENDENCY shows only its CALLED methods (de-noise, A). EXCEPTION — a CONTAINER-
+  // INVOKED class, whose methods have no in-repo CALLER, so restricting to caller-invoked methods empties it:
+  //   • a cross-stack ROUTE/QUEUE HANDLER (an incident handler edge) — container-invoked, and
+  //   • an INTERFACE IMPL reached via the interface→impl edge — the "caller" is the INTERFACE, which DECLARES
+  //     the methods but never INVOKES them, so caller-files de-noise hides EVERY method (the EJB/DI data-hub
+  //     bean lands as a bare class node, its CRUD + the DB calls inside them unreachable).
+  // For both, surface ALL methods so the grow lands on each operation and chains DOWN to the DB (and the
+  // bidirectional climb can reach the other operations' callers).
+  let callerFiles: string[] | undefined;
+  if (down && (next.kind === "class" || next.kind === "interface")) {
+    const containerInvoked = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && (isHandlerEdge(e.kind) || e.kind === "interface-impl"));
+    if (!containerInvoked) {
+      const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
+      const cf = new Set<string>();
+      for (const e of data.edges as any[]) {
+        if (e.from !== next.id && e.to !== next.id) continue;
+        const f = fileById.get(e.from === next.id ? e.to : e.from);
+        if (f && f !== next.file) cf.add(f);
+      }
+      callerFiles = [...cf];
+    }
+  }
+  let add: any;
+  try {
+    add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
+  } catch { dbg(`[grow]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
+  // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
+  // answer — data-coupling fan is exempt (self-bounded + the intent).
+  const have = new Set(data.nodes.map((x: any) => _key(x)));
+  const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
+  if (flood > _MOVE_CAP) { dbg(`[grow]   ${label}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); return { data, added: 0 }; }
+  // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
+  // continues the same way (consumers up, deps down), but each new node may still later reverse.
+  const tag = down ? "backward" : "forward";
+  for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
+  const before = data.nodes.length;
+  const merged = merge_resolved(data, add, add.anchor?.id);
+  const added = merged.nodes.length - before;
+  dbg(`[grow]   ${label}: ${arrow} ${qual} → +${added} node(s)`);
+  history.push({ node: next.symbol, added, ...(down ? { dir: "down" } : {}) });
+  return { data: merged, added };
+}
+
+// WAVEFRONT (flood-fill) mode — opt-in via SEAM_GROW_WAVE. Instead of re-ranking the whole frontier and taking
+// ONE best move per step (re-deriving the role/distance maps every step — O(steps·N) — and re-crossing paths a
+// stabler dedup would have caught), each WAVE recomputes the frontier ONCE and expands EVERY ready head; the
+// nodes a wave adds become the NEXT wave's frontier (classic BFS region-growing). Heads are still processed in
+// relevance order, so a node budget fills the most-relevant region first. The dedup key is file#symbol#dir (the
+// expansion's true identity) — NOT _key's file#line#kind — so a coupling-re-added node isn't re-expanded.
+const _GROW_WAVE = () => process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_GROW_WAVE === "true";
+
 async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, prune: (g: any) => any, excludedFile: (f?: string) => boolean, maxSteps: number, maxNodes: number): Promise<[any, any[]]> {
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
@@ -380,7 +454,22 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     catch { /* embeddings absent → complexity fallback */ }
   }
   const _iscore = (n: any): number => intentScore.get(`${n.symbol} ${normpath(n.file)}`) ?? 0;
-  for (let step = 0; step < maxSteps && data.nodes.length < maxNodes; step++) {
+  const wave = _GROW_WAVE();
+  // EXPANSION IDENTITY. Single-pick keys on `_key`#dir (file#line#kind) — its historical behaviour. The wavefront
+  // keys on file#symbol#dir: the (file, symbol, direction) triple a build_footprint is keyed by, so the SAME
+  // logical node re-added by the coupling overlay at a different line/kind is NOT re-expanded (kills the visible
+  // re-crossing). Mode-local so the default path is byte-identical.
+  const expKey = wave
+    ? (n: any, d: string) => `${normpath(n.file ?? "")}#${n.symbol ?? ""}#${d}`
+    : (n: any, d: string) => `${_key(n)}::${d}`;
+  // SOFT INTENT-BORDER tolerance (wavefront only). Unset → border OFF (flood every reachable node). A float t≥0
+  // floods through a node as long as relevance hasn't fallen more than t below the path's high-water mark.
+  const borderTol = wave && process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null;
+  let moveNo = 0;
+  // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
+  // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
+  // maxSteps (its budget is the move count).
+  for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -407,15 +496,38 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const dist = new Map<string, number>([[anchorId, 0]]);
     for (const queue = [anchorId]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
     const distOf = (id: string) => dist.get(id) ?? 999;
+    // SOFT INTENT-BORDER — the SHAPE: nodes reachable from the anchor along a path whose embedding relevance never
+    // falls more than `borderTol` below the path's high-water mark. Flood toward MORE-relevant nodes freely,
+    // tolerate a shallow dip (a low-embedding bridge that recovers), HALT at a relevance cliff. Fixpoint
+    // relaxation over the field (deterministic / order-independent). No tol or no embeddings → every node in-shape.
+    let inShape: Set<string> | null = null;
+    if (borderTol != null) {
+      const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _iscore(n)]));
+      const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
+      for (let pass = 0, changed = true; changed && pass <= data.nodes.length; pass++) {
+        changed = false;
+        for (const [u, nbrs] of adj) {
+          const pu = peak.get(u); if (pu == null) continue;
+          for (const v of nbrs) {
+            if (pu - (scoreById.get(v) ?? 0) > borderTol) continue;          // a cliff DOWN from the high-water mark
+            const np = Math.max(scoreById.get(v) ?? 0, pu);                  // carry the high-water mark forward
+            if (np > (peak.get(v) ?? -Infinity)) { peak.set(v, np); changed = true; }
+          }
+        }
+      }
+      inShape = new Set(peak.keys());
+      dbg(`[grow] soft border (tol=${borderTol}): shape=${inShape.size}/${data.nodes.length} node(s)`);
+    }
     // BIDIRECTIONAL MOVES — each reached node offers BOTH directions (a dependency may climb back UP to its other
     // consumers — the sibling entry points — not only descend). UP of a CORE node is still skipped (the central
     // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
     const moves: Move[] = [];
     for (const n of data.nodes as any[]) {
       if (n.id === "n1" || n.id === anchorId || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
+      if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
       for (const d of ["up", "down"] as const) {
-        if (expanded.has(`${_key(n)}::${d}`)) continue;
+        if (expanded.has(expKey(n, d))) continue;
         // Skip the UP-climb of a NEAR core node (the central seam — already covered, re-growing it is noise), but
         // ALLOW it for a FAR core node: a shared backend service reached deep in the walk, whose other consumers
         // are the SIBLING entry points (the second UI behind a second route). Distance is the discriminator.
@@ -423,59 +535,30 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         moves.push({ node: n, dir: d });
       }
     }
-    const move = _nextMove(moves, crossings, _iscore, typeRefOnly, distOf);
-    if (!move) break;
-    const next = move.node;
-    const down = move.dir === "down";
-    expanded.add(`${_key(next)}::${move.dir}`);
-    // QUALIFY with the enclosing class so same-named methods in different classes are distinguishable in the
-    // progress trace (BookingsBean.createBooking vs AcmeCheckBookingsService.createBooking) — grounded on the
-    // node's own `enclosing`, not a file-name guess; omitted when absent or redundant (a class node).
-    const qual = next.enclosing && next.enclosing !== next.symbol ? `${next.enclosing}.${next.symbol}` : next.symbol;
-    emit(`Growing the footprint to its terminals (step ${step + 1}): ${down ? "↓ down (deps)" : "↑ up (consumers)"} via ${qual}…`);
-    const arrow = down ? "↓down" : "↑up";
-    // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
-    // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
-    // full decomposition is the SEED anchor's privilege). A pure return-type ref (no calls) thus adds nothing.
-    // A class reached as a DEPENDENCY shows only its CALLED methods (de-noise, A). EXCEPTION — a CONTAINER-
-    // INVOKED class, whose methods have no in-repo CALLER, so restricting to caller-invoked methods empties it:
-    //   • a cross-stack ROUTE/QUEUE HANDLER (an incident handler edge) — container-invoked, and
-    //   • an INTERFACE IMPL reached via the interface→impl edge — the "caller" is the INTERFACE, which DECLARES
-    //     the methods but never INVOKES them, so caller-files de-noise hides EVERY method (the EJB/DI data-hub
-    //     bean lands as a bare class node, its CRUD + the DB calls inside them unreachable).
-    // For both, surface ALL methods so the grow lands on each operation and chains DOWN to the DB (and the
-    // bidirectional climb can reach the other operations' callers).
-    let callerFiles: string[] | undefined;
-    if (down && (next.kind === "class" || next.kind === "interface")) {
-      const containerInvoked = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && (isHandlerEdge(e.kind) || e.kind === "interface-impl"));
-      if (!containerInvoked) {
-        const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
-        const cf = new Set<string>();
-        for (const e of data.edges as any[]) {
-          if (e.from !== next.id && e.to !== next.id) continue;
-          const f = fileById.get(e.from === next.id ? e.to : e.from);
-          if (f && f !== next.file) cf.add(f);
-        }
-        callerFiles = [...cf];
+    const ordered = _orderMoves(moves, crossings, _iscore, typeRefOnly, distOf);
+    if (!ordered.length) break;
+    if (!wave) {
+      // SINGLE-PICK (default): the one best move this step; recompute the frontier next step.
+      const move = ordered[0];
+      expanded.add(expKey(move.node, move.dir));
+      const r = await _applyMove(repo, data, move, `step ${step + 1}`, coStruct, prune, history);
+      data = r.data;
+    } else {
+      // WAVEFRONT (flood): expand EVERY ready head this wave; the nodes it adds become the next wave's frontier.
+      // Heads are taken in relevance order, so a node budget fills the most-relevant region first. The recompute
+      // above ran ONCE for this whole wave (not per move) — the perf win over single-pick.
+      let waveAdded = 0;
+      for (const move of ordered) {
+        if (data.nodes.length >= maxNodes) break;
+        const k = expKey(move.node, move.dir);
+        if (expanded.has(k)) continue;
+        expanded.add(k);
+        const r = await _applyMove(repo, data, move, `wave ${step + 1}·${++moveNo}`, coStruct, prune, history);
+        data = r.data;
+        waveAdded += r.added;
       }
+      if (!waveAdded) break;   // a whole wave added nothing new → the region is fully flooded
     }
-    let add: any;
-    try {
-      add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
-    } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
-    // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
-    // answer — data-coupling fan is exempt (self-bounded + the intent).
-    const have = new Set(data.nodes.map((x: any) => _key(x)));
-    const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
-    if (flood > _MOVE_CAP) { dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
-    // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
-    // continues the same way (consumers up, deps down), but each new node may still later reverse.
-    const tag = down ? "backward" : "forward";
-    for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
-    const before = data.nodes.length;
-    data = merge_resolved(data, add, add.anchor?.id);
-    dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} → +${data.nodes.length - before} node(s)`);
-    history.push({ node: next.symbol, added: data.nodes.length - before, ...(down ? { dir: "down" } : {}) });
   }
   return [data, history];
 }
