@@ -9,6 +9,7 @@ import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
 import { makeCtx, available, lang_for, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
+import { dbg } from "../../core/progress.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Unit, type ResolvedGraph, makeGraph,
@@ -76,7 +77,10 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
       if (!hasMethod && !hasExtends) continue;
       const rel = relative(repo, path);
       const cctx = await makeCtx(text, lang_for(rel)!);
-      if (!cctx) continue;
+      // A candidate CONSUMER file that won't parse (tree-sitter failed / oversized) is silently dropped — its
+      // call sites then never resolve, so a real caller vanishes from the consumer set with no trace. Surface it:
+      // this is exactly how a same-named caller can go missing while a smaller sibling file resolves fine.
+      if (!cctx) { if (hasMethod) dbg(`[callsite] SKIPPED unparseable candidate consumer ${rel} (${text.length} bytes) — its calls to ${[...methods].join("/")} are NOT resolved`); continue; }
       if (hasExtends) for (const [name, bases] of _class_bases(cctx)) globalBases.set(name, bases);
       if (hasMethod) {
         const sites = _method_call_sites(cctx, methods);
