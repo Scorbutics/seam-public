@@ -12,7 +12,7 @@ export interface Args {
   emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean; spineOnly?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   down: boolean; crossFrom?: string;
-  emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number;
+  emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   excludeDirs?: string[]; includeTests: boolean;   // footprint exclusion: folders to drop; tests dropped unless --include-tests
@@ -88,6 +88,7 @@ export function parseArgs(argv: string[]): Args {
       case "--spine-only": a.spineOnly = true; break;   // crop the OFF-intent band (deterministic embed tier) — opt-in token/speed view; off-seams become compact stubs in cluster.omitted
 
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
+      case "--max-nodes": a.maxNodes = parseInt(next() ?? "0", 10) || undefined; break;   // grow node budget (auto mode); unset → engine default (80)
       case "--llm-bridge": a.llmBridge = next(); break;
       case "--check-backend": a.checkBackend = true; break;   // probe: exit 0 (+print kind) if a claude/copilot LLM backend resolves, else 1
       case "--list-passes": a.listPasses = true; break;   // print the LLM pass inventory (tag · tier · note) from the registry

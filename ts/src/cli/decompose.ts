@@ -444,7 +444,12 @@ async function runCodebase(a: Args): Promise<number> {
       const growSymbol = fileAnchor ? "" : a.symbol!;
       // bidirectional is OPT-IN (--bidirectional): default climbs UP (consumers) and adds deps only for a true
       // entry point — descending a mid-spine method's deps gets lost in the data-model type tree (see grow seed).
-      const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests };
+      // GROW BUDGET (auto/det): honour --max-steps / --max-nodes, else the engine's det defaults (12 / 80). The
+      // CLI default maxSteps=4 is for OTHER modes; treat it as "unset" here so the det grow keeps its 12. A deep
+      // flow (a UI → a far data-hub service) needs a bigger budget than 80 to climb all the way — raise both.
+      const growSteps = a.maxSteps > 4 ? a.maxSteps : 12;
+      const growNodes = a.maxNodes ?? 80;
+      const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes };
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
@@ -474,7 +479,7 @@ async function runCodebase(a: Args): Promise<number> {
         // it: once the merge reaches maxNodes, stop adding anchors (no K× blow-up; coverage dedup does the rest).
         const anchors = anchorSet ?? [{ name: a.symbol!, file: a.anchorFile!, kind: fileAnchor ? "module" : "function" }];
         const ctx = new EngineCtx();
-        const maxNodes = 80;   // grow_to_terminals' own per-anchor default — reused as the GLOBAL merged budget
+        const maxNodes = growNodes;   // the per-anchor budget, reused as the GLOBAL merged budget (--max-nodes)
         for (const anc of anchors) {
           if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
           const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx);
