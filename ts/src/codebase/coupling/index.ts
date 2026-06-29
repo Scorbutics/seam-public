@@ -150,8 +150,12 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // honours the size cap (skips minified/generated bundles) and SEAM_NO_ADAPTERS (empty floor).
 // What changes the floor OUTPUT for the same files — folded into the disk-cache key so a config change can't
 // serve a stale index. (Adapter SET is sourced from the registry, not hardcoded.)
+// `alogic` = adapter-LOGIC version: the salt already keys on the adapter SET (kinds), but not on a kind's
+// extraction LOGIC. Bump this when an adapter's scan changes (e.g. endpoint_map multi-line descriptors) so a
+// cached floor re-scans instead of serving pre-fix keys — otherwise a logic fix is invisible on a warm repo.
+const _ADAPTER_LOGIC_VERSION = "2";
 function floorConfigSalt(): string {
-  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|adapters=${ADAPTERS.map((a) => a.kind).join(",")}`;
+  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${ADAPTERS.map((a) => a.kind).join(",")}`;
 }
 
 // One file's RAW floor contribution — the per-file MAP half of the floor build, kept raw (param sites

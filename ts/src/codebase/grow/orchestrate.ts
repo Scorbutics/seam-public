@@ -420,7 +420,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const next = move.node;
     const down = move.dir === "down";
     expanded.add(`${_key(next)}::${move.dir}`);
-    emit(`Growing the footprint to its terminals (step ${step + 1}): ${down ? "↓ down (deps)" : "↑ up (consumers)"} via ${next.symbol}…`);
+    // QUALIFY with the enclosing class so same-named methods in different classes are distinguishable in the
+    // progress trace (BookingsBean.createBooking vs AcmeCheckBookingsService.createBooking) — grounded on the
+    // node's own `enclosing`, not a file-name guess; omitted when absent or redundant (a class node).
+    const qual = next.enclosing && next.enclosing !== next.symbol ? `${next.enclosing}.${next.symbol}` : next.symbol;
+    emit(`Growing the footprint to its terminals (step ${step + 1}): ${down ? "↓ down (deps)" : "↑ up (consumers)"} via ${qual}…`);
     const arrow = down ? "↓down" : "↑up";
     // DE-NOISE a DOWN expansion into a class/interface reached as a DEPENDENCY: pass the files that REACHED it
     // so its down footprint surfaces ONLY the methods those callers actually invoke — not every method (the
@@ -450,19 +454,19 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     let add: any;
     try {
       add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
-    } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
+    } catch { dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); continue; }
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
     // answer — data-coupling fan is exempt (self-bounded + the intent).
     const have = new Set(data.nodes.map((x: any) => _key(x)));
     const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
-    if (flood > _MOVE_CAP) { dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
+    if (flood > _MOVE_CAP) { dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); continue; }
     // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
     // continues the same way (consumers up, deps down), but each new node may still later reverse.
     const tag = down ? "backward" : "forward";
     for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
     const before = data.nodes.length;
     data = merge_resolved(data, add, add.anchor?.id);
-    dbg(`[grow]   step ${step + 1}: ${arrow} ${next.symbol} → +${data.nodes.length - before} node(s)`);
+    dbg(`[grow]   step ${step + 1}: ${arrow} ${qual} → +${data.nodes.length - before} node(s)`);
     history.push({ node: next.symbol, added: data.nodes.length - before, ...(down ? { dir: "down" } : {}) });
   }
   return [data, history];
