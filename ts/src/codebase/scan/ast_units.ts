@@ -41,7 +41,15 @@ export function _name_of(ctx: Ctx, node: any): string | null {
 }
 
 // Every named function/method/class/assigned-function def in the parse, as [name, kind, start, end].
+// Memo the full-tree unit scan by Ctx identity. `makeCtx` returns the SAME Ctx instance for the same (content,
+// grammar) — its own LRU cache — so a file examined more than once in a grow (as a consumer in one build, a
+// candidate / dependency in another) re-traverses its whole tree each time. After the inverted indices, this
+// per-neighbour re-traversal is a chunk of the residual UP/DOWN cost. WeakMap → entries vanish when the Ctx is
+// evicted from the parse cache and GC'd, so it's bounded with no manual eviction. Pure (content-determined).
+const _namedUnitsMemo = new WeakMap<Ctx, Unit[]>();
 export function _named_units(ctx: Ctx): Unit[] {
+  const cached = _namedUnitsMemo.get(ctx);
+  if (cached) return cached;
   const units: Unit[] = [];
   // `inClass` = this node sits DIRECTLY in a class body (not nested inside a function). A funclike there is a
   // METHOD even when its node kind isn't in _METHOD_KINDS — Ruby `def` parses as `method`, a C++ in-class body
@@ -66,6 +74,7 @@ export function _named_units(ctx: Ctx): Unit[] {
     for (const c of ctx.children(n)) visit(c, childInClass);
   };
   visit(ctx.root, false);
+  _namedUnitsMemo.set(ctx, units);
   return units;
 }
 
