@@ -37,6 +37,18 @@ export function resolveExpr(expr: string, consts: Map<string, string>): string |
   return out || null;
 }
 
+// The innermost `{…}` object enclosing `idx` — the descriptor an `endpoint:` lives in. Used to look for a
+// method/verb SIBLING across the WHOLE entry (any line), not just the endpoint's line, so a multi-line
+// `{ endpoint, method }` is recognised while a `{ path, component }` router config (no method/verb) is rejected.
+function _enclosingObject(src: string, idx: number): string {
+  let depth = 0, open = -1;
+  for (let i = idx; i >= 0; i--) { const c = src[i]; if (c === "}") depth++; else if (c === "{") { if (depth === 0) { open = i; break; } depth--; } }
+  if (open < 0) return "";
+  let d = 0;
+  for (let i = open; i < src.length; i++) { if (src[i] === "{") d++; else if (src[i] === "}" && --d === 0) return src.slice(open, i + 1); }
+  return src.slice(open);
+}
+
 export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!_CLIENT_EXT.test(file)) return [];   // declarative CLIENT config is JS/TS/Vue
   const src = masked?.comments ?? maskComments(text);
@@ -48,13 +60,11 @@ export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   const seen = new Set<string>();
   let em: RegExpExecArray | null; _ENDPOINT_RE.lastIndex = 0;
   while ((em = _ENDPOINT_RE.exec(src))) {
-    // require the API-CALL descriptor shape — a `method`/`verb` sibling on the SAME line/entry as the endpoint
-    // — so a plain front-end router config (`{ path: '/home', component: X }`) isn't mistaken for an HTTP route.
-    // (A char window leaked an ADJACENT entry's `method:`; the descriptor map writes one entry per line.)
-    const ls = src.lastIndexOf("\n", em.index) + 1;
-    const le = src.indexOf("\n", em.index);
-    const lineText = src.slice(ls, le === -1 ? src.length : le);
-    if (!/\b(?:method|verb)\b[ \t]*:/.test(lineText)) continue;
+    // require the API-CALL descriptor shape — a `method`/`verb` sibling within the SAME `{…}` descriptor object
+    // — so a front-end router config (`{ path: '/home', component: X }`) isn't mistaken for an HTTP route, while a
+    // MULTI-LINE descriptor (`{ endpoint: …,\n method: … }` — the COMMON real shape) is still recognised. (A
+    // same-LINE check rejected every multi-line entry, so a whole declarative client silently failed to ground.)
+    if (!/\b(?:method|verb)\b[ \t]*:/.test(_enclosingObject(src, em.index))) continue;
     const route = resolveExpr(em[1], consts);
     if (!route || !route.startsWith("/")) continue;
     const value = normPath(route);

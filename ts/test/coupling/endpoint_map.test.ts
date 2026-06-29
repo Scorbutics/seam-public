@@ -31,6 +31,15 @@ describe("endpoint_map adapter — config-driven routes as consume keys", () => 
   test("a router config with no method/verb sibling is NOT mistaken for an HTTP route", () => {
     expect(keys.map((k) => k.value)).not.toContain("/home");
   });
+  test("a MULTI-LINE descriptor is recognised (method/verb sibling is brace-scoped, not same-line)", () => {
+    // the real declarative-client shape: endpoint + method on SEPARATE lines. A same-line check missed these,
+    // so the whole client failed to ground. The enclosing-{} check accepts it; a multi-line router config (no
+    // method/verb anywhere in the entry) is still rejected.
+    const ml = `const baseUrl = '/acme/rest/member/booking/v1';\nconst eps = {\n  createBooking: {\n    endpoint: baseUrl,\n    method: 'post'\n  }\n};\nconst routes = {\n  home: {\n    path: '/home',\n    component: Home\n  }\n};\n`;
+    const vals = scan("web/bookingService.js", ml).map((k) => k.value);
+    expect(vals).toContain("/acme/rest/member/booking/v1");   // multi-line API descriptor grounds
+    expect(vals).not.toContain("/home");                    // multi-line router config still rejected
+  });
   test("only client (JS/TS/Vue) files are scanned", () => {
     expect(scan("BookingsService.java", src)).toEqual([]);
   });
