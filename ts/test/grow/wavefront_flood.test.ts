@@ -51,6 +51,19 @@ describe("wavefront flood — coverage parity, dedup, and the soft intent-border
     expect(flood).toContain("ejb/AcmeCheckBookingsService.java");             // the coupling-reached resource
   }, 60_000);
 
+  test("the maxNodes safety cap is HONEST — hitting it in wave mode flags a flood-safety-cap blindspot", async () => {
+    if (!available()) return;
+    // border OFF + a tiny cap → the flood runs to the cap (the degraded / no-border path). It must SAY the shape
+    // is truncated, not return a silently-incomplete one. (No embeddings needed — deterministic.)
+    process.env.SEAM_GROW_WAVE = "1"; delete process.env.SEAM_GROW_BORDER_TOL;
+    try {
+      const [data]: any = await grow_to_terminals(repo, "web/bookingUI.js", "cancelBooking",
+        { maxSteps: 40, maxNodes: 4, dataCoupling: false, intent: "cancel a booking", ctx: new EngineCtx() } as any);
+      expect(data.nodes.length).toBeGreaterThanOrEqual(4);                                   // ran to the cap
+      expect((data.blindspots ?? []).some((b: any) => b.mechanism === "flood-safety-cap")).toBe(true);
+    } finally { delete process.env.SEAM_GROW_WAVE; }
+  }, 60_000);
+
   test("the soft border halts at the off-intent relevance cliff, keeping the boundary ring", async () => {
     if (!available()) return;
     // GUARD on the transformers model: without embeddings every score is 0 → the border can't fire.

@@ -448,7 +448,14 @@ async function runCodebase(a: Args): Promise<number> {
       // CLI default maxSteps=4 is for OTHER modes; treat it as "unset" here so the det grow keeps its 12. A deep
       // flow (a UI → a far data-hub service) needs a bigger budget than 80 to climb all the way — raise both.
       const growSteps = a.maxSteps > 4 ? a.maxSteps : 12;
-      const growNodes = a.maxNodes ?? 80;
+      // WAVE (flood) mode: the SOFT BORDER is the terminator, so maxNodes is a high runaway SAFETY backstop, not
+      // the budget — the single-pick default of 80 would truncate the shape long before the border. An explicit
+      // --max-nodes still wins. Single-pick keeps 80.
+      // 80 truncates a flood immediately; an unbounded one is minutes (~0.5s/node until per-wave builds are
+      // parallelised). 500 is a runtime-sane safety backstop — big enough for most intent-regions, and an honest
+      // flood-safety-cap blindspot fires if the shape needs more (raise --max-nodes). An explicit --max-nodes wins.
+      const waveGrow = process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_GROW_WAVE === "true";
+      const growNodes = a.maxNodes ?? (waveGrow ? 500 : 80);
       const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes };
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");

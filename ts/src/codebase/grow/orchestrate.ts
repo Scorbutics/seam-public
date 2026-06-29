@@ -448,13 +448,29 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   // INTENT-WEIGHTED FRONTIER: rank the next node to grow by its passage's intent-relevance (cached def
   // embeddings); empty without an intent or embeddings → the complexity fallback. Computed ONCE per grow.
+  const wave = _GROW_WAVE();
+  // INTENT FIELD — per-node relevance from cached def embeddings (empty without an intent/embeddings → the
+  // complexity fallback). SINGLE-PICK uses the whole-repo embed-RECALL field (lexically pre-filtered, computed
+  // ONCE) — its historical behaviour. WAVEFRONT uses a DENSE field: it embeds every REACHED file's defs against
+  // the intent (the scoped `embedScoreDefs` SKIPS the pre-filter), extended incrementally as the flood grows.
+  // The sparse recall field scored on-intent MECHANISM nodes (a busy-times / date-range helper) at 0 and so the
+  // soft border cut them; the dense field scores them honestly, so the border cuts at REAL relevance cliffs.
   const intentScore = new Map<string, number>();
-  if (opts.intent) {
+  const scoredFiles = new Set<string>();
+  const densify = async (): Promise<void> => {       // WAVE: embed the reached files not yet scored
+    if (!opts.intent) return;
+    const want = new Set<string>();
+    for (const n of data.nodes as any[]) { const f = n.file ? normpath(n.file) : ""; if (f && !scoredFiles.has(f)) want.add(f); }
+    if (!want.size) return;
+    for (const f of want) scoredFiles.add(f);
+    try { for (const { def, score } of await embedScoreDefs(repo, opts.intent, want)) intentScore.set(`${def.name} ${normpath(def.file)}`, score); }
+    catch { /* embeddings absent → field stays empty → border OFF (flood-all), unchanged degradation */ }
+  };
+  if (!wave && opts.intent) {
     try { for (const { def, score } of await embedScoreDefs(repo, opts.intent)) { const k = `${def.name} ${normpath(def.file)}`; if (!intentScore.has(k)) intentScore.set(k, score); } }
     catch { /* embeddings absent → complexity fallback */ }
   }
   const _iscore = (n: any): number => intentScore.get(`${n.symbol} ${normpath(n.file)}`) ?? 0;
-  const wave = _GROW_WAVE();
   // EXPANSION IDENTITY. Single-pick keys on `_key`#dir (file#line#kind) — its historical behaviour. The wavefront
   // keys on file#symbol#dir: the (file, symbol, direction) triple a build_footprint is keyed by, so the SAME
   // logical node re-added by the coupling overlay at a different line/kind is NOT re-expanded (kills the visible
@@ -470,6 +486,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
   for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
+    if (wave) await densify();   // score the files this wave can see BEFORE the border + ordering read the field
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -559,6 +576,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       }
       if (!waveAdded) break;   // a whole wave added nothing new → the region is fully flooded
     }
+  }
+  // HONEST BACKSTOP — in wave mode the SOFT BORDER is the intended terminator; maxNodes is only a runaway safety
+  // cap. If the flood hit it (a too-loose / absent border let the flood run to the cap), say so — a silently
+  // truncated shape reads as complete. Single-pick's maxNodes IS its budget, so this is wave-only.
+  if (wave && data.nodes.length >= maxNodes) {
+    (data.blindspots ??= []).push({ node: data.anchor?.id ?? "n1", mechanism: "flood-safety-cap",
+      evidence: `the wavefront flood hit the ${maxNodes}-node safety cap before settling at the intent border — the shape may be incomplete. Tighten the border (lower SEAM_GROW_BORDER_TOL) or raise the node cap (--max-nodes).`,
+      candidates: [] });
   }
   return [data, history];
 }
