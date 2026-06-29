@@ -3,7 +3,7 @@
 // footprint + the question, let it pick ONE node and a DIRECTION (up = consumers / down = deps) that
 // advances toward the answer, expand+merge, repeat — until done or a step budget. The LLM only
 // CHOOSES moves over the deterministic primitives; it never invents an edge.
-import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, registerPass, available as llmAvailable, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit, dbg } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow move picker (node + direction per step)" });
@@ -443,6 +443,61 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
 // expansion's true identity) — NOT _key's file#line#kind — so a coupling-re-added node isn't re-expanded.
 const _GROW_WAVE = () => process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_GROW_WAVE === "true";
 
+// LLM-PRUNE BORDER (wave mode, opt-in via SEAM_GROW_BORDER_LLM) — the validated discriminator. Embedding cosine
+// can't reason that "merge date-ranges" is part of "check availability" (it scored that 0.11 and a booking-
+// lifecycle event 0.47 — wrong-signed); the irreducibly-semantic "is this node ON the intent?" judgement is the
+// LLM's. We keep it OUT of the per-node loop: ONCE PER WAVE, one cheap (haiku, thinking-off) call classifies the
+// wave's NEW candidate ring over a COMPACT skeleton (name + container + file + kind — no bodies), and only the
+// in-scope nodes are flooded through. Frontier-evaluable (a node is judged BEFORE its footprint is built, so the
+// cut subtree is never built), bounded (≈ one call per wave), cached per node (decided once, never re-asked).
+const _GROW_BORDER_LLM = () => process.env.SEAM_GROW_BORDER_LLM === "1" || process.env.SEAM_GROW_BORDER_LLM === "true";
+const PRUNE_PASS = registerPass({ tag: "grow-border", tier: "cheap", note: "wave-level intent border — keep only the candidates ON the intent" });
+const _PRUNE_BATCH = 50;   // candidates per call — small enough for a reliable per-candidate JSON reply
+
+function _candLabel(n: any): string {
+  const encl = n.enclosing && n.enclosing !== n.symbol ? ` (${n.enclosing})` : "";
+  return `${n.symbol}${encl} — ${n.file ? normpath(n.file) : "?"} — ${n.kind ?? "symbol"}`;
+}
+function _prunePrompt(intent: string, cands: { i: number; n: any }[]): string {
+  return [
+    `A developer is mapping the code for ONE intent: "${intent}".`,
+    "",
+    "For EACH candidate symbol below, decide if it is part of the MECHANISM / FLOW that realises THIS intent.",
+    "EXCLUDE a neighbour that belongs to a DIFFERENT concern (another domain, lifecycle/notifications/audit/",
+    "payments, a generic shared utility) even if it sits in the same module or is called nearby. When unsure,",
+    "EXCLUDE — the map should be the intent's spine, not its whole neighbourhood.",
+    "Each line is `[index] name (container) — file — kind`.",
+    "",
+    ...cands.map((c) => `[${c.i}] ${_candLabel(c.n)}`),
+    "",
+    'Output ONLY a JSON array, ONE object per candidate: [{"id":"<index>","keep":true|false}, …]',
+  ].join("\n");
+}
+
+// Classify every not-yet-decided node as in-scope / out, ONE batched call per ≤_PRUNE_BATCH ring, caching the
+// verdict per node id so a node is judged exactly once across the whole grow. `decided` persists across waves.
+async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>): Promise<Set<string>> {
+  decided.set(anchorId, true);   // the anchor is always the intent's centre
+  const undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
+  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) {
+    const batch = undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n }));
+    emit(`Judging the intent border with the LLM (${batch.length} candidate${batch.length === 1 ? "" : "s"})…`);
+    let out: Map<string, any> | null = null;
+    try { out = run_pass(_prunePrompt(opts.intent, batch), { model: opts.model, claudeBin: opts.claudeBin, tag: PRUNE_PASS.tag }); }
+    catch (e) { dbg(`[grow] border-llm: pass failed (${(e as Error).message}) — keeping this ring (degrade to flood)`); }
+    // run_pass keys the Map by each reply object's `id`; here that's the candidate index. A node MISSING from a
+    // parsed reply → EXCLUDE; a whole-batch parse failure / absent backend → KEEP (degrade to flood; cap bounds it).
+    const parsed = !!out && batch.some(({ i }) => out!.has(String(i)));
+    for (const { i, n } of batch) {
+      const v = parsed ? out!.get(String(i)) : null;
+      decided.set(n.id, parsed ? (!!v && (v.keep === true || v.keep === "true")) : true);
+    }
+  }
+  const inScope = new Set<string>();
+  for (const [id, ok] of decided) if (ok) inScope.add(id);
+  return inScope;
+}
+
 async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, prune: (g: any) => any, excludedFile: (f?: string) => boolean, maxSteps: number, maxNodes: number): Promise<[any, any[]]> {
   const history: any[] = [];
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
@@ -481,12 +536,16 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // SOFT INTENT-BORDER tolerance (wavefront only). Unset → border OFF (flood every reachable node). A float t≥0
   // floods through a node as long as relevance hasn't fallen more than t below the path's high-water mark.
   const borderTol = wave && process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null;
+  // LLM-prune border takes precedence over the embedding tol border when on AND a backend exists (else it falls
+  // back to the tol border / flood). `decided` caches each node's in-scope verdict across all waves.
+  const llmPrune = wave && _GROW_BORDER_LLM() && opts.intent && llmAvailable(opts.claudeBin);
+  const decided = new Map<string, boolean>();
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
   for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
-    if (wave) await densify();   // score the files this wave can see BEFORE the border + ordering read the field
+    if (wave && !llmPrune) await densify();   // embedding field for the tol border + ordering; the LLM prune needs neither
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -518,7 +577,10 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // tolerate a shallow dip (a low-embedding bridge that recovers), HALT at a relevance cliff. Fixpoint
     // relaxation over the field (deterministic / order-independent). No tol or no embeddings → every node in-shape.
     let inShape: Set<string> | null = null;
-    if (borderTol != null) {
+    if (llmPrune) {
+      // VALIDATED border: one cheap LLM call per wave judges the new ring; only in-scope nodes flood through.
+      inShape = await _llmPruneInShape(data, anchorId, opts, decided);
+    } else if (borderTol != null) {
       const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _iscore(n)]));
       const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
       for (let pass = 0, changed = true; changed && pass <= data.nodes.length; pass++) {
@@ -584,6 +646,22 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     (data.blindspots ??= []).push({ node: data.anchor?.id ?? "n1", mechanism: "flood-safety-cap",
       evidence: `the wavefront flood hit the ${maxNodes}-node safety cap before settling at the intent border — the shape may be incomplete. Tighten the border (lower SEAM_GROW_BORDER_TOL) or raise the node cap (--max-nodes).`,
       candidates: [] });
+  }
+  // LLM-PRUNE: crop the footprint to the IN-SCOPE set. The border gated flood-THROUGH, but each in-scope node's
+  // build_footprint still added its out-of-scope neighbours (the boundary RING), which dominate the node count on
+  // a dense repo and read as "no discrimination". The SHAPE is the in-scope set, so drop the ring (out-of-scope +
+  // never-judged). Judge the LAST wave's ring first (one final call) so a genuinely-in-scope node added on the
+  // final wave isn't dropped unjudged. Boundary nodes (flow-subjects/coupling) the prune never sees are KEPT.
+  if (llmPrune) {
+    const aId = data.anchor?.id ?? "n1";
+    await _llmPruneInShape(data, aId, opts, decided);
+    const keep = new Set<string>([aId]);
+    for (const n of data.nodes as any[]) { const v = decided.get(n.id); if (v === true || (v === undefined && (isFlowSubject(n.kind) || n.coupling))) keep.add(n.id); }
+    const before = data.nodes.length;
+    data.nodes = (data.nodes as any[]).filter((n) => keep.has(n.id));
+    data.edges = (data.edges as any[]).filter((e) => keep.has(e.from) && keep.has(e.to));
+    if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => keep.has(b.node));
+    dbg(`[grow] llm-border: cropped ${before} → ${data.nodes.length} in-scope node(s)`);
   }
   return [data, history];
 }

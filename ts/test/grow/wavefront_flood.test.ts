@@ -15,6 +15,7 @@ import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { embedScoreDefs } from "../../src/codebase/scan/def_embed.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
+import { set_host_bus, HostBus } from "../../src/core/llm.js";
 
 const filesOf = (data: any): string[] => [...new Set((data.nodes as any[]).map((n) => String(n.file)))].sort();
 
@@ -78,4 +79,35 @@ describe("wavefront flood — coverage parity, dedup, and the soft intent-border
     expect(shaped).toContain("ejb/AcmeCheckBookingsService.java");            // …while the relevant flow is kept
     expect(shaped).toContain("analytics/charts.js");                           // …down to the boundary ring (one node past)
   }, 90_000);
+
+  // LLM-PRUNE border (SEAM_GROW_BORDER_LLM) — judged per wave, then the footprint is CROPPED to the in-scope set.
+  // Deterministic: a fake HostBus stands in for the model, voting keep/drop by file path, so the test pins the
+  // OUTPUT-FORMAT CONTRACT (one {id:<index>,keep:bool} per candidate — the bug was a single {id:"prune",keep:[…]}
+  // envelope that `_collect` dropped, silently degrading every wave to keep-all) without a real LLM.
+  test("the LLM-prune border crops the footprint to the in-scope set (off-intent dropped)", async () => {
+    if (!available()) return;
+    // off-intent `sendEmail` hangs off the availability flow; the fake judge keeps core/avail, drops notify.
+    class FakeJudge extends HostBus {
+      serve(tag: string, prompt: string): string {
+        if (tag !== "grow-border") return "[]";
+        const verdicts: any[] = [];
+        for (const line of prompt.split("\n")) {
+          const m = line.match(/^\[(\d+)\]\s+(.+)$/);
+          if (!m) continue;
+          const file = m[2].split(" — ")[1] ?? "";
+          verdicts.push({ id: m[1], keep: /core\/|avail/.test(file) });   // keep availability mechanism, drop the rest
+        }
+        return JSON.stringify(verdicts);   // ONE object per candidate — the contract under test
+      }
+    }
+    set_host_bus(new FakeJudge());
+    process.env.SEAM_GROW_WAVE = "1"; process.env.SEAM_GROW_BORDER_LLM = "1";
+    try {
+      const [data]: any = await grow_to_terminals(repo, "web/bookingUI.js", "cancelBooking",
+        { maxSteps: 40, maxNodes: 200, dataCoupling: false, intent: "compute booking availability", ctx: new EngineCtx() } as any);
+      const files = filesOf(data);
+      expect(files).toContain("web/bookingUI.js");                               // the anchor is always kept
+      expect(files.some((f) => /analytics\//.test(f))).toBe(false);             // off-intent ring CROPPED, not just un-expanded
+    } finally { set_host_bus(null); delete process.env.SEAM_GROW_WAVE; delete process.env.SEAM_GROW_BORDER_LLM; }
+  }, 60_000);
 });
