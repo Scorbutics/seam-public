@@ -44,6 +44,21 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   return delta;
 }
 
+// Couple ONE reached node's whole file, attaching the bridge to that node. The anchor coupling above is span-
+// precise; this fans coupling over the OTHER boundary-bearing files the seed reached — a HUB anchor
+// (`getBookingService`, no boundary of its own) reaches RESOURCES whose @Path routes must still cross to their
+// consumers. Whole-file (not the node's span) so EVERY handler in the resource crosses, not just one op. The
+// resolveCoupling gate skips a file with no boundary cheaply, so this is bounded to the few real boundaries.
+async function _fileCouplingDelta(repo: string, file: string, anchorId: string, counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+  const empty = { nodes: [], edges: [], blindspots: [], counter };
+  const ar = _read(repo, file);
+  if (!ar) return empty;
+  const hi = (ar[0].match(/\n/g) ?? []).length;
+  const delta = await resolveCoupling(repo, anchorId, file, ar[0], 0, hi, counter, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
+  delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
+  return delta;
+}
+
 // Merge the coupling overlay onto the settled footprint. Re-id any complement that would collide with a
 // structural node id (the grow assigned its own ids while the overlay was held aside); the anchor `n1` and the
 // overlay's internal references stay consistent through the remap.
@@ -283,6 +298,21 @@ async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts:
     const mod: any = prune(await build_footprint(repo, anchorFile, null, { ...coStruct }));
     const modOverlay = await _anchorCouplingDelta(repo, anchorFile, mod, opts, co.ctx);
     if (modOverlay.nodes.length) { data = mod; overlay = modOverlay; }
+  }
+  // FAN over the seed's OTHER reached files — couple each distinct one (whole-file) so a boundary on a REACHED
+  // node (not the anchor) still crosses to its consumers. Without this a hub anchor surfaces no boundary itself
+  // and the resources it reaches never bridge — the footprint narrows to whatever the anchor's own chain found.
+  const anchorNorm = normpath(anchorFile);
+  const seen = new Set<string>([anchorNorm]);
+  let counter = (data.nodes ?? []).length + overlay.nodes.length;
+  for (const n of (data.nodes ?? [])) {
+    const f = n.file ? normpath(n.file) : "";
+    if (!f || seen.has(f)) continue;
+    seen.add(f);
+    const d = await _fileCouplingDelta(repo, n.file, n.id, counter, opts, co.ctx);
+    if (!d.nodes.length) continue;
+    counter = d.counter;
+    overlay = { nodes: [...overlay.nodes, ...d.nodes], edges: [...overlay.edges, ...d.edges], blindspots: [...overlay.blindspots, ...d.blindspots], counter };
   }
   _mergeCouplingOverlay(data, overlay);
   return data;
