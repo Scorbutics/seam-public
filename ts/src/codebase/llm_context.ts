@@ -20,7 +20,17 @@ const rolesOf = (s: Seam): string => {
   return r.length ? r.join(",") : "—";
 };
 const filesOf = (s: Seam): string[] => [...new Set((s.hunks ?? []).map((h) => h.file).filter(Boolean) as string[])];
-const where = (s: Seam): string => s.primary ? `${s.primary.symbol} (${s.primary.file}:${s.primary.line})` : (filesOf(s)[0] ?? "—");
+// The file's container stem (Java: one public class per file = the class; elsewhere the module/file name). Used
+// to QUALIFY a bare method name so two same-named methods in different classes are distinguishable at a glance
+// (the acme case: BookingsBean.createBooking vs AcmeCheckBookingsService.createBooking). Only when it
+// adds information (≠ the symbol, so a class node `BookingsBean` isn't rendered `BookingsBean.BookingsBean`).
+const _container = (f?: string): string => (f ? (f.split("/").pop() ?? f).replace(/\.[^.]+$/, "") : "");
+const where = (s: Seam): string => {
+  if (!s.primary) return filesOf(s)[0] ?? "—";
+  const c = _container(s.primary.file);
+  const qualified = c && c !== s.primary.symbol ? `${c}.${s.primary.symbol}` : s.primary.symbol;
+  return `${qualified} (${s.primary.file}:${s.primary.line})`;
+};
 const facts = (s: Seam): string => {
   const bits: string[] = [];
   if (s.writes && s.writes.length) bits.push(`writes ${s.writes.join(", ")}`);
