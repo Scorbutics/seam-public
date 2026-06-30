@@ -3,7 +3,7 @@
 // footprint + the question, let it pick ONE node and a DIRECTION (up = consumers / down = deps) that
 // advances toward the answer, expand+merge, repeat — until done or a step budget. The LLM only
 // CHOOSES moves over the deterministic primitives; it never invents an edge.
-import { run_pass, registerPass, available as llmAvailable, fastCheapBackend, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, run_pass_async, registerPass, available as llmAvailable, fastCheapBackend, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit, dbg } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow move picker (node + direction per step)" });
@@ -485,11 +485,16 @@ function _prunePrompt(intent: string, cands: { i: number; n: any }[]): string {
 async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>): Promise<Set<string>> {
   decided.set(anchorId, true);   // the anchor is always the intent's centre
   const undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
-  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) {
-    const batch = undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n }));
+  // BATCHES OF ONE WAVE'S ring run CONCURRENTLY — each ≤_PRUNE_BATCH slice is an independent classify over a
+  // DISJOINT candidate set (no cross-batch dependency), so on a wide wave the wall is the slowest batch, not their
+  // sum (the cheap-backend / Ollama path serves concurrent requests). The verdict-write is order-independent
+  // (each batch owns its own nodes); JS runs each .then to completion, so no race on `decided`.
+  const batches: { i: number; n: any }[][] = [];
+  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) batches.push(undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n })));
+  await Promise.all(batches.map(async (batch) => {
     emit(`Judging the intent border with the LLM (${batch.length} candidate${batch.length === 1 ? "" : "s"})…`);
     let out: Map<string, any> | null = null;
-    try { out = run_pass(_prunePrompt(opts.intent, batch), { model: opts.model, claudeBin: opts.claudeBin, tag: PRUNE_PASS.tag }); }
+    try { out = await run_pass_async(_prunePrompt(opts.intent, batch), { model: opts.model, claudeBin: opts.claudeBin, tag: PRUNE_PASS.tag }); }
     catch (e) { dbg(`[grow] border-llm: pass failed (${(e as Error).message}) — keeping this ring (degrade to flood)`); }
     // run_pass keys the Map by each reply object's `id`; here that's the candidate index. A node MISSING from a
     // parsed reply → EXCLUDE; a whole-batch parse failure / absent backend → KEEP (degrade to flood; cap bounds it).
@@ -498,7 +503,7 @@ async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided:
       const v = parsed ? out!.get(String(i)) : null;
       decided.set(n.id, parsed ? (!!v && (v.keep === true || v.keep === "true")) : true);
     }
-  }
+  }));
   const inScope = new Set<string>();
   for (const [id, ok] of decided) if (ok) inScope.add(id);
   return inScope;
@@ -668,6 +673,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     data.edges = (data.edges as any[]).filter((e) => keep.has(e.from) && keep.has(e.to));
     if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => keep.has(b.node));
     dbg(`[grow] llm-border: cropped ${before} → ${data.nodes.length} in-scope node(s)`);
+    (data as any)._borderDecided = decided;   // hand the structural verdicts to the post-coupling border (reuse, don't re-ask)
   }
   // RANKING SIGNAL: when the LLM border judged the flood, IT is the intent signal — the kept footprint is
   // already intent-scoped. So the post-grow embedding RE-rank is redundant (and can mis-score what the LLM
@@ -675,6 +681,25 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // embedding pass and degrades exactly as it does when embeddings are absent (the LLM is the ranker now).
   if (llmPrune) (data as any).llmBorder = true;
   return [data, history];
+}
+
+// BORDER THE COUPLING OVERLAY (the intent gate the data-coupling fan bypasses). The structural border crops the
+// flood to the intent, but the coupling overlay (P3 seed + deep) then fans every shared key/table the on-intent
+// flow touches (`users`, `bookings`, `features`) out to ALL its consumers — auth, org, workflows, app-store,
+// tests — and those complements were AUTO-KEPT, unjudged. So a clean 19-seam availability flow became 169. Run
+// the SAME intent border over the coupling complements, REUSING the structural verdicts (only the new coupling
+// nodes are LLM-judged), and drop the off-intent crossings. The boundary markers (flow-subjects) stay — they
+// anchor a kept crossing; a marker whose complement was dropped is pruned by the dangling-edge filter downstream.
+export async function _borderCoupling(data: any, opts: any, decided: Map<string, boolean>): Promise<void> {
+  const aId = data.anchor?.id ?? "n1";
+  const before = data.nodes.length;
+  await _llmPruneInShape(data, aId, opts, decided);   // judges the as-yet-undecided coupling complements (structural reused)
+  const keep = new Set<string>([aId]);
+  for (const n of data.nodes as any[]) { const v = decided.get(n.id); if (v === true || (v === undefined && isFlowSubject(n.kind))) keep.add(n.id); }
+  data.nodes = (data.nodes as any[]).filter((n) => keep.has(n.id));
+  data.edges = (data.edges as any[]).filter((e) => keep.has(e.from) && keep.has(e.to));
+  if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => keep.has(b.node));
+  dbg(`[grow] coupling-border: cropped ${before} → ${data.nodes.length} node(s) (off-intent crossings pruned)`);
 }
 
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
@@ -701,6 +726,12 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // P3 (deep) — couple the boundary files the bidirectional walk CLIMBED to (sibling resources reached during
   // expand, not in the seed), so their routes cross to their UIs. `coupled` skips the seed files already done.
   if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[grow] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); }
+  // #1 — INTENT-BORDER THE COUPLING OVERLAY: the seed+deep coupling fan bypassed the structural border (its
+  // complements were auto-kept), drowning the on-intent flow in off-intent consumers of shared hub tables. Judge
+  // them with the same border and drop the off-intent ones. Skip the throwaway stable-floor probe (its result is
+  // discarded; only the real grow's footprint is rendered).
+  if (co.dataCoupling !== false && (data as any).llmBorder && (data as any)._borderDecided && !co.ctx?.stableFloor)
+    await _borderCoupling(data, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin }, (data as any)._borderDecided);
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {
