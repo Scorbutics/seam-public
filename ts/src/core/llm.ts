@@ -412,6 +412,13 @@ async function _serveAsync(kind: string, binary: string, prompt: string, model: 
   return { raw: await _run_backend_async(kind, binary, prompt, model, thinking), model };
 }
 
+// The model a pass will ACTUALLY run on, for the at-call-time log — Ollama (cheap tier, when up) shows as
+// `ollama:<model>` rather than the routed claude/haiku. (A rare Ollama hiccup still falls back to claude at
+// serve time; the [timing] line names the real backend either way, so the two logs agree in the normal case.)
+function _effectiveModel(tag: string, routed: string): string {
+  return _HOST_BUS === null && _cheapViaOllama(tag) ? `ollama:${_ollamaModel()}` : routed;
+}
+
 // JSON reply → {id: item} map; per-pass timing emit. Both shared by the two pass runners below.
 function _collect(raw: string, labels: Map<string, any>): void {
   for (const item of extractJsonArray(raw))
@@ -442,7 +449,7 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
   const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
-  _logPass(tag, model, prompt);
+  _logPass(tag, _effectiveModel(tag, model), prompt);
   for (const _attempt of [1, 2]) {
     try {
       const { raw, model: used } = _serve(kind, binary, prompt, model, thinking, tag);
@@ -464,7 +471,7 @@ export async function runPassRawAsync(kind: string, binary: string, prompt: stri
   const labels = new Map<string, any>();
   let lastErr: Error | null = null;
   const t0 = (verbose() || timingOn()) ? performance.now() : 0;   // per-pass wall-clock — LLM cost is important at --verbose
-  _logPass(tag, model, prompt);
+  _logPass(tag, _effectiveModel(tag, model), prompt);
   for (const _attempt of [1, 2]) {
     try {
       const { raw, model: used } = await _serveAsync(kind, binary, prompt, model, thinking, tag);
