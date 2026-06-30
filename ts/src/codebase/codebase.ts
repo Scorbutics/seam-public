@@ -1078,6 +1078,12 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     const ordered: any[] = [];
     for (const ch of coreHunks) { ordered.push(ch); for (const k of (childrenOf.get(ch.id) ?? []).sort(fileLine)) ordered.push(k); }
     for (const t of trailing.sort(fileLine)) ordered.push(t);
+    // DEDUP by (file, span) — the flood-fill can re-reach the same logical node under DIFFERENT ids (and a
+    // caller hunk can land on a member's line), so the same code location would otherwise render as several
+    // identical refs in one seam. Keep the FIRST in core-grouped order (the most representative). The summary
+    // fan hunk (file="") is exempt. Presentation-only; a diff has no such re-reach so it's a no-op there.
+    const _seenLoc = new Set<string>();
+    const deduped = ordered.filter((h) => { if (!h.file) return true; const k = `${h.file}:${h.start}:${h.end}`; return _seenLoc.has(k) ? false : (_seenLoc.add(k), true); });
     const warns: string[] = [];
     for (const i of ids) for (const w of [...(seamWarnings.get(i) ?? []), ...(nodeWarnings.get(i) ?? [])]) if (!warns.includes(w)) warns.push(w);
     // The seam's REPRESENTATIVE (a trustworthy "this is where it lives" pointer): the anchor if this seam
@@ -1088,7 +1094,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
       : ([...ids].filter((i) => g.nodes.get(i)!.role === "core").sort(byCx)[0] ?? [...ids].sort(byCx)[0]);
     const pn = pid ? g.nodes.get(pid) : undefined;
     outSeams.push({ id: s.id, label: s.label, linkOnly: s.linkOnly, uncertain: false, warnings: warns,
-      hunks: ordered, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false,
+      hunks: deduped, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false,
       tier: s.tier, ...(pn ? { primary: { file: pn.file, line: pn.start, symbol: pn.label } } : {}),
       // Intent pass only (additive + conditional → non-intent *_seams oracles stay byte-identical).
       ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
