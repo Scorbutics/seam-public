@@ -12,15 +12,18 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { enumerate_defs } from "../../src/codebase/scan/def_table.js";
+import { enumerate_defs, _resetDefTableMem } from "../../src/codebase/scan/def_table.js";
 
 let REPO: string;
 const w = (rel: string, text: string) => { mkdirSync(join(REPO, rel, ".."), { recursive: true }); writeFileSync(join(REPO, rel), text); };
 const sig = (defs: { name: string; kind: string; file: string; signature: string; enclosing: string; doc: string }[]) =>
   defs.map((d) => `${d.name}|${d.kind}|${d.file}|${d.signature}|${d.enclosing}|${d.doc}`).join("\n");
+// the whole-repo table is memoised IN MEMORY per process; these tests exercise the DISK cache + edit-pickup
+// across what would be SEPARATE runs, so clear the memo before each enumerate to simulate a fresh process.
+const fresh = async (limit: number) => { _resetDefTableMem(); return enumerate_defs(REPO, limit, undefined, { moduleDefs: true }); };
 
-beforeEach(() => { REPO = mkdtempSync(join(tmpdir(), "def-table-")); });
-afterEach(() => { rmSync(REPO, { recursive: true, force: true }); delete process.env.SEAM_INDEX_CACHE; });
+beforeEach(() => { REPO = mkdtempSync(join(tmpdir(), "def-table-")); _resetDefTableMem(); });
+afterEach(() => { rmSync(REPO, { recursive: true, force: true }); delete process.env.SEAM_INDEX_CACHE; _resetDefTableMem(); });
 
 describe("def table — incremental disk cache (correctness, not timing)", () => {
   test("whole-repo enumeration is byte-identical cache ON (cold+warm) vs OFF, and persists to .seam/", async () => {
@@ -28,10 +31,10 @@ describe("def table — incremental disk cache (correctness, not timing)", () =>
     w("src/user.ts", "export const userName = 'x';\nexport function ensureUser() { return true; }\n");
 
     process.env.SEAM_INDEX_CACHE = "0";
-    const direct = await enumerate_defs(REPO, 15000, undefined, { moduleDefs: true });
+    const direct = await fresh(15000);
     delete process.env.SEAM_INDEX_CACHE;
-    const cold = await enumerate_defs(REPO, 15000, undefined, { moduleDefs: true });   // builds the cache
-    const warm = await enumerate_defs(REPO, 15000, undefined, { moduleDefs: true });   // reuses it
+    const cold = await fresh(15000);   // builds the disk cache
+    const warm = await fresh(15000);   // reuses it
 
     expect(direct.length).toBeGreaterThan(0);
     expect(sig(cold)).toBe(sig(direct));   // cache must not change recall
@@ -41,13 +44,13 @@ describe("def table — incremental disk cache (correctness, not timing)", () =>
 
   test("an edit (a new def) is picked up — not served stale", async () => {
     w("src/svc.ts", "export function alpha() { return 1; }\n");
-    const before = await enumerate_defs(REPO, 15000, undefined, { moduleDefs: true });
+    const before = await fresh(15000);
     expect(before.some((d) => d.name === "alpha")).toBe(true);
     expect(before.some((d) => d.name === "beta")).toBe(false);
 
     // re-write the SAME file with an extra def (mtime/size change → that file is re-scanned)
     w("src/svc.ts", "export function alpha() { return 1; }\nexport function beta() { return 2; }\n");
-    const after = await enumerate_defs(REPO, 15000, undefined, { moduleDefs: true });
+    const after = await fresh(15000);
     expect(after.some((d) => d.name === "beta")).toBe(true);   // the edit is reflected, not the stale cache
   });
 });

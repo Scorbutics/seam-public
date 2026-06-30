@@ -189,30 +189,54 @@ async function _scan_defs_file(rel: string, text: string): Promise<{ defs: Def[]
 // so the on-disk cache is invalidated rather than serving stale-shaped defs.
 const _DEF_TABLE_SALT = "def-v1";
 
-export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>, opts: { moduleDefs?: boolean } = {}): Promise<Def[]> {
-  repo = expanduser(repo);
-  const want = files && files.size ? new Set([...files].map(normpath)) : null;
+// WHOLE-REPO def table — assemble the candidate defs (disk-cached per file, so warm re-runs re-parse only the
+// CHANGED files). Returns up to `limit` in candidate order.
+async function _enumerateWholeRepo(repo: string, limit: number, moduleDefs: boolean): Promise<Def[]> {
   const out: Def[] = [];
-  // WHOLE-REPO recall (no `files` scope) is the dominant COLD cost — a full-repo parse paid on every grow (and
-  // again on every anchor selection). Persist each file's parsed contribution to `.seam/def-table.json`
-  // (content-keyed by mtime/size), so a warm re-run re-parses only CHANGED files — the impl/callsite-index
-  // pattern. Scoped (`files`) calls stay on the direct read below: already bounded, and routing a few files
-  // through the whole-repo cache would force a full walk. Kill switch: SEAM_INDEX_CACHE=0 (byte-identical).
-  if (!want && indexCacheEnabled()) {
+  if (indexCacheEnabled()) {
     for (const { data } of await incrementalScanFiles(repo, candidate_source_files(repo), _DEF_TABLE_SALT, _scan_defs_file, "def-table")) {
       for (const d of data.defs) { out.push(d); if (out.length >= limit) return out; }
-      if (opts.moduleDefs) { out.push(data.mod); if (out.length >= limit) return out; }
+      if (moduleDefs) { out.push(data.mod); if (out.length >= limit) return out; }
     }
     return out;
   }
   for (const rel of candidate_source_files(repo)) {
-    if (want && !want.has(normpath(rel))) continue;
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
     const { defs, mod } = await _scan_defs_file(rel, text);
     for (const d of defs) { out.push(d); if (out.length >= limit) return out; }
-    // file-level def AFTER the real ones, so a file with a same-named class (Java) keeps the class on
-    // dedup and only files lacking a representative symbol gain a new candidate. Opt-in (recall path only).
+    if (moduleDefs) { out.push(mod); if (out.length >= limit) return out; }   // file-level def AFTER the real ones
+  }
+  return out;
+}
+
+// IN-MEMORY memo of the whole-repo table — it's re-enumerated SEVERAL times per grow (anchor recall, intent
+// rank, and the grow's own embed pass) and even WARM each call re-runs `git ls-files` + stats every candidate
+// file + reloads/assembles the disk cache (~hundreds of ms on a big repo — the "scanning several times" symptom).
+// The table is STABLE within a process (files don't change mid-grow), so memo it per (repo, limit, moduleDefs).
+// `_resetDefTableMem()` clears it for a process that edits files between enumerations (the incremental test).
+const _defTableMem = new Map<string, Def[]>();
+export function _resetDefTableMem(): void { _defTableMem.clear(); }
+
+export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>, opts: { moduleDefs?: boolean } = {}): Promise<Def[]> {
+  repo = expanduser(repo);
+  const want = files && files.size ? new Set([...files].map(normpath)) : null;
+  if (!want) {   // WHOLE-REPO recall (no `files` scope) — memoised: re-enumerated several times per grow, stable per process
+    const key = `${repo}|${limit}|${!!opts.moduleDefs}`;
+    const hit = _defTableMem.get(key);
+    if (hit) return hit;
+    const out = await _enumerateWholeRepo(repo, limit, !!opts.moduleDefs);
+    _defTableMem.set(key, out);
+    return out;
+  }
+  // SCOPED (`files`) recall — already bounded (a few footprint files); a direct read, not memoised.
+  const out: Def[] = [];
+  for (const rel of candidate_source_files(repo)) {
+    if (!want.has(normpath(rel))) continue;
+    let text: string;
+    try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
+    const { defs, mod } = await _scan_defs_file(rel, text);
+    for (const d of defs) { out.push(d); if (out.length >= limit) return out; }
     if (opts.moduleDefs) { out.push(mod); if (out.length >= limit) return out; }
   }
   return out;
