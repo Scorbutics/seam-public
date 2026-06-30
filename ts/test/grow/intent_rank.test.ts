@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { bandTiers, annotateIntentRelevance, cropOffIntent, markSpineMembers, fillSpineFromTiers } from "../../src/codebase/grow/intent_rank.js";
+import { bandTiers, annotateIntentRelevance, cropOffIntent, markSpineMembers } from "../../src/codebase/grow/intent_rank.js";
 
 describe("rank-banding (pure, deterministic)", () => {
   test("top third → spine, middle → supporting, tail → off", () => {
@@ -70,34 +70,6 @@ describe("markSpineMembers — surface the intent path INSIDE a collapsed (god-o
 
 // REGRESSION: under skeleton (no LLM seam-intent pass) the embedding tiering runs AFTER emit_seams, so the
 // cluster's `spine` array — computed in emit from the tiers present THEN — was frozen empty even though the
-// seams DID get tiered. The renderer keys "## Spine" off `cl.spine`, so the spine section silently vanished
-// (Supporting/Off still rendered from the live tier). fillSpineFromTiers rebuilds an empty spine from the
-// spine-TIER seams so the embedding-ranked spine surfaces in fast mode.
-describe("fillSpineFromTiers — skeleton: rebuild the empty spine from the (late) embedding tiers", () => {
-  test("empty spine → filled with the spine-tier seam ids, in model order", () => {
-    const clusters: any[] = [{ spine: [], seams: [
-      { id: "a", tier: "spine" }, { id: "b", tier: "supporting" }, { id: "c", tier: "spine" }, { id: "d", tier: "off" },
-    ] }];
-    fillSpineFromTiers(clusters);
-    expect(clusters[0].spine).toEqual(["a", "c"]);
-  });
-  test("an already-ordered (LLM/BFS) spine is NEVER clobbered", () => {
-    const clusters: any[] = [{ spine: ["c", "a"], seams: [{ id: "a", tier: "spine" }, { id: "c", tier: "spine" }] }];
-    fillSpineFromTiers(clusters);
-    expect(clusters[0].spine).toEqual(["c", "a"]);   // preserved (BFS order kept), not re-derived to model order
-  });
-  test("no spine-tier seams (embeddings unavailable) → spine left empty (graceful, no Spine section)", () => {
-    const clusters: any[] = [{ spine: [], seams: [{ id: "a" }, { id: "b" }] }];
-    fillSpineFromTiers(clusters);
-    expect(clusters[0].spine).toEqual([]);
-  });
-  test("undefined spine on a tiered cluster is filled", () => {
-    const clusters: any[] = [{ seams: [{ id: "a", tier: "spine" }, { id: "b", tier: "off" }] }];
-    fillSpineFromTiers(clusters);
-    expect(clusters[0].spine).toEqual(["a"]);
-  });
-});
-
 describe("cropOffIntent (--spine-only) — deterministic, honest, lossless-by-reference", () => {
   test("drops tier=off, keeps spine+supporting, leaves stubs in cluster.omitted", () => {
     const clusters = [{ seams: [

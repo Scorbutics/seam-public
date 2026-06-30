@@ -13,7 +13,7 @@ import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
-import { annotateIntentRelevance, cropOffIntent, fillSpineFromTiers } from "../codebase/grow/intent_rank.js";
+import { annotateIntentRelevance, cropOffIntent } from "../codebase/grow/intent_rank.js";
 
 // Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
 // emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present JSON beats no
@@ -21,7 +21,6 @@ import { annotateIntentRelevance, cropOffIntent, fillSpineFromTiers } from "../c
 async function annotateForEmit(repo: string, intent: string | undefined, spineOnly: boolean | undefined, model: any): Promise<void> {
   try {
     const ranked = await annotateIntentRelevance(repo, intent, model.clusters);
-    if (ranked) fillSpineFromTiers(model.clusters);   // skeleton: tiers are set here (post-emit) → rebuild the empty spine from them
     if (spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
   } catch (e) {
     process.stderr.write(`intent-relevance annotation skipped: ${(e as Error).message}\n`);

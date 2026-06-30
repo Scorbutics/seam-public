@@ -63,7 +63,7 @@ describe("intent map: graded tiers + spine ordering", () => {
     expect(seams[0].tier).toBe("spine");                          // the main path leads
     expect(seams[seams.length - 1].tier).toBe("off");             // side-effects last
     expect(model.selectedSeam).toBe(seams.find((s: any) => s.selected)?.id);
-    expect(model.clusters[0].spine[0]).toBe(seams[0].id);         // spine trace starts at the top seam
+    expect(model.clusters[0].spine).toBeUndefined();              // the linear spine trace is retired (region replaces it)
     // REGION metadata (the flood-fill's shape, replacing the spine): every seam carries shell (hops from the
     // anchor) + direction, and the anchor's own seam sits at shell 0.
     for (const s of seams) { expect(typeof s.region?.shell).toBe("number"); expect(typeof s.region?.direction).toBe("string"); }
@@ -282,17 +282,17 @@ describe("structural spine under SKELETON (no LLM) — the real bug: a leaf enum
   };
   test("the booking chain (→ bookings table) is the spine; Role is NOT on it", async () => {
     const m = await decompose(from_resolved_graph(data), { intent: "how an adviser manages bookings from the UI to the database", skeleton: true });
-    const spine: string[] = m.clusters[0].spine ?? [];
-    const byId = new Map<string, any>(m.clusters[0].seams.map((s: any) => [s.id, s]));
-    const labelsIn = (ids: string[]) => new Set(ids.flatMap((id) => (byId.get(id)?.hunks ?? []).map((h: any) => h.label)));
-    const spineLabels = labelsIn(spine);
-    expect(spine.length).toBeGreaterThan(0);              // a spine exists under skeleton (no LLM)
-    expect(spineLabels.has("bookings")).toBe(true);       // the DB culmination IS the main path
-    expect(spineLabels.has("Role")).toBe(false);          // the off-path leaf enum is NOT crowned
-    // and Role's seam still exists in the footprint (excluded from the spine, not dropped)
-    const roleSeam = m.clusters[0].seams.find((s: any) => (s.hunks ?? []).some((h: any) => h.label === "Role"));
+    // The structural backbone is locked to tier=spine (the ●●● relevance the region view dims by) even under
+    // skeleton — by topology, not text. (The linear `cl.spine` trace is retired; the tier carries the signal.)
+    const seams = m.clusters[0].seams;
+    const spineTier = seams.filter((s: any) => s.tier === "spine");
+    const labelsOf = (ss: any[]) => new Set(ss.flatMap((s: any) => (s.hunks ?? []).map((h: any) => h.label)));
+    expect(spineTier.length).toBeGreaterThan(0);          // a backbone is tier=spine under skeleton (no LLM)
+    expect(labelsOf(spineTier).has("bookings")).toBe(true);   // the DB culmination IS on the backbone (●●●)
+    // Role's seam still exists (in the region, just dimmed) but is NOT crowned on the backbone
+    const roleSeam = seams.find((s: any) => (s.hunks ?? []).some((h: any) => h.label === "Role"));
     expect(roleSeam).toBeDefined();
-    expect(spine).not.toContain(roleSeam.id);
+    expect(roleSeam.tier).not.toBe("spine");              // the off-path leaf enum isn't crowned ●●●
   });
 });
 

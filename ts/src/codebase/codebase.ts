@@ -1159,12 +1159,11 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     .map((s) => ({ id: s.id, label: s.label, score: s.culmination as number, tier: s.tier,
       writes: s.writes ?? [], dir: s.dir ?? null }))
     .sort((a, b) => b.score - a.score);
-  // MULTI-PATH (intent only): the intent's distinct flows, one per crossing (load / create / … each cross the
-  // UI⇄DB boundary once). A pure post-pass over the grown seams (no new growth). Only emitted when there's
-  // more than one path — a single-flow footprint keeps just the spine, so existing renders are unchanged.
-  const paths = opts.intent ? extract_paths(g, seams, opts.lead) : [];
+  // The footprint is a flood-fill REGION, not a linear spine/path — the per-seam `region` (shell + direction)
+  // + relevance tier ARE the structure now, so we no longer emit `spine` (an ordered trace) or `paths`
+  // (per-crossing flows). The `tier` stays as the relevance band the region view dims by.
   const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams,
-    ...(spine.length ? { spine } : {}), ...(paths.length > 1 ? { paths } : {}), ...(culminationRanked.length ? { culminationRanked } : {}) }];
+    ...(culminationRanked.length ? { culminationRanked } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
   // policy-vs-flow `shape` + the `lead` slice — only on a BIDIRECTIONAL footprint (decompose passes them);
   // single-direction footprints (the oracle fixtures) emit neither, so byte-identical parity is preserved.

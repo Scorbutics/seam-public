@@ -35,19 +35,6 @@ export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   scored.forEach((s, i) => { (s as any).tier = isOff(s) ? "off" : band(i); });
 }
 
-// Rebuild each cluster's `spine` array from its spine-TIER seams when it's empty. `cl.spine` is computed in
-// emit_seams from the tiers present THEN — under the LLM path the seam-intent pass tiered first, so it's
-// populated; under SKELETON the (deterministic, embedding) tiering runs AFTER emit (annotateIntentRelevance),
-// so emit saw no tiers and froze `spine` empty even though Supporting/Off render fine from the live tier. This
-// fills it so the renderer's "## Spine" section isn't dropped. ONLY fills an empty spine — never clobbers an
-// already-ordered (LLM/BFS) one. Order = the seams' current model order (deterministic, anchor-ward).
-export function fillSpineFromTiers(clusters: any[]): void {
-  for (const cl of clusters ?? []) {
-    if ((cl.spine ?? []).length) continue;
-    const ids = (cl.seams ?? []).filter((s: any) => s.tier === "spine").map((s: any) => s.id);
-    if (ids.length) cl.spine = ids;
-  }
-}
 
 // --spine-only crop: deterministically drop the OFF-intent band (tier === "off"), keeping spine +
 // supporting in full. HONEST + lossless-by-reference — each dropped seam leaves a compact stub
