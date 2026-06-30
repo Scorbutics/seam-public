@@ -330,6 +330,62 @@ async function _run_backend_async(kind: string, binary: string, prompt: string, 
   return kind === "claude" ? _run_claude_async(binary, prompt, model, thinking) : _run_copilot_async(binary, prompt, thinking);
 }
 
+// --- Ollama backend: a LOCAL fast SLM for the CHEAP tier (opt-in) --------------------------------------
+// The `claude -p` subprocess has a ~15s/call FLOOR even on haiku for a 2 KB prompt; a tight cheap-tier
+// classification (the grow-border keep/drop judge — "structure proposes candidates, the model judges which
+// are on-intent") is exactly the small, specific reasoning a local 3B model answers in <1s. Routing the
+// cheap tier to Ollama turns a reliable-but-slow LLM grow (~75s) into reliable-AND-fast (~5s).
+//   • OPT-IN: SEAM_OLLAMA_MODEL=<model> (e.g. qwen2.5:3b). Unset → Ollama OFF, ZERO behaviour change.
+//   • CHEAP TIER ONLY: a `strong` pass (anchoring judge, key discovery) NEVER uses it — it needs the capable model.
+//   • DEGRADES: unset / server unreachable / model missing / a failed call → falls back to claude, so it only
+//     ever makes the cheap tier FASTER, never changes what's reachable.
+// HTTP via `curl` (one mechanism for sync + async, like the engine's other subprocess backends; no fetch so
+// it works identically under bun and the esbuilt .vsix). curl absent → probe fails → claude.
+const _ollamaUrl = (): string => process.env.SEAM_OLLAMA_URL ?? "http://127.0.0.1:11434";
+const _ollamaModel = (): string => process.env.SEAM_OLLAMA_MODEL ?? "";   // unset ⇒ Ollama disabled
+const _ollamaTimeoutS = (): string => String(Math.max(2, Math.ceil(Number(process.env.SEAM_OLLAMA_TIMEOUT ?? 60000) / 1000)));
+let _ollamaOk: boolean | null = null;
+export function _resetOllamaProbe(): void { _ollamaOk = null; }   // tests toggle the env between cases
+function _ollamaAvailable(): boolean {
+  const model = _ollamaModel();
+  if (!model || _HOST_BUS !== null) return false;   // host-bus (MCP sampling) owns the model
+  if (_ollamaOk !== null) return _ollamaOk;
+  const r = _spawnSync("curl", ["-sf", "-m", "2", `${_ollamaUrl()}/api/tags`]);   // reachable AND the model is pulled
+  _ollamaOk = r.status === 0 && r.stdout.includes(model.split(":")[0]);
+  return _ollamaOk;
+}
+// route a CHEAP-tier pass to Ollama (strong tier and unregistered tags stay on claude/copilot)
+export function _cheapViaOllama(tag: string | undefined): boolean {
+  const spec = tag ? _PASS_REGISTRY.get(tag) : undefined;
+  return !!spec && spec.tier === "cheap" && _ollamaAvailable();
+}
+const _ollamaArgs = (): string[] => ["-sf", "-m", _ollamaTimeoutS(), "-X", "POST", `${_ollamaUrl()}/api/generate`,
+  "-H", "content-type: application/json", "-d", "@-"];   // body (model+prompt) on stdin → no argv limit
+const _ollamaBody = (prompt: string): string => JSON.stringify({ model: _ollamaModel(), prompt, stream: false, options: { temperature: 0 } });
+function _parseOllama(p: ProcResult): string {
+  if (p.status !== 0) throw new ClassifierError(`ollama call failed (exit ${p.status}): ${p.stderr.trim().slice(0, 200)}`);
+  let j: any; try { j = JSON.parse(p.stdout); } catch { throw new ClassifierError(`ollama did not return JSON: ${JSON.stringify(p.stdout.slice(0, 200))}`); }
+  if (j.error) throw new ClassifierError(`ollama error: ${j.error}`);
+  _USAGE.record("ollama", { input_tokens: j.prompt_eval_count ?? 0, output_tokens: j.eval_count ?? 0 }, 0, (j.total_duration ?? 0) / 1e6);
+  return String(j.response ?? "");
+}
+function _run_ollama(prompt: string): string { return _parseOllama(_spawnSync("curl", _ollamaArgs(), { input: _ollamaBody(prompt) })); }
+async function _run_ollama_async(prompt: string): Promise<string> { return _parseOllama(await _spawnAsync("curl", _ollamaArgs(), { input: _ollamaBody(prompt) })); }
+
+// Serve ONE pass, picking the backend: host bus (MCP sampling) → Ollama (cheap tier, when up) → claude/copilot.
+// An Ollama hiccup falls back to claude so the cheap pass still answers (never lost to a flaky local server).
+// Returns the reply AND the model actually used (so timing/metering name the real backend).
+function _serve(kind: string, binary: string, prompt: string, model: string, thinking: number | null, tag: string): { raw: string; model: string } {
+  if (_HOST_BUS !== null) return { raw: _HOST_BUS.serve(tag, prompt, model, thinking), model };
+  if (_cheapViaOllama(tag)) { try { return { raw: _run_ollama(prompt), model: `ollama:${_ollamaModel()}` }; } catch { /* local server hiccup → claude */ } }
+  return { raw: _run_backend(kind, binary, prompt, model, thinking), model };
+}
+async function _serveAsync(kind: string, binary: string, prompt: string, model: string, thinking: number | null, tag: string): Promise<{ raw: string; model: string }> {
+  if (_HOST_BUS !== null) return { raw: _HOST_BUS.serve(tag, prompt, model, thinking), model };
+  if (_cheapViaOllama(tag)) { try { return { raw: await _run_ollama_async(prompt), model: `ollama:${_ollamaModel()}` }; } catch { /* local server hiccup → claude */ } }
+  return { raw: await _run_backend_async(kind, binary, prompt, model, thinking), model };
+}
+
 // JSON reply → {id: item} map; per-pass timing emit. Both shared by the two pass runners below.
 function _collect(raw: string, labels: Map<string, any>): void {
   for (const item of extractJsonArray(raw))
@@ -363,10 +419,8 @@ export function runPassRaw(kind: string, binary: string, prompt: string, model: 
   _logPass(tag, model, prompt);
   for (const _attempt of [1, 2]) {
     try {
-      const raw = _HOST_BUS !== null
-        ? _HOST_BUS.serve(tag, prompt, model, thinking)
-        : _run_backend(kind, binary, prompt, model, thinking);
-      _emitTiming(t0, tag, model, prompt.length);
+      const { raw, model: used } = _serve(kind, binary, prompt, model, thinking, tag);
+      _emitTiming(t0, tag, used, prompt.length);
       _collect(raw, labels);
       break;
     } catch (e) { lastErr = e as Error; }
@@ -387,10 +441,8 @@ export async function runPassRawAsync(kind: string, binary: string, prompt: stri
   _logPass(tag, model, prompt);
   for (const _attempt of [1, 2]) {
     try {
-      const raw = _HOST_BUS !== null
-        ? _HOST_BUS.serve(tag, prompt, model, thinking)
-        : await _run_backend_async(kind, binary, prompt, model, thinking);
-      _emitTiming(t0, tag, model, prompt.length);
+      const { raw, model: used } = await _serveAsync(kind, binary, prompt, model, thinking, tag);
+      _emitTiming(t0, tag, used, prompt.length);
       _collect(raw, labels);
       break;
     } catch (e) { lastErr = e as Error; }
