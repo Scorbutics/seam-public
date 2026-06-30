@@ -47,6 +47,29 @@ describe("renderLlmContext member rendering", () => {
   });
 });
 
+describe("renderLlmContext region view (spine retired)", () => {
+  const regionModel = {
+    mode: "codebase", anchor: "ensureAvailable", resolutionQuality: "FULL", complete: true, blindspots: [],
+    clusters: [{ id: "g1", intent: "availability", seams: [
+      { id: "a", label: "Anchor entry", tier: "spine", region: { shell: 0, direction: "" }, primary: { file: "a.ts", line: 1, symbol: "foo" }, hunks: [] },
+      { id: "d1", label: "A dep", tier: "spine", region: { shell: 1, direction: "down" }, primary: { file: "d.ts", line: 5, symbol: "dep" }, hunks: [] },
+      { id: "d2", label: "Peripheral dep", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "e.ts", line: 9, symbol: "side" }, hunks: [] },
+      { id: "u1", label: "A consumer", tier: "supporting", region: { shell: 1, direction: "up" }, primary: { file: "u.ts", line: 3, symbol: "caller" }, hunks: [] },
+    ] }],
+  };
+  test("renders a Region grouped by direction + shell, dimmed by relevance — and NO spine/supporting/off sections", () => {
+    const out = renderLlmContext(regionModel);
+    expect(out).toContain("## Region");
+    expect(out).toContain("the anchor:");
+    expect(out).toContain("↓ deps (how it works)");
+    expect(out).toContain("↑ consumers (who uses it)");
+    expect(out).toContain("[1] A dep");                    // shell annotation
+    expect(out).toContain("●●● [1] A dep");                // on-intent dimming
+    expect(out).toContain("● [2] Peripheral dep");         // peripheral dimmed IN PLACE (not exiled to "off")
+    for (const gone of ["## Spine", "## Supporting", "## Off-path", "## Paths"]) expect(out).not.toContain(gone);
+  });
+});
+
 describe("renderLlmContext off-intent gate", () => {
   const base = (intentMatch: any) => ({ mode: "codebase", anchor: "X", resolutionQuality: "FULL", complete: true, blindspots: [], intentMatch, clusters: [{ id: "g1", intent: "X", spine: [], seams: [] }] });
   test("offIntent → ⚠ warning + ranked alternative anchors", () => {

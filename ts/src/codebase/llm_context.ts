@@ -309,7 +309,6 @@ export function renderLlmContext(model: any): string {
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
   const byId = new Map(seams.map((s) => [s.id, s]));
-  const spineIds: string[] = cl.spine ?? [];
   const anchorSym = cl.intent ?? model.anchor ?? "?";
   const out: string[] = [];
 
@@ -328,28 +327,29 @@ export function renderLlmContext(model: any): string {
     out.push("");
   }
 
-  // PATHS — an intent is a multi-call graph (a load path, a create path, …), each crossing the UI⇄DB boundary
-  // once. When the footprint spans more than one such path, render each as its own ordered trace; a single-flow
-  // footprint falls back to the one SPINE below. The path closest to the anchor is listed first.
-  const paths: any[] = cl.paths ?? [];
-  const renderStep = (s: Seam, i: number) => { out.push(`  ${i + 1}. ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); for (const ml of memberLines(s)) out.push(ml); };
-  if (paths.length > 1) {
-    out.push(`## Paths (this intent spans ${paths.length} flows, read each in order)`);
-    paths.forEach((p, pi) => {
-      const cross = p.crossingValue || p.crossingKind ? ` · via ${p.crossingKind ?? "crossing"}${p.crossingValue ? ` ${p.crossingValue}` : ""}` : "";
-      out.push(`### Path ${pi + 1}: ${p.label}${cross}`);
-      (p.steps ?? []).map((id: string) => byId.get(id)).filter(Boolean).forEach((s: Seam, i: number) => renderStep(s, i));
-    });
-    out.push("");
-  } else {
-    // SPINE — the main path, in trace order (anchor → … → outcome). The one section a consumer reads first.
-    const spine = spineIds.map((id) => byId.get(id)).filter(Boolean) as Seam[];
-    if (spine.length) {
-      out.push("## Spine (main path, read in order)");
-      spine.forEach((s, i) => renderStep(s, i));
-      out.push("");
-    }
-  }
+  // REGION — the flood-fill's actual shape: the anchor + its reach, by DIRECTION (↓ deps = how it works /
+  // ↑ consumers = who uses it / ↕ both) and within each by SHELL (hops from the anchor), DIMMED by intent
+  // relevance (the model's tier → ●●● on-intent · ●● related · ● peripheral). This replaces the linear "spine":
+  // a flood produces a REGION, not a path, so peripheral seams are dimmed IN PLACE, not exiled to an "off"
+  // section, and the whole footprint is visible at once rather than a thin trace. Skeleton (no tiers) → ●● all.
+  const reld = (s: Seam) => (model.skeleton ? "●●" : s.tier === "spine" ? "●●●" : s.tier === "off" ? "●" : "●●");
+  const relRank = (s: Seam) => (s.tier === "spine" ? 0 : s.tier === "off" ? 2 : 1);
+  const shellOf = (s: Seam) => ((s as any).region?.shell ?? -1);
+  const dirOf = (s: Seam) => ((s as any).region?.direction ?? "");
+  const regionLine = (s: Seam) => { const h = shellOf(s); out.push(`  ${reld(s)} ${h >= 0 ? `[${h}] ` : ""}${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); for (const ml of memberLines(s)) out.push(ml); };
+  const bucket = (title: string, members: Seam[]) => {
+    if (!members.length) return;
+    out.push(title);
+    members.sort((a, b) => (shellOf(a) - shellOf(b)) || (relRank(a) - relRank(b))).forEach(regionLine);
+  };
+  out.push(`## Region (the anchor's flood-fill — [N]=hops out, ●●● on-intent · ●● related · ● peripheral)`);
+  const anchorSeams = seams.filter((s) => shellOf(s) === 0);
+  for (const s of anchorSeams) { out.push("the anchor:"); regionLine(s); }
+  bucket("↓ deps (how it works), nearest first:", seams.filter((s) => shellOf(s) !== 0 && dirOf(s) === "down"));
+  bucket("↑ consumers (who uses it), nearest first:", seams.filter((s) => shellOf(s) !== 0 && dirOf(s) === "up"));
+  bucket("↕ both directions:", seams.filter((s) => shellOf(s) !== 0 && dirOf(s) === "both"));
+  bucket("· (direction not set):", seams.filter((s) => shellOf(s) !== 0 && !["up", "down", "both"].includes(dirOf(s))));
+  out.push("");
 
   // CULMINATION — ranked with confidence, NOT a single boolean. The selected pick is flagged but the
   // runners-up are kept so a consumer can see how close (and how trustworthy) the climax is.
@@ -366,27 +366,11 @@ export function renderLlmContext(model: any): string {
     out.push("");
   } else if (model.selectedSeam) {
     const s = byId.get(model.selectedSeam);
-    if (s) out.push("## Culmination", `- ${s.label} — ${where(s)} (topology fallback: far end of the spine)`, "");
+    if (s) out.push("## Culmination", `- ${s.label} — ${where(s)} (topology fallback: deepest on-intent seam)`, "");
   }
 
-  const list = (title: string, items: Seam[], withMembers = false) => {
-    if (!items.length) return;
-    out.push(`## ${title}`);
-    for (const s of items) { out.push(`- ${s.label} — ${where(s)}  [roles: ${rolesOf(s)}]${facts(s)}${lineageOf(s)}`); if (withMembers) for (const ml of memberLines(s)) out.push(ml); }
-    out.push("");
-  };
-  // count a seam as "already shown" if it's in the spine OR in any rendered path, so multi-path output
-  // doesn't re-list its own steps under "Other spine seams".
-  const spineSet = new Set<string>([...spineIds, ...paths.flatMap((p: any) => p.steps ?? [])]);
-  list("Supporting", seams.filter((s) => s.tier === "supporting"), true);
-  // OFF-path: every one, never collapsed (the deliberate difference from the human view).
-  list("Off-path (full — not collapsed)", seams.filter((s) => s.tier === "off"));
-  // Spine seams not already shown in the ordered list (defensive — usually none).
-  list("Other spine seams", seams.filter((s) => s.tier === "spine" && !spineSet.has(s.id)));
-  // SKELETON mode: the LLM seam-intent pass was skipped, so seams carry no tier. List every non-spine
-  // seam flat so the consuming LLM still sees the full reached set (it tiers/labels them itself — that
-  // judgement is its job, not ours, for an LLM consumer). Gated on the flag → zero change to full mode.
-  if (model.skeleton) list("Other reached code (untiered)", seams.filter((s) => !spineSet.has(s.id)));
+  // (Supporting / Off-path / skeleton sections are gone — the Region above shows EVERY seam, dimmed by
+  // relevance in place, so nothing is exiled to a separate "off" list or hidden behind a spine.)
 
   // BLINDSPOTS — the recall→verify baton: where the static trace stopped, with SUGGESTED candidates to chase.
   const bs: any[] = model.blindspots ?? [];
@@ -434,20 +418,20 @@ export function renderLlmContext(model: any): string {
     // SKELETON: no LLM tiers/labels were assigned (this output is for an LLM, which tiers/labels better
     // itself than a pre-pass would). So describe the skeleton, not the absent Culmination/Off-path sections.
     out.push(
-      "Read the Spine top-to-bottom for the mechanism (when present). The other seams are everything the",
-      "trace reached — judge yourself which are on-path vs incidental; the labels are structural (symbol",
+      "The Region is the anchor's reach: ↓ deps = how it works, ↑ consumers = who uses it, [N] = hops out.",
+      "No tiers were assigned (this is for an LLM — judge relevance yourself); labels are structural (symbol",
       "names), so read the code to confirm intent. Blindspot candidates are unproven leads to chase.",
       "Seam footprints COMPOSE: when one ends at a cross-stack blindspot you care about (a data-flow",
       "boundary to a frontend/other service), run a SECOND Seam anchored on the other side and stitch the",
       "two together — that's faster and more complete than a manual grep sweep.");
   else
     out.push(
-      paths.length > 1 ? "Read each Path top-to-bottom — they are the intent's distinct flows (one per crossing). Treat the Culmination ranking as confidence, not"
-      : "Read the Spine top-to-bottom for the mechanism. Treat the Culmination ranking as confidence, not",
-      "fact — verify the top pick (the single climax is unreliable on backend cron/queue flows). Off-path",
-      "seams are related but a different concern. Blindspot candidates are unproven leads to chase.",
-      "Seam footprints COMPOSE: when one ends at a cross-stack blindspot you care about (a data-flow",
-      "boundary to a frontend/other service), run a SECOND Seam anchored on the other side and stitch the",
-      "two together — that's faster and more complete than a manual grep sweep.");
+      "The Region is the anchor's flood-fill: ↓ deps (how it works) / ↑ consumers (who uses it), [N] = hops",
+      "from the anchor, and each seam is dimmed by intent relevance (●●● on-intent → ● peripheral) IN PLACE —",
+      "the whole footprint at once, no thin path. Treat the Culmination ranking as confidence, not fact —",
+      "verify the top pick (the single climax is unreliable on backend cron/queue flows). Blindspot candidates",
+      "are unproven leads to chase. Seam footprints COMPOSE: when one ends at a cross-stack blindspot you care",
+      "about (a data-flow boundary to a frontend/other service), run a SECOND Seam anchored on the other side",
+      "and stitch the two together — that's faster and more complete than a manual grep sweep.");
   return out.join("\n");
 }
