@@ -463,17 +463,40 @@ async function _learn(
 // repo-wide pass ("grow from the diff": a change touching no DB/route/queue/event pays ~nothing). Returns true
 // = PROCEED. Ruby is exempt (carrier coupling isn't span-local) and footprint-scoped is already bounded AND the
 // gate is chicken-and-egg cold (the rule that would key the anchor isn't learned yet) — both bypass to true.
+// SIGNAL #5 of the L3 trigger — a route/HANDLER file by convention. A RECALL NET (which files are worth the
+// per-anchor LLM, NOT a meaning judgement — the structural↔semantic rule): the purest implicit keys (a Rails
+// `resources` route, a controller's convention route) have NO key LITERAL to ground a deterministic signal on,
+// so the file's handler shape is the only cheap signal it MIGHT carry a deducible boundary. Deliberately broad
+// (recall over precision — a false positive is just one extra LLM probe). Extensible across stacks.
+export function _handlerShaped(file: string): boolean {
+  const segs = file.toLowerCase().split("/");
+  if (segs.some((s) => ["controllers", "controller", "handlers", "routes", "endpoints", "resolvers", "webhooks"].includes(s))) return true;
+  const base = segs[segs.length - 1];
+  return base === "route.ts" || base === "route.js"
+    || /(_controller\.rb|controller\.(ts|js|java|kt|cs|php|py)|\.handler\.(ts|js)|_handler\.go|resource\.java)$/.test(base);
+}
+
 async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText: string, lo: number, hi: number, llmOpts: _LlmOpts, opts: CouplingOpts, ctx: EngineCtx): Promise<boolean> {
-  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake") || ctx.footprintFiles) return true;
+  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake")) return true;   // carrier (Ruby) coupling isn't span-local
+  const footprint = !!ctx.footprintFiles;
+  // GROUNDED L3 TRIGGER — a footprint grow used to BYPASS this gate (return true), so the per-anchor LLM
+  // (anchorProposedKeys) ran on EVERY coupled node = a per-file LLM sweep that finds nothing 95%+ of the time on
+  // a big repo. Now a footprint grow runs the gate too, so L3 fires ONLY where a GROUNDED boundary signal (below)
+  // says a key is plausible. SEAM_ANCHOR_KEYS=1 restores the always-probe bypass (a test asserting a signal-less
+  // implicit key sets it). Non-footprint is UNCHANGED (it keeps the per-anchor LLM fallback at the end).
+  if (footprint && process.env.SEAM_ANCHOR_KEYS === "1") return true;
   const inSpan = (line: number) => line >= lo && line <= hi;
-  if (scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;
-  const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);   // getParameter(CONST)/addParameter(CONST) sites
+  if (scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;          // 1 — floor keys
+  const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);                 // 3 — getParameter(CONST)/addParameter(CONST) sites
   if (sites.some((s) => inSpan(s.line))) return true;
-  if (!ctx.stableFloor && resolveHttpCallSites(anchorFile, anchorText, await _effectClients(repo, ctx)).some((h) => inSpan(h.line))) return true;
-  if (!ctx.stableFloor) for (const { matcher } of listMatchers(repo)) {   // learned matchers — not in a stable-floor probe
+  if (!ctx.stableFloor && resolveHttpCallSites(anchorFile, anchorText, await _effectClients(repo, ctx)).some((h) => inSpan(h.line))) return true;   // 2 — http I/O
+  if (_handlerShaped(anchorFile)) return true;                                                  // 5 — route/handler file (the implicit-key recall net)
+  if (!ctx.stableFloor) for (const { matcher } of listMatchers(repo)) {   // 4 — learned matchers (not in a stable-floor probe)
     if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) return true;
   }
-  if (opts.llm) {
+  // LLM fallback — NON-footprint only. A footprint grow must NOT per-node LLM-probe (that's the L3 sweep this
+  // trigger exists to prune); it relies on the grounded signals above. Non-footprint keeps the probe (unchanged).
+  if (!footprint && opts.llm) {
     const lk = await import("./llm_key_index.js");
     if ((await lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx)).length > 0) return true;
   }
