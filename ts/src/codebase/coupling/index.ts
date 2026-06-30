@@ -432,19 +432,21 @@ async function _learn(
   // anchor's module directory (lazy, per-module warm).
   const scope = module_scope(repo, anchorFile);
   const scopeFiles = ctx.footprintFiles;
-  // BOUND THE PER-NODE LLM PROBE TO THE STABLE FOOTPRINT. anchorProposedKeys is a per-node LLM key discovery
-  // (the `discover-keys-batch` pass). On a footprint grow the WAVE/LLM border reaches files BEYOND the
-  // deterministic floor footprint (ctx.footprintFiles), and WHICH files vary run-to-run — so probing them is
-  // uncacheable churn: a different boundary-file set each run ⇒ discover-keys re-runs warm and never settles
-  // (the ~107s warm cost on cal.com). llmKeyIndex's OWN per-file discovery is already scoped to
-  // ctx.footprintFiles; scope the per-node probe the SAME way so a warm run hits the per-file cache. The
-  // wave-only files still ground via the repo-wide MATCHER rules (applyMatchers, deterministic, unscoped) —
-  // no recall loss, just no per-node LLM on the unstable frontier. Non-footprint grows (no scopeFiles) keep
-  // the per-node probe unchanged.
+  // L3 (the PER-ANCHOR LLM key probe) is DEFAULT-OFF on a footprint grow. anchorProposedKeys is the per-file
+  // LLM discovery (`discover-keys-batch`) applied per node. On a footprint grow L2 — the matcher flywheel
+  // (llmKeyIndex, footprint-scoped, clustered, cached, deterministic repo-wide) — already covers the couplings,
+  // so the per-node L3 probe is the redundant "finds nothing 95% of the time" pass: measured on cal.com (2
+  // anchors) it grounded 0–1 UNIQUE couplings (the lone hit a test-scaffolding file) for 37–98s of cold sonnet,
+  // and it churned warm (the wave frontier varies run-to-run → never cache-settles). So a footprint grow runs on
+  // L1 (floor) + L2 (matcher rules); the per-anchor L3 is OPT-IN via SEAM_ANCHOR_KEYS=1 (for a genuinely
+  // cross-stack repo where it might add a real edge), and even then it stays BOUND to ctx.footprintFiles so the
+  // opt-in path still warm-caches. NON-footprint single-anchor grows (no scopeFiles) keep L3 unconditionally —
+  // there's no footprint-scoped L2 pass there, and implicit-key recall (the regression tests) depends on it.
   const inFootprint = !scopeFiles || scopeFiles.has(anchorFile);
+  const probe = !scopeFiles || (process.env.SEAM_ANCHOR_KEYS === "1" && inFootprint);
   const [llmKeyIndex, proposedKeys] = await Promise.all([
     lk.llmKeyIndex(repo, { ...llmOpts, scope, scopeFiles }, ctx),
-    inFootprint ? lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx) : Promise.resolve([] as KeyHit[]),
+    probe ? lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx) : Promise.resolve([] as KeyHit[]),
   ]);
 
   // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). It is gated to
