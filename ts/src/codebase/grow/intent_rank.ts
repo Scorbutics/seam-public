@@ -9,6 +9,24 @@
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
 import { embedScoreDefs } from "../scan/def_embed.js";
 
+// Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
+// emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present result beats none.
+// Mutates `model` in place; on failure leaves seams un-annotated and the --spine-only crop off.
+export async function annotateForEmit(repo: string, intent: string | undefined, spineOnly: boolean | undefined, model: any): Promise<void> {
+  // When the LLM border shaped the grow (model.llmBorder), the kept footprint is ALREADY intent-scoped by the
+  // LLM — so the embedding RE-rank is redundant and can mis-score what the LLM correctly kept (the documented
+  // 0.11-on-a-real-mechanism-node case). Skip it and degrade exactly as when embeddings are absent (the LLM is
+  // the ranker). Embeddings stay the deterministic FALLBACK ranker only when there's no LLM border (no backend).
+  if (model.llmBorder) { if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true }; return; }
+  try {
+    const ranked = await annotateIntentRelevance(repo, intent, model.clusters);
+    if (spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
+  } catch (e) {
+    process.stderr.write(`intent-relevance annotation skipped: ${(e as Error).message}\n`);
+    if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true };
+  }
+}
+
 // Rank-banded tier from a seam's position in the relevance ordering — threshold-free (no magic cosine
 // cutoff that drifts per repo/model): the top band is the spine, the middle is supporting, the tail is off.
 // Deterministic given the scores. A coarse 3-band split — the consumer refines if it wants.

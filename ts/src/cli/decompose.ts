@@ -13,20 +13,7 @@ import { assign_spans } from "../diff/classifier_det.js";
 import * as engine from "../diff/engine.js";
 import { emit_seams_json } from "../diff/seams.js";
 import { ledgerSnapshot } from "../codebase/coupling/ledger.js";
-import { annotateIntentRelevance, cropOffIntent } from "../codebase/grow/intent_rank.js";
-
-// Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
-// emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present JSON beats no
-// JSON at all. Mutates `model` in place; on failure leaves seams un-annotated and the --spine-only crop off.
-async function annotateForEmit(repo: string, intent: string | undefined, spineOnly: boolean | undefined, model: any): Promise<void> {
-  try {
-    const ranked = await annotateIntentRelevance(repo, intent, model.clusters);
-    if (spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
-  } catch (e) {
-    process.stderr.write(`intent-relevance annotation skipped: ${(e as Error).message}\n`);
-    if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true };
-  }
-}
+import { annotateForEmit } from "../codebase/grow/intent_rank.js";
 
 // OFF-INTENT GATE — honest "this anchor's footprint doesn't relate to the intent" + ranked alternative
 // anchors to re-run on. Uses the relevance the annotate pass already set: if the BEST seam is below the floor
@@ -472,6 +459,7 @@ async function runCodebase(a: Args): Promise<number> {
       };
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
       let hist: any[] = [];
+      let llmBorder = false;   // any anchor whose grow was shaped by the LLM border → skip the embedding re-rank
       try {
         // MULTI-ANCHOR: grow each entry point in the covering set through ONE shared ctx and MERGE — the model
         // already carries multiple anchor roots and P3 emits a path per crossing, so the merged footprint shows
@@ -484,6 +472,7 @@ async function runCodebase(a: Args): Promise<number> {
           if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
           const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx);
           hist = hist.concat(h.map((x: any) => ({ ...x, anchor: anc.name })));
+          if ((d as any).llmBorder) llmBorder = true;   // the LLM border shaped this grow → it is the intent ranker (survives the merge)
           data = data ? mergeFootprints(data, d, d.anchor?.id) : d;
         }
       }
@@ -493,12 +482,13 @@ async function runCodebase(a: Args): Promise<number> {
       emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
+      if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       const nSeams = (model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
       const usage = get_usage().as_dict();
       if (usage) model2.usage = usage;
-      emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);
-      await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // deterministic embed relevance (guarded — never blocks emit)
+      if (!llmBorder) emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);   // LLM border already ranked → no embedding pass
+      await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // embed relevance (guarded; skipped when the LLM border ranked)
       applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
       const payload = JSON.stringify(stamped);

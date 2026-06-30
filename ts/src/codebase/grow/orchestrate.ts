@@ -669,6 +669,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => keep.has(b.node));
     dbg(`[grow] llm-border: cropped ${before} → ${data.nodes.length} in-scope node(s)`);
   }
+  // RANKING SIGNAL: when the LLM border judged the flood, IT is the intent signal — the kept footprint is
+  // already intent-scoped. So the post-grow embedding RE-rank is redundant (and can mis-score what the LLM
+  // correctly kept — the documented 0.11-on-a-real-mechanism-node case). Stamp it so the emit skips the
+  // embedding pass and degrades exactly as it does when embeddings are absent (the LLM is the ranker now).
+  if (llmPrune) (data as any).llmBorder = true;
   return [data, history];
 }
 
