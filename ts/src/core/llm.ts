@@ -341,18 +341,39 @@ async function _run_backend_async(kind: string, binary: string, prompt: string, 
 //     ever makes the cheap tier FASTER, never changes what's reachable.
 // HTTP via `curl` (one mechanism for sync + async, like the engine's other subprocess backends; no fetch so
 // it works identically under bun and the esbuilt .vsix). curl absent → probe fails → claude.
+// Env-only (the library reads no files): the COMPOSITION ROOT (CLI main / MCP server) applies the provisioned
+// `~/.seam/slm.json` to these env vars at startup via applySlmConfigToEnv(), so tests + library callers that
+// don't set them get the default (Ollama OFF) and never see a host's config.
 const _ollamaUrl = (): string => process.env.SEAM_OLLAMA_URL ?? "http://127.0.0.1:11434";
-const _ollamaModel = (): string => process.env.SEAM_OLLAMA_MODEL ?? "";   // unset ⇒ Ollama disabled
-const _ollamaTimeoutS = (): string => String(Math.max(2, Math.ceil(Number(process.env.SEAM_OLLAMA_TIMEOUT ?? 60000) / 1000)));
+const _ollamaModel = (): string => process.env.SEAM_OLLAMA_MODEL ?? "";   // empty ⇒ Ollama disabled
+const _ollamaTimeoutS = (): string => String(Math.max(2, Math.ceil(Number(process.env.SEAM_OLLAMA_TIMEOUT ?? 120000) / 1000)));
 let _ollamaOk: boolean | null = null;
 export function _resetOllamaProbe(): void { _ollamaOk = null; }   // tests toggle the env between cases
+const _sleep = (ms: number): void => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* SAB unavailable → skip */ } };
+function _probeOllama(): boolean {   // server reachable AND the model is pulled (so a generate call will work)
+  const r = _spawnSync("curl", ["-sf", "-m", "2", `${_ollamaUrl()}/api/tags`]);
+  return r.status === 0 && r.stdout.includes(_ollamaModel().split(":")[0]);
+}
+// Auto-start the MANAGED ollama binary (recorded in slm.json by the provisioner) when the server isn't up —
+// so a provisioned SLM "just works" after a reboot without the user re-running `ollama serve`. Best-effort:
+// spawn detached, wait ~6s for the PORT (not the model load), degrade to claude if it never comes up.
+function _ensureManagedServer(): void {
+  const bin = process.env.SEAM_OLLAMA_BIN;   // set from slm.json by the composition root; absent ⇒ reuse a server the user runs
+  if (!bin || !existsSync(bin)) return;
+  try {
+    const host = _ollamaUrl().replace(/^https?:\/\//, "");
+    spawn(bin, ["serve"], { detached: true, stdio: "ignore", env: { ...process.env, OLLAMA_HOST: host } }).unref();
+    for (const deadline = Date.now() + 6000; Date.now() < deadline; _sleep(300))
+      if (_spawnSync("curl", ["-sf", "-m", "1", `${_ollamaUrl()}/api/tags`]).status === 0) return;
+  } catch { /* best-effort */ }
+}
 function _ollamaAvailable(): boolean {
   const model = _ollamaModel();
   if (!model || _HOST_BUS !== null) return false;   // host-bus (MCP sampling) owns the model
   if (_ollamaOk !== null) return _ollamaOk;
-  const r = _spawnSync("curl", ["-sf", "-m", "2", `${_ollamaUrl()}/api/tags`]);   // reachable AND the model is pulled
-  _ollamaOk = r.status === 0 && r.stdout.includes(model.split(":")[0]);
-  return _ollamaOk;
+  if (_probeOllama()) return (_ollamaOk = true);
+  _ensureManagedServer();                            // not up → try to start the provisioned binary, then re-probe
+  return (_ollamaOk = _probeOllama());
 }
 // route a CHEAP-tier pass to Ollama (strong tier and unregistered tags stay on claude/copilot)
 export function _cheapViaOllama(tag: string | undefined): boolean {

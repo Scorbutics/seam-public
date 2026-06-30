@@ -635,6 +635,12 @@ async function runCodebase(a: Args): Promise<number> {
 }
 
 async function main(argv: string[]): Promise<number> {
+  // `seam slm …` — provision/inspect the local fast SLM (Ollama) that serves the cheap-tier grow-border judge.
+  // A subcommand, not a flag, so it's claimed before parseArgs.
+  if (argv[0] === "slm") { const { runSlm } = await import("./slm.js"); return runSlm(argv.slice(1)); }
+  // Apply the provisioned local-SLM config (seam slm install) to the env the engine reads — the CLI is a
+  // composition root, so this is where zero-config defaults are wired (env still wins). Library/tests skip it.
+  (await import("../core/slm_config.js")).applySlmConfigToEnv();
   const a = parseArgs(argv);
   // --verbose is the single user-facing diagnostics surface: hand it to the cross-cutting stderr sites
   // (coupling-debug, anchor-debug, sub-step timing) via SEAM_VERBOSE, which `verbose()`/`timingOn()` read.
