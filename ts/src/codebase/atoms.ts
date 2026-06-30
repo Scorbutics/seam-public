@@ -87,12 +87,32 @@ export function lang_for(filePath: string): string | null {
 
 export class Ctx {
   constructor(public content: string, public root: any) {}
-  ln(off: number): number { let c = 0; for (let i = 0; i < off && i < this.content.length; i++) if (this.content[i] === "\n") c++; return c; }
+  // --- per-Ctx memos (the parse tree is IMMUTABLE, so every derivation is content-determined and cacheable).
+  // These are the in-TS analogue of the future native FileFacts pass: walk the WASM tree ONCE, cache the
+  // cheap scalars, then answer every extractor over JS-side data instead of re-crossing the boundary per node.
+  private _allNodes: any[] | null = null;   // every node, pop-order (one whole-tree walk)
+  private _allTypes: string[] | null = null; // its `.type` cached in parallel — so collect() never re-reads .type across the boundary
+  private _lineStarts: number[] | null = null; // offset of each line start, for O(log n) ln()
+  private _ensureAll(): void {
+    if (this._allNodes) return;
+    const nodes: any[] = [], types: string[] = [], st = [this.root];
+    while (st.length) { const x = st.pop(); nodes.push(x); types.push(x.type); const cc = x.childCount; for (let i = 0; i < cc; i++) { const c = x.child(i); if (c) st.push(c); } }
+    this._allNodes = nodes; this._allTypes = types;
+  }
+  ln(off: number): number {
+    if (!this._lineStarts) { const ls = [0], s = this.content; for (let i = 0; i < s.length; i++) if (s[i] === "\n") ls.push(i + 1); this._lineStarts = ls; }
+    const ls = this._lineStarts; let lo = 0, hi = ls.length - 1, ans = 0;
+    while (lo <= hi) { const mid = (lo + hi) >> 1; if (ls[mid] <= off) { ans = mid; lo = mid + 1; } else hi = mid - 1; }
+    return ans;   // largest line-start index ≤ off == count of '\n' before off (byte-identical to the old linear scan)
+  }
   span(n: any): [number, number] { return [this.ln(n.startIndex), this.ln(n.endIndex)]; }
   children(n: any): any[] { const out: any[] = []; for (let i = 0; i < n.childCount; i++) { const c = n.child(i); if (c) out.push(c); } return out; }
   text(n: any): string { return this.content.slice(n.startIndex, n.endIndex); }
   col(off: number): number { return off - (this.content.lastIndexOf("\n", off - 1) + 1); }
   collect(root: any, pred: (k: string) => boolean): any[] {
+    // Whole-tree collect (the common, expensive case, re-run ~6× per file across a grow) reads the memoised
+    // single walk — same pop-order, same pred(type), so byte-identical output with the boundary crossings paid ONCE.
+    if (root === this.root) { this._ensureAll(); const out: any[] = [], ns = this._allNodes!, ts = this._allTypes!; for (let i = 0; i < ns.length; i++) if (pred(ts[i])) out.push(ns[i]); return out; }
     const out: any[] = []; const st = [root];
     while (st.length) { const x = st.pop(); if (pred(x.type)) out.push(x); st.push(...this.children(x)); }
     return out;
