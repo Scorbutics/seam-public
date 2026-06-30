@@ -432,9 +432,19 @@ async function _learn(
   // anchor's module directory (lazy, per-module warm).
   const scope = module_scope(repo, anchorFile);
   const scopeFiles = ctx.footprintFiles;
+  // BOUND THE PER-NODE LLM PROBE TO THE STABLE FOOTPRINT. anchorProposedKeys is a per-node LLM key discovery
+  // (the `discover-keys-batch` pass). On a footprint grow the WAVE/LLM border reaches files BEYOND the
+  // deterministic floor footprint (ctx.footprintFiles), and WHICH files vary run-to-run — so probing them is
+  // uncacheable churn: a different boundary-file set each run ⇒ discover-keys re-runs warm and never settles
+  // (the ~107s warm cost on cal.com). llmKeyIndex's OWN per-file discovery is already scoped to
+  // ctx.footprintFiles; scope the per-node probe the SAME way so a warm run hits the per-file cache. The
+  // wave-only files still ground via the repo-wide MATCHER rules (applyMatchers, deterministic, unscoped) —
+  // no recall loss, just no per-node LLM on the unstable frontier. Non-footprint grows (no scopeFiles) keep
+  // the per-node probe unchanged.
+  const inFootprint = !scopeFiles || scopeFiles.has(anchorFile);
   const [llmKeyIndex, proposedKeys] = await Promise.all([
     lk.llmKeyIndex(repo, { ...llmOpts, scope, scopeFiles }, ctx),
-    lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx),
+    inFootprint ? lk.anchorProposedKeys(repo, anchorFile, anchorText, llmOpts, ctx) : Promise.resolve([] as KeyHit[]),
   ]);
 
   // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). It is gated to
