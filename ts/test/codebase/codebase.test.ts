@@ -64,6 +64,10 @@ describe("intent map: graded tiers + spine ordering", () => {
     expect(seams[seams.length - 1].tier).toBe("off");             // side-effects last
     expect(model.selectedSeam).toBe(seams.find((s: any) => s.selected)?.id);
     expect(model.clusters[0].spine[0]).toBe(seams[0].id);         // spine trace starts at the top seam
+    // REGION metadata (the flood-fill's shape, replacing the spine): every seam carries shell (hops from the
+    // anchor) + direction, and the anchor's own seam sits at shell 0.
+    for (const s of seams) { expect(typeof s.region?.shell).toBe("number"); expect(typeof s.region?.direction).toBe("string"); }
+    expect(seams.some((s: any) => s.region.shell === 0)).toBe(true);
   });
 });
 

@@ -1012,6 +1012,21 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
   };
 
   const fileLine = (a: any, b: any) => (a.file < b.file ? -1 : a.file > b.file ? 1 : a.start - b.start);
+  // REGION metadata — the flood-fill's NATURAL shape (what replaces a linear spine): each node's HOP DISTANCE
+  // from the anchor (the wave shell it was reached on) + the DIRECTION it was reached from (↑ consumers /
+  // ↓ deps). A seam's `shell` = its nearest node; `direction` = its dominant. BFS over the UNDIRECTED resolved
+  // graph, computed once. Intent-gated on emit → non-intent oracles stay byte-identical. (The region view reads
+  // this; the spine is being retired in favour of it.)
+  const _dist = new Map<string, number>([[g.anchor, 0]]);
+  { const adj = new Map<string, string[]>();
+    for (const e of g.resolved_edges()) { (adj.get(e.src) ?? adj.set(e.src, []).get(e.src)!).push(e.dst); (adj.get(e.dst) ?? adj.set(e.dst, []).get(e.dst)!).push(e.src); }
+    for (const q = [g.anchor]; q.length;) { const u = q.shift()!; const du = _dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!_dist.has(v)) { _dist.set(v, du + 1); q.push(v); } } }
+  const _seamRegion = (ids: string[]): { shell: number; direction: string } => {
+    const shells = ids.map((i) => _dist.get(i)).filter((d): d is number => d !== undefined);
+    const dirs = ids.map((i) => (g.nodes.get(i) as any)?.direction).filter(Boolean);
+    const up = dirs.filter((d) => d === "forward").length, down = dirs.filter((d) => d === "backward").length;
+    return { shell: shells.length ? Math.min(...shells) : -1, direction: up && down ? "both" : down ? "down" : up ? "up" : "" };
+  };
   const outSeams: any[] = [];
   for (const s of seams) {
     const ids = [...s.node_ids].sort((i, j) => fileLine(g.nodes.get(i)!, g.nodes.get(j)!));
@@ -1098,6 +1113,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
       tier: s.tier, ...(pn ? { primary: { file: pn.file, line: pn.start, symbol: pn.label } } : {}),
       // Intent pass only (additive + conditional → non-intent *_seams oracles stay byte-identical).
       ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
+      ...(opts.intent ? { region: _seamRegion(ids) } : {}),   // wave-shell + direction (the region view's structure)
       ...(s.writes && s.writes.length ? { writes: s.writes } : {}), ...(s.dir ? { dir: s.dir } : {}) });
   }
 
