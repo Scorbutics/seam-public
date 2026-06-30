@@ -93,3 +93,35 @@ export async function incrementalScanAsync<T>(
   if (timingOn()) process.stderr.write(`[index-cache] ${cacheName}: ${reused} reused, ${rescanned} re-scanned\n`);
   return out;
 }
+
+// Like incrementalScanAsync, but the caller supplies the EXACT file list (and its ORDER) instead of a
+// walk+predicate — for an index whose candidate set is computed elsewhere with rules a raw walk can't
+// reproduce (the def table's gitignore-aware, oversize-filtered, sorted `candidate_source_files`). Same
+// per-file (mtime,size) caching to `.seam/<name>.json`; returns one entry per still-existing file, in the
+// caller's order, so the assembled result is byte-identical to a full re-scan.
+export async function incrementalScanFiles<T>(
+  repo: string, rels: string[], configSalt: string,
+  scanFile: (rel: string, text: string) => Promise<T>, cacheName: string,
+): Promise<{ rel: string; data: T }[]> {
+  const salt = `${_CACHE_VERSION}|${configSalt}`;
+  const path = _cachePath(repo, cacheName);
+  let prev: CacheFile<T>["files"] = {};
+  try { if (existsSync(path)) { const c = JSON.parse(readFileSync(path, "utf-8")) as CacheFile<T>; if (c && c.salt === salt && c.files) prev = c.files; } } catch { /* corrupt → rebuild */ }
+
+  const out: { rel: string; data: T }[] = [];
+  const next: CacheFile<T>["files"] = {};
+  let reused = 0, rescanned = 0;
+  for (const rel of rels) {
+    let st; try { st = statSync(join(repo, rel)); } catch { continue; }
+    const m = Math.round(st.mtimeMs), s = st.size;
+    const hit = prev[rel];
+    let data: T;
+    if (hit && hit.m === m && hit.s === s) { data = hit.d; reused++; }       // unchanged → reuse the cached parse
+    else { let text; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; } data = await scanFile(rel, text); rescanned++; }
+    next[rel] = { m, s, d: data };
+    out.push({ rel, data });
+  }
+  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  if (timingOn()) process.stderr.write(`[index-cache] ${cacheName}: ${reused} reused, ${rescanned} re-scanned\n`);
+  return out;
+}

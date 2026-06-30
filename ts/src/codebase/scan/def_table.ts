@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
 import { endsWithSourceExt, provider_for, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { walk, normpath } from "../../core/resolve/walk.js";
+import { incrementalScanFiles, indexCacheEnabled } from "../../core/resolve/index_cache.js";
 import { defs_in_file_treesitter } from "./def_treesitter.js";
 import { SCAN } from "./config.js";
 
@@ -171,27 +172,48 @@ export function module_def(rel: string, text: string): Def {
   return { name: base, kind: "module", file: rel, signature: `module ${base}`, enclosing: "", doc: doc.trim().slice(0, _DOC_CAP), body: _body_window(lines, -1) };
 }
 
+// PER-LANGUAGE def extraction for ONE file → its real defs + the file-level module def. The regex extractor
+// (`defs_in_file`) is TS/JS-syntax-specific: it parses TS/JS fine and is the extractor the embed-recall gate
+// was validated with, so KEEP it for TS/JS — no reason to swap a validated path (tree-sitter is more accurate
+// but an unvalidated change for TS embed ranking). For the OTHER languages the regex is near-blind (it found
+// ~1 def across a whole Java repo), so use the language-agnostic tree-sitter extractor there (regex fallback
+// when grammars are absent — the offline .vsix). The module def is cheap (string ops, no parse) so it's
+// always computed and cached; whether it's emitted is the assembler's `moduleDefs` decision.
+async function _scan_defs_file(rel: string, text: string): Promise<{ defs: Def[]; mod: Def }> {
+  const defs = provider_for(rel)?.name === "typescript"
+    ? defs_in_file(rel, text)
+    : (await defs_in_file_treesitter(rel, text)) ?? defs_in_file(rel, text);
+  return { defs, mod: module_def(rel, text) };
+}
+// Bump on any change to the per-file def EXTRACTION (defs_in_file / defs_in_file_treesitter / module_def)
+// so the on-disk cache is invalidated rather than serving stale-shaped defs.
+const _DEF_TABLE_SALT = "def-v1";
+
 export async function enumerate_defs(repo: string, limit = 4000, files?: Set<string>, opts: { moduleDefs?: boolean } = {}): Promise<Def[]> {
   repo = expanduser(repo);
   const want = files && files.size ? new Set([...files].map(normpath)) : null;
   const out: Def[] = [];
+  // WHOLE-REPO recall (no `files` scope) is the dominant COLD cost — a full-repo parse paid on every grow (and
+  // again on every anchor selection). Persist each file's parsed contribution to `.seam/def-table.json`
+  // (content-keyed by mtime/size), so a warm re-run re-parses only CHANGED files — the impl/callsite-index
+  // pattern. Scoped (`files`) calls stay on the direct read below: already bounded, and routing a few files
+  // through the whole-repo cache would force a full walk. Kill switch: SEAM_INDEX_CACHE=0 (byte-identical).
+  if (!want && indexCacheEnabled()) {
+    for (const { data } of await incrementalScanFiles(repo, candidate_source_files(repo), _DEF_TABLE_SALT, _scan_defs_file, "def-table")) {
+      for (const d of data.defs) { out.push(d); if (out.length >= limit) return out; }
+      if (opts.moduleDefs) { out.push(data.mod); if (out.length >= limit) return out; }
+    }
+    return out;
+  }
   for (const rel of candidate_source_files(repo)) {
     if (want && !want.has(normpath(rel))) continue;
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
-    // PER-LANGUAGE def extraction. The regex extractor (`defs_in_file`) is TS/JS-syntax-specific: it
-    // parses TS/JS fine and is the extractor the embed-recall gate was validated with, so KEEP it for
-    // TS/JS — no reason to swap a validated path (tree-sitter is more accurate but an unvalidated change
-    // for TS embed ranking). For the OTHER languages the regex is near-blind (it found ~1 def across a
-    // whole Java repo), so use the language-agnostic tree-sitter extractor there (regex fallback when
-    // grammars are absent — the offline .vsix).
-    const defs = provider_for(rel)?.name === "typescript"
-      ? defs_in_file(rel, text)
-      : (await defs_in_file_treesitter(rel, text)) ?? defs_in_file(rel, text);
+    const { defs, mod } = await _scan_defs_file(rel, text);
     for (const d of defs) { out.push(d); if (out.length >= limit) return out; }
     // file-level def AFTER the real ones, so a file with a same-named class (Java) keeps the class on
     // dedup and only files lacking a representative symbol gain a new candidate. Opt-in (recall path only).
-    if (opts.moduleDefs) { out.push(module_def(rel, text)); if (out.length >= limit) return out; }
+    if (opts.moduleDefs) { out.push(mod); if (out.length >= limit) return out; }
   }
   return out;
 }
