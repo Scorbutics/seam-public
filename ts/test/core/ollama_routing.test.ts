@@ -7,7 +7,7 @@
 //   3. configured-but-unreachable degrades to false (no Ollama server on the test host → claude).
 // Pure routing decision (no real HTTP / no model needed) → green offline / in CI.
 import { describe, expect, test, afterEach } from "bun:test";
-import { registerPass, _cheapViaOllama, _resetOllamaProbe } from "../../src/core/llm.js";
+import { registerPass, _cheapViaOllama, fastCheapBackend, _resetOllamaProbe } from "../../src/core/llm.js";
 
 registerPass({ tag: "test-ollama-cheap", tier: "cheap" });
 registerPass({ tag: "test-ollama-strong", tier: "strong" });
@@ -40,5 +40,12 @@ describe("cheap-tier Ollama routing — opt-in + degrading", () => {
     process.env.SEAM_OLLAMA_MODEL = "qwen2.5:3b";
     _resetOllamaProbe();
     expect(_cheapViaOllama("no-such-pass")).toBe(false);
+  });
+
+  // fastCheapBackend() gates the wave+LLM-border grow DEFAULT: false here ⇒ the grow stays on the instant
+  // deterministic picker (so offline / no-Ollama behaviour + the grow oracles are unchanged).
+  test("fastCheapBackend() is false without a configured+reachable Ollama (grow default stays det)", () => {
+    delete process.env.SEAM_OLLAMA_MODEL; _resetOllamaProbe();
+    expect(fastCheapBackend()).toBe(false);
   });
 });

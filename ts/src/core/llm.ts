@@ -359,6 +359,11 @@ export function _cheapViaOllama(tag: string | undefined): boolean {
   const spec = tag ? _PASS_REGISTRY.get(tag) : undefined;
   return !!spec && spec.tier === "cheap" && _ollamaAvailable();
 }
+// A FAST local cheap-tier backend is configured + reachable (Ollama). The grow uses this to decide its
+// DEFAULT picker: a fast SLM makes the reliable wave+LLM-border grow also fast (~45s vs ~75s on claude's
+// per-call floor), so it's worth defaulting ON; without it, the grow stays on the instant deterministic
+// picker. Cached probe; false under the host bus (MCP owns the model).
+export function fastCheapBackend(): boolean { return _ollamaAvailable(); }
 const _ollamaArgs = (): string[] => ["-sf", "-m", _ollamaTimeoutS(), "-X", "POST", `${_ollamaUrl()}/api/generate`,
   "-H", "content-type: application/json", "-d", "@-"];   // body (model+prompt) on stdin → no argv limit
 const _ollamaBody = (prompt: string): string => JSON.stringify({ model: _ollamaModel(), prompt, stream: false, options: { temperature: 0 } });

@@ -48,7 +48,7 @@ import { render } from "../diff/report_text.js";
 import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
-import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
+import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage, fastCheapBackend } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
 import { emit, emitTimingSummary } from "../core/progress.js";
 import { readFileSync } from "node:fs";
@@ -454,7 +454,10 @@ async function runCodebase(a: Args): Promise<number> {
       // 80 truncates a flood immediately; an unbounded one is minutes (~0.5s/node until per-wave builds are
       // parallelised). 500 is a runtime-sane safety backstop — big enough for most intent-regions, and an honest
       // flood-safety-cap blindspot fires if the shape needs more (raise --max-nodes). An explicit --max-nodes wins.
-      const waveGrow = process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_GROW_WAVE === "true";
+      // Mirror orchestrate's _GROW_WAVE default (env override, else ON when a fast SLM backend is configured)
+      // so the node BUDGET matches the picker the grow will actually run — else an 80-cap truncates a flood.
+      const wEnv = process.env.SEAM_GROW_WAVE;
+      const waveGrow = (wEnv === undefined || wEnv === "") ? fastCheapBackend() : (wEnv === "1" || wEnv === "true");
       const growNodes = a.maxNodes ?? (waveGrow ? 500 : 80);
       const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes };
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);

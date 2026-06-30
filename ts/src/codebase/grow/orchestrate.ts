@@ -3,7 +3,7 @@
 // footprint + the question, let it pick ONE node and a DIRECTION (up = consumers / down = deps) that
 // advances toward the answer, expand+merge, repeat — until done or a step budget. The LLM only
 // CHOOSES moves over the deterministic primitives; it never invents an edge.
-import { run_pass, registerPass, available as llmAvailable, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, registerPass, available as llmAvailable, fastCheapBackend, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit, dbg } from "../../core/progress.js";
 
 const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow move picker (node + direction per step)" });
@@ -441,7 +441,13 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
 // nodes a wave adds become the NEXT wave's frontier (classic BFS region-growing). Heads are still processed in
 // relevance order, so a node budget fills the most-relevant region first. The dedup key is file#symbol#dir (the
 // expansion's true identity) — NOT _key's file#line#kind — so a coupling-re-added node isn't re-expanded.
-const _GROW_WAVE = () => process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_GROW_WAVE === "true";
+// DEFAULT-ON when a fast local SLM (Ollama) is configured: wave+LLM-border is the more reliable picker (the
+// deterministic flood overgrows into adjacent concerns — validated: det 48 files vs wave+border 29-32, the
+// border cropping billing/oauth/pagination noise), and a fast cheap backend makes it ALSO fast (~45s). Without
+// a fast backend (claude-only / offline / MCP host-bus) it stays OFF → the instant deterministic picker, so
+// offline behaviour + the grow oracles are unchanged. SEAM_GROW_WAVE=0/1 forces it either way.
+const _envFlag = (v: string | undefined): boolean | undefined => (v === undefined || v === "") ? undefined : (v === "1" || v === "true");
+const _GROW_WAVE = () => _envFlag(process.env.SEAM_GROW_WAVE) ?? fastCheapBackend();
 
 // LLM-PRUNE BORDER (wave mode, opt-in via SEAM_GROW_BORDER_LLM) — the validated discriminator. Embedding cosine
 // can't reason that "merge date-ranges" is part of "check availability" (it scored that 0.11 and a booking-
@@ -450,7 +456,7 @@ const _GROW_WAVE = () => process.env.SEAM_GROW_WAVE === "1" || process.env.SEAM_
 // wave's NEW candidate ring over a COMPACT skeleton (name + container + file + kind — no bodies), and only the
 // in-scope nodes are flooded through. Frontier-evaluable (a node is judged BEFORE its footprint is built, so the
 // cut subtree is never built), bounded (≈ one call per wave), cached per node (decided once, never re-asked).
-const _GROW_BORDER_LLM = () => process.env.SEAM_GROW_BORDER_LLM === "1" || process.env.SEAM_GROW_BORDER_LLM === "true";
+const _GROW_BORDER_LLM = () => _envFlag(process.env.SEAM_GROW_BORDER_LLM) ?? fastCheapBackend();
 const PRUNE_PASS = registerPass({ tag: "grow-border", tier: "cheap", note: "wave-level intent border — keep only the candidates ON the intent" });
 const _PRUNE_BATCH = 50;   // candidates per call — small enough for a reliable per-candidate JSON reply
 
