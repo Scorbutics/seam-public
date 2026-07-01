@@ -23,6 +23,13 @@ describe("parseArgs — llm-context defaults the LLM seam-ranking pass OFF (skel
   test("--skeleton on its own (no format) still works (the original behaviour)", () => {
     expect(parseArgs(["--skeleton"]).skeleton).toBe(true);
   });
+  test("the WAVE / SCENARIO views also default skeleton ON (they read the det structure, not the LLM tiers)", () => {
+    expect(parseArgs(["--format", "waves"]).skeleton).toBe(true);
+    expect(parseArgs(["--format", "scenarios"]).skeleton).toBe(true);
+    // …and --rank / --no-skeleton force the LLM pass back on there too
+    expect(parseArgs(["--format", "waves", "--rank"]).skeleton).toBe(false);
+    expect(parseArgs(["--format", "scenarios", "--no-skeleton"]).skeleton).toBe(false);
+  });
 });
 
 describe("parseArgs — data-coupling mode (auto is the default)", () => {

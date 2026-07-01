@@ -118,9 +118,11 @@ export function parseArgs(argv: string[]): Args {
         if (v.startsWith("-")) { process.stderr.write(`warning: unknown flag ignored: ${v}\n`); }
     }
   }
-  // For an LLM-CONSUMER format the consumer ranks/interprets the structure itself, so Seam's own LLM
-  // seam-intent (ranking/tiering) + refine passes are redundant latency/cost — default them OFF (the det
-  // skeleton: spine + structural labels + blindspots). `--rank` / `--no-skeleton` forces them back on.
-  if (a.format === "llm-context" && a.skeleton === undefined) a.skeleton = true;
+  // For an LLM-CONSUMER format the consumer ranks/interprets the structure itself, and the WAVE / SCENARIO views
+  // read the DETERMINISTIC structure (region.shell + resolved edges), never the LLM tiers/labels — so Seam's own
+  // LLM seam-intent (ranking/tiering) + refine passes are redundant latency/cost (and the pass that can stall a
+  // whole run on a slow backend). Default them OFF (the det skeleton: spine + structural labels + blindspots).
+  // `--rank` / `--no-skeleton` forces them back on.
+  if ((a.format === "llm-context" || a.format === "waves" || a.format === "scenarios") && a.skeleton === undefined) a.skeleton = true;
   return a;
 }
