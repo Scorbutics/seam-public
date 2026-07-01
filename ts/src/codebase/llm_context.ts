@@ -441,12 +441,33 @@ export function renderLlmContext(model: any): string {
 // resolved relation (called by / used by / via route from …). Pure projection of the emitted model — `region.
 // shell` gives the wave, `edges` (node-level) give the parent — no engine logic. Answers "how did the flood get
 // here?" node-by-node, the stepping stone to a per-scenario sequence view.
+// SHARED-KEY MEDIA — each coupling archetype's [medium, PRODUCE edge, CONSUME edge]. A crossing over any of these
+// is a link between two layers via a shared KEY (a route path / table / topic), not a direct call. `pull` = the
+// CONSUMER initiates the flow (an HTTP client fetch); otherwise the PRODUCER does (a writer / publisher / emitter
+// pushing to the boundary). Drives boundary detection, the wave link verb, and the scenario orientation below.
+const _MEDIA: { medium: string; produce: string; consume: string; pull?: boolean; wave: string }[] = [
+  { medium: "HTTP route", produce: "route-serve", consume: "route-fetch", pull: true, wave: "via HTTP route from" },
+  { medium: "table", produce: "db-write", consume: "db-read", wave: "sharing a DB table with" },
+  { medium: "queue", produce: "queue-publish", consume: "queue-subscribe", wave: "over a queue with" },
+  { medium: "event", produce: "event-emit", consume: "event-on", wave: "via an event with" },
+  { medium: "cache", produce: "cache-write", consume: "cache-read", wave: "sharing a cache with" },
+  { medium: "file", produce: "file-write", consume: "file-read", wave: "sharing a file with" },
+];
+// edge-kind → medium; and the SOURCE edges (point code→boundary: the consumer's fetch for a pull medium, the
+// producer's write/publish otherwise) vs SINK edges (boundary→code: deliver to the receiver).
+const _MEDIUM_OF = new Map<string, { medium: string; wave: string }>();
+const _CROSS_SOURCE = new Set<string>(), _CROSS_SINK = new Set<string>(), _CROSS_KINDS = new Set<string>();
+for (const m of _MEDIA) {
+  _MEDIUM_OF.set(m.produce, m); _MEDIUM_OF.set(m.consume, m);
+  const src = m.pull ? m.consume : m.produce, sink = m.pull ? m.produce : m.consume;
+  _CROSS_SOURCE.add(src); _CROSS_SINK.add(sink); _CROSS_KINDS.add(m.produce); _CROSS_KINDS.add(m.consume);
+}
 const _WAVE_VERB: Record<string, string> = {
   call: "called by", import: "used by", reference: "referenced by", "interface-impl": "implemented by",
-  contains: "declared in", "route-serve": "via HTTP route from", "route-fetch": "via HTTP route from",
-  "db-read": "reads the table", "db-write": "writes the table", "data-coupling": "shares a key with", "type-ref": "typed by",
+  contains: "declared in", "type-ref": "typed by", "data-coupling": "sharing a key with",
 };
-const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
+for (const [kind, m] of _MEDIUM_OF) _WAVE_VERB[kind] = m.wave;   // every shared-key crossing names its medium
+const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : _CROSS_KINDS.has(k) ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
 const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
 
 // FLOOD TREE — for each seam, the connected seam CLOSER to the anchor (strictly lower shell) that reached it;
@@ -533,44 +554,44 @@ export function renderScenarios(model: any): string {
   const node = new Map<string, Info>();
   for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) node.set(String(id), { seam: s, label: h.label ?? s.label, file: h.file }); }
 
-  // BOUNDARY nodes = the synthetic route standing BETWEEN a consumer and a handler (incident to a route-fetch AND
-  // a route-serve). They orient the cross-stack hop but aren't participants themselves.
+  // CROSSING BOUNDARY = the synthetic KEY node standing BETWEEN two layers — incident to BOTH a PRODUCE and a
+  // CONSUME edge of the SAME medium (a route reached + served, a table written + read, a topic published +
+  // subscribed). `crossOf` returns its medium + KEY (the node's own label: the route path / table name) so a link
+  // reads `getExistingBookings [HTTP route: /…]` / `[table: bookings]`. A pure producer/consumer CODE node is
+  // incident to only ONE side, so it's not mistaken for the boundary.
   const inc = new Map<string, Set<string>>();
   for (const e of (model.edges ?? []) as any[]) { for (const x of [e.from, e.to]) (inc.get(String(x)) ?? inc.set(String(x), new Set()).get(String(x))!).add(e.kind); }
-  const isBoundary = (id: string) => { const k = inc.get(id); return !!k && k.has("route-serve") && k.has("route-fetch"); };
-  // A CROSSING is a data-coupling boundary (the synthetic KEY between two layers): its MEDIUM (an HTTP route, a
-  // DB table, a shared key) + its KEY (the node's own label — the route path / table name). Used to annotate the
-  // link between layers so a scenario arrow reads `getExistingBookings [HTTP route: /acme/rest/member/booking/v1]`
-  // instead of an opaque `[HTTP]`. Generalises `isBoundary` (routes) to db / shared-key boundaries.
   const crossOf = (id: string): { medium: string; key: string } | null => {
     const k = inc.get(id); if (!k) return null;
-    const key = node.get(id)?.label ?? "";
-    if (k.has("route-serve") && k.has("route-fetch")) return { medium: "HTTP route", key };
-    if (k.has("db-write") && k.has("db-read")) return { medium: "table", key };
-    if (k.has("data-coupling")) return { medium: "shared key", key };
+    for (const m of _MEDIA) if (k.has(m.produce) && k.has(m.consume)) return { medium: m.medium, key: node.get(id)?.label ?? "" };
     return null;
   };
 
-  // FORWARD GRAPH — ORIENTED by MEANING, not flood order: a call/contains/impl/import goes from→to as-is; a route
-  // crossing (emitted symmetrically) is oriented consumer→boundary→handler by which end is the boundary. This
-  // survives a sibling UI action reached AFTER the anchor (whose shell would mis-orient it). `contains` continues a
-  // flow from a class into its method; it does NOT count as being "called", so a method stays a valid entry.
+  // FORWARD GRAPH — ORIENTED by MEANING, not flood order: a call/contains/impl/import goes from→to as-is; a
+  // SHARED-KEY crossing (route/table/queue/event/cache/file — emitted symmetrically) is oriented INITIATOR →
+  // boundary → RECEIVER by which end is the boundary and whether the edge is the source or sink side. So a UI →
+  // route → handler flow and a writer → table → reader flow both traverse in the direction the DATA moves,
+  // surviving a sibling entry reached AFTER the anchor (whose shell would mis-orient it). `contains` continues a
+  // flow from a class into its method without counting as a "call", so a method stays a valid entry.
   const fwd = new Map<string, { to: string; kind: string }[]>();
   const callIn = new Map<string, number>();
   for (const id of node.keys()) callIn.set(id, 0);
   const addFwd = (f: string, t: string, kind: string) => { if (f === t || !node.has(f) || !node.has(t)) return; const a = fwd.get(f) ?? fwd.set(f, []).get(f)!; if (!a.some((o) => o.to === t && o.kind === kind)) a.push({ to: t, kind }); if (kind !== "contains") callIn.set(t, (callIn.get(t) ?? 0) + 1); };
   for (const e of (model.edges ?? []) as any[]) {
     const f = String(e.from), t = String(e.to);
-    if (e.kind === "route-fetch") { const c = isBoundary(t) ? f : isBoundary(f) ? t : null, b = isBoundary(t) ? t : f; if (c) addFwd(c, b, e.kind); }        // consumer → boundary
-    else if (e.kind === "route-serve") { const b = isBoundary(f) ? f : t, h = isBoundary(f) ? t : f; if (isBoundary(b)) addFwd(b, h, e.kind); }              // boundary → handler
-    else if (_FWD_KINDS.has(e.kind)) addFwd(f, t, e.kind);
+    if (_CROSS_KINDS.has(e.kind)) {
+      const bId = crossOf(f) ? f : crossOf(t) ? t : null; if (!bId) continue;   // the boundary is the two-sided end
+      const codeId = bId === f ? t : f;
+      if (_CROSS_SOURCE.has(e.kind)) addFwd(codeId, bId, e.kind);   // initiator (client fetch / writer / publisher) → boundary
+      else addFwd(bId, codeId, e.kind);                            // boundary → receiver (handler / reader / subscriber)
+    } else if (_FWD_KINDS.has(e.kind)) addFwd(f, t, e.kind);
   }
-  // ENTRY POINTS = each USER ACTION's departure, NOT the anchor: a non-boundary node that CONSUMES a route (has an
-  // outgoing route-fetch — a UI/client action), OR a forward-root nothing in-region calls (a backend entry). Each
-  // becomes its own scenario. On-intent first, deepest reach.
+  // ENTRY POINTS = each USER ACTION's departure, NOT the anchor: a non-boundary node that INITIATES a crossing (an
+  // outgoing source edge — a UI fetch, a writer's db-write, a publisher's queue-publish), OR a forward-root nothing
+  // in-region calls (a backend entry). Each becomes its own scenario. On-intent first, deepest reach.
   const hasOut = (id: string) => (fwd.get(id)?.length ?? 0) > 0;
-  const consumes = (id: string) => (fwd.get(id) ?? []).some((o) => o.kind === "route-fetch");
-  const entries = [...node.keys()].filter((id) => !isBoundary(id) && hasOut(id) && (consumes(id) || (callIn.get(id) ?? 0) === 0));
+  const initiates = (id: string) => (fwd.get(id) ?? []).some((o) => _CROSS_SOURCE.has(o.kind));
+  const entries = [...node.keys()].filter((id) => !crossOf(id) && hasOut(id) && (initiates(id) || (callIn.get(id) ?? 0) === 0));
 
   // LONGEST forward path from a node — memoised DAG longest-path, cycle-safe (a back-edge counts 0). O(V+E).
   const memo = new Map<string, { next: string | null; kind: string; len: number }>();
@@ -640,6 +661,7 @@ export function renderScenarios(model: any): string {
   if (!n) { out.push("(no cross-component user flow to draw — the region's entries stay within one component; read the wave view.)"); return out.join("\n"); }
   out.push(...blocks);
   out.push("Each diagram is ONE user flow, departing from its OWN entry point (not the anchor) and following the",
-    "forward call/route graph to its deepest terminal; same-class steps share a lifeline, [HTTP] = over a route.");
+    "forward call + data-coupling graph to its deepest terminal; same-class steps share a lifeline. A bracket on",
+    "a link names the shared-key crossing between two layers — [HTTP route: /path], [table: name], [queue: topic].");
   return out.join("\n");
 }

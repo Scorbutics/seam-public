@@ -166,6 +166,29 @@ describe("renderScenarios (per-scenario sequence diagrams)", () => {
     expect(renderScenarios({ mode: "diff" })).toBe("(not a codebase seam model)");
     expect(renderScenarios({ mode: "codebase", clusters: [{ id: "g1", seams: [] }] })).toContain("no cross-component user flow");
   });
+
+  test("a SHARED DB-TABLE coupling (writer → table → reader, no call) renders as a scenario with the table on the link", () => {
+    // persistPayment WRITES `payments`; showInvoice READS it. No import/call edge between them — only the table
+    // name couples them. The db-write/db-read edges are emitted symmetrically (as the engine does).
+    const db = {
+      mode: "codebase", anchor: "persistPayment", resolutionQuality: "FULL", complete: true, blindspots: [],
+      clusters: [{ id: "g1", intent: "persist and display payments", seams: [
+        { id: "w", label: "Persist payment", region: { shell: 0 }, primary: { file: "backend/persist.ts", line: 3, symbol: "persistPayment" }, hunks: [{ id: "w", label: "persistPayment", file: "backend/persist.ts" }] },
+        { id: "tbl", label: "payments table", region: { shell: 1 }, primary: { file: "backend/persist.ts", line: 3, symbol: "payments" }, hunks: [{ id: "tbl", label: "payments", file: "backend/persist.ts" }] },
+        { id: "r", label: "Show invoice", region: { shell: 2 }, primary: { file: "ui/invoice.ts", line: 2, symbol: "showInvoice" }, hunks: [{ id: "r", label: "showInvoice", file: "ui/invoice.ts" }] },
+      ] }],
+      edges: [
+        { from: "w", to: "tbl", kind: "db-write" }, { from: "tbl", to: "w", kind: "db-write" },
+        { from: "tbl", to: "r", kind: "db-read" }, { from: "r", to: "tbl", kind: "db-read" },
+      ],
+    };
+    const out = renderScenarios(db);
+    expect(out).toContain("## Scenario 1: persistPayment -> showInvoice");   // departs from the WRITER, reaches the reader
+    expect(out).toContain("participant persist");
+    expect(out).toContain("participant invoice");
+    expect(out).toMatch(/persist->>invoice: .*\[table: payments\]/);         // the shared table is on the layer-link
+    expect(out).not.toMatch(/participant \S* as payments/);                  // the table is a link, not a lifeline
+  });
 });
 
 describe("renderLlmContext off-intent gate", () => {
