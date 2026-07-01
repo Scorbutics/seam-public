@@ -395,6 +395,14 @@ bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts -
 # Prints `[auto-anchor:llm|structural] <symbol> (<file>)`.  (needs a `claude` CLI for anchor-judge + tiering)
 bun ts/src/cli/decompose.ts --scan --auto --repo . \
     --intent "how does the seam JSON contract get stamped" --emit-seams footprint.json
+
+# RENDER VIEWS — the same footprint, printed three ways (pure projections; add to any of the above):
+#   --format llm-context   the flood-fill REGION, dimmed by intent
+#   --format waves         the region read as FLOOD ORDER: seams grouped by hop, each ← the seam that reached it
+#   --format scenarios     the region's distinct USER flows as Mermaid sequence diagrams (one per entry point)
+# waves/scenarios read only the deterministic structure, so they skip the LLM tier pass by default
+# (`--rank` to force it back on).
+bun ts/src/cli/decompose.ts --scan --auto --repo . --intent "load member bookings" --format scenarios
 ```
 
 `--depth N` follows N consumer hops; `resolutionQuality` / `unresolved` / `blindspots` in the output

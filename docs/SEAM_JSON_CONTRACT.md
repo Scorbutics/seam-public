@@ -49,7 +49,11 @@ Keep this document in lockstep with the constant.
   "edges":        [GraphEdge],    // raw symbol→symbol call/dependency graph (chain view)
   "seamContracts":[SeamContract], // the symbols bridging each pair of seams
   "selectedSeam": "seam-id|''",   // the seam matching the user's intent (auto-focused)
-  "autoGrown":    false           // an LLM-grown footprint — render ALL seams, don't isolate one
+  "autoGrown":    false,          // an LLM-grown footprint — render ALL seams, don't isolate one
+  "skeleton":     true            // OPTIONAL. the LLM seam-intent (tier/label) pass was skipped — seams carry
+                                  //   deterministic structure + structural labels only, no `tier`/prose labels.
+                                  //   Default for LLM-consumer / structure-only output (`--format llm-context|waves|
+                                  //   scenarios`); a renderer should treat every seam as equally lit.
 }
 ```
 
@@ -68,7 +72,16 @@ Keep this document in lockstep with the constant.
 { "id": "s0", "label": "…", "linkOnly": false, "uncertain": false,
   "warnings": ["dangling", …],   // posture kinds (informational — NOT errors); see seams.ts _verify_pair
   "hunks": [SeamHunk],
-  "suggested": false             // codebase mode: a SUGGESTED (unverified) seam, never a resolved edge
+  "suggested": false,            // codebase mode: a SUGGESTED (unverified) seam, never a resolved edge
+
+  // --- codebase mode, optional ---
+  "primary":   { "file": "…", "line": N, "symbol": "…" },  // the seam's representative ("this is where it lives")
+  "tier":      "spine|supporting|off",  // intent relevance band — ABSENT under `skeleton` (no LLM tiering pass)
+  "region":    { "shell": N, "direction": "up|down|both|" }, // flood-fill shape: hop distance from the anchor +
+                                        //   the direction it was reached (↑ consumers / ↓ deps). The REGION,
+                                        //   WAVE (group by `shell`) and SCENARIO (forward-graph over `edges`)
+                                        //   views are built purely from `region` + `edges` — no LLM.
+  "culmination": 0.0             // 0..1 confidence this seam is where the flow's outcome is produced
 }
 ```
 

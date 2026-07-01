@@ -52,10 +52,23 @@ testable and independently fixable. The `Footprint` is the contract object passe
 - **P3 is an overlay, not an ingredient.** Coupling is computed once over the settled structural footprint
   and merged; expanding a bridge uses **structural** builds only, so it chains without re-coupling. This is
   the decoupling — the grow traversal never triggers coupling.
+  - *Merge by CONTENT, not id.* The overlay is deep-fanned over several files (seed / reached-resource fan),
+    and `_chain_route_consumers` re-derives the SAME route→consumer crossing each time a file sharing that
+    route is coupled. `_mergeCouplingOverlay` therefore dedups by `_key` (file#line#kind) exactly like
+    `merge_resolved` — a re-derived crossing reuses the existing node (edges remap onto it) instead of
+    re-appending under a fresh `dc` id. Without this a single crossing surfaced 12–18× → one node per re-derive
+    seam (booking-app: 73 "seams" for 18 locations).
   - *Open decision (Step 2):* scope = anchor-only (today) vs every footprint node (target, more complete).
 - **P4 is where intent decides membership.** Tests off by default; `--exclude` folders; hub-crowd demotion;
   data-model type-chain pruning; off-intent dead-end trimming. Everything that "removes noise" lives here,
   nowhere else.
+  - *The wave SLM intent-border is REGION-SHAPED.* `_llmPruneInShape` judges each candidate NOT in isolation
+    ("is this on the intent?" — which reads a data-layer bean as "generic → exclude" and severs the mechanism
+    the flow delegates to) but WITH its flood REACH CONTEXT: `_reachPhrases` names which in-region node reached
+    it and via what resolved relation (called by / used by / via route from), so the cheap model answers the
+    region question — "does this CONTINUE the flooded concern or DEPART into a side-concern (rendering / audit /
+    notifications / …)?". SLM-first: a structural auto-keep of any resolved-call continuation was tried and
+    reverted (it re-admits an off-intent chain reached by the same edges — the split is irreducibly semantic).
 
 ## Current state vs target (2026-06-26)
 
