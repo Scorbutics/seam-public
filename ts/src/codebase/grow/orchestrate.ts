@@ -615,6 +615,17 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // back to the tol border / flood). `decided` caches each node's in-scope verdict across all waves.
   const llmPrune = wave && (opts.borderLlm ?? _GROW_BORDER_LLM()) && opts.intent && llmAvailable(opts.claudeBin);
   const decided = new Map<string, boolean>();
+  // HUB GATE (wave, opt-in via SEAM_HUB_GATE / opts.hubGate) — a DETERMINISTIC bound on the off-intent overgrow
+  // the profiling exposed: a hub node (a shared repo/util/accessor) whose expansion adds a WIDE fan of pure
+  // NON-crossing consumers. Those consumers are sibling/other-feature entry points, not this flow's spine, so
+  // treating all N as spine is the 62%-off-intent bloat (and, on a big repo, the seconds-per-hub build). We
+  // drop such a fan and stop it seeding further waves. INVARIANT (terminal-preservation): a fan that bears ANY
+  // grounded crossing or flow-subject is SPINE-WARD and is NEVER gated — so a terminal reached through the hub
+  // survives. This is the same "never prune a crossing" rule the move-ordering already enforces, applied to the
+  // fan. It bounds the shape; which off-intent siblings matter semantically stays the (LLM) border's job.
+  const hubGate = (opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) && wave;
+  const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
+  const hubFanned = new Set<string>();   // node ids belonging to a gated hub fan — cropped + never re-expanded
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
@@ -707,12 +718,39 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         const k = expKey(move.node, move.dir);
         if (expanded.has(k)) continue;
         expanded.add(k);
+        const before = hubGate ? new Set<string>((data.nodes as any[]).map((n) => n.id)) : null;
         const r = await _applyMove(repo, data, move, `wave ${step + 1}·${++moveNo}`, coStruct, prune, history);
         data = r.data;
         waveAdded += r.added;
+        // HUB GATE: this move added a wide fan — is it a PURE (non-spine) hub fan, or does it bear a crossing?
+        if (hubGate && before && r.added >= hubFan) {
+          const addedIds = (data.nodes as any[]).filter((n) => !before.has(n.id)).map((n: any) => n.id);
+          const crossDst = new Set<string>();
+          for (const e of data.edges as any[]) if (_is_crossing(e)) { crossDst.add(e.dst); crossDst.add(e.from); }
+          const kindById = new Map<string, string>((data.nodes as any[]).map((n: any) => [n.id, n.kind]));
+          const spineWard = addedIds.some((id: string) =>
+            crossDst.has(id) || isFlowSubject(kindById.get(id)) || (data.nodes as any[]).find((n: any) => n.id === id)?.coupling);
+          if (!spineWard) {   // off-intent hub fan → crop it and don't let it seed the next wave
+            for (const id of addedIds) {
+              hubFanned.add(id);
+              const nn = (data.nodes as any[]).find((n: any) => n.id === id);
+              if (nn) { expanded.add(expKey(nn, "up")); expanded.add(expKey(nn, "down")); }
+            }
+            dbg(`[grow] hub-gate: ${move.node.symbol} ${move.dir} fanned ${r.added} pure non-crossing consumer(s) → gated`);
+          }
+        }
       }
       if (!waveAdded) break;   // a whole wave added nothing new → the region is fully flooded
     }
+  }
+  // HUB-GATE CROP — remove the gated off-intent hub fans (kept out of the shape, like the border's ring crop).
+  // Crossing/flow-subject fans were never marked, so a terminal reached through a hub is untouched here.
+  if (hubGate && hubFanned.size) {
+    const before = data.nodes.length;
+    data.nodes = (data.nodes as any[]).filter((n) => !hubFanned.has(n.id));
+    data.edges = (data.edges as any[]).filter((e) => !hubFanned.has(e.from) && !hubFanned.has(e.to));
+    if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => !hubFanned.has(b.node));
+    dbg(`[grow] hub-gate: cropped ${before} → ${data.nodes.length} node(s) (${hubFanned.size} off-intent hub-fan node(s) dropped)`);
   }
   // HONEST BACKSTOP — in wave mode the SOFT BORDER is the intended terminator; maxNodes is only a runaway safety
   // cap. If the flood hit it (a too-loose / absent border let the flood run to the cap), say so — a silently
@@ -770,7 +808,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
