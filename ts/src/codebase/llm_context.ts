@@ -504,80 +504,124 @@ export function renderWaves(model: any): string {
   return out.join("\n");
 }
 
-// SCENARIO SEQUENCE VIEW — the region's distinct end-to-end flows as Mermaid sequence diagrams. A scenario is a
-// root→leaf path in the flood tree (anchor → … → a TERMINAL: a seam no other seam hangs off — the DB write, the
-// leaf service). Consecutive seams in the SAME container (class/file) collapse onto one lifeline; a container
-// change emits a message labelled by the callee + the relation that crossed (a call, an HTTP route). Pure
-// projection — reuses `_floodParents` (the wave parent links ARE the sequence edges). Cap the scenario count and
-// depth so a broad region stays legible; on-intent (spine) terminals first.
-const _SCENARIO_CAP = 8, _SEQ_DEPTH_CAP = 20;
+// SCENARIO SEQUENCE VIEW — the region's distinct USER flows as Mermaid sequence diagrams. A scenario departs from
+// its OWN ENTRY POINT (a node nothing in-region calls — the UI action / top of a flow), NOT the anchor: a region
+// grown from `loadBookings` also holds `updateBooking`, `cancelBooking`, `getAvailableTimes` as sibling entries
+// (reached via a shared route), each its own scenario. We follow the FORWARD CALL GRAPH (call / route / impl —
+// the flow direction) from each entry to its deepest terminal, so a scenario is a real invocation chain (UI ->
+// route -> handler -> bean -> repo), not a flood-tree link that would false-wire the anchor to a sibling op.
+// Same-container nodes share a lifeline; a container change is an arrow labelled by the callee (or the seam label
+// when the edge only reached the class) + [HTTP] on a route hop.
+const _SCENARIO_CAP = 12, _SEQ_DEPTH_CAP = 24;
 const _MERMAID_ID = (s: string): string => (s.replace(/[^A-Za-z0-9]/g, "_").replace(/^(\d)/, "_$1") || "p");
 const _seqArrow: Record<string, string> = { "route-serve": "HTTP", "route-fetch": "HTTP", "interface-impl": "impl", "data-coupling": "data" };
+// FORWARD (flow-direction) edge kinds: an invocation/dependency the flow follows OUTWARD. `contains` IS included
+// (class -> its method) so a flow reached at a CLASS via `route-serve` continues INTO the method that does the
+// work — same container, so it folds onto one lifeline, never a spurious message. `data-coupling` (an undirected
+// shared-key link) is excluded (not a directed flow step).
+const _FWD_KINDS = new Set(["call", "route-fetch", "route-serve", "interface-impl", "reference", "import", "contains"]);
 
 export function renderScenarios(model: any): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
-  const parentOf = _floodParents(model, seams);
-  const symOf = (s: Seam): string => s.primary?.symbol ?? s.label;
-  const contOf = (s: Seam): string => _container(s.primary?.file) || filesOf(s)[0] || s.label;
+  const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
 
-  // TERMINALS = seams that are no seam's parent (nothing hangs further off them) — the ends of each flow. A pure
-  // ROUTE-BOUNDARY leaf (its rep is a `/route` literal) is NOT a real terminal — it's a crossing the deeper flow
-  // already passes through — so it's excluded (else every route emits a 1-hop stub scenario). Order on-intent
-  // (spine) first, then deepest, so the most relevant scenarios lead and the cap drops the periphery.
-  const isParent = new Set([...parentOf.values()].map((p) => p.seam.id));
-  const isRouteLiteral = (s: Seam) => (s.primary?.symbol ?? s.label).startsWith("/");
-  const tierRank = (s: Seam) => (s.tier === "spine" ? 0 : s.tier === "off" ? 2 : 1);
-  const terminals = seams.filter((s) => !isParent.has(s.id) && parentOf.has(s.id) && !isRouteLiteral(s))
-    .sort((a, b) => (tierRank(a) - tierRank(b)) || (_shellOf(b) - _shellOf(a)));
+  // NODE INDEX. Each hunk is a node; the model's `edges` are node-level.
+  type Info = { seam: Seam; label: string; file?: string };
+  const node = new Map<string, Info>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) node.set(String(id), { seam: s, label: h.label ?? s.label, file: h.file }); }
+
+  // BOUNDARY nodes = the synthetic route standing BETWEEN a consumer and a handler (incident to a route-fetch AND
+  // a route-serve). They orient the cross-stack hop but aren't participants themselves.
+  const inc = new Map<string, Set<string>>();
+  for (const e of (model.edges ?? []) as any[]) { for (const x of [e.from, e.to]) (inc.get(String(x)) ?? inc.set(String(x), new Set()).get(String(x))!).add(e.kind); }
+  const isBoundary = (id: string) => { const k = inc.get(id); return !!k && k.has("route-serve") && k.has("route-fetch"); };
+
+  // FORWARD GRAPH — ORIENTED by MEANING, not flood order: a call/contains/impl/import goes from→to as-is; a route
+  // crossing (emitted symmetrically) is oriented consumer→boundary→handler by which end is the boundary. This
+  // survives a sibling UI action reached AFTER the anchor (whose shell would mis-orient it). `contains` continues a
+  // flow from a class into its method; it does NOT count as being "called", so a method stays a valid entry.
+  const fwd = new Map<string, { to: string; kind: string }[]>();
+  const callIn = new Map<string, number>();
+  for (const id of node.keys()) callIn.set(id, 0);
+  const addFwd = (f: string, t: string, kind: string) => { if (f === t || !node.has(f) || !node.has(t)) return; const a = fwd.get(f) ?? fwd.set(f, []).get(f)!; if (!a.some((o) => o.to === t && o.kind === kind)) a.push({ to: t, kind }); if (kind !== "contains") callIn.set(t, (callIn.get(t) ?? 0) + 1); };
+  for (const e of (model.edges ?? []) as any[]) {
+    const f = String(e.from), t = String(e.to);
+    if (e.kind === "route-fetch") { const c = isBoundary(t) ? f : isBoundary(f) ? t : null, b = isBoundary(t) ? t : f; if (c) addFwd(c, b, e.kind); }        // consumer → boundary
+    else if (e.kind === "route-serve") { const b = isBoundary(f) ? f : t, h = isBoundary(f) ? t : f; if (isBoundary(b)) addFwd(b, h, e.kind); }              // boundary → handler
+    else if (_FWD_KINDS.has(e.kind)) addFwd(f, t, e.kind);
+  }
+  // ENTRY POINTS = each USER ACTION's departure, NOT the anchor: a non-boundary node that CONSUMES a route (has an
+  // outgoing route-fetch — a UI/client action), OR a forward-root nothing in-region calls (a backend entry). Each
+  // becomes its own scenario. On-intent first, deepest reach.
+  const hasOut = (id: string) => (fwd.get(id)?.length ?? 0) > 0;
+  const consumes = (id: string) => (fwd.get(id) ?? []).some((o) => o.kind === "route-fetch");
+  const entries = [...node.keys()].filter((id) => !isBoundary(id) && hasOut(id) && (consumes(id) || (callIn.get(id) ?? 0) === 0));
+
+  // LONGEST forward path from a node — memoised DAG longest-path, cycle-safe (a back-edge counts 0). O(V+E).
+  const memo = new Map<string, { next: string | null; kind: string; len: number }>();
+  const inProg = new Set<string>();
+  const best = (id: string): { next: string | null; kind: string; len: number } => {
+    const m = memo.get(id); if (m) return m;
+    if (inProg.has(id)) return { next: null, kind: "", len: 0 };
+    inProg.add(id);
+    let bl = 0, bn: string | null = null, bk = "";
+    for (const o of fwd.get(id) ?? []) { const r = best(o.to); if (r.len + 1 > bl) { bl = r.len + 1; bn = o.to; bk = o.kind; } }
+    inProg.delete(id);
+    const res = { next: bn, kind: bk, len: bl }; memo.set(id, res); return res;
+  };
+  const pathFrom = (src: string): { id: string; kind: string }[] => {
+    const path: { id: string; kind: string }[] = [{ id: src, kind: "" }];
+    const seenN = new Set([src]);
+    for (let cur = src; path.length < _SEQ_DEPTH_CAP; ) { const r = best(cur); if (!r.next || seenN.has(r.next)) break; path.push({ id: r.next, kind: r.kind }); seenN.add(r.next); cur = r.next; }
+    return path;
+  };
+
+  const scenarios = entries.map((src) => ({ src, path: pathFrom(src) }))
+    .filter((x) => x.path.length >= 2)
+    .sort((a, b) => (tierRank(node.get(a.src)?.seam) - tierRank(node.get(b.src)?.seam)) || (b.path.length - a.path.length));
 
   const out: string[] = [];
-  const head = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`, `resolution: ${model.resolutionQuality ?? "?"}`, `scenarios: ${Math.min(terminals.length, _SCENARIO_CAP)}`];
-  out.push(`# Intent footprint — scenario sequences`, head.join(" | "), "");
-  if (!terminals.length) {
-    out.push("(no traceable end-to-end flow — the region has no attached terminal; read the wave view instead.)");
-    return out.join("\n");
-  }
+  out.push(`# Intent footprint — scenario sequences`, `anchor: ${cl.intent ?? model.anchor ?? "?"} | resolution: ${model.resolutionQuality ?? "?"}`, "");
 
-  const seenPath = new Set<string>();   // dedup scenarios that collapse to the same container sequence
+  const contOf = (id: string): string => { const i = node.get(id)!; return _container(i.file) || _container(i.seam.primary?.file) || i.seam.label; };
+  const emitted: string[] = [];   // participant-transition signatures already drawn — drop a flow that's a SUB-path
+  const blocks: string[] = [];
   let n = 0;
-  for (const leaf of terminals) {
+  for (const { src, path } of scenarios) {
     if (n >= _SCENARIO_CAP) break;
-    // walk parent links leaf → anchor, then reverse to anchor → leaf (guard against a cycle / depth blow-up).
-    const path: Seam[] = []; const guard = new Set<string>();
-    for (let s: Seam | undefined = leaf; s && !guard.has(s.id) && path.length < _SEQ_DEPTH_CAP; s = parentOf.get(s.id)?.seam) { guard.add(s.id); path.push(s); }
-    path.reverse();
-    if (path.length < 2) continue;
-
-    // collapse consecutive same-container seams; a container change is a message (labelled by the callee symbol +
-    // the crossing relation). Participants are the containers in first-appearance order.
-    const parts: string[] = []; const msgs: string[] = [];
+    const parts: string[] = []; const msgs: string[] = []; const hops: string[] = [];
     let prev: string | null = null;
-    for (const s of path) {
-      const c = contOf(s), id = _MERMAID_ID(c);
-      if (!parts.includes(`${id} ${c}`)) parts.push(`${id} ${c}`);
+    for (const step of path) {
+      const c = contOf(step.id), id = _MERMAID_ID(c), info = node.get(step.id)!;
+      if (!parts.includes(`${id}\t${c}`)) parts.push(`${id}\t${c}`);
       if (prev !== null && prev !== id) {
-        const p = parentOf.get(s.id);
-        const rel = _seqArrow[p?.kind ?? ""];
-        // the callee method / route; when the resolved edge only reached the CLASS (via === container), the
-        // descriptive seam label reads better than repeating the participant name.
-        const msg = p?.via && p.via !== c ? p.via : s.label;
+        const rel = _seqArrow[step.kind];
+        const msg = info.label && info.label !== c && !info.label.startsWith("/") ? info.label : info.seam.label;
         msgs.push(`  ${prev}->>${id}: ${msg}${rel ? ` [${rel}]` : ""}`);
+        hops.push(`${prev}>${id}`);
       }
       prev = id;
     }
-    if (!msgs.length) continue;                                 // whole path in one container → not a sequence
-    const sig = msgs.join("|");
-    if (seenPath.has(sig)) continue; seenPath.add(sig);
+    if (!msgs.length) continue;                                 // whole flow in one container -> not a sequence
+    // SUB-PATH dedup: a flow whose component-transition sequence is contained in an already-drawn (longer) one is
+    // just its tail (a backend-only entry under a full UI→DB flow) — skip it. Scenarios are sorted longest-first;
+    // the bar delimiters make the containment test hop-exact (no partial-name false match).
+    const sig = "|" + hops.join("|") + "|";
+    if (emitted.some((e) => e.includes(sig))) continue;
+    emitted.push(sig);
     n++;
-    out.push(`## Scenario ${n}: ${symOf(path[0])} → ${symOf(leaf)}`, "```mermaid", "sequenceDiagram");
-    for (const p of parts) { const [id, disp] = p.split(" "); out.push(`  participant ${id} as ${disp}`); }
-    out.push(...msgs, "```", "");
+    const endInfo = node.get(path[path.length - 1].id)!, srcInfo = node.get(src)!;
+    const endSym = endInfo.seam.primary?.symbol ?? endInfo.label, srcSym = srcInfo.seam.primary?.symbol ?? srcInfo.label;
+    blocks.push(`## Scenario ${n}: ${srcSym} -> ${endSym}`, "```mermaid", "sequenceDiagram",
+      ...parts.map((p) => { const [id, disp] = p.split("\t"); return `  participant ${id} as ${disp}`; }), ...msgs, "```", "");
   }
-  if (!n) out.push("(the region's flows stay within one component — no cross-component sequence to draw.)");
-  else out.push("Each diagram is ONE end-to-end flow through the region (anchor → terminal); same-class steps share",
-    "a lifeline, an arrow is a cross-component call ([HTTP] = over a route). Scenarios are capped + on-intent first.");
+  out[1] = out[1] + ` | scenarios: ${n}`;
+  if (!n) { out.push("(no cross-component user flow to draw — the region's entries stay within one component; read the wave view.)"); return out.join("\n"); }
+  out.push(...blocks);
+  out.push("Each diagram is ONE user flow, departing from its OWN entry point (not the anchor) and following the",
+    "forward call/route graph to its deepest terminal; same-class steps share a lifeline, [HTTP] = over a route.");
   return out.join("\n");
 }

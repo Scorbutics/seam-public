@@ -112,45 +112,58 @@ describe("renderWaves (flood-order view)", () => {
 });
 
 describe("renderScenarios (per-scenario sequence diagrams)", () => {
-  // deep flow UI → resource (over a route) → bean → repo, PLUS an orphan route-boundary leaf that must NOT
-  // become its own 1-hop scenario. Node ids match the edges; region.shell gives the wave order.
+  // TWO user actions in the same UI file, each its OWN scenario departure (NOT the anchor): loadBookings crosses a
+  // route boundary to a resource → bean → repo; cancelBooking crosses another boundary to a cancel handler. Route
+  // edges are SYMMETRIC (as the engine emits them) and a boundary is oriented consumer→boundary→handler. The
+  // boundary nodes fold (they're not participants). rp is the deep terminal; the backend-only sub-path must dedup.
   const scenModel = {
     mode: "codebase", anchor: "loadBookings", resolutionQuality: "FULL", complete: true, blindspots: [],
-    clusters: [{ id: "g1", intent: "load member bookings", seams: [
-      { id: "n1", label: "Load bookings UI", tier: "spine", region: { shell: 0 }, primary: { file: "ui.js", line: 2, symbol: "loadBookings" }, hunks: [{ id: "n1", label: "loadBookings" }] },
-      { id: "orph", label: "Orphan route", tier: "off", region: { shell: 1 }, primary: { file: "ui.js", line: 9, symbol: "/orphan/route" }, hunks: [{ id: "orph", label: "/orphan/route" }] },
-      { id: "rs", label: "Bookings resource", tier: "spine", region: { shell: 1 }, primary: { file: "R.java", line: 5, symbol: "getExistingBookings" }, hunks: [{ id: "rs", label: "getExistingBookings" }] },
-      { id: "bn", label: "Bookings bean", tier: "supporting", region: { shell: 2 }, primary: { file: "B.java", line: 3, symbol: "BookingsBean" }, hunks: [{ id: "bn", label: "getExistingBookings" }] },
-      { id: "rp", label: "Record repo", tier: "off", region: { shell: 3 }, primary: { file: "Repo.java", line: 1, symbol: "RecordRepo" }, hunks: [{ id: "rp", label: "find" }] },
+    clusters: [{ id: "g1", intent: "member bookings", seams: [
+      { id: "n1", label: "Load bookings UI", tier: "spine", region: { shell: 0 }, primary: { file: "ui.js", line: 2, symbol: "loadBookings" }, hunks: [{ id: "n1", label: "loadBookings", file: "ui.js" }] },
+      { id: "n2", label: "Cancel booking UI", tier: "supporting", region: { shell: 0 }, primary: { file: "ui.js", line: 8, symbol: "cancelBooking" }, hunks: [{ id: "n2", label: "cancelBooking", file: "ui.js" }] },
+      { id: "b1", label: "existing route", tier: "spine", region: { shell: 1 }, primary: { file: "ui.js", line: 3, symbol: "/existing/*" }, hunks: [{ id: "b1", label: "/existing/*", file: "ui.js" }] },
+      { id: "b2", label: "cancel route", tier: "off", region: { shell: 1 }, primary: { file: "ui.js", line: 9, symbol: "/cancel/*" }, hunks: [{ id: "b2", label: "/cancel/*", file: "ui.js" }] },
+      { id: "rs", label: "Bookings resource", tier: "spine", region: { shell: 2 }, primary: { file: "R.java", line: 5, symbol: "getExistingBookings" }, hunks: [{ id: "rs", label: "getExistingBookings", file: "R.java" }] },
+      { id: "ch", label: "Cancel handler", tier: "supporting", region: { shell: 2 }, primary: { file: "C.java", line: 4, symbol: "cancel" }, hunks: [{ id: "ch", label: "cancel", file: "C.java" }] },
+      { id: "bn", label: "Bookings bean", tier: "supporting", region: { shell: 3 }, primary: { file: "B.java", line: 3, symbol: "BookingsBean" }, hunks: [{ id: "bn", label: "BookingsBean", file: "B.java" }] },
+      { id: "rp", label: "Record repo", tier: "off", region: { shell: 4 }, primary: { file: "Repo.java", line: 1, symbol: "RecordRepo" }, hunks: [{ id: "rp", label: "find", file: "Repo.java" }] },
     ] }],
     edges: [
-      { from: "n1", to: "orph", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },
-      { from: "n1", to: "rs", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },
+      // symmetric route crossings (consumer ⇄ boundary ⇄ handler)
+      { from: "n1", to: "b1", kind: "route-fetch" }, { from: "b1", to: "n1", kind: "route-fetch" },
+      { from: "b1", to: "rs", kind: "route-serve" }, { from: "rs", to: "b1", kind: "route-serve" },
+      { from: "n2", to: "b2", kind: "route-fetch" }, { from: "b2", to: "n2", kind: "route-fetch" },
+      { from: "b2", to: "ch", kind: "route-serve" }, { from: "ch", to: "b2", kind: "route-serve" },
+      // backend calls
       { from: "rs", to: "bn", kind: "call", provenance: "RESOLVED_FULL" },
       { from: "bn", to: "rp", kind: "call", provenance: "RESOLVED_FULL" },
     ],
   };
 
-  test("renders one end-to-end flow as a Mermaid sequence, with participants, a route [HTTP] hop, and callee messages", () => {
+  test("each USER ACTION is its own departure (not the anchor), as a Mermaid sequence with a route [HTTP] hop", () => {
     const out = renderScenarios(scenModel);
     expect(out).toContain("```mermaid");
     expect(out).toContain("sequenceDiagram");
-    expect(out).toContain("## Scenario 1: loadBookings → RecordRepo");     // anchor → the deepest code terminal
+    // the load flow departs from loadBookings and runs UI → resource (over a route) → bean → repo
+    expect(out).toContain("## Scenario 1: loadBookings -> RecordRepo");
     for (const p of ["participant ui", "participant R", "participant B", "participant Repo"]) expect(out).toContain(p);
-    expect(out).toMatch(/ui->>R: .*\[HTTP\]/);                             // the UI→resource hop crossed a route
-    expect(out).toMatch(/R->>B: getExistingBookings/);                    // the specific callee, not the class
-    expect(out).toMatch(/B->>Repo: find/);
+    expect(out).toMatch(/ui->>R: .*\[HTTP\]/);                        // the cross-stack hop is marked HTTP
+    expect(out).toMatch(/B->>Repo:/);                                // reaches the deep terminal
+    // the SECOND user action departs from cancelBooking — a different departure, its own scenario
+    expect(out).toContain("cancelBooking ->");
   });
 
-  test("a route-boundary leaf is NOT emitted as its own scenario", () => {
+  test("boundary nodes fold (not participants), and a backend-only sub-path is not re-emitted", () => {
     const out = renderScenarios(scenModel);
-    expect(out).not.toContain("/orphan/route");     // the orphan route literal is a crossing, not a flow terminal
-    expect(out).toContain("scenarios: 1");
+    expect(out).not.toContain("participant b1");     // the route boundary is folded onto the consumer lifeline
+    expect(out).not.toContain("/existing/*");        // the raw route literal isn't a participant/message
+    // rs→bn→rp is the tail of scenario 1, so getExistingBookings must NOT also head its own scenario
+    expect(out).not.toContain("## Scenario 2: getExistingBookings");
   });
 
   test("degrades on an empty / foreign model", () => {
     expect(renderScenarios({ mode: "diff" })).toBe("(not a codebase seam model)");
-    expect(renderScenarios({ mode: "codebase", clusters: [{ id: "g1", seams: [] }] })).toContain("no traceable end-to-end flow");
+    expect(renderScenarios({ mode: "codebase", clusters: [{ id: "g1", seams: [] }] })).toContain("no cross-component user flow");
   });
 });
 
