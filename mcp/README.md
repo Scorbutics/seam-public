@@ -28,8 +28,8 @@ Group a git diff into seams (one technical intent each), labelling every hunk by
   relevant/irrelevant (needs engine `hybrid`/`llm` or a local binary). The floor handles the easy 80%; this
   is the exception handler, not the firehose.
 
-> Both codebase tools below emit the **deterministic skeleton** (`--skeleton`): the spine (when grown) +
-> structural symbol-name labels + blindspots, *without* the LLM seam-intent tiering/labeling pass. The
+> Both codebase tools below emit the **deterministic skeleton** (`--skeleton`): the flood-fill region (when
+> grown) + structural symbol-name labels + blindspots, *without* the LLM seam-intent tiering/labeling pass. The
 > consumer here is **your** model, which re-derives tiers/labels from the symbols itself — validated A/B
 > to give an equal-or-better answer at ~⅓ the tokens, while skipping the ~18s pass. The full prose-label
 > + tier-grouping enrichment is reserved for the human VS Code visualization, which can't re-tier on the fly.

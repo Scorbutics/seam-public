@@ -29,8 +29,8 @@ VS Code's own Node — so installing the `.vsix` is all a user needs.
 Beyond diffs, Seam maps where an intent **lives across a repo**. From the editor: **Analyze codebase
 from anchor** (cursor), **Analyze module** (a file's exports), **Find footprint by intent…** (describe
 it in words), or **Auto-map intent** (grow the footprint toward a question). Seam traces the footprint
-and renders it as seams — an **anchor → spine → culmination** path, off-domain parts dimmed, and edges
-it can't statically resolve flagged as `SUGGESTED` / blindspots rather than asserted. Use it to
+and renders it as seams — the anchor's **flood-fill region** (its reach across layers + the culmination),
+off-domain parts dimmed, and edges it can't statically resolve flagged as `SUGGESTED` / blindspots rather than asserted. Use it to
 understand how a feature flows, or to map a change's blast radius before you make it. No index to build
 or keep fresh — it traces on demand, in any supported language.
 

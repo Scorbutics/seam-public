@@ -59,10 +59,10 @@ which connected footprint is the intent's entry point** — then grows that one.
 split as everywhere else: structure measures connectedness (a fact), the LLM judges relevance (the
 meaning). LLM query-expansion widens recall so *"registration"* still finds `RegisterPage`.
 
-## Beyond the spine — structural questions (the shapes)
+## Beyond the flow — structural questions (the shapes)
 
-A *flow* (the spine: anchor → … → outcome) is one shape of answer — but many real questions aren't a
-flow: *who calls this, can A reach B, what's this module's boundary, what subsystem is X part of, how
+A *flow* (the anchor's flood-fill **region** — its reach across layers, dimmed by intent) is one shape
+of answer — but many real questions aren't a flow: *who calls this, can A reach B, what's this module's boundary, what subsystem is X part of, how
 do A and B differ.* Each is a **projection over the same resolved graph**, deterministic and offline,
 with an **honest negative** when structure genuinely can't answer (then it tells you to use grep/RAG
 rather than fabricating a result):
@@ -409,7 +409,7 @@ bun ts/src/cli/decompose.ts --scan --auto --repo . --intent "load member booking
 report where static resolution gave out.
 
 **Structural shapes** (non-flow questions — all deterministic/offline, see
-[§Beyond the spine](#beyond-the-spine--structural-questions-the-shapes)):
+[§Beyond the flow](#beyond-the-flow--structural-questions-the-shapes)):
 
 ```bash
 # who calls a symbol — the RESOLVED consumer set (no grep false-positives)
@@ -651,14 +651,14 @@ opposite**:
 |---|---|---|
 | **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); the footprint **grows deterministically** to its terminals (default `--grow det`, zero LLM), LLM only to *tier* it |
 | **Index** | the whole repo, continuous, **real-time** (100M+ lines) | an **on-demand footprint** from one anchor, per question |
-| **Output** | invisible context feeding the model | a **transparent map** — spine, roles, wiring, intent tiers |
+| **Output** | invisible context feeding the model | a **transparent map** — a flood-fill region, roles, wiring, intent tiers |
 | **Confidence** | a similarity score | **provenance** (`RESOLVED` / `PARTIAL` / `SUGGESTED`) + named **blindspots** |
 | **Surface** | a full assistant + hosted infra + non-code sources (commits, tickets, docs) | a focused decomposition tool, code-only |
 
 They **converge** on the mission, on building a dependency graph, and on exposing context over
 **MCP** (Augment shipped a Context-Engine MCP server in 2026; Seam [already has one](mcp/)).
 
-**Seam-distinct:** an **intent spine** (a ranked, readable main-path answer — not retrieved snippets);
+**Seam-distinct:** an **intent region** (a ranked, readable flood-fill map dimmed by intent — not retrieved snippets);
 **provenance + blindspots** (it states what it *can't* statically see, where a similarity engine
 returns its best match silently); and **cross-framework data-coupling as a first-class edge** — a
 `payments` table or `/api/payments` route shared between a backend function and a frontend page. That
@@ -706,13 +706,13 @@ Known limits:
   floor reliably *discards* a dead-end anchor, but the candidate it picks among is bounded by the
   name-overlap scan + LLM query-expansion (a symbol the expanded vocabulary never names won't be
   probed), and the final pick is an LLM judgement (not deterministic). Naming a `--symbol` skips it.
-- **Domain coherence is an LLM call primed by structure.** Keeping the spine to one domain (e.g.
-  `members` side-effect seams off a `payments` spine) is a **semantic judgement**, so it's the LLM's —
+- **Domain coherence is an LLM call primed by structure.** Keeping the region to one domain (e.g.
+  `members` side-effect seams off a `payments` flow) is a **semantic judgement**, so it's the LLM's —
   the tier pass is fed deterministic **priors** (each seam's flow position, hop-distance, and the db
   `tables:` it touches) and decides. Structure supplies *facts*; the model supplies the *verdict*. So
   the db-table prior is just **absent** (not fatal) when there's no data-coupling — the LLM still tiers
   by meaning. The general limit is the usual one: the verdict is LLM-quality-bound and not
-  deterministic (the spine can vary run-to-run; the priors make it robust on a weak model).
+  deterministic (the ranked region can vary run-to-run; the priors make it robust on a weak model).
 - **Test-only PRs have no core to anchor on.** On a change that's almost all tests plus one trivial
   production line (e.g. `samples/httpx-json-compact-tests`), Seam reports **0 cores** and renders a
   single link-only "ambient" seam with the tests grouped to skim — correct, but there's no

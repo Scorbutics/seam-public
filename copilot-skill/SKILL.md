@@ -33,7 +33,7 @@ Every invocation should write the model with `--emit-seams <file>` and then you 
 |---|---|---|
 | *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --emit-seams /tmp/seam.json` (or `--file <patch>`) | clusters → seams + roles + wiring |
 | *"Where does this symbol/module live — who consumes it, what does it wire?"* (you have an anchor) | `seam --scan --repo <repo> --anchor-file <f> [--symbol <s>] --intent "<q>" --skeleton --emit-seams /tmp/seam.json` | a static footprint, decomposed into seams |
-| *"How does &lt;intent&gt; work / where does it culminate?"* (a question, maybe no symbol) | `seam --scan --auto --repo <repo> --anchor-file <f> --symbol <s> --intent "<q>" --skeleton --emit-seams /tmp/seam.json` | an auto-grown footprint: anchor → spine → culmination |
+| *"How does &lt;intent&gt; work / where does it culminate?"* (a question, maybe no symbol) | `seam --scan --auto --repo <repo> --anchor-file <f> --symbol <s> --intent "<q>" --skeleton --emit-seams /tmp/seam.json` | an auto-grown footprint: the anchor's flood-fill region + culmination |
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --anchor-file <f> --symbol <s> [--to-symbol <t>] --emit-seams /tmp/seam.json` | the resolved SET / shape (deterministic, no LLM) |
 
 Then read `/tmp/seam.json` and answer from it. A text report is also available (drop `--emit-seams`), but

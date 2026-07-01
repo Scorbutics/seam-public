@@ -4,8 +4,9 @@ Seam's codebase grow returns the **full structural closure** of an anchor: every
 coupling edge, followed to its terminals. That breadth is correct — the tool's job is to *show everything
 and highlight*, not to judge-by-hiding. But a broad closure (a REST entry transitively pulls in schema,
 projection, DocuSign, …) is noisy when it feeds an LLM. So Seam attaches a **deterministic intent-relevance
-ranking** to each seam — separating the intent *spine* from off-intent infrastructure **without cropping by
-default**, and without an LLM call.
+ranking** to each seam — the flood-fill region stays whole, but each seam is banded by intent (the on-intent
+`spine` tier vs off-intent infrastructure) so a consumer can dim, **without cropping by default** and without
+an LLM call.
 
 Relevance is a *semantic* judgement, but a **deterministic** one: per CLAUDE.md, semantic work belongs to
 "the LLM **or embeddings**." Embeddings are reproducible (same model + same input → same vector → same

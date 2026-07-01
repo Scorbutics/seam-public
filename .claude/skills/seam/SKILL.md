@@ -175,7 +175,7 @@ This is the cheapest entry point — instant, offline, zero LLM calls. Use it wh
 > there are genuinely no LLM passes.
 >
 > **`--skeleton` (recommended when YOU — an LLM — are the consumer):** skips the LLM seam-intent
-> labeling pass, so the engine emits the **deterministic skeleton** — the spine (when grown) + structural
+> labeling pass, so the engine emits the **deterministic skeleton** — the flood-fill region (when grown) + structural
 > (symbol-name) labels + blindspots — and you tier/label it yourself as you read. Validated A/B: an LLM
 > consumer gets an equal-or-better answer from the skeleton at ~⅓ the tokens, *and* it skips the
 > ~18s pass. So with `--intent --skeleton` there are again **no LLM passes here at all** (no batch

@@ -48,7 +48,7 @@ testable and independently fixable. The `Footprint` is the contract object passe
   answer first), but it may not *exclude* a node for low intent — that would starve a transit to a
   high-intent terminal. Connectivity bounds (budget, flood guard, direction policy) are P2's only limits.
   - Direction policy (P2): seed UP (consumers — the flow toward terminals). Add DOWN (deps) only for a true
-    **entry point** (no in-repo consumers). A mid-spine method climbs; it does not descend its dep tree.
+    **entry point** (no in-repo consumers). A mid-flow method climbs; it does not descend its dep tree.
 - **P3 is an overlay, not an ingredient.** Coupling is computed once over the settled structural footprint
   and merged; expanding a bridge uses **structural** builds only, so it chains without re-coupling. This is
   the decoupling — the grow traversal never triggers coupling.

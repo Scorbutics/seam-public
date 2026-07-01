@@ -33,7 +33,7 @@ ts/src/
                llm_discovery · atoms (tree-sitter facts) · engine_ctx (the per-run cache/budget context,
                §8.8) · coupling/ (the cross-boundary MOAT: archetype registry + built-in floor adapters
                + the LEARNED flywheel — §8.7) · grow/ — the FOOTPRINT PROJECTIONS: orchestrate (grow the
-               spine) + the non-spine SHAPES (project_set · reach · contract · neighborhood · compare) +
+               region) + the non-flow SHAPES (project_set · reach · contract · neighborhood · compare) +
                name_consumers (name-grounded recall) + route (the NL→shape router) — §8.6
   cli/         decompose.ts (the one CLI entry) · anchor_rank.ts (standalone ranker / --select)
 ```
@@ -292,11 +292,11 @@ CLI default = the **deterministic floor** (anchor → footprint → intent floor
 
 ## 8.6 Codebase shapes — projections over the resolved graph + the router (`codebase/grow/`)
 
-The flow/spine is **one** shape of answer; it is not the unit. The unit is the **`ResolvedGraph`**
+The flow is **one** shape of answer; it is not the unit. The unit is the **`ResolvedGraph`**
 (`scan/graph.ts`) — resolved edges (imports, namespace-member calls, data-coupling shared-keys, HTTP
-routes). A *spine* is the longest-meaningful-path **projection** of it; a *policy* is the star/fan
-projection. The non-spine **shapes** are sibling projections of the same graph, each a small module in
-`codebase/grow/`:
+routes). A *flow* projects as the anchor's flood-fill **region** (its reach across layers, dimmed by
+intent); a *policy* as the star/fan of enforcement sites. The other **shapes** are sibling projections
+of the same graph, each a small module in `codebase/grow/`:
 
 | shape (`--query`) | module · fn | projection | honest negative |
 |---|---|---|---|
@@ -314,7 +314,7 @@ but **"does the answer's correctness need resolved edges?"** Lexical one-fact �
 *about-X* → RAG; Seam owns the **structural middle**. Every shape carries the **dual of `noFlow`** — an
 explicit `noStructure` that **routes away** rather than fabricating a result. They are deterministic,
 offline, and reuse the scan wholesale (each is a projection + a renderer, not a new engine), so they
-add zero risk to the spine/grow path.
+add zero risk to the region/grow path.
 
 Two notes that bit real repos and shaped the code:
 - **Resolver floor completeness, not embedding fallback.** A consumer the floor misses is a *resolver*

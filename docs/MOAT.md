@@ -169,9 +169,9 @@ passes) dominates. Keep the honest `truncated` signal regardless — never silen
    extension diff review); `det`, the anchor probe, AND the **codebase grow/footprint** stay floor-only by
    default. The grow path was deliberately KEPT explicit-opt-in (`--data-coupling llm`): the autogrow
    stability harness showed default-on there breaks **deterministic grow on a cold `.seam/`** (the LLM
-   deduces different keys per run → different footprints → spine destabilises; grow 100%→<100%,
+   deduces different keys per run → different footprints → the ranked region destabilises; grow 100%→<100%,
    tier 0.99→0.83). It self-heals once `.seam/` is warmed, but we gate cold determinism, so the grow opts
-   in explicitly. Review-impact learning is safe by contrast (additive "verify" leads, not a gated spine,
+   in explicitly. Review-impact learning is safe by contrast (additive "verify" leads, not a gated region,
    and it warms the cache). `--data-coupling floor|off` opts out; the pass degrades to floor with no backend
    (offline suite unaffected — it no-ops). Validated: floor-blind homemade-ORM learns→persists→replays
    offline + surfaced in `model.adapters`; MCP keeps an explicit floor/llm contract (independent of the
