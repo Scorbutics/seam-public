@@ -215,21 +215,34 @@ export function extractJsonArray(text: string): any[] {
 // spawn call. Everything else — argument building, JSON-envelope parsing, error wording, usage
 // metering — is shared here, so a fix lands in exactly one place.
 const _MAX_BUF = 256 * 1024 * 1024;
+// HANG GUARD — a per-call wall-clock ceiling on the LLM subprocess. Without it a stalled backend (a hung
+// `claude` CLI on a rate-limit/network stall, a wedged ollama) blocks the whole pipeline FOREVER — the pass has
+// no way to fail, so a footprint just freezes (the seam-intent tiering is the usual victim). On timeout we KILL
+// the child and surface a non-zero status → the parser throws a ClassifierError → the pass degrades to its
+// deterministic floor, exactly as it does for any backend failure. Generous by default (the seam-intent pass is
+// legitimately output-bound and slow on a big footprint); `SEAM_LLM_TIMEOUT_MS` overrides.
+const _llmTimeoutMs = (): number => Math.max(100, Number(process.env.SEAM_LLM_TIMEOUT_MS) || 180000);   // read per call (env-overridable, testable)
 interface ProcResult { status: number; stdout: string; stderr: string; }
 
 function _spawnSync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}): ProcResult {
-  const p = spawnSync(bin, args, { input: opts.input, encoding: "utf-8", env: opts.env ?? process.env, maxBuffer: _MAX_BUF });
+  const ms = _llmTimeoutMs();
+  const p = spawnSync(bin, args, { input: opts.input, encoding: "utf-8", env: opts.env ?? process.env, maxBuffer: _MAX_BUF, timeout: ms, killSignal: "SIGKILL" });
+  if ((p as any).error && ((p as any).error.code === "ETIMEDOUT" || p.signal === "SIGKILL"))
+    return { status: -1, stdout: p.stdout ?? "", stderr: `timed out after ${ms}ms (SEAM_LLM_TIMEOUT_MS)` };
   return { status: p.status ?? -1, stdout: p.stdout ?? "", stderr: p.stderr ?? "" };
 }
 
 function _spawnAsync(bin: string, args: string[], opts: { input?: string; env?: NodeJS.ProcessEnv } = {}): Promise<ProcResult> {
   return new Promise((resolve) => {
+    const ms = _llmTimeoutMs();
     const proc = spawn(bin, args, { env: opts.env ?? process.env });
-    let stdout = "", stderr = "";
+    let stdout = "", stderr = "", done = false;
+    const finish = (r: ProcResult) => { if (done) return; done = true; clearTimeout(timer); resolve(r); };
+    const timer = setTimeout(() => { try { proc.kill("SIGKILL"); } catch { /* already gone */ } finish({ status: -1, stdout, stderr: `timed out after ${ms}ms (SEAM_LLM_TIMEOUT_MS)` }); }, ms);
     proc.stdout.on("data", (d) => { stdout += d; });
     proc.stderr.on("data", (d) => { stderr += d; });
-    proc.on("error", (e) => resolve({ status: -1, stdout, stderr: String((e as Error).message ?? e) }));
-    proc.on("close", (code) => resolve({ status: code ?? -1, stdout, stderr }));
+    proc.on("error", (e) => finish({ status: -1, stdout, stderr: String((e as Error).message ?? e) }));
+    proc.on("close", (code) => finish({ status: code ?? -1, stdout, stderr }));
     if (opts.input != null) { proc.stdin.write(opts.input); proc.stdin.end(); }
   });
 }

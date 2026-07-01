@@ -77,3 +77,25 @@ describe("pass registry (tier routing + enumeration)", () => {
     expect(bus.recorded.get("test-strong-opus")?.model).toBe("claude-opus-4-8");
   });
 });
+
+import { writeFileSync, chmodSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+
+describe("LLM subprocess hang guard (timeout)", () => {
+  test("a stalled backend is killed and the pass THROWS — it does not block forever", () => {
+    // a fake `claude` that ignores its args and hangs; the wall-clock ceiling must kill it and surface a failure
+    // (which the callers catch → degrade to their deterministic floor) instead of freezing the whole pipeline.
+    const dir = mkdtempSync(join(tmpdir(), "seam-llm-hang-"));
+    const bin = join(dir, "hang.sh");
+    writeFileSync(bin, "#!/bin/sh\nsleep 60\n"); chmodSync(bin, 0o755);
+    const prev = process.env.SEAM_LLM_TIMEOUT_MS; process.env.SEAM_LLM_TIMEOUT_MS = "200";
+    try {
+      const t0 = performance.now();
+      expect(() => runPassRaw("claude", bin, "hi", "claude-haiku-4-5", 0, "seam-intent")).toThrow(/timed out/);
+      expect(performance.now() - t0).toBeLessThan(5000);   // killed promptly (2 retries x 200ms), not a 60s hang
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+      if (prev === undefined) delete process.env.SEAM_LLM_TIMEOUT_MS; else process.env.SEAM_LLM_TIMEOUT_MS = prev;
+    }
+  });
+});
