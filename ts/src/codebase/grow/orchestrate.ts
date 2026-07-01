@@ -478,17 +478,54 @@ function _candLabel(n: any): string {
   const encl = n.enclosing && n.enclosing !== n.symbol ? ` (${n.enclosing})` : "";
   return `${n.symbol}${encl} — ${n.file ? normpath(n.file) : "?"} — ${n.kind ?? "symbol"}`;
 }
-function _prunePrompt(intent: string, cands: { i: number; n: any }[]): string {
+
+// REGION REACH — the resolved relation(s) that REACHED a candidate from a node ALREADY IN the region (the flood
+// parent). The border used to judge each node in ISOLATION ("is this on the intent?"), which reads a data-layer
+// bean as "generic → exclude" and cuts the mechanism the flow delegates to. Feeding the SLM WHO reached the
+// candidate and HOW turns the question into the REGION-SHAPED one — "does this CONTINUE the flooded concern or
+// DEPART into another?" — which the cheap model answers far better (a resource → bean → repo continuation is
+// obvious once you see it's what the on-intent handler CALLS). Phrasing is from the candidate's point of view.
+const _RELATION_PHRASE: Record<string, [string, string]> = {   // [reached-from side, points-to side]
+  call: ["called by", "calls"], import: ["used by", "uses"], reference: ["referenced by", "references"],
+  "interface-impl": ["implemented by", "implements"], contains: ["a member of", "contains"],
+  "route-fetch": ["reached over a route from", "reaches over a route to"],
+  "route-serve": ["reached over a route from", "reaches over a route to"],
+  "data-coupling": ["shares data with", "shares data with"], "type-ref": ["a data type used by", "uses the type"],
+};
+export function _reachPhrases(n: any, edges: any[], isReacher: (id: string) => boolean, symOf: (id: string) => string): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  const rank = (k: string) => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" ? 2 : 3);
+  const cands: { r: number; s: string }[] = [];
+  for (const e of edges) {
+    let dir: "from" | "to" | null = null, other = "";
+    if (e.to === n.id && e.from !== n.id && isReacher(e.from)) { dir = "from"; other = e.from; }
+    else if (e.from === n.id && e.to !== n.id && isReacher(e.to)) { dir = "to"; other = e.to; }
+    if (!dir) continue;
+    const pair = _RELATION_PHRASE[e.kind] ?? ["reached from", "reaches"];
+    const s = `${dir === "from" ? pair[0] : pair[1]} ${symOf(other)}`;
+    if (seen.has(s)) continue; seen.add(s);
+    cands.push({ r: rank(e.kind), s });
+  }
+  cands.sort((a, b) => a.r - b.r);
+  for (const c of cands.slice(0, 2)) out.push(c.s);
+  return out.length ? out.join(", ") : "(reached from the region)";
+}
+
+export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: string }[]): string {
   return [
-    `A developer is mapping the code for ONE intent: "${intent}".`,
+    `A developer is mapping the code REGION for ONE intent: "${intent}" — a flood-fill outward from an anchor over`,
+    "the code's real call/dependency graph. Each candidate below was REACHED from a node ALREADY IN the region, via",
+    "a resolved relation (shown after the ·). For EACH, decide if it CONTINUES the same mechanism the region is",
+    "about, or DEPARTS into a DIFFERENT concern.",
+    "KEEP a candidate the region's flow CALLS or DEPENDS ON to do its work — the service / bean / repository / DB /",
+    "handler the mechanism delegates through (the \"how it works\" runs THROUGH it). DROP a clear DEPARTURE: a",
+    "side-concern reached incidentally (rendering / charts / analytics, notifications, audit, an unrelated domain or",
+    "a generic utility) even if on-intent code calls it. When unsure whether it CONTINUES the mechanism, KEEP it —",
+    "losing the data layer the flow reaches is worse than keeping one extra neighbour.",
+    "Each line is `[index] name (container) — file — kind · <how it was reached>`.",
     "",
-    "For EACH candidate symbol below, decide if it is part of the MECHANISM / FLOW that realises THIS intent.",
-    "EXCLUDE a neighbour that belongs to a DIFFERENT concern (another domain, lifecycle/notifications/audit/",
-    "payments, a generic shared utility) even if it sits in the same module or is called nearby. When unsure,",
-    "EXCLUDE — the map should be the intent's spine, not its whole neighbourhood.",
-    "Each line is `[index] name (container) — file — kind`.",
-    "",
-    ...cands.map((c) => `[${c.i}] ${_candLabel(c.n)}`),
+    ...cands.map((c) => `[${c.i}] ${_candLabel(c.n)} · ${c.ctx}`),
     "",
     'Output ONLY a JSON array, ONE object per candidate: [{"id":"<index>","keep":true|false}, …]',
   ].join("\n");
@@ -496,15 +533,23 @@ function _prunePrompt(intent: string, cands: { i: number; n: any }[]): string {
 
 // Classify every not-yet-decided node as in-scope / out, ONE batched call per ≤_PRUNE_BATCH ring, caching the
 // verdict per node id so a node is judged exactly once across the whole grow. `decided` persists across waves.
-async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>): Promise<Set<string>> {
+export async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>): Promise<Set<string>> {
   decided.set(anchorId, true);   // the anchor is always the intent's centre
   const undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
+  // REGION-SHAPED CONTEXT — for each candidate, the resolved relation(s) that reached it from a node ALREADY IN
+  // the region (a prior-kept node, the anchor, or a boundary marker the flood crossed). The border judges
+  // CONTINUATION-vs-DEPARTURE with this, not each node in isolation. A reacher is anything already anchored in the
+  // region: the anchor, a kept node, or a boundary node (flow-subject / coupling crossing) the flood grew through.
+  const byId = new Map<string, any>((data.nodes as any[]).map((n) => [n.id, n]));
+  const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
+  const isReacher = (id: string): boolean => { if (id === anchorId || decided.get(id) === true) return true; const nd = byId.get(id); return !!nd && (isFlowSubject(nd.kind) || !!nd.coupling); };
+  const ctxOf = (n: any): string => _reachPhrases(n, data.edges as any[], isReacher, (id) => nodeSym.get(id) ?? id);
   // BATCHES OF ONE WAVE'S ring run CONCURRENTLY — each ≤_PRUNE_BATCH slice is an independent classify over a
   // DISJOINT candidate set (no cross-batch dependency), so on a wide wave the wall is the slowest batch, not their
   // sum (the cheap-backend / Ollama path serves concurrent requests). The verdict-write is order-independent
   // (each batch owns its own nodes); JS runs each .then to completion, so no race on `decided`.
-  const batches: { i: number; n: any }[][] = [];
-  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) batches.push(undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n })));
+  const batches: { i: number; n: any; ctx: string }[][] = [];
+  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) batches.push(undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n, ctx: ctxOf(n) })));
   await Promise.all(batches.map(async (batch) => {
     emit(`Judging the intent border with the LLM (${batch.length} candidate${batch.length === 1 ? "" : "s"})…`);
     let out: Map<string, any> | null = null;
@@ -528,7 +573,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   // INTENT-WEIGHTED FRONTIER: rank the next node to grow by its passage's intent-relevance (cached def
   // embeddings); empty without an intent or embeddings → the complexity fallback. Computed ONCE per grow.
-  const wave = _GROW_WAVE();
+  // opts.wave / opts.borderLlm OVERRIDE the env toggles (production reads env; a caller — a test — passes them
+  // directly so it never races the process-global env under bun's concurrent file scheduling).
+  const wave = opts.wave ?? _GROW_WAVE();
   // INTENT FIELD — per-node relevance from cached def embeddings (empty without an intent/embeddings → the
   // complexity fallback). SINGLE-PICK uses the whole-repo embed-RECALL field (lexically pre-filtered, computed
   // ONCE) — its historical behaviour. WAVEFRONT uses a DENSE field: it embeds every REACHED file's defs against
@@ -563,7 +610,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const borderTol = wave && process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null;
   // LLM-prune border takes precedence over the embedding tol border when on AND a backend exists (else it falls
   // back to the tol border / flood). `decided` caches each node's in-scope verdict across all waves.
-  const llmPrune = wave && _GROW_BORDER_LLM() && opts.intent && llmAvailable(opts.claudeBin);
+  const llmPrune = wave && (opts.borderLlm ?? _GROW_BORDER_LLM()) && opts.intent && llmAvailable(opts.claudeBin);
   const decided = new Map<string, boolean>();
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
@@ -720,7 +767,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
