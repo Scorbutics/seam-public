@@ -4,19 +4,16 @@
       "/api/orders|backend/OrderController.java|route|C",
       "/api/orders|frontend/OrdersPage.tsx|route|C",
       "App|frontend/App.tsx|function",
-      "App|frontend/App.tsx|function|C",
       "OrdersPage|frontend/OrdersPage.tsx|function",
-      "OrdersPage|frontend/OrdersPage.tsx|function|C",
       "formatOrders|lib/format.ts|function|backward",
       "listOrders|backend/OrderController.java|method|C|backward"
     ],
     "edges": [
       "/api/orders->OrdersPage:route-fetch",
       "/api/orders->listOrders:route-serve",
-      "App->OrdersPage:reference",
+      "App->OrdersPage:import",
       "App->OrdersPage:reference",
       "OrdersPage->/api/orders:route-fetch",
-      "OrdersPage->formatOrders:import",
       "OrdersPage->formatOrders:import",
       "listOrders->/api/orders:route-serve"
     ]
@@ -42,12 +39,8 @@
   "app/api/admin/payments/route.ts:GET": {
     "nodes": [
       "/api/admin/payments|app/api/admin/payments/route.ts|route|C",
-      "/api/admin/payments|app/api/admin/payments/route.ts|route|C",
-      "AdminPaymentsPage|app/dashboard/admin/payments/page.ts|function|C",
       "AdminPaymentsPage|app/dashboard/admin/payments/page.ts|function|C",
       "GET|app/api/admin/payments/route.ts|function",
-      "GET|app/api/admin/payments/route.ts|function|C",
-      "fetchPayments|lib/services.ts|function|C",
       "fetchPayments|lib/services.ts|function|C",
       "payments|app/api/admin/payments/route.ts|table|C",
       "payments|backend/persist.ts|table|C",
@@ -55,10 +48,8 @@
     ],
     "edges": [
       "/api/admin/payments->fetchPayments:route-fetch",
-      "/api/admin/payments->fetchPayments:route-fetch",
+      "AdminPaymentsPage->fetchPayments:import",
       "AdminPaymentsPage->fetchPayments:reference",
-      "AdminPaymentsPage->fetchPayments:reference",
-      "GET->/api/admin/payments:route-serve",
       "GET->/api/admin/payments:route-serve",
       "GET->payments:db-read",
       "payments->GET:db-read",

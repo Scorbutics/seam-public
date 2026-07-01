@@ -59,21 +59,35 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
   return delta;
 }
 
-// Merge the coupling overlay onto the settled footprint. Re-id any complement that would collide with a
-// structural node id (the grow assigned its own ids while the overlay was held aside); the anchor `n1` and the
-// overlay's internal references stay consistent through the remap.
-function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges: any[]; blindspots: any[] }): void {
+// Merge the coupling overlay onto the settled footprint. DEDUP BY CONTENT (`_key` = file#line#kind), like
+// merge_resolved: `_chain_route_consumers` re-derives the SAME route→consumer crossing every time any file
+// sharing that route base is coupled (seed, fan, deep-fan), each pass minting a fresh `dc` id — so the same
+// synthetic node was appended N× and `_extract_suggested_seams` minted N duplicate seams from it (the region
+// showed loadBookings/install/every route literal 12-18×). A content-equal node already present REUSES its id
+// (edges remap onto it); only genuinely new complements are pushed. Kind stays in the key so a synthetic
+// boundary node never collapses onto the real method at the same line. Re-id still guards raw id collisions.
+export function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges: any[]; blindspots: any[] }): void {
   if (!overlay?.nodes?.length) return;
   const used = new Set<string>((data.nodes ?? []).map((n: any) => n.id));
+  const byKey = new Map<string, string>((data.nodes ?? []).map((n: any) => [_key(n), n.id]));
   const remap = new Map<string, string>();
   let k = (data.nodes ?? []).length;
   for (const n of overlay.nodes) {
+    const ck = _key(n);
+    const dupe = byKey.get(ck);
+    if (dupe !== undefined) { if (dupe !== n.id) remap.set(n.id, dupe); continue; }   // content-equal → reuse it
     let id = n.id;
     while (used.has(id)) id = `dc${k++}`;
     if (id !== n.id) remap.set(n.id, id);
-    used.add(id); data.nodes.push({ ...n, id });
+    used.add(id); byKey.set(ck, id); data.nodes.push({ ...n, id });
   }
-  for (const e of overlay.edges) data.edges.push({ ...e, from: remap.get(e.from) ?? e.from, to: remap.get(e.to) ?? e.to });
+  const eset = new Set<string>((data.edges ?? []).map((e: any) => `${e.from} ${e.to} ${e.kind ?? ""}`));
+  for (const e of overlay.edges) {
+    const from = remap.get(e.from) ?? e.from, to = remap.get(e.to) ?? e.to;
+    const ek = `${from} ${to} ${e.kind ?? ""}`;
+    if (eset.has(ek)) continue;                          // the re-derived crossing brings the same edge back
+    eset.add(ek); data.edges.push({ ...e, from, to });
+  }
   (data.blindspots ??= []).push(...(overlay.blindspots ?? []));
 }
 
