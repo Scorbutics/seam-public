@@ -621,7 +621,7 @@ function collectAnchorKeys(
     if (hit.line < spanLo || hit.line > spanHi) return;
     const id = accessId(hit);
     if (!anchorKeys.has(id) || hit.line < anchorKeys.get(id)!.line)
-      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source });
+      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source, ...(hit.label ? { label: hit.label } : {}) });
   };
   for (const hit of scan_file_keys(anchorFile, anchorText)) addFloor(hit, "scan");
   for (const hit of carrierAccs) addFloor(hit, "carrier");
@@ -715,8 +715,14 @@ function drawBoundary(s: NodeScope, boundaryByKey: Map<string, string>, key: Anc
   const id = keyId(key.kind, key.value);
   let boundaryId = boundaryByKey.get(id);
   if (boundaryId === undefined) {
-    boundaryId = s.graph.addNode({ symbol: key.value, kind: kindOf(key.kind).nodeKind, file, range: [key.line, key.line], enclosing: "", complexity: 1, coupling: true });
+    // LABEL the boundary with the operation name (an endpoint-map `updateBooking`) when the adapter provides one —
+    // far more legible than the raw route value; falls back to the value for keys with no human name.
+    boundaryId = s.graph.addNode({ symbol: key.label ?? key.value, kind: kindOf(key.kind).nodeKind, file, range: [key.line, key.line], enclosing: "", complexity: 1, coupling: true });
     boundaryByKey.set(id, boundaryId);
+  } else if (key.label) {
+    // ORDER-INDEPENDENT: a labelled key arriving after the boundary was minted route-first upgrades the label.
+    const node = s.graph.nodes.find((n) => n.id === boundaryId);
+    if (node && node.symbol === key.value) node.symbol = key.label;
   }
   return boundaryId;
 }

@@ -33,6 +33,15 @@ describe("booking-app fixture — the declarative-client + route contract", () =
     expect(vals.has("/acme/rest/member/booking/v1/*")).toBe(true);     // updateBooking (base + '/{id}')
   });
 
+  test("each endpoint-map entry carries its OPERATION KEY as the boundary label (not just the route)", () => {
+    // the crossing node is labelled by the operation the config declares (`updateBooking`) instead of the raw
+    // route (`/…/v1/*`), so a footprint shows the symbol, not an opaque path. Keyed on the base+'/{id}' entry,
+    // whose route is unique (the bare-base one collides with getBookings — one boundary per route path).
+    const hits = endpointMapScan("web/bookingService.js", read("web/bookingService.js"));
+    const upd = hits.find((k) => k.value === "/acme/rest/member/booking/v1/*");
+    expect(upd?.label).toBe("updateBooking");
+  });
+
   test("the booking route is specific; the archived /summarize fragment is not (the false-positive guard)", () => {
     // the summary caller's route grounds to the booking handler (≥2 shared literals) …
     expect(routeMatchSpecificity("/acme/rest/member/booking/v1/summarize/0/*", "/acme/rest/member/booking/v1/summarize/*/*")).toBeGreaterThanOrEqual(4);

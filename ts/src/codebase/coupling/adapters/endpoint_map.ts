@@ -49,6 +49,18 @@ function _enclosingObject(src: string, idx: number): string {
   return src.slice(open);
 }
 
+// The OPERATION KEY the descriptor is declared under — `"updateBooking": { endpoint, method }` → "updateBooking".
+// It names the boundary far more usefully than the raw route (`/booking/v1/*`), so it becomes the node label. The
+// scan-back from the `endpoint:` position hits the descriptor's own `{` first (the route value, with any `{id}`,
+// comes AFTER `endpoint:`), then the key sits immediately before it.
+function _descriptorKey(src: string, idx: number): string | undefined {
+  let depth = 0, open = -1;
+  for (let i = idx; i >= 0; i--) { const c = src[i]; if (c === "}") depth++; else if (c === "{") { if (depth === 0) { open = i; break; } depth--; } }
+  if (open < 0) return undefined;
+  const m = src.slice(0, open).match(/(['"`]?)([A-Za-z_$][\w$]*)\1[ \t]*:[ \t]*$/);
+  return m ? m[2] : undefined;
+}
+
 export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!_CLIENT_EXT.test(file)) return [];   // declarative CLIENT config is JS/TS/Vue
   const src = masked?.comments ?? maskComments(text);
@@ -70,7 +82,8 @@ export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     const value = normPath(route);
     if (value === "/" || seen.has(value)) continue;
     seen.add(value);
-    out.push({ kind: HTTP_ROUTE_META.kind, value, line: lineOf(text, em.index), produces: false });   // a consumer (the client calls it)
+    const label = _descriptorKey(src, em.index);   // the operation name (`updateBooking`) — the boundary's human label
+    out.push({ kind: HTTP_ROUTE_META.kind, value, line: lineOf(text, em.index), produces: false, ...(label ? { label } : {}) });   // a consumer (the client calls it)
   }
   return out;
 }
