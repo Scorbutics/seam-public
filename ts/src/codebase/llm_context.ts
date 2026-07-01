@@ -447,13 +447,39 @@ const _WAVE_VERB: Record<string, string> = {
   "data-coupling": "shares data with", "type-ref": "typed by",
 };
 const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
+const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
+
+// FLOOD TREE — for each seam, the connected seam CLOSER to the anchor (strictly lower shell) that reached it;
+// prefer the NEAREST parent (highest shell below it), then the most concrete relation (call > route > import >
+// containment). A node-level `edges` link resolves to a seam-to-seam wave link. Shared by the wave view and the
+// per-scenario sequence view (the parent links ARE the sequence edges).
+function _floodParents(model: any, seams: Seam[]): Map<string, { seam: Seam; kind: string; via: string }> {
+  const seamOfNode = new Map<string, Seam>();
+  const nodeLabel = new Map<string, string>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { seamOfNode.set(String(id), s); nodeLabel.set(String(id), h.label ?? s.label); } }
+  const parentOf = new Map<string, { seam: Seam; kind: string; via: string }>();
+  for (const e of (model.edges ?? []) as any[]) {
+    const a = seamOfNode.get(String(e.from)), b = seamOfNode.get(String(e.to));
+    if (!a || !b || a.id === b.id) continue;
+    // `via` = the SPECIFIC child-side node the edge reached (the method/route invoked), not the seam's class rep —
+    // so a sequence message reads `getExistingBookings`, not `BookingsBean`.
+    for (const [child, par, childNode] of [[a, b, e.from], [b, a, e.to]] as [Seam, Seam, string][]) {
+      const cs = _shellOf(child), ps = _shellOf(par);
+      if (ps < 0 || cs < 0 || ps >= cs) continue;                       // parent must sit closer to the anchor
+      const cur = parentOf.get(child.id);
+      if (!cur || ps > _shellOf(cur.seam) || (ps === _shellOf(cur.seam) && _WAVE_RANK(e.kind) < _WAVE_RANK(cur.kind)))
+        parentOf.set(child.id, { seam: par, kind: e.kind, via: nodeLabel.get(String(childNode)) ?? child.label });
+    }
+  }
+  return parentOf;
+}
 
 export function renderWaves(model: any): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
-  const shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
+  const shellOf = _shellOf;
 
   const out: string[] = [];
   const head = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`, `resolution: ${model.resolutionQuality ?? "?"}`];
@@ -461,24 +487,7 @@ export function renderWaves(model: any): string {
   head.push(`complete: ${model.complete ? "yes" : "no"}`, `seams: ${seams.length}`);
   out.push(`# Intent footprint — wave view (flood order)`, head.join(" | "), "");
 
-  // node id → its seam, and each seam's shell — so a node-level edge resolves to a seam-to-seam wave link.
-  const seamOfNode = new Map<string, Seam>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) seamOfNode.set(String(id), s); }
-  // PARENT of each seam = the connected seam CLOSER to the anchor (strictly lower shell) that reached it; prefer
-  // the NEAREST (highest shell below it), then the most concrete relation (a call over an import over containment).
-  const parentOf = new Map<string, { seam: Seam; kind: string }>();
-  for (const e of (model.edges ?? []) as any[]) {
-    const a = seamOfNode.get(String(e.from)), b = seamOfNode.get(String(e.to));
-    if (!a || !b || a.id === b.id) continue;
-    for (const [child, par] of [[a, b], [b, a]] as [Seam, Seam][]) {
-      const cs = shellOf(child), ps = shellOf(par);
-      if (ps < 0 || cs < 0 || ps >= cs) continue;                       // parent must sit closer to the anchor
-      const cur = parentOf.get(child.id);
-      if (!cur || ps > shellOf(cur.seam) || (ps === shellOf(cur.seam) && _WAVE_RANK(e.kind) < _WAVE_RANK(cur.kind)))
-        parentOf.set(child.id, { seam: par, kind: e.kind });
-    }
-  }
-
+  const parentOf = _floodParents(model, seams);
   const reld = (s: Seam): string => (model.skeleton ? "" : s.tier === "spine" ? "●●● " : s.tier === "off" ? "● " : "●● ");
   const byShell = new Map<number, Seam[]>();
   for (const s of seams) { const sh = shellOf(s); (byShell.get(sh) ?? byShell.set(sh, []).get(sh)!).push(s); }
@@ -492,5 +501,83 @@ export function renderWaves(model: any): string {
   }
   out.push("", "Each seam is listed at the WAVE the flood reached it (its hop from the anchor); ← names the",
     "previous-wave seam that reached it, and how. Read top-down to replay the flood's growth.");
+  return out.join("\n");
+}
+
+// SCENARIO SEQUENCE VIEW — the region's distinct end-to-end flows as Mermaid sequence diagrams. A scenario is a
+// root→leaf path in the flood tree (anchor → … → a TERMINAL: a seam no other seam hangs off — the DB write, the
+// leaf service). Consecutive seams in the SAME container (class/file) collapse onto one lifeline; a container
+// change emits a message labelled by the callee + the relation that crossed (a call, an HTTP route). Pure
+// projection — reuses `_floodParents` (the wave parent links ARE the sequence edges). Cap the scenario count and
+// depth so a broad region stays legible; on-intent (spine) terminals first.
+const _SCENARIO_CAP = 8, _SEQ_DEPTH_CAP = 20;
+const _MERMAID_ID = (s: string): string => (s.replace(/[^A-Za-z0-9]/g, "_").replace(/^(\d)/, "_$1") || "p");
+const _seqArrow: Record<string, string> = { "route-serve": "HTTP", "route-fetch": "HTTP", "interface-impl": "impl", "data-coupling": "data" };
+
+export function renderScenarios(model: any): string {
+  if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
+  const cl = (model.clusters ?? [])[0];
+  if (!cl) return "(empty footprint)";
+  const seams: Seam[] = cl.seams ?? [];
+  const parentOf = _floodParents(model, seams);
+  const symOf = (s: Seam): string => s.primary?.symbol ?? s.label;
+  const contOf = (s: Seam): string => _container(s.primary?.file) || filesOf(s)[0] || s.label;
+
+  // TERMINALS = seams that are no seam's parent (nothing hangs further off them) — the ends of each flow. A pure
+  // ROUTE-BOUNDARY leaf (its rep is a `/route` literal) is NOT a real terminal — it's a crossing the deeper flow
+  // already passes through — so it's excluded (else every route emits a 1-hop stub scenario). Order on-intent
+  // (spine) first, then deepest, so the most relevant scenarios lead and the cap drops the periphery.
+  const isParent = new Set([...parentOf.values()].map((p) => p.seam.id));
+  const isRouteLiteral = (s: Seam) => (s.primary?.symbol ?? s.label).startsWith("/");
+  const tierRank = (s: Seam) => (s.tier === "spine" ? 0 : s.tier === "off" ? 2 : 1);
+  const terminals = seams.filter((s) => !isParent.has(s.id) && parentOf.has(s.id) && !isRouteLiteral(s))
+    .sort((a, b) => (tierRank(a) - tierRank(b)) || (_shellOf(b) - _shellOf(a)));
+
+  const out: string[] = [];
+  const head = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`, `resolution: ${model.resolutionQuality ?? "?"}`, `scenarios: ${Math.min(terminals.length, _SCENARIO_CAP)}`];
+  out.push(`# Intent footprint — scenario sequences`, head.join(" | "), "");
+  if (!terminals.length) {
+    out.push("(no traceable end-to-end flow — the region has no attached terminal; read the wave view instead.)");
+    return out.join("\n");
+  }
+
+  const seenPath = new Set<string>();   // dedup scenarios that collapse to the same container sequence
+  let n = 0;
+  for (const leaf of terminals) {
+    if (n >= _SCENARIO_CAP) break;
+    // walk parent links leaf → anchor, then reverse to anchor → leaf (guard against a cycle / depth blow-up).
+    const path: Seam[] = []; const guard = new Set<string>();
+    for (let s: Seam | undefined = leaf; s && !guard.has(s.id) && path.length < _SEQ_DEPTH_CAP; s = parentOf.get(s.id)?.seam) { guard.add(s.id); path.push(s); }
+    path.reverse();
+    if (path.length < 2) continue;
+
+    // collapse consecutive same-container seams; a container change is a message (labelled by the callee symbol +
+    // the crossing relation). Participants are the containers in first-appearance order.
+    const parts: string[] = []; const msgs: string[] = [];
+    let prev: string | null = null;
+    for (const s of path) {
+      const c = contOf(s), id = _MERMAID_ID(c);
+      if (!parts.includes(`${id} ${c}`)) parts.push(`${id} ${c}`);
+      if (prev !== null && prev !== id) {
+        const p = parentOf.get(s.id);
+        const rel = _seqArrow[p?.kind ?? ""];
+        // the callee method / route; when the resolved edge only reached the CLASS (via === container), the
+        // descriptive seam label reads better than repeating the participant name.
+        const msg = p?.via && p.via !== c ? p.via : s.label;
+        msgs.push(`  ${prev}->>${id}: ${msg}${rel ? ` [${rel}]` : ""}`);
+      }
+      prev = id;
+    }
+    if (!msgs.length) continue;                                 // whole path in one container → not a sequence
+    const sig = msgs.join("|");
+    if (seenPath.has(sig)) continue; seenPath.add(sig);
+    n++;
+    out.push(`## Scenario ${n}: ${symOf(path[0])} → ${symOf(leaf)}`, "```mermaid", "sequenceDiagram");
+    for (const p of parts) { const [id, disp] = p.split(" "); out.push(`  participant ${id} as ${disp}`); }
+    out.push(...msgs, "```", "");
+  }
+  if (!n) out.push("(the region's flows stay within one component — no cross-component sequence to draw.)");
+  else out.push("Each diagram is ONE end-to-end flow through the region (anchor → terminal); same-class steps share",
+    "a lifeline, an arrow is a cross-component call ([HTTP] = over a route). Scenarios are capped + on-intent first.");
   return out.join("\n");
 }

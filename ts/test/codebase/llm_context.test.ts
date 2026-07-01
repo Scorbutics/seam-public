@@ -3,7 +3,7 @@
 // member ranking (the intent path inside the blob) was invisible. The renderer now prints each seam's
 // spine-flagged members (★, relevance, file:line) under the spine + supporting seams.
 import { describe, expect, test } from "bun:test";
-import { renderLlmContext, renderWaves } from "../../src/codebase/llm_context.js";
+import { renderLlmContext, renderWaves, renderScenarios } from "../../src/codebase/llm_context.js";
 
 const model = (spineHunks: any[]) => ({
   mode: "codebase", anchor: "FileNoteService", resolutionQuality: "FULL", complete: true,
@@ -108,6 +108,49 @@ describe("renderWaves (flood-order view)", () => {
     expect(out).toContain("●●● Load bookings UI");   // spine
     expect(out).toContain("● Record repo");          // off-intent, dimmed
     expect(renderWaves({ mode: "diff" })).toBe("(not a codebase seam model)");
+  });
+});
+
+describe("renderScenarios (per-scenario sequence diagrams)", () => {
+  // deep flow UI → resource (over a route) → bean → repo, PLUS an orphan route-boundary leaf that must NOT
+  // become its own 1-hop scenario. Node ids match the edges; region.shell gives the wave order.
+  const scenModel = {
+    mode: "codebase", anchor: "loadBookings", resolutionQuality: "FULL", complete: true, blindspots: [],
+    clusters: [{ id: "g1", intent: "load member bookings", seams: [
+      { id: "n1", label: "Load bookings UI", tier: "spine", region: { shell: 0 }, primary: { file: "ui.js", line: 2, symbol: "loadBookings" }, hunks: [{ id: "n1", label: "loadBookings" }] },
+      { id: "orph", label: "Orphan route", tier: "off", region: { shell: 1 }, primary: { file: "ui.js", line: 9, symbol: "/orphan/route" }, hunks: [{ id: "orph", label: "/orphan/route" }] },
+      { id: "rs", label: "Bookings resource", tier: "spine", region: { shell: 1 }, primary: { file: "R.java", line: 5, symbol: "getExistingBookings" }, hunks: [{ id: "rs", label: "getExistingBookings" }] },
+      { id: "bn", label: "Bookings bean", tier: "supporting", region: { shell: 2 }, primary: { file: "B.java", line: 3, symbol: "BookingsBean" }, hunks: [{ id: "bn", label: "getExistingBookings" }] },
+      { id: "rp", label: "Record repo", tier: "off", region: { shell: 3 }, primary: { file: "Repo.java", line: 1, symbol: "RecordRepo" }, hunks: [{ id: "rp", label: "find" }] },
+    ] }],
+    edges: [
+      { from: "n1", to: "orph", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },
+      { from: "n1", to: "rs", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },
+      { from: "rs", to: "bn", kind: "call", provenance: "RESOLVED_FULL" },
+      { from: "bn", to: "rp", kind: "call", provenance: "RESOLVED_FULL" },
+    ],
+  };
+
+  test("renders one end-to-end flow as a Mermaid sequence, with participants, a route [HTTP] hop, and callee messages", () => {
+    const out = renderScenarios(scenModel);
+    expect(out).toContain("```mermaid");
+    expect(out).toContain("sequenceDiagram");
+    expect(out).toContain("## Scenario 1: loadBookings → RecordRepo");     // anchor → the deepest code terminal
+    for (const p of ["participant ui", "participant R", "participant B", "participant Repo"]) expect(out).toContain(p);
+    expect(out).toMatch(/ui->>R: .*\[HTTP\]/);                             // the UI→resource hop crossed a route
+    expect(out).toMatch(/R->>B: getExistingBookings/);                    // the specific callee, not the class
+    expect(out).toMatch(/B->>Repo: find/);
+  });
+
+  test("a route-boundary leaf is NOT emitted as its own scenario", () => {
+    const out = renderScenarios(scenModel);
+    expect(out).not.toContain("/orphan/route");     // the orphan route literal is a crossing, not a flow terminal
+    expect(out).toContain("scenarios: 1");
+  });
+
+  test("degrades on an empty / foreign model", () => {
+    expect(renderScenarios({ mode: "diff" })).toBe("(not a codebase seam model)");
+    expect(renderScenarios({ mode: "codebase", clusters: [{ id: "g1", seams: [] }] })).toContain("no traceable end-to-end flow");
   });
 });
 

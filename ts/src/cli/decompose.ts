@@ -65,7 +65,7 @@ async function runAsk(a: Args): Promise<number> {
   if (res.routedAway || !res.result) { process.stdout.write((res.guidance ?? "") + "\n"); return 0; }
 
   const model: any = res.result.mode ? res.result : { mode: "codebase", ...res.result };
-  if (a.format === "llm-context" || a.format === "waves") {
+  if (a.format === "llm-context" || a.format === "waves" || a.format === "scenarios") {
     const lc = await import("../codebase/llm_context.js");
     // the SET/deps/reaches/… shapes have no flood-wave structure, so `--format waves` only changes the flow view.
     const r = res.result.shape === "set" ? lc.renderConsumerSet
@@ -77,6 +77,7 @@ async function runAsk(a: Args): Promise<number> {
       : res.result.shape === "neighborhood" ? lc.renderNeighborhood
       : res.result.shape === "comparison" ? lc.renderComparison
       : a.format === "waves" ? lc.renderWaves            // flow → wave view (flood order)
+      : a.format === "scenarios" ? lc.renderScenarios    // flow → per-scenario sequence diagrams
       : lc.renderLlmContext;                             // flow → the region renderer
     process.stdout.write(r(model) + "\n");
   }
@@ -504,6 +505,9 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "waves") {              // the same region read as FLOOD ORDER (wave-by-wave + parent links)
         const { renderWaves } = await import("../codebase/llm_context.js");
         process.stdout.write(renderWaves(stamped) + "\n");
+      } else if (a.format === "scenarios") {          // the region's end-to-end flows as Mermaid sequence diagrams
+        const { renderScenarios } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderScenarios(stamped) + "\n");
       } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");
