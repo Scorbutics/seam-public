@@ -53,9 +53,9 @@ describe("intent border — region reach context (continuation vs departure)", (
       { i: 0, n: { symbol: "BookingsBean", file: "ejb/BookingsBean.java", kind: "class" }, ctx: "called by AcmeCheckBookingsService.getExistingBookings" },
     ]);
     expect(p).toContain("called by AcmeCheckBookingsService.getExistingBookings");   // the flood context is fed
-    expect(p).toMatch(/CONTINUE/);                                                      // …the region-shaped question
-    expect(p).toMatch(/DEPART/);
-    expect(p).toMatch(/KEEP it/);                                                       // …unsure-default biased to recall
+    expect(p).toMatch(/DEPART/);                                                        // …the region-shaped question
+    expect(p).toMatch(/SIDE-CONCERN/);                                                  // …drop side-concerns the flow merely triggers
+    expect(p).toMatch(/KEEP the mechanism/);                                            // …keep the intent's own data path
     expect(p).toContain("[0] BookingsBean");
   });
 
