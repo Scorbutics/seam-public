@@ -242,7 +242,13 @@ function nthStringArg(text: string, start: number, n: number): string | null {
 // Execute a matcher over ONE file → the keys it detects. Deterministic, bounded, no LLM. ASYNC because the
 // AST shapes (assign/attr) parse with tree-sitter; `call` stays a pure regex (no parser ⇒ works offline /
 // .vsix-degraded, the floor's robustness). `file` selects the grammar for the AST shapes.
+const _NO_HITS: KeyHit[] = [];
 export async function runMatcher(m: KeyMatcher, file: string, text: string): Promise<KeyHit[]> {
+  // PRE-FILTER (perf, behaviour-preserving) — same gate applyMatchers uses on the repo-wide grounding pass
+  // (key_matcher.ts), extended to the runPipeline PER-NODE loop (the un-filtered site: measured ~2000 learned
+  // rules × every node = 60k runMatcher calls / 45s on cal.com, 85% of them for a rule whose literal is absent
+  // and so could never match). Kill-switch SEAM_MATCHER_PREFILTER=0 for A/B.
+  if (process.env.SEAM_MATCHER_PREFILTER !== "0") { const lit = matcherLiteral(m); if (lit && !text.includes(lit)) return _NO_HITS; }
   if (m.via === "call") return runCall(m, text);
   if (m.via === "assign") return runAssign(m, file, text);
   if (m.via === "method") return runMethod(m, file, text);

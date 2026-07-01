@@ -7,7 +7,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { matcherLiteral, validateMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { matcherLiteral, validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -40,5 +40,32 @@ describe("applyMatchers pre-filter is behaviour-preserving", () => {
     const k = idx.get("db-table booking");
     expect(k).toBeDefined();
     expect(k!.consumers.map((c) => c.file)).toEqual(["reader.ts"]);   // matched the token-bearing file only
+  });
+});
+
+// The SAME gate on the runPipeline PER-NODE loop (the previously un-filtered site — the cal.com hotspot).
+// runMatcher itself now short-circuits, so every caller (pipeline + grounding) benefits. Offline (regex shape).
+describe("runMatcher pre-filter is behaviour-preserving", () => {
+  const repoM = validateMatcher({ via: "repository", token: "bookingRepo", verbs: ["save", "create"], kind: "db-table", role: "produces" })!;
+  const callM = validateMatcher({ via: "call", token: "emitEvent", argIndex: 0, kind: "event", role: "consumes" })!;
+
+  test("a real match is KEPT (literal present, pattern matches)", async () => {
+    const hits = await runMatcher(repoM, "svc.ts", `export function f(){ bookingRepo.save({ id: 1 }); }`);
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits[0].value).toBe("bookingRepo");
+  });
+
+  test("literal ABSENT → empty, and correct (the pattern could not match anyway)", async () => {
+    expect((await runMatcher(repoM, "svc.ts", `export function f(){ otherRepo.save({ id: 1 }); }`)).length).toBe(0);
+  });
+
+  test("literal present but pattern does NOT match → empty (the regex, not the gate, decides)", async () => {
+    expect((await runMatcher(repoM, "svc.ts", `const note = "bookingRepo is our data layer";`)).length).toBe(0);
+  });
+
+  test("gate literal only in a COMMENT → empty (raw-text gate is a safe superset; masking still rejects)", async () => {
+    expect((await runMatcher(callM, "svc.ts", `// emitEvent('sync') is called elsewhere\nexport const x = 1;`)).length).toBe(0);
+    // the same call in CODE IS matched — the gate did not over-skip
+    expect((await runMatcher(callM, "svc.ts", `export function f(){ emitEvent('sync'); }`)).length).toBeGreaterThan(0);
   });
 });
