@@ -94,8 +94,8 @@ describe("renderWaves (flood-order view)", () => {
     expect(out).toContain("Wave 1:");
     expect(out).toContain("Wave 2:");
     expect(out).toContain("Wave 3:");
-    // parent links: the resource is reached over a route from the UI; the bean is CALLED by the resource
-    expect(out).toMatch(/Bookings resource .*← via route from Load bookings UI/);
+    // parent links: the resource is reached over an HTTP route from the UI; the bean is CALLED by the resource
+    expect(out).toMatch(/Bookings resource .*← via HTTP route from Load bookings UI/);
     expect(out).toMatch(/Bookings bean .*← called by Bookings resource/);
     expect(out).toMatch(/Record repo .*← called by Bookings bean/);
     // waves are ordered, and the anchor has no parent link
@@ -147,16 +147,17 @@ describe("renderScenarios (per-scenario sequence diagrams)", () => {
     // the load flow departs from loadBookings and runs UI → resource (over a route) → bean → repo
     expect(out).toContain("## Scenario 1: loadBookings -> RecordRepo");
     for (const p of ["participant ui", "participant R", "participant B", "participant Repo"]) expect(out).toContain(p);
-    expect(out).toMatch(/ui->>R: .*\[HTTP\]/);                        // the cross-stack hop is marked HTTP
+    expect(out).toMatch(/ui->>R: .*\[HTTP route: \/existing\/\*\]/);  // the cross-stack hop names the ROUTE it crosses
     expect(out).toMatch(/B->>Repo:/);                                // reaches the deep terminal
     // the SECOND user action departs from cancelBooking — a different departure, its own scenario
     expect(out).toContain("cancelBooking ->");
   });
 
-  test("boundary nodes fold (not participants), and a backend-only sub-path is not re-emitted", () => {
+  test("a boundary is a LINK decoration (its key on the arrow), not a participant; a backend sub-path isn't re-emitted", () => {
     const out = renderScenarios(scenModel);
-    expect(out).not.toContain("participant b1");     // the route boundary is folded onto the consumer lifeline
-    expect(out).not.toContain("/existing/*");        // the raw route literal isn't a participant/message
+    expect(out).not.toContain("participant b1");     // the route boundary is not its own lifeline
+    expect(out).not.toMatch(/participant \S* as \/existing/);   // …the raw route literal isn't a participant
+    expect(out).toContain("[HTTP route: /existing/*]");         // …it decorates the layer-crossing link instead
     // rs→bn→rp is the tail of scenario 1, so getExistingBookings must NOT also head its own scenario
     expect(out).not.toContain("## Scenario 2: getExistingBookings");
   });

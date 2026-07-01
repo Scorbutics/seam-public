@@ -443,8 +443,8 @@ export function renderLlmContext(model: any): string {
 // here?" node-by-node, the stepping stone to a per-scenario sequence view.
 const _WAVE_VERB: Record<string, string> = {
   call: "called by", import: "used by", reference: "referenced by", "interface-impl": "implemented by",
-  contains: "declared in", "route-serve": "via route from", "route-fetch": "via route from",
-  "data-coupling": "shares data with", "type-ref": "typed by",
+  contains: "declared in", "route-serve": "via HTTP route from", "route-fetch": "via HTTP route from",
+  "db-read": "reads the table", "db-write": "writes the table", "data-coupling": "shares a key with", "type-ref": "typed by",
 };
 const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
 const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
@@ -538,6 +538,18 @@ export function renderScenarios(model: any): string {
   const inc = new Map<string, Set<string>>();
   for (const e of (model.edges ?? []) as any[]) { for (const x of [e.from, e.to]) (inc.get(String(x)) ?? inc.set(String(x), new Set()).get(String(x))!).add(e.kind); }
   const isBoundary = (id: string) => { const k = inc.get(id); return !!k && k.has("route-serve") && k.has("route-fetch"); };
+  // A CROSSING is a data-coupling boundary (the synthetic KEY between two layers): its MEDIUM (an HTTP route, a
+  // DB table, a shared key) + its KEY (the node's own label — the route path / table name). Used to annotate the
+  // link between layers so a scenario arrow reads `getExistingBookings [HTTP route: /acme/rest/member/booking/v1]`
+  // instead of an opaque `[HTTP]`. Generalises `isBoundary` (routes) to db / shared-key boundaries.
+  const crossOf = (id: string): { medium: string; key: string } | null => {
+    const k = inc.get(id); if (!k) return null;
+    const key = node.get(id)?.label ?? "";
+    if (k.has("route-serve") && k.has("route-fetch")) return { medium: "HTTP route", key };
+    if (k.has("db-write") && k.has("db-read")) return { medium: "table", key };
+    if (k.has("data-coupling")) return { medium: "shared key", key };
+    return null;
+  };
 
   // FORWARD GRAPH — ORIENTED by MEANING, not flood order: a call/contains/impl/import goes from→to as-is; a route
   // crossing (emitted symmetrically) is oriented consumer→boundary→handler by which end is the boundary. This
@@ -594,14 +606,20 @@ export function renderScenarios(model: any): string {
     if (n >= _SCENARIO_CAP) break;
     const parts: string[] = []; const msgs: string[] = []; const hops: string[] = [];
     let prev: string | null = null;
+    let cross: { medium: string; key: string } | null = null;   // a boundary crossed since the last participant
     for (const step of path) {
+      const x = crossOf(step.id);
+      if (x) { cross = x; continue; }   // the KEY (route/table) is a LINK decoration, not a lifeline — carry it forward
       const c = contOf(step.id), id = _MERMAID_ID(c), info = node.get(step.id)!;
       if (!parts.includes(`${id}\t${c}`)) parts.push(`${id}\t${c}`);
       if (prev !== null && prev !== id) {
-        const rel = _seqArrow[step.kind];
         const msg = info.label && info.label !== c && !info.label.startsWith("/") ? info.label : info.seam.label;
-        msgs.push(`  ${prev}->>${id}: ${msg}${rel ? ` [${rel}]` : ""}`);
+        // the link between the two layers: the actual coupling key when one was crossed (an http-route / table),
+        // else the plain relation marker ([impl]/[data]) — a same-file call is unmarked.
+        const link = cross ? ` [${cross.medium}: ${cross.key}]` : (_seqArrow[step.kind] ? ` [${_seqArrow[step.kind]}]` : "");
+        msgs.push(`  ${prev}->>${id}: ${msg}${link}`);
         hops.push(`${prev}>${id}`);
+        cross = null;
       }
       prev = id;
     }
