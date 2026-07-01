@@ -3,7 +3,7 @@
 // member ranking (the intent path inside the blob) was invisible. The renderer now prints each seam's
 // spine-flagged members (★, relevance, file:line) under the spine + supporting seams.
 import { describe, expect, test } from "bun:test";
-import { renderLlmContext } from "../../src/codebase/llm_context.js";
+import { renderLlmContext, renderWaves } from "../../src/codebase/llm_context.js";
 
 const model = (spineHunks: any[]) => ({
   mode: "codebase", anchor: "FileNoteService", resolutionQuality: "FULL", complete: true,
@@ -67,6 +67,47 @@ describe("renderLlmContext region view (spine retired)", () => {
     expect(out).toContain("●●● [1] A dep");                // on-intent dimming
     expect(out).toContain("● [2] Peripheral dep");         // peripheral dimmed IN PLACE (not exiled to "off")
     for (const gone of ["## Spine", "## Supporting", "## Off-path", "## Paths"]) expect(out).not.toContain(gone);
+  });
+});
+
+describe("renderWaves (flood-order view)", () => {
+  // UI anchor (wave 0) → resource over a route (wave 1) → bean it calls (wave 2) → repo (wave 3). Node-level
+  // edges carry the parent links; each seam's region.shell is the wave it was reached on.
+  const waveModel = {
+    mode: "codebase", anchor: "loadBookings", resolutionQuality: "FULL", complete: true, blindspots: [],
+    clusters: [{ id: "g1", intent: "load member bookings", seams: [
+      { id: "n1", label: "Load bookings UI", tier: "spine", region: { shell: 0, direction: "" }, primary: { file: "ui.js", line: 2, symbol: "loadBookings" }, hunks: [{ id: "n1" }] },
+      { id: "rs", label: "Bookings resource", tier: "spine", region: { shell: 1, direction: "down" }, primary: { file: "R.java", line: 5, symbol: "getExistingBookings" }, hunks: [{ id: "rs" }] },
+      { id: "bn", label: "Bookings bean", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "B.java", line: 3, symbol: "BookingsBean" }, hunks: [{ id: "bn" }] },
+      { id: "rp", label: "Record repo", tier: "off", region: { shell: 3, direction: "down" }, primary: { file: "Repo.java", line: 1, symbol: "RecordRepo" }, hunks: [{ id: "rp" }] },
+    ] }],
+    edges: [
+      { from: "n1", to: "rs", kind: "route-serve", provenance: "RESOLVED_PARTIAL" },
+      { from: "rs", to: "bn", kind: "call", provenance: "RESOLVED_FULL" },
+      { from: "bn", to: "rp", kind: "call", provenance: "RESOLVED_FULL" },
+    ],
+  };
+
+  test("groups seams by WAVE and links each to the previous-wave seam that reached it, with the relation", () => {
+    const out = renderWaves(waveModel);
+    expect(out).toContain("Wave 0 — the anchor:");
+    expect(out).toContain("Wave 1:");
+    expect(out).toContain("Wave 2:");
+    expect(out).toContain("Wave 3:");
+    // parent links: the resource is reached over a route from the UI; the bean is CALLED by the resource
+    expect(out).toMatch(/Bookings resource .*← via route from Load bookings UI/);
+    expect(out).toMatch(/Bookings bean .*← called by Bookings resource/);
+    expect(out).toMatch(/Record repo .*← called by Bookings bean/);
+    // waves are ordered, and the anchor has no parent link
+    expect(out.indexOf("Wave 1:")).toBeLessThan(out.indexOf("Wave 2:"));
+    expect(out).toMatch(/Load bookings UI[^\n]*$/m);   // anchor line has no "←"
+  });
+
+  test("dims by tier and degrades cleanly on an empty/foreign model", () => {
+    const out = renderWaves(waveModel);
+    expect(out).toContain("●●● Load bookings UI");   // spine
+    expect(out).toContain("● Record repo");          // off-intent, dimmed
+    expect(renderWaves({ mode: "diff" })).toBe("(not a codebase seam model)");
   });
 });
 

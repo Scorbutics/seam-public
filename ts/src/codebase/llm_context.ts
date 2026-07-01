@@ -435,3 +435,62 @@ export function renderLlmContext(model: any): string {
       "and stitch the two together — that's faster and more complete than a manual grep sweep.");
   return out.join("\n");
 }
+
+// WAVE VIEW — the same region, read as the FLOOD ORDER it grew in: seams grouped by SHELL (the wave/hop the
+// flood reached them on), and each new node LINKED BACK to the previous-wave node that reached it, with the
+// resolved relation (called by / used by / via route from …). Pure projection of the emitted model — `region.
+// shell` gives the wave, `edges` (node-level) give the parent — no engine logic. Answers "how did the flood get
+// here?" node-by-node, the stepping stone to a per-scenario sequence view.
+const _WAVE_VERB: Record<string, string> = {
+  call: "called by", import: "used by", reference: "referenced by", "interface-impl": "implemented by",
+  contains: "declared in", "route-serve": "via route from", "route-fetch": "via route from",
+  "data-coupling": "shares data with", "type-ref": "typed by",
+};
+const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
+
+export function renderWaves(model: any): string {
+  if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
+  const cl = (model.clusters ?? [])[0];
+  if (!cl) return "(empty footprint)";
+  const seams: Seam[] = cl.seams ?? [];
+  const shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
+
+  const out: string[] = [];
+  const head = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`, `resolution: ${model.resolutionQuality ?? "?"}`];
+  if (model.shape) head.push(`shape: ${model.shape}`);
+  head.push(`complete: ${model.complete ? "yes" : "no"}`, `seams: ${seams.length}`);
+  out.push(`# Intent footprint — wave view (flood order)`, head.join(" | "), "");
+
+  // node id → its seam, and each seam's shell — so a node-level edge resolves to a seam-to-seam wave link.
+  const seamOfNode = new Map<string, Seam>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) seamOfNode.set(String(id), s); }
+  // PARENT of each seam = the connected seam CLOSER to the anchor (strictly lower shell) that reached it; prefer
+  // the NEAREST (highest shell below it), then the most concrete relation (a call over an import over containment).
+  const parentOf = new Map<string, { seam: Seam; kind: string }>();
+  for (const e of (model.edges ?? []) as any[]) {
+    const a = seamOfNode.get(String(e.from)), b = seamOfNode.get(String(e.to));
+    if (!a || !b || a.id === b.id) continue;
+    for (const [child, par] of [[a, b], [b, a]] as [Seam, Seam][]) {
+      const cs = shellOf(child), ps = shellOf(par);
+      if (ps < 0 || cs < 0 || ps >= cs) continue;                       // parent must sit closer to the anchor
+      const cur = parentOf.get(child.id);
+      if (!cur || ps > shellOf(cur.seam) || (ps === shellOf(cur.seam) && _WAVE_RANK(e.kind) < _WAVE_RANK(cur.kind)))
+        parentOf.set(child.id, { seam: par, kind: e.kind });
+    }
+  }
+
+  const reld = (s: Seam): string => (model.skeleton ? "" : s.tier === "spine" ? "●●● " : s.tier === "off" ? "● " : "●● ");
+  const byShell = new Map<number, Seam[]>();
+  for (const s of seams) { const sh = shellOf(s); (byShell.get(sh) ?? byShell.set(sh, []).get(sh)!).push(s); }
+  for (const sh of [...byShell.keys()].filter((n) => n >= 0).sort((a, b) => a - b)) {
+    out.push(sh === 0 ? "Wave 0 — the anchor:" : `Wave ${sh}:`);
+    for (const s of byShell.get(sh)!) {
+      const p = parentOf.get(s.id);
+      const link = p ? `   ← ${_WAVE_VERB[p.kind] ?? p.kind} ${p.seam.label}` : (sh > 0 ? "   ← (root / cross-stack seed)" : "");
+      out.push(`  ${reld(s)}${s.label} — ${where(s)}  [${rolesOf(s)}]${facts(s)}${link}`);
+    }
+  }
+  out.push("", "Each seam is listed at the WAVE the flood reached it (its hop from the anchor); ← names the",
+    "previous-wave seam that reached it, and how. Read top-down to replay the flood's growth.");
+  return out.join("\n");
+}

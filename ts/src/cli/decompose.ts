@@ -65,8 +65,9 @@ async function runAsk(a: Args): Promise<number> {
   if (res.routedAway || !res.result) { process.stdout.write((res.guidance ?? "") + "\n"); return 0; }
 
   const model: any = res.result.mode ? res.result : { mode: "codebase", ...res.result };
-  if (a.format === "llm-context") {
+  if (a.format === "llm-context" || a.format === "waves") {
     const lc = await import("../codebase/llm_context.js");
+    // the SET/deps/reaches/… shapes have no flood-wave structure, so `--format waves` only changes the flow view.
     const r = res.result.shape === "set" ? lc.renderConsumerSet
       : res.result.shape === "deps" ? lc.renderDependencySet
       : res.result.shape === "reaches" ? lc.renderReach
@@ -75,7 +76,8 @@ async function runAsk(a: Args): Promise<number> {
       : res.result.shape === "refactor" ? lc.renderRefactorFacts
       : res.result.shape === "neighborhood" ? lc.renderNeighborhood
       : res.result.shape === "comparison" ? lc.renderComparison
-      : lc.renderLlmContext;   // flow → the spine renderer
+      : a.format === "waves" ? lc.renderWaves            // flow → wave view (flood order)
+      : lc.renderLlmContext;                             // flow → the region renderer
     process.stdout.write(r(model) + "\n");
   }
   if (a.emitSeams) {
@@ -496,9 +498,12 @@ async function runCodebase(a: Args): Promise<number> {
         emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, payload);
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
-      } else if (a.format === "llm-context") {        // HUMAN-readable spine view directly (no temp file)
+      } else if (a.format === "llm-context") {        // HUMAN-readable region view directly (no temp file)
         const { renderLlmContext } = await import("../codebase/llm_context.js");
         process.stdout.write(renderLlmContext(stamped) + "\n");
+      } else if (a.format === "waves") {              // the same region read as FLOOD ORDER (wave-by-wave + parent links)
+        const { renderWaves } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderWaves(stamped) + "\n");
       } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");
