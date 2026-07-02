@@ -59,6 +59,18 @@ which connected footprint is the intent's entry point** — then grows that one.
 split as everywhere else: structure measures connectedness (a fact), the LLM judges relevance (the
 meaning). LLM query-expansion widens recall so *"registration"* still finds `RegisterPage`.
 
+**Agent-facing surface (opt-in).** For a coding agent that calls Seam instead of running a grep loop,
+three additions read the same emitted model: **`--format agent`** — one token-budgeted map (spine ·
+region · collapsed hubs · a ranked *decision-point frontier*, each with the exact `--grow-from`
+command to deepen it · unresolved gaps); **`--grow-from <file>#<symbol>`** — deepen from a frontier
+node (re-anchors the wave grow, warm on the `.seam` indices; `--intent` redirects the branch);
+**`--stream`** — NDJSON per settled wave on stdout, EPIPE-graceful for early stop. Two deterministic,
+zero-LLM containment knobs back them (env / opts, default **OFF** pending recall-safe threshold
+tuning + an author-repo gold gate — see `eval/grow-phase1-matrix.md` §5.1): `SEAM_HUB_COLLAPSE` keeps
+a ubiquitous type/util as ONE marked node instead of flooding its fan, and `SEAM_TIER_GROW` grows to
+convergence under a three-tier rule (follow a crossing/continuation; fan through an on-intent pivot;
+park an off-intent pivot on the frontier).
+
 ## Beyond the flow — structural questions (the shapes)
 
 A *flow* (the anchor's flood-fill **region** — its reach across layers, dimmed by intent) is one shape

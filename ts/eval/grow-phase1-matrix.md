@@ -69,3 +69,34 @@ decision points, not pruned). So the derived convergence budget from the reachab
 deep/wide regions live are unreachable in this environment. The production wave default stays the **500-node
 runaway backstop** (an explicit `--max-nodes` still wins); the smallest-budget-for-every-gold-case derivation
 must be re-run on the author repos before the Phase-5 default flip. Never fake a number.
+
+## Phase 5.1 — default-flip decision (tierGrow + hubCollapse): DEFERRED (author-repo evidence)
+
+`~/dev/private-app` (the author repo) IS reachable here — so, per plan-1's own condition ("re-run on
+the author repos to make the flip decision"), the flip was validated on it, anchor
+`app/subscribe/page.tsx#SubscribePage`, intent "how does a member subscribe … through Stripe checkout".
+
+Clean deterministic isolation (LLM border OFF, `--data-coupling floor`, production thresholds
+tierMargin=0.20 / hubUbiquity=12 / hubFan=12):
+
+| config | files | seams | hubs contained | frontier | subscription mechanisms |
+|---|---|---|---|---|---|
+| raw flood (tier/hub OFF) | 193 | 301 | 0 | 0 | all 3 kept, but unusably large |
+| **tierGrow + hubCollapse ON** | **78** | 197 | 5 real (`ensureAuthUser` fan 22, `index` 18, `isMemberCurrentlyPaused`/`handleLogout` 16, `sendWelcomeEmail` 13) | 20 | **drops `resolveSubscription` + `subscriptionFromPriceId`** |
+| LLM border (today's default with a backend) | 15 | 4 | — | — | all 3 kept |
+
+**Verdict — do NOT flip the default (keep opt-in, default OFF).** The mechanisms are a strong
+DETERMINISTIC/OFFLINE border — 193→78 files, five genuine hubs contained + marked, a 20-point decision
+frontier surfaced — a large improvement over the raw flood (the only alternative when no LLM backend is
+present, e.g. the offline `.vsix`). BUT at `tierMargin=0.20` the tier rule parks two REAL on-intent
+mechanisms (`resolveSubscription`, `subscriptionFromPriceId` — resolving the subscription type and the
+Stripe price config ARE the flow). That is a **recall regression**, which the plan itself calls *fatal*
+("recall failures are fatal; precision failures are just tokens"). Flipping on fixture-only + one
+un-gold'd author case would ship that regression to every user.
+
+**Blocked on, before a flip:** (1) tune `tierMargin` / hub thresholds so recall holds on the author case
+(the border must not park a below-margin node that a grounded crossing/continuation still reaches — a
+grounded-reach rescue, scoped so it stays SEMANTIC-free); (2) a committed **gold region** on an author
+case so the flip is gated on recall, not eyeballed. `SEAM_TIER_GROW` / `SEAM_HUB_COLLAPSE` /
+`--format agent` / `--grow-from` / `--stream` stay **opt-in** and fully documented; the raw numbers above
+are reproducible via `eval/agent-grow-bench.sh`.
