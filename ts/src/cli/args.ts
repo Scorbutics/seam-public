@@ -18,6 +18,7 @@ export interface Args {
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   excludeDirs?: string[]; includeTests: boolean;   // footprint exclusion: folders to drop; tests dropped unless --include-tests
   trace?: boolean;   // --trace: --verbose + the per-node timing firehose (SEAM_TIMING)
+  stream?: boolean;  // --stream: wave-mode NDJSON on stdout (one record per settled wave + a final {done,model})
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   reviewImpact?: boolean; triage?: boolean;
 }
@@ -45,6 +46,7 @@ export function parseArgs(argv: string[]): Args {
       case "--repo": a.repo = next(); break;
       case "--format": a.format = next(); break;
       case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
+      case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout
       case "--classifier": a.classifier = next(); break;
       case "--cluster": a.cluster = next(); break;
       case "--roles": a.roles = next(); break;

@@ -460,7 +460,14 @@ async function runCodebase(a: Args): Promise<number> {
       const wEnv = process.env.SEAM_GROW_WAVE;
       const waveGrow = (wEnv === undefined || wEnv === "") ? fastCheapBackend() : (wEnv === "1" || wEnv === "true");
       const growNodes = a.maxNodes ?? (waveGrow ? 500 : 80);
-      const gOpts = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes };
+      // STREAM (Phase 4): --stream emits ONE NDJSON record per settled wave on STDOUT (progress stays on stderr,
+      // I7). The reader may hang up early (got its answer at wave 2) → stdout EPIPE → stop growing, exit 0 (no
+      // stack trace). A monotonic wave counter spans multi-anchor grows so records stay ordered.
+      let streamWave = 0;
+      if (a.stream) process.stdout.on("error", (e: any) => { if (e?.code === "EPIPE") process.exit(0); });
+      const onWave = a.stream ? (rec: any) => { try { process.stdout.write(JSON.stringify({ wave: ++streamWave, added: rec.added, edges: rec.edges, frontier: rec.frontier }) + "\n"); } catch { process.exit(0); } } : undefined;
+      const gOpts: any = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
+      if (a.stream) gOpts.wave = true;   // --stream is wave-mode only — the per-wave records come from the flood loop
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
@@ -507,7 +514,10 @@ async function runCodebase(a: Args): Promise<number> {
       applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
       const payload = JSON.stringify(stamped);
-      if (a.emitSeams) {                              // FILE sink: write JSON, confirm on stdout (unchanged contract)
+      if (a.stream) {                                 // STREAM: the per-wave records already went to stdout; close with the full model
+        process.stdout.write(JSON.stringify({ done: true, model: stamped }) + "\n");
+        if (a.emitSeams) { writeFileSync(a.emitSeams, payload); process.stderr.write(`Seams: ${a.emitSeams}\n`); }   // optional file sink, on stderr (stdout stays pure NDJSON)
+      } else if (a.emitSeams) {                       // FILE sink: write JSON, confirm on stdout (unchanged contract)
         emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, payload);
         process.stdout.write(`Seams: ${a.emitSeams}\n`);

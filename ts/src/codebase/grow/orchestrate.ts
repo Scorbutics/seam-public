@@ -804,6 +804,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         concern: concernMap ? (n: any) => concernOf(concernMap, repo, n.file) : undefined }
     : undefined;
   let moveNo = 0;
+  // STREAM: emit the SEED (P1 + P3-coupling nodes that exist BEFORE the flood) as the first record, so the union
+  // of every record's `added` equals the final region (else the seed would be missing from the stream). wave 0.
+  if (wave && opts.onWave && !stableFloor) opts.onWave({ wave: 0,
+    added: (data.nodes as any[]).map((n) => ({ id: n.id, symbol: n.symbol, file: n.file ? normpath(n.file) : "", kind: n.kind })),
+    edges: (data.edges as any[]).map((e) => ({ from: e.from, to: e.to, kind: e.kind })),
+    frontier: (data.nodes as any[]).map((n) => n.id) });
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
@@ -942,6 +948,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // Heads are taken in relevance order, so a node budget fills the most-relevant region first. The recompute
       // above ran ONCE for this whole wave (not per move) — the perf win over single-pick.
       let waveAdded = 0;
+      // STREAM (Phase 4): snapshot before the wave so onWave can report exactly this wave's new nodes + edges.
+      const waveBeforeIds = opts.onWave ? new Set<string>((data.nodes as any[]).map((n) => n.id)) : null;
+      const waveBeforeEdgeN = opts.onWave ? (data.edges as any[]).length : 0;
       for (let mi = 0; mi < ordered.length; mi++) {
         const move = ordered[mi];
         if (data.nodes.length >= maxNodes) {
@@ -976,6 +985,15 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
             dbg(`[grow] hub-gate: ${move.node.symbol} ${move.dir} fanned ${r.added} pure non-crossing consumer(s) → gated`);
           }
         }
+      }
+      // STREAM: emit ONE record for this settled wave — its new nodes + edges + the ring they form (the next
+      // frontier). Raw flood order; the FINAL model (emitted after all crops) is authoritative. I7: the caller
+      // routes this to stdout, progress stays on stderr. onWave may THROW (reader hung up) → propagate to stop.
+      if (opts.onWave && waveBeforeIds && !stableFloor) {
+        const added = (data.nodes as any[]).filter((n) => !waveBeforeIds.has(n.id))
+          .map((n: any) => ({ id: n.id, symbol: n.symbol, file: n.file ? normpath(n.file) : "", kind: n.kind }));
+        const newEdges = (data.edges as any[]).slice(waveBeforeEdgeN).map((e: any) => ({ from: e.from, to: e.to, kind: e.kind }));
+        opts.onWave({ wave: step + 1, added, edges: newEdges, frontier: added.map((n: any) => n.id) });
       }
       if (!waveAdded) break;   // a whole wave added nothing new → the region is fully flooded
     }
@@ -1071,7 +1089,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the

@@ -134,6 +134,14 @@ A hunk can appear in several seams (a link wires more than one core). Occurrence
 Usage         { "calls", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms", "backends":[…] }
 Unresolved    { "node", "query", "reason" }
 BlindSpot     { "node", "mechanism", "evidence", "candidates":[ { "symbol", "provenance" } ] }
+StreamRecord  // --stream (wave mode): one NDJSON line per settled wave on STDOUT (progress stays on stderr).
+              // wave 0 = the seed (P1 + coupling nodes present before the flood); waves 1..N = each flood ring.
+              // The union of every record's `added` equals the final region (a plain flood; crops apply at
+              // finalization, so the closing record's `model` is authoritative). The reader may hang up early
+              // (EPIPE → the engine stops, exit 0). Node/edge shapes are the compact raw-graph forms below.
+  { "wave": N, "added":[ {"id","symbol","file","kind"} ], "edges":[ {"from","to","kind"} ], "frontier":["id",…] }
+  { "done": true, "model": SeamModel }   // the final record — the full emitted model (post-crop, authoritative)
+
 FrontierPoint { "id", "symbol", "file", "kind", "reachedVia", "score", "cutBy":"decision|hub|border|budget" }
               // a tier-3 decision point (tier-grow): a node whose fan the grow declined (off-intent pivot /
               // collapsed hub / node budget). `id` = node identity (union deepened regions by it); `reachedVia`
