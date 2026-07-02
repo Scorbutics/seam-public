@@ -138,6 +138,9 @@ FrontierPoint { "id", "symbol", "file", "kind", "reachedVia", "score", "cutBy":"
               // a tier-3 decision point (tier-grow): a node whose fan the grow declined (off-intent pivot /
               // collapsed hub / node budget). `id` = node identity (union deepened regions by it); `reachedVia`
               // = the resolved relation(s) that reached it; `score` = intent relevance; `cutBy` = why it stopped.
+              // DEEPEN a point with `--grow-from <file>#<symbol> [--intent <redirect>]` — re-anchors the wave grow
+              // there and emits the same model shape; union it back with `merge_resolved` (keys on file#line#kind,
+              // so the shared node appears once). Warm on the content-keyed `.seam` disk indices.
 SeamEdge      { "from", "to", "provenance" }
 GraphEdge     { "from", "to", "kind", "provenance", "line"? }   // line = call-site in `from`'s file
 SeamContract  { "seamA", "seamB", "links":[GraphEdge], "blurry" }

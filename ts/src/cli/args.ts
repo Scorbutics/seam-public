@@ -11,6 +11,7 @@ export interface Args {
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
   emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean; spineOnly?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
+  growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
@@ -72,6 +73,7 @@ export function parseArgs(argv: string[]): Args {
       case "--include-tests": a.includeTests = true; break;   // keep test files in the footprint (default: dropped)
       case "--anchor-recall": a.anchorRecall = (next() ?? "embed").toLowerCase(); break;   // embed (default) | lexical
       case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
+      case "--grow-from": a.growFrom = next(); break;
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;

@@ -331,6 +331,16 @@ async function runReaches(a: Args): Promise<number> {
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
   reset_usage();
+  // DEEPEN (Phase 2.3) — `--grow-from <file>#<symbol>` re-anchors the WAVE grow at a decision-point/frontier node
+  // and emits the SAME contract-shape model the caller unions by node id. It is a thin router into the normal
+  // `--scan --anchor-file --symbol` grow path (reuse, not a new engine): the full wave/tier/border/hub machinery
+  // runs, warm on the content-keyed `.seam` disk indices, and `--intent` (if differing) REDIRECTS the branch
+  // semantically. The frontier entry carries the exact `file` + `symbol` to plug in here.
+  if (a.growFrom) {
+    const hash = a.growFrom.indexOf("#");
+    if (hash <= 0 || hash >= a.growFrom.length - 1) err("--grow-from expects <file>#<symbol> (e.g. services/bookingService.ts#manageBooking)");
+    a.anchorFile = a.growFrom.slice(0, hash); a.symbol = a.growFrom.slice(hash + 1); a.scan = true;
+  }
   if (a.resolver !== "det") {
     const { make_resolver } = await import("../core/resolve/resolver.js");
     const { set_resolver } = await import("../core/resolve/consumers.js");
@@ -681,7 +691,7 @@ async function main(argv: string[]): Promise<number> {
     if (a.format === "llm-context") { const { renderLlmContext } = await import("../codebase/llm_context.js"); process.stdout.write(renderLlmContext(m) + "\n"); return 0; }
     err("--from-seams currently supports --format llm-context");
   }
-  if (a.scan || a.graph || a.expandGraph) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph
+  if (a.scan || a.graph || a.expandGraph || a.growFrom) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph / --grow-from
   reset_usage();
   let hunks: Hunk[];
 
