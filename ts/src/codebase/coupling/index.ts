@@ -61,6 +61,9 @@ const keyId = (kind: string, value: string) => `${kind} ${value}`;   // the kind
 // ════════════════════════════════════════════════════════════════════════════════════════════════════
 
 const _HTTP_ROUTE = "http-route";
+// A GENERIC 1-literal route match (a bare `/summarize/*` shared by many services) is a coupling ONLY if it
+// grounds to at most this many files — a SOLE mount. Above it, the shared segment is a coincidental common word.
+const _GENERIC_ROUTE_FANOUT_CAP = 1;
 // Route patterns rarely equal a caller URL byte-for-byte: a handler `@WebServlet("/document/*")` is
 // mounted under a context path the caller spells in full (`/manage/rest/member/document`). So for
 // http-route keys ONLY, couple a handler to a caller when one path's segments are a whole-SEGMENT SUFFIX
@@ -103,7 +106,7 @@ export function routeSuffixMatch(a: string, b: string): boolean { return routeMa
 // every coupling edge emitted is RESOLVED_PARTIAL (a shared-name crossing), never an asserted call.
 // Exact-key matches, plus (for http-route) suffix-aliased route keys, so a full-URL caller grounds to a
 // sub-path/wildcard handler and vice-versa. Dedup is handled downstream (complementFiles).
-function otherSide(index: GroundingIndex, kind: string, value: string, produces: boolean): Access[] {
+export function otherSide(index: GroundingIndex, kind: string, value: string, produces: boolean): Access[] {
   const exact = index.get(keyId(kind, value));
   const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
   if (kind !== _HTTP_ROUTE) return out;
@@ -123,7 +126,21 @@ function otherSide(index: GroundingIndex, kind: string, value: string, produces:
     if (spec >= 1) scored.push({ spec, accesses: produces ? v.consumers : v.producers });
   }
   const hasSpecific = scored.some((s) => s.spec >= 2);
-  for (const s of scored) if (s.spec >= 2 || !hasSpecific) out.push(...s.accesses);
+  for (const s of scored) if (s.spec >= 2) out.push(...s.accesses);   // a SPECIFIC (≥2-literal) match is always kept
+  if (!hasSpecific) {
+    // GENERIC fallback — a single shared literal (a bare `/summarize/*` method-@Path with no combinable class
+    // base). A SOLE mount (`/document/*` servlet → one file) is a real coupling: keep it. But when the segment
+    // grounds to MANY files it's a coincidental COMMON WORD (`summarize`/`list`, one per service) — keep only the
+    // producer whose FILE reflects a DISCRIMINATING segment of the caller route (BookingsService for
+    // `/…/booking/summarize`), dropping the unrelated services. If NONE match (truly can't disambiguate) keep all,
+    // so a lone real coupling is never lost. This stops the booking flow dragging in every `summarize` service.
+    const generics = scored.filter((s) => s.spec < 2).flatMap((s) => s.accesses);
+    const files = new Set(generics.map((a) => a.file));
+    if (files.size <= _GENERIC_ROUTE_FANOUT_CAP) { out.push(...generics); return out; }
+    const segs = routeSegs(value).filter((x) => x !== "*" && x.length >= 4);
+    const disc = generics.filter((a) => segs.some((seg) => a.file.toLowerCase().includes(seg.toLowerCase())));
+    out.push(...(disc.length ? disc : generics));
+  }
   return out;
 }
 

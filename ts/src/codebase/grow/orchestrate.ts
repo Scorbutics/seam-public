@@ -801,7 +801,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // final wave isn't dropped unjudged. Boundary nodes (flow-subjects/coupling) the prune never sees are KEPT.
   if (llmPrune) {
     const aId = data.anchor?.id ?? "n1";
-    await _llmPruneInShape(data, aId, opts, decided);
+    await _llmPruneInShape(data, aId, { ...opts, repo }, decided);   // repo → class candidates judged WITH their methods
     const keep = new Set<string>([aId]);
     for (const n of data.nodes as any[]) { const v = decided.get(n.id); if (v === true || (v === undefined && (isFlowSubject(n.kind) || n.coupling))) keep.add(n.id); }
     const before = data.nodes.length;
@@ -867,7 +867,9 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // them with the same border and drop the off-intent ones. Skip the throwaway stable-floor probe (its result is
   // discarded; only the real grow's footprint is rendered).
   if (co.dataCoupling !== false && (data as any).llmBorder && (data as any)._borderDecided && !co.ctx?.stableFloor)
-    await _borderCoupling(data, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin }, (data as any)._borderDecided);
+    // pass `repo` so a route-complement CLASS (a handler like CompanyAdviserService reached over a shared route)
+    // is judged WITH its methods ({advisers, deserialize, …} ≠ bookings), not a bare class name the weak SLM keeps.
+    await _borderCoupling(data, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin, repo }, (data as any)._borderDecided);
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {

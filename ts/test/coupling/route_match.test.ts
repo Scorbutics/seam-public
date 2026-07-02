@@ -5,7 +5,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { routeSuffixMatch, routeMatchSpecificity } from "../../src/codebase/coupling/index.js";
+import { routeSuffixMatch, routeMatchSpecificity, otherSide } from "../../src/codebase/coupling/index.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -79,5 +79,37 @@ describe("specificity filtering — a generic shared sub-path doesn't pull in an
     expect(data.nodes.some((n: any) => n.file.endsWith("BookingsService.java"))).toBe(true);
     // …while the GENERIC 1-literal fragment from the unrelated service stays excluded.
     expect(data.nodes.some((n: any) => n.file.endsWith("CompanyAdviserService.java"))).toBe(false);
+  });
+});
+
+describe("otherSide — generic route fanout suppression (the /summarize false-match)", () => {
+  // A bare method-@Path key like `/summarize/*/*` (emitted when the class @Path can't be combined) is shared by
+  // EVERY service with a summarize method — a coincidental common word, not a coupling. Grounding a booking
+  // caller must not drag in company/analytics via it.
+  const idx = (entries: [string, string[]][]): any =>
+    new Map(entries.map(([k, files]) => [k, { producers: files.map((f) => ({ file: f, line: 1 })), consumers: [] }]));
+
+  test("a generic /summarize shared by many services grounds ONLY to the caller's own service (by file name)", () => {
+    const index = idx([["http-route /summarize/*/*",
+      ["api/BookingsService.java", "api/CompanyAdviserService.java", "api/AnalyticsService.java"]]]);
+    const files = otherSide(index, "http-route", "/manage/rest/booking/summarize/0/*", false).map((a) => a.file);
+    expect(files).toContain("api/BookingsService.java");            // caller's `booking` segment → BookingsService
+    expect(files).not.toContain("api/CompanyAdviserService.java");  // unrelated services dropped
+    expect(files).not.toContain("api/AnalyticsService.java");
+  });
+
+  test("a SPECIFIC (≥2-literal) handler is kept and suppresses the generic siblings", () => {
+    const index = idx([
+      ["http-route /manage/rest/booking/summarize/*/*", ["api/BookingsService.java"]],
+      ["http-route /summarize/*/*", ["api/CompanyAdviserService.java", "api/AnalyticsService.java"]],
+    ]);
+    const files = otherSide(index, "http-route", "/manage/rest/booking/summarize/0/*", false).map((a) => a.file);
+    expect(files).toContain("api/BookingsService.java");
+    expect(files).not.toContain("api/CompanyAdviserService.java");
+  });
+
+  test("a SOLE generic mount (a /document/* servlet) is still kept", () => {
+    const index = idx([["http-route /document/*", ["api/DocServlet.java"]]]);
+    expect(otherSide(index, "http-route", "/document/123", false).map((a) => a.file)).toContain("api/DocServlet.java");
   });
 });
