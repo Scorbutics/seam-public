@@ -26,6 +26,18 @@ describe("inferHttpClients — transitive http-client detection", () => {
     expect(clients.has("httpHelper")).toBe(false);   // named "http*" but touches no sink → not a client
   });
 
+  test("a plain FUNCTION that calls fetch is a CALLER, not a client — nor is the response var (no over-inference)", async () => {
+    if (!available()) return;
+    // A component that merely calls fetch, and the response binding, are NOT reusable client receivers: you
+    // never call `getBookings.get('/route')` or `res.get(…)`. Only object/class receivers with sink-methods
+    // qualify. (This is the over-inference that minted ~90× phantom clients on a big repo — one per fetch-caller.)
+    const files = [{ rel: "web/page.js", text: `export async function getBookings(id) {\n  const url = "/api/bookings";\n  const res = await fetch(url);\n  return res.json();\n}\n` }];
+    const clients = await inferHttpClients(files);
+    expect(clients.has("getBookings")).toBe(false);
+    expect(clients.has("res")).toBe(false);
+    expect(clients.size).toBe(0);
+  });
+
   test("a transitive (2-hop) alias chain still inherits the effect", async () => {
     if (!available()) return;
     const files = [

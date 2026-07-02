@@ -8,7 +8,7 @@
 //
 // Deterministic, no LLM, no keyword guessing: the seed is concrete I/O PRIMITIVES (not verbs like get/http),
 // and the propagation rides real in-repo definitions/assignments (not blind call-site resolution).
-import { makeCtx, available, lang_for, _CALL, _NEW, _CLASS_KINDS, _FUNCLIKE, _VAR_DECLARATOR, _NAME_KINDS, type Ctx } from "../atoms.js";
+import { makeCtx, available, lang_for, _CALL, _NEW, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, type Ctx } from "../atoms.js";
 import { makeMaskCtx, lineOf } from "./adapters/util.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
 import { HTTP_ROUTE_META, normPath } from "./adapters/http_route.js";
@@ -28,21 +28,32 @@ const _lineSet = (text: string, re: RegExp): Set<number> => {
   return out;
 };
 
-// The named bindings in a parse, as [name, startLine, endLine] — `const X = …`, `class X`, `function X`, and
-// an assignment to an object/identifier (`X.y = …`, `module.exports = …`). The name is the receiver token a
-// later call site uses; the span is what we test a sink-line for containment against.
+// Object-literal node kinds — the VALUE shape that makes a binding a client CANDIDATE (a receiver you call
+// verb-methods on: `client.get('/route')`), as opposed to a plain function that merely CALLS a sink.
+const _OBJECT_KINDS = new Set(["object", "object_expression"]);
+const _valueIsObjOrClass = (ctx: Ctx, n: any): boolean =>
+  ctx.children(n).some((c: any) => _OBJECT_KINDS.has(c.type) || _CLASS_KINDS.has(c.type));
+
+// The named CLIENT-CANDIDATE bindings in a parse, as [name, startLine, endLine]: a binding whose VALUE is an
+// OBJECT or CLASS (`const httpService = { get(){…} }`, `class Api {…}`), which a sink inside one of its methods
+// makes an http client. A plain `function X(){ fetch() }` / `const res = fetch()` is a fetch-CALLER, not a
+// reusable client receiver (you never call `X.get('/route')` / `res.get(…)`) — so it is NOT a candidate, and
+// marking it was the over-inference that minted thousands of phantom clients on a big repo. Aliases (`X.y =
+// httpService`) still inherit via _ALIAS_RE below. The span is what a sink-line is tested against.
 function _bindings(ctx: Ctx): { name: string; s: number; e: number }[] {
   const out: { name: string; s: number; e: number }[] = [];
   const add = (n: any, name: string | null) => { if (name) { const [s, e] = ctx.span(n); out.push({ name, s, e }); } };
-  for (const n of ctx.collect(ctx.root, (k) => _VAR_DECLARATOR.has(k) || _CLASS_KINDS.has(k) || _FUNCLIKE.has(k))) {
+  for (const n of ctx.collect(ctx.root, (k) => _VAR_DECLARATOR.has(k) || _CLASS_KINDS.has(k))) {
+    if (_VAR_DECLARATOR.has(n.type) && !_valueIsObjOrClass(ctx, n)) continue;   // a function/value wrapper is a CALLER, not a client
     const nf = n.childForFieldName?.("name");
     if (nf) add(n, ctx.text(nf));
     else { const id = ctx.children(n).find((c: any) => _NAME_KINDS.has(c.type)); if (id) add(n, ctx.text(id)); }
   }
-  // assignment to an object/value: `X = …` / `X.y = …` — the LHS (dotted) is the binding name.
+  // assignment whose RHS is an object/class: `X = { … }` / `X.y = class …` — the LHS (dotted) is the client name.
   for (const n of ctx.collect(ctx.root, (k) => k === "assignment_expression")) {
     const lhs = ctx.children(n)[0];
-    if (lhs && (_NAME_KINDS.has(lhs.type) || lhs.type === "member_expression")) add(n, ctx.text(lhs).replace(/\s/g, ""));
+    if (lhs && (_NAME_KINDS.has(lhs.type) || lhs.type === "member_expression") && _valueIsObjOrClass(ctx, n))
+      add(n, ctx.text(lhs).replace(/\s/g, ""));
   }
   return out;
 }
