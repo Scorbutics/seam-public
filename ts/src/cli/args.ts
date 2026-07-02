@@ -3,7 +3,7 @@
 
 export interface Args {
   file?: string; git?: string; submodules?: boolean; fromClassified?: string; repo: string;
-  format: string; classifier?: string; cluster?: string; roles?: string; wiring?: string;
+  format: string; tokenBudget?: number; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
@@ -44,6 +44,7 @@ export function parseArgs(argv: string[]): Args {
       case "--from-classified": a.fromClassified = next(); break;
       case "--repo": a.repo = next(); break;
       case "--format": a.format = next(); break;
+      case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
       case "--classifier": a.classifier = next(); break;
       case "--cluster": a.cluster = next(); break;
       case "--roles": a.roles = next(); break;

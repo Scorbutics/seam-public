@@ -339,7 +339,9 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.growFrom) {
     const hash = a.growFrom.indexOf("#");
     if (hash <= 0 || hash >= a.growFrom.length - 1) err("--grow-from expects <file>#<symbol> (e.g. services/bookingService.ts#manageBooking)");
-    a.anchorFile = a.growFrom.slice(0, hash); a.symbol = a.growFrom.slice(hash + 1); a.scan = true;
+    // a.auto routes into the AUTO-GROW path (grow_to_terminals with the full wave/tier/border/hub machinery),
+    // NOT the shallow consumers footprint the plain --scan path builds. a.scan enters the codebase block.
+    a.anchorFile = a.growFrom.slice(0, hash); a.symbol = a.growFrom.slice(hash + 1); a.scan = true; a.auto = true;
   }
   if (a.resolver !== "det") {
     const { make_resolver } = await import("../core/resolve/resolver.js");
@@ -518,6 +520,9 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "scenarios") {          // the region's end-to-end flows as Mermaid sequence diagrams
         const { renderScenarios } = await import("../codebase/llm_context.js");
         process.stdout.write(renderScenarios(stamped) + "\n");
+      } else if (a.format === "agent") {              // the token-budgeted agent surface: spine · region · hubs · frontier · gaps
+        const { renderAgent } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
       } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");
@@ -689,7 +694,8 @@ async function main(argv: string[]): Promise<number> {
   if (a.fromSeams) {
     const m = JSON.parse(readFileSync(a.fromSeams, "utf-8"));
     if (a.format === "llm-context") { const { renderLlmContext } = await import("../codebase/llm_context.js"); process.stdout.write(renderLlmContext(m) + "\n"); return 0; }
-    err("--from-seams currently supports --format llm-context");
+    if (a.format === "agent") { const { renderAgent } = await import("../codebase/llm_context.js"); process.stdout.write(renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n"); return 0; }
+    err("--from-seams supports --format llm-context | agent");
   }
   if (a.scan || a.graph || a.expandGraph || a.growFrom) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph / --grow-from
   reset_usage();

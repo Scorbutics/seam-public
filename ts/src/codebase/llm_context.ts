@@ -665,3 +665,128 @@ export function renderScenarios(model: any): string {
     "a link names the shared-key crossing between two layers — [HTTP route: /path], [table: name], [queue: topic].");
   return out.join("\n");
 }
+
+// AGENT RENDER (Phase 3) — the ONE token-budgeted projection a coding agent reads instead of reconstructing a
+// flow with a grep loop. Pure (reads only the emitted model, zero LLM, skeleton-compatible). Sections, in order:
+// header · spine · region-by-tier · hubs · frontier · blindspots/unresolved. Everything a caller must TRUST —
+// the spine, the collapsed hubs, the decision-point frontier, the honest gaps — is EXEMPT from budget cropping;
+// only the off-path/supporting region lines (then hub sample-consumer detail) degrade, and WHAT was cropped is
+// stated (I3). Reuses the same where/rolesOf/_WAVE_VERB vocabulary as the other views (one render language).
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string } = {}): string {
+  if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
+  const cl = (model.clusters ?? [])[0];
+  if (!cl) return "(empty footprint)";
+  const seams: Seam[] = cl.seams ?? [];
+  const budget = Math.max(300, opts.tokenBudget ?? 4000);
+  const tok = (lines: string[]) => Math.ceil(lines.join("\n").length / 4);
+
+  // id → label + the seam each node lives in (for reach phrases that stop at the seam boundary).
+  const label = new Map<string, string>();
+  const seamOfId = new Map<string, string>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { label.set(String(id), h.label ?? s.label); seamOfId.set(String(id), s.id); } }
+  const allIds = new Set(label.keys());
+  const seamIds = (s: Seam) => new Set((s.hunks ?? []).map((h) => String((h as any).id)).filter((x) => x !== "undefined"));
+  // reachedVia for a SEAM: the resolved relation(s) that reached it from a node OUTSIDE the seam (same vocabulary
+  // as the frontier's reachedVia — the incoming edge kind → its wave verb). Best 1–2, ranked by relation concreteness.
+  const reachSeam = (s: Seam): string => {
+    const ids = seamIds(s);
+    const cands: { r: number; s: string }[] = [];
+    for (const e of (model.edges ?? []) as any[]) {
+      const f = String(e.from), t = String(e.to);
+      if (ids.has(t) && !ids.has(f) && allIds.has(f)) cands.push({ r: _WAVE_RANK(e.kind), s: `${_WAVE_VERB[e.kind] ?? "reached from"} ${label.get(f)}` });
+    }
+    cands.sort((a, b) => a.r - b.r);
+    const uniq = [...new Set(cands.map((c) => c.s))].slice(0, 2);
+    return uniq.length ? uniq.join(", ") : "the anchor / region root";
+  };
+  const cross = (s: Seam): string => (s.writes && s.writes.length ? `  [crossing: ${s.writes.join(", ")}]` : "");
+
+  const tierOf = (s: Seam) => s.tier ?? "";
+  const hasSpine = seams.some((s) => tierOf(s) === "spine");
+  const spineSeams = seams.filter((s) => tierOf(s) === "spine");
+  const supporting = seams.filter((s) => tierOf(s) !== "spine" && tierOf(s) !== "off");
+  const offSeams = seams.filter((s) => tierOf(s) === "off");
+  // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
+  const hubs: { label: string; file?: string; hub: any }[] = [];
+  for (const s of seams) for (const h of (s.hunks ?? [])) if ((h as any).hub) hubs.push({ label: h.label ?? "?", file: h.file, hub: (h as any).hub });
+  const frontier: any[] = model.frontier ?? [];
+
+  const q = (x: string) => (opts.intent ? ` --intent "${opts.intent}"` : x);   // the deepen invocation carries the intent to redirect
+
+  // ---- section builders (each returns its lines) ----
+  const header = (): string[] => {
+    const h = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`];
+    if (opts.intent) h.push(`intent: ${opts.intent}`);
+    h.push(`resolution: ${model.resolutionQuality ?? "?"}`, `seams: ${seams.length}`,
+      `unresolved: ${(model.unresolved ?? []).length}`, `blindspots: ${(model.blindspots ?? []).length}`);
+    const out = ["# Agent map — the region to read instead of a grep loop", h.join(" | ")];
+    const im = model.intentMatch;
+    if (im?.offIntent) out.push(`⚠ low intent match (top ${im.max} < ${im.floor}) — this anchor's flow may not answer the intent`);
+    return out;
+  };
+  const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
+  const spineSection = (): string[] => {
+    if (!hasSpine) return [];
+    const out = ["", "## Spine (the primary path, anchor → … → outcome)"];
+    spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
+    return out;
+  };
+  const regionSection = (dropOff: boolean, dropSupporting: boolean): string[] => {
+    const out: string[] = ["", hasSpine ? "## Region (remaining, by relevance)" : "## Region (by shell — nearest the anchor first)"];
+    if (!hasSpine) {   // no-intent / skeleton fallback: order every seam by shell (hops from the anchor)
+      [...seams].sort((a, b) => (_shellOf(a) - _shellOf(b))).forEach((s) => out.push(seamLine(s)));
+      return out;
+    }
+    if (supporting.length) {
+      if (dropSupporting) out.push(`  supporting: ${supporting.length} seam(s) — cropped to fit the ${budget}-token budget (raise --token-budget to see them)`);
+      else { out.push("supporting:"); [...supporting].sort((a, b) => _shellOf(a) - _shellOf(b)).forEach((s) => out.push(seamLine(s))); }
+    }
+    if (offSeams.length) {
+      if (dropOff) out.push(`  off-path: ${offSeams.length} seam(s) — cropped to fit the ${budget}-token budget`);
+      else { out.push("off-path:"); [...offSeams].sort((a, b) => _shellOf(a) - _shellOf(b)).forEach((s) => out.push(seamLine(s))); }
+    }
+    return out;
+  };
+  const hubsSection = (dropSamples: boolean): string[] => {
+    if (!hubs.length) return [];
+    const out = ["", "## Collapsed hubs (ubiquitous — expand explicitly if needed)"];
+    for (const h of hubs) {
+      const s = h.hub.sampleConsumers ?? [];
+      const sample = (!dropSamples && s.length) ? `, e.g. ${s.slice(0, 3).join(", ")}` : "";
+      out.push(`  ${h.label}${h.file ? ` (${h.file})` : ""} — hub: ${h.hub.reason}, fan ${h.hub.fan}${sample}`);
+    }
+    return out;
+  };
+  const frontierSection = (): string[] => {
+    if (!frontier.length) return [];
+    const out = ["", "## Frontier (decision points — deepen the ones that matter)"];
+    for (const f of frontier) out.push(`  ${f.symbol} (${f.file}) — ${f.reachedVia} [${f.cutBy}]  →  seam --grow-from ${f.file}#${f.symbol}${q("")}`);
+    if (model.frontierCut) out.push(`  (+${model.frontierCut} more decision point(s) cut by the cap — raise SEAM_FRONTIER_CAP)`);
+    return out;
+  };
+  const gapsSection = (): string[] => {
+    const out: string[] = [];
+    const bs: any[] = model.blindspots ?? [];
+    if (bs.length) {
+      out.push("", "## Blindspots (what static resolution could not see — verify)");
+      const ambient = new Map<string, string[]>();
+      for (const b of bs) {
+        if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
+        const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
+        out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
+      }
+      for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
+    }
+    const un: any[] = model.unresolved ?? [];
+    if (un.length) { out.push("", `## Unresolved (${un.length} edge(s) static analysis couldn't follow)`); for (const u of un.slice(0, 8)) out.push(`  ${u.node ?? "?"}: ${u.query ?? ""}${u.reason ? ` (${u.reason})` : ""}`); }
+    return out;
+  };
+
+  // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
+  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
+    [...header(), ...spineSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+  const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
+  let out = assemble(...steps[0]);
+  for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
+  return out.join("\n");
+}
