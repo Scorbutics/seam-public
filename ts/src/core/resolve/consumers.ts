@@ -75,7 +75,7 @@ export interface Consumer { file: string; local: string; source: string; status:
 type ImportContribution = { refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[] };
 type ImportEntry = ImportContribution & { rel: string; norm: string };
 const _repoImportsCache = new Map<string, ImportEntry[]>();
-export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); _invImportsCache.clear(); }
+export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); _invImportsCache.clear(); _fileImportersCache.clear(); }
 
 // INVERTED import index — `symbol → the entries that import a binding of that name`, plus the (small) subsets
 // that have namespace / default imports. `_scan_direct` (finding a symbol's consumers) used to walk the WHOLE
@@ -84,6 +84,27 @@ export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCa
 // lookup O(matches), and the ns/default passes iterate only the few files that actually have those imports.
 interface InvImports { byName: Map<string, ImportEntry[]>; nsEntries: ImportEntry[]; defaultEntries: ImportEntry[]; }
 const _invImportsCache = new Map<string, InvImports>();
+
+// FILE-LEVEL reverse-import index — normalized target file → the set of rel files that import it (via ANY
+// binding: named / namespace / default). Built ONCE from the already-cached `_repoImports` by resolving each
+// import's MODULE source (memoized in `_resolveCache`), so it is a whole-repo fan-in query with NO new file
+// walk. Powers the deterministic UBIQUITY prior (grow/ubiquity.ts). Cleared with the other import caches.
+const _fileImportersCache = new Map<string, Map<string, Set<string>>>();
+export async function fileImporters(repo: string): Promise<Map<string, Set<string>>> {
+  const cached = _fileImportersCache.get(repo);
+  if (cached) return cached;
+  const out = new Map<string, Set<string>>();
+  const add = (target: string, importer: string) => { const k = normpath(target); (out.get(k) ?? out.set(k, new Set()).get(k)!).add(importer); };
+  for (const { rel, refs, ns, defs } of _repoImports(repo)) {
+    const sources = new Set<string>();
+    for (const r of refs) if (r.source) sources.add(r.source);
+    for (const n of ns) sources.add(n.source);
+    for (const d of defs) sources.add(d.source);
+    for (const src of sources) { const t = await _resolve(repo, rel, src); if (t && normpath(t) !== normpath(rel)) add(t, rel); }
+  }
+  _fileImportersCache.set(repo, out);
+  return out;
+}
 function _importIndex(repo: string): InvImports {
   let inv = _invImportsCache.get(repo);
   if (inv) return inv;

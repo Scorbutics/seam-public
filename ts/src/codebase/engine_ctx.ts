@@ -28,6 +28,10 @@ export class EngineCtx {
   // deterministic fanout fallback). Absent / empty → fanout order. (Impl: grow/key_ranker.ts.)
   rankKeys?: (items: { value: string; otherSide: string[]; passage?: string }[]) => Promise<Map<string, number>>;
 
+  // --- grow: deterministic UBIQUITY prior (cross-module fan-in) — repo → (candidate file → distinct
+  // consumer-module count). Derived once/run from the already-built reverse-import index (grow/ubiquity.ts). ---
+  ubiquity = new Map<string, Map<string, number>>();
+
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
   carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null
 

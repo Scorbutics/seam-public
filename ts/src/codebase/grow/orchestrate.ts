@@ -12,6 +12,7 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
+import { ubiquityIndex, ubiquityOf } from "./ubiquity.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
@@ -285,12 +286,13 @@ export type Move = { node: any; dir: "up" | "down" };
 // ORDER the whole frontier best-first by the same criteria the single-pick walk used. Single-pick takes [0];
 // the WAVEFRONT (flood) mode processes the WHOLE ordered list per wave — same priority, so under a node budget
 // the flood still fills the most-relevant region first (the "spine" is just the degenerate linear flood).
-export function _orderMoves(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number): Move[] {
+export function _orderMoves(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number, isHub: (n: any) => boolean = () => false): Move[] {
   const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
   const band = (n: any) => Math.round(iscore(n) * _INTENT_BANDS);                          // coarse intent bucket
   return [...moves].sort((a, b) =>
     (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY — never prune the spine
     || (Number(!typeRefOnly.has(b.node.id)) - Number(!typeRefOnly.has(a.node.id)))        // (2) DELEGATION over type-ref
+    || (Number(isHub(a.node)) - Number(isHub(b.node)))                                    // (2.5) UBIQUITY — a non-crossing shared hub grows LAST (default no-op)
     || (band(b.node) - band(a.node))                                                      // (3) INTENT band — a clearly-relevant node first (incl. a FAR one)
     || (dist(a.node.id) - dist(b.node.id))                                                // (4) CLOSENESS — nearest among similar-relevance (the bound)
     || (iscore(b.node) - iscore(a.node))                                                  // (5) fine intent
@@ -684,6 +686,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const hubGate = (opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) && wave;
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubFanned = new Set<string>();   // node ids belonging to a gated hub fan — cropped + never re-expanded
+  // UBIQUITY PRIOR (wave, opt-in via SEAM_UBIQUITY / opts.ubiquity) — a DETERMINISTIC cross-module fan-in read
+  // from the reverse-import index (grow/ubiquity.ts): a node reached from ≥`ubiquityFan` DISTINCT modules is
+  // shared infrastructure. It (a) DEMOTES such a node in the frontier order (grow it last) and (b) STOPS the
+  // flood from expanding THROUGH it — but ONLY when it bears NO grounded crossing (I4: a shared DAO on the
+  // flow's crossing is scored high yet never gated). Off / no index → empty → no effect (I1/I3).
+  const ubiquity = (opts.ubiquity ?? _envFlag(process.env.SEAM_UBIQUITY) ?? false) && wave;
+  const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
+  const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
@@ -695,6 +705,13 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
     const crossings = new Set<string>();
     for (const e of g.resolved_edges()) if (_is_crossing(e)) crossings.add(e.dst);
+    // UBIQUITY hub test (I4-safe). `crossings` above is dst-only; broaden to BOTH endpoints (+ flow-subjects /
+    // coupling nodes) so a node that BEARS a grounded crossing is never treated as a shared hub — it may be
+    // scored high (a widely-consumed DAO), yet it is on the flow's crossing, so it is neither demoted nor gated.
+    const crossingBearers = new Set<string>();
+    if (ubiquity) for (const e of data.edges as any[]) if (_is_crossing(e)) { crossingBearers.add(e.dst); crossingBearers.add(e.from); }
+    const isHub = (n: any): boolean => ubiquity && ubiquityOf(ubiqScore!, n.file) >= ubiquityFan
+      && !crossingBearers.has(n.id) && !isFlowSubject(n.kind) && !n.coupling;
     // PAYLOAD TYPE-REFS — a node reached ONLY by `type-ref` edges is a data-model DTO the anchor never calls a
     // method on (not the delegation spine). Demote it in the frontier so the budget follows calls/crossings
     // first; it's still expanded if budget remains. A node with ANY non-type-ref edge (a call/import/crossing)
@@ -762,16 +779,20 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
+      const hub = isHub(n);   // UBIQUITY: a non-crossing shared hub (its CONSUMER fan is off-intent sibling entry points)
       for (const d of ["up", "down"] as const) {
         if (expanded.has(expKey(n, d))) continue;
         // Skip the UP-climb of a NEAR core node (the central seam — already covered, re-growing it is noise), but
         // ALLOW it for a FAR core node: a shared backend service reached deep in the walk, whose other consumers
         // are the SIBLING entry points (the second UI behind a second route). Distance is the discriminator.
         if (d === "up" && isCore && distOf(n.id) < _UPCLIMB_MIN_DIST) continue;
+        // UBIQUITY: skip the UP-climb of a non-crossing shared hub — its consumers are off-intent sibling entry
+        // points (the cross-module fan). DOWN is kept, so a terminal reached THROUGH the hub is never severed.
+        if (d === "up" && hub) continue;
         moves.push({ node: n, dir: d });
       }
     }
-    const ordered = _orderMoves(moves, crossings, _iscore, typeRefOnly, distOf);
+    const ordered = _orderMoves(moves, crossings, _iscore, typeRefOnly, distOf, isHub);
     if (!ordered.length) break;
     if (!wave) {
       // SINGLE-PICK (default): the one best move this step; recompute the frontier next step.
@@ -879,7 +900,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
