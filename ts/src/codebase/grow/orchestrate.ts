@@ -743,12 +743,23 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       inShape = new Set(peak.keys());
       dbg(`[grow] soft border (tol=${borderTol}): shape=${inShape.size}/${data.nodes.length} node(s)`);
     }
+    // GROUNDED REACH — don't flood THROUGH a node reachable only via a bare-name receiver-agnostic `call` match
+    // (RESOLVED_PARTIAL / SUGGESTED: honest ambiguity — core/resolution.ts says a PARTIAL link must not be
+    // FOLLOWED). Such a node is a method-name coincidence (a test class's `empty()`/`generate()` matching every
+    // same-named call), surfaced as a lead but not part of the flow; without this the grow floods through every
+    // `generate`/`replaceColors` that merely calls a same-named method. A grounded reach — RESOLVED_FULL, a
+    // structural PARTIAL that isn't a bare-name call (interface-impl / dispatch), a coupling crossing, an import
+    // — IS followed. Symmetric with _fanCouple's coupling-fan gate; recomputed per wave as grounded edges appear.
+    const nameMatchEdge = (e: any) => (e.provenance === "RESOLVED_PARTIAL" || e.provenance === "SUGGESTED") && e.kind === "call";
+    const grounded = new Set<string>([anchorId]);
+    for (const e of data.edges as any[]) if (!nameMatchEdge(e)) { grounded.add(e.from); grounded.add(e.to); }
     // BIDIRECTIONAL MOVES — each reached node offers BOTH directions (a dependency may climb back UP to its other
     // consumers — the sibling entry points — not only descend). UP of a CORE node is still skipped (the central
     // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
     const moves: Move[] = [];
     for (const n of data.nodes as any[]) {
       if (n.id === "n1" || n.id === anchorId || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
+      if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
       for (const d of ["up", "down"] as const) {
