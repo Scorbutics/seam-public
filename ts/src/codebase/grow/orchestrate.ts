@@ -1090,11 +1090,49 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
   dbg(`[grow] coupling-border: cropped ${before} → ${data.nodes.length} node(s) (off-intent crossings pruned)`);
 }
 
+// DETERMINISTIC coupling border (OFFLINE — when the SLM border is off). Same concern as `_borderCoupling` (the
+// coupling overlay fans a shared key/table out to ALL its consumers, most off-intent), but the judge is the INTENT
+// FIELD (cached def embeddings — local, deterministic), not the LLM. A coupling COMPLEMENT (a real far-side file,
+// `n.coupling` but not a boundary marker) is KEPT iff its file scores on-intent (≥ `tierMargin`), else dropped.
+// The structural flow (non-coupling nodes reached by the CALL graph) and the boundary markers stay; a marker whose
+// complement was dropped is pruned downstream by the dangling-edge filter. RECALL-SAFE: the on-intent flow is
+// reached by the call graph; the coupling fan is SIBLING consumers of a shared key (auth/admin/reporting reading
+// the same `members` table), which score off-intent. Unscored file → kept (I3). Embeddings absent → no-op (keep
+// all — same degradation as everywhere the field is unavailable). This is what makes the offline agent feed tight:
+// on a real app the unbordered table-fan is the bulk of the region + the shared-key-fanout blindspots.
+export async function _borderCouplingDet(repo: string, data: any, intent: string, margin: number, fanThreshold: number): Promise<void> {
+  const isComp = (n: any) => n.coupling && !isFlowSubject(n.kind) && n.file;
+  const compById = new Map<string, any>((data.nodes as any[]).filter(isComp).map((n) => [n.id, n]));
+  if (!compById.size) return;
+  const markerIds = new Set<string>((data.nodes as any[]).filter((n) => n.coupling && isFlowSubject(n.kind)).map((n) => n.id));
+  // group complements by the boundary marker (table/route key) they cross — the fan of a marker is its complement set.
+  const compMarkers = new Map<string, Set<string>>(), markerComps = new Map<string, Set<string>>();
+  for (const e of data.edges as any[]) for (const [a, b] of [[e.from, e.to], [e.to, e.from]] as [string, string][])
+    if (markerIds.has(a) && compById.has(b)) { (compMarkers.get(b) ?? compMarkers.set(b, new Set()).get(b)!).add(a); (markerComps.get(a) ?? markerComps.set(a, new Set()).get(a)!).add(b); }
+  // I4: only a WIDE-FAN marker (a shared table read by many — the hub) has its complement fan field-gated. A complement
+  // reached via a NARROW marker (a sole route → its one handler = the flow's TERMINAL) is ALWAYS kept. A complement is
+  // a "fan" candidate only if EVERY marker that reached it is wide-fan (else a narrow marker vouches for it — spine-ward).
+  const wide = (m: string) => (markerComps.get(m)?.size ?? 0) > fanThreshold;
+  const fanComps = [...compById.keys()].filter((id) => { const ms = compMarkers.get(id); return ms && ms.size > 0 && [...ms].every(wide); });
+  if (!fanComps.length) return;
+  const files = new Set<string>(fanComps.map((id) => normpath(compById.get(id).file)));
+  const fileScore = new Map<string, number>();   // a file is on-intent if ANY of its symbols scores on-intent (max)
+  try { for (const { def, score } of await embedScoreDefs(repo, intent, files)) { const f = normpath(def.file); fileScore.set(f, Math.max(fileScore.get(f) ?? -1, score)); } }
+  catch { return; }   // embeddings absent → keep all (no deterministic signal)
+  const drop = new Set<string>(fanComps.filter((id) => (fileScore.get(normpath(compById.get(id).file)) ?? 1) < margin));   // unscored → keep (I3)
+  if (!drop.size) return;
+  const before = data.nodes.length;
+  data.nodes = (data.nodes as any[]).filter((n) => !drop.has(n.id));
+  data.edges = (data.edges as any[]).filter((e) => !drop.has(e.from) && !drop.has(e.to));
+  if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => !drop.has(b.node));
+  dbg(`[grow] coupling-border(det): cropped ${before} → ${data.nodes.length} node(s) (${drop.size} off-intent shared-key-fan complement(s) pruned by the intent field; narrow-marker terminals kept — I4)`);
+}
+
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
@@ -1122,6 +1160,15 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
     // pass `repo` so a route-complement CLASS (a handler like CompanyAdviserService reached over a shared route)
     // is judged WITH its methods ({advisers, deserialize, …} ≠ bookings), not a bare class name the weak SLM keeps.
     await _borderCoupling(data, { intent: opts.intent, model: opts.model, claudeBin: opts.claudeBin, repo }, (data as any)._borderDecided);
+  // OFFLINE (no SLM border): bound the coupling table-fan DETERMINISTICALLY with the intent field, so the fully-det
+  // agent feed is tight instead of drowning in a shared key's off-intent consumers. Opt out with SEAM_COUPLING_BORDER_DET=0.
+  else if (co.dataCoupling !== false && !(data as any).llmBorder && opts.intent && !co.ctx?.stableFloor
+      && (_envFlag(process.env.SEAM_COUPLING_BORDER_DET) ?? true))
+    // Complements need a HIGHER bar than call-graph pivots: they're sibling consumers of a shared key, topically
+    // near the intent (embeddings are generous), so the on-intent flow (in the call graph) is unaffected while the
+    // fan is cut. Dedicated SEAM_COUPLING_MARGIN (default 0.25 — the complement-score cliff on the author repo).
+    await _borderCouplingDet(repo, data, opts.intent, Number(process.env.SEAM_COUPLING_MARGIN ?? opts.couplingMargin ?? 0.25) || 0.25,
+      Math.max(1, parseInt(process.env.SEAM_COUPLING_FAN ?? "1", 10) || 1));   // a 1:1 crossing is a TERMINAL (always kept, I4); only a marker with >1 materialized complement is a fan to field-gate
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {

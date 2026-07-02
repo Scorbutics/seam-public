@@ -74,4 +74,23 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toContain("## Region (by shell");
     expect(out).toContain("bookingService");
   });
+
+  test("many shared-key-fanout blindspots COLLAPSE to one summary (keep the keys + directive, not N lines)", () => {
+    const model = makeModel();
+    // a coupling-heavy repo: dozens of shared-key boundaries + one real per-node lead
+    (model as any).blindspots = [
+      ...Array.from({ length: 30 }, (_, i) => ({ node: `dc${i}`, mechanism: "shared-key-fanout",
+        evidence: `'${["members", "admin", "payments"][i % 3]}' (db-table) written in ${i} files`, candidates: [{ symbol: ["members", "admin", "payments"][i % 3], provenance: "SUGGESTED" }] })),
+      { node: "dispatch", mechanism: "string-dispatch", evidence: "dynamic handler lookup", candidates: [] },
+    ];
+    const out = renderAgent(model, { tokenBudget: 4000, intent: "x" });
+    // the 30 fanout lines became ONE summary with the count + the distinct keys + the cross-from-other-side directive
+    expect(out).toMatch(/30 shared-key boundary crossing\(s\)/);
+    expect(out).toContain("members");
+    expect(out.toLowerCase()).toContain("other side");
+    // the non-fanout lead is still shown per-node (not collapsed)
+    expect(out).toContain("string-dispatch");
+    // and the section did not blow up: at most a couple of fanout-related lines, not 30
+    expect((out.match(/shared-key/g) ?? []).length).toBeLessThanOrEqual(2);
+  });
 });

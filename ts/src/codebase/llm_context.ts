@@ -769,13 +769,26 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const bs: any[] = model.blindspots ?? [];
     if (bs.length) {
       out.push("", "## Blindspots (what static resolution could not see — verify)");
+      // SHARED-KEY-FANOUT boundaries are a CLASS, not individual leads — a coupling-heavy repo emits dozens
+      // (`members` written in 17 files, `admin` in 7…). Rendered one-per-line they drown the exempt section and
+      // blow the budget. COLLAPSE them to a summary that keeps the honest signal (count + the distinct keys +
+      // the directive) without the flood. Non-fanout blindspots (real per-node leads) stay one-per-line.
+      const FANOUT = new Set(["shared-key-fanout", "llm-proposed-key"]);
+      const fanout = bs.filter((b) => FANOUT.has(b.mechanism));
       const ambient = new Map<string, string[]>();
       for (const b of bs) {
+        if (FANOUT.has(b.mechanism)) continue;
         if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
         const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
         out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
       }
       for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
+      if (fanout.length) {
+        const keyOf = (b: any) => (b.candidates ?? [])[0]?.symbol ?? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1]) ?? b.node;
+        const keys = [...new Set(fanout.map(keyOf).filter(Boolean))];
+        out.push(`  ${fanout.length} shared-key boundary crossing(s) (data-flow, not calls) over: ${keys.slice(0, 12).join(", ")}${keys.length > 12 ? `, +${keys.length - 12} more` : ""}`
+          + " — to follow one, run Seam again from the OTHER side with the key as the intent.");
+      }
     }
     const un: any[] = model.unresolved ?? [];
     if (un.length) { out.push("", `## Unresolved (${un.length} edge(s) static analysis couldn't follow)`); for (const u of un.slice(0, 8)) out.push(`  ${u.node ?? "?"}: ${u.query ?? ""}${u.reason ? ` (${u.reason})` : ""}`); }
