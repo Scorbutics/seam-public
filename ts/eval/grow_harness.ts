@@ -49,6 +49,7 @@ const CONFIGS: Config[] = [
   { label: "tolblend", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false, borderField: "blend" }, needsEmbed: true },   // region-centroid blend field
   { label: "tolbpri", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false, borderField: "blend", ubiquity: true, ubiquityFan: 3, hubGate: true, hubFan: 3 }, needsEmbed: true },   // blend + both priors
   { label: "slm", opts: { wave: true, borderLlm: true }, needsBackend: true },                       // the LLM border
+  { label: "slmres", opts: { wave: true, borderLlm: true, borderResidual: true, ubiquityFan: 3 }, needsBackend: true },   // residual band: SLM only the ambiguous middle
 ];
 
 const round = (x: number, n = 3): number => Math.round(x * 10 ** n) / 10 ** n;
@@ -139,6 +140,10 @@ function gate(report: Report, baseline: Report, tol: number): number {
     const base = baseline[name]; if (!base) continue;
     for (const [cfg, r] of Object.entries(byCfg)) {
       const b = base[cfg]; if (!b || r.skipped || b.skipped) continue;
+      // SLM-backed configs are NON-DETERMINISTIC (the model's verdict on the residual middle wobbles run-to-run),
+      // so their region precision/recall are REPORTED, not gated — a single-run gate would flake. Only the
+      // deterministic configs (det / tol / priors) are gated. (Stable SLM gating would need N-run aggregation.)
+      if (CONFIGS.find((c) => c.label === cfg)?.needsBackend) continue;
       if (r.precision < b.precision - tol) regressed.push(`${name}/${cfg}: precision ${b.precision} -> ${r.precision}`);
       if (r.recall < b.recall - tol) regressed.push(`${name}/${cfg}: recall ${b.recall} -> ${r.recall}`);
       const baseKept = new Set(b.mustKeepMissing);

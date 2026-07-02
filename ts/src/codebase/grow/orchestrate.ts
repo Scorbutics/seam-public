@@ -567,11 +567,35 @@ export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: st
   ].join("\n");
 }
 
+// RESIDUAL-BAND gating context (Phase 3): the deterministic signals that auto-decide the confident ends of
+// the ring so ONLY the ambiguous middle reaches the SLM. `field` = intent cosine (the discriminative field —
+// the centroid was a NO-GO, see grow-phase2-matrix.md); `ubiquity` = cross-module fan-in. hi/lo/fan are the
+// SLM-agreement-calibrated margins.
+export interface BandCtx { field: (n: any) => number; ubiquity: (n: any) => number; hi: number; lo: number; fan: number; }
+
 // Classify every not-yet-decided node as in-scope / out, ONE batched call per ≤_PRUNE_BATCH ring, caching the
 // verdict per node id so a node is judged exactly once across the whole grow. `decided` persists across waves.
-export async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>): Promise<Set<string>> {
+// `bands` (residual mode) auto-decides the confident ends first, so the batches carry only the residual band.
+export async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>, bands?: BandCtx): Promise<Set<string>> {
   decided.set(anchorId, true);   // the anchor is always the intent's centre
-  const undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
+  let undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
+  // RESIDUAL BAND (Phase 3, opt-in): partition the ring deterministically BEFORE the SLM sees it —
+  //  • auto-KEEP: bears a grounded crossing (I4 — never auto-dropped), or field ≥ hi (confidently on-intent);
+  //  • auto-DROP: cross-module ubiquity ≥ fan AND field ≤ lo (confident shared side-concern; crossing-free);
+  //  • residual (the middle): goes to the SLM exactly as before.
+  // Margins are SLM-agreement-calibrated (≥95% on the fixture). Recorded on data for the harness (LLM-call drop).
+  if (bands) {
+    const bearers = new Set<string>();
+    for (const e of data.edges as any[]) if (_is_crossing(e)) { bearers.add(String(e.from)); bearers.add(String(e.to)); }
+    let autoKeep = 0, autoDrop = 0;
+    undecided = undecided.filter((n) => {
+      if (bearers.has(String(n.id)) || n.coupling || bands.field(n) >= bands.hi) { decided.set(n.id, true); autoKeep++; return false; }   // auto-KEEP (crossing first → I4)
+      if (bands.ubiquity(n) >= bands.fan && bands.field(n) <= bands.lo) { decided.set(n.id, false); autoDrop++; return false; }            // auto-DROP (non-crossing only — crossings already kept)
+      return true;   // residual → SLM
+    });
+    const s = ((data as any)._residualStats ??= { autoKeep: 0, autoDrop: 0, slm: 0 });
+    s.autoKeep += autoKeep; s.autoDrop += autoDrop; s.slm += undecided.length;
+  }
   // REGION-SHAPED CONTEXT — for each candidate, the resolved relation(s) that reached it from a node ALREADY IN
   // the region (a prior-kept node, the anchor, or a boundary marker the flood crossed). The border judges
   // CONTINUATION-vs-DEPARTURE with this, not each node in isolation. A reacher is anything already anchored in the
@@ -719,13 +743,31 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // flow's crossing is scored high yet never gated). Off / no index → empty → no effect (I1/I3).
   const ubiquity = (opts.ubiquity ?? _envFlag(process.env.SEAM_UBIQUITY) ?? false) && wave;
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
-  const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
+  // RESIDUAL-BAND SLM (Phase 3, opt-in via SEAM_GROW_BORDER_RESIDUAL / opts.borderResidual). Only meaningful
+  // when the LLM border is on: it deterministically auto-decides the confident ends of each ring (crossing /
+  // field ≥ hi → keep; ubiquity-gated + field ≤ lo → drop) so the SLM judges only the ambiguous middle. hi/lo
+  // are SLM-agreement-calibrated on the fixture (env-overridable; author-repo recalibration pending). The band
+  // needs the intent field AND the ubiquity index, so both are computed here even when their own flags are off.
+  const borderResidual = llmPrune && (opts.borderResidual ?? _envFlag(process.env.SEAM_GROW_BORDER_RESIDUAL) ?? false);
+  const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
+  const bandHi = _num(opts.borderHi ?? process.env.SEAM_GROW_BORDER_HI, 0.34);
+  const bandLo = _num(opts.borderLo ?? process.env.SEAM_GROW_BORDER_LO, 0.20);
+  const needUbiq = ubiquity || borderResidual;
+  const ubiqScore = needUbiq ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
+  // NOTE (auto-KEEP is EDGE-visible crossings only, NOT the file-level floor): a floor key marks a file that
+  // TOUCHES a table, but an off-intent PEER reader of the same table (a reporting view reading `bookings`)
+  // also touches it — auto-keeping by floor key over-keeps those peers and cut precision on the fixture. A
+  // MATERIALISED crossing edge in the footprint is the on-intent signal; which same-table peer is on-intent
+  // is semantic (the SLM's residual job). So crossings auto-keep via `bearers` (edges) + `n.coupling` only.
+  const bandCtx: BandCtx | undefined = borderResidual
+    ? { field: (n: any) => _iscore(n), ubiquity: (n: any) => ubiquityOf(ubiqScore!, n.file), hi: bandHi, lo: bandLo, fan: ubiquityFan }
+    : undefined;
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
   for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
-    if (wave && !llmPrune) { await densify(); _growCentroid(step); }   // embedding field for the tol border + ordering; the LLM prune needs neither
+    if (wave && (!llmPrune || borderResidual)) { await densify(); _growCentroid(step); }   // embedding field for the tol border + ordering (+ the residual band's intent field); the plain LLM prune needs neither
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -768,7 +810,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // VALIDATED border: one cheap LLM call per wave judges the new ring; only in-scope nodes flood through.
       // Pass `repo` so a class candidate's methods can be read from source (its `contains` children aren't grown
       // yet at frontier time) — the judge sees `BookingsBean {createBooking, …}`, not a bare class name.
-      inShape = await _llmPruneInShape(data, anchorId, { ...opts, repo }, decided);
+      inShape = await _llmPruneInShape(data, anchorId, { ...opts, repo }, decided, bandCtx);
     } else if (borderTol != null) {
       const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _fieldScore(n)]));
       const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
@@ -885,7 +927,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // final wave isn't dropped unjudged. Boundary nodes (flow-subjects/coupling) the prune never sees are KEPT.
   if (llmPrune) {
     const aId = data.anchor?.id ?? "n1";
-    await _llmPruneInShape(data, aId, { ...opts, repo }, decided);   // repo → class candidates judged WITH their methods
+    await _llmPruneInShape(data, aId, { ...opts, repo }, decided, bandCtx);   // repo → class candidates judged WITH their methods
     const keep = new Set<string>([aId]);
     for (const n of data.nodes as any[]) { const v = decided.get(n.id); if (v === true || (v === undefined && (isFlowSubject(n.kind) || n.coupling))) keep.add(n.id); }
     const before = data.nodes.length;
@@ -926,7 +968,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
