@@ -37,9 +37,15 @@ interface GrowCase {
 // A border config = the env vars + grow opts that select a border. New phases append configs here
 // (centroid / blend / ubiquity / residual / concernMap) — the matrix and baseline grow with them.
 interface Config { label: string; env?: Record<string, string>; opts?: Record<string, any>; needsBackend?: boolean; needsEmbed?: boolean; }
+// NOTE on thresholds: hubFan/ubiquityFan default to 12 in production (calibrated for real repos). The
+// hermetic fixture is tiny (max cross-module fan ~6), so the prior configs below scale the fan down to
+// exercise the mechanism at all. A real-repo validation of the DEFAULT-flip uses the production defaults.
 const CONFIGS: Config[] = [
   { label: "det", opts: { wave: true, borderLlm: false, hubGate: false } },                         // flood, no border
   { label: "tol", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false }, needsEmbed: true },   // intent-cosine soft border
+  { label: "ubi", opts: { wave: true, borderLlm: false, ubiquity: true, ubiquityFan: 3 } },          // + deterministic ubiquity prior
+  { label: "hub", opts: { wave: true, borderLlm: false, hubGate: true, hubFan: 3 } },                // + deterministic hub gate
+  { label: "hububi", opts: { wave: true, borderLlm: false, hubGate: true, hubFan: 3, ubiquity: true, ubiquityFan: 3 } },   // both priors
   { label: "slm", opts: { wave: true, borderLlm: true }, needsBackend: true },                       // the LLM border
 ];
 
