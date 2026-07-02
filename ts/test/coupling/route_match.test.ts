@@ -112,4 +112,15 @@ describe("otherSide — generic route fanout suppression (the /summarize false-m
     const index = idx([["http-route /document/*", ["api/DocServlet.java"]]]);
     expect(otherSide(index, "http-route", "/document/123", false).map((a) => a.file)).toContain("api/DocServlet.java");
   });
+
+  test("a generic /summarize bucket grounding ONLY to unrelated services (no filename match) drops ALL", () => {
+    // The real acme shape: BookingsService's method key is `/summarize/*/*` (own bucket, specific-matched
+    // via its combined path); CompanyAdviser/Analytics use `/summarize/*` — a SEPARATE bucket that contains NONE of
+    // the caller's discriminating segments (booking/manage/rest). Keeping all was the fan bug; the right call is to
+    // drop the whole coincidental-common-word bucket.
+    const index = idx([["http-route /summarize/*",
+      ["api/CompanyAdviserService.java", "api/AnalyticsService.java", "api/ReportService.java"]]]);
+    const files = otherSide(index, "http-route", "/manage/rest/booking/summarize/0/*", false).map((a) => a.file);
+    expect(files).toEqual([]);   // no discriminating filename among many → coincidental → drop all (was: keep all = the fan)
+  });
 });

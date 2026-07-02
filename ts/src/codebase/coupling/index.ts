@@ -132,14 +132,17 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
     // base). A SOLE mount (`/document/*` servlet → one file) is a real coupling: keep it. But when the segment
     // grounds to MANY files it's a coincidental COMMON WORD (`summarize`/`list`, one per service) — keep only the
     // producer whose FILE reflects a DISCRIMINATING segment of the caller route (BookingsService for
-    // `/…/booking/summarize`), dropping the unrelated services. If NONE match (truly can't disambiguate) keep all,
-    // so a lone real coupling is never lost. This stops the booking flow dragging in every `summarize` service.
+    // `/…/booking/summarize`), dropping the unrelated services. If NONE match, DROP them all: a single caller
+    // route can't legitimately couple to many DISTINCT services through one shared common word, so an
+    // un-discriminable many-file generic is coincidental, not a coupling. (Every disambiguable real coupling is
+    // already preserved above — the ≥2-literal SPECIFIC match and the sole-mount generic.) This stops the booking
+    // flow dragging in every `summarize` service (CompanyAdviser/Analytics/…) via the bare `/summarize/*` key.
     const generics = scored.filter((s) => s.spec < 2).flatMap((s) => s.accesses);
     const files = new Set(generics.map((a) => a.file));
     if (files.size <= _GENERIC_ROUTE_FANOUT_CAP) { out.push(...generics); return out; }
     const segs = routeSegs(value).filter((x) => x !== "*" && x.length >= 4);
     const disc = generics.filter((a) => segs.some((seg) => a.file.toLowerCase().includes(seg.toLowerCase())));
-    out.push(...(disc.length ? disc : generics));
+    out.push(...disc);   // many-file generic, no discriminating filename → coincidental common word → drop all
   }
   return out;
 }
