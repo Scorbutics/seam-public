@@ -17,6 +17,8 @@ import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
 import { _read } from "../scan/ast_units.js";
+import { defs_in_file } from "../scan/def_table.js";
+import { defs_in_file_treesitter } from "../scan/def_treesitter.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -474,9 +476,15 @@ const _GROW_BORDER_LLM = () => _envFlag(process.env.SEAM_GROW_BORDER_LLM) ?? fas
 const PRUNE_PASS = registerPass({ tag: "grow-border", tier: "cheap", note: "wave-level intent border — keep only the candidates ON the intent" });
 const _PRUNE_BATCH = 50;   // candidates per call — small enough for a reliable per-candidate JSON reply
 
-function _candLabel(n: any): string {
+const _MEMBER_HINT_CAP = 8;
+function _candLabel(n: any, members?: string[]): string {
   const encl = n.enclosing && n.enclosing !== n.symbol ? ` (${n.enclosing})` : "";
-  return `${n.symbol}${encl} — ${n.file ? normpath(n.file) : "?"} — ${n.kind ?? "symbol"}`;
+  // For a CLASS/interface, list its methods — WHAT it does. A bare `BookingsBean — … — class` tells a weak SLM
+  // nothing, so it drops the data-layer bean the flow delegates to; `BookingsBean {createBooking, updateBooking,
+  // getUpcomingBookings}` makes it obvious the class realises a "manage bookings" intent. Grounded (real member
+  // nodes), capped, so it names the behaviour without a body dump.
+  const mem = members && members.length ? ` {${members.slice(0, _MEMBER_HINT_CAP).join(", ")}${members.length > _MEMBER_HINT_CAP ? ", …" : ""}}` : "";
+  return `${n.symbol}${encl}${mem} — ${n.file ? normpath(n.file) : "?"} — ${n.kind ?? "symbol"}`;
 }
 
 // REGION REACH — the resolved relation(s) that REACHED a candidate from a node ALREADY IN the region (the flood
@@ -512,7 +520,7 @@ export function _reachPhrases(n: any, edges: any[], isReacher: (id: string) => b
   return out.length ? out.join(", ") : "(reached from the region)";
 }
 
-export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: string }[]): string {
+export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: string; members?: string[] }[]): string {
   return [
     `A developer is mapping the code REGION for ONE intent: "${intent}" — a flood-fill outward from an anchor over`,
     "the code's real call/dependency graph. Each candidate below was REACHED from a node ALREADY IN the region, via",
@@ -520,15 +528,16 @@ export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: st
     "SIDE-CONCERNS along the way that are not what the intent is about. For EACH, decide if it is ON the intent's",
     "own path or a DEPARTURE into another concern.",
     "KEEP the mechanism that realises THIS intent: the service / bean / repository / DB / handler the flow",
-    "delegates THROUGH to read or write the data the intent is about, and the steps between them.",
+    "delegates THROUGH to read or write the data the intent is about, and the steps between them. A class whose",
+    "OWN methods (listed in {…}) name the intent's operations IS the mechanism — keep it.",
     "DROP a SIDE-CONCERN even though on-intent code calls it — notifications / messaging / broadcast, exports /",
     "integrations, document / vault management, audit / logging, security / permission / auth checks, search /",
     "indexing, rendering / charts / analytics, config, or an unrelated domain. These are triggered BY the flow but",
-    "are not the flow. When unsure, DROP a non-data node and KEEP only a clear data-layer one — a tight region on",
-    "the intent's own path beats its whole neighbourhood.",
-    "Each line is `[index] name (container) — file — kind · <how it was reached>`.",
+    "are not the flow. When unsure, KEEP a node the flow CALLS or DEPENDS ON (a data/service/repository step) and",
+    "DROP only a clear side-concern — losing the data layer the flow reaches is worse than one extra neighbour.",
+    "Each line is `[index] name (container) {methods} — file — kind · <how it was reached>`.",
     "",
-    ...cands.map((c) => `[${c.i}] ${_candLabel(c.n)} · ${c.ctx}`),
+    ...cands.map((c) => `[${c.i}] ${_candLabel(c.n, c.members)} · ${c.ctx}`),
     "",
     'Output ONLY a JSON array, ONE object per candidate: [{"id":"<index>","keep":true|false}, …]',
   ].join("\n");
@@ -547,12 +556,35 @@ export async function _llmPruneInShape(data: any, anchorId: string, opts: any, d
   const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
   const isReacher = (id: string): boolean => { if (id === anchorId || decided.get(id) === true) return true; const nd = byId.get(id); return !!nd && (isFlowSubject(nd.kind) || !!nd.coupling); };
   const ctxOf = (n: any): string => _reachPhrases(n, data.edges as any[], isReacher, (id) => nodeSym.get(id) ?? id);
+  // MEMBERS — a class/interface candidate's own methods, so the judge sees WHAT the class does. A bare
+  // `BookingsBean — class` gets dropped by a weak SLM; `BookingsBean {createBooking, updateBooking, …}` obviously
+  // realises "manage bookings". Prefer the GROWN `contains` children; but the PER-WAVE border judges a class
+  // BEFORE its methods are expanded (frontier eval), so `contains` is empty then — fall back to a cheap regex def
+  // scan of the class's own file (`defs_in_file`, offline, cached per file). Grounded either way (real members).
+  const membersOf = new Map<string, string[]>();
+  for (const e of (data.edges ?? []) as any[]) if (e.kind === "contains") { const m = byId.get(String(e.to)); if (m?.symbol) (membersOf.get(String(e.from)) ?? membersOf.set(String(e.from), []).get(String(e.from))!).push(m.symbol); }
+  // Pre-compute each class/interface candidate's members: the GROWN `contains` children if any, else a source def
+  // scan (tree-sitter — handles Java `public class` the JS-oriented regex misses; regex fallback offline). Cached
+  // per file. Awaited up front so the (sync) batch build below can just read the map.
+  const _fileDefs = new Map<string, any[]>();
+  const classMembers = new Map<string, string[]>();
+  for (const n of undecided) {
+    if (n.kind !== "class" && n.kind !== "interface") continue;
+    const grown = membersOf.get(String(n.id));
+    if (grown && grown.length) { classMembers.set(String(n.id), grown); continue; }
+    if (!opts.repo || !n.file) continue;
+    let defs = _fileDefs.get(n.file);
+    if (defs === undefined) { const rd = _read(opts.repo, n.file); defs = rd ? ((await defs_in_file_treesitter(n.file, rd[0])) ?? defs_in_file(n.file, rd[0])) : []; _fileDefs.set(n.file, defs); }
+    const mem = defs.filter((d) => d.enclosing === n.symbol && (d.kind === "method" || d.kind === "function")).map((d) => d.name);
+    if (mem.length) classMembers.set(String(n.id), mem);
+  }
+  const memOf = (n: any): string[] | undefined => classMembers.get(String(n.id));
   // BATCHES OF ONE WAVE'S ring run CONCURRENTLY — each ≤_PRUNE_BATCH slice is an independent classify over a
   // DISJOINT candidate set (no cross-batch dependency), so on a wide wave the wall is the slowest batch, not their
   // sum (the cheap-backend / Ollama path serves concurrent requests). The verdict-write is order-independent
   // (each batch owns its own nodes); JS runs each .then to completion, so no race on `decided`.
-  const batches: { i: number; n: any; ctx: string }[][] = [];
-  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) batches.push(undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n, ctx: ctxOf(n) })));
+  const batches: { i: number; n: any; ctx: string; members?: string[] }[][] = [];
+  for (let off = 0; off < undecided.length; off += _PRUNE_BATCH) batches.push(undecided.slice(off, off + _PRUNE_BATCH).map((n, k) => ({ i: k, n, ctx: ctxOf(n), members: memOf(n) })));
   await Promise.all(batches.map(async (batch) => {
     emit(`Judging the intent border with the LLM (${batch.length} candidate${batch.length === 1 ? "" : "s"})…`);
     let out: Map<string, any> | null = null;
@@ -665,7 +697,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     let inShape: Set<string> | null = null;
     if (llmPrune) {
       // VALIDATED border: one cheap LLM call per wave judges the new ring; only in-scope nodes flood through.
-      inShape = await _llmPruneInShape(data, anchorId, opts, decided);
+      // Pass `repo` so a class candidate's methods can be read from source (its `contains` children aren't grown
+      // yet at frontier time) — the judge sees `BookingsBean {createBooking, …}`, not a bare class name.
+      inShape = await _llmPruneInShape(data, anchorId, { ...opts, repo }, decided);
     } else if (borderTol != null) {
       const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _iscore(n)]));
       const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
@@ -729,7 +763,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
           for (const e of data.edges as any[]) if (_is_crossing(e)) { crossDst.add(e.dst); crossDst.add(e.from); }
           const kindById = new Map<string, string>((data.nodes as any[]).map((n: any) => [n.id, n.kind]));
           const spineWard = addedIds.some((id: string) =>
-            crossDst.has(id) || isFlowSubject(kindById.get(id)) || (data.nodes as any[]).find((n: any) => n.id === id)?.coupling);
+            crossDst.has(id) || isFlowSubject(kindById.get(id) ?? "") || (data.nodes as any[]).find((n: any) => n.id === id)?.coupling);
           if (!spineWard) {   // off-intent hub fan → crop it and don't let it seed the next wave
             for (const id of addedIds) {
               hubFanned.add(id);

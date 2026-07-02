@@ -59,6 +59,16 @@ describe("intent border — region reach context (continuation vs departure)", (
     expect(p).toContain("[0] BookingsBean");
   });
 
+  test("_prunePrompt lists a CLASS candidate's methods so the judge sees WHAT it does (not a bare class name)", () => {
+    // a bare `BookingsBean — class` gets dropped by a weak SLM; its methods make it obviously the mechanism.
+    const p = _prunePrompt("how are member bookings managed", [
+      { i: 0, n: { symbol: "BookingsBean", file: "ejb/BookingsBean.java", kind: "class" }, ctx: "called by AcmeCheckBookingsService.createBooking",
+        members: ["getUpcomingBookings", "createBooking", "updateBooking"] },
+    ]);
+    expect(p).toContain("BookingsBean {getUpcomingBookings, createBooking, updateBooking}");
+    expect(p).toMatch(/methods.*name the intent's operations IS the mechanism/);   // the prompt tells the model to keep it
+  });
+
   test("RECALL — a region-aware judge keeps the data mechanism the flow calls, drops the analytics departure", async () => {
     // A model that reads the region context: the resource→bean→repo the flow delegates through is a CONTINUATION
     // (kept); the analytics/rendering chart is a DEPARTURE (dropped). Keyed on the file the border prints.
