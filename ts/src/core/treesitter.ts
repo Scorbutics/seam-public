@@ -28,6 +28,24 @@ const WASM_DIR = _ENV_WASM_DIR
 
 export function langForExt(ext: string): string | null { return _LANG_BY_EXT[ext.toLowerCase()] ?? null; }
 
+// Languages that share ONE runtime/link unit, so an in-process call in one CAN structurally invoke a
+// symbol DEFINED in another: JS/TS/TSX transpile to the same JS runtime; Java/Kotlin share the JVM;
+// C/C++ share the linker. A call site in a DIFFERENT family can only reach the anchor across a BOUNDARY
+// (HTTP / FFI / JNI) — which is the coupling overlay's job, NEVER the structural call-site pass. A
+// language absent here is its own singleton family (python / ruby / go / …). Sourced from the language
+// registry above (the same closed set `_LANG_BY_EXT` enumerates), not a parallel hardcoded list.
+const _LANG_FAMILY: Record<string, string> = {
+  javascript: "js", typescript: "js", tsx: "js",
+  java: "jvm", kotlin: "jvm",
+  c: "native", cpp: "native",
+};
+export function langFamily(lang: string): string { return _LANG_FAMILY[lang] ?? lang; }
+// Two languages can host an in-process call between them. Null (unknown ext) is never same-family — an
+// unparseable candidate is not a provable structural consumer.
+export function sameLangFamily(a: string | null, b: string | null): boolean {
+  return a != null && b != null && langFamily(a) === langFamily(b);
+}
+
 // Generic node helpers (language-agnostic): a field accessor and a typed-descendant collector. Every
 // language front-end walks tree-sitter ASTs the same way, so these live in the shared substrate rather
 // than being re-declared per language. `collectByType` recurses through matched nodes too (a `call`

@@ -84,6 +84,7 @@ export function lang_for(filePath: string): string | null {
   const dot = filePath.lastIndexOf(".");
   return langForExtAtoms(dot >= 0 ? filePath.slice(dot).toLowerCase() : "");
 }
+export { sameLangFamily } from "../core/treesitter.js";
 
 export class Ctx {
   constructor(public content: string, public root: any) {}

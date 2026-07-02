@@ -9,7 +9,7 @@ import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { incrementalScanAsync } from "../../core/resolve/index_cache.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
-import { makeCtx, available, lang_for, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
+import { makeCtx, available, lang_for, sameLangFamily, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
 import { dbg } from "../../core/progress.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
@@ -93,8 +93,16 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   // re-reading the whole repo. A candidate that won't parse is surfaced (its calls then never resolve).
   const idx = await _callIndex(repo);
   const globalBases = idx.bases;
+  // CROSS-LANGUAGE GATE: the call index is a repo-wide method-NAME map (every language). A same-named call
+  // in a DIFFERENT language family is not a real consumer — a Java class's `data()`/`response()` cannot be
+  // invoked from a `.js` controller's `x.data`; that reach, if any, is an HTTP/FFI BOUNDARY the coupling
+  // overlay owns, not a structural call. Without this, a test/base class whose methods share generic names
+  // fans its "consumers" out to every JS/other-lang file that happens to use those names (the observed
+  // 211-node seed of a pdf/xslt scenario TEST pulling in bookings/login/company controllers). Grounded on
+  // the language registry (a closed structural fact), so it degrades identically for every language.
+  const anchorLang = lang_for(anchorFile);
   const candidates = new Set<string>();
-  for (const m of methods) for (const rel of idx.callers.get(m) ?? []) candidates.add(rel);
+  for (const m of methods) for (const rel of idx.callers.get(m) ?? []) if (sameLangFamily(lang_for(rel), anchorLang)) candidates.add(rel);
   const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; sites: ReturnType<typeof _method_call_sites> }[] = [];
   for (const rel of candidates) {
     if (normpath(join(repo, rel)) === anchorAbs) continue;
