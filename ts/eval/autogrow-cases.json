@@ -22,10 +22,10 @@
       "services/bookingService.ts",
       "domain/availabilityBean.ts",
       "data/bookingRepo.ts",
-      "util/dateRanges.ts"
+      "domain/dateRanges.ts"
     ],
     "mustKeep": [
-      "util/dateRanges.ts",
+      "domain/dateRanges.ts",
       "data/bookingRepo.ts"
     ],
     "mustDrop": [

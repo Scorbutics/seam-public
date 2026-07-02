@@ -50,6 +50,7 @@ const CONFIGS: Config[] = [
   { label: "tolbpri", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false, borderField: "blend", ubiquity: true, ubiquityFan: 3, hubGate: true, hubFan: 3 }, needsEmbed: true },   // blend + both priors
   { label: "slm", opts: { wave: true, borderLlm: true }, needsBackend: true },                       // the LLM border
   { label: "slmres", opts: { wave: true, borderLlm: true, borderResidual: true, ubiquityFan: 3 }, needsBackend: true },   // residual band: SLM only the ambiguous middle
+  { label: "slmrescm", opts: { wave: true, borderLlm: true, borderResidual: true, ubiquityFan: 3, concernMap: true }, needsBackend: true },   // + learned concern-map auto-drop
 ];
 
 const round = (x: number, n = 3): number => Math.round(x * 10 ** n) / 10 ** n;

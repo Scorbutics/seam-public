@@ -14,6 +14,8 @@ import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf } from "./ubiquity.js";
 import { RegionCentroid } from "./field.js";
+import { concernDropSentence } from "./concerns.js";
+import { loadOrBuildConcernMap, concernOf, type ConcernMap } from "./concern_map.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
@@ -554,10 +556,9 @@ export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: st
     "KEEP the mechanism that realises THIS intent: the service / bean / repository / DB / handler the flow",
     "delegates THROUGH to read or write the data the intent is about, and the steps between them. A class whose",
     "OWN methods (listed in {…}) name the intent's operations IS the mechanism — keep it.",
-    "DROP a SIDE-CONCERN even though on-intent code calls it — notifications / messaging / broadcast, exports /",
-    "integrations, document / vault management, audit / logging, security / permission / auth checks, search /",
-    "indexing, rendering / charts / analytics, config, or an unrelated domain. These are triggered BY the flow but",
-    "are not the flow. When unsure, KEEP a node the flow CALLS or DEPENDS ON (a data/service/repository step) and",
+    // DROP sentence DERIVED from the concern registry (concerns.ts) — prompt ⇄ taxonomy can't drift.
+    concernDropSentence(),
+    "When unsure, KEEP a node the flow CALLS or DEPENDS ON (a data/service/repository step) and",
     "DROP only a clear side-concern — losing the data layer the flow reaches is worse than one extra neighbour.",
     "Each line is `[index] name (container) {methods} — file — kind · <how it was reached>`.",
     "",
@@ -571,7 +572,11 @@ export function _prunePrompt(intent: string, cands: { i: number; n: any; ctx: st
 // the ring so ONLY the ambiguous middle reaches the SLM. `field` = intent cosine (the discriminative field —
 // the centroid was a NO-GO, see grow-phase2-matrix.md); `ubiquity` = cross-module fan-in. hi/lo/fan are the
 // SLM-agreement-calibrated margins.
-export interface BandCtx { field: (n: any) => number; ubiquity: (n: any) => number; hi: number; lo: number; fan: number; }
+export interface BandCtx {
+  residual: boolean;                        // field/ubiquity auto-decisions active (Phase 3)
+  field: (n: any) => number; ubiquity: (n: any) => number; hi: number; lo: number; fan: number;
+  concern?: (n: any) => string | null;      // learned side-concern label of a node's module (Phase 4) — a real concern → auto-DROP
+}
 
 // Classify every not-yet-decided node as in-scope / out, ONE batched call per ≤_PRUNE_BATCH ring, caching the
 // verdict per node id so a node is judged exactly once across the whole grow. `decided` persists across waves.
@@ -579,18 +584,21 @@ export interface BandCtx { field: (n: any) => number; ubiquity: (n: any) => numb
 export async function _llmPruneInShape(data: any, anchorId: string, opts: any, decided: Map<string, boolean>, bands?: BandCtx): Promise<Set<string>> {
   decided.set(anchorId, true);   // the anchor is always the intent's centre
   let undecided = (data.nodes as any[]).filter((n) => n.id !== anchorId && n.file && n.symbol && !isFlowSubject(n.kind) && !decided.has(n.id));
-  // RESIDUAL BAND (Phase 3, opt-in): partition the ring deterministically BEFORE the SLM sees it —
-  //  • auto-KEEP: bears a grounded crossing (I4 — never auto-dropped), or field ≥ hi (confidently on-intent);
-  //  • auto-DROP: cross-module ubiquity ≥ fan AND field ≤ lo (confident shared side-concern; crossing-free);
-  //  • residual (the middle): goes to the SLM exactly as before.
-  // Margins are SLM-agreement-calibrated (≥95% on the fixture). Recorded on data for the harness (LLM-call drop).
+  // BAND partition (Phase 3 residual + Phase 4 concern) — auto-decide the confident ends BEFORE the SLM sees
+  // the ring, so it judges only the ambiguous middle. Order matters: CROSSING auto-KEEP is checked FIRST, so a
+  // crossing-bearer is never auto-dropped by a concern label or the ubiquity band (I4).
+  //  • auto-KEEP: bears a grounded crossing / coupling; or (residual) field ≥ hi;
+  //  • auto-DROP: (concern) node in a labelled side-concern module; or (residual) ubiquity ≥ fan AND field ≤ lo;
+  //  • residual (the middle): goes to the SLM.
+  // Recorded on data for the harness (the LLM-call drop).
   if (bands) {
     const bearers = new Set<string>();
     for (const e of data.edges as any[]) if (_is_crossing(e)) { bearers.add(String(e.from)); bearers.add(String(e.to)); }
     let autoKeep = 0, autoDrop = 0;
     undecided = undecided.filter((n) => {
-      if (bearers.has(String(n.id)) || n.coupling || bands.field(n) >= bands.hi) { decided.set(n.id, true); autoKeep++; return false; }   // auto-KEEP (crossing first → I4)
-      if (bands.ubiquity(n) >= bands.fan && bands.field(n) <= bands.lo) { decided.set(n.id, false); autoDrop++; return false; }            // auto-DROP (non-crossing only — crossings already kept)
+      if (bearers.has(String(n.id)) || n.coupling || (bands.residual && bands.field(n) >= bands.hi)) { decided.set(n.id, true); autoKeep++; return false; }   // auto-KEEP (crossing first → I4)
+      if (bands.concern?.(n)) { decided.set(n.id, false); autoDrop++; return false; }                                                       // auto-DROP: labelled side-concern module (non-crossing — crossings kept above)
+      if (bands.residual && bands.ubiquity(n) >= bands.fan && bands.field(n) <= bands.lo) { decided.set(n.id, false); autoDrop++; return false; }   // auto-DROP: shared + low-field
       return true;   // residual → SLM
     });
     const s = ((data as any)._residualStats ??= { autoKeep: 0, autoDrop: 0, slm: 0 });
@@ -752,6 +760,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const bandHi = _num(opts.borderHi ?? process.env.SEAM_GROW_BORDER_HI, 0.34);
   const bandLo = _num(opts.borderLo ?? process.env.SEAM_GROW_BORDER_LO, 0.20);
+  // CONCERN MAP (Phase 4, opt-in via SEAM_CONCERN_MAP / opts.concernMap) — the learned side-concern taxonomy.
+  // Loaded/learned once (never in the stable-floor probe, I5); a node in a labelled concern module auto-DROPs.
+  const concernMapOn = llmPrune && (opts.concernMap ?? _envFlag(process.env.SEAM_CONCERN_MAP) ?? false);
+  const concernMap: ConcernMap | null = (concernMapOn && !stableFloor)
+    ? await loadOrBuildConcernMap(repo, { model: opts.model, claudeBin: opts.claudeBin }, coStruct.ctx as EngineCtx)
+    : null;
   const needUbiq = ubiquity || borderResidual;
   const ubiqScore = needUbiq ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
   // NOTE (auto-KEEP is EDGE-visible crossings only, NOT the file-level floor): a floor key marks a file that
@@ -759,8 +773,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // also touches it — auto-keeping by floor key over-keeps those peers and cut precision on the fixture. A
   // MATERIALISED crossing edge in the footprint is the on-intent signal; which same-table peer is on-intent
   // is semantic (the SLM's residual job). So crossings auto-keep via `bearers` (edges) + `n.coupling` only.
-  const bandCtx: BandCtx | undefined = borderResidual
-    ? { field: (n: any) => _iscore(n), ubiquity: (n: any) => ubiquityOf(ubiqScore!, n.file), hi: bandHi, lo: bandLo, fan: ubiquityFan }
+  const bandCtx: BandCtx | undefined = (borderResidual || concernMap)
+    ? { residual: borderResidual, field: (n: any) => _iscore(n), ubiquity: (n: any) => ubiquityOf(ubiqScore ?? new Map(), n.file), hi: bandHi, lo: bandLo, fan: ubiquityFan,
+        concern: concernMap ? (n: any) => concernOf(concernMap, repo, n.file) : undefined }
     : undefined;
   let moveNo = 0;
   // WAVEFRONT termination is the BORDER (a wave that adds nothing — region fully flooded), NOT a wave count, so
@@ -968,7 +983,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the

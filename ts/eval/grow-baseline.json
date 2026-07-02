@@ -11,17 +11,17 @@
       ],
       "nodes": 14,
       "llmCalls": 0,
-      "wallMs": 427,
+      "wallMs": 394,
       "region": [
         "admin/adminService.ts",
         "api/bookingHandler.ts",
         "billing/billingService.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
+        "domain/dateRanges.ts",
         "notifications/notifier.ts",
         "reporting/reportService.ts",
         "services/bookingService.ts",
-        "util/dateRanges.ts",
         "util/logger.ts"
       ]
     },
@@ -36,16 +36,16 @@
       ],
       "nodes": 12,
       "llmCalls": 0,
-      "wallMs": 40,
+      "wallMs": 42,
       "region": [
         "api/bookingHandler.ts",
         "billing/billingService.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
+        "domain/dateRanges.ts",
         "notifications/notifier.ts",
         "reporting/reportService.ts",
         "services/bookingService.ts",
-        "util/dateRanges.ts",
         "util/logger.ts"
       ]
     },
@@ -60,16 +60,16 @@
       ],
       "nodes": 12,
       "llmCalls": 0,
-      "wallMs": 43,
+      "wallMs": 48,
       "region": [
         "api/bookingHandler.ts",
         "billing/billingService.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
+        "domain/dateRanges.ts",
         "notifications/notifier.ts",
         "reporting/reportService.ts",
         "services/bookingService.ts",
-        "util/dateRanges.ts",
         "util/logger.ts"
       ]
     },
@@ -82,15 +82,15 @@
       ],
       "nodes": 11,
       "llmCalls": 0,
-      "wallMs": 39,
+      "wallMs": 41,
       "region": [
         "admin/adminService.ts",
         "api/bookingHandler.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
+        "domain/dateRanges.ts",
         "reporting/reportService.ts",
         "services/bookingService.ts",
-        "util/dateRanges.ts",
         "util/logger.ts"
       ]
     },
@@ -98,7 +98,7 @@
       "precision": 0.667,
       "recall": 0.4,
       "mustKeepMissing": [
-        "util/dateRanges.ts",
+        "domain/dateRanges.ts",
         "data/bookingRepo.ts"
       ],
       "mustDropPresent": [
@@ -106,7 +106,7 @@
       ],
       "nodes": 3,
       "llmCalls": 0,
-      "wallMs": 22,
+      "wallMs": 20,
       "region": [
         "api/bookingHandler.ts",
         "services/bookingService.ts",
@@ -117,7 +117,7 @@
       "precision": 0.444,
       "recall": 0.8,
       "mustKeepMissing": [
-        "util/dateRanges.ts"
+        "domain/dateRanges.ts"
       ],
       "mustDropPresent": [
         "util/logger.ts",
@@ -126,7 +126,7 @@
       ],
       "nodes": 11,
       "llmCalls": 0,
-      "wallMs": 31,
+      "wallMs": 29,
       "region": [
         "admin/adminService.ts",
         "api/bookingHandler.ts",
@@ -143,7 +143,7 @@
       "precision": 0.667,
       "recall": 0.4,
       "mustKeepMissing": [
-        "util/dateRanges.ts",
+        "domain/dateRanges.ts",
         "data/bookingRepo.ts"
       ],
       "mustDropPresent": [
@@ -165,30 +165,45 @@
       "mustDropPresent": [],
       "nodes": 8,
       "llmCalls": 5,
-      "wallMs": 46888,
+      "wallMs": 58158,
       "region": [
         "api/bookingHandler.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
-        "services/bookingService.ts",
-        "util/dateRanges.ts"
+        "domain/dateRanges.ts",
+        "services/bookingService.ts"
       ]
     },
     "slmres": {
-      "precision": 0.833,
+      "precision": 1,
       "recall": 1,
       "mustKeepMissing": [],
       "mustDropPresent": [],
-      "nodes": 9,
+      "nodes": 8,
       "llmCalls": 4,
-      "wallMs": 62318,
+      "wallMs": 28084,
       "region": [
-        "admin/adminService.ts",
         "api/bookingHandler.ts",
         "data/bookingRepo.ts",
         "domain/availabilityBean.ts",
-        "services/bookingService.ts",
-        "util/dateRanges.ts"
+        "domain/dateRanges.ts",
+        "services/bookingService.ts"
+      ]
+    },
+    "slmrescm": {
+      "precision": 1,
+      "recall": 1,
+      "mustKeepMissing": [],
+      "mustDropPresent": [],
+      "nodes": 8,
+      "llmCalls": 4,
+      "wallMs": 29297,
+      "region": [
+        "api/bookingHandler.ts",
+        "data/bookingRepo.ts",
+        "domain/availabilityBean.ts",
+        "domain/dateRanges.ts",
+        "services/bookingService.ts"
       ]
     }
   }

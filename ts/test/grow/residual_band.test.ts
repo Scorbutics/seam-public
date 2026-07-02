@@ -47,7 +47,7 @@ const graph = () => ({
   blindspots: [],
 });
 
-const bands = (): BandCtx => ({ field: (n: any) => n.f ?? 0, ubiquity: (n: any) => n.u ?? 0, hi: 0.34, lo: 0.2, fan: 3 });
+const bands = (): BandCtx => ({ residual: true, field: (n: any) => n.f ?? 0, ubiquity: (n: any) => n.u ?? 0, hi: 0.34, lo: 0.2, fan: 3 });
 
 describe("residual band — the SLM sees only the ambiguous middle", () => {
   test("auto-KEEP / auto-DROP / I4-crossing never reach the judge; only the middle does", async () => {

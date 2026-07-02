@@ -13,7 +13,7 @@ grow-border eval run **fully offline** (no author-local repo, no network) — th
 createBooking (api/bookingHandler.ts)
   └─ bookSlot (services/bookingService.ts)
        ├─ AvailabilityBean.computeFreeRanges (domain/availabilityBean.ts)   ← availability mechanism
-       │    ├─ mergeIntervals (util/dateRanges.ts)                          ← LOW-COSINE mechanism
+       │    ├─ mergeIntervals (domain/dateRanges.ts)                          ← LOW-COSINE mechanism
        │    └─ loadBookings  (data/bookingRepo.ts)                          ← data layer
        └─ saveBooking (data/bookingRepo.ts)  ──db-table:bookings──▶  the crossing
 ```
@@ -22,7 +22,7 @@ createBooking (api/bookingHandler.ts)
 
 ## The adversarial cases
 
-- **low-cosine mechanism** (`util/dateRanges.ts` `mergeIntervals`) — pure interval math, shares no
+- **low-cosine mechanism** (`domain/dateRanges.ts` `mergeIntervals`) — pure interval math, shares no
   vocabulary with "booking"/"availability", yet it IS the availability computation. A pure-embedding
   intent border scores it near-zero and cuts it. **must-keep.**
 - **spine hub with a crossing** (`data/bookingRepo.ts`) — writes the `bookings` table (the flow's

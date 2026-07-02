@@ -1,5 +1,5 @@
 import { loadBookings } from "../data/bookingRepo.js";
-import { mergeIntervals } from "../util/dateRanges.js";
+import { mergeIntervals } from "./dateRanges.js";
 
 // The mechanism that decides whether a slot is free for a member on a date — the heart of the intent.
 // It delegates the core interval computation to a helper (mergeIntervals) whose name shares NO
