@@ -373,8 +373,23 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
   // reaches the data bean + its REST resource via one route but never its OTHER routes' UI consumers".
   const producer = new Set<string>();
   for (const e of (data.edges ?? [])) if (isHandlerEdge(e.kind) || isProduceEdge(e.kind)) { producer.add(e.from); producer.add(e.to); }
+  // GROUNDED REACH — a node reached ONLY via a receiver-agnostic bare-name `call` match (RESOLVED_PARTIAL: the
+  // resolver's "honest ambiguity" from a method-name coincidence — core/resolution.ts says a PARTIAL link must
+  // NOT be followed) is not a confirmed part of the flow. Fanning coupling from it manufactures a boundary
+  // crossing out of a name collision: a test base class's generic `data()`/`response()` "matches" every bean,
+  // and each bean's routes/tables then fan to counterparts across the repo (the "coupling scans everything"
+  // explosion off an anchor that itself touches no boundary). Couple a node only when it has a GROUNDED reach —
+  // RESOLVED_FULL, or a structural PARTIAL that isn't a bare-name call (a sole interface-impl / dispatch edge,
+  // which IS a provable runtime binding). The anchor (n1) is always grounded. Producer/resource coupling nodes
+  // are exempt (a boundary edge already grounds them). This is the seed-side twin of the cross-language callsite
+  // gate: seed coupling on GROUNDED facts, never a name guess.
+  const grounded = new Set<string>(["n1"]);
+  for (const e of (data.edges ?? [])) {
+    if (e.provenance === "RESOLVED_FULL" || (e.provenance === "RESOLVED_PARTIAL" && e.kind !== "call")) { grounded.add(e.from); grounded.add(e.to); }
+  }
   for (const n of (data.nodes ?? [])) {
     if (n.coupling && !producer.has(n.id)) continue;   // skip pure-consumer coupling nodes; couple producer/resource ones
+    if (!producer.has(n.id) && !grounded.has(n.id)) continue;   // don't fan a boundary from a bare-name call match
     const f = n.file ? normpath(n.file) : "";
     if (!f || coupled.has(f)) continue;
     coupled.add(f);
