@@ -180,6 +180,21 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
   return out;
 }
 
+// The TYPE-name tokens referenced in a file — every identifier used in a TYPE position (`Optional<X>`, a
+// cast, extends/implements) plus `new X()` constructors. Lets the call-site pass tell a STATIC receiver
+// (`Optional.empty()` — the receiver IS a type) from an instance one, so a bare-name match to an unrelated
+// class's same-named method (`empty`) is dropped: the call dispatches to that type, not the anchor. Grounded
+// on structural type positions (a closed node-kind set), not a capitalisation/naming convention.
+export function _type_names(ctx: Ctx): Set<string> {
+  const out = new Set<string>();
+  for (const t of ctx.collect(ctx.root, (k) => _TYPE_REF.has(k))) out.add(ctx.text(t));
+  for (const nx of ctx.collect(ctx.root, (k) => _NEW.has(k))) {
+    const c = ctx.children(nx).find((x) => x.type === "identifier" || _MEMBER.has(x.type));
+    if (c) out.add(ctx.text(c));
+  }
+  return out;
+}
+
 // The distinct method-call names this file makes (`obj.name()` → name) — method calls only (has a receiver),
 // mirroring _method_call_sites' filter. Feeds the inverted call-site index so a consumer scan finds caller
 // files by lookup instead of re-walking + re-reading the whole repo per build.

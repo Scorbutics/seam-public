@@ -18,7 +18,7 @@ import {
 import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _usage_lines } from "./ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
-  _instance_types, _method_call_sites, _subclass_family, _called_method_names,
+  _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names,
 } from "./ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
 
@@ -103,7 +103,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   const anchorLang = lang_for(anchorFile);
   const candidates = new Set<string>();
   for (const m of methods) for (const rel of idx.callers.get(m) ?? []) if (sameLangFamily(lang_for(rel), anchorLang)) candidates.add(rel);
-  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; sites: ReturnType<typeof _method_call_sites> }[] = [];
+  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
   for (const rel of candidates) {
     if (normpath(join(repo, rel)) === anchorAbs) continue;
     const rd = _read(repo, rel);
@@ -111,7 +111,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     const cctx = await makeCtx(rd[0], rd[1]);
     if (!cctx) { dbg(`[callsite] SKIPPED unparseable candidate consumer ${rel} — its calls to ${[...methods].join("/")} are NOT resolved`); continue; }
     const sites = _method_call_sites(cctx, methods);
-    if (sites.length) pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes: owner ? _instance_types(cctx) : new Map(), sites });
+    if (sites.length) pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes: owner ? _instance_types(cctx) : new Map(), typeNames: owner ? _type_names(cctx) : new Set<string>(), sites });
   }
 
   const family = owner ? _subclass_family(globalBases, owner) : null;
@@ -129,6 +129,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   // that ambiguity is real. Empty when the owner has no in-repo base (nothing to be a sibling of), which
   // preserves the unrelated-same-name → PARTIAL contract (a class sharing no base is never a sibling).
   const ownerBases = owner ? (globalBases.get(owner) ?? []) : [];
+  const ownerBaseSet = new Set(ownerBases);
   const siblings = new Set<string>();
   for (const b of ownerBases) for (const c of _subclass_family(globalBases, b)) siblings.add(c);
   for (const c of family ?? []) siblings.delete(c);   // keep the owner + its subclasses
@@ -139,6 +140,16 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     if (s.recvId) { const ts = instTypes.get(s.recvId); if (ts && ts.size && [...ts].every((t) => siblings.has(t))) return true; }
     return false;
   };
+  // STATIC-FOREIGN receiver: a call whose receiver is a TYPE token (`Optional.empty()`, `Collections.…()`) —
+  // not an instance — dispatches at compile time to THAT type's static method, so it can NEVER be an instance
+  // method of the owner. When the receiver names a type used in the file (typeNames) that isn't the owner /
+  // family / base, drop it. This is the case a generic factory name on the anchor (`DefaultParameters.empty`)
+  // hit: without it, every `Optional.empty()` in the repo became a RESOLVED_PARTIAL "consumer" the grow then
+  // FOLLOWED (core/resolution.ts: don't follow a PARTIAL). Unlike a VIRTUAL instance call (`v.m()`, v:Other),
+  // a static call has no dynamic-dispatch ambiguity, so this drops without touching the instance-receiver
+  // PARTIAL contract (an unrelated typed var stays a surfaced lead).
+  const staticForeign = (s: { recvId: string | null; recvNew: string | null }, typeNames: Set<string>): boolean =>
+    !!owner && !!family && !!s.recvId && !s.recvNew && typeNames.has(s.recvId) && !family.has(s.recvId) && !ownerBaseSet.has(s.recvId);
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
@@ -146,7 +157,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   const resolvedMethods = new Set<string>();   // every method name a call site was found for (any provenance)
   for (const pf of pending) {
     for (const s of pf.sites) {
-      if (provablySibling(s, pf.instTypes)) continue;   // a sibling's own dispatch — not a consumer of this class
+      if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames)) continue;   // dispatches to a different type — not a consumer of this class
       resolvedMethods.add(s.method);
       const enc = _enclosing(pf.units, s.line);
       const [sym, kind, start, end] = enc ? enc : [stem(pf.fn), "module", s.line, s.line];
