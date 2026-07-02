@@ -645,7 +645,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const borderTol = wave && process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null;
   // LLM-prune border takes precedence over the embedding tol border when on AND a backend exists (else it falls
   // back to the tol border / flood). `decided` caches each node's in-scope verdict across all waves.
-  const llmPrune = wave && (opts.borderLlm ?? _GROW_BORDER_LLM()) && opts.intent && llmAvailable(opts.claudeBin);
+  // STABLE-FLOOR PROBE: the footprint-scoping pre-grow (`grow_footprint_scoped`) DISCARDS its footprint — only the
+  // files it reaches are kept, to scope the real grow's LLM key-discovery. It is the "cheap DETERMINISTIC floor"
+  // pre-grow, so it must run LLM-FREE (the same reason line ~869 skips `_borderCoupling` under stableFloor). Running
+  // the wave border + crop here doubled the LLM calls on a footprint we throw away. Gate them off in the probe.
+  const stableFloor = coStruct.ctx?.stableFloor;
+  const llmPrune = !stableFloor && wave && (opts.borderLlm ?? _GROW_BORDER_LLM()) && opts.intent && llmAvailable(opts.claudeBin);
   const decided = new Map<string, boolean>();
   // HUB GATE (wave, opt-in via SEAM_HUB_GATE / opts.hubGate) — a DETERMINISTIC bound on the off-intent overgrow
   // the profiling exposed: a hub node (a shared repo/util/accessor) whose expansion adds a WIDE fan of pure
