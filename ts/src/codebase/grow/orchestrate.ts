@@ -401,6 +401,12 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
   _mergeCouplingOverlay(data, overlay);
 }
 
+// The `[grow]` log prefix, tagged `·probe` when this grow is the throwaway footprint-scoping pre-grow
+// (`grow_footprint_scoped` sets ctx.stableFloor). The probe runs a FULL grow — seed → coupling → wave
+// expansion — to discover the flow's files, then discards the footprint; its wave lines are otherwise
+// indistinguishable from the real grow's, so it reads as "the grow is still growing" (see [coupling·probe]).
+const _gtag = (ctx?: EngineCtx): string => (ctx?.stableFloor ? "grow·probe" : "grow");
+
 // ── P2 STRUCTURAL EXPANSION (docs/grow-architecture.md) ──────────────────────────────────────────────────
 // Reach the flow's terminals via consumer/dependency edges, bounded by budget. The frontier is INTENT-GUIDED
 // (`_nextFrontier` orders by relevance, then crossing, then complexity) and the excluded set is dropped here.
@@ -448,12 +454,12 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   let add: any;
   try {
     add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
-  } catch { dbg(`[grow]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
+  } catch { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
   // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
   // answer — data-coupling fan is exempt (self-bounded + the intent).
   const have = new Set(data.nodes.map((x: any) => _key(x)));
   const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
-  if (flood > _MOVE_CAP) { dbg(`[grow]   ${label}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); return { data, added: 0 }; }
+  if (flood > _MOVE_CAP) { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); return { data, added: 0 }; }
   // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
   // continues the same way (consumers up, deps down), but each new node may still later reverse.
   const tag = down ? "backward" : "forward";
@@ -461,7 +467,7 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   const before = data.nodes.length;
   const merged = merge_resolved(data, add, add.anchor?.id);
   const added = merged.nodes.length - before;
-  dbg(`[grow]   ${label}: ${arrow} ${qual} → +${added} node(s)`);
+  dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} → +${added} node(s)`);
   history.push({ node: next.symbol, added, ...(down ? { dir: "down" } : {}) });
   return { data: merged, added };
 }
@@ -873,15 +879,15 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   const coupled = new Set<string>();   // files already coupled — carried across the seed + post-expand fans (couple each once)
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
-  dbg(`[grow] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
+  dbg(`[${_gtag(co.ctx)}] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
   data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune, coupled);   // P3 coupling bridges (seed)
-  dbg(`[grow] P3 coupling: +${data.nodes.length - seedN} bridge node(s)`);
+  dbg(`[${_gtag(co.ctx)}] P3 coupling: +${data.nodes.length - seedN} bridge node(s)`);
   const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // P2 expand
   data = grown;
-  dbg(`[grow] P2 expand: ${history.length} step(s) → ${data.nodes.length} node(s) total (budget ${maxSteps} steps / ${maxNodes} nodes)`);
+  dbg(`[${_gtag(co.ctx)}] P2 expand: ${history.length} step(s) → ${data.nodes.length} node(s) total (budget ${maxSteps} steps / ${maxNodes} nodes)`);
   // P3 (deep) — couple the boundary files the bidirectional walk CLIMBED to (sibling resources reached during
   // expand, not in the seed), so their routes cross to their UIs. `coupled` skips the seed files already done.
-  if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[grow] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); }
+  if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[${_gtag(co.ctx)}] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); }
   // #1 — INTENT-BORDER THE COUPLING OVERLAY: the seed+deep coupling fan bypassed the structural border (its
   // complements were auto-kept), drowning the on-intent flow in off-intent consumers of shared hub tables. Judge
   // them with the same border and drop the off-intent ones. Skip the throwaway stable-floor probe (its result is
