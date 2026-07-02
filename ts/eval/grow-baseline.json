@@ -1,0 +1,69 @@
+{
+  "booking-mini": {
+    "det": {
+      "precision": 0.5,
+      "recall": 1,
+      "mustKeepMissing": [],
+      "mustDropPresent": [
+        "util/logger.ts",
+        "billing/billingService.ts",
+        "notifications/notifier.ts"
+      ],
+      "nodes": 14,
+      "llmCalls": 0,
+      "wallMs": 484,
+      "region": [
+        "admin/adminService.ts",
+        "api/bookingHandler.ts",
+        "billing/billingService.ts",
+        "data/bookingRepo.ts",
+        "domain/availabilityBean.ts",
+        "notifications/notifier.ts",
+        "reporting/reportService.ts",
+        "services/bookingService.ts",
+        "util/dateRanges.ts",
+        "util/logger.ts"
+      ]
+    },
+    "tol": {
+      "precision": 0.556,
+      "recall": 1,
+      "mustKeepMissing": [],
+      "mustDropPresent": [
+        "util/logger.ts",
+        "billing/billingService.ts",
+        "notifications/notifier.ts"
+      ],
+      "nodes": 12,
+      "llmCalls": 0,
+      "wallMs": 57,
+      "region": [
+        "api/bookingHandler.ts",
+        "billing/billingService.ts",
+        "data/bookingRepo.ts",
+        "domain/availabilityBean.ts",
+        "notifications/notifier.ts",
+        "reporting/reportService.ts",
+        "services/bookingService.ts",
+        "util/dateRanges.ts",
+        "util/logger.ts"
+      ]
+    },
+    "slm": {
+      "precision": 1,
+      "recall": 1,
+      "mustKeepMissing": [],
+      "mustDropPresent": [],
+      "nodes": 8,
+      "llmCalls": 5,
+      "wallMs": 41058,
+      "region": [
+        "api/bookingHandler.ts",
+        "data/bookingRepo.ts",
+        "domain/availabilityBean.ts",
+        "services/bookingService.ts",
+        "util/dateRanges.ts"
+      ]
+    }
+  }
+}

@@ -120,6 +120,11 @@ export function get_host_bus(): HostBus | null { return _HOST_BUS; }
 export class UsageMeter {
   calls = 0; input_tokens = 0; output_tokens = 0; cost_usd = 0.0; duration_ms = 0;
   backends = new Set<string>();
+  // Per-PASS invocation count keyed by tag (bumped once per pass, before retries — so it counts pass
+  // ATTEMPTS at the choke point, independent of which backend/token metering ran). Lets a harness
+  // assert "the grow-border pass fired N times" (the LLM-call metric §3) without parsing stderr.
+  by_tag: Record<string, number> = {};
+  bumpTag(tag: string): void { this.by_tag[tag] = (this.by_tag[tag] ?? 0) + 1; }
   record(kind: string, usage: any, cost_usd: any, duration_ms: any): void {
     this.calls += 1;
     this.backends.add(kind);
@@ -134,7 +139,7 @@ export class UsageMeter {
     if (!this.calls) return null;
     return { calls: this.calls, input_tokens: this.input_tokens, output_tokens: this.output_tokens,
       total_tokens: this.total_tokens, cost_usd: Math.round(this.cost_usd * 1e4) / 1e4,
-      duration_ms: this.duration_ms, backends: [...this.backends].sort() };
+      duration_ms: this.duration_ms, backends: [...this.backends].sort(), by_tag: { ...this.by_tag } };
   }
   summary(): string {
     if (!this.calls) return "";
@@ -447,6 +452,7 @@ function _emitTiming(t0: number, tag: string, model: string, promptLen: number):
 let _passSeq = 0;
 function _logPass(tag: string, model: string, prompt: string): void {
   const seq = ++_passSeq;
+  _USAGE.bumpTag(tag);   // per-tag pass-invocation count (the §3 LLM-call metric), independent of backend metering
   const dir = process.env.SEAM_LLM_DUMP;
   if (verbose() || dir) process.stderr.write(`[llm] #${seq} ${tag} (${model}) ← ${prompt.length} chars${dir ? ` → ${tag}` : ""}\n`);
   if (dir) {

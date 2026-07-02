@@ -1,6 +1,6 @@
 // Port of eval/facts_provider_test.py (parts 1,2,5) PLUS a differential oracle: the TS
 // regex facts producer must emit byte-identical facts to the Python producer on the same
-// real-diff fixtures (eval/cases/*.patch). The Python output is captured in test/oracle/.
+// real-diff fixtures (ts/test/diff/cases/*.patch). The Python output is captured in test/oracle/.
 import { describe, expect, test } from "bun:test";
 import { readFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,7 @@ import {
 const __dir = dirname(fileURLToPath(import.meta.url));
 const casesDir = join(__dir, "cases");
 const oracleDir = join(__dir, "..", "oracle");
-// Only oracle-BACKED cases: ts/test/cases is shared with the eval harness corpus (many patches have
+// Only oracle-BACKED cases: ts/test/diff/cases is shared with the eval harness corpus (many patches have
 // no Python oracle — they're for scoring, not parity). Run parity on the ones with a parser oracle.
 const cases = readdirSync(casesDir).filter((f) => f.endsWith(".patch")
   && existsSync(join(oracleDir, `${f.replace(/\.patch$/, "")}.parsed.json`)))

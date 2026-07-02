@@ -10,5 +10,28 @@
     "intent": "how are weekly missions generated and assigned to each member",
     "expectedAnchor": "generate-member-missions",
     "expectedCulmination": "save@backend/supabase/functions/scoring-cycle/repositories.ts"
+  },
+  {
+    "label": "booking-mini",
+    "repo": "eval/grow-fixtures/booking-mini",
+    "anchorFile": "api/bookingHandler.ts",
+    "symbol": "createBooking",
+    "intent": "how does a member book a slot and confirm availability",
+    "goldRegion": [
+      "api/bookingHandler.ts",
+      "services/bookingService.ts",
+      "domain/availabilityBean.ts",
+      "data/bookingRepo.ts",
+      "util/dateRanges.ts"
+    ],
+    "mustKeep": [
+      "util/dateRanges.ts",
+      "data/bookingRepo.ts"
+    ],
+    "mustDrop": [
+      "util/logger.ts",
+      "billing/billingService.ts",
+      "notifications/notifier.ts"
+    ]
   }
 ]

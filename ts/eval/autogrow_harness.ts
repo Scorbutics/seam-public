@@ -31,14 +31,16 @@ const BUN = process.env.HOME ? join(process.env.HOME, ".bun", "bin", "bun") : "b
 // and gates: a SELECTING step must clear ≥0.8 (ideally ≥0.9); the deterministic grow must be 100% (an
 // identical footprint across runs). Absent → stability only.
 type Case = { label: string; repo: string; intent: string; anchorFile?: string; symbol?: string;
-  expectedAnchor?: string; expectedCulmination?: string };
+  expectedAnchor?: string; expectedCulmination?: string; goldRegion?: string[] };
 const expandHome = (p: string) => p.startsWith("~") ? join(process.env.HOME ?? "", p.slice(1)) : p;
 const mean = (a: number[]): number => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 const round = (x: number, n = 3): number => Math.round(x * 10 ** n) / 10 ** n;
 
 function loadCases(only?: string): Case[] {
   if (!existsSync(CASES)) { process.stderr.write(`no cases file: ${CASES}\n`); process.exit(1); }
-  let cs: Case[] = JSON.parse(readFileSync(CASES, "utf-8"));
+  // Cases carrying a goldRegion are REGION cases owned by grow_harness.ts (they score region precision/
+  // recall, not stability) — skip them here so the two harnesses share one cases file without collision.
+  let cs: Case[] = (JSON.parse(readFileSync(CASES, "utf-8")) as Case[]).filter((c) => !c.goldRegion);
   if (only) cs = cs.filter((c) => c.label === only);
   return cs;
 }

@@ -35,6 +35,9 @@ test: install ## Typecheck the engine + run the unit tests
 smoke: ## Offline (det, no LLM) smoke test on every checked-in sample diff
 	bash scripts/smoke.sh
 
+eval-grow: ## Grow-border region matrix on the hermetic fixture (det/tol offline; slm needs a backend)
+	cd $(TS_DIR) && bun eval/grow_harness.ts eval --baseline
+
 readme-audit: ## Run the documented README commands verbatim (offline subset always)
 	bash scripts/readme-audit.sh
 
@@ -43,4 +46,4 @@ cleanroom: ## Prove zero-to-running in a vanilla Docker container (needs Docker)
 
 ci: test readme-audit smoke vsix ## Everything CI runs, locally
 
-.PHONY: help install vsix test smoke readme-audit cleanroom ci
+.PHONY: help install vsix test smoke eval-grow readme-audit cleanroom ci

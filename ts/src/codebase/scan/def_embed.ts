@@ -77,7 +77,7 @@ async function embedder(): Promise<any> {
 // Is transformers.js loadable at all? Cached so it costs one import attempt per process. Probe BEFORE the
 // expensive def walk so an absent lib (the bundled .vsix externalizes it) bails fast to the non-embed path.
 let _tfAvailable: boolean | null = null;
-async function transformersAvailable(): Promise<boolean> {
+export async function transformersAvailable(): Promise<boolean> {
   if (_tfAvailable !== null) return _tfAvailable;
   try { await import("@xenova/transformers"); _tfAvailable = true; } catch { _tfAvailable = false; }
   return _tfAvailable;

@@ -577,8 +577,12 @@ export async function resolveCoupling(
   const graph = new CouplingGraph(counter);
   if (opts.dataCoupling === false) return graph.result();
   // STAGE diagnostics at --verbose (the FLOOR/LEARN/GROUND/APPLY timing + counts you read to debug coupling);
-  // the per-NODE timing firehose stays at --trace (timingOn).
-  const _stage = (label: string, t0: number) => dbg(`[coupling] ${anchorFile}: ${label} (${Math.round(performance.now() - t0)}ms)`);
+  // the per-NODE timing firehose stays at --trace (timingOn). TAG the throwaway footprint-scoping probe
+  // (`ctx.stableFloor`) so its per-file gating — which sweeps the WHOLE module to discover the flow's files,
+  // mostly `→ skipped` — is visibly distinct from the REAL grow's (scoped) coupling and doesn't read as "the
+  // grow is following http-routes everywhere". Diagnostic-only; the probe's footprint is discarded.
+  const _tag = ctx.stableFloor ? "coupling·probe" : "coupling";
+  const _stage = (label: string, t0: number) => dbg(`[${_tag}] ${anchorFile}: ${label} (${Math.round(performance.now() - t0)}ms)`);
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
 
@@ -848,7 +852,7 @@ async function runPipeline(
   if (verbose() || process.env.SEAM_COUPLING_DEBUG) {
     const anchorPath0 = normpath(node.file);
     const rows = [...keys.values()].map((k) => `${k.kind} '${k.value}' (${k.produces ? "produces" : "consumes"}, ${k.source}) → ${collectComplementFiles(p.index, k, anchorPath0).size} other-side file(s)`);
-    process.stderr.write(`[coupling-debug] ${node.file}:${node.lo} surfaced ${keys.size} key(s):\n${rows.map((r) => "    " + r).join("\n") || "    (none)"}\n`);
+    process.stderr.write(`[${p.ctx.stableFloor ? "coupling-debug·probe" : "coupling-debug"}] ${node.file}:${node.lo} surfaced ${keys.size} key(s):\n${rows.map((r) => "    " + r).join("\n") || "    (none)"}\n`);
   }
   if (!keys.size) return;
 
