@@ -45,6 +45,10 @@ Keep this document in lockstep with the constant.
   "complete": true,
   "unresolved":   [Unresolved],   // UNKNOWN edges (not "no link") — couldn't be statically resolved
   "blindspots":   [BlindSpot],    // statically-opaque mechanisms (string dispatch, DI, …)
+  "frontier":     [FrontierPoint],// OPTIONAL (tier-grow). the DECISION POINTS the convergence grow declined to
+                                  //   expand — the ranked handles a caller deepens from (see 2.3 below). Present
+                                  //   only when the tier rule parked a residue; absent otherwise.
+  "frontierCut":  N,              // OPTIONAL. how many frontier points were dropped by the cap (no silent truncation)
   "seamEdges":    [SeamEdge],     // resolved seam→seam wiring
   "edges":        [GraphEdge],    // raw symbol→symbol call/dependency graph (chain view)
   "seamContracts":[SeamContract], // the symbols bridging each pair of seams
@@ -130,6 +134,10 @@ A hunk can appear in several seams (a link wires more than one core). Occurrence
 Usage         { "calls", "input_tokens", "output_tokens", "total_tokens", "cost_usd", "duration_ms", "backends":[…] }
 Unresolved    { "node", "query", "reason" }
 BlindSpot     { "node", "mechanism", "evidence", "candidates":[ { "symbol", "provenance" } ] }
+FrontierPoint { "id", "symbol", "file", "kind", "reachedVia", "score", "cutBy":"decision|hub|border|budget" }
+              // a tier-3 decision point (tier-grow): a node whose fan the grow declined (off-intent pivot /
+              // collapsed hub / node budget). `id` = node identity (union deepened regions by it); `reachedVia`
+              // = the resolved relation(s) that reached it; `score` = intent relevance; `cutBy` = why it stopped.
 SeamEdge      { "from", "to", "provenance" }
 GraphEdge     { "from", "to", "kind", "provenance", "line"? }   // line = call-site in `from`'s file
 SeamContract  { "seamA", "seamB", "links":[GraphEdge], "blurry" }

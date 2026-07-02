@@ -942,8 +942,13 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // Heads are taken in relevance order, so a node budget fills the most-relevant region first. The recompute
       // above ran ONCE for this whole wave (not per move) — the perf win over single-pick.
       let waveAdded = 0;
-      for (const move of ordered) {
-        if (data.nodes.length >= maxNodes) break;
+      for (let mi = 0; mi < ordered.length; mi++) {
+        const move = ordered[mi];
+        if (data.nodes.length >= maxNodes) {
+          // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget (I3).
+          if (tierGrow) for (const m of ordered.slice(mi)) if (!parked.has(m.node.id)) parked.set(m.node.id, "budget");
+          break;
+        }
         const k = expKey(move.node, move.dir);
         if (expanded.has(k)) continue;
         expanded.add(k);
@@ -1022,12 +1027,23 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // correctly kept — the documented 0.11-on-a-real-mechanism-node case). Stamp it so the emit skips the
   // embedding pass and degrades exactly as it does when embeddings are absent (the LLM is the ranker now).
   if (llmPrune) (data as any).llmBorder = true;
-  // CONVERGENCE RESIDUE — the tier-3 decision points (nodes whose fan the tier rule declined) survive on `data`
-  // for the decision-point frontier emit (Phase 2.2). Only nodes still present after all the crops are real
-  // decision points; drop any that a hub/border crop removed. Present only under tierGrow (additive).
+  // DECISION-POINT FRONTIER (Phase 2.2) — the tier-3 residue as the ranked list a caller deepens from. Built HERE
+  // where the reach context (_reachPhrases), the intent field (_fieldScore) and the edges all live; threaded through
+  // the IR as `data.frontier` and capped/filtered at emit. Each entry carries its `id` (node identity → the caller
+  // unions deepened regions by it) + provenance (`reachedVia`) + `cutBy`. Ranked by intent score desc (the move
+  // ordering's signal), then decision-before-budget, then symbol — deterministic. Present only under tierGrow (I3).
   if (tierGrow && parked.size) {
-    const present = new Set<string>((data.nodes as any[]).map((n) => n.id));
-    (data as any)._parked = [...parked].filter(([id]) => present.has(id)).map(([id, cutBy]) => ({ id, cutBy }));
+    const byId = new Map<string, any>((data.nodes as any[]).map((n) => [n.id, n]));
+    const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
+    const present = new Set<string>(byId.keys());
+    const reachOf = (n: any): string => _reachPhrases(n, data.edges as any[], (id) => id !== n.id && present.has(id), (id) => nodeSym.get(id) ?? id);
+    const cutRank = (c: string) => (c === "decision" ? 0 : c === "hub" ? 1 : c === "border" ? 2 : 3);
+    const front = [...parked].filter(([id]) => present.has(id)).map(([id, cutBy]) => {
+      const n = byId.get(id);
+      return { id, symbol: n.symbol, file: normpath(n.file ?? ""), kind: n.kind, reachedVia: reachOf(n), score: Math.round(_fieldScore(n) * 1000) / 1000, cutBy };
+    });
+    front.sort((a, b) => (b.score - a.score) || (cutRank(a.cutBy) - cutRank(b.cutBy)) || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
+    (data as any).frontier = front;   // uncapped; emit filters-present + caps + reports the cut count
   }
   return [data, history];
 }

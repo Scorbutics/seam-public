@@ -628,6 +628,9 @@ export interface SeamPath { id: string; label: string; crossingKind?: string; cr
 // at _PATH_CAP, ordered by proximity to the anchor (the closest crossing is the primary path — the one nearest
 // the anchor the user reads first). Returns [] when there is no crossing (caller keeps the single spine).
 const _PATH_CAP = 8;
+// Decision-point frontier cap (Phase 2.2): the ranked list is capped so the render stays scannable; the OVERFLOW
+// count is reported (`frontierCut`) — no silent truncation (I3). Env-overridable, mirrors the other grow toggles.
+const _FRONTIER_CAP = Math.max(1, parseInt(process.env.SEAM_FRONTIER_CAP ?? "20", 10) || 20);
 export function extract_paths(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): SeamPath[] {
   const byId = new Map(seams.map((s) => [s.id, s]));
   const nodeSeam = new Map<string, string>();
@@ -1152,6 +1155,11 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     }
   }
   const selectedSeam = outSeams.find((s) => s.selected)?.id ?? "";
+  // DECISION-POINT FRONTIER (tier-grow, intent only) — the tier-3 residue as a ranked, capped list the caller
+  // deepens from. Filter to nodes still PRESENT after all crops (a decision point removed by a later crop is no
+  // longer one), cap, and REPORT the overflow (`frontierCut`) — collapse, never silently drop (I3/I2 additive).
+  const _frontierAll = (opts.intent ? g.frontier.filter((f) => g.nodes.has(f.id)) : []);
+  const _frontier = _frontierAll.slice(0, _FRONTIER_CAP);
   // CULMINATION RANKING (intent pass only): the climax as a RANKED list with confidence + the structural
   // facts that grounded it — what an LLM consumer reads instead of the fragile single `selectedSeam` ★.
   // Conditional, so non-intent footprints (the oracle fixtures) omit it and stay byte-identical.
@@ -1179,6 +1187,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     blindspots: g.blindspots.map((b) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence,
       candidates: b.candidates.map((c) => ({ symbol: c.dst, provenance: c.provenance })) })),
     unresolved: g.unresolved,
+    ...(_frontier.length ? { frontier: _frontier, frontierCut: _frontierAll.length - _frontier.length } : {}),
     health: health.postures ?? {},
   };
 }

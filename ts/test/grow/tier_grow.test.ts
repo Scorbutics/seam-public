@@ -12,6 +12,8 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
+import { decompose } from "../../src/codebase/codebase.js";
+import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { available } from "../../src/codebase/atoms.js";
 import { transformersAvailable } from "../../src/codebase/scan/def_embed.js";
 
@@ -52,6 +54,21 @@ describe("tier rule — the on-intent sibling connects, the off-intent fan is pa
     expect(offCount(legacy)).toBeGreaterThan(0);          // baseline: the legacy flood climbs the util to its off-intent fan
     expect(offCount(tier)).toBeLessThan(offCount(legacy)); // tier 3 parks that fan
     expect(tier.nodes.length).toBeLessThanOrEqual(legacy.nodes.length);
-    expect(((tier as any)._parked ?? []).length).toBeGreaterThan(0);   // I3: the tier-3 residue is RECORDED, not silently dropped
+    expect(((tier as any).frontier ?? []).length).toBeGreaterThan(0);   // I3: the tier-3 residue is RECORDED, not silently dropped
+  });
+
+  test("EMIT: the decision-point frontier surfaces in the model — ranked, with reach provenance + cutBy", async () => {
+    if (!available() || !(await transformersAvailable())) return;
+    const [data]: [any, any[]] = await grow(true);
+    const model: any = await decompose(from_resolved_graph(data), { repo, intent: "how are bookings created and cancelled" });
+    expect(Array.isArray(model.frontier)).toBe(true);
+    expect(model.frontier.length).toBeGreaterThan(0);
+    const f = model.frontier[0];
+    for (const k of ["id", "symbol", "file", "kind", "reachedVia", "score", "cutBy"]) expect(f).toHaveProperty(k);
+    expect(["decision", "hub", "border", "budget"]).toContain(f.cutBy);
+    expect(typeof f.reachedVia).toBe("string");
+    // ranked by score desc (the intent signal the caller reads top-first)
+    const scores = model.frontier.map((x: any) => x.score);
+    expect(scores).toEqual([...scores].sort((a: number, b: number) => b - a));
   });
 });
