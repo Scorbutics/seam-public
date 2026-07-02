@@ -140,7 +140,7 @@ function loadCache(p: string): Record<string, number[]> {
 // EVERY repo def scored by cosine similarity of its embed string to the intent, DESC. Lazily embeds (and
 // disk-caches) the def table on first use; subsequent queries reuse the cache. Returns [] on any failure /
 // when transformers is absent — so all callers degrade to their non-embed path.
-export async function embedScoreDefs(repo: string, intent: string, files?: Set<string>): Promise<{ def: Def; score: number }[]> {
+export async function embedScoreDefs(repo: string, intent: string, files?: Set<string>): Promise<{ def: Def; score: number; vec: number[] }[]> {
   const _et0 = timingOn() ? performance.now() : 0;   // embed-recall wall-clock (--verbose / SEAM_TIMING)
   try {
     if (!(await transformersAvailable())) return [];   // bail before the repo walk when the lib is absent (.vsix → lexical)
@@ -184,7 +184,9 @@ export async function embedScoreDefs(repo: string, intent: string, files?: Set<s
     for (const i of misses) { cache[h(strings[i])] = await embed_one(strings[i]); dirty = true; }
     if (dirty) { mkdirSync(dirname(cp), { recursive: true }); writeFileSync(cp, JSON.stringify(cache)); }
     const iv = await embed_one(QUERY_PREFIX + intent);
-    const scored = defs.map((d, i) => ({ def: d, score: cosine(iv, cache[h(strings[i])]) }));
+    // `vec` carries the def's cached embedding (already computed above) so a caller can build a REGION
+    // centroid field (grow/orchestrate `centroid`/`blend` border) without a second embed pass.
+    const scored = defs.map((d, i) => ({ def: d, score: cosine(iv, cache[h(strings[i])]), vec: cache[h(strings[i])] }));
     scored.sort((a, b) => b.score - a.score);
     if (_et0) process.stderr.write(`[timing] embed score: ${Math.round(performance.now() - _et0)}ms (${defs.length} defs, ${misses.length} newly embedded)\n`);
     if (WHY) {

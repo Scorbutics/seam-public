@@ -11,7 +11,7 @@
       ],
       "nodes": 14,
       "llmCalls": 0,
-      "wallMs": 346,
+      "wallMs": 396,
       "region": [
         "admin/adminService.ts",
         "api/bookingHandler.ts",
@@ -36,7 +36,7 @@
       ],
       "nodes": 12,
       "llmCalls": 0,
-      "wallMs": 36,
+      "wallMs": 38,
       "region": [
         "api/bookingHandler.ts",
         "billing/billingService.ts",
@@ -60,7 +60,7 @@
       ],
       "nodes": 12,
       "llmCalls": 0,
-      "wallMs": 42,
+      "wallMs": 47,
       "region": [
         "api/bookingHandler.ts",
         "billing/billingService.ts",
@@ -82,7 +82,7 @@
       ],
       "nodes": 11,
       "llmCalls": 0,
-      "wallMs": 37,
+      "wallMs": 41,
       "region": [
         "admin/adminService.ts",
         "api/bookingHandler.ts",
@@ -106,7 +106,52 @@
       ],
       "nodes": 3,
       "llmCalls": 0,
-      "wallMs": 19,
+      "wallMs": 23,
+      "region": [
+        "api/bookingHandler.ts",
+        "services/bookingService.ts",
+        "util/logger.ts"
+      ]
+    },
+    "tolblend": {
+      "precision": 0.444,
+      "recall": 0.8,
+      "mustKeepMissing": [
+        "util/dateRanges.ts"
+      ],
+      "mustDropPresent": [
+        "util/logger.ts",
+        "billing/billingService.ts",
+        "notifications/notifier.ts"
+      ],
+      "nodes": 11,
+      "llmCalls": 0,
+      "wallMs": 33,
+      "region": [
+        "admin/adminService.ts",
+        "api/bookingHandler.ts",
+        "billing/billingService.ts",
+        "data/bookingRepo.ts",
+        "domain/availabilityBean.ts",
+        "notifications/notifier.ts",
+        "reporting/reportService.ts",
+        "services/bookingService.ts",
+        "util/logger.ts"
+      ]
+    },
+    "tolbpri": {
+      "precision": 0.667,
+      "recall": 0.4,
+      "mustKeepMissing": [
+        "util/dateRanges.ts",
+        "data/bookingRepo.ts"
+      ],
+      "mustDropPresent": [
+        "util/logger.ts"
+      ],
+      "nodes": 3,
+      "llmCalls": 0,
+      "wallMs": 24,
       "region": [
         "api/bookingHandler.ts",
         "services/bookingService.ts",
@@ -120,7 +165,7 @@
       "mustDropPresent": [],
       "nodes": 8,
       "llmCalls": 5,
-      "wallMs": 76949,
+      "wallMs": 40343,
       "region": [
         "api/bookingHandler.ts",
         "data/bookingRepo.ts",

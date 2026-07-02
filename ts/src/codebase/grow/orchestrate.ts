@@ -13,6 +13,7 @@ import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf } from "./ubiquity.js";
+import { RegionCentroid } from "./field.js";
 import { embedScoreDefs } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
@@ -641,6 +642,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // The sparse recall field scored on-intent MECHANISM nodes (a busy-times / date-range helper) at 0 and so the
   // soft border cut them; the dense field scores them honestly, so the border cuts at REAL relevance cliffs.
   const intentScore = new Map<string, number>();
+  const vecByKey = new Map<string, number[]>();   // def key → its embedding vector (for the region-centroid field)
   const scoredFiles = new Set<string>();
   const densify = async (): Promise<void> => {       // WAVE: embed the reached files not yet scored
     if (!opts.intent) return;
@@ -648,7 +650,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     for (const n of data.nodes as any[]) { const f = n.file ? normpath(n.file) : ""; if (f && !scoredFiles.has(f)) want.add(f); }
     if (!want.size) return;
     for (const f of want) scoredFiles.add(f);
-    try { for (const { def, score } of await embedScoreDefs(repo, opts.intent, want)) intentScore.set(`${def.name} ${normpath(def.file)}`, score); }
+    try { for (const { def, score, vec } of await embedScoreDefs(repo, opts.intent, want)) { const k = `${def.name} ${normpath(def.file)}`; intentScore.set(k, score); if (vec) vecByKey.set(k, vec); } }
     catch { /* embeddings absent → field stays empty → border OFF (flood-all), unchanged degradation */ }
   };
   if (!wave && opts.intent) {
@@ -656,6 +658,30 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     catch { /* embeddings absent → complexity fallback */ }
   }
   const _iscore = (n: any): number => intentScore.get(`${n.symbol} ${normpath(n.file)}`) ?? 0;
+  // REGION-CENTROID FIELD (wave, SEAM_GROW_BORDER_FIELD / opts.borderField): `intent` (default) scores a
+  // candidate by cosine to the INTENT text; `centroid` by cosine to the running KEPT-REGION centroid;
+  // `blend` = max of the two. The centroid is a NEW field for the SAME soft border (I7 — no second walker),
+  // seeded by the anchor and accumulated (weighted) as waves keep nodes, so a mechanism node with no intent
+  // vocabulary (`mergeIntervals` under "check availability") is scored by its EMBEDDING PROXIMITY to what the
+  // flow already kept — the case the intent field scores near-zero and cuts. Arithmetic over the cached def
+  // vectors: no new embedding work. Empty vectors → 0 → the border floods (I3), same degradation as `intent`.
+  const fieldMode = wave ? (opts.borderField ?? process.env.SEAM_GROW_BORDER_FIELD ?? "intent") : "intent";
+  const useCentroid = fieldMode === "centroid" || fieldMode === "blend";
+  const keyOf = (n: any): string => `${n.symbol} ${normpath(n.file)}`;
+  const centroid = new RegionCentroid();
+  const contributed = new Set<string>();                            // node ids already folded into the centroid
+  // fold every not-yet-counted region node into the centroid; the anchor + wave-1 keeps weigh ×2 (drift control)
+  const _growCentroid = (step: number): void => {
+    if (!useCentroid) return;
+    for (const n of data.nodes as any[]) if (n.id && !contributed.has(n.id)) { contributed.add(n.id); centroid.add(vecByKey.get(keyOf(n)), step === 0 ? 2 : 1); }
+  };
+  // the candidate score the SOFT BORDER consumes — the selected field (default `intent` → byte-identical).
+  const _fieldScore = (n: any): number => {
+    const iv = _iscore(n);
+    if (!useCentroid) return iv;
+    const cv = centroid.score(vecByKey.get(keyOf(n)));
+    return fieldMode === "centroid" ? cv : Math.max(iv, cv);
+  };
   // EXPANSION IDENTITY. Single-pick keys on `_key`#dir (file#line#kind) — its historical behaviour. The wavefront
   // keys on file#symbol#dir: the (file, symbol, direction) triple a build_footprint is keyed by, so the SAME
   // logical node re-added by the coupling overlay at a different line/kind is NOT re-expanded (kills the visible
@@ -665,7 +691,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     : (n: any, d: string) => `${_key(n)}::${d}`;
   // SOFT INTENT-BORDER tolerance (wavefront only). Unset → border OFF (flood every reachable node). A float t≥0
   // floods through a node as long as relevance hasn't fallen more than t below the path's high-water mark.
-  const borderTol = wave && process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null;
+  const borderTol = wave ? (opts.borderTol ?? (process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null)) : null;
   // LLM-prune border takes precedence over the embedding tol border when on AND a backend exists (else it falls
   // back to the tol border / flood). `decided` caches each node's in-scope verdict across all waves.
   // STABLE-FLOOR PROBE: the footprint-scoping pre-grow (`grow_footprint_scoped`) DISCARDS its footprint — only the
@@ -699,7 +725,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
   for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
-    if (wave && !llmPrune) await densify();   // embedding field for the tol border + ordering; the LLM prune needs neither
+    if (wave && !llmPrune) { await densify(); _growCentroid(step); }   // embedding field for the tol border + ordering; the LLM prune needs neither
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -744,7 +770,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // yet at frontier time) — the judge sees `BookingsBean {createBooking, …}`, not a bare class name.
       inShape = await _llmPruneInShape(data, anchorId, { ...opts, repo }, decided);
     } else if (borderTol != null) {
-      const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _iscore(n)]));
+      const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _fieldScore(n)]));
       const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
       for (let pass = 0, changed = true; changed && pass <= data.nodes.length; pass++) {
         changed = false;
@@ -900,7 +926,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
