@@ -468,6 +468,16 @@ async function runCodebase(a: Args): Promise<number> {
       const onWave = a.stream ? (rec: any) => { try { process.stdout.write(JSON.stringify({ wave: ++streamWave, added: rec.added, edges: rec.edges, frontier: rec.frontier }) + "\n"); } catch { process.exit(0); } } : undefined;
       const gOpts: any = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
       if (a.stream) gOpts.wave = true;   // --stream is wave-mode only — the per-wave records come from the flood loop
+      // PRODUCT DEFAULT (Phase 5.1 flip) — the convergence tier rule + hub collapse are ON in WAVE mode. Validated
+      // recall-safe on the author repo (docs: grow-phase1-matrix §5.1); the env vars still override (set =0 to opt
+      // out). Wired HERE at the composition root, so the library default (grow_to_terminals) stays OFF — every
+      // in-process caller (harness, tests) is byte-identical; only the product flips. maxNodes stays the runaway
+      // backstop — convergence terminates the flood first, so it is not the budget.
+      if (waveGrow || gOpts.wave) {
+        const envOn = (v?: string) => (v === undefined || v === "") ? undefined : (v === "1" || v === "true");
+        gOpts.tierGrow = envOn(process.env.SEAM_TIER_GROW) ?? true;
+        gOpts.hubCollapse = envOn(process.env.SEAM_HUB_COLLAPSE) ?? true;
+      }
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");

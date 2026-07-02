@@ -85,18 +85,27 @@ tierMargin=0.20 / hubUbiquity=12 / hubFan=12):
 | **tierGrow + hubCollapse ON** | **78** | 197 | 5 real (`ensureAuthUser` fan 22, `index` 18, `isMemberCurrentlyPaused`/`handleLogout` 16, `sendWelcomeEmail` 13) | 20 | **drops `resolveSubscription` + `subscriptionFromPriceId`** |
 | LLM border (today's default with a backend) | 15 | 4 | — | — | all 3 kept |
 
-**Verdict — do NOT flip the default (keep opt-in, default OFF).** The mechanisms are a strong
-DETERMINISTIC/OFFLINE border — 193→78 files, five genuine hubs contained + marked, a 20-point decision
-frontier surfaced — a large improvement over the raw flood (the only alternative when no LLM backend is
-present, e.g. the offline `.vsix`). BUT at `tierMargin=0.20` the tier rule parks two REAL on-intent
-mechanisms (`resolveSubscription`, `subscriptionFromPriceId` — resolving the subscription type and the
-Stripe price config ARE the flow). That is a **recall regression**, which the plan itself calls *fatal*
-("recall failures are fatal; precision failures are just tokens"). Flipping on fixture-only + one
-un-gold'd author case would ship that regression to every user.
+**First pass found a recall bug** (the raw flood 193→78-file ON config above dropped two REAL on-intent
+mechanisms, `resolveSubscription` + `subscriptionFromPriceId`). Isolation (tier-only vs hub-only) pinned it
+on **hub collapse**, not the tier rule: the fan-crop fired on a **DOWN** fan (a mechanism's own
+dependencies), not just the off-intent **UP** consumer fan.
 
-**Blocked on, before a flip:** (1) tune `tierMargin` / hub thresholds so recall holds on the author case
-(the border must not park a below-margin node that a grounded crossing/continuation still reaches — a
-grounded-reach rescue, scoped so it stays SEMANTIC-free); (2) a committed **gold region** on an author
-case so the flip is gated on recall, not eyeballed. `SEAM_TIER_GROW` / `SEAM_HUB_COLLAPSE` /
-`--format agent` / `--grow-from` / `--stream` stay **opt-in** and fully documented; the raw numbers above
-are reproducible via `eval/agent-grow-bench.sh`.
+**Grounded-reach fix (recall-safe).** Containment now applies ONLY to the UP consumer fan (off-intent
+siblings); a DOWN dependency fan is the grounded mechanism/continuation chain the flow delegates THROUGH,
+always followed (I4). Re-validated on the author repo, both configs:
+
+| config (fixed) | files | mechanisms kept |
+|---|---|---|
+| deterministic (LLM border OFF) | 127 (from 193 raw) | all 3 ✓ + 20-pt frontier |
+| realistic default (LLM border ON) | 15 | all 3 ✓ + frontier — a *clean win* over the plain border |
+
+**Verdict — FLIP: `SEAM_TIER_GROW` + `SEAM_HUB_COLLAPSE` ON by default in WAVE mode** (wired at the CLI
+composition root; env `=0` opts out; the library default stays OFF so the harness/tests are byte-identical).
+Trade recorded honestly: dropping an *off-intent called dependency* is a SEMANTIC judgement (the LLM
+border's job — the `slm` configs still do it at P100), so the deterministic-only configs now OVERGROW by a
+few off-intent side-concern files (booking-mini `hub` P 0.63→0.50: keeps `billing`/`notifications`, the
+fixture's own "triggered BY the flow but not what it is about"). That is bounded PRECISION overgrowth
+(ranked to the bottom + surfaced on the frontier), never a recall loss — the plan's bar exactly. The fix
+also *raised* `tolbpri` recall 0.40→0.80 (the old DOWN-crop had been dropping the must-keep `bookingRepo`).
+Baselines for `hub`/`hububi`/`tolbpri` updated to the corrected behavior; a committed DOWN-fan regression
+test (`test/grow/hub_collapse.test.ts`) locks it. Reproduce via `ts/eval/agent-grow-bench.sh`.

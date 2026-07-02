@@ -65,11 +65,13 @@ region · collapsed hubs · a ranked *decision-point frontier*, each with the ex
 command to deepen it · unresolved gaps); **`--grow-from <file>#<symbol>`** — deepen from a frontier
 node (re-anchors the wave grow, warm on the `.seam` indices; `--intent` redirects the branch);
 **`--stream`** — NDJSON per settled wave on stdout, EPIPE-graceful for early stop. Two deterministic,
-zero-LLM containment knobs back them (env / opts, default **OFF** pending recall-safe threshold
-tuning + an author-repo gold gate — see `eval/grow-phase1-matrix.md` §5.1): `SEAM_HUB_COLLAPSE` keeps
-a ubiquitous type/util as ONE marked node instead of flooding its fan, and `SEAM_TIER_GROW` grows to
-convergence under a three-tier rule (follow a crossing/continuation; fan through an on-intent pivot;
-park an off-intent pivot on the frontier).
+zero-LLM containment mechanisms back them, **ON by default in wave mode** (validated recall-safe on
+the author repo — see `ts/eval/grow-phase1-matrix.md` §5.1; `SEAM_HUB_COLLAPSE=0` / `SEAM_TIER_GROW=0`
+opt out): `SEAM_HUB_COLLAPSE` keeps a ubiquitous type/util as ONE marked node instead of flooding its
+fan, and `SEAM_TIER_GROW` grows to convergence under a three-tier rule (follow a crossing/continuation;
+fan through an on-intent pivot; park an off-intent pivot on the frontier). They tolerate a little
+off-intent overgrowth (ranked to the bottom + surfaced on the frontier) rather than ever drop a real
+on-intent mechanism — the semantic "is this called dependency on-intent?" cut stays the LLM border's job.
 
 ## Beyond the flow — structural questions (the shapes)
 

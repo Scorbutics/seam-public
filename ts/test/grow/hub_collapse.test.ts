@@ -71,3 +71,32 @@ describe("hub-collapse — the ubiquitous util is contained, present, and marked
     expect(hub.hub.sampleConsumers.length).toBeGreaterThan(0);
   });
 });
+
+// GROUNDED-REACH RESCUE (I4) — the containment gate applies ONLY to the UP (consumer) fan (off-intent siblings);
+// a wide DOWN fan is the node's own DEPENDENCIES — the grounded mechanism/continuation chain the flow delegates
+// THROUGH — and must be FOLLOWED, never cropped. Regression for the private-app finding: hub collapse dropped an
+// orchestrator's resolve/config deps because the fan-crop fired on the DOWN fan. Own tmp repo (a controller with
+// many downstream helpers, none a crossing), so the DOWN fan is unambiguous.
+const deprepo = join(tmpdir(), "seam-hubdown-" + process.pid);
+beforeAll(() => {
+  const d = (rel: string, t: string) => { const p = join(deprepo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };
+  d("package.json", `{ "name": "hubdown", "version": "1.0.0" }\n`);
+  // grantAccess (the mechanism) calls 8 downstream helpers — its DOWN fan IS the flow (resolve type, price, etc.).
+  const helpers = ["resolveType", "lookupPrice", "checkQuota", "writeGrant", "auditLog", "notifyUser", "syncCache", "tagMember"];
+  d("services/grant.ts", `${helpers.map((h) => `import { ${h} } from "../logic/${h}";`).join("\n")}\nexport function grantAccess(id: string) {\n${helpers.map((h) => `  ${h}(id);`).join("\n")}\n  return { id, ok: true };\n}\n`);
+  d("api/subscribe.ts", `import { grantAccess } from "../services/grant";\nexport function subscribe() { return grantAccess("m1"); }\n`);
+  for (const h of helpers) d(`logic/${h}.ts`, `export function ${h}(id: string) { return "${h}:" + id; }\n`);
+});
+afterAll(() => { rmSync(deprepo, { recursive: true, force: true }); });
+
+describe("hub-collapse — a wide DOWN dependency fan (the mechanism chain) is NEVER cropped", () => {
+  test("grantAccess's 8 downstream helpers all survive under hub collapse (grounded continuation)", async () => {
+    if (!available()) return;
+    const [col]: [any, any[]] = await grow_to_terminals(deprepo, "api/subscribe.ts", "subscribe",
+      { dataCoupling: true, intent: "how is paid access granted on subscribe", wave: true, borderLlm: false, hubCollapse: true, hubFan: 4, hubUbiquity: 4 });
+    const files = new Set((col.nodes as any[]).map((n) => String(n.file)));
+    const helpers = ["resolveType", "lookupPrice", "checkQuota", "writeGrant", "auditLog", "notifyUser", "syncCache", "tagMember"];
+    const reached = helpers.filter((h) => [...files].some((f) => f.includes(`logic/${h}.ts`)));
+    expect(reached.length).toBe(helpers.length);   // the DOWN mechanism fan is the flow — every dep kept (I4)
+  });
+});

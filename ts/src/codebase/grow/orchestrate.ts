@@ -751,7 +751,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // collapse, never silently drop). Collapse turns BOTH the fan gate and the ubiquity gate ON (it subsumes
   // their flags — one mechanism, CLAUDE.md) and adds the marker + the `type` classification (the `MyString`
   // shape: a util TYPE referenced everywhere but never a call target on the spine). Default OFF until Phase 5.
-  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? false) && wave;
+  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? false) && wave && !stableFloor;   // the discarded scoping PROBE stays inclusive (no containment)
   const hubGate = ((opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) || hubCollapse) && wave;
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
@@ -766,7 +766,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // a tiebreaker in _orderMoves). Termination is CONVERGENCE (a wave admits nothing), not a hop count. Default OFF
   // until Phase 5 → flag-off byte-identical. Needs the embedding field; absent → falls back to the legacy distance
   // gate (I5, no worse than today). `parked` collects the tier-3 residue for the decision-point frontier (Phase 2.2).
-  const tierGrow = (opts.tierGrow ?? _envFlag(process.env.SEAM_TIER_GROW) ?? false) && wave;
+  const tierGrow = (opts.tierGrow ?? _envFlag(process.env.SEAM_TIER_GROW) ?? false) && wave && !stableFloor;   // the scoping PROBE stays inclusive (no tier gating)
   const parked = new Map<string, "decision" | "hub" | "border" | "budget">();   // node id → why its expansion stopped (frontier cutBy)
   // UBIQUITY PRIOR (wave, opt-in via SEAM_UBIQUITY / opts.ubiquity) — a DETERMINISTIC cross-module fan-in read
   // from the reverse-import index (grow/ubiquity.ts): a node reached from ≥`ubiquityFan` DISTINCT modules is
@@ -966,7 +966,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         data = r.data;
         waveAdded += r.added;
         // HUB GATE: this move added a wide fan — is it a PURE (non-spine) hub fan, or does it bear a crossing?
-        if (hubGate && before && r.added >= hubFan) {
+        // GROUNDED-REACH RESCUE (I4): only the UP (consumer) fan is an off-intent sibling fan; a DOWN fan is the
+        // node's own DEPENDENCIES — the grounded mechanism/continuation chain (handler→service→resolve→config the
+        // flow delegates THROUGH) — and must be followed, never cropped. Cropping a wide DOWN fan dropped real
+        // on-intent mechanisms (private-app: applyMemberSubscription's resolveSubscription + price-config deps). So gate
+        // the crop to UP moves; a DOWN continuation is grounded reach and is always kept.
+        if (move.dir === "up" && hubGate && before && r.added >= hubFan) {
           const addedIds = (data.nodes as any[]).filter((n) => !before.has(n.id)).map((n: any) => n.id);
           const crossDst = new Set<string>();
           for (const e of data.edges as any[]) if (_is_crossing(e)) { crossDst.add(e.dst); crossDst.add(e.from); }
