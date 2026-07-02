@@ -971,6 +971,7 @@ function _seam_hunk(n: Node, provenance: string): any {
   };
   if (n.subcores.length) out.subcores = n.subcores;
   if (n.contract.length) out.contract = n.contract;
+  if (n.hub) out.hub = n.hub;   // COLLAPSED hub marker (reason/fan/sampleConsumers) — additive, present only under hubCollapse (I2)
   return out;
 }
 

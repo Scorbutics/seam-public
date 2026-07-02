@@ -12,7 +12,8 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
-import { ubiquityIndex, ubiquityOf } from "./ubiquity.js";
+import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
+import type { HubMarker } from "../../core/graph_ir.js";
 import { RegionCentroid } from "./field.js";
 import { concernDropSentence } from "./concerns.js";
 import { loadOrBuildConcernMap, concernOf, type ConcernMap } from "./concern_map.js";
@@ -741,15 +742,26 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // grounded crossing or flow-subject is SPINE-WARD and is NEVER gated — so a terminal reached through the hub
   // survives. This is the same "never prune a crossing" rule the move-ordering already enforces, applied to the
   // fan. It bounds the shape; which off-intent siblings matter semantically stays the (LLM) border's job.
-  const hubGate = (opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) && wave;
+  // HUB COLLAPSE (wave, opt-in via SEAM_HUB_COLLAPSE / opts.hubCollapse) — supersedes the bare hub gate: the
+  // SAME deterministic fan/ubiquity containment, but the hub node STAYS in the region with a `hub:` marker
+  // (reason + fan + sample consumers) and an explicit expansion handle, instead of being silently gated (I3:
+  // collapse, never silently drop). Collapse turns BOTH the fan gate and the ubiquity gate ON (it subsumes
+  // their flags — one mechanism, CLAUDE.md) and adds the marker + the `type` classification (the `MyString`
+  // shape: a util TYPE referenced everywhere but never a call target on the spine). Default OFF until Phase 5.
+  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? false) && wave;
+  const hubGate = ((opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) || hubCollapse) && wave;
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
+  const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
+  const hubTypeFan = Math.max(2, opts.hubTypeFan ?? (parseInt(process.env.SEAM_HUB_TYPE_FAN ?? "5", 10) || 5));      // lower fan-in for a type-ref-only hub (the MyString shape)
   const hubFanned = new Set<string>();   // node ids belonging to a gated hub fan — cropped + never re-expanded
+  const hubMark = new Map<string, HubMarker>();   // hub node id → its marker (stamped onto data.nodes after the flood)
   // UBIQUITY PRIOR (wave, opt-in via SEAM_UBIQUITY / opts.ubiquity) — a DETERMINISTIC cross-module fan-in read
   // from the reverse-import index (grow/ubiquity.ts): a node reached from ≥`ubiquityFan` DISTINCT modules is
   // shared infrastructure. It (a) DEMOTES such a node in the frontier order (grow it last) and (b) STOPS the
   // flood from expanding THROUGH it — but ONLY when it bears NO grounded crossing (I4: a shared DAO on the
   // flow's crossing is scored high yet never gated). Off / no index → empty → no effect (I1/I3).
-  const ubiquity = (opts.ubiquity ?? _envFlag(process.env.SEAM_UBIQUITY) ?? false) && wave;
+  // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
+  const ubiquity = ((opts.ubiquity ?? _envFlag(process.env.SEAM_UBIQUITY) ?? false) || hubCollapse) && wave;
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
   // RESIDUAL-BAND SLM (Phase 3, opt-in via SEAM_GROW_BORDER_RESIDUAL / opts.borderResidual). Only meaningful
   // when the LLM border is on: it deterministically auto-decides the confident ends of each ring (crossing /
@@ -793,8 +805,6 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // scored high (a widely-consumed DAO), yet it is on the flow's crossing, so it is neither demoted nor gated.
     const crossingBearers = new Set<string>();
     if (ubiquity) for (const e of data.edges as any[]) if (_is_crossing(e)) { crossingBearers.add(e.dst); crossingBearers.add(e.from); }
-    const isHub = (n: any): boolean => ubiquity && ubiquityOf(ubiqScore!, n.file) >= ubiquityFan
-      && !crossingBearers.has(n.id) && !isFlowSubject(n.kind) && !n.coupling;
     // PAYLOAD TYPE-REFS — a node reached ONLY by `type-ref` edges is a data-model DTO the anchor never calls a
     // method on (not the delegation spine). Demote it in the frontier so the budget follows calls/crossings
     // first; it's still expanded if budget remains. A node with ANY non-type-ref edge (a call/import/crossing)
@@ -803,6 +813,19 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     for (const e of data.edges) { (edgeKinds.get(e.from) ?? edgeKinds.set(e.from, []).get(e.from))!.push(e.kind); (edgeKinds.get(e.to) ?? edgeKinds.set(e.to, []).get(e.to))!.push(e.kind); }
     const typeRefOnly = new Set<string>();
     for (const [id, kinds] of edgeKinds) if (kinds.length && kinds.every((k) => k === "type-ref")) typeRefOnly.add(id);
+    // HUB CLASSIFICATION (I4-safe) — ONE deterministic test serving the ubiquity gate AND hub-collapse. A node
+    // that BEARS a grounded crossing / is a flow-subject / is a coupling node is NEVER a hub (it's on the spine).
+    // Otherwise: ubiquity fan-in ≥ threshold → a shared-infra hub; under collapse, a type-ref-only node with a
+    // lower fan-in → the `MyString` shape. Returns the marker (reason + fan) or null. `sampleConsumers` is filled
+    // lazily (needs an async index read) only when the node is actually collapsed. Ubiquity off / no index → null.
+    const hubInfo = (n: any): { reason: HubMarker["reason"]; fan: number } | null => {
+      if (!ubiquity || crossingBearers.has(n.id) || isFlowSubject(n.kind) || n.coupling) return null;
+      const u = ubiquityOf(ubiqScore!, n.file);
+      if (u >= (hubCollapse ? hubUbiquity : ubiquityFan)) return { reason: "ubiquity", fan: u };
+      if (hubCollapse && typeRefOnly.has(n.id) && u >= hubTypeFan) return { reason: "type", fan: u };
+      return null;
+    };
+    const isHub = (n: any): boolean => hubInfo(n) != null;
     // frontier = a real symbol (not a boundary node) we haven't re-anchored yet, not excluded. CORE nodes are
     // excluded on the FORWARD/consumer side (the central seam is already covered — re-growing it adds noise), but
     // a DOWNSTREAM (backward) core node IS expanded: the mechanism chain (handler → service → repo → DB) is a
@@ -862,7 +885,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
-      const hub = isHub(n);   // UBIQUITY: a non-crossing shared hub (its CONSUMER fan is off-intent sibling entry points)
+      const hinfo = hubInfo(n);
+      const hub = hinfo != null;   // UBIQUITY: a non-crossing shared hub (its CONSUMER fan is off-intent sibling entry points)
+      // COLLAPSE: this ubiquity/type hub stays in the region — record its marker (its up-climb fan is never grown, so
+      // the sample consumers come from the reverse-import index, not the region). Recorded once; stamped after the flood.
+      if (hub && hubCollapse && !hubMark.has(n.id)) hubMark.set(n.id, { reason: hinfo!.reason, fan: hinfo!.fan, sampleConsumers: await ubiquityConsumers(repo, n.file) });
       for (const d of ["up", "down"] as const) {
         if (expanded.has(expKey(n, d))) continue;
         // Skip the UP-climb of a NEAR core node (the central seam — already covered, re-growing it is noise), but
@@ -906,11 +933,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
           const spineWard = addedIds.some((id: string) =>
             crossDst.has(id) || isFlowSubject(kindById.get(id) ?? "") || (data.nodes as any[]).find((n: any) => n.id === id)?.coupling);
           if (!spineWard) {   // off-intent hub fan → crop it and don't let it seed the next wave
+            const sampleFiles: string[] = [];
             for (const id of addedIds) {
               hubFanned.add(id);
               const nn = (data.nodes as any[]).find((n: any) => n.id === id);
-              if (nn) { expanded.add(expKey(nn, "up")); expanded.add(expKey(nn, "down")); }
+              if (nn) { expanded.add(expKey(nn, "up")); expanded.add(expKey(nn, "down")); if (nn.file && sampleFiles.length < 3 && !sampleFiles.includes(nn.file)) sampleFiles.push(normpath(nn.file)); }
             }
+            // COLLAPSE: mark the fanning SOURCE as a hub (its fan we just saw is the sample) — it stays in the region.
+            if (hubCollapse && !hubMark.has(move.node.id)) hubMark.set(move.node.id, { reason: "fan", fan: r.added, sampleConsumers: sampleFiles });
             dbg(`[grow] hub-gate: ${move.node.symbol} ${move.dir} fanned ${r.added} pure non-crossing consumer(s) → gated`);
           }
         }
@@ -926,6 +956,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     data.edges = (data.edges as any[]).filter((e) => !hubFanned.has(e.from) && !hubFanned.has(e.to));
     if (Array.isArray(data.blindspots)) data.blindspots = data.blindspots.filter((b: any) => !hubFanned.has(b.node));
     dbg(`[grow] hub-gate: cropped ${before} → ${data.nodes.length} node(s) (${hubFanned.size} off-intent hub-fan node(s) dropped)`);
+  }
+  // HUB COLLAPSE MARK — stamp the recorded markers onto the surviving hub nodes (I3: the hub stays, marked, with
+  // its fan count + sample consumers + an expansion handle; only its off-intent fan was dropped). A hub that was
+  // itself cropped as another hub's fan member is skipped (it's gone). Present only under hubCollapse (I1/I2).
+  if (hubCollapse && hubMark.size) {
+    let marked = 0;
+    for (const n of data.nodes as any[]) { const m = hubMark.get(n.id); if (m && !n.hub) { n.hub = m; marked++; } }
+    dbg(`[grow] hub-collapse: marked ${marked} collapsed hub node(s)`);
   }
   // HONEST BACKSTOP — in wave mode the SOFT BORDER is the intended terminator; maxNodes is only a runaway safety
   // cap. If the flood hit it (a too-loose / absent border let the flood run to the cap), say so — a silently
@@ -983,7 +1021,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the

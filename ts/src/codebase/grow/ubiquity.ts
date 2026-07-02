@@ -47,3 +47,21 @@ export async function ubiquityIndex(repo: string, ctx?: EngineCtx): Promise<Map<
 export function ubiquityOf(index: Map<string, number>, file: string | undefined): number {
   return file ? (index.get(_norm(file)) ?? 0) : 0;
 }
+
+// A handful of DISTINCT-MODULE sample consumers of a file (the reverse-import index, cached) — the provenance a
+// collapsed hub carries so the caller sees WHO the fan is without expanding it. Deterministic + LLM-free; the
+// same index ubiquityIndex reads, so no new repo walk. Empty when the file has no importers / no index.
+export async function ubiquityConsumers(repo: string, file: string | undefined, limit = 3): Promise<string[]> {
+  if (!file) return [];
+  const importers = await fileImporters(repo);
+  const imps = importers.get(_norm(file));
+  if (!imps) return [];
+  const seenMod = new Set<string>(); const out: string[] = [];
+  for (const imp of [...imps].sort()) {   // sorted → deterministic; one per module so the sample is diverse
+    const mod = moduleKey(repo, imp);
+    if (seenMod.has(mod)) continue;
+    seenMod.add(mod); out.push(_norm(imp));
+    if (out.length >= limit) break;
+  }
+  return out;
+}

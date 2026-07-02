@@ -114,7 +114,13 @@ A hunk can appear in several seams (a link wires more than one core). Occurrence
 
   // codebase mode provenance
   "provenance": "RESOLVED_FULL|RESOLVED_PARTIAL|SUGGESTED|…",
-  "caller": true
+  "caller": true,
+
+  // COLLAPSED HUB (codebase mode, --hub-collapse / SEAM_HUB_COLLAPSE). OPTIONAL, present only on a hub node.
+  // A ubiquitous type/util (a `MyString` reached from everywhere) is kept as ONE node with a handle instead of
+  // its off-intent consumer fan being flooded across the codebase (I3: collapse, never silently drop). Fully
+  // deterministic — reason + counts come from the ubiquity/fan indices, never a semantic judgement.
+  "hub": { "reason": "ubiquity|fan|type", "fan": N, "sampleConsumers": ["path/a.ts", "path/b.ts"] }
 }
 ```
 
