@@ -46,6 +46,7 @@ const CONFIGS: Config[] = [
   { label: "ubi", opts: { wave: true, borderLlm: false, ubiquity: true, ubiquityFan: 3 } },          // + deterministic ubiquity prior
   { label: "hub", opts: { wave: true, borderLlm: false, hubGate: true, hubFan: 3 } },                // + deterministic hub gate
   { label: "hububi", opts: { wave: true, borderLlm: false, hubGate: true, hubFan: 3, ubiquity: true, ubiquityFan: 3 } },   // both priors
+  { label: "tier", opts: { wave: true, borderLlm: false, tierGrow: true }, needsEmbed: true },      // convergence tier rule (pivot-relevance up-climb); `nodes` = the fixture's convergence budget (2.4)
   { label: "tolblend", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false, borderField: "blend" }, needsEmbed: true },   // region-centroid blend field
   { label: "tolbpri", env: { SEAM_GROW_BORDER_TOL: "0.15" }, opts: { wave: true, borderLlm: false, borderField: "blend", ubiquity: true, ubiquityFan: 3, hubGate: true, hubFan: 3 }, needsEmbed: true },   // blend + both priors
   { label: "slm", opts: { wave: true, borderLlm: true }, needsBackend: true },                       // the LLM border

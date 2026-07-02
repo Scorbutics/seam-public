@@ -49,3 +49,23 @@ With no evidence at production thresholds and the author repos unavailable, flip
 would be unjustified. `SEAM_HUB_GATE` / `opts.hubGate` and `SEAM_UBIQUITY` / `opts.ubiquity` stay **opt-in
 (default OFF)**; the escape hatch is moot until the default flips. Re-run this matrix on the author repos
 (at default thresholds) to make the flip decision.
+
+## Phase 2.4 — convergence node-budget derivation (tier rule)
+
+The `tier` config (convergence grow, `opts.tierGrow`) on the reachable gold case:
+
+| config | precision | recall | nodes (convergence budget) | must-keep | must-drop |
+|---|---|---|---|---|---|
+| det (flood) | 50% | 100% | 14 | ✓ | keeps logger/billing/notifier |
+| tier | 50% | 100% | **13** | ✓ | keeps logger/billing/notifier |
+
+**One-call convergence holds on the fixture:** every `mustKeep` sibling is reached in ONE invocation
+(recall 100%) and the flood settles at **13 nodes** — far under the 500-node runaway backstop. Precision is
+unchanged vs the flood because the tier rule targets off-intent *up-climb fans*; the off-intent *down-deps*
+(logger/billing/notifier) are the intent border's job, not the tier rule's (they stay on the frontier as
+decision points, not pruned). So the derived convergence budget from the reachable case is ~13 nodes.
+
+**Author-repo budget sweep: SKIPPED** — the large author repos (`~/dev/private-app`, monorepos) where the
+deep/wide regions live are unreachable in this environment. The production wave default stays the **500-node
+runaway backstop** (an explicit `--max-nodes` still wins); the smallest-budget-for-every-gold-case derivation
+must be re-run on the author repos before the Phase-5 default flip. Never fake a number.

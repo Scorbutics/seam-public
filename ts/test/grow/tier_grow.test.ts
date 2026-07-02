@@ -72,3 +72,26 @@ describe("tier rule — the on-intent sibling connects, the off-intent fan is pa
     expect(scores).toEqual([...scores].sort((a: number, b: number) => b - a));
   });
 });
+
+// DEEP-SPINE — tier 1 (continuation / crossing) has NO depth limit: a terminal deep in the mechanism chain is
+// reached in ONE call. The old wave count is not a control variable; convergence is. Own tmp repo so the chain
+// length is exact. Guards on tree-sitter (no embeddings needed — the chain is single-continuation, tier 1).
+const deepRepo = join(tmpdir(), "seam-tierdeep-" + process.pid);
+beforeAll(() => {
+  const d = (rel: string, t: string) => { const p = join(deepRepo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };
+  d("package.json", `{ "name": "tierdeep", "version": "1.0.0" }\n`);
+  // a 6-deep single-continuation chain: h0 → h1 → … → h5 (each calls the next). h5 is the deep terminal.
+  for (let i = 0; i < 5; i++) d(`chain/h${i}.ts`, `import { step${i + 1} } from "./h${i + 1}";\nexport function step${i}() { return step${i + 1}(); }\n`);
+  d("chain/h5.ts", `export function step5() { return "deep terminal"; }\n`);
+});
+afterAll(() => { rmSync(deepRepo, { recursive: true, force: true }); });
+
+describe("tier rule — a deep single-continuation terminal is reached in one call (tier 1, no depth limit)", () => {
+  test("the wave-5 terminal arrives in ONE grow", async () => {
+    if (!available()) return;
+    const [data]: [any, any[]] = await grow_to_terminals(deepRepo, "chain/h0.ts", "step0",
+      { dataCoupling: true, intent: "how does the chain reach its terminal", wave: true, borderLlm: false, tierGrow: true });
+    const files = new Set((data.nodes as any[]).map((n) => String(n.file)));
+    expect([...files].some((f) => f.includes("chain/h5.ts"))).toBe(true);   // the deep terminal, one call
+  });
+});
