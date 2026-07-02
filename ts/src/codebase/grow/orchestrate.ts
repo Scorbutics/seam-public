@@ -715,6 +715,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const cv = centroid.score(vecByKey.get(keyOf(n)));
     return fieldMode === "centroid" ? cv : Math.max(iv, cv);
   };
+  // Is the embedding field populated? The tier rule needs a pivot score; absent (no intent / no embeddings) it
+  // falls back to the legacy distance gate (I5 — degrade to order-by-structure, never park the whole frontier).
+  const haveField = (): boolean => intentScore.size > 0;
   // EXPANSION IDENTITY. Single-pick keys on `_key`#dir (file#line#kind) — its historical behaviour. The wavefront
   // keys on file#symbol#dir: the (file, symbol, direction) triple a build_footprint is keyed by, so the SAME
   // logical node re-added by the coupling overlay at a different line/kind is NOT re-expanded (kills the visible
@@ -755,6 +758,16 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const hubTypeFan = Math.max(2, opts.hubTypeFan ?? (parseInt(process.env.SEAM_HUB_TYPE_FAN ?? "5", 10) || 5));      // lower fan-in for a type-ref-only hub (the MyString shape)
   const hubFanned = new Set<string>();   // node ids belonging to a gated hub fan — cropped + never re-expanded
   const hubMark = new Map<string, HubMarker>();   // hub node id → its marker (stamped onto data.nodes after the flood)
+  // CONVERGENCE GROW / TIER RULE (wave, opt-in via SEAM_TIER_GROW / opts.tierGrow) — the three-tier move-admission
+  // policy (docs plan §0): tier 1 FOLLOW an unambiguous continuation or a grounded crossing at ANY depth; tier 2
+  // FOLLOW the fan through an ON-INTENT, non-ubiquitous PIVOT (ONE score on the pivot — the sibling interactions the
+  // region exists to connect); tier 3 STOP at an off-intent / ubiquitous pivot and PARK it as a decision point. This
+  // SUBSUMES _UPCLIMB_MIN_DIST — pivot RELEVANCE replaces hop distance as the up-climb discriminator (distance stays
+  // a tiebreaker in _orderMoves). Termination is CONVERGENCE (a wave admits nothing), not a hop count. Default OFF
+  // until Phase 5 → flag-off byte-identical. Needs the embedding field; absent → falls back to the legacy distance
+  // gate (I5, no worse than today). `parked` collects the tier-3 residue for the decision-point frontier (Phase 2.2).
+  const tierGrow = (opts.tierGrow ?? _envFlag(process.env.SEAM_TIER_GROW) ?? false) && wave;
+  const parked = new Map<string, "decision" | "hub" | "border" | "budget">();   // node id → why its expansion stopped (frontier cutBy)
   // UBIQUITY PRIOR (wave, opt-in via SEAM_UBIQUITY / opts.ubiquity) — a DETERMINISTIC cross-module fan-in read
   // from the reverse-import index (grow/ubiquity.ts): a node reached from ≥`ubiquityFan` DISTINCT modules is
   // shared infrastructure. It (a) DEMOTES such a node in the frontier order (grow it last) and (b) STOPS the
@@ -772,6 +785,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const bandHi = _num(opts.borderHi ?? process.env.SEAM_GROW_BORDER_HI, 0.34);
   const bandLo = _num(opts.borderLo ?? process.env.SEAM_GROW_BORDER_LO, 0.20);
+  const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   // CONCERN MAP (Phase 4, opt-in via SEAM_CONCERN_MAP / opts.concernMap) — the learned side-concern taxonomy.
   // Loaded/learned once (never in the stable-floor probe, I5); a node in a labelled concern module auto-DROPs.
   const concernMapOn = llmPrune && (opts.concernMap ?? _envFlag(process.env.SEAM_CONCERN_MAP) ?? false);
@@ -794,7 +808,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the maxSteps cap is dropped in wave mode; maxNodes stays only as a runaway safety backstop. Single-pick keeps
   // maxSteps (its budget is the move count).
   for (let step = 0; (wave || step < maxSteps) && data.nodes.length < maxNodes; step++) {
-    if (wave && (!llmPrune || borderResidual)) { await densify(); _growCentroid(step); }   // embedding field for the tol border + ordering (+ the residual band's intent field); the plain LLM prune needs neither
+    if (wave && (!llmPrune || borderResidual || tierGrow)) { await densify(); _growCentroid(step); }   // embedding field for the tol border + ordering (+ the residual band's intent field + the tier rule's pivot score); the plain LLM prune needs neither
     const g = from_resolved_graph(data);
     assign_roles(g);
     const roleById = new Map([...g.nodes.values()].map((n: any) => [n.id, n.role]));
@@ -890,15 +904,28 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // COLLAPSE: this ubiquity/type hub stays in the region — record its marker (its up-climb fan is never grown, so
       // the sample consumers come from the reverse-import index, not the region). Recorded once; stamped after the flood.
       if (hub && hubCollapse && !hubMark.has(n.id)) hubMark.set(n.id, { reason: hinfo!.reason, fan: hinfo!.fan, sampleConsumers: await ubiquityConsumers(repo, n.file) });
+      // TIER RULE (tierGrow) — pivot RELEVANCE discriminates the up-climb, replacing the distance gate. The up-climb
+      // is the FAN direction (a dependency climbing back to its OTHER consumers — the sibling entry points). A move is
+      // admitted when it is spine-ward (bears a grounded crossing / flow-subject / coupling — tier 1, I4) or fans
+      // through an ON-INTENT, non-ubiquitous pivot (tier 2); otherwise it is PARKED as a decision point (tier 3). The
+      // field must be available (embeddings) — absent, fall back to the legacy distance+hub gate (I5). DOWN keeps the
+      // mechanism chain (a continuation is tier 1); a wide off-intent DOWN-fan is still caught by the post-move crop.
+      const crossingWard = crossingBearers.has(n.id) || isFlowSubject(n.kind) || n.coupling;
+      const tierUp = tierGrow && haveField() && !crossingWard;   // apply the tier gate to this node's up-climb
       for (const d of ["up", "down"] as const) {
         if (expanded.has(expKey(n, d))) continue;
-        // Skip the UP-climb of a NEAR core node (the central seam — already covered, re-growing it is noise), but
-        // ALLOW it for a FAR core node: a shared backend service reached deep in the walk, whose other consumers
-        // are the SIBLING entry points (the second UI behind a second route). Distance is the discriminator.
-        if (d === "up" && isCore && distOf(n.id) < _UPCLIMB_MIN_DIST) continue;
-        // UBIQUITY: skip the UP-climb of a non-crossing shared hub — its consumers are off-intent sibling entry
-        // points (the cross-module fan). DOWN is kept, so a terminal reached THROUGH the hub is never severed.
-        if (d === "up" && hub) continue;
+        if (d === "up" && tierUp) {
+          // tier 3 — a ubiquitous/type hub, or an off-intent pivot: KEEP the node, PARK its fan as a decision point.
+          if (hub) { parked.set(n.id, hubCollapse ? "hub" : "decision"); continue; }
+          if (_fieldScore(n) < tierMargin) { parked.set(n.id, "decision"); continue; }
+          // else tier 2 — an on-intent, non-ubiquitous pivot: follow the whole fan (no distance gate).
+        } else if (d === "up") {
+          // LEGACY gate (tierGrow off / no field): near-core up-climb is noise; a FAR core's consumers are the
+          // sibling entry points (distance is the discriminator). A non-crossing ubiquity hub's up-climb is skipped.
+          if (isCore && distOf(n.id) < _UPCLIMB_MIN_DIST) continue;
+          if (hub) continue;
+        }
+        if (d === "up") parked.delete(n.id);   // a later wave admitted this up-climb (field rose / a crossing appeared) → no longer a decision point
         moves.push({ node: n, dir: d });
       }
     }
@@ -995,6 +1022,13 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // correctly kept — the documented 0.11-on-a-real-mechanism-node case). Stamp it so the emit skips the
   // embedding pass and degrades exactly as it does when embeddings are absent (the LLM is the ranker now).
   if (llmPrune) (data as any).llmBorder = true;
+  // CONVERGENCE RESIDUE — the tier-3 decision points (nodes whose fan the tier rule declined) survive on `data`
+  // for the decision-point frontier emit (Phase 2.2). Only nodes still present after all the crops are real
+  // decision points; drop any that a hub/border crop removed. Present only under tierGrow (additive).
+  if (tierGrow && parked.size) {
+    const present = new Set<string>((data.nodes as any[]).map((n) => n.id));
+    (data as any)._parked = [...parked].filter(([id]) => present.has(id)).map(([id, cutBy]) => ({ id, cutBy }));
+  }
   return [data, history];
 }
 
@@ -1021,7 +1055,7 @@ export async function _borderCoupling(data: any, opts: any, decided: Map<string,
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
+    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
