@@ -14,7 +14,7 @@
 //     this to per-footprint dependency tracking (invalidate only the affected nodes) via reverse.json.
 //   • CALLER-FILES CASES stay live (a class/interface DOWN footprint varies by the files that reached it).
 // Gated by SEAM_GRAPH_CACHE (graphCacheEnabled). Off → build_footprint runs live, byte-identical to today.
-import { statSync, readFileSync, readdirSync } from "node:fs";
+import { statSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/index_cache.js";
 import { walk } from "../../core/resolve/walk.js";
@@ -59,24 +59,21 @@ function epochOf(repo: string): string {
   return e;
 }
 
-// The COUPLING epoch (Phase 4): the source epoch ⊕ a CONTENT hash of every top-level `.seam/*.json`. A
-// floor-coupling footprint depends not only on the source but on the LEARNED shared-key state (the matcher /
-// adapter rules in `key-adapters.json`, and any other learned json the coupling floor replays). Content —
-// not mtime — because these caches are rewritten every run with IDENTICAL bytes when nothing was learned, so
-// a content hash stays stable on a warm run (cache hits) yet bumps the moment a matcher is learned (the
-// flywheel) or the source changes. Sharded sub-dirs (impl-index/…, footprint-v1/…) are directories, not
-// `*.json` files, so they're naturally excluded — critical for footprint-v1, else the cache self-invalidates.
+// The COUPLING epoch (Phase 4): the source epoch ⊕ a CONTENT hash of the LEARNED shared-key state — ONLY the
+// adapter/matcher store, NOT every `.seam/*.json`. Hashing all of them was a timing trap: the derived caches
+// (floor-files, def-table, the index manifests) are rewritten EVERY run, and are written mid-run, so cold and
+// warm computed the epoch against different on-disk state → a stale miss on every warm run (exactly why the
+// answer cache never hit on cal.com). Those derived caches are functions of the SOURCE anyway, already covered
+// by the source epoch. The two files below change ONLY when a matcher is learned (the flywheel), so hashing
+// just them is stable on a warm floor run yet bumps the moment the store grows — correct AND cache-friendly.
+const _LEARNED_FILES = ["key-adapters.json", "key-matchers.json"];
 function couplingEpochOf(repo: string): string {
   const cached = _cEpoch.get(repo);
   if (cached !== undefined) return cached;
   const src = epochOf(repo);
-  const learned: string[] = [];
-  try {
-    for (const name of readdirSync(join(repo, ".seam")).sort()) {
-      if (!name.endsWith(".json")) continue;                            // top-level learned/derived state only
-      try { learned.push(`${name}:${_hash(readFileSync(join(repo, ".seam", name), "utf-8"))}`); } catch { /* skip */ }
-    }
-  } catch { /* no .seam yet */ }
+  const learned = _LEARNED_FILES.map((name) => {
+    try { return `${name}:${_hash(readFileSync(join(repo, ".seam", name), "utf-8"))}`; } catch { return `${name}:∅`; }
+  });
   const e = src ? `${src}|${_hash(learned.join("\n"))}` : "";
   _cEpoch.set(repo, e);
   return e;
@@ -169,8 +166,11 @@ function gShardOf(repo: string, file: string): CShard<unknown> {
 
 // A stable fingerprint of the process's SEAM_* tuning flags — they steer the grow (tier/hub/border/frontier)
 // but live in env, not opts. Folding them into the key means any flag flip misses the cache (safe direction).
+// DIAGNOSTIC flags are excluded: they change observability, never the result, so toggling SEAM_FP_DEBUG /
+// SEAM_TIMING must NOT bust the answer cache (it did — that's why a debug run always showed MISS).
+const _DIAG_ENV = /(_DEBUG|_TRACE)$|^SEAM_(TIMING|VERBOSE|PROGRESS|GRAPH_CACHE|INDEX_CACHE|FP_DEBUG)$/;
 export function seamEnvSnapshot(): string {
-  return Object.keys(process.env).filter((k) => k.startsWith("SEAM_")).sort().map((k) => `${k}=${process.env[k]}`).join(";");
+  return Object.keys(process.env).filter((k) => k.startsWith("SEAM_") && !_DIAG_ENV.test(k)).sort().map((k) => `${k}=${process.env[k]}`).join(";");
 }
 
 // Memoize a whole deterministic grow. `keyMaterial` must capture EVERYTHING that affects the result (symbol +
