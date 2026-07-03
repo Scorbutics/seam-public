@@ -24,6 +24,9 @@ import { timingOn } from "../progress.js";
 const _CACHE_VERSION = "v2-incremental";
 
 export const indexCacheEnabled = (): boolean => process.env.SEAM_INDEX_CACHE !== "0";   // on by default; =0 kill switch
+// Graph cache (docs/GRAPH_CACHE.md) — OPT-IN while it's built out (validate-first, per Brice). When on, the
+// async indices persist as per-file SHARDS instead of one monolithic JSON. Off = today's byte-identical layout.
+export const graphCacheEnabled = (): boolean => process.env.SEAM_GRAPH_CACHE === "1";
 
 type FileEntry<T> = { m: number; s: number; d: T };          // mtimeMs, size, contribution
 type CacheFile<T> = { salt: string; files: Record<string, FileEntry<T>> };
@@ -69,6 +72,10 @@ export async function incrementalScanAsync<T>(
   repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean, configSalt: string,
   scanFile: (rel: string, text: string) => Promise<T>, cacheName: string,
 ): Promise<{ rel: string; data: T }[]> {
+  // Phase 2 (docs/GRAPH_CACHE.md): when the graph cache is on, persist as per-file SHARDS. Same walk, salt,
+  // predicate and scanFile ⇒ byte-identical merge for the caller — only the on-disk layout differs. Off by
+  // default, so this is a pure internal storage swap the consumers (impl-index, callsite) never see.
+  if (graphCacheEnabled()) return shardedIncrementalScanAsync(repo, skipDirs, predicate, configSalt, scanFile, cacheName);
   const salt = `${_CACHE_VERSION}|${configSalt}`;
   const path = _cachePath(repo, cacheName);
   let prev: CacheFile<T>["files"] = {};
