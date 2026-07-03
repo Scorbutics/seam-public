@@ -869,9 +869,12 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches the center}
   for (const consumer of (callIn.get(center) ?? [])) { const e = entryOf(consumer); if (!rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
   for (const [y, key] of couplingVia) { const e = entryOf(y); if (!rays.has(e)) rays.set(e, { entry: e, via: `the ${key} boundary` }); }
+  const relOf = (id: string) => (hunkById.get(id)?.relevance ?? 0);
   const rayList = [...rays.values()].sort((a, b) =>
-    (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||
+    (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
+    (relOf(b.entry) - relOf(a.entry)) ||                                 // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
+  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern (BookingsBean fan 14+) stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${h?.label ?? "?"} (${h?.file ?? "?"}:${h?.start ?? 0})`;
   const out: string[] = [];
@@ -880,9 +883,10 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
   out.push("", "## Center (the shared mechanism)", `  ${where(ch)} — fan-in ${fanIn(center)} consumer(s)${ch?.hub ? ` — collapsed hub (${ch.hub.reason}, fan ${ch.hub.fan})` : ""}`);
   out.push("", "## Interactions (each entry point that uses the center — deepen the ones that matter)");
-  for (const r of rayList) { const eh = hunkById.get(r.entry);
+  for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
     out.push(`  ${where(eh)}${rel} — reaches the center via ${r.via}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
+  if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];
   if (bs.length) { const keys = [...new Set(bs.map((b) => (b.candidates ?? [])[0]?.symbol ?? b.mechanism).filter(Boolean))];

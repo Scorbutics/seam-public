@@ -63,6 +63,15 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).not.toContain("grow-from db/bookings#bookings");                            // the boundary itself is NOT a ray
     expect(out).toMatch(/interactions: 5/);                                                 // 4 call + 1 coupling
   });
+
+  test("a big concern caps the interaction list (with a +N more note)", () => {
+    const prev = process.env.SEAM_CONCERN_CAP; process.env.SEAM_CONCERN_CAP = "2";
+    try {
+      const out = renderConcern(makeConcernModel(), { intent: "how are bookings managed" });   // 4 interactions, cap 2
+      expect((out.match(/seam --grow-from/g) ?? []).length).toBe(2);
+      expect(out).toContain("+2 more interaction(s)");
+    } finally { if (prev === undefined) delete process.env.SEAM_CONCERN_CAP; else process.env.SEAM_CONCERN_CAP = prev; }
+  });
 });
 
 // end-to-end: a central shared function + 4 interactions in different modules; grow from ONE (the member point).
