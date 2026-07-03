@@ -559,7 +559,10 @@ async function runCodebase(a: Args): Promise<number> {
       }
       const g2 = from_resolved_graph(data);
       emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);
-      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
+      // The LLM seam-ranking (refine/tier) is OFF by default now (Brice: "useless" + it was the 4-min cost). The
+      // deterministic annotateForEmit (embeddings, below) supplies the spine/supporting/off tiers instead — LLM stays
+      // reserved for the flywheel. Opt back in with --no-skeleton. (Concern already forced skeleton at line 558.)
+      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton ?? true });
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
