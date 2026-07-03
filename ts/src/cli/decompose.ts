@@ -482,12 +482,12 @@ async function runCodebase(a: Args): Promise<number> {
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
       // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
-      const growAnchorFootprint = async (af: string, sym: string, ctx: any): Promise<[any, any[]]> => {
-        if (a.grow === "llm") return orch.auto_orchestrate(a.repo, af, sym, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm });
+      const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling): Promise<[any, any[]]> => {
+        if (a.grow === "llm") return orch.auto_orchestrate(a.repo, af, sym, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: dc, dataCouplingLlm: dc && dcLlm });
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
-        if (dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx });
-        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCouplingLlm: false, ctx });
+        if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx });
+        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCoupling: dc, dataCouplingLlm: false, ctx });
       };
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
       let hist: any[] = [];
@@ -502,7 +502,9 @@ async function runCodebase(a: Args): Promise<number> {
         const maxNodes = growNodes;   // the per-anchor budget, reused as the GLOBAL merged budget (--max-nodes)
         for (const anc of anchors) {
           if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
-          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx);
+          // CONCERN: the first grow is only for center DETECTION (fan-in over the call graph); its coupling is
+          // discarded when we re-anchor on the cluster, so skip it — the cluster re-grow does the real coupling.
+          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx, a.concern ? false : a.dataCoupling);
           hist = hist.concat(h.map((x: any) => ({ ...x, anchor: anc.name })));
           if ((d as any).llmBorder) llmBorder = true;   // the LLM border shaped this grow → it is the intent ranker (survives the merge)
           data = data ? mergeFootprints(data, d, d.anchor?.id) : d;
