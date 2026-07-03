@@ -543,6 +543,9 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "agent") {              // the token-budgeted agent surface: spine · region · hubs · frontier · gaps
         const { renderAgent } = await import("../codebase/llm_context.js");
         process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
+      } else if (a.format === "concern") {            // CENTER-first star (prototype) — plural "how is X managed?" questions
+        const { renderConcern } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderConcern(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
       } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");

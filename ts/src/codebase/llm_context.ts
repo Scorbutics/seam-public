@@ -811,3 +811,68 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
   return out.join("\n");
 }
+
+// CONCERN RENDER (prototype) — a CENTER-first projection for plural "how is X managed?" questions, where the
+// answer is a STAR (a shared mechanism + the interactions around it) not a linear flow. The center is found
+// STRUCTURALLY: the node with the highest fan-in (most consumers) in the intent-region — on Acme, the
+// `BookingsBean` every interaction delegates through. Its consumers (each walked up to its entry point) are the
+// INTERACTIONS, ranked by intent tier. Pure projection of an already-grown model (no re-grow) — validates whether
+// the star FRAMING reads better than the flow map on a concern; the full plan re-anchors the grow on the center.
+export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number } = {}): string {
+  if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
+  const cl = (model.clusters ?? [])[0];
+  if (!cl) return "(empty footprint)";
+  const seams: Seam[] = cl.seams ?? [];
+  const hunkById = new Map<string, any>();
+  const seamOf = new Map<string, Seam>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) if ((h as any).id != null) { hunkById.set(String((h as any).id), h); seamOf.set(String((h as any).id), s); }
+  const edges = (model.edges ?? []) as any[];
+  // fan-in (consumers) and adjacency (undirected, for the up-climb to entries), ignoring containment.
+  const inEdges = new Map<string, Set<string>>();   // node → its callers (edge.to === node)
+  const outEdges = new Map<string, Set<string>>();
+  for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
+    (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f); (outEdges.get(f) ?? outEdges.set(f, new Set()).get(f)!).add(t); }
+  // CENTER = the highest fan-in node in the region (the mechanism the interactions share). Tie-break: a collapsed
+  // hub, then complexity. Structural — no name-matching (the intent already scoped the region via the grow).
+  const nodes = [...hunkById.keys()];
+  if (!nodes.length) return "(empty region)";
+  const fanIn = (id: string) => inEdges.get(id)?.size ?? 0;
+  const center = nodes.slice().sort((a, b) =>
+    (fanIn(b) - fanIn(a)) || (Number(!!hunkById.get(b).hub) - Number(!!hunkById.get(a).hub)) ||
+    ((hunkById.get(b).complexity ?? 0) - (hunkById.get(a).complexity ?? 0)))[0];
+  const ch = hunkById.get(center);
+  // INTERACTIONS = the center's consumers, each walked UP to its entry point (a node with no callers / a route
+  // boundary), so a ray is named by its interaction, not the immediate caller. Deduped by entry.
+  const entryOf = (start: string): string => {
+    let cur = start; const seen = new Set<string>([center]);
+    for (let hop = 0; hop < 8; hop++) {
+      if (seen.has(cur)) break; seen.add(cur);
+      const callers = [...(inEdges.get(cur) ?? [])].filter((c) => !seen.has(c));
+      if (!callers.length) return cur;                 // no caller → an entry point
+      cur = callers.sort((a, b) => (fanIn(a) - fanIn(b)))[0];   // climb the least-shared caller (toward a specific entry)
+    }
+    return cur;
+  };
+  const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
+  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, the center-adjacent consumer}
+  for (const consumer of (inEdges.get(center) ?? [])) { const e = entryOf(consumer); if (!rays.has(e)) rays.set(e, { entry: e, via: consumer }); }
+  const rayList = [...rays.values()].sort((a, b) =>
+    (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||
+    (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
+  const q = opts.intent ? ` --intent "${opts.intent}"` : "";
+  const where = (h: any) => `${h?.label ?? "?"} (${h?.file ?? "?"}:${h?.start ?? 0})`;
+  const out: string[] = [];
+  out.push("# Concern map — a mechanism and the interactions around it (center-first)",
+    [`center: ${ch?.label ?? "?"}`, ...(opts.intent ? [`intent: ${opts.intent}`] : []), `resolution: ${model.resolutionQuality ?? "?"}`,
+      `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
+  out.push("", "## Center (the shared mechanism)", `  ${where(ch)} — fan-in ${fanIn(center)} consumer(s)${ch?.hub ? ` — collapsed hub (${ch.hub.reason}, fan ${ch.hub.fan})` : ""}`);
+  out.push("", "## Interactions (each entry point that uses the center — deepen the ones that matter)");
+  for (const r of rayList) { const eh = hunkById.get(r.entry), vh = hunkById.get(r.via);
+    const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
+    out.push(`  ${where(eh)}${rel} — reaches the center via ${vh?.label ?? "?"}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
+  // blindspots (reuse the fanout collapse idea, kept short)
+  const bs = (model.blindspots ?? []) as any[];
+  if (bs.length) { const keys = [...new Set(bs.map((b) => (b.candidates ?? [])[0]?.symbol ?? b.mechanism).filter(Boolean))];
+    out.push("", `## Blindspots — ${bs.length} boundary/opaque site(s) over: ${keys.slice(0, 10).join(", ")}${keys.length > 10 ? ", …" : ""}`); }
+  return out.join("\n");
+}
