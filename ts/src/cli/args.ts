@@ -12,6 +12,8 @@ export interface Args {
   emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean; spineOnly?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
+  concern?: boolean;   // --concern: CENTER-anchor a plural "how is X managed?" question — detect the shared mechanism + re-grow from it
+  center?: string;     // --center <file>#<symbol>: skip center detection, use this node as the concern center
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
@@ -77,6 +79,8 @@ export function parseArgs(argv: string[]): Args {
       case "--anchor-recall": a.anchorRecall = (next() ?? "embed").toLowerCase(); break;   // embed (default) | lexical
       case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
       case "--grow-from": a.growFrom = next(); break;
+      case "--concern": a.concern = true; break;
+      case "--center": a.center = next(); break;
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;

@@ -10,6 +10,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { renderConcern } from "../../src/codebase/llm_context.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
+import { detectCenter } from "../../src/codebase/grow/center.js";
 import { decompose } from "../../src/codebase/codebase.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { available } from "../../src/codebase/atoms.js";
@@ -73,5 +74,40 @@ describe("renderConcern — end-to-end: growing from a POINT still recovers the 
     // every module's interaction is recovered, even though we grew from ONE of them
     for (const f of ["member/memberBookings", "admin/adminBookings", "jobs/reminderJob", "api/bookingApi"])
       expect(out).toContain(f);
+  });
+});
+
+describe("concern center — WRONG-ANCHOR RESISTANCE (the plan's killer property)", () => {
+  const grow = (file: string, sym: string) => grow_to_terminals(repo, file, sym,
+    { dataCoupling: true, intent: "how are bookings managed across the app", wave: true, borderLlm: false, tierGrow: true });
+  const points = [
+    ["member/memberBookings.ts", "loadBookings"],
+    ["admin/adminBookings.ts", "assignBookingAdviser"],
+    ["api/bookingApi.ts", "cancelBookingViaApi"],
+  ];
+  test("the detected center is the SAME shared mechanism no matter which point we start from", async () => {
+    if (!available()) return;
+    const centers: string[] = [];
+    for (const [f, s] of points) {
+      const [data]: [any, any[]] = await grow(f, s);
+      const c = detectCenter(data, { excludeFile: f, excludeSymbol: s });
+      centers.push(c ? c.symbol : "none");
+    }
+    // every start point resolves to the same center (manageBooking) — the answer is anchor-invariant
+    expect(new Set(centers).size).toBe(1);
+    expect(centers[0]).toBe("manageBooking");
+  });
+  test("re-anchoring on the center recovers the FULL interaction set from any starting point", async () => {
+    if (!available()) return;
+    const interactionSets: string[][] = [];
+    for (const [f, s] of points) {
+      const [pt]: [any, any[]] = await grow(f, s);
+      const c = detectCenter(pt, { excludeFile: f, excludeSymbol: s })!;
+      const [star]: [any, any[]] = await grow(c.file, c.symbol);   // re-anchor on the center
+      const files = new Set((star.nodes as any[]).map((n) => String(n.file)));
+      interactionSets.push(["member/memberBookings", "admin/adminBookings", "jobs/reminderJob", "api/bookingApi"].filter((iv) => [...files].some((x) => x.includes(iv))));
+    }
+    // the star from every starting point contains all four interactions
+    for (const set of interactionSets) expect(set.length).toBe(4);
   });
 });

@@ -510,6 +510,21 @@ async function runCodebase(a: Args): Promise<number> {
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
       process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
+      // CONCERN RE-ANCHOR (--concern): a plural "how is X managed?" question has no entry point — it has a shared
+      // MECHANISM. The auto-anchor grew from ONE interaction (a point); detect the center STRUCTURALLY (highest
+      // fan-in node in the region) and RE-GROW from it so the answer is the center-rooted STAR of interactions, the
+      // same no matter which point we started on (the plan's wrong-anchor resistance). `--center` overrides detection.
+      if (a.concern && data) {
+        const { detectCenter } = await import("../codebase/grow/center.js");
+        const explicit = a.center ? { file: a.center.slice(0, a.center.indexOf("#")), symbol: a.center.slice(a.center.indexOf("#") + 1) } : null;
+        const center = explicit ?? detectCenter(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol });
+        if (center && (center.file !== a.anchorFile || center.symbol !== a.symbol)) {
+          process.stderr.write(`[concern] center = ${center.symbol} (${center.file})${(center as any).fanIn ? ` — fan-in ${(center as any).fanIn}` : ""}; re-anchoring the grow there\n`);
+          try { const [cd] = await growAnchorFootprint(center.file, center.symbol, new EngineCtx()); if (cd?.nodes?.length) data = cd; }
+          catch (e) { process.stderr.write(`[concern] re-anchor grow failed (${(e as Error).message}) — keeping the point region\n`); }
+        } else process.stderr.write(`[concern] no shared center found (no node with fan-in ≥ 2) — this reads as a flow, not a concern\n`);
+        if (a.format === "none") a.format = "concern";   // --concern implies the center-first render unless overridden
+      }
       const g2 = from_resolved_graph(data);
       emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton });
