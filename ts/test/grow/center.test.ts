@@ -22,8 +22,8 @@ describe("detectCenter — intent-weighted (the User fan-in-61 bug)", () => {
   test("WITHOUT relevance, raw fan-in wrongly picks the ubiquitous entity", () => {
     expect(detectCenter(data)?.symbol).toBe("User");   // the bug: fan-in 8 > 4
   });
-  test("WITH relevance, the off-intent ubiquitous entity is excluded → the mechanism is the center", () => {
-    const relevance = (f: string) => (f.includes("User") ? 0.05 : 0.6);   // User off-intent, everything else on
+  test("WITH per-symbol relevance, the off-intent ubiquitous entity is excluded → the mechanism is the center", () => {
+    const relevance = (n: { symbol: string }) => (n.symbol === "User" ? 0.05 : 0.6);   // score the SYMBOL, not the file
     const c = detectCenter(data, { relevance });
     expect(c?.symbol).toBe("manageBooking");
     expect(c?.fanIn).toBe(4);

@@ -13,7 +13,7 @@ export interface Center { id: string; file: string; symbol: string; fanIn: numbe
 // (`BookingsBean`, fan-in 14): both are structural hubs. So `relevance(file)` (when available) FILTERS to on-intent
 // nodes first — `User` scores off-intent for "how are bookings managed" and drops out; among the on-intent
 // survivors the highest fan-in is the center. No relevance / nothing clears the floor → raw fan-in (I5 degradation).
-export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?: string; excludeSymbol?: string; relevance?: (file: string) => number; minRelevance?: number } = {}): Center | null {
+export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?: string; excludeSymbol?: string; relevance?: (n: { symbol: string; file: string }) => number; minRelevance?: number; debug?: (line: string) => void } = {}): Center | null {
   const minFanIn = opts.minFanIn ?? 2;
   const minRel = opts.minRelevance ?? 0.18;
   const byId = new Map<string, any>((data.nodes ?? []).map((n: any) => [n.id, n]));
@@ -22,17 +22,16 @@ export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?:
     if (e.kind === "contains") continue;
     (callers.get(e.to) ?? callers.set(e.to, new Set()).get(e.to)!).add(e.from);
   }
-  const pick = (onIntentOnly: boolean): Center | null => {
-    let best: any = null, bestFan = 0;
-    for (const [id, set] of callers) {
-      const n = byId.get(id);
-      if (!n || !n.file || !n.symbol) continue;                                 // must be a real symbol we can re-anchor on
-      if (n.file === opts.excludeFile && n.symbol === opts.excludeSymbol) continue;
-      if (onIntentOnly && opts.relevance && opts.relevance(n.file) < minRel) continue;   // off-intent hub (User) → excluded
-      const fan = set.size;
-      if (fan > bestFan || (fan === bestFan && (n.complexity ?? 0) > (best?.complexity ?? 0))) { best = n; bestFan = fan; }
-    }
-    return best && bestFan >= minFanIn ? { id: best.id, file: best.file, symbol: best.symbol, fanIn: bestFan } : null;
-  };
-  return (opts.relevance ? pick(true) : null) ?? pick(false);   // on-intent center first; else raw fan-in (never spuriously null)
+  // rank every real-symbol node by fan-in, with its intent relevance (per-SYMBOL, not file-max — sharper: `User`
+  // vs `BookingsBean` directly, so a stray booking-ish method elsewhere in User.java can't lift the entity in).
+  const cands = [...callers.entries()].map(([id, set]) => byId.get(id))
+    .filter((n) => n && n.file && n.symbol && !(n.file === opts.excludeFile && n.symbol === opts.excludeSymbol))
+    .map((n) => ({ n, fan: callers.get(n.id)!.size, rel: opts.relevance ? opts.relevance({ symbol: n.symbol, file: n.file }) : 1 }))
+    .sort((a, b) => (b.fan - a.fan) || ((b.n.complexity ?? 0) - (a.n.complexity ?? 0)));
+  if (opts.debug && cands.length) opts.debug(`[concern] center candidates (fan-in · relevance): ${cands.slice(0, 6).map((c) => `${c.n.symbol}(${c.fan}·${c.rel.toFixed(2)})`).join(", ")}`);
+  const mk = (c: any): Center => ({ id: c.n.id, file: c.n.file, symbol: c.n.symbol, fanIn: c.fan });
+  // on-intent center first (highest fan-in among relevance ≥ floor); else the raw highest fan-in (never spuriously null).
+  const onIntent = opts.relevance ? cands.find((c) => c.fan >= minFanIn && c.rel >= minRel) : null;
+  const raw = cands.find((c) => c.fan >= minFanIn);
+  return onIntent ? mk(onIntent) : (raw ? mk(raw) : null);
 }

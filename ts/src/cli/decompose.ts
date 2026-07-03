@@ -521,18 +521,20 @@ async function runCodebase(a: Args): Promise<number> {
         // INTENT-WEIGHT the center pick: score the region's files against the intent (embeddings, cached) so a
         // ubiquitous OFF-INTENT entity (`User`, fan-in 61) is excluded in favour of the on-intent mechanism
         // (`BookingsBean`). Guarded — no embeddings → detectCenter degrades to raw fan-in.
-        let relevance: ((f: string) => number) | undefined;
+        let relevance: ((n: { symbol: string; file: string }) => number) | undefined;
         if (!explicit && a.intent) {
           try {
             const { embedScoreDefs } = await import("../codebase/scan/def_embed.js");
             const { normpath } = await import("../core/resolve/walk.js");
             const files = new Set<string>((data.nodes as any[]).map((n) => n.file ? normpath(n.file) : "").filter(Boolean));
-            const fs = new Map<string, number>();
-            for (const { def, score } of await embedScoreDefs(a.repo, a.intent, files)) { const f = normpath(def.file); fs.set(f, Math.max(fs.get(f) ?? -1, score)); }
-            if (fs.size) relevance = (f: string) => fs.get(normpath(f)) ?? 0;
-          } catch { /* embeddings absent → raw fan-in */ }
+            const bySym = new Map<string, number>();    // per-SYMBOL score (`name file`) — sharper than file-max
+            const byFile = new Map<string, number>();    // file-max fallback for a symbol embeddings didn't score
+            for (const { def, score } of await embedScoreDefs(a.repo, a.intent, files)) { const f = normpath(def.file); bySym.set(`${def.name} ${f}`, score); byFile.set(f, Math.max(byFile.get(f) ?? -1, score)); }
+            if (bySym.size) relevance = (n) => bySym.get(`${n.symbol} ${normpath(n.file)}`) ?? byFile.get(normpath(n.file)) ?? 0;
+            else process.stderr.write(`[concern] no def embeddings for the region — center falls back to raw fan-in (may pick a ubiquitous entity)\n`);
+          } catch { process.stderr.write(`[concern] embeddings unavailable — center falls back to raw fan-in\n`); }
         }
-        const center = explicit ?? detectCenter(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol, relevance });
+        const center = explicit ?? detectCenter(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol, relevance, debug: (l) => process.stderr.write(l + "\n") });
         if (center && (center.file !== a.anchorFile || center.symbol !== a.symbol)) {
           concernCenter = { file: center.file, symbol: center.symbol };   // the render honours this (not its own raw-fan-in re-detect)
           process.stderr.write(`[concern] center = ${center.symbol} (${center.file})${(center as any).fanIn ? ` — fan-in ${(center as any).fanIn}` : ""}; re-anchoring the grow there\n`);
