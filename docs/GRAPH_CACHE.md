@@ -69,14 +69,27 @@ live path, then persist their shard — so it warms lazily, exactly like the fly
 
 ## Phasing (each gated, green, on `refactor/graph-cache`)
 
-1. **Sharded store primitive** — `shardedIncrementalScan<T>` (drop-in sharded sibling of
-   `incrementalScan<T>`): per-file shards + manifest, partial rewrite, hermetic invalidation tests
-   (change one file → only its shard rewrites; delete → shard drops). Behind `SEAM_GRAPH_CACHE=1`. **← this turn**
-2. **Migrate the raw caches** (floor / impl / callsite) onto the sharded store — byte-identical output,
-   just sharded on disk.
-3. **Persist resolved edges + reverse index** — the `out`/`defs`/`reverse.json` half + the cross-file
-   re-resolution rule, with the invalidation test as the gate.
-4. **Persist coupling crossings** (`cross`, matcher-versioned) + the staleness report.
-5. **Cut grow/concern over to the reader** — flood the cached graph; live path becomes the cold fallback.
-6. **Flip the flywheel to always-lazy** — learn matchers under `floor` too (now cheap to amortize,
-   because the learned edges are cached), `off` = no learning.
+> **Profile pivot (recorded during Phase 3).** A warm grow's cost is NOT resolution or index-build — those
+> are already cached (0 re-scan). It's `build_footprint` re-deriving each node's neighbourhood: **448×~15ms**
+> on the seam repo. So the resolved-edge/`reverse.json` model above is deferred to a **v2** refinement; the
+> shipped v1 memoizes `build_footprint` directly on a coarse repo **content epoch** (any source change
+> invalidates all — correct, and it closes the alias/new-impl hole by construction).
+
+1. **Sharded store primitive** ✅ — `shardedIncrementalScanAsync` + `loadShard`/`saveShard`: per-file shards
+   + manifest, partial rewrite/prune, hermetic invalidation tests. Behind `SEAM_GRAPH_CACHE=1`.
+2. **Migrate the async indices** ✅ — `incrementalScanAsync` dispatches to the sharded store under the flag
+   (impl-index, callsite-index); byte-identical output.
+3. **Memoize `build_footprint` per node** ✅ (warm ~2×, 8.8s→4.4s) — `footprint_cache.ts`, keyed on
+   `(file, symbol, direction)` + the **source epoch** (a direct stat-walk of source files — NOT an index
+   manifest, which refreshes lazily mid-grow → stale hit). Structural only (`dataCoupling === false`); the
+   grow traversal is always structural, so this serves coupling-on grows too. Gate: subprocess warm-reuse +
+   new-impl invalidation.
+4. **Memoize the anchor coupling overlay** ✅ — coupling is a single `_anchorCouplingDelta` merged onto the
+   settled footprint, so it's cached separately: `cachedCouplingDelta` keyed by anchor on a **coupling epoch**
+   = source epoch ⊕ content-hash of top-level `.seam/*.json` (learned matchers). Floor only; LLM stays live.
+5. **Cut grow/concern over to a reader** — flood the cached graph; live path becomes the cold fallback. *next*
+6. **Flip the flywheel to always-lazy** — learn matchers under `floor` too (cheap to amortize now), `off` =
+   no learning.
+
+**Deferred to v2:** the per-footprint dependency tracking / `reverse.json` fine-grained invalidation (so a
+one-file edit invalidates only the affected nodes, instead of the whole coarse epoch bumping every entry).
