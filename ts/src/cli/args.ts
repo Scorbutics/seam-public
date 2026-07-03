@@ -117,7 +117,7 @@ export function parseArgs(argv: string[]): Args {
       // llm=floor + the LLM shared-key front-end (always), auto (DEFAULT)=floor + LLM front-end WHEN an LLM
       // backend resolves (learn-once → cached → deterministic warm), else floor. `auto` makes cross-stack
       // coupling on-by-default without paying the LLM when there's no backend or it's disabled.
-      case "--data-coupling": { const m = (next() ?? "floor").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingAuto = m === "auto"; a.dataCouplingExplicit = true; break; }
+      case "--data-coupling": { const m = (next() ?? "auto").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingAuto = m === "auto"; a.dataCouplingExplicit = true; break; }
       case "-v": case "--verbose": a.verbose = true; break;
       case "--trace": a.verbose = true; a.trace = true; break;   // --verbose + the per-node timing firehose
       case "--context-window": case "-o": case "--out":
