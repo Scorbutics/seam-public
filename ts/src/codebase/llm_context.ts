@@ -707,8 +707,16 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const supporting = seams.filter((s) => tierOf(s) !== "spine" && tierOf(s) !== "off");
   const offSeams = seams.filter((s) => tierOf(s) === "off");
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
+  // DEDUPE: a hub-marked hunk appears in every seam it wires (a hub wires many), so a naive scan lists it once per
+  // seam — the same `BookingsBean` line a dozen times. Key by (file, label, reason) → one line per collapsed hub.
   const hubs: { label: string; file?: string; hub: any }[] = [];
-  for (const s of seams) for (const h of (s.hunks ?? [])) if ((h as any).hub) hubs.push({ label: h.label ?? "?", file: h.file, hub: (h as any).hub });
+  const seenHub = new Set<string>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) {
+    const hb = (h as any).hub; if (!hb) continue;
+    const k = `${h.file ?? ""}|${h.label ?? ""}|${hb.reason ?? ""}`;
+    if (seenHub.has(k)) continue; seenHub.add(k);
+    hubs.push({ label: h.label ?? "?", file: h.file, hub: hb });
+  }
   const frontier: any[] = model.frontier ?? [];
 
   const q = (x: string) => (opts.intent ? ` --intent "${opts.intent}"` : x);   // the deepen invocation carries the intent to redirect

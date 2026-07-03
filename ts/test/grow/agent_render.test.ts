@@ -49,6 +49,15 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toContain("(+2 more decision point(s) cut");
   });
 
+  test("a hub wiring many seams is listed ONCE, not per-seam (dedup — the Acme BookingsBean bug)", () => {
+    const model = makeModel();
+    // the SAME hub-marked hunk appears in 12 seams (a hub wires many) — the naive scan listed it 12×.
+    const hubHunk = { id: "beanh", file: "cdi/bookings/BookingsBean.java", start: 3, role: "core", label: "BookingsBean", hub: { reason: "fan", fan: 14, sampleConsumers: ["a.java", "b.java"] } };
+    for (let i = 0; i < 12; i++) model.clusters[0].seams.push({ id: `wire${i}`, label: `wire${i}`, tier: "off", region: { shell: 2, direction: "up" }, primary: { file: `w${i}.java`, line: 1, symbol: `wire${i}` }, hunks: [hubHunk] });
+    const out = renderAgent(model, { tokenBudget: 8000, intent: "how are bookings managed" });
+    expect((out.match(/BookingsBean.*hub: fan, fan 14/g) ?? []).length).toBe(1);   // exactly one collapsed-hub line
+  });
+
   test("tight budget: off/supporting region lines crop (with a note); spine, hubs, frontier, blindspots stay", () => {
     const model = makeModel({ offN: 40 });   // a big off-path region → the full render blows the budget
     const budget = 350;
