@@ -827,11 +827,14 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const seamOf = new Map<string, Seam>();
   for (const s of seams) for (const h of (s.hunks ?? [])) if ((h as any).id != null) { hunkById.set(String((h as any).id), h); seamOf.set(String((h as any).id), s); }
   const edges = (model.edges ?? []) as any[];
-  // fan-in (consumers) and adjacency (undirected, for the up-climb to entries), ignoring containment.
-  const inEdges = new Map<string, Set<string>>();   // node → its callers (edge.to === node)
-  const outEdges = new Map<string, Set<string>>();
+  // fan-in (consumers) ignoring containment. `callIn` = only CALL/reference/import in-edges (NOT crossings) — the
+  // entry walk climbs those, so a data-READ edge (boundary → reader) is never mistaken for a caller (which would
+  // climb a coupling interaction UP into the boundary node).
+  const inEdges = new Map<string, Set<string>>();     // node → all its consumers (for center fan-in)
+  const callIn = new Map<string, Set<string>>();      // node → its CALL-graph callers only (for the entry walk)
   for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
-    (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f); (outEdges.get(f) ?? outEdges.set(f, new Set()).get(f)!).add(t); }
+    (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f);
+    if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f); }
   // CENTER = the highest fan-in node in the region (the mechanism the interactions share). Tie-break: a collapsed
   // hub, then complexity. Structural — no name-matching (the intent already scoped the region via the grow).
   const nodes = [...hunkById.keys()];
@@ -847,15 +850,25 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     let cur = start; const seen = new Set<string>([center]);
     for (let hop = 0; hop < 8; hop++) {
       if (seen.has(cur)) break; seen.add(cur);
-      const callers = [...(inEdges.get(cur) ?? [])].filter((c) => !seen.has(c));
-      if (!callers.length) return cur;                 // no caller → an entry point
+      const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));   // CALL-graph callers only (skip crossings)
+      if (!callers.length) return cur;                 // no caller → an entry point (a coupling reader is its own entry)
       cur = callers.sort((a, b) => (fanIn(a) - fanIn(b)))[0];   // climb the least-shared caller (toward a specific entry)
     }
     return cur;
   };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
-  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, the center-adjacent consumer}
-  for (const consumer of (inEdges.get(center) ?? [])) { const e = entryOf(consumer); if (!rays.has(e)) rays.set(e, { entry: e, via: consumer }); }
+  // COUPLING interactions — a node sharing a data-key BOUNDARY with the center (the center writes a table a
+  // reporting job READS → that job is an interaction though it never CALLS the center). 2 hops over crossing
+  // edges: center —cross→ boundary —cross→ interaction; the 1-hop boundary is skipped, its OTHER touchers are rays.
+  const crossAdj = new Map<string, Set<string>>();
+  for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
+    (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
+  const boundaries = crossAdj.get(center) ?? new Set<string>();
+  const couplingVia = new Map<string, string>();   // interaction id → the shared key/boundary label
+  for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) if (y !== center && !boundaries.has(y) && hunkById.has(y)) couplingVia.set(y, hunkById.get(b)?.label ?? "a shared key");
+  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches the center}
+  for (const consumer of (callIn.get(center) ?? [])) { const e = entryOf(consumer); if (!rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
+  for (const [y, key] of couplingVia) { const e = entryOf(y); if (!rays.has(e)) rays.set(e, { entry: e, via: `the ${key} boundary` }); }
   const rayList = [...rays.values()].sort((a, b) =>
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
@@ -867,9 +880,9 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
   out.push("", "## Center (the shared mechanism)", `  ${where(ch)} — fan-in ${fanIn(center)} consumer(s)${ch?.hub ? ` — collapsed hub (${ch.hub.reason}, fan ${ch.hub.fan})` : ""}`);
   out.push("", "## Interactions (each entry point that uses the center — deepen the ones that matter)");
-  for (const r of rayList) { const eh = hunkById.get(r.entry), vh = hunkById.get(r.via);
+  for (const r of rayList) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
-    out.push(`  ${where(eh)}${rel} — reaches the center via ${vh?.label ?? "?"}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
+    out.push(`  ${where(eh)}${rel} — reaches the center via ${r.via}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];
   if (bs.length) { const keys = [...new Set(bs.map((b) => (b.candidates ?? [])[0]?.symbol ?? b.mechanism).filter(Boolean))];

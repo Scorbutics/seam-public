@@ -48,6 +48,21 @@ describe("renderConcern — center-first star (pure model)", () => {
       expect(out).toContain(`seam --grow-from ${file}#${label}`);
     expect(out).toMatch(/interactions: 4/);
   });
+
+  test("a COUPLING-only interaction (reads a table the center writes, never calls it) is a ray; the boundary is not", () => {
+    const m = makeConcernModel();
+    // add a table boundary the center WRITES + a reporting job that READS it (no call to the center).
+    m.clusters[0].seams.push(
+      { id: "sT", label: "bookings", tier: "supporting", hunks: [{ id: "T", label: "bookings", file: "db/bookings", start: 0, role: "environment", tier: "supporting" }] },
+      { id: "sR", label: "report", tier: "supporting", hunks: [{ id: "R", label: "bookingRevenueReport", file: "reporting/report.ts", start: 1, role: "core", tier: "supporting" }] },
+    );
+    m.edges.push({ from: "C", to: "T", kind: "db-write" }, { from: "T", to: "R", kind: "db-read" });
+    const out = renderConcern(m, { intent: "how are bookings managed" });
+    expect(out).toContain("seam --grow-from reporting/report.ts#bookingRevenueReport");   // the coupling reader is an interaction
+    expect(out).toContain("via the bookings boundary");                                    // named by the shared key
+    expect(out).not.toContain("grow-from db/bookings#bookings");                            // the boundary itself is NOT a ray
+    expect(out).toMatch(/interactions: 5/);                                                 // 4 call + 1 coupling
+  });
 });
 
 // end-to-end: a central shared function + 4 interactions in different modules; grow from ONE (the member point).
