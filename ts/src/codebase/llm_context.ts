@@ -876,7 +876,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const [y, key] of couplingVia) { const e = entryOf(y); if (!rays.has(e)) rays.set(e, { entry: e, via: `the ${key} boundary` }); }
   const rayList = [...rays.values()].sort((a, b) =>
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
-    (relOf(b.entry) - relOf(a.entry)) ||                                 // then most intent-relevant
+    (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern (BookingsBean fan 14+) stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
