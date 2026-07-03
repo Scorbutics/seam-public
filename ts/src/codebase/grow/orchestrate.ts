@@ -499,7 +499,10 @@ const _GROW_WAVE = () => _envFlag(process.env.SEAM_GROW_WAVE) ?? fastCheapBacken
 // wave's NEW candidate ring over a COMPACT skeleton (name + container + file + kind — no bodies), and only the
 // in-scope nodes are flooded through. Frontier-evaluable (a node is judged BEFORE its footprint is built, so the
 // cut subtree is never built), bounded (≈ one call per wave), cached per node (decided once, never re-asked).
-const _GROW_BORDER_LLM = () => _envFlag(process.env.SEAM_GROW_BORDER_LLM) ?? fastCheapBackend();
+// LLM is OUT of the grow loop by default (Brice's architecture): the deterministic tier/hub/coupling-border
+// carry the grow; the SLM border is opt-in via SEAM_GROW_BORDER_LLM=1. The LLM is reserved for the ONE thing it
+// is uniquely good at — the data-coupling flywheel (learning matchers). Was `?? fastCheapBackend()` (on w/ Ollama).
+const _GROW_BORDER_LLM = () => _envFlag(process.env.SEAM_GROW_BORDER_LLM) ?? false;
 const PRUNE_PASS = registerPass({ tag: "grow-border", tier: "cheap", note: "wave-level intent border — keep only the candidates ON the intent" });
 const _PRUNE_BATCH = 50;   // candidates per call — small enough for a reliable per-candidate JSON reply
 
