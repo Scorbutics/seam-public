@@ -7,16 +7,17 @@
 // interactions, robustly, no matter which point the auto-anchor happened to land on.
 export interface Center { id: string; file: string; symbol: string; fanIn: number; }
 
-// `relevance(file)` — the intent-field score of a file (embeddings), when available. WITHOUT it the highest-fan-in
-// node wins outright, which on a real app is a UBIQUITOUS ENTITY (`User`, referenced by everything — fan-in 61),
-// NOT the concern's mechanism (`BookingsBean`, fan-in 14). So we FILTER to on-intent nodes first: `User` scores
-// off-intent for "how are bookings managed" and is excluded; among the on-intent survivors the highest fan-in is
-// the center. Degrades to raw fan-in when no relevance is passed or nothing clears the floor (I5).
+// STRUCTURE deduces the candidates (the shared, high-fan-in nodes); the intent field (embeddings) judges WHICH of
+// them the concern is ABOUT — the CLAUDE.md structural↔semantic split. Structure alone CANNOT separate a generic
+// ubiquitous ENTITY (`User`, fan-in 61, referenced by census/crypto/bookings alike) from the concern's MECHANISM
+// (`BookingsBean`, fan-in 14): both are structural hubs. So `relevance(file)` (when available) FILTERS to on-intent
+// nodes first — `User` scores off-intent for "how are bookings managed" and drops out; among the on-intent
+// survivors the highest fan-in is the center. No relevance / nothing clears the floor → raw fan-in (I5 degradation).
 export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?: string; excludeSymbol?: string; relevance?: (file: string) => number; minRelevance?: number } = {}): Center | null {
   const minFanIn = opts.minFanIn ?? 2;
   const minRel = opts.minRelevance ?? 0.18;
   const byId = new Map<string, any>((data.nodes ?? []).map((n: any) => [n.id, n]));
-  const callers = new Map<string, Set<string>>();   // DISTINCT consumers per node, ignoring containment edges
+  const callers = new Map<string, Set<string>>();   // DISTINCT consumers per node (a caller counts once), sans containment
   for (const e of data.edges ?? []) {
     if (e.kind === "contains") continue;
     (callers.get(e.to) ?? callers.set(e.to, new Set()).get(e.to)!).add(e.from);
@@ -33,6 +34,5 @@ export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?:
     }
     return best && bestFan >= minFanIn ? { id: best.id, file: best.file, symbol: best.symbol, fanIn: bestFan } : null;
   };
-  // prefer the on-intent center; fall back to raw fan-in only if the intent filter left nothing (or no relevance).
-  return (opts.relevance ? pick(true) : null) ?? pick(false);
+  return (opts.relevance ? pick(true) : null) ?? pick(false);   // on-intent center first; else raw fan-in (never spuriously null)
 }

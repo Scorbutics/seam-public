@@ -538,9 +538,9 @@ async function runCodebase(a: Args): Promise<number> {
           process.stderr.write(`[concern] center = ${center.symbol} (${center.file})${(center as any).fanIn ? ` — fan-in ${(center as any).fanIn}` : ""}; re-anchoring the grow there\n`);
           try { const [cd] = await growAnchorFootprint(center.file, center.symbol, new EngineCtx()); if (cd?.nodes?.length) data = cd; }
           catch (e) { process.stderr.write(`[concern] re-anchor grow failed (${(e as Error).message}) — keeping the point region\n`); }
-        } else process.stderr.write(`[concern] no on-intent shared center found (no node with fan-in ≥ 2) — this reads as a flow, not a concern\n`);
+        } else process.stderr.write(`[concern] no on-intent shared center found (fan-in ≥ 2) — this reads as a flow, not a concern\n`);
         if (a.format === "none") a.format = "concern";   // --concern implies the center-first render unless overridden
-        if (a.skeleton === undefined) a.skeleton = true;   // the concern render is STRUCTURAL — skip the LLM refine/tier passes (the 245-seam tiering was the 4-min cost)
+        if (a.skeleton === undefined) a.skeleton = true;   // concern render is STRUCTURAL — skip the LLM refine/tier passes (the 245-seam tiering was the 4-min cost)
       }
       const g2 = from_resolved_graph(data);
       emit(`Decomposing the grown footprint (${g2.nodes.size} symbols) into seams…`);

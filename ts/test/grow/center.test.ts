@@ -1,6 +1,7 @@
 // CONCERN CENTER detection — the center is the shared MECHANISM, found structurally (highest fan-in) but
 // INTENT-WEIGHTED: on a real app the highest raw fan-in is a UBIQUITOUS ENTITY (`User`, referenced by
-// everything — the Acme fan-in-61 bug), not the concern's mechanism. Pure over a hand-built graph.
+// everything — the Acme fan-in-61 bug), not the concern's mechanism. Structure alone can't tell them
+// apart (both are hubs) — the intent field does. Pure over a hand-built graph.
 import { describe, expect, test } from "bun:test";
 import { detectCenter } from "../../src/codebase/grow/center.js";
 
@@ -28,8 +29,7 @@ describe("detectCenter — intent-weighted (the User fan-in-61 bug)", () => {
     expect(c?.fanIn).toBe(4);
   });
   test("if the intent filter leaves nothing, it falls back to raw fan-in (never returns null spuriously)", () => {
-    const relevance = () => 0.0;   // nothing clears the floor
-    expect(detectCenter(data, { relevance })?.symbol).toBe("User");   // graceful fallback
+    expect(detectCenter(data, { relevance: () => 0.0 })?.symbol).toBe("User");   // graceful fallback
   });
   test("no shared mechanism (all fan-in < 2) → null (reads as a flow, not a concern)", () => {
     expect(detectCenter({ nodes: [{ id: "X", file: "a.ts", symbol: "x" }], edges: [] })).toBeNull();
