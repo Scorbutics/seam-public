@@ -540,18 +540,27 @@ async function runCodebase(a: Args): Promise<number> {
         // GROUNDED prior: pass the anchor id so the center pick is proximity-weighted toward the anchor's flow
         // (not a distant hub), and DON'T hard-exclude the anchor — a good anchor (createBooking) IS the mechanism.
         const centers = (explicit as any) ?? detectCenters(data, { anchorId: data.anchor?.id, relevance, debug: (l) => process.stderr.write(l + "\n") }, k);
-        const fresh = centers;   // keep the anchor if it ranks as a center (its re-grow is answer-cached, so cheap)
+        // ALWAYS surface the ANCHOR as a mechanism (completeness) — the dev pointed at it, so its flow must appear in
+        // the star even when the detected centers drift off it (private-app: weak embeddings → member funcs). Idempotent when
+        // the anchor already ranks (cal.com createBooking). Skipped for an EXPLICIT --center (the dev chose it).
+        const anchorC = { file: (data.anchor?.file ?? a.anchorFile) as string, symbol: (data.anchor?.symbol ?? a.symbol) as string };
+        const fresh = (!explicit && anchorC.file && anchorC.symbol)
+          ? [anchorC, ...centers.filter((c: any) => c.file !== anchorC.file || c.symbol !== anchorC.symbol)]
+          : centers;
         if (fresh.length) {
           concernCenters = fresh.map((c: any) => ({ file: c.file, symbol: c.symbol }));   // the render honours these (its own detection is a fallback)
           process.stderr.write(`[concern] mechanism cluster (${fresh.length}): ${fresh.map((c: any) => c.symbol).join(", ")}; re-anchoring the grow on all of them\n`);
-          // RE-ANCHOR on the whole cluster: grow from each mechanism through ONE shared ctx (indices build once) and
-          // MERGE — the star spans every bean's interactions. Bounded by the global node budget (no K× blow-up).
+          // ADD the cluster ON TOP of the anchor's own flow — never REPLACE it. When the center pick is weak (private-app:
+          // low-fan anchor + near-zero embeddings → the cluster drifts to member funcs 7 hops away), replacing the
+          // region DISCARDED the subscription flow the dev anchored on. Seeding the accumulator with `data` keeps that
+          // flow and grows the star around it — completeness first (the calling agent judges), still bounded by the
+          // node budget. MERGE is content-keyed (merge_resolved), so the anchor's own re-grow dedups idempotently.
           try {
-            const cctx = new EngineCtx(); let merged: any = null;
+            const cctx = new EngineCtx(); let merged: any = data;
             for (const c of fresh) {
-              if (merged && (merged.nodes?.length ?? 0) >= growNodes) { process.stderr.write(`[concern] node budget ${growNodes} reached — stopping at ${merged.nodes.length} node(s)\n`); break; }
+              if ((merged.nodes?.length ?? 0) >= growNodes) { process.stderr.write(`[concern] node budget ${growNodes} reached — stopping at ${merged.nodes.length} node(s)\n`); break; }
               const [cd] = await growAnchorFootprint(c.file, c.symbol, cctx);
-              merged = merged ? mergeFootprints(merged, cd, cd.anchor?.id) : cd;
+              merged = mergeFootprints(merged, cd, cd.anchor?.id);
             }
             if (merged?.nodes?.length) data = merged;
           } catch (e) { process.stderr.write(`[concern] cluster re-anchor failed (${(e as Error).message}) — keeping the point region\n`); }
