@@ -167,6 +167,12 @@ export function loadShard<T>(repo: string, cacheName: string, rel: string): T | 
   return _readShard<T>(_shardDir(repo, cacheName), _shardHash(rel), rel);
 }
 
+// Persist ONE file's contribution directly (the write counterpart of loadShard) — for a consumer that owns
+// its own shard lifecycle (the footprint cache) rather than the walk-based shardedIncrementalScanAsync.
+export function saveShard<T>(repo: string, cacheName: string, rel: string, d: T): void {
+  _writeShard(_shardDir(repo, cacheName), _shardHash(rel), rel, d);
+}
+
 export async function shardedIncrementalScanAsync<T>(
   repo: string, skipDirs: Set<string>, predicate: (rel: string) => boolean, configSalt: string,
   scanFile: (rel: string, text: string) => Promise<T>, cacheName: string,

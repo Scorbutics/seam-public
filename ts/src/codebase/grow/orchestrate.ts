@@ -10,7 +10,7 @@ const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
-import { build_footprint } from "../scan/index.js";
+import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
@@ -459,7 +459,7 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   }
   let add: any;
   try {
-    add = prune(await build_footprint(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
+    add = prune(await build_footprint_cached(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
   } catch { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
   // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
   // answer — data-coupling fan is exempt (self-bounded + the intent).
