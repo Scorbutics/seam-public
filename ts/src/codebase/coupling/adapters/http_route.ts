@@ -76,6 +76,15 @@ const METHOD_EXPORT = /\bexport\s+(?:async\s+)?(?:default\b|(?:function\s+|const
 // NB: a leading `\b` does NOT match before `$` (both sides non-word), silently missing `$http`/`$fetch`;
 // the lookbehind excludes word-char/`$` only (NOT `.`) so member forms like `this.$http.get` match too.
 const FETCH_CALL = /(?<![\w$])(?:fetch|\$fetch|useFetch|\$http(?:\.\w+)?|\$resource|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\(\s*[`'"]([^`'"]*)/g;
+// REVERSE CROSS-EDGE (Brice): a route literal that is NOT at a fetch site — the ubiquitous carrier-indirection
+// where the URL is stashed in a field and the `http.*` call reads the field: Angular/JHipster
+// `resourceUrl = getEndpointFor('api/operations'); http.post(this.resourceUrl, …)`. The FETCH_CALL above sees a
+// variable at the call site and grounds nothing, but the literal IS in the file (one carrier hop away). We're
+// holding the GROUNDED backend route from the footprint, so rather than trace the carrier we ground the literal
+// DIRECTLY as a route consumer and let routeMatchSpecificity bridge it (subpath-safe, class+method composed).
+// Guarded to route-SHAPED literals — ≥2 path segments, no file extension — so it grounds real routes, not any
+// string; a coincidental literal only crosses if a backend route with ≥2 shared LITERAL segments actually exists.
+const BARE_ROUTE = /[`'"](\/?[A-Za-z][\w-]*(?:\/[\w{}$:.*-]+)+)[`'"]/g;
 
 function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   if (!endsWithSourceExt(file) || !JS_EXT.test(file)) return [];
@@ -112,6 +121,20 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   while ((v = INVOKE_CALL.exec(text)) !== null) {
     const slug = v[1].replace(/^\/+/, "");
     if (slug) out.push({ kind: "http-route", value: normPath("/functions/v1/" + slug), line: lineOf(text, v.index), produces: false });
+  }
+  // REVERSE CROSS-EDGE — indirected route literals (see BARE_ROUTE). Skip anything already grounded at a fetch
+  // site (same value) so we only ADD the ones the site-based scan missed; route-shape + ≥2 literal segments gate.
+  const grounded = new Set(out.filter((h) => !h.produces).map((h) => h.value));
+  let b: RegExpExecArray | null;
+  BARE_ROUTE.lastIndex = 0;
+  while ((b = BARE_ROUTE.exec(text)) !== null) {
+    const raw = b[1];
+    if (/\.(?:[mc]?[jt]sx?|json|css|s[ca]ss|html|png|svg|jpe?g|md)$/.test(raw)) continue;   // a file path, not a route
+    const path = normPath(raw);
+    if (path.split("/").filter((s) => s && s !== "*").length < 2) continue;                  // ≥2 LITERAL segments — a single word can't ground
+    if (grounded.has(path)) continue;                                                        // already grounded at its fetch site
+    grounded.add(path);
+    out.push({ kind: "http-route", value: path, line: lineOf(text, b.index), produces: false });
   }
   return out;
 }

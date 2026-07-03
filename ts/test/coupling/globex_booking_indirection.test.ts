@@ -9,20 +9,18 @@
 //   • GAP A (composition): the route GROUNDS for a STATIC literal (the floor covers fetch/axios/$http), but is
 //     FRONT-END-BLIND for a TEMPLATE literal (`${API_BASE}/bookings`) — composition is the one thing that
 //     breaks the floor, leaving the backend's route dangling.
-//   • GAP B (partial floor coverage): bookingService.js is NOT floor-blind — it PRODUCES the $bookingService
-//     binding — so pass 1 of the per-file LLM skips it (`floor.length && !augment → continue`). The wrapper is
-//     never examined for its OTHER (route) shape, so the LLM never gets to resolve the template. The
-//     dangling-reach can't save it either: anchored on the component, the footprint has no route key at all,
-//     so there is nothing to grep the backend from. (Anchored on the BACKEND it WOULD work — the Java route
-//     dangles, grep `/bookings` hits the template in the wrapper, and the reach discovers it.)
+//   • GAP B — now FLOOR-FIXED by the REVERSE cross-edge: the wrapper stashes the route base in a const
+//     (`API_BASE = '/api/acmecheck'`); that literal is grounded DIRECTLY (it's in the file, one carrier hop
+//     from the composed axios call), and it matches the backend's class-level @RequestMapping("/api/acmecheck")
+//     — so the FE wrapper crosses to the Spring handler DETERMINISTICALLY, no LLM. It grounds the whole service
+//     (coarser than the per-op "/bookings"), which the calling agent refines. A wrapper with NO literal at all
+//     (a fully-computed URL) is still the LLM's job.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
-import { floor_base_index, mergeGrounding, routeSuffixMatch } from "../../src/codebase/coupling/index.js";
-import { llmKeyIndex } from "../../src/codebase/coupling/llm_key_index.js";
+import { floor_base_index, routeSuffixMatch } from "../../src/codebase/coupling/index.js";
 import { SKIP_DIRS } from "../../src/core/resolve/languages/index.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 
@@ -65,29 +63,18 @@ describe("globex acmeBooking → $bookingService → indirect endpoint (hardest 
     expect(routeKeys("axios.get(`${API_BASE}/bookings`);")).toEqual([]);                  // template → blind (the indirection)
   });
 
-  test("GAP B FIXED: the binding-only wrapper IS examined, the resolved route grounds with the backend", async () => {
-    const shown: string[] = [];
-    // the wrapper is floor-covered ONLY by the $bookingService binding → now a BRIDGE file → still discovered.
-    // The LLM resolves the composed `${API_BASE}/bookings` to its route segment (here: "/bookings"), the
-    // segment the backend's @GetMapping("/bookings") produces.
-    class Bus extends HostBus {
-      serve(tag: string, prompt: string): string {
-        if (tag !== "discover-keys-batch") return "[]";
-        if (!prompt.includes("bookingService.js")) return "[]";
-        shown.push("bookingService.js");
-        return JSON.stringify([{ id: "r", file: "web/services/bookingService.js", kind: "route", value: "/bookings", role: "consumes" }]);
-      }
-    }
-    set_host_bus(new Bus());
-    try {
-      const ctx = new EngineCtx();
-      const idx = await llmKeyIndex(REPO, { llm: true, scopeFiles: new Set(["web/services/bookingService.js"]) }, ctx);
-      expect(shown).toContain("bookingService.js");                                      // NOW examined (was skipped)
-      // the discovered FE route consumer ⊕ the backend @GetMapping producer (floor) → GROUNDED → crossable
-      const route = mergeGrounding(floor_base_index(REPO, SKIP_DIRS, ctx), idx).get("http-route /bookings");
-      expect(route?.consumers.some((c) => c.file.endsWith("bookingService.js"))).toBe(true);   // FE wrapper, discovered
-      expect(route?.producers.some((p) => p.file.endsWith(".java"))).toBe(true);               // Spring handler, floor
-    } finally { set_host_bus(null); }
+  test("GAP B FLOOR-FIXED (reverse cross-edge): the wrapper's base literal grounds it to the backend, no LLM", () => {
+    // The wrapper stashes the route base in a const (`API_BASE = '/api/acmecheck'`) then composes it into the
+    // axios template. The REVERSE cross-edge grounds that base literal DIRECTLY on the floor — the literal is in
+    // the file, one carrier hop from the call — and it matches the backend's class-level
+    // @RequestMapping("/api/acmecheck"), so the FE wrapper crosses to the Spring handler DETERMINISTICALLY (the
+    // LLM path is now reserved for a wrapper with NO literal at all). Coarser than "/bookings" (it grounds the
+    // whole service, not one op) but correct and grounded — completeness the calling agent refines.
+    const floor = floor_base_index(REPO, SKIP_DIRS, new EngineCtx());
+    const route = floor.get("http-route /api/acmecheck");
+    expect(route).toBeDefined();
+    expect(route!.consumers.some((c) => c.file.endsWith("bookingService.js"))).toBe(true);   // FE wrapper, floor-grounded via reverse-edge
+    expect(route!.producers.some((p) => p.file.endsWith(".java"))).toBe(true);               // Spring @RequestMapping, floor
   });
 
   test("route NORMALISATION: a FE full path reconciles with the backend's composed segment (already handled)", () => {

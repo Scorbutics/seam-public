@@ -6,7 +6,35 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { routeSuffixMatch, routeMatchSpecificity, otherSide } from "../../src/codebase/coupling/index.js";
+import { HTTP_ROUTE } from "../../src/codebase/coupling/adapters/http_route.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
+
+// REVERSE CROSS-EDGE — the JHipster/Angular indirection `resourceUrl = getEndpointFor('api/operations')` then
+// `http.post(this.resourceUrl)`: the fetch SITE has a variable, so the site-based scan grounds nothing, but the
+// route literal is in the file one carrier hop away. We ground it directly and let routeMatchSpecificity bridge.
+describe("http-route reverse cross-edge — indirected route literals", () => {
+  const consume = (js: string) => HTTP_ROUTE.scan("app/entities/op/op.service.ts", js).filter((h) => !h.produces).map((h) => h.value);
+  test("a route literal stashed in a field (not at the fetch site) is grounded as a consumer", () => {
+    expect(consume(`protected resourceUrl = this.cfg.getEndpointFor('api/operations');\n post(x){ return this.http.post(this.resourceUrl, x); }`)).toContain("api/operations");
+  });
+  test("route-shaped guard — a file path or a bare word is NOT grounded (no noise)", () => {
+    expect(consume(`const a = 'lib/format.ts'; const b = 'operations'; const c = 'just a sentence';`)).toEqual([]);
+  });
+  test("a fetch-site literal is not double-grounded", () => {
+    expect(HTTP_ROUTE.scan("a.ts", `$http.get('/api/orders');`).filter((h) => !h.produces).map((h) => h.value)).toEqual(["/api/orders"]);
+  });
+});
+
+describe("http-route matching — composed class+method @Path, no subpath overmatch", () => {
+  test("an indirected collection consumer meets the COMPOSED method route (class @Path + method @Path)", () => {
+    // backend @RequestMapping('/api/operations') + @GetMapping('/{id}') → '/api/operations/*'; consumer 'api/operations'
+    expect(routeMatchSpecificity("/api/operations/*", "api/operations")).toBeGreaterThanOrEqual(2);
+  });
+  test("a SIBLING route does NOT overmatch (whole-segment)", () => {
+    expect(routeMatchSpecificity("/api/operations", "api/orders")).toBe(-1);              // different 2nd segment
+    expect(routeMatchSpecificity("/api/operations", "api/operations-audit")).toBe(-1);    // /operations ≁ /operations-audit
+  });
+});
 import { available } from "../../src/codebase/atoms.js";
 
 describe("routeSuffixMatch — wildcard params + concat-truncated callers", () => {
