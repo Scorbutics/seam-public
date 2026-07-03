@@ -35,3 +35,31 @@ describe("detectCenter — intent-weighted (the User fan-in-61 bug)", () => {
     expect(detectCenter({ nodes: [{ id: "X", file: "a.ts", symbol: "x" }], edges: [] })).toBeNull();
   });
 });
+
+describe("detectCenters — proximity prior (the cal.com Booker-store drift)", () => {
+  // M: a NEAR on-intent mechanism (1 hop from the anchor, fan-in 5). H: a DISTANT ubiquitous hub (3 hops, fan-in 21).
+  // Raw fan×rel picks H (21×0.4 = 8.4 ≫ 5×0.6 = 3) — the bug where a Booker UI store swamps the creation flow.
+  // With the anchor id (proximity) + log-fan, the near mechanism must win: it's ON the anchor's flow.
+  const nodes = [
+    { id: "A", file: "svc/anchor.ts", symbol: "createThing", complexity: 3 },
+    { id: "M", file: "svc/mech.ts", symbol: "mechanism", complexity: 5 },
+    { id: "H", file: "ui/hub.ts", symbol: "useBigStore", complexity: 1 },
+    { id: "X", file: "x.ts", symbol: "x" }, { id: "Y", file: "y.ts", symbol: "y" },
+    ...Array.from({ length: 4 }, (_, i) => ({ id: `m${i}`, file: `m${i}.ts`, symbol: `m${i}` })),
+    ...Array.from({ length: 20 }, (_, i) => ({ id: `h${i}`, file: `h${i}.ts`, symbol: `h${i}` })),
+  ];
+  const edges = [
+    { from: "A", to: "M", kind: "call" }, ...["m0", "m1", "m2", "m3"].map((f) => ({ from: f, to: "M", kind: "call" })),   // M: fan-in 5, 1 hop
+    { from: "A", to: "X", kind: "call" }, { from: "X", to: "Y", kind: "call" }, { from: "Y", to: "H", kind: "call" },      // H: 3 hops from A
+    ...Array.from({ length: 20 }, (_, i) => ({ from: `h${i}`, to: "H", kind: "call" })),                                    // H: fan-in 21
+  ];
+  const data = { nodes, edges, anchor: { id: "A" } };
+  const rel = (n: { symbol: string }) => n.symbol === "mechanism" || n.symbol === "createThing" ? 0.6 : n.symbol === "useBigStore" ? 0.4 : 0.05;
+
+  test("WITHOUT the anchor (no proximity), raw log-fan×rel still picks the distant hub", () => {
+    expect(detectCenter(data, { relevance: rel })?.symbol).toBe("useBigStore");
+  });
+  test("WITH the anchor id, the near on-intent mechanism outranks the distant higher-fan hub", () => {
+    expect(detectCenter(data, { anchorId: "A", relevance: rel })?.symbol).toBe("mechanism");
+  });
+});

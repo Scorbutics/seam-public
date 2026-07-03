@@ -537,8 +537,10 @@ async function runCodebase(a: Args): Promise<number> {
           } catch { process.stderr.write(`[concern] embeddings unavailable — centers fall back to raw fan-in\n`); }
         }
         const k = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
-        const centers = (explicit as any) ?? detectCenters(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol, relevance, debug: (l) => process.stderr.write(l + "\n") }, k);
-        const fresh = centers.filter((c: any) => c.file !== a.anchorFile || c.symbol !== a.symbol);
+        // GROUNDED prior: pass the anchor id so the center pick is proximity-weighted toward the anchor's flow
+        // (not a distant hub), and DON'T hard-exclude the anchor — a good anchor (createBooking) IS the mechanism.
+        const centers = (explicit as any) ?? detectCenters(data, { anchorId: data.anchor?.id, relevance, debug: (l) => process.stderr.write(l + "\n") }, k);
+        const fresh = centers;   // keep the anchor if it ranks as a center (its re-grow is answer-cached, so cheap)
         if (fresh.length) {
           concernCenters = fresh.map((c: any) => ({ file: c.file, symbol: c.symbol }));   // the render honours these (its own detection is a fallback)
           process.stderr.write(`[concern] mechanism cluster (${fresh.length}): ${fresh.map((c: any) => c.symbol).join(", ")}; re-anchoring the grow on all of them\n`);
