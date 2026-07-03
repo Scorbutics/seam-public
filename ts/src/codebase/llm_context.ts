@@ -818,7 +818,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 // `BookingsBean` every interaction delegates through. Its consumers (each walked up to its entry point) are the
 // INTERACTIONS, ranked by intent tier. Pure projection of an already-grown model (no re-grow) — validates whether
 // the star FRAMING reads better than the flow map on a concern; the full plan re-anchors the grow on the center.
-export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number } = {}): string {
+export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number; center?: { file: string; symbol: string } } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -835,14 +835,19 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
     (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f);
     if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f); }
-  // CENTER = the highest fan-in node in the region (the mechanism the interactions share). Tie-break: a collapsed
-  // hub, then complexity. Structural — no name-matching (the intent already scoped the region via the grow).
+  // CENTER = the mechanism the interactions share. If the caller re-anchored on a known center (opts.center),
+  // HONOUR it. Else detect: highest fan-in, INTENT-WEIGHTED by the model's per-hunk relevance so a ubiquitous
+  // OFF-INTENT entity (`User`, fan-in 61) isn't mistaken for the concern's mechanism. Relevance absent → raw fan-in.
   const nodes = [...hunkById.keys()];
   if (!nodes.length) return "(empty region)";
   const fanIn = (id: string) => inEdges.get(id)?.size ?? 0;
-  const center = nodes.slice().sort((a, b) =>
-    (fanIn(b) - fanIn(a)) || (Number(!!hunkById.get(b).hub) - Number(!!hunkById.get(a).hub)) ||
-    ((hunkById.get(b).complexity ?? 0) - (hunkById.get(a).complexity ?? 0)))[0];
+  const centerRel = (id: string) => (hunkById.get(id)?.relevance ?? -1);
+  const haveRel = nodes.some((id) => centerRel(id) >= 0);
+  const onIntent = (id: string) => !haveRel || centerRel(id) >= 0.18;
+  const byFan = (a: string, b: string) => (fanIn(b) - fanIn(a)) || (Number(!!hunkById.get(b).hub) - Number(!!hunkById.get(a).hub)) || ((hunkById.get(b).complexity ?? 0) - (hunkById.get(a).complexity ?? 0));
+  const center = opts.center
+    ? (nodes.find((id) => { const h = hunkById.get(id); return h?.file && String(h.file).replace(/^\.\//, "").endsWith(opts.center!.file.replace(/^\.\//, "")) && h?.label === opts.center!.symbol; }) ?? nodes.slice().sort(byFan)[0])
+    : ((nodes.filter(onIntent).sort(byFan)[0]) ?? nodes.slice().sort(byFan)[0]);
   const ch = hunkById.get(center);
   // INTERACTIONS = the center's consumers, each walked UP to its entry point (a node with no callers / a route
   // boundary), so a ray is named by its interaction, not the immediate caller. Deduped by entry.
