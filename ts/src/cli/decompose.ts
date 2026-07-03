@@ -386,6 +386,7 @@ async function runCodebase(a: Args): Promise<number> {
   let anchorAlternatives: { name: string; file: string; score: number }[] | undefined;   // runner-up anchors → offered when the footprint reads off-intent
   let fileAnchor = false;   // chosen anchor is a FILE/module (no named symbol — a module.exports/Vue plugin) → grow FILE-LEVEL
   let anchorSet: { name: string; file: string; kind: string }[] | null = null;   // multi-anchor covering set (primary first), or null for single
+  let centerPicked = false;   // --concern center-first: the mechanism(s) were picked repo-wide (no anchor, no detection grow)
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
     const { merge_resolved } = await import("../codebase/scan/index.js");
@@ -398,7 +399,22 @@ async function runCodebase(a: Args): Promise<number> {
   } else if (a.scan) {
     // Auto-anchor: --auto with --intent but NO --symbol → SELECT the anchor instead of the user picking
     // one (a bad pick linked to nothing hides the real result).
-    if (a.auto && a.intent && !a.symbol) {
+    if (a.auto && a.intent && !a.symbol && a.concern && !a.center) {
+      // CENTER-FIRST (--concern, no --symbol/--center): picking the mechanism from an intent PHRASE is a SEMANTIC
+      // mapping, so ask the LLM DIRECTLY over a lexical recall net — NO anchor selection, NO throwaway detection
+      // grow. The picked mechanism(s) ARE the anchors; the loop below grows from them (coupling ON). An agent
+      // passes --center and skips this entirely (zero LLM). Offline → the deterministic lexical floor.
+      const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
+      const { centerJudgeLlm } = await import("../codebase/grow/center_judge.js");
+      emit(`Picking the concern's mechanism for "${a.intent}"…`);
+      const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+      const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
+      if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
+      a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
+      anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
+      centerPicked = true;
+      process.stderr.write(`[center-first] ${picked.length} mechanism(s): ${picked.map((c) => c.symbol).join(", ")}\n`);
+    } else if (a.auto && a.intent && !a.symbol) {
       // The full auto-anchor pipeline behind ONE call: entry-point seed + intent-expand (concurrent,
       // LLM-gated) feeding the probe→judge select_anchor. The entry seed is a SEED candidate (decide-LAST),
       // not a preemptive override; embed recall is the default (degrades to lexical where transformers.js
@@ -504,7 +520,7 @@ async function runCodebase(a: Args): Promise<number> {
           if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
           // CONCERN: the first grow is only for center DETECTION (fan-in over the call graph); its coupling is
           // discarded when we re-anchor on the cluster, so skip it — the cluster re-grow does the real coupling.
-          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx, a.concern ? false : a.dataCoupling);
+          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx, a.concern && !centerPicked ? false : a.dataCoupling);
           hist = hist.concat(h.map((x: any) => ({ ...x, anchor: anc.name })));
           if ((d as any).llmBorder) llmBorder = true;   // the LLM border shaped this grow → it is the intent ranker (survives the merge)
           data = data ? mergeFootprints(data, d, d.anchor?.id) : d;
@@ -517,7 +533,13 @@ async function runCodebase(a: Args): Promise<number> {
       // fan-in node in the region) and RE-GROW from it so the answer is the center-rooted STAR of interactions, the
       // same no matter which point we started on (the plan's wrong-anchor resistance). `--center` overrides detection.
       let concernCenters: { file: string; symbol: string }[] | undefined;
-      if (a.concern && data) {
+      if (a.concern && data && centerPicked) {
+        // CENTER-FIRST: the mechanisms were already picked repo-wide and the loop above grew from them (coupling
+        // ON) — `data` IS the star. Just hand the picked centers to the render; no region re-detection, no re-grow.
+        concernCenters = (anchorSet ?? []).map((c) => ({ file: c.file, symbol: c.name }));
+        if (a.format === "none") a.format = "concern";
+        if (a.skeleton === undefined) a.skeleton = true;
+      } else if (a.concern && data) {
         const { detectCenters } = await import("../codebase/grow/center.js");
         const explicit = a.center ? [{ file: a.center.slice(0, a.center.indexOf("#")), symbol: a.center.slice(a.center.indexOf("#") + 1) }] : null;
         // INTENT-WEIGHT the center pick: score the region's files against the intent (embeddings, cached) so a

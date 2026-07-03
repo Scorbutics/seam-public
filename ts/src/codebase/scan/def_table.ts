@@ -42,13 +42,15 @@ function _git_files(repo: string): string[] | null {
 // Deterministic (sorted) regardless of source. Repo-relative, forward-slash paths.
 export function candidate_source_files(repo: string): string[] {
   repo = expanduser(repo);
-  let rels = _git_files(repo);
-  if (rels === null) {
-    rels = [];
-    for (const [dir, files] of walk(repo, SKIP_DIRS))
-      for (const fn of files) rels.push(relative(repo, join(dir, fn)).replace(/\\/g, "/"));
-  }
-  const out = rels.filter((rel) =>
+  const seen = new Set<string>();
+  const git = _git_files(repo);
+  if (git) for (const r of git) seen.add(r);   // tracked files (git-clean, respects the parent repo)
+  // ALSO walk the tree — this is the engine's convention everywhere else (the impl/callsite/floor indices all
+  // scan walk-based over SKIP_DIRS). `git ls-files` alone MISSES real source the grow reads: a git SUBMODULE is a
+  // single gitlink entry (private-app' `backend/` — so resolveSubscription was never enumerated), and plain untracked
+  // source. Union keeps git's list AND covers those. SKIP_DIRS + endsWithSourceExt + oversized bound the junk.
+  for (const [dir, files] of walk(repo, SKIP_DIRS)) for (const fn of files) seen.add(relative(repo, join(dir, fn)).replace(/\\/g, "/"));
+  const out = [...seen].filter((rel) =>
     endsWithSourceExt(rel)
     && !rel.split("/").some((seg) => SKIP_DIRS.has(seg))
     && !oversizedForAnchor(join(repo, rel)));
