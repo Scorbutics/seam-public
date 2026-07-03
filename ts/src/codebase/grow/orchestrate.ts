@@ -10,7 +10,7 @@ const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
-import { build_footprint, build_footprint_cached, cachedCouplingDelta } from "../scan/index.js";
+import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
@@ -1139,8 +1139,20 @@ export async function _borderCouplingDet(repo: string, data: any, intent: string
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
-export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string,
-    opts: { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean } = {}): Promise<[any, any[]]> {
+type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; wave?: boolean; borderLlm?: boolean; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; borderResidual?: boolean; borderHi?: number; borderLo?: number; concernMap?: boolean };
+
+// Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run on known territory
+// skips the wave orchestration entirely. Over-broad key (symbol + every serializable opt + all SEAM_* env) so
+// a config change can never serve a stale answer; only DETERMINISTIC grows are cached (an LLM border / LLM
+// coupling / streaming grow runs live). ctx/model/claudeBin/callbacks are dropped from the key — they don't
+// affect the structural result. The coupling epoch guards a coupling grow; the source epoch a structural one.
+export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
+  const deterministic = !opts.borderLlm && !opts.dataCouplingLlm && !opts.onWave;
+  const km = `${symbol}\n${JSON.stringify(opts, (k, v) => (k === "ctx" || k === "onWave" || k === "model" || k === "claudeBin" || typeof v === "function" ? undefined : v))}\n${seamEnvSnapshot()}`;
+  return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
+}
+
+async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the

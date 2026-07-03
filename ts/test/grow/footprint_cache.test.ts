@@ -48,8 +48,9 @@ describe("build_footprint per-node cache (via CLI subprocesses)", () => {
   test("WARM REUSE — a second run is identical, and the shard cache is written", () => {
     if (!available()) return;
     const f1 = growFiles();
-    expect(existsSync(join(repo, ".seam/footprint-v1/f"))).toBe(true);   // cache written cold
-    const f2 = growFiles();                                              // fresh process → hydrates from disk
+    expect(existsSync(join(repo, ".seam/footprint-v1/f"))).toBe(true);   // Phase 3: per-node cache written cold
+    expect(existsSync(join(repo, ".seam/grow-v1/f"))).toBe(true);        // Phase 5: settled-grow answer cache written
+    const f2 = growFiles();                                              // fresh process → hydrates from disk (skips the wave)
     expect(f2).toEqual(f1);
     expect(f1).toContain("svc/dbRepo.ts");                               // it did reach the impl (a real footprint)
   });

@@ -152,5 +152,46 @@ export async function cachedCouplingDelta<T>(
   return _clone(d) as T;
 }
 
+// ── Phase 5: the SETTLED-FOOTPRINT (answer) cache ──────────────────────────────────────────────────────────
+// Phases 3–4 cache the per-node build_footprint + the coupling overlay, but the wave ORCHESTRATION (frontier /
+// tier / hub / merge / prune over ~450 nodes) still runs each warm query. This memoizes the WHOLE settled grow
+// per query, so a warm run on known territory skips the wave entirely. The danger is key-completeness — a
+// missed input would serve a wrong-config answer — so the caller builds an OVER-broad key (every serializable
+// opt + a snapshot of all SEAM_* env vars), and only DETERMINISTIC grows are cached (no LLM border/coupling).
+const GROW = "grow-v1";
+const _gmem = new Map<string, Map<string, CShard<unknown>>>();
+function gShardOf(repo: string, file: string): CShard<unknown> {
+  const byFile = _gmem.get(repo) ?? _gmem.set(repo, new Map()).get(repo)!;
+  let s = byFile.get(file);
+  if (!s) { s = loadShard<CShard<unknown>>(repo, GROW, file) ?? {}; byFile.set(file, s); }
+  return s;
+}
+
+// A stable fingerprint of the process's SEAM_* tuning flags — they steer the grow (tier/hub/border/frontier)
+// but live in env, not opts. Folding them into the key means any flag flip misses the cache (safe direction).
+export function seamEnvSnapshot(): string {
+  return Object.keys(process.env).filter((k) => k.startsWith("SEAM_")).sort().map((k) => `${k}=${process.env[k]}`).join(";");
+}
+
+// Memoize a whole deterministic grow. `keyMaterial` must capture EVERYTHING that affects the result (symbol +
+// serializable opts + seamEnvSnapshot); `coupling` selects which epoch guards it. `deterministic` is false for
+// an LLM border / LLM coupling / streaming grow → always live. Result is deep-cloned on a hit (callers mutate).
+export async function cachedGrow<T>(
+  repo: string, anchorFile: string, keyMaterial: string, coupling: boolean, deterministic: boolean, compute: () => Promise<T>,
+): Promise<T> {
+  if (!graphCacheEnabled() || !deterministic) return compute();
+  const epoch = coupling ? couplingEpochOf(repo) : epochOf(repo);
+  if (!epoch) return compute();
+  const key = _hash(keyMaterial);
+  const shard = gShardOf(repo, anchorFile);
+  const hit = shard[key];
+  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[grow] ${anchorFile} ${key} epoch=${epoch} ${hit ? (hit.e === epoch ? "HIT (skip wave)" : "MISS(stale)") : "MISS(new)"}\n`);
+  if (hit && hit.e === epoch) return _clone(hit.d) as T;
+  const d = await compute();
+  shard[key] = { e: epoch, d };
+  saveShard(repo, GROW, anchorFile, shard);
+  return _clone(d) as T;
+}
+
 // test seam: drop the in-process mirrors so a hermetic test can prove a genuine DISK reuse across "runs".
-export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _epoch.clear(); _cEpoch.clear(); }
+export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); }
