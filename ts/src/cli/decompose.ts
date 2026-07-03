@@ -514,13 +514,13 @@ async function runCodebase(a: Args): Promise<number> {
       // MECHANISM. The auto-anchor grew from ONE interaction (a point); detect the center STRUCTURALLY (highest
       // fan-in node in the region) and RE-GROW from it so the answer is the center-rooted STAR of interactions, the
       // same no matter which point we started on (the plan's wrong-anchor resistance). `--center` overrides detection.
-      let concernCenter: { file: string; symbol: string } | undefined;
+      let concernCenters: { file: string; symbol: string }[] | undefined;
       if (a.concern && data) {
-        const { detectCenter } = await import("../codebase/grow/center.js");
-        const explicit = a.center ? { file: a.center.slice(0, a.center.indexOf("#")), symbol: a.center.slice(a.center.indexOf("#") + 1) } : null;
+        const { detectCenters } = await import("../codebase/grow/center.js");
+        const explicit = a.center ? [{ file: a.center.slice(0, a.center.indexOf("#")), symbol: a.center.slice(a.center.indexOf("#") + 1) }] : null;
         // INTENT-WEIGHT the center pick: score the region's files against the intent (embeddings, cached) so a
-        // ubiquitous OFF-INTENT entity (`User`, fan-in 61) is excluded in favour of the on-intent mechanism
-        // (`BookingsBean`). Guarded — no embeddings → detectCenter degrades to raw fan-in.
+        // ubiquitous OFF-INTENT entity (`User`, fan-in 61) is excluded in favour of the on-intent mechanisms. A
+        // broad concern has a CLUSTER of beans, not one — detectCenters returns the top-K by fan×relevance.
         let relevance: ((n: { symbol: string; file: string }) => number) | undefined;
         if (!explicit && a.intent) {
           try {
@@ -531,16 +531,27 @@ async function runCodebase(a: Args): Promise<number> {
             const byFile = new Map<string, number>();    // file-max fallback for a symbol embeddings didn't score
             for (const { def, score } of await embedScoreDefs(a.repo, a.intent, files)) { const f = normpath(def.file); bySym.set(`${def.name} ${f}`, score); byFile.set(f, Math.max(byFile.get(f) ?? -1, score)); }
             if (bySym.size) relevance = (n) => bySym.get(`${n.symbol} ${normpath(n.file)}`) ?? byFile.get(normpath(n.file)) ?? 0;
-            else process.stderr.write(`[concern] no def embeddings for the region — center falls back to raw fan-in (may pick a ubiquitous entity)\n`);
-          } catch { process.stderr.write(`[concern] embeddings unavailable — center falls back to raw fan-in\n`); }
+            else process.stderr.write(`[concern] no def embeddings for the region — centers fall back to raw fan-in (may pick a ubiquitous entity)\n`);
+          } catch { process.stderr.write(`[concern] embeddings unavailable — centers fall back to raw fan-in\n`); }
         }
-        const center = explicit ?? detectCenter(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol, relevance, debug: (l) => process.stderr.write(l + "\n") });
-        if (center && (center.file !== a.anchorFile || center.symbol !== a.symbol)) {
-          concernCenter = { file: center.file, symbol: center.symbol };   // the render honours this (not its own raw-fan-in re-detect)
-          process.stderr.write(`[concern] center = ${center.symbol} (${center.file})${(center as any).fanIn ? ` — fan-in ${(center as any).fanIn}` : ""}; re-anchoring the grow there\n`);
-          try { const [cd] = await growAnchorFootprint(center.file, center.symbol, new EngineCtx()); if (cd?.nodes?.length) data = cd; }
-          catch (e) { process.stderr.write(`[concern] re-anchor grow failed (${(e as Error).message}) — keeping the point region\n`); }
-        } else process.stderr.write(`[concern] no on-intent shared center found (fan-in ≥ 2) — this reads as a flow, not a concern\n`);
+        const k = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+        const centers = (explicit as any) ?? detectCenters(data, { excludeFile: a.anchorFile, excludeSymbol: a.symbol, relevance, debug: (l) => process.stderr.write(l + "\n") }, k);
+        const fresh = centers.filter((c: any) => c.file !== a.anchorFile || c.symbol !== a.symbol);
+        if (fresh.length) {
+          concernCenters = fresh.map((c: any) => ({ file: c.file, symbol: c.symbol }));   // the render honours these (its own detection is a fallback)
+          process.stderr.write(`[concern] mechanism cluster (${fresh.length}): ${fresh.map((c: any) => c.symbol).join(", ")}; re-anchoring the grow on all of them\n`);
+          // RE-ANCHOR on the whole cluster: grow from each mechanism through ONE shared ctx (indices build once) and
+          // MERGE — the star spans every bean's interactions. Bounded by the global node budget (no K× blow-up).
+          try {
+            const cctx = new EngineCtx(); let merged: any = null;
+            for (const c of fresh) {
+              if (merged && (merged.nodes?.length ?? 0) >= growNodes) { process.stderr.write(`[concern] node budget ${growNodes} reached — stopping at ${merged.nodes.length} node(s)\n`); break; }
+              const [cd] = await growAnchorFootprint(c.file, c.symbol, cctx);
+              merged = merged ? mergeFootprints(merged, cd, cd.anchor?.id) : cd;
+            }
+            if (merged?.nodes?.length) data = merged;
+          } catch (e) { process.stderr.write(`[concern] cluster re-anchor failed (${(e as Error).message}) — keeping the point region\n`); }
+        } else process.stderr.write(`[concern] no on-intent shared mechanism found (fan-in ≥ 2) — this reads as a flow, not a concern\n`);
         if (a.format === "none") a.format = "concern";   // --concern implies the center-first render unless overridden
         if (a.skeleton === undefined) a.skeleton = true;   // concern render is STRUCTURAL — skip the LLM refine/tier passes (the 245-seam tiering was the 4-min cost)
       }
@@ -579,7 +590,7 @@ async function runCodebase(a: Args): Promise<number> {
         process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
       } else if (a.format === "concern") {            // CENTER-first star (prototype) — plural "how is X managed?" questions
         const { renderConcern } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderConcern(stamped, { tokenBudget: a.tokenBudget, intent: a.intent, center: concernCenter }) + "\n");
+        process.stdout.write(renderConcern(stamped, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters }) + "\n");
       } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
         process.stdout.write(payload + "\n");

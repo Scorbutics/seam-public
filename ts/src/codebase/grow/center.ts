@@ -13,7 +13,14 @@ export interface Center { id: string; file: string; symbol: string; fanIn: numbe
 // (`BookingsBean`, fan-in 14): both are structural hubs. So `relevance(file)` (when available) FILTERS to on-intent
 // nodes first — `User` scores off-intent for "how are bookings managed" and drops out; among the on-intent
 // survivors the highest fan-in is the center. No relevance / nothing clears the floor → raw fan-in (I5 degradation).
-export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?: string; excludeSymbol?: string; relevance?: (n: { symbol: string; file: string }) => number; minRelevance?: number; debug?: (line: string) => void } = {}): Center | null {
+type CenterOpts = { minFanIn?: number; excludeFile?: string; excludeSymbol?: string; relevance?: (n: { symbol: string; file: string }) => number; minRelevance?: number; debug?: (line: string) => void };
+
+// A broad concern ("how are bookings managed?") has NO single center — it is a CLUSTER of mechanism beans
+// (`BookingsBean`, `BookingsSetupBean`, `MemberBooking`, `MicrosoftBookingsBean`…). detectCenters returns the top-K
+// ON-INTENT, high-fan-in mechanisms, ranked by fan-in × relevance. The caller grows from ALL of them (merged) and
+// renders the cluster + the interactions around any of them. Off-intent hubs (`User`) are excluded by the floor;
+// no relevance → the single raw-highest-fan-in node (degenerate cluster of one, I5).
+export function detectCenters(data: any, opts: CenterOpts = {}, k = 4): Center[] {
   const minFanIn = opts.minFanIn ?? 2;
   const minRel = opts.minRelevance ?? 0.18;
   const byId = new Map<string, any>((data.nodes ?? []).map((n: any) => [n.id, n]));
@@ -22,25 +29,25 @@ export function detectCenter(data: any, opts: { minFanIn?: number; excludeFile?:
     if (e.kind === "contains") continue;
     (callers.get(e.to) ?? callers.set(e.to, new Set()).get(e.to)!).add(e.from);
   }
-  // rank every real-symbol node by fan-in, with its intent relevance (per-SYMBOL, not file-max — sharper: `User`
-  // vs `BookingsBean` directly, so a stray booking-ish method elsewhere in User.java can't lift the entity in).
+  // per-SYMBOL relevance (not file-max — sharper: `User` vs `BookingsBean` directly, so a stray booking-ish method
+  // elsewhere in User.java can't lift the entity in). Rank by fan-in for the diagnostic; by fan×rel for the pick.
   const cands = [...callers.entries()].map(([id, set]) => byId.get(id))
     .filter((n) => n && n.file && n.symbol && !(n.file === opts.excludeFile && n.symbol === opts.excludeSymbol))
     .map((n) => ({ n, fan: callers.get(n.id)!.size, rel: opts.relevance ? opts.relevance({ symbol: n.symbol, file: n.file }) : 1 }))
     .sort((a, b) => (b.fan - a.fan) || ((b.n.complexity ?? 0) - (a.n.complexity ?? 0)));
   const mk = (c: any): Center => ({ id: c.n.id, file: c.n.file, symbol: c.n.symbol, fanIn: c.fan });
-  // Among the ON-INTENT candidates (fan-in ≥ floor AND relevance ≥ floor), pick by fan-in × relevance — so a bean
-  // that is MORE about the concern (`BookingsBean`) can beat one with slightly higher raw fan-in but a lower
-  // on-concern score (`BookingsSetupBean`). Off-intent hubs (`User`) are already gone. Else raw fan-in (I5).
-  const onIntent = opts.relevance ? cands.filter((c) => c.fan >= minFanIn && c.rel >= minRel) : [];
   const score = (c: any) => c.fan * Math.max(c.rel, 0);
-  const winner = onIntent.length ? onIntent.reduce((a, b) => (score(b) > score(a) ? b : a)) : null;
-  // Diagnostic: the top candidates by raw fan-in AND the top ON-INTENT ones by fan×rel (so a bean the region-local
-  // fan-in undercounts still shows its relevance — the data to tune the pick against a real repo).
+  const onIntent = (opts.relevance ? cands.filter((c) => c.fan >= minFanIn && c.rel >= minRel) : []).sort((a, b) => score(b) - score(a));
   if (opts.debug && cands.length) {
     opts.debug(`[concern] center candidates by fan-in: ${cands.slice(0, 8).map((c) => `${c.n.symbol}(${c.fan}·${c.rel.toFixed(2)})`).join(", ")}`);
-    if (onIntent.length) opts.debug(`[concern] on-intent by fan×rel: ${[...onIntent].sort((a, b) => score(b) - score(a)).slice(0, 8).map((c) => `${c.n.symbol}(${c.fan}·${c.rel.toFixed(2)}=${score(c).toFixed(1)})`).join(", ")}`);
+    if (onIntent.length) opts.debug(`[concern] on-intent mechanisms by fan×rel: ${onIntent.slice(0, 8).map((c) => `${c.n.symbol}(${c.fan}·${c.rel.toFixed(2)}=${score(c).toFixed(1)})`).join(", ")}`);
   }
-  const raw = cands.find((c) => c.fan >= minFanIn);
-  return winner ? mk(winner) : (raw ? mk(raw) : null);
+  if (onIntent.length) return onIntent.slice(0, Math.max(1, k)).map(mk);
+  const raw = cands.find((c) => c.fan >= minFanIn);   // no on-intent survivor → the single raw-highest-fan-in node
+  return raw ? [mk(raw)] : [];
+}
+
+// Single-center convenience (the highest-ranked mechanism) — back-compat + the degenerate concern.
+export function detectCenter(data: any, opts: CenterOpts = {}): Center | null {
+  return detectCenters(data, opts, 1)[0] ?? null;
 }

@@ -40,13 +40,38 @@ describe("renderConcern — center-first star (pure model)", () => {
   test("the highest fan-in node is the center; every consumer entry is an interaction with a deepen handle", () => {
     const out = renderConcern(makeConcernModel(), { intent: "how are bookings managed" });
     expect(out).toContain("# Concern map");
-    expect(out).toContain("center: manageBooking");
-    expect(out).toContain("## Center");
+    expect(out).toContain("## Mechanisms");
+    expect(out).toContain("manageBooking");
     expect(out).toContain("fan-in 4 consumer(s)");
     // all four interactions surface as rays, each with its own --grow-from
     for (const [label, file] of [["loadBookings", "member/m.ts"], ["assignAdviser", "admin/a.ts"], ["runReminders", "jobs/j.ts"], ["cancelViaApi", "api/x.ts"]])
       expect(out).toContain(`seam --grow-from ${file}#${label}`);
     expect(out).toMatch(/interactions: 4/);
+  });
+
+  test("MULTI-CENTER: a cluster of mechanisms is rendered together, interactions span all of them", () => {
+    // two booking beans (C1, C2), each called by its own interactions; passed as the center cluster.
+    const hunk = (id: string, label: string, file: string) => ({ id, label, file, start: 1, role: "core", tier: "supporting" });
+    const model = {
+      mode: "codebase", anchor: "C1", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "bookings", seams: [
+        { id: "s1", label: "BookingsBean", tier: "spine", hunks: [hunk("C1", "BookingsBean", "cdi/BookingsBean.ts")] },
+        { id: "s2", label: "BookingsSetupBean", tier: "spine", hunks: [hunk("C2", "BookingsSetupBean", "cdi/BookingsSetupBean.ts")] },
+        { id: "sA", label: "memberBook", tier: "supporting", hunks: [hunk("A", "memberBook", "member/m.ts")] },
+        { id: "sB", label: "adminSetup", tier: "supporting", hunks: [hunk("B", "adminSetup", "admin/a.ts")] },
+      ] }],
+      edges: [{ from: "A", to: "C1", kind: "call" }, { from: "B", to: "C2", kind: "call" }],
+      blindspots: [],
+    };
+    const out = renderConcern(model, { intent: "how are bookings managed", centers: [{ file: "cdi/BookingsBean.ts", symbol: "BookingsBean" }, { file: "cdi/BookingsSetupBean.ts", symbol: "BookingsSetupBean" }] });
+    expect(out).toMatch(/mechanisms: 2/);
+    expect(out).toContain("BookingsBean");
+    expect(out).toContain("BookingsSetupBean");
+    // an interaction of EACH mechanism appears (memberBook → C1, adminSetup → C2)
+    expect(out).toContain("member/m.ts#memberBook");
+    expect(out).toContain("admin/a.ts#adminSetup");
+    // the mechanisms themselves are NOT listed as interactions of each other
+    expect(out).not.toContain("cdi/BookingsBean.ts#BookingsBean");
   });
 
   test("a COUPLING-only interaction (reads a table the center writes, never calls it) is a ray; the boundary is not", () => {
@@ -94,7 +119,8 @@ describe("renderConcern — end-to-end: growing from a POINT still recovers the 
       { dataCoupling: true, intent: "how are bookings managed across the app", wave: true, borderLlm: false, tierGrow: true });
     const model: any = await decompose(from_resolved_graph(data), { repo, intent: "how are bookings managed across the app" });
     const out = renderConcern(model, { intent: "how are bookings managed across the app" });
-    expect(out).toContain("center: manageBooking");        // the center, not the member point we anchored on
+    expect(out).toContain("manageBooking");                // the mechanism, not the member point we anchored on
+    expect(out).toContain("## Mechanisms");
     // every module's interaction is recovered, even though we grew from ONE of them
     for (const f of ["member/memberBookings", "admin/adminBookings", "jobs/reminderJob", "api/bookingApi"])
       expect(out).toContain(f);

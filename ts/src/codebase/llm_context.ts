@@ -818,7 +818,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 // `BookingsBean` every interaction delegates through. Its consumers (each walked up to its entry point) are the
 // INTERACTIONS, ranked by intent tier. Pure projection of an already-grown model (no re-grow) — validates whether
 // the star FRAMING reads better than the flow map on a concern; the full plan re-anchors the grow on the center.
-export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number; center?: { file: string; symbol: string } } = {}): string {
+export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number; centers?: { file: string; symbol: string }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -835,9 +835,9 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
     (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f);
     if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f); }
-  // CENTER = the mechanism the interactions share. If the caller re-anchored on a known center (opts.center),
-  // HONOUR it. Else detect: highest fan-in, INTENT-WEIGHTED by the model's per-hunk relevance so a ubiquitous
-  // OFF-INTENT entity (`User`, fan-in 61) isn't mistaken for the concern's mechanism. Relevance absent → raw fan-in.
+  // CENTER CLUSTER — a broad concern's shared MECHANISMS (a cluster of beans, not one). Honour the caller's cluster
+  // (opts.centers); else detect one intent-weighted center as a fallback. Interactions are the consumers of ANY
+  // mechanism + their coupling counterparts, so the star spans the whole cluster.
   const nodes = [...hunkById.keys()];
   if (!nodes.length) return "(empty region)";
   const fanIn = (id: string) => inEdges.get(id)?.size ?? 0;
@@ -845,14 +845,17 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const haveRel = nodes.some((id) => centerRel(id) >= 0);
   const onIntent = (id: string) => !haveRel || centerRel(id) >= 0.18;
   const byFan = (a: string, b: string) => (fanIn(b) - fanIn(a)) || (Number(!!hunkById.get(b).hub) - Number(!!hunkById.get(a).hub)) || ((hunkById.get(b).complexity ?? 0) - (hunkById.get(a).complexity ?? 0));
-  const center = opts.center
-    ? (nodes.find((id) => { const h = hunkById.get(id); return h?.file && String(h.file).replace(/^\.\//, "").endsWith(opts.center!.file.replace(/^\.\//, "")) && h?.label === opts.center!.symbol; }) ?? nodes.slice().sort(byFan)[0])
-    : ((nodes.filter(onIntent).sort(byFan)[0]) ?? nodes.slice().sort(byFan)[0]);
-  const ch = hunkById.get(center);
-  // INTERACTIONS = the center's consumers, each walked UP to its entry point (a node with no callers / a route
-  // boundary), so a ray is named by its interaction, not the immediate caller. Deduped by entry.
+  const matchNode = (c: { file: string; symbol: string }) => nodes.find((id) => { const h = hunkById.get(id); return h?.file && String(h.file).replace(/^\.\//, "").endsWith(c.file.replace(/^\.\//, "")) && h?.label === c.symbol; });
+  let centerIds: string[] = (opts.centers?.length ? [...new Set(opts.centers.map(matchNode).filter((x): x is string => !!x))] : [])
+    .length ? [...new Set(opts.centers!.map(matchNode).filter((x): x is string => !!x))]
+    : [(nodes.filter(onIntent).sort(byFan)[0]) ?? nodes.slice().sort(byFan)[0]];
+  centerIds = centerIds.filter(Boolean).sort(byFan);
+  const centerSet = new Set(centerIds);
+  const primary = hunkById.get(centerIds[0]);
+  // INTERACTIONS = consumers of ANY mechanism, each walked UP to its entry point (stopping at any mechanism), so a
+  // ray is named by its interaction. Deduped by entry; a mechanism is never its own interaction.
   const entryOf = (start: string): string => {
-    let cur = start; const seen = new Set<string>([center]);
+    let cur = start; const seen = new Set<string>(centerSet);
     for (let hop = 0; hop < 8; hop++) {
       if (seen.has(cur)) break; seen.add(cur);
       const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));   // CALL-graph callers only (skip crossings)
@@ -862,34 +865,34 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     return cur;
   };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
-  // COUPLING interactions — a node sharing a data-key BOUNDARY with the center (the center writes a table a
-  // reporting job READS → that job is an interaction though it never CALLS the center). 2 hops over crossing
-  // edges: center —cross→ boundary —cross→ interaction; the 1-hop boundary is skipped, its OTHER touchers are rays.
+  // COUPLING interactions — a node sharing a data-key BOUNDARY with a mechanism (the bean writes a table a reporting
+  // job READS → that job is an interaction though it never CALLS the bean). 2 hops over crossings; boundary skipped.
   const crossAdj = new Map<string, Set<string>>();
   for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
     (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
-  const boundaries = crossAdj.get(center) ?? new Set<string>();
-  const couplingVia = new Map<string, string>();   // interaction id → the shared key/boundary label
-  for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) if (y !== center && !boundaries.has(y) && hunkById.has(y)) couplingVia.set(y, hunkById.get(b)?.label ?? "a shared key");
-  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches the center}
-  for (const consumer of (callIn.get(center) ?? [])) { const e = entryOf(consumer); if (!rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
-  for (const [y, key] of couplingVia) { const e = entryOf(y); if (!rays.has(e)) rays.set(e, { entry: e, via: `the ${key} boundary` }); }
+  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches a mechanism}
+  for (const cid of centerIds) {
+    for (const consumer of (callIn.get(cid) ?? [])) { if (centerSet.has(consumer)) continue; const e = entryOf(consumer); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
+    const bounds = crossAdj.get(cid) ?? new Set<string>();
+    for (const b of bounds) for (const y of (crossAdj.get(b) ?? [])) if (!centerSet.has(y) && !bounds.has(y) && hunkById.has(y)) { const e = entryOf(y); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` }); }
+  }
   const rayList = [...rays.values()].sort((a, b) =>
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
     (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
-  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern (BookingsBean fan 14+) stays scannable
+  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${h?.label ?? "?"} (${h?.file ?? "?"}:${h?.start ?? 0})`;
   const out: string[] = [];
-  out.push("# Concern map — a mechanism and the interactions around it (center-first)",
-    [`center: ${ch?.label ?? "?"}`, ...(opts.intent ? [`intent: ${opts.intent}`] : []), `resolution: ${model.resolutionQuality ?? "?"}`,
+  out.push("# Concern map — the mechanisms and the interactions around them",
+    [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${centerIds.length}`, `resolution: ${model.resolutionQuality ?? "?"}`,
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
-  out.push("", "## Center (the shared mechanism)", `  ${where(ch)} — fan-in ${fanIn(center)} consumer(s)${ch?.hub ? ` — collapsed hub (${ch.hub.reason}, fan ${ch.hub.fan})` : ""}`);
-  out.push("", "## Interactions (each entry point that uses the center — deepen the ones that matter)");
+  out.push("", `## Mechanisms (the concern's shared beans — the star's center${centerIds.length > 1 ? " cluster" : ""})`);
+  for (const cid of centerIds) { const h = hunkById.get(cid); out.push(`  ${where(h)} — fan-in ${fanIn(cid)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`); }
+  out.push("", "## Interactions (each entry point that uses a mechanism — deepen the ones that matter)");
   for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
-    out.push(`  ${where(eh)}${rel} — reaches the center via ${r.via}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
+    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${r.via}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];
