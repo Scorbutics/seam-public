@@ -21,10 +21,12 @@ let repo: string;
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, t); };
 
 // One warm-mode CLI grow in its OWN process (SEAM_GRAPH_CACHE on) → the sorted set of files its footprint spans.
-function growFiles(): string[] {
+// `coupling` selects the data-coupling mode: "off" exercises the structural per-node cache (Phase 3), "floor"
+// also exercises the deterministic anchor-coupling overlay cache (Phase 4).
+function growFiles(coupling: "off" | "floor" = "off"): string[] {
   const out = execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
     "--anchor-file", "svc/handler.ts", "--symbol", "handle", "--intent", "how is the payload saved",
-    "--data-coupling", "off", "--format", "none"],
+    "--data-coupling", coupling, "--format", "none"],
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1" }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
   const m = JSON.parse(out);
   const files = new Set<string>();
@@ -64,5 +66,26 @@ describe("build_footprint per-node cache (via CLI subprocesses)", () => {
     // the epoch bumped (a source file appeared) → the anchor's cached DOWN footprint is invalidated → the new
     // impl is reached. A same-file key would have returned the stale one-impl footprint and FAILED here.
     expect(f2).toContain("svc/apiRepo.ts");
+  });
+});
+
+describe("anchor coupling overlay cache — Phase 4 (via CLI subprocesses, --data-coupling floor)", () => {
+  test("WARM REUSE — a floor-coupling run is identical warm, and the overlay cache is written", () => {
+    if (!available()) return;
+    const f1 = growFiles("floor");
+    expect(existsSync(join(repo, ".seam/coupling-delta-v1/f"))).toBe(true);   // overlay memoized to disk
+    const f2 = growFiles("floor");                                            // fresh process → overlay hydrated from disk
+    expect(f2).toEqual(f1);
+    expect(f1).toContain("svc/dbRepo.ts");
+  });
+
+  test("INVALIDATION — a source change still flows through under floor (coupling epoch folds in the source)", () => {
+    if (!available()) return;
+    const f1 = growFiles("floor");
+    expect(f1).not.toContain("svc/apiRepo.ts");
+    w("svc/apiRepo.ts", `import { Repo } from "./repo";\nexport class ApiRepo implements Repo { save(x: string) { fetch("/save", { method: "POST", body: x }); } }\n`);
+    // the coupling epoch = source ⊕ learned-state, so the appearing source file bumps it → overlay + structural
+    // caches both invalidate → the new impl is reached (never masked by the floor-coupling overlay cache either).
+    expect(growFiles("floor")).toContain("svc/apiRepo.ts");
   });
 });

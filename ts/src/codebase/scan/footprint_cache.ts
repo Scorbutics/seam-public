@@ -14,7 +14,7 @@
 //     this to per-footprint dependency tracking (invalidate only the affected nodes) via reverse.json.
 //   • CALLER-FILES CASES stay live (a class/interface DOWN footprint varies by the files that reached it).
 // Gated by SEAM_GRAPH_CACHE (graphCacheEnabled). Off → build_footprint runs live, byte-identical to today.
-import { statSync } from "node:fs";
+import { statSync, readFileSync, readdirSync } from "node:fs";
 import { join, relative } from "node:path";
 import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/index_cache.js";
 import { walk } from "../../core/resolve/walk.js";
@@ -24,12 +24,13 @@ import type { FootprintOpts, ResolvedGraph } from "./graph.js";
 
 const CACHE = "footprint-v1";
 type Entry = { e: string; g: ResolvedGraph };   // e = repo content epoch under which g was computed
-type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified" → entry
+type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified|coupling" → entry
 
 // module-level mirror of the on-disk per-file shards — a path-keyed persistence layer, which engine_ctx.ts
-// blesses as module-level (unlike per-run compute state). One process = one CLI run, so the epoch is fresh.
+// blesses as module-level (unlike per-run compute state). One process = one CLI run, so the epochs are fresh.
 const _mem = new Map<string, Map<string, Shard>>();     // repo → file → shard
-const _epoch = new Map<string, string>();               // repo → content epoch (computed once/process)
+const _epoch = new Map<string, string>();               // repo → SOURCE content epoch (structural footprints)
+const _cEpoch = new Map<string, string>();              // repo → source ⊕ learned-state epoch (coupling footprints)
 
 function _hash(s: string): string {
   let h = 0x811c9dc5;
@@ -58,6 +59,29 @@ function epochOf(repo: string): string {
   return e;
 }
 
+// The COUPLING epoch (Phase 4): the source epoch ⊕ a CONTENT hash of every top-level `.seam/*.json`. A
+// floor-coupling footprint depends not only on the source but on the LEARNED shared-key state (the matcher /
+// adapter rules in `key-adapters.json`, and any other learned json the coupling floor replays). Content —
+// not mtime — because these caches are rewritten every run with IDENTICAL bytes when nothing was learned, so
+// a content hash stays stable on a warm run (cache hits) yet bumps the moment a matcher is learned (the
+// flywheel) or the source changes. Sharded sub-dirs (impl-index/…, footprint-v1/…) are directories, not
+// `*.json` files, so they're naturally excluded — critical for footprint-v1, else the cache self-invalidates.
+function couplingEpochOf(repo: string): string {
+  const cached = _cEpoch.get(repo);
+  if (cached !== undefined) return cached;
+  const src = epochOf(repo);
+  const learned: string[] = [];
+  try {
+    for (const name of readdirSync(join(repo, ".seam")).sort()) {
+      if (!name.endsWith(".json")) continue;                            // top-level learned/derived state only
+      try { learned.push(`${name}:${_hash(readFileSync(join(repo, ".seam", name), "utf-8"))}`); } catch { /* skip */ }
+    }
+  } catch { /* no .seam yet */ }
+  const e = src ? `${src}|${_hash(learned.join("\n"))}` : "";
+  _cEpoch.set(repo, e);
+  return e;
+}
+
 function shardOf(repo: string, file: string): Shard {
   const byFile = _mem.get(repo) ?? _mem.set(repo, new Map()).get(repo)!;
   let s = byFile.get(file);
@@ -65,12 +89,14 @@ function shardOf(repo: string, file: string): Shard {
   return s;
 }
 
-const _clone = (g: ResolvedGraph): ResolvedGraph => JSON.parse(JSON.stringify(g));
+const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));
 const _key = (symbol: string, opts: FootprintOpts) =>
   `${symbol}|${opts.direction ?? "up"}|${opts.depth ?? 1}|${opts.verified ? 1 : 0}`;
 
-// build_footprint with the per-node cache in front. Only the provably-safe structural case is cached; every
-// other case (coupling on, caller-files de-noise, null symbol, cache off) falls straight through to live.
+// build_footprint with the per-node cache in front. The grow TRAVERSAL is purely structural (coupling is a
+// separate overlay — see orchestrate.ts _anchorCouplingDelta), so build_footprint here is a deterministic
+// function of the SOURCE, keyed on the source epoch. Cached whenever there's a real symbol and no caller-files
+// de-noise (which varies by the reaching callers); everything else falls through to live.
 export async function build_footprint_cached(
   repo: string, anchorFile: string, symbol: string | null, opts: FootprintOpts = {},
 ): Promise<ResolvedGraph> {
@@ -91,5 +117,40 @@ export async function build_footprint_cached(
   return _clone(g);                                                     // …and hand the caller its own copy to mutate
 }
 
-// test seam: drop the in-process mirror so a hermetic test can prove a genuine DISK reuse across "runs".
-export function _resetFootprintMirror(): void { _mem.clear(); _epoch.clear(); }
+// ── Phase 4: the ANCHOR COUPLING OVERLAY cache ─────────────────────────────────────────────────────────────
+// Coupling is computed ONCE per anchor and merged onto the settled footprint (orchestrate.ts _anchorCouplingDelta),
+// NOT per node. Under FLOOR (deterministic matcher replay, no LLM) that overlay is a pure function of the anchor's
+// source + the learned state — so we memoize it on the COUPLING epoch (source ⊕ learned-state). The LLM front-end
+// (non-deterministic, and it LEARNS) is never cached. Keyed by the anchor identity; sharded per anchor file. The
+// overlay's node ids (c${count}) are reconciled by merge_resolved's content dedup, so a cached delta replays safely.
+const CDELTA = "coupling-delta-v1";
+type CEntry<T> = { e: string; d: T };
+type CShard<T> = Record<string, CEntry<T>>;
+const _cmem = new Map<string, Map<string, CShard<unknown>>>();
+function cShardOf(repo: string, file: string): CShard<unknown> {
+  const byFile = _cmem.get(repo) ?? _cmem.set(repo, new Map()).get(repo)!;
+  let s = byFile.get(file);
+  if (!s) { s = loadShard<CShard<unknown>>(repo, CDELTA, file) ?? {}; byFile.set(file, s); }
+  return s;
+}
+
+// Memoize the anchor coupling overlay across runs. `compute` runs on a miss; the cached delta is deep-cloned on
+// a hit (the caller merges/mutates it). `anchorKey` identifies the anchor within its file (symbol/id).
+export async function cachedCouplingDelta<T>(
+  repo: string, anchorFile: string, anchorKey: string, dataCouplingLlm: boolean, compute: () => Promise<T>,
+): Promise<T> {
+  if (!graphCacheEnabled() || dataCouplingLlm) return compute();       // LLM overlay: non-deterministic + it learns
+  const epoch = couplingEpochOf(repo);
+  if (!epoch) return compute();
+  const shard = cShardOf(repo, anchorFile);
+  const hit = shard[anchorKey];
+  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[cd] ${anchorFile} ${anchorKey} epoch=${epoch} ${hit ? (hit.e === epoch ? "HIT" : "MISS(stale)") : "MISS(new)"}\n`);
+  if (hit && hit.e === epoch) return _clone(hit.d) as T;
+  const d = await compute();
+  shard[anchorKey] = { e: epoch, d };
+  saveShard(repo, CDELTA, anchorFile, shard);
+  return _clone(d) as T;
+}
+
+// test seam: drop the in-process mirrors so a hermetic test can prove a genuine DISK reuse across "runs".
+export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _epoch.clear(); _cEpoch.clear(); }

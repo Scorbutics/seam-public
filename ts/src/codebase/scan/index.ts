@@ -4,7 +4,7 @@
 // (build_consumers_graph, build_class_graph, build_callsite_graph, …) are INTERNAL to the phase: reach
 // for build_footprint instead, or import the specific builder file directly for a white-box test.
 export { build_footprint } from "./footprint.js";
-export { build_footprint_cached } from "./footprint_cache.js";   // Phase-3 per-node memoization (docs/GRAPH_CACHE.md)
+export { build_footprint_cached, cachedCouplingDelta } from "./footprint_cache.js";   // graph cache: Phase-3 per-node + Phase-4 anchor-coupling memoization (docs/GRAPH_CACHE.md)
 export { class_call_candidates } from "./class_graph.js";
 export { implemented_interfaces, is_framework_entry } from "./interface_index.js";
 export { merge_resolved } from "./expand.js";

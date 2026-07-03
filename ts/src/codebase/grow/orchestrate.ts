@@ -10,7 +10,7 @@ const PASS = registerPass({ tag: "orchestrate", tier: "cheap", note: "auto-grow 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
-import { build_footprint, build_footprint_cached } from "../scan/index.js";
+import { build_footprint, build_footprint_cached, cachedCouplingDelta } from "../scan/index.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
@@ -46,9 +46,14 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   const resolved = arange[1] > 0;                                  // a real def span vs a name-only anchor (whole file)
   const keyLo = resolved ? _annotationLo(ar[0], arange[0]) : 0;
   const keyHi = resolved ? arange[1] : (ar[0].match(/\n/g) ?? []).length;
-  const delta = await resolveCoupling(repo, anchorId, anchorFile, ar[0], keyLo, keyHi, (data.nodes ?? []).length, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
-  delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);   // route → its consumers (2nd hop), as before
-  return delta;
+  // Phase 4: memoize this overlay across runs under FLOOR (deterministic replay). It's a pure function of the
+  // anchor span + the learned state (the coupling epoch), independent of the settled footprint's shape (it reads
+  // only the anchor + a node count for id numbering, which merge_resolved re-ids anyway). LLM stays live (learns).
+  return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, async () => {
+    const delta = await resolveCoupling(repo, anchorId, anchorFile, ar[0], keyLo, keyHi, (data.nodes ?? []).length, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
+    delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);   // route → its consumers (2nd hop), as before
+    return delta;
+  });
 }
 
 // Couple ONE reached node's whole file, attaching the bridge to that node. The anchor coupling above is span-
