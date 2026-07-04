@@ -882,9 +882,14 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const crossAdj = new Map<string, Set<string>>();
   for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
     (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
-  const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches a mechanism}
+  // Rays are keyed by ENTRY (the least-shared caller a consumer climbs to), but MANY operations climb to the
+  // same entry (createBooking/updateBooking/cancelBooking → an orchestrator `book`). Keeping ONE `via` per entry
+  // hid all but the first — the dev saw `book` but not `createBooking` (Acme). ACCUMULATE the distinct
+  // vias so the entry lists every operation reaching it: `via book, createBooking, updateBooking, …`.
+  const rays = new Map<string, { entry: string; vias: Set<string> }>();   // entry id → {entry, the operations reaching a mechanism through it}
+  const addRay = (entry: string, via: string) => { if (mechNodes.has(entry)) return; const r = rays.get(entry) ?? { entry, vias: new Set<string>() }; r.vias.add(via); rays.set(entry, r); };
   for (const cid of mechNodes)   // consumers of the mechanism's CLASS or any of its METHODS
-    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; const e = entryOf(consumer); if (!mechNodes.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: qual(hunkById.get(consumer)) }); }
+    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; addRay(entryOf(consumer), qual(hunkById.get(consumer))); }
   // CROSS-STACK interactions — the boundary (a route/table/queue) can sit on an INTERMEDIATE that reaches the
   // mechanism (a REST endpoint the bean sits BEHIND), NOT on the center itself: a Java bean's JS front-end
   // consumer crosses the route to the ENDPOINT, never to the bean, so a center-only crossing scan hides it (the
@@ -903,7 +908,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
     if (upstream.has(y) || boundaries.has(y) || !hunkById.has(y)) continue;   // Java call-side / another boundary / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
-    if (!mechNodes.has(e) && !upstream.has(e) && !boundaries.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` });
+    if (!mechNodes.has(e) && !upstream.has(e) && !boundaries.has(e)) addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
@@ -917,20 +922,22 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${qual(h)} (${h?.file ?? "?"}:${h?.start ?? 0})`;
-  // SETTLING DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT + which
-  // mechanism consumers were FOLDED into a shared entry (their own name not shown). Tells a "why is X missing"
-  // apart: absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; folded =
-  // it shares an entry with another interaction (deepen that entry).
+  // the operations reaching a mechanism through this entry, distinct, capped + counted (a fat orchestrator stays
+  // scannable). The entry's OWN name (when it is itself a direct consumer) sorts first; other operations follow.
+  const _VIA_CAP = Math.max(1, parseInt(process.env.SEAM_CONCERN_VIAS ?? "8", 10) || 8);
+  const viasStr = (r: { entry: string; vias: Set<string> }): string => {
+    const self = qual(hunkById.get(r.entry));
+    const v = [...r.vias].sort((a, b) => (Number(b === self) - Number(a === self)) || (a < b ? -1 : 1));
+    return v.slice(0, _VIA_CAP).join(", ") + (v.length > _VIA_CAP ? `, … (+${v.length - _VIA_CAP})` : "");
+  };
+  // DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT. "Why is X missing":
+  // absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; in a `via` list =
+  // it reaches the mechanism through that entry (now shown, not silently folded away).
   if (process.env.SEAM_FP_DEBUG) {
     const w = (s: string) => process.stderr.write(s + "\n");
     w(`[concern] mechanisms: ${[...mechNodes].filter((c) => centerSet.has(c)).map((c) => qual(hunkById.get(c))).join(", ")} | +${mechNodes.size - centerSet.size} method node(s) in scope`);
     w(`[concern] interactions: ${rayList.length} enumerated, cap ${cap}`);
-    rayList.forEach((r, i) => w(`[concern]   ${i < cap ? "show " : "CUT  "}${qual(hunkById.get(r.entry))} [${seamOf.get(r.entry)?.tier ?? "?"}] — via ${r.via}`));
-    const shownEntries = new Set(rayList.map((r) => r.entry));
-    for (const cid of mechNodes) for (const consumer of (callIn.get(cid) ?? [])) {
-      if (mechNodes.has(consumer)) continue; const e = entryOf(consumer);
-      if (e !== consumer && shownEntries.has(e)) w(`[concern]   folded ${qual(hunkById.get(consumer))} → shown under entry ${qual(hunkById.get(e))}`);
-    }
+    rayList.forEach((r, i) => w(`[concern]   ${i < cap ? "show " : "CUT  "}${qual(hunkById.get(r.entry))} [${seamOf.get(r.entry)?.tier ?? "?"}] — via ${viasStr(r)}`));
   }
   const out: string[] = [];
   // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
@@ -968,7 +975,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
     const handle = symLike(eh?.label) ? `  →  seam --grow-from ${eh.file}#${eh.label}${q}` : "";   // file/module node → describe it, no broken deepen handle
-    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${r.via}${handle}`); }
+    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${viasStr(r)}${handle}`); }
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];
