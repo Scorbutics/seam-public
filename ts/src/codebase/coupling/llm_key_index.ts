@@ -207,6 +207,16 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const { floorContributions } = await import("./index.js");
   const floorByRel = new Map<string, KeyHit[]>(floorContributions(repo, SKIP_DIRS, ctx).map((c) => [c.rel, c.data.keys]));
   const blindCandidates: { file: string; text: string; ck: string }[] = [];   // floor-blind in-scope → clustered below
+  // The COLLECTION cap must bound COST, not SETTLING. Capping which blind files get COLLECTED (and thus cached
+  // as cluster-covered below) made the flywheel SLIDE: with >cap footprint-blind files, cold caches the first
+  // `cap`, the warm run finds those cached (skip) and slides to the NEXT `cap` — so key-adapters.json grows every
+  // run for ceil(blind/cap) rounds, and each write bumps the coupling epoch → the answer cache NEVER settles on a
+  // big repo (Acme: hundreds of blind files → never a warm READ). A SCOPED pass (footprint via
+  // scopeFiles, or a module prefix) is already bounded by its scope — so collect ALL of it in ONE round and let
+  // it settle. Only the truly UNSCOPED whole-repo warm-up (SEAM_WARM_ADAPTERS / empty scope) keeps the cost cap.
+  // The LLM SEND is still bounded downstream (blindFiles cap + the matcher snippet cap), so cost is unchanged.
+  const unscoped = !opts.scopeFiles && !scope;
+  let blindHit = 0, blindScanned = 0;   // settling census (SEAM_FP_DEBUG): floor-blind files already cached vs newly collected
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
     const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
@@ -220,8 +230,10 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     if (floor.length && !augment && !isBridge) continue;   // floor covers + not augmenting/bridge → leave to shared_key_index
     const ck = `${rel} ${createHash("sha1").update(text).digest("hex")}`;
     const disk = cachedFileKeys(repo, ck);
+    const blindish = !floor.length || isBridge;
+    if (blindish) (disk.hit ? blindHit++ : blindScanned++);
     if (disk.hit) { llmKeysOf.set(rel, disk.keys); continue; }
-    if (!floor.length || isBridge) { if (blindCandidates.length < COUPLING.keyBudget) blindCandidates.push({ file: rel, text, ck }); continue; }   // blind OR bridge → discover its (other) keys
+    if (blindish) { if (!unscoped || blindCandidates.length < COUPLING.keyBudget) blindCandidates.push({ file: rel, text, ck }); continue; }   // blind OR bridge → discover its (other) keys (scoped: collect ALL → settle; unscoped: cost-capped)
     if (opts.llm && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push({ file: rel, text, ck }); }   // augment floor-COVERED file (not clustered — its keys are file-specific gaps)
   }
   // STRUCTURAL pre-clustering: floor-blind files sharing a data-access SHAPE (`prisma.<x>.<verb>()`) are one
@@ -231,6 +243,11 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const clusters = await clusterBlindFiles(blindCandidates);
   const collapsed = blindCandidates.length - clusters.length;
   if (collapsed > 0) emit(`Clustered ${blindCandidates.length} floor-blind file(s) → ${clusters.length} pattern representative(s) (−${collapsed} covered by shared shape)…`);
+  // SETTLING CENSUS (SEAM_FP_DEBUG): on a truly WARM run this MUST read `new=0` (every floor-blind file already
+  // cached) — then no learning fires, key-adapters.json is untouched, the epoch holds, the answer cache hits.
+  // `new>0` on a repeat run pinpoints the leak: those files were NOT cached last run (a cap-slide remnant, or a
+  // per-file synth that returned keys but whose ck didn't get a marker). `scope` shows the discovery is bounded.
+  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[coupling] scope=${opts.scopeFiles ? `fp:${opts.scopeFiles.size}` : (scope || "repo")} | floor-blind: ${blindHit} cached-hit, ${blindScanned} NEW → ${blindCandidates.length} to cluster → ${clusters.length} rep(s)\n`);
   // The cluster is the unit of LLM work: ONE rep per cluster → the MATCHER pass (pass 4) learns the SHAPE and
   // grounds it repo-wide. The per-file `discover-keys-batch` extraction on the SAME reps is OFF by default —
   // SEAM_KEY_AUDIT (cal.com) shows it adds ZERO unique grounded couplings (the matcher pass covers them all),

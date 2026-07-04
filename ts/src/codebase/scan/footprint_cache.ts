@@ -75,6 +75,15 @@ function couplingEpochOf(repo: string): string {
     try { return `${name}:${_hash(readFileSync(join(repo, ".seam", name), "utf-8"))}`; } catch { return `${name}:∅`; }
   });
   const e = src ? `${src}|${_hash(learned.join("\n"))}` : "";
+  // SETTLING DIAGNOSTIC: if the coupling epoch differs run-to-run the answer cache can NEVER hit. This prints
+  // WHAT it's made of (source epoch ⊕ the learned-store hashes) + the parsed store counts, so two runs can be
+  // diffed: a changing source hash = a source edit (or an mtime-only touch); a changing learned hash with the
+  // SAME counts = a rewrite with reordered content; growing counts = a pass still learning (see [key-store]).
+  if (process.env.SEAM_FP_DEBUG) {
+    let sum = "";
+    try { const j = JSON.parse(readFileSync(join(repo, ".seam", "key-adapters.json"), "utf-8")); sum = ` adapters{rules:${(j.rules ?? []).length},files:${Object.keys(j.files ?? {}).length},learnedSigs:${(j.learnedSigs ?? []).length}}`; } catch { sum = " adapters{∅}"; }
+    process.stderr.write(`[coupling-epoch] source=${src} | ${learned.join(" ")}${sum} → epoch=${e}\n`);
+  }
   _cEpoch.set(repo, e);
   return e;
 }
@@ -116,10 +125,13 @@ export async function build_footprint_cached(
 
 // ── Phase 4: the ANCHOR COUPLING OVERLAY cache ─────────────────────────────────────────────────────────────
 // Coupling is computed ONCE per anchor and merged onto the settled footprint (orchestrate.ts _anchorCouplingDelta),
-// NOT per node. Under FLOOR (deterministic matcher replay, no LLM) that overlay is a pure function of the anchor's
-// source + the learned state — so we memoize it on the COUPLING epoch (source ⊕ learned-state). The LLM front-end
-// (non-deterministic, and it LEARNS) is never cached. Keyed by the anchor identity; sharded per anchor file. The
-// overlay's node ids (c${count}) are reconciled by merge_resolved's content dedup, so a cached delta replays safely.
+// NOT per node. The overlay is a pure function of the anchor's source ⊕ the LEARNED shared-key state, so we
+// memoize it on the COUPLING epoch (source ⊕ a content-hash of key-adapters.json). This holds for the LLM
+// front-end TOO: the flywheel LEARNS matchers then persists them, so a warm run REPLAYS them deterministically —
+// and the couplingEpoch captures which matcher set the delta was computed under. A learning run stores under its
+// pre-learn epoch and misses next run (the epoch bumped → recompute); once the flywheel settles the epoch is
+// stable and the delta replays. Keyed by the anchor identity; sharded per anchor file. The overlay's node ids
+// (c${count}) are reconciled by merge_resolved's content dedup, so a cached delta replays safely.
 const CDELTA = "coupling-delta-v1";
 type CEntry<T> = { e: string; d: T };
 type CShard<T> = Record<string, CEntry<T>>;
@@ -134,10 +146,10 @@ function cShardOf(repo: string, file: string): CShard<unknown> {
 // Memoize the anchor coupling overlay across runs. `compute` runs on a miss; the cached delta is deep-cloned on
 // a hit (the caller merges/mutates it). `anchorKey` identifies the anchor within its file (symbol/id).
 export async function cachedCouplingDelta<T>(
-  repo: string, anchorFile: string, anchorKey: string, dataCouplingLlm: boolean, compute: () => Promise<T>,
+  repo: string, anchorFile: string, anchorKey: string, _dataCouplingLlm: boolean, compute: () => Promise<T>,
 ): Promise<T> {
-  if (!graphCacheEnabled() || dataCouplingLlm) return compute();       // LLM overlay: non-deterministic + it learns
-  const epoch = couplingEpochOf(repo);
+  if (!graphCacheEnabled()) return compute();
+  const epoch = couplingEpochOf(repo);        // captures the learned-matcher state → an LLM overlay replays safely once settled
   if (!epoch) return compute();
   const shard = cShardOf(repo, anchorFile);
   const hit = shard[anchorKey];
@@ -173,9 +185,11 @@ export function seamEnvSnapshot(): string {
   return Object.keys(process.env).filter((k) => k.startsWith("SEAM_") && !_DIAG_ENV.test(k)).sort().map((k) => `${k}=${process.env[k]}`).join(";");
 }
 
-// Memoize a whole deterministic grow. `keyMaterial` must capture EVERYTHING that affects the result (symbol +
-// serializable opts + seamEnvSnapshot); `coupling` selects which epoch guards it. `deterministic` is false for
-// an LLM border / LLM coupling / streaming grow → always live. Result is deep-cloned on a hit (callers mutate).
+// Memoize a whole replayable grow. `keyMaterial` must capture EVERYTHING that affects the result (symbol +
+// serializable opts + seamEnvSnapshot); `coupling` selects which epoch guards it — the COUPLING epoch folds in
+// the learned-matcher state, so an LLM-coupling grow replays deterministically once the flywheel settles.
+// `deterministic` is false ONLY for a grow that can't be replayed from persisted state: an LLM border or a
+// streaming (onWave) grow → always live. Result is deep-cloned on a hit (callers mutate).
 export async function cachedGrow<T>(
   repo: string, anchorFile: string, keyMaterial: string, coupling: boolean, deterministic: boolean, compute: () => Promise<T>,
 ): Promise<T> {

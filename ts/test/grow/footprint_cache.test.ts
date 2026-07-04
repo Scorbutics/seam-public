@@ -22,8 +22,10 @@ const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(joi
 
 // One warm-mode CLI grow in its OWN process (SEAM_GRAPH_CACHE on) → the sorted set of files its footprint spans.
 // `coupling` selects the data-coupling mode: "off" exercises the structural per-node cache (Phase 3), "floor"
-// also exercises the deterministic anchor-coupling overlay cache (Phase 4).
-function growFiles(coupling: "off" | "floor" = "off"): string[] {
+// also exercises the deterministic anchor-coupling overlay cache (Phase 4), "llm" the LLM-coupling answer cache
+// (Phase 5 under the flywheel — the learned-state epoch makes a settled LLM grow replayable; offline it degrades
+// to floor grounding with zero learning, so the run is deterministic and the CACHE GATING is what's exercised).
+function growFiles(coupling: "off" | "floor" | "llm" = "off"): string[] {
   const out = execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
     "--anchor-file", "svc/handler.ts", "--symbol", "handle", "--intent", "how is the payload saved",
     "--data-coupling", coupling, "--format", "none"],
@@ -89,4 +91,32 @@ describe("anchor coupling overlay cache — Phase 4 (via CLI subprocesses, --dat
     // caches both invalidate → the new impl is reached (never masked by the floor-coupling overlay cache either).
     expect(growFiles("floor")).toContain("svc/apiRepo.ts");
   });
+});
+
+// Phase 5 under `--data-coupling llm` (the flywheel): the LLM LEARNS matchers once then every run REPLAYS them
+// deterministically, so a settled LLM grow is answer-cacheable — keyed on the COUPLING epoch which folds in the
+// learned-matcher state (key-adapters.json). This is the fix for "the grow + data-coupling re-run every warm run
+// even when the flywheel did zero LLM work": the old gate hard-excluded `dataCouplingLlm` from the answer cache,
+// so the whole wave orchestration re-ran on every warm query. REGRESSION GUARD: under the old gate the grow-v1
+// answer shard was NEVER written for llm mode → this asserts it IS. Offline-safe (no backend → no learning → the
+// grow is a deterministic floor grow; the assertion is about the CACHE being engaged, not about learned keys).
+describe("LLM-coupling answer cache — Phase 5 under the flywheel (via CLI subprocesses, --data-coupling llm)", () => {
+  test("WARM REUSE — an llm-coupling grow writes the answer cache and replays identical warm", () => {
+    if (!available()) return;
+    const f1 = growFiles("llm");
+    expect(existsSync(join(repo, ".seam/grow-v1/f"))).toBe(true);   // the answer cache NOW covers llm coupling (was excluded)
+    const f2 = growFiles("llm");                                    // fresh process → served from the answer cache, no wave
+    expect(f2).toEqual(f1);
+    expect(f1).toContain("svc/dbRepo.ts");                          // a real footprint (reached the impl)
+  }, 30000);
+
+  test("INVALIDATION — a source change bumps the coupling epoch, so the new impl still appears warm", () => {
+    if (!available()) return;
+    const f1 = growFiles("llm");
+    expect(f1).not.toContain("svc/apiRepo.ts");
+    w("svc/apiRepo.ts", `import { Repo } from "./repo";\nexport class ApiRepo implements Repo { save(x: string) { fetch("/save", { method: "POST", body: x }); } }\n`);
+    // the appearing source file bumps the coupling epoch → the cached llm-coupling answer invalidates → recompute
+    // reaches the new impl (the answer cache can never mask a source change, same guarantee as floor/structural).
+    expect(growFiles("llm")).toContain("svc/apiRepo.ts");
+  }, 30000);
 });

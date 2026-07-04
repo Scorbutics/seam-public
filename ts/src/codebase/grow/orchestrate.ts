@@ -1143,11 +1143,19 @@ type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional
 
 // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run on known territory
 // skips the wave orchestration entirely. Over-broad key (symbol + every serializable opt + all SEAM_* env) so
-// a config change can never serve a stale answer; only DETERMINISTIC grows are cached (an LLM border / LLM
-// coupling / streaming grow runs live). ctx/model/claudeBin/callbacks are dropped from the key — they don't
-// affect the structural result. The coupling epoch guards a coupling grow; the source epoch a structural one.
+// a config change can never serve a stale answer. ctx/model/claudeBin/callbacks are dropped from the key — they
+// don't affect the structural result. The coupling epoch guards a coupling grow; the source epoch a structural.
+//
+// `--data-coupling llm` IS cacheable (the whole point of the flywheel): the LLM LEARNS matchers, persists them
+// to `.seam/key-adapters.json`, and every subsequent run REPLAYS them deterministically. That learned state is
+// folded into the COUPLING EPOCH (couplingEpochOf hashes key-adapters.json) — so the answer is keyed on the
+// exact matcher set it was computed under. A learning run stores under its pre-learn epoch and MISSES next run
+// (the epoch bumped) → recompute; once the flywheel SETTLES (no new blind files → key-adapters.json stops
+// changing → epoch stabilises), the answer cache hits and the wave + the coupling pass are skipped entirely
+// (the graph READ the user expects). Only genuinely non-replayable grows stay live: an LLM BORDER (no persisted
+// state to key on) and a STREAMING grow (onWave callback can't be served from cache).
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
-  const deterministic = !opts.borderLlm && !opts.dataCouplingLlm && !opts.onWave;
+  const deterministic = !opts.borderLlm && !opts.onWave;
   const km = `${symbol}\n${JSON.stringify(opts, (k, v) => (k === "ctx" || k === "onWave" || k === "model" || k === "claudeBin" || typeof v === "function" ? undefined : v))}\n${seamEnvSnapshot()}`;
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }

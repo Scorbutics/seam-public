@@ -83,6 +83,11 @@ export function recordLearnedMatchers(repo: string, sig: string): void {
   const store = _loadStore(_repoDir(repo));
   if (store.learnedSigs.has(sig)) return;
   store.learnedSigs.add(sig);
+  // SETTLING DIAGNOSTIC: a NEW learned-signature on a WARM run = a learning pass fired that shouldn't have (its
+  // input set differs from any cached one) → key-adapters.json is rewritten → the coupling epoch bumps → the
+  // answer cache misses. The sig prefix tells which pass: bare hex = matcher synth (learnKeyMatchers), "rc:" =
+  // repository/receiver classifier, "ra:" = annotation classifier. A repo that keeps printing this never settles.
+  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[key-store] +learnedSig ${sig.slice(0, 10)} → learnedSigs now ${store.learnedSigs.size} (WRITE key-adapters.json)\n`);
   try { ensureSeamGitignore(repo); _writeStore(_repoDir(repo)); } catch { /* read-only repo → in-memory only */ }
 }
 
@@ -107,7 +112,11 @@ export function persistMatchers(repo: string, matchers: KeyMatcher[]): void {
   if (!matchers.length) return;
   const store = _loadStore(_repoDir(repo));
   const have = new Set(store.rules.map(_id));
-  for (const m of matchers) if (!have.has(_id(m))) { have.add(_id(m)); store.rules.push(m); recordAdapterLearned(_label(m)); }
+  let added = 0;
+  for (const m of matchers) if (!have.has(_id(m))) { have.add(_id(m)); store.rules.push(m); recordAdapterLearned(_label(m)); added++; }
+  // SETTLING DIAGNOSTIC: NEW rules on a warm run = a learn pass produced a rule not already stored. `added=0`
+  // means this call was a no-op that STILL rewrites the file (dedup found nothing new) — harmless but noted.
+  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[key-store] persistMatchers +${added} rule(s) → rules now ${store.rules.length} (WRITE key-adapters.json)\n`);
   try { ensureSeamGitignore(repo); _writeStore(_repoDir(repo)); } catch { /* read-only repo → in-memory only */ }
 }
 
@@ -131,7 +140,13 @@ export function cachedFileKeys(repo: string, key: string): { hit: boolean; keys:
 
 export function persistFileKeys(repo: string, key: string, adapter: KeyAdapter): void {
   recordAdapterLearned(adapter.name);
-  _loadStore(_repoDir(repo)).files.set(key, adapter);
+  const store = _loadStore(_repoDir(repo));
+  const fresh = !store.files.has(key);
+  store.files.set(key, adapter);
+  // SETTLING DIAGNOSTIC: a NEW per-file entry on a warm run = a floor-blind file that was NOT already cached
+  // (the cluster-covered marker missed) → key-adapters.json grows → epoch bumps. If this prints on every warm
+  // run, blind files aren't being cached completely (the cap-slide, now fixed) — the `key` is `<file> <sha1>`.
+  if (fresh && process.env.SEAM_FP_DEBUG) process.stderr.write(`[key-store] +file ${key.split(" ")[0]} keys=${adapter.keys.length} → files now ${store.files.size} (WRITE key-adapters.json)\n`);
   try { ensureSeamGitignore(repo); _writeStore(_repoDir(repo)); } catch { /* read-only repo → in-memory only */ }
 }
 

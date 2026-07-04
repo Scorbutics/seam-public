@@ -86,8 +86,17 @@ live path, then persist their shard — so it warms lazily, exactly like the fly
    new-impl invalidation.
 4. **Memoize the anchor coupling overlay** ✅ — coupling is a single `_anchorCouplingDelta` merged onto the
    settled footprint, so it's cached separately: `cachedCouplingDelta` keyed by anchor on a **coupling epoch**
-   = source epoch ⊕ content-hash of top-level `.seam/*.json` (learned matchers). Floor only; LLM stays live.
-5. **Cut grow/concern over to a reader** — flood the cached graph; live path becomes the cold fallback. *next*
+   = source epoch ⊕ content-hash of the learned-matcher store (`key-adapters.json`). Covers `--data-coupling
+   llm` too: the flywheel LEARNS matchers then REPLAYS them deterministically, and the learned-state is folded
+   into the epoch — so a settled LLM overlay is a pure function of (source ⊕ learned matchers).
+5. **Settled-footprint answer cache** ✅ — `cachedGrow` memoizes the WHOLE grow per query (symbol + every
+   serializable opt + `seamEnvSnapshot`) so a warm run skips the wave orchestration entirely. Guarded by the
+   coupling epoch for a coupling grow, the source epoch for a structural one. **`--data-coupling llm` is
+   cached** (the flywheel is the only non-determinism and it's epoch-captured): a learning run stores under its
+   pre-learn epoch and misses next run → recompute; once the flywheel SETTLES (no new blind files →
+   `key-adapters.json` stops changing → epoch stabilises) the answer replays and the wave + coupling pass are
+   skipped (private-app `--data-coupling llm`: settled warm = 0 waves / 0 learning / 0 coupling-materialize, ~0.8s).
+   Only an **LLM border** (no persisted state to key on) and a **streaming** (`onWave`) grow stay live.
 6. **Flip the flywheel to always-lazy** — learn matchers under `floor` too (cheap to amortize now), `off` =
    no learning.
 
