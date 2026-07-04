@@ -22,7 +22,7 @@ import { ORM_READ_VERBS, ORM_WRITE_VERBS } from "./adapters/member_access.js";
 import { DB_TABLE_META } from "./adapters/db_table.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
 import { persistMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
-import { _ROUTE_ANNOT as _BUILTIN_ROUTE_ANNOT } from "./adapters/annotation_route.js";
+import { isRouteAnnotation as _isBuiltinRouteAnnot } from "./frameworks/route_annotations.js";
 import { EngineCtx } from "../engine_ctx.js";
 
 const PASS = registerPass({ tag: "classify-receivers", tier: "strong", note: "receiver→type classification (database/http/store/…); learn-once → .seam" });
@@ -282,7 +282,7 @@ export async function classifyAndPersistAnnotations(
   const push = (m: KeyMatcher | null) => { if (m) matchers.push(m); };
   for (const c of cands) {
     const t = types.get(c.name);
-    if (t === "route" && !_BUILTIN_ROUTE_ANNOT.has(c.name)) push(validateMatcher({ via: "annotation", annotation: c.name, kind: "http-route", role: "produces" }));   // CUSTOM route annot only — the floor already handles @Get/@Path
+    if (t === "route" && !_isBuiltinRouteAnnot(c.name)) push(validateMatcher({ via: "annotation", annotation: c.name, kind: "http-route", role: "produces" }));   // CUSTOM route annot only — the floor already handles @Get/@Path
     else if (t === "queue") push(validateMatcher({ via: "annotation", annotation: c.name, kind: "queue", role: "consumes" }));        // a listener consumes the queue
     else if (t === "event") push(validateMatcher({ via: "annotation", annotation: c.name, kind: "event", role: "consumes" }));        // a handler consumes the event
   }

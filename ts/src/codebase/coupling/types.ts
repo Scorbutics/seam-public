@@ -20,7 +20,7 @@ export interface MaskCtx { readonly comments: string; readonly strings: string }
 // A KeyHit is one raw key observation in a file, emitted by ANY source (a scan adapter, a carrier wrapper,
 // or the LLM). An AnchorKey is a KeyHit collected for the anchor span and TAGGED with the source that found
 // it — that tag (not a boolean) is what later decides floor-silence vs an ungrounded-proposal blindspot.
-export interface KeyHit { kind: string; value: string; line: number; produces: boolean; label?: string }   // label = a human name for the boundary (e.g. the endpoint-map operation `updateBooking`) shown instead of the raw key value
+export interface KeyHit { kind: string; value: string; line: number; produces: boolean; label?: string; method?: string }   // label = a human boundary name (the endpoint-map op `updateBooking`); method = the HTTP verb for a route key (GET/POST/…), sourced from the framework registry — the prerequisite for method-aware route grounding
 export interface AnchorKey extends KeyHit { source: KeySource }
 export const isFloor = (k: AnchorKey): boolean => k.source !== "llm";   // deterministic floor (scan|carrier) vs LLM proposal
 

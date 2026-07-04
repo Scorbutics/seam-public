@@ -29,9 +29,9 @@ describe("annotation-route adapter (handler side, agnostic)", () => {
     expect(hits.some((h) => h.value === "/member/booking")).toBe(false);   // the class base alone is NOT emitted
   });
 
-  test("Spring @GetMapping with a path param normalises to a wildcard", () => {
+  test("Spring @GetMapping with a path param normalises to a wildcard + carries its HTTP method (registry)", () => {
     const hits = keys("C.java", '@GetMapping("/owners/{id}")\nvoid get() {}');
-    expect(hits).toContainEqual({ kind: "http-route", value: "/owners/*", line: 0, produces: true });
+    expect(hits).toContainEqual({ kind: "http-route", value: "/owners/*", line: 0, produces: true, method: "GET" });   // @GetMapping → GET, from the framework registry
   });
   test("Flask @app.route decorator (Python) is caught by the same shape", () => {
     const hits = keys("v.py", '@app.route("/api/members")\ndef members(): pass');

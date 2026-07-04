@@ -10,15 +10,17 @@ import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { HTTP_ROUTE_META, normPath } from "./http_route.js";
 import { lineOf, maskComments } from "./util.js";
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
+import { isRouteAnnotation, routeAnnotationMethod } from "../frameworks/route_annotations.js";
 
-// ROUTE-annotation idiom — a closed cross-framework set of annotation NAMES that declare an HTTP route (JAX-RS
-// @Path/@GET…, Spring @*Mapping, Nest @Get…, Flask @route, Feign @RequestLine, Servlet @WebServlet). The bare
-// regex pass below is name-AGNOSTIC (it judges the literal), but a route SPLIT across a class @Path + a method
-// @Path with PLAIN relative literals (`member/booking` + `v1`, no slash, no path-var) is invisible to it — the
-// only signal that `member/booking` IS a route is the annotation NAME. So COMPOSITION keys on this vocabulary.
-export const _ROUTE_ANNOT = new Set(["Path", "GET", "POST", "PUT", "DELETE", "HEAD", "OPTIONS", "PATCH",
-  "GetMapping", "PostMapping", "PutMapping", "DeleteMapping", "PatchMapping", "RequestMapping",
-  "Get", "Post", "Put", "Delete", "Patch", "route", "WebServlet", "RequestLine"]);
+// ROUTE-annotation idiom — the cross-framework set of annotation NAMES that declare an HTTP route now lives in
+// the declarative FRAMEWORK REGISTRY (../frameworks/route_annotations), the single source of truth a community
+// plugin extends by adding rows. The bare regex pass below is name-AGNOSTIC (it judges the literal), but a route
+// SPLIT across a class @Path + a method @Path with PLAIN relative literals (`member/booking` + `v1`, no slash,
+// no path-var) is invisible to it — the only signal that `member/booking` IS a route is the annotation NAME,
+// so COMPOSITION keys on the registry vocabulary. The registry ALSO maps the name → its HTTP verb (@GetMapping →
+// GET) so a route key carries its method (method-aware grounding). Re-exported for `receiver_class` (custom-annot
+// learner) — a snapshot of the builtin names.
+export { routeAnnotationNames as _routeAnnotNames, isRouteAnnotation, routeAnnotationMethod } from "../frameworks/route_annotations.js";
 const _NAMED_ANNOT = /@(\w+)\s*\(\s*["'`]([^"'`\s]+)["'`]/g;        // @Name("literal") — name + the literal
 const _join = (base: string, sub: string) => normPath("/" + [base, sub].map((s) => s.replace(/^\/+|\/+$/g, "")).filter(Boolean).join("/"));
 // the next non-annotation/non-blank code line AFTER the annotation at `at` — to tell a CLASS base from a METHOD
@@ -44,10 +46,11 @@ function composedRoutes(text: string): KeyHit[] {
   _NAMED_ANNOT.lastIndex = 0;
   while ((m = _NAMED_ANNOT.exec(text)) !== null) {
     const [name, lit] = [m[1], m[2]];
-    if (!_ROUTE_ANNOT.has(name)) continue;
+    if (!isRouteAnnotation(name)) continue;
     if (/\b(class|interface|enum|record)\b/.test(_nextDecl(text, m.index))) { classBase = lit; continue; }   // class base
     const full = lit.startsWith("/") ? normPath(lit) : _join(classBase ?? "", lit);   // method path (absolute overrides the base)
-    if (full && full !== "/") out.push({ kind: "http-route", value: full, line: lineOf(text, m.index), produces: true });
+    const method = routeAnnotationMethod(name);   // @GetMapping → GET (the registry's name→verb map); undefined for a bare @Path
+    if (full && full !== "/") out.push({ kind: "http-route", value: full, line: lineOf(text, m.index), produces: true, ...(method ? { method } : {}) });
   }
   return out;
 }
@@ -61,7 +64,7 @@ function composedRoutes(text: string): KeyHit[] {
 //     route" signal when the slash is absent; the engine's route SUFFIX matcher then grounds the relative
 //     handler to the front-end's FULL URL (`/manage/rest/fileNote/generateFileNote/*`) — no class-combine
 //     or base-path needed. A plain literal with no slash/var (`@Column("user_id")`, `@Named("x")`) is NOT a route.
-const ANNOTATION_ARG = /@\w[\w.]*\s*\([^)]*?["'`]([^"'`\s]+)["'`]/g;
+const ANNOTATION_ARG = /@(\w[\w.]*)\s*\([^)]*?["'`]([^"'`\s]+)["'`]/g;   // group 1 = annotation name (for the verb lookup), group 2 = the literal
 const PATHISH = /^[\w\-./{}:<>*~%]+$/;                       // path characters only — excludes prose/SQL/regex
 const PATH_VAR = /\{[^}]*\}|<[^>]*>|(?:^|\/):[A-Za-z_]/;     // {id} / <id> / :id — a dynamic route segment
 function routeValue(s: string): string | null {
@@ -78,8 +81,10 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   let m: RegExpExecArray | null;
   ANNOTATION_ARG.lastIndex = 0;
   while ((m = ANNOTATION_ARG.exec(text)) !== null) {
-    const path = routeValue(m[1]);
-    if (path && path !== "/") out.push({ kind: "http-route", value: path, line: lineOf(text, m.index), produces: true });
+    const path = routeValue(m[2]);
+    if (!path || path === "/") continue;
+    const method = routeAnnotationMethod(m[1].split(".").pop()!);   // qualified @javax.ws.rs.GET → last segment; verb from the registry (undefined for an unknown/verb-less annotation)
+    out.push({ kind: "http-route", value: path, line: lineOf(text, m.index), produces: true, ...(method ? { method } : {}) });
   }
   // ⊕ class@Path + method@Path COMPOSED endpoints (the plain-relative split the literal pass can't recognise)
   const seen = new Set(out.map((h) => h.value));
