@@ -12,6 +12,10 @@ import * as atoms from "./atoms.js";
 import { RENDER } from "./config.js";
 
 const _CONF_CORE = 1.0, _CONF_TEST = 1.0, _CONF_LINK = 0.9, _CONF_ENV = 0.6;
+// BOUNDARY (shared-key medium) node kinds — the crossing sites, NOT code. The seam hunk carries `kind` only for
+// these (a route labelled by its op, a table, a queue…) so the concern render can name an op-labelled route;
+// code hunks (method/function/class/module) omit `kind`, keeping the call-graph oracle fixtures byte-stable.
+const _BOUNDARY_KINDS = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
 
 const inter = (a: Set<string>, b: Set<string> | undefined): Set<string> => {
   const out = new Set<string>();
@@ -973,6 +977,7 @@ function _seam_hunk(n: Node, provenance: string): any {
     direction: n.direction,
   };
   if (n.enclosing && n.enclosing !== n.label) out.enclosing = n.enclosing;   // owning class → the render QUALIFIES `Class.method`; `label` stays bare for handles/center-matching
+  if (_BOUNDARY_KINDS.has(n.kind)) out.kind = n.kind;   // carry the medium kind for BOUNDARY nodes only (route/table/queue/…) so the render can name an op-labelled route; code hunks stay unchanged (oracle-stable)
   if (n.subcores.length) out.subcores = n.subcores;
   if (n.contract.length) out.contract = n.contract;
   if (n.hub) out.hub = n.hub;   // COLLAPSED hub marker (reason/fan/sampleConsumers) — additive, present only under hubCollapse (I2)

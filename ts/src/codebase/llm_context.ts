@@ -8,7 +8,7 @@
 //      a consumer can hedge (the single-pick is fragile on backend flows); 3. token economy — paths +
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
-type Hunk = { file?: string; role?: string; label?: string; enclosing?: string; start?: number; relevance?: number; spine?: boolean };
+type Hunk = { file?: string; role?: string; label?: string; enclosing?: string; kind?: string; start?: number; relevance?: number; spine?: boolean };
 type Seam = { id: string; label: string; tier?: string; selected?: boolean; suggested?: boolean;
   primary?: { file: string; line: number; symbol: string }; hunks?: Hunk[];
   culmination?: number; writes?: string[]; dir?: string;
@@ -905,10 +905,17 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // counterpart — it's the medium, not an interaction (a `/route` or `table` node would render as a fake entry).
   const boundaries = new Set<string>();
   for (const n of upstream) for (const b of (crossAdj.get(n) ?? [])) boundaries.add(b);
+  const _isSym = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
     if (upstream.has(y) || boundaries.has(y) || !hunkById.has(y)) continue;   // Java call-side / another boundary / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
-    if (!mechNodes.has(e) && !upstream.has(e) && !boundaries.has(e)) addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
+    if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
+    // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names its OP as the route node's label
+    // (`updateBooking`) instead of a raw `/path`, and the ops fold into one code entry (`install`). Surface the
+    // op NAMES as the via so the map shows what the client does — `via updateBooking`, not just `the /… boundary`.
+    const ops = [...(crossAdj.get(y) ?? [])].map((r) => hunkById.get(r)).filter((rh) => rh?.kind === "route" && _isSym(rh.label));
+    if (ops.length) for (const rh of ops) addRay(e, rh.label);
+    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.

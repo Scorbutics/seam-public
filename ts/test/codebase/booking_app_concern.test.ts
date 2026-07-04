@@ -53,6 +53,15 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
     expect([...routes].some((r) => String(r).startsWith("/manage/rest/booking"))).toBe(true);
   });
 
+  test("a declarative endpoint-map client surfaces its OPERATION name, not just the wrapper function", () => {
+    if (!available()) return;
+    const { out } = concern();
+    const interactions = out.slice(out.indexOf("## Interactions"));
+    // bookingService.js fires ops through a { endpoint, method } map, folding them into `install`; the render
+    // names the op (a distinct-route boundary is labelled by the operation) — `updateBooking`, not just a path.
+    expect(interactions).toMatch(/install \(web\/bookingService\.js[\s\S]*via[^\n]*updateBooking/);
+  });
+
   test("a front-end file from each family appears as an interaction (the cross-stack reach)", () => {
     if (!available()) return;
     const { out } = concern();
