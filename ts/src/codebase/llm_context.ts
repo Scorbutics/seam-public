@@ -871,10 +871,27 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
     (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
   const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches a mechanism}
-  for (const cid of centerIds) {
+  for (const cid of centerIds)
     for (const consumer of (callIn.get(cid) ?? [])) { if (centerSet.has(consumer)) continue; const e = entryOf(consumer); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
-    const bounds = crossAdj.get(cid) ?? new Set<string>();
-    for (const b of bounds) for (const y of (crossAdj.get(b) ?? [])) if (!centerSet.has(y) && !bounds.has(y) && hunkById.has(y)) { const e = entryOf(y); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` }); }
+  // CROSS-STACK interactions — the boundary (a route/table/queue) can sit on an INTERMEDIATE that reaches the
+  // mechanism (a REST endpoint the bean sits BEHIND), NOT on the center itself: a Java bean's JS front-end
+  // consumer crosses the route to the ENDPOINT, never to the bean, so a center-only crossing scan hides it (the
+  // cross-stack half is grown but invisible on the map — the whole point of Seam). Walk the mechanism's call-
+  // UPSTREAM closure (every node that reaches a center through calls) and surface the crossing counterpart of ANY
+  // of them. The boundary node (b) is skipped; the counterpart (y) is the interaction, walked up to its OWN
+  // (front-end) entry — and if that entry climbed out of the grown region, surface the counterpart itself.
+  const upstream = new Set<string>(centerSet);
+  const ust = [...centerSet];
+  while (ust.length) { const n = ust.pop()!; for (const c of (callIn.get(n) ?? [])) if (!upstream.has(c)) { upstream.add(c); ust.push(c); } }
+  // the BOUNDARY nodes the mechanism sits on (the route/table/key sites, crossing-adjacent to the upstream); their
+  // OTHER neighbours are the cross-stack counterparts (code sharing the boundary). Skip a boundary itself as a
+  // counterpart — it's the medium, not an interaction (a `/route` or `table` node would render as a fake entry).
+  const boundaries = new Set<string>();
+  for (const n of upstream) for (const b of (crossAdj.get(n) ?? [])) boundaries.add(b);
+  for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
+    if (upstream.has(y) || boundaries.has(y) || !hunkById.has(y)) continue;   // Java call-side / another boundary / non-region → not a counterpart
+    let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
+    if (!centerSet.has(e) && !upstream.has(e) && !boundaries.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` });
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.

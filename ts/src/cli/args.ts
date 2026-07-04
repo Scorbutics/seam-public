@@ -113,6 +113,11 @@ export function parseArgs(argv: string[]): Args {
       case "--no-interface-consumers": a.interfaceConsumers = false; break;   // disable the default interface-consumer enrichment
       case "--no-data-coupling": a.dataCoupling = false; a.dataCouplingAuto = false; a.dataCouplingExplicit = true; break;
       case "--cache": a.cache = true; break;
+      // Force a full REGROW + re-coupling: bypass the graph cache (per-node footprint P3 / coupling-delta P4 /
+      // settled-grow answer P5 + the sharded scan) so the wave orchestration and coupling materialisation re-run
+      // live. Leaves the LEARNED flywheel matchers (`.seam/key-adapters.json`) intact — they replay
+      // deterministically, so this re-runs the work WITHOUT paying the LLM to re-learn. Same as SEAM_GRAPH_CACHE=0.
+      case "--no-cache": process.env.SEAM_GRAPH_CACHE = "0"; break;
       // --data-coupling off|floor|llm|auto : off=disabled, floor=deterministic adapters only,
       // llm=floor + the LLM shared-key front-end (always), auto (DEFAULT)=floor + LLM front-end WHEN an LLM
       // backend resolves (learn-once → cached → deterministic warm), else floor. `auto` makes cross-stack
