@@ -62,8 +62,24 @@ const GENERIC: KeyKind = { kind: "key", nodeKind: "resource", produceEdge: "key-
 // Kind metadata (node label + edge kinds) for a key kind: a PRESENT detection adapter owns its kind; else
 // the ARCHETYPE registry supplies the semantics (so a learned `event`/`binding`/… matcher grounds with the
 // right boundary + edges even though no built-in adapter detects it); else GENERIC.
+// PLUGIN adapters (Phase 2): a community code adapter — a `KeyKind` loaded from a plugins dir — is registered
+// here at runtime and joins the builtins for detection AND all the derived metadata below. `allAdapters()` is
+// the LIVE list every consumer reads; registering rebuilds the derived sets IN PLACE (importers hold the Set
+// reference), and bumps a version so the coupling cache epoch invalidates.
+const _extra: KeyKind[] = [];
+export const allAdapters = (): KeyKind[] => (_extra.length ? [...ADAPTERS, ..._extra] : ADAPTERS);
+export let ADAPTERS_VERSION = 0;   // folded into the coupling epoch so a newly-registered adapter invalidates the cache
+export function registerAdapter(a: KeyKind): boolean {
+  if (allAdapters().some((x) => x.kind === a.kind && (x.name ?? x.kind) === (a.name ?? a.kind))) return false;   // idempotent by (kind,name)
+  _extra.push(a);
+  ADAPTERS_VERSION += 1;
+  _rebuildAdapterDerived();
+  return true;
+}
+export function _resetAdapterPlugins(): void { if (!_extra.length) return; _extra.length = 0; ADAPTERS_VERSION += 1; _rebuildAdapterDerived(); }
+
 export const kindOf = (kind: string): KeyKind => {
-  const adapter = ADAPTERS.find((a) => a.kind === kind);
+  const adapter = allAdapters().find((a) => a.kind === kind);
   if (adapter) return adapter;
   const arch = ARCHETYPES[kind];
   return arch ? { ...arch, scan: () => [] } : GENERIC;
@@ -104,13 +120,26 @@ export function scan_file_keys(file: string, text: string, masked?: MaskCtx): Ke
   // ANY adapter — the deterministic floor isn't immune (raw-SQL matched the English "…select … from the …"
   // as a db-table read across 32 files). plausibleKeyValue is the same identifier-shape filter the LLM/
   // matcher paths use, applied here so a coincidental match can't become a shared-key boundary.
-  return ADAPTERS.flatMap((a) => a.scan(file, text, m)).filter((h) => plausibleKeyValue(h.value));
+  return allAdapters().flatMap((a) => a.scan(file, text, m)).filter((h) => plausibleKeyValue(h.value));
 }
 
 // Non-source file extensions the coupling walk ALSO scans for shared keys: the structural TEMPLATE_EXTS
 // (markup that carries framework bindings — for the learned `attr` matchers) UNION any adapter's own
 // `extraExts`. SEAM_NO_ADAPTERS disables the floor → no extra exts either.
-const EXTRA_EXTS = [...new Set([...TEMPLATE_EXTS, ...ADAPTERS.flatMap((a) => a.extraExts ?? [])])].map((e) => e.toLowerCase());
+let EXTRA_EXTS = [...new Set([...TEMPLATE_EXTS, ...ADAPTERS.flatMap((a) => a.extraExts ?? [])])].map((e) => e.toLowerCase());
+
+// Recompute the ADAPTER-derived metadata after a plugin registers — MUTATE the exported Sets in place (importers
+// hold the reference) + reassign the module-local EXTRA_EXTS. Archetype/GENERIC metadata is unchanged.
+function _rebuildAdapterDerived(): void {
+  const all = allAdapters();
+  const metas = [...all, ...ARCHETYPE_METAS, GENERIC];
+  const put = (s: Set<string>, vals: string[]) => { s.clear(); for (const v of vals) if (v) s.add(v); };
+  put(KEY_EDGE_KINDS, metas.flatMap((k) => [k.produceEdge, k.consumeEdge]));
+  put(KEY_NODE_KINDS, metas.map((k) => k.nodeKind));
+  put(DOMAIN_SUBJECT_KINDS, all.filter((a) => a.kind === DB_TABLE_META.kind).map((a) => a.nodeKind));
+  put(KEY_PRODUCE_EDGE_KINDS, [...all, GENERIC].map((k) => k.produceEdge));
+  EXTRA_EXTS = [...new Set([...TEMPLATE_EXTS, ...all.flatMap((a) => a.extraExts ?? [])])].map((e) => e.toLowerCase());
+}
 
 // The "is this file worth scanning for shared keys" predicate — SOURCE_EXTS (the global source set) PLUS
 // the adapters' template extras. The coupling walks (shared_key_index, llmKeyIndex) use THIS instead of

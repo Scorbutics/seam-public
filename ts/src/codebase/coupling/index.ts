@@ -20,7 +20,7 @@ import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { ADAPTERS, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
@@ -175,7 +175,7 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // cached floor re-scans instead of serving pre-fix keys — otherwise a logic fix is invisible on a warm repo.
 const _ADAPTER_LOGIC_VERSION = "2";
 function floorConfigSalt(): string {
-  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${ADAPTERS.map((a) => a.kind).join(",")}`;
+  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${allAdapters().map((a) => a.kind).join(",")}|plugins=${ADAPTERS_VERSION}`;
 }
 
 // One file's RAW floor contribution — the per-file MAP half of the floor build, kept raw (param sites

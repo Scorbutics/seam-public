@@ -1,0 +1,5 @@
+{
+  "routeAnnotations": [
+    { "annotation": "MyRoute", "httpMethod": "GET", "framework": "acme" }
+  ]
+}
