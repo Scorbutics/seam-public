@@ -38,7 +38,8 @@
               "relevant": true,
               "external": [],
               "externalRefs": [],
-              "rewire": null
+              "rewire": null,
+              "enclosing": "PaymentService"
             },
             {
               "id": "AdminPanel",
@@ -95,7 +96,8 @@
               "relevant": true,
               "external": [],
               "externalRefs": [],
-              "rewire": null
+              "rewire": null,
+              "enclosing": "PaymentService"
             },
             {
               "id": "RefundPage",

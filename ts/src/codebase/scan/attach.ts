@@ -8,7 +8,7 @@ import { _resolve_import, scan_consumers, _kind_for } from "../../core/resolve/c
 import { endsWithSourceExt, parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
 import { makeCtx, available } from "../atoms.js";
-import { _read, _named_units, _usage_lines, _enclosing, _exported_members, stem } from "./ast_units.js";
+import { _read, _named_units, _usage_lines, _enclosing, _enclosingClass, _exported_members, stem } from "./ast_units.js";
 import { SCAN } from "./config.js";
 import type { GraphNode, GraphEdge } from "./graph.js";
 
@@ -71,7 +71,7 @@ export async function _depth2_ripple(repo: string, consumers: GraphNode[], count
           counter += 1;
           d2id = `n${counter}`;
           seenKeys.set(key, d2id);
-          newNodes.push({ id: d2id, symbol: name, kind: _kind_for(rel, kind), file: rel, range: [start, end], enclosing: "", complexity: Math.max(1, end - start + 1) });
+          newNodes.push({ id: d2id, symbol: name, kind: _kind_for(rel, kind), file: rel, range: [start, end], enclosing: _enclosingClass(units, start, end), complexity: Math.max(1, end - start + 1) });
         }
         if (d2id !== tid) newEdges.push({ from: d2id, to: tid, kind: "reference", provenance: "RESOLVED_FULL" });
       }
@@ -108,7 +108,7 @@ export async function _chain_route_consumers(repo: string, nodes: GraphNode[], e
       for (const ln of lines) {
         const enc = _enclosing(units, ln);
         let name: string, kind: string, start: number, end: number, cls: string;
-        if (enc) { [name, kind, start, end] = enc; cls = units.find((u) => u[1] === "class" && u[2] <= start && end <= u[3])?.[0] ?? ""; }
+        if (enc) { [name, kind, start, end] = enc; cls = _enclosingClass(units, start, end); }
         else { name = stem(con.file); kind = "module"; start = ln; end = ln; cls = ""; }
         const key = `${con.file}#${name}#${start}`;
         if (seen.has(key)) continue;

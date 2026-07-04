@@ -52,7 +52,8 @@
               "relevant": true,
               "external": [],
               "externalRefs": [],
-              "rewire": null
+              "rewire": null,
+              "enclosing": "PaymentService"
             },
             {
               "id": "c1",
@@ -94,7 +95,8 @@
               "relevant": true,
               "external": [],
               "externalRefs": [],
-              "rewire": null
+              "rewire": null,
+              "enclosing": "PaymentService"
             }
           ],
           "proposedBy": "floor",

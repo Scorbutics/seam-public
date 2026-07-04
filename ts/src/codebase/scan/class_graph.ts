@@ -15,7 +15,7 @@ import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Unit, type ResolvedGraph, makeGraph,
 } from "./graph.js";
-import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _usage_lines } from "./ast_units.js";
+import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "./ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
   _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names,
@@ -159,7 +159,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
-  const byKey = new Map<string, { sym: string; kind: string; start: number; end: number; rel: string; full: boolean }>();
+  const byKey = new Map<string, { sym: string; kind: string; start: number; end: number; rel: string; full: boolean; encClass: string }>();
   const resolvedMethods = new Set<string>();   // every method name a call site was found for (any provenance)
   for (const pf of pending) {
     for (const s of pf.sites) {
@@ -167,17 +167,20 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
       resolvedMethods.add(s.method);
       const enc = _enclosing(pf.units, s.line);
       const [sym, kind, start, end] = enc ? enc : [stem(pf.fn), "module", s.line, s.line];
+      // the consumer's OWNING class → the node's `enclosing`, so a method reached here reads as
+      // `Class.method` not a bare, cross-class-ambiguous name (3 `createBooking` beans on Acme).
+      const encClass = _enclosingClass(pf.units, start, end);
       const key = `${pf.rel}#${sym}#${start}`;
       const full = inFamily(s, pf.instTypes);
       const cur = byKey.get(key);
       if (cur) cur.full = cur.full || full;
-      else byKey.set(key, { sym, kind, start, end, rel: pf.rel, full });
+      else byKey.set(key, { sym, kind, start, end, rel: pf.rel, full, encClass });
     }
   }
   let counter = 0;
   for (const v of byKey.values()) {
     counter += 1;
-    nodes.push({ id: `c${counter}`, symbol: v.sym, kind: _kind_for(v.rel, v.kind), file: v.rel, range: [v.start, v.end], enclosing: "", complexity: Math.max(1, v.end - v.start + 1) });
+    nodes.push({ id: `c${counter}`, symbol: v.sym, kind: _kind_for(v.rel, v.kind), file: v.rel, range: [v.start, v.end], enclosing: v.encClass, complexity: Math.max(1, v.end - v.start + 1) });
     edges.push({ from: `c${counter}`, to: "n1", kind: "call", provenance: v.full ? "RESOLVED_FULL" : "RESOLVED_PARTIAL" });
   }
   // `resolvedMethods` is read by build_consumers_graph BEFORE merge_resolved (which copies only
@@ -278,7 +281,7 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
   const methodSpan = new Map(methods.map((m) => [m[0], [m[1], m[2]] as [number, number]]));
 
   const blindspots: Blindspot[] = [], unresolved: Unresolved[] = [];
-  const pending: [string, string, string, number, number, Record<string, number>, string][] = [];
+  const pending: [string, string, string, number, number, Record<string, number>, string, string][] = [];   // …, prov, enclosingClass
   const usedMethods = new Set<string>();
   // PARSE CAP — a HUB class (e.g. a Repository consumed by 500+ files) would otherwise tree-sitter-parse
   // every consumer just to attribute method calls — minutes on a big repo, EVERY run (the parse isn't disk-
@@ -295,7 +298,7 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
       continue;
     }
     if (parsed >= _CLASS_CONSUMER_PARSE_CAP) {   // past the cap → a lightweight module node (counts, but no method attribution)
-      pending.push([con.file, stem(con.file), "module", 0, 0, {}, "RESOLVED_FULL"]); capped++;
+      pending.push([con.file, stem(con.file), "module", 0, 0, {}, "RESOLVED_FULL", ""]); capped++;
       continue;
     }
     const rd = _read(repo, con.file);
@@ -312,7 +315,7 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
     const line = Object.keys(usage).length ? Math.min(...Object.values(usage)) : (_usage_lines(cctx, units, con.local)[0] ?? 0);
     const enc = _enclosing(units, line);
     const [sym, kind, start, end] = enc ? enc : [stem(con.file), "module", line, line];
-    pending.push([con.file, sym, kind, start, end, usage, prov]);
+    pending.push([con.file, sym, kind, start, end, usage, prov, _enclosingClass(units, start, end)]);   // owning class → `Class.method` in the render
     for (const m of Object.keys(usage)) usedMethods.add(m);
   }
   if (capped) blindspots.push({ node: className, mechanism: "method-attribution-capped",
@@ -336,11 +339,11 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
   const nMethods = usedMethods.size;
   const untraced: string[] = [];
   const seenKeys = new Map<string, string>();
-  for (const [cfile, sym, kind, start, end, usage] of pending) {
+  for (const [cfile, sym, kind, start, end, usage, , encClass] of pending) {
     counter += 1;
     const cid = `c${counter}`;
     seenKeys.set(`${cfile}#${sym}#${start}`, cid);
-    nodes.push({ id: cid, symbol: sym, kind: _kind_for(cfile, kind), file: cfile, range: [start, end], enclosing: "", complexity: Math.max(1, end - start + 1) });
+    nodes.push({ id: cid, symbol: sym, kind: _kind_for(cfile, kind), file: cfile, range: [start, end], enclosing: encClass, complexity: Math.max(1, end - start + 1) });
     if (Object.keys(usage).length) {
       for (const mn of Object.keys(usage).sort()) edges.push({ from: cid, to: `${className}.${mn}`, kind: "reference", provenance: "RESOLVED_FULL", line: usage[mn] });
     } else { edges.push({ from: cid, to: className, kind: "reference", provenance: "RESOLVED_FULL" }); untraced.push(cfile); }

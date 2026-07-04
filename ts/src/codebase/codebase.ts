@@ -972,6 +972,7 @@ function _seam_hunk(n: Node, provenance: string): any {
     provenance, relevant: n.relevant, external: [], externalRefs: [], rewire: null,
     direction: n.direction,
   };
+  if (n.enclosing && n.enclosing !== n.label) out.enclosing = n.enclosing;   // owning class → the render QUALIFIES `Class.method`; `label` stays bare for handles/center-matching
   if (n.subcores.length) out.subcores = n.subcores;
   if (n.contract.length) out.contract = n.contract;
   if (n.hub) out.hub = n.hub;   // COLLAPSED hub marker (reason/fan/sampleConsumers) — additive, present only under hubCollapse (I2)

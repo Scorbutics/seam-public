@@ -8,7 +8,7 @@
 //      a consumer can hedge (the single-pick is fragile on backend flows); 3. token economy — paths +
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
-type Hunk = { file?: string; role?: string; label?: string; start?: number; relevance?: number; spine?: boolean };
+type Hunk = { file?: string; role?: string; label?: string; enclosing?: string; start?: number; relevance?: number; spine?: boolean };
 type Seam = { id: string; label: string; tier?: string; selected?: boolean; suggested?: boolean;
   primary?: { file: string; line: number; symbol: string }; hunks?: Hunk[];
   culmination?: number; writes?: string[]; dir?: string;
@@ -865,6 +865,9 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     return cur;
   };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
+  // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
+  // for the --grow-from handle + center-matching. Disambiguates a bare `createBooking` across sibling beans.
+  const qual = (h: any): string => (h?.enclosing && h.enclosing !== h.label ? `${h.enclosing}.${h.label}` : (h?.label ?? "?"));
   // COUPLING interactions — a node sharing a data-key BOUNDARY with a mechanism (the bean writes a table a reporting
   // job READS → that job is an interaction though it never CALLS the bean). 2 hops over crossings; boundary skipped.
   const crossAdj = new Map<string, Set<string>>();
@@ -872,7 +875,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
   const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches a mechanism}
   for (const cid of centerIds)
-    for (const consumer of (callIn.get(cid) ?? [])) { if (centerSet.has(consumer)) continue; const e = entryOf(consumer); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: hunkById.get(consumer)?.label ?? "?" }); }
+    for (const consumer of (callIn.get(cid) ?? [])) { if (centerSet.has(consumer)) continue; const e = entryOf(consumer); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: qual(hunkById.get(consumer)) }); }
   // CROSS-STACK interactions — the boundary (a route/table/queue) can sit on an INTERMEDIATE that reaches the
   // mechanism (a REST endpoint the bean sits BEHIND), NOT on the center itself: a Java bean's JS front-end
   // consumer crosses the route to the ENDPOINT, never to the bean, so a center-only crossing scan hides it (the
@@ -904,7 +907,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
-  const where = (h: any) => `${h?.label ?? "?"} (${h?.file ?? "?"}:${h?.start ?? 0})`;
+  const where = (h: any) => `${qual(h)} (${h?.file ?? "?"}:${h?.start ?? 0})`;
   const out: string[] = [];
   // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
   // grow reached shows its fan-in; one the node budget didn't expand is still listed (picked, not reached) so the

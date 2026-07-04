@@ -84,6 +84,15 @@ export function _enclosing(units: Unit[], line: number): Unit | null {
   return cands.length ? cands.reduce((a, b) => (b[3] - b[2] < a[3] - a[2] ? b : a)) : null;
 }
 
+// The name of the CLASS that owns the span [start,end] — the `enclosing` for a METHOD node (so a consumer
+// reached mid-grow reads `AcmeCheckBookingsService.createBooking`, not a bare, ambiguous `createBooking`).
+// Tightest containing class wins (nested classes); "" for a top-level function or a call in a class body whose
+// own unit IS the class. STRUCTURAL (tree-sitter units), never a name heuristic.
+export function _enclosingClass(units: Unit[], start: number, end: number): string {
+  const cands = units.filter((u) => u[1] === "class" && u[2] <= start && end <= u[3] && !(u[2] === start && u[3] === end));
+  return cands.length ? cands.reduce((a, b) => (b[3] - b[2] < a[3] - a[2] ? b : a))[0] : "";
+}
+
 export function _call_lines(ctx: Ctx, local: string): number[] {
   const lines: number[] = [];
   for (const c of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
