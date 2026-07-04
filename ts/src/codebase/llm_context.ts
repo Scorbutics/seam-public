@@ -912,12 +912,29 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
   // grow reached shows its fan-in; one the node budget didn't expand is still listed (picked, not reached) so the
   // agent knows it's part of the concern. Falls back to the detected centerIds when no centers were passed.
+  // OPERATIONS — a mechanism is usually a CLASS/bean; its own METHODS present in the footprint (grown as its
+  // deps) ARE the answer to "how is X managed" (createBooking / cancelBooking / …), but the center line only
+  // names the class, so they were invisible — the dev saw a bare `BookingsBean` and none of its operations.
+  // List the methods the region holds under each mechanism (structural: hunk.enclosing === the center's label),
+  // capped + counted so a fat bean stays scannable. A leading `→` marks the intent-relevant ones (spine tier).
+  const _OPS_CAP = Math.max(4, parseInt(process.env.SEAM_CONCERN_OPS ?? "16", 10) || 16);
+  const opsOf = (label: string): string[] => {
+    if (!label) return [];
+    const ops: { name: string; spine: boolean }[] = [];
+    const seen = new Set<string>();
+    for (const id of nodes) { const hh = hunkById.get(id); if (hh?.enclosing === label && hh.label && !seen.has(hh.label)) { seen.add(hh.label); ops.push({ name: hh.label, spine: seamOf.get(id)?.tier === "spine" }); } }
+    return ops.sort((a, b) => (Number(b.spine) - Number(a.spine)) || (a.name < b.name ? -1 : 1)).map((o) => (o.spine ? `→${o.name}` : o.name));
+  };
+  const mechLine = (h: any, cid: string | null): string => {
+    const head = `  ${where(h)} — fan-in ${cid ? fanIn(cid) : 0} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`;
+    const ops = opsOf(h?.label);
+    return ops.length ? `${head}\n      operations: ${ops.slice(0, _OPS_CAP).join(", ")}${ops.length > _OPS_CAP ? `, … (+${ops.length - _OPS_CAP} more)` : ""}` : head;
+  };
   const mechLines: string[] = [];
   if (opts.centers?.length) {
     for (const c of opts.centers) { const cid = matchNode(c); const h = cid ? hunkById.get(cid) : null;
-      mechLines.push(h ? `  ${where(h)} — fan-in ${fanIn(cid!)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`
-        : `  ${c.symbol} (${c.file}) — picked, not reached in this region`); }
-  } else for (const cid of centerIds) { const h = hunkById.get(cid); mechLines.push(`  ${where(h)} — fan-in ${fanIn(cid)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`); }
+      mechLines.push(h ? mechLine(h, cid) : `  ${c.symbol} (${c.file}) — picked, not reached in this region`); }
+  } else for (const cid of centerIds) mechLines.push(mechLine(hunkById.get(cid), cid));
   const mechCount = opts.centers?.length ?? centerIds.length;
   out.push("# Concern map — the mechanisms and the interactions around them",
     [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${mechCount}`, `resolution: ${model.resolutionQuality ?? "?"}`,
