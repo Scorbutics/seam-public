@@ -29,7 +29,8 @@ describe("interface→impl index — incremental disk cache (correctness, not ti
     const impls = await impls_of(REPO, "Cluster");
     expect(impls.map((i) => i.cls)).toEqual(["FailoverCluster"]);
     expect(impls[0].file).toBe("FailoverCluster.java");
-    expect(existsSync(join(REPO, ".seam", "impl-index.json"))).toBe(true);   // contribution persisted for reuse
+    // contribution persisted for reuse — monolithic (SEAM_GRAPH_CACHE=0) or sharded (default): either layout counts
+    expect(existsSync(join(REPO, ".seam", "impl-index.json")) || existsSync(join(REPO, ".seam", "impl-index", "manifest.json"))).toBe(true);
   });
 
   test("a NEW implementation added mid-life is picked up (incremental re-parse of only the new file)", async () => {

@@ -452,11 +452,12 @@ in the file and matches it (subpath-safe, class+method `@Path` composed) to the 
 bridges e.g. a JHipster Angular service to its Spring controller **deterministically** under
 `--data-coupling floor`, no LLM.
 
-### `SEAM_GRAPH_CACHE=1` — instant on known territory (opt-in)
+### Graph cache — instant on known territory (on by default)
 
 A persistent, per-source-file **graph cache** memoizes the resolved footprint so a warm query is a read,
 not a recompute — measured **cold→warm** ≈ 110s→2s (cal.com), byte-identical. Content-keyed and
-invalidated on any source change; **off by default** while it's validated on real repos. See
+invalidated on any source change, so it only ever affects speed. **On by default**;
+`SEAM_GRAPH_CACHE=0` is the kill switch (the monolithic byte-identical layout, no memoization). See
 `docs/GRAPH_CACHE.md`.
 
 **Structural shapes** (non-flow questions — all deterministic/offline, see

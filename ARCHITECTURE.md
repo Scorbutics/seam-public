@@ -450,7 +450,7 @@ with repo size is the handful of **O(repo)** whole-repo index builds; the design
 The discipline throughout: **profile the measured bottleneck on a real repo, don't assume** — the first
 hypothesis here (anchor-recall embeddings) was wrong; the wall was the DI-index parse.
 
-- **Persistent graph cache — `SEAM_GRAPH_CACHE=1`, OPT-IN (`docs/GRAPH_CACHE.md`, `scan/footprint_cache.ts`).**
+- **Persistent graph cache — ON by default (`SEAM_GRAPH_CACHE=0` kills it; `docs/GRAPH_CACHE.md`, `scan/footprint_cache.ts`).**
   The next escalation: cache the *resolved graph*, sharded per source file, so a query on known territory is a
   read, not a recompute. `shardedIncrementalScanAsync` splits the async indices into per-file shards; then two
   memoizations, both guarded by a **content epoch** (a hash of every source file's `(rel,mtime,size)` from a
@@ -460,7 +460,8 @@ hypothesis here (anchor-recall embeddings) was wrong; the wall was the DI-index 
   `SEAM_*` env), so a same-config warm run skips the wave entirely. **P4** memoizes the anchor coupling overlay
   under a coupling epoch (source ⊕ the learned-adapter store). Only DETERMINISTIC grows are cached (no LLM
   border/coupling). Measured **cold→warm** on real repos: cal.com 110s→1.9s, private-app 13s→1.2s, byte-identical.
-  It stays **off by default** for the first main merge (validate-first); flip after real-repo confirmation.
+  **On by default** — like the index cache it only ever affects speed (content-keyed, invalidated on any
+  source change, cold==warm identical); `SEAM_GRAPH_CACHE=0` forces the monolithic no-memoization path.
   (Profiling caught the real wall again: `build_footprint` per-node re-derivation, not resolution — resolution
   is already index-cached.)
 

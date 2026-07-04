@@ -76,7 +76,7 @@ live path, then persist their shard — so it warms lazily, exactly like the fly
 > invalidates all — correct, and it closes the alias/new-impl hole by construction).
 
 1. **Sharded store primitive** ✅ — `shardedIncrementalScanAsync` + `loadShard`/`saveShard`: per-file shards
-   + manifest, partial rewrite/prune, hermetic invalidation tests. Behind `SEAM_GRAPH_CACHE=1`.
+   + manifest, partial rewrite/prune, hermetic invalidation tests. ON by default (`SEAM_GRAPH_CACHE=0` kills it).
 2. **Migrate the async indices** ✅ — `incrementalScanAsync` dispatches to the sharded store under the flag
    (impl-index, callsite-index); byte-identical output.
 3. **Memoize `build_footprint` per node** ✅ (warm ~2×, 8.8s→4.4s) — `footprint_cache.ts`, keyed on

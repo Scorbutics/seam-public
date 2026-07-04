@@ -25,9 +25,11 @@ import { ensureSeamDir, ensureSeamGitignore } from "../seam_dir.js";
 const _CACHE_VERSION = "v2-incremental";
 
 export const indexCacheEnabled = (): boolean => process.env.SEAM_INDEX_CACHE !== "0";   // on by default; =0 kill switch
-// Graph cache (docs/GRAPH_CACHE.md) — OPT-IN while it's built out (validate-first, per Brice). When on, the
-// async indices persist as per-file SHARDS instead of one monolithic JSON. Off = today's byte-identical layout.
-export const graphCacheEnabled = (): boolean => process.env.SEAM_GRAPH_CACHE === "1";
+// Graph cache (docs/GRAPH_CACHE.md) — ON by default (it only affects SPEED, never output: content-keyed,
+// invalidated on any source change, cold==warm identical — validated on cal.com/private-app/JHipster). The async
+// indices persist as per-file SHARDS + build_footprint / settled-grow memoize, so a warm query is a read.
+// `SEAM_GRAPH_CACHE=0` is the kill switch → the monolithic byte-identical layout, no memoization.
+export const graphCacheEnabled = (): boolean => process.env.SEAM_GRAPH_CACHE !== "0";
 
 type FileEntry<T> = { m: number; s: number; d: T };          // mtimeMs, size, contribution
 type CacheFile<T> = { salt: string; files: Record<string, FileEntry<T>> };

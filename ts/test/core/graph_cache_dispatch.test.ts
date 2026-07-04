@@ -23,22 +23,22 @@ beforeEach(() => {
 afterEach(() => { rmSync(repo, { recursive: true, force: true }); delete process.env.SEAM_GRAPH_CACHE; });
 
 describe("incrementalScanAsync — graph-cache dispatch", () => {
-  test("OFF (default): writes the monolithic <name>.json, not a shard dir", async () => {
-    delete process.env.SEAM_GRAPH_CACHE;
+  test("KILL SWITCH (SEAM_GRAPH_CACHE=0): writes the monolithic <name>.json, not a shard dir", async () => {
+    process.env.SEAM_GRAPH_CACHE = "0";
     await incrementalScanAsync(repo, SKIP, isTs, "v1", scan, "idx");
     expect(existsSync(join(repo, ".seam/idx.json"))).toBe(true);
     expect(existsSync(join(repo, ".seam/idx/manifest.json"))).toBe(false);
   });
 
-  test("ON: writes per-file shards + a manifest, not the monolithic JSON", async () => {
-    process.env.SEAM_GRAPH_CACHE = "1";
+  test("DEFAULT (env unset) + ON: writes per-file shards + a manifest, not the monolithic JSON", async () => {
+    delete process.env.SEAM_GRAPH_CACHE;   // graph cache is now ON by default
     await incrementalScanAsync(repo, SKIP, isTs, "v1", scan, "idx");
     expect(existsSync(join(repo, ".seam/idx/manifest.json"))).toBe(true);
     expect(existsSync(join(repo, ".seam/idx.json"))).toBe(false);
   });
 
   test("the merged result is IDENTICAL whether sharded or monolithic (only disk layout differs)", async () => {
-    delete process.env.SEAM_GRAPH_CACHE;
+    process.env.SEAM_GRAPH_CACHE = "0";
     const mono = await incrementalScanAsync(repo, SKIP, isTs, "v1", scan, "idxA");
     process.env.SEAM_GRAPH_CACHE = "1";
     const shard = await incrementalScanAsync(repo, SKIP, isTs, "v1", scan, "idxB");
