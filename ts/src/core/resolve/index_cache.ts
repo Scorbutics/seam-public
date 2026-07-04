@@ -20,6 +20,7 @@ import { existsSync, readFileSync, writeFileSync, mkdirSync, statSync, readdirSy
 import { join, relative } from "node:path";
 import { walk } from "./walk.js";
 import { timingOn } from "../progress.js";
+import { ensureSeamDir, ensureSeamGitignore } from "../seam_dir.js";
 
 const _CACHE_VERSION = "v2-incremental";
 
@@ -59,7 +60,7 @@ export function incrementalScan<T>(
     next[rel] = { m, s, d: data };
     out.push({ rel, data });
   }
-  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  try { ensureSeamDir(repo); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
   if (timingOn()) process.stderr.write(`[index-cache] ${reused} file(s) reused, ${rescanned} re-scanned\n`);
   return out;
 }
@@ -96,7 +97,7 @@ export async function incrementalScanAsync<T>(
     next[rel] = { m, s, d: data };
     out.push({ rel, data });
   }
-  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  try { ensureSeamDir(repo); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
   if (timingOn()) process.stderr.write(`[index-cache] ${cacheName}: ${reused} reused, ${rescanned} re-scanned\n`);
   return out;
 }
@@ -128,7 +129,7 @@ export async function incrementalScanFiles<T>(
     next[rel] = { m, s, d: data };
     out.push({ rel, data });
   }
-  try { mkdirSync(join(repo, ".seam"), { recursive: true }); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
+  try { ensureSeamDir(repo); writeFileSync(path, JSON.stringify({ salt, files: next } satisfies CacheFile<T>)); } catch { /* best-effort */ }
   if (timingOn()) process.stderr.write(`[index-cache] ${cacheName}: ${reused} reused, ${rescanned} re-scanned\n`);
   return out;
 }
@@ -170,6 +171,7 @@ export function loadShard<T>(repo: string, cacheName: string, rel: string): T | 
 // Persist ONE file's contribution directly (the write counterpart of loadShard) — for a consumer that owns
 // its own shard lifecycle (the footprint cache) rather than the walk-based shardedIncrementalScanAsync.
 export function saveShard<T>(repo: string, cacheName: string, rel: string, d: T): void {
+  ensureSeamGitignore(repo);   // self-ignore the cache on the very first shard write (footprint cache owns its own dir)
   _writeShard(_shardDir(repo, cacheName), _shardHash(rel), rel, d);
 }
 
@@ -202,7 +204,7 @@ export async function shardedIncrementalScanAsync<T>(
   }
   // prune shards for deleted files (present on disk, not in this walk) — keeps the cache from leaking.
   try { for (const fn of readdirSync(join(dir, "f"))) { const h = fn.replace(/\.json$/, ""); if (!kept.has(h)) try { unlinkSync(_shardPath(dir, h)); } catch { /* ignore */ } } } catch { /* no shard dir yet */ }
-  try { mkdirSync(dir, { recursive: true }); writeFileSync(manPath, JSON.stringify({ salt, files: next } satisfies ShardManifest)); } catch { /* best-effort */ }
+  try { ensureSeamGitignore(repo); mkdirSync(dir, { recursive: true }); writeFileSync(manPath, JSON.stringify({ salt, files: next } satisfies ShardManifest)); } catch { /* best-effort */ }
   if (timingOn()) process.stderr.write(`[index-cache] ${cacheName} (sharded): ${reused} reused, ${rescanned} re-scanned\n`);
   return out;
 }

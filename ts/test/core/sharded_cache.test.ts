@@ -3,10 +3,10 @@
 // change rebuilds all; and loadShard hydrates one file WITHOUT touching the manifest or its neighbours.
 // Hermetic: a throwaway tmp repo built in beforeEach, removed in afterEach. No embeddings/tree-sitter needed.
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, utimesSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { shardedIncrementalScanAsync, loadShard } from "../../src/core/resolve/index_cache.js";
+import { shardedIncrementalScanAsync, loadShard, saveShard } from "../../src/core/resolve/index_cache.js";
 
 const SKIP = new Set<string>(["node_modules", ".seam"]);
 const isTs = (rel: string) => rel.endsWith(".ts");
@@ -76,5 +76,27 @@ describe("shardedIncrementalScanAsync — partial invalidation", () => {
     expect(loadShard(repo, "graph-test", "a.ts")).toMatchObject({ rel: "a.ts", len: "export const a = 1;\n".length });
     expect(loadShard(repo, "graph-test", "sub/c.ts")).toMatchObject({ rel: "sub/c.ts" });
     expect(loadShard(repo, "graph-test", "does/not/exist.ts")).toBeUndefined();   // cold miss
+  });
+
+  // REGRESSION: the graph cache must self-ignore so a codebase grow never dirties the analyzed repo's git
+  // status. Before the fix, index_cache wrote `.seam/` with a bare mkdirSync and only the coupling stores
+  // dropped the `.gitignore` — so a scan that never hit coupling left `.seam/` untracked and visible.
+  test("the very first cache write drops a self-ignoring .seam/.gitignore", async () => {
+    await run();
+    const gi = join(repo, ".seam/.gitignore");
+    expect(existsSync(gi)).toBe(true);
+    expect(readFileSync(gi, "utf-8")).toContain("*");   // ignores everything under .seam by default
+  });
+});
+
+// saveShard (the footprint cache's write-through) owns its own shard dir — it must self-ignore too.
+describe("saveShard — self-ignores the cache", () => {
+  let r: string;
+  beforeEach(() => { r = join(tmpdir(), "seam-saveshard-" + process.pid + "-" + Math.round(process.hrtime()[1])); mkdirSync(r, { recursive: true }); });
+  afterEach(() => rmSync(r, { recursive: true, force: true }));
+
+  test("dropping a shard drops .seam/.gitignore", () => {
+    saveShard(r, "footprint-test", "x.ts", { hello: 1 });
+    expect(existsSync(join(r, ".seam/.gitignore"))).toBe(true);
   });
 });
