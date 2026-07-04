@@ -12,7 +12,7 @@ import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "./graph.js";
-import { expanduser, _read, _name_of, _named_units, _usage_lines } from "./ast_units.js";
+import { expanduser, _read, _name_of, _named_units, _usage_lines, _call_lines } from "./ast_units.js";
 import { _type_methods, _class_method_usage, _called_types } from "./ast_class.js";
 import { impls_of } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
@@ -180,6 +180,30 @@ async function _typeMethodsPass(s: DepScan, callerFiles?: string[]): Promise<voi
 // just not statically asserted). MULTIPLE impls → an honest blindspot listing candidates (we don't guess
 // which one the container wires). ZERO → left as-is (framework-generated, e.g. a Spring-Data repository:
 // a genuine terminal blindspot).
+// 2c) INTRA-FILE CALLEE pass (a FUNCTION/METHOD anchor only) — the anchor CALLS other functions/methods defined
+// in the SAME file (a module of helpers: `get_pdf_text` → same-file `extract_text_with_pdftotext`/`pypdf`). Those
+// callees have NO import and are NOT type-refs, so every pass above misses them and the anchor reads as a LEAF
+// (its actual mechanism invisible — the gauntlet's cross-language gap). Resolve the anchor body's call sites
+// against the file's OWN defs and add them as `call` deps. Cross-language (tree-sitter call-lines ⊕ named units).
+function _intraFileCalleePass(s: DepScan): void {
+  if (!s.actx) return;
+  const anchor = s.aunits.find((u) => u[0] === s.symbol);
+  if (!anchor) return;
+  const [, , alo, ahi] = anchor;   // the anchor's own span
+  // add the node/edge DIRECTLY — _addDep rejects same-file deps by design (a cross-file resolver guard), which is
+  // exactly what blocked these; here the same file IS the answer.
+  for (const [name, kind, dlo, dhi] of s.aunits) {
+    if (name === s.symbol || (dlo >= alo && dlo <= ahi)) continue;             // itself / a NESTED def (not a callee)
+    if (s.seen.has(`${name} ${s.anchorFile}`)) continue;                        // already added by another pass
+    if (!_call_lines(s.actx, name).some((ln) => ln >= alo && ln <= ahi)) continue;   // the anchor body calls this same-file def
+    s.seen.add(`${name} ${s.anchorFile}`);
+    s.counter += 1;
+    const did = `d${s.counter}`;
+    s.nodes.push({ id: did, symbol: name, kind, file: s.anchorFile, range: [dlo, dhi], enclosing: "", complexity: Math.max(1, dhi - dlo + 1) });
+    s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_FULL", line: _call_lines(s.actx, name).find((ln) => ln >= alo && ln <= ahi) ?? dlo });
+  }
+}
+
 async function _interfaceImplPass(s: DepScan): Promise<void> {
   for (const dn of [...s.nodes]) {
     const cands = await impls_of(s.repo, dn.symbol);
@@ -269,7 +293,8 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     let _t = _dt();
     await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
     await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
-    if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); } else { await _samePackagePass(s); _de("samePackage", _t); }
+    if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); }
+    else { await _samePackagePass(s); _intraFileCalleePass(s); _de("samePackage+intraCallee", _t); }
     _t = _dt();
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);

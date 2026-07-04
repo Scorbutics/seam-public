@@ -1,0 +1,10 @@
+def get_text(p):
+    if p:
+        return via_pdftotext(p)
+    return via_pypdf(p)
+def via_pdftotext(p):
+    return "a"
+def via_pypdf(p):
+    return "b"
+def extract_from_file(f):
+    return get_text(f)

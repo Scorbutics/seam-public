@@ -6,7 +6,8 @@
       "App|frontend/App.tsx|function",
       "OrdersPage|frontend/OrdersPage.tsx|function",
       "formatOrders|lib/format.ts|function|backward",
-      "listOrders|backend/OrderController.java|method|C|backward"
+      "listOrders|backend/OrderController.java|method|C|backward",
+      "render|frontend/OrdersPage.tsx|function|backward"
     ],
     "edges": [
       "/api/orders->OrdersPage:route-fetch",
@@ -15,25 +16,32 @@
       "App->OrdersPage:reference",
       "OrdersPage->/api/orders:route-fetch",
       "OrdersPage->formatOrders:import",
-      "listOrders->/api/orders:route-serve"
+      "OrdersPage->render:call",
+      "listOrders->/api/orders:route-serve",
+      "render->formatOrders:import"
     ]
   },
   "backend/OrderController.java:OrderController": {
     "nodes": [
       "/api/orders|backend/OrderController.java|route|C",
+      "/api/orders|frontend/OrdersPage.tsx|route|C",
       "App|frontend/App.tsx|function|C",
       "OrderController|backend/OrderController.java|class",
       "OrdersPage|frontend/OrdersPage.tsx|function|C",
       "formatOrders|lib/format.ts|function|backward",
-      "listOrders|backend/OrderController.java|method|backward"
+      "listOrders|backend/OrderController.java|method|backward",
+      "render|frontend/OrdersPage.tsx|function|backward"
     ],
     "edges": [
       "/api/orders->OrdersPage:route-fetch",
-      "App->OrdersPage:import",
+      "/api/orders->listOrders:route-serve",
       "App->OrdersPage:reference",
       "OrderController->/api/orders:route-serve",
       "OrderController->listOrders:contains",
-      "OrdersPage->formatOrders:import"
+      "OrdersPage->formatOrders:import",
+      "OrdersPage->render:call",
+      "render->/api/orders:route-fetch",
+      "render->formatOrders:import"
     ]
   },
   "app/api/admin/payments/route.ts:GET": {
