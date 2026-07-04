@@ -18,28 +18,36 @@ const _STOP = new Set(["how", "are", "is", "the", "a", "an", "of", "to", "in", "
 function _terms(intent: string): string[] {
   return [...new Set(intent.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !_STOP.has(w)))];
 }
-// NOISE — never a mechanism: a segment that is a TEST/fixture/archived/generated/legacy tree (a whole segment
-// OR a `test-…`/`archive…` prefixed one — Acme's `archived/bt/test-review-manage/` leaked in via
-// "managed"~"manage"), or a DTO/type-decl file shape.
-const _NOISE_FILE = /(?:^|\/)(?:tests?|test[-_][^/]*|__tests__|e2e|cypress|spec|mocks?|fixtures?|archived?|archive[-_][^/]*|generated?|gen|legacy|deprecated|vendor|examples?|samples?)(?:\/|$)|\.(?:test|spec|cy|e2e-spec|stories|test-samples|d|input|output|dto)\.[jt]sx?$/i;
-// DATA/config classes are not mechanisms — a `*Constants`/`*Config`/`*Enum`/`*Dto` is behaviour-free, so picking
-// it strands the concern on a dead-end (Acme: `BookingsConstants`, fan-in 0, 0 interactions).
-const _DATA_NAME = /(?:Constants?|Config(?:uration)?|Enum|Dto|Vo|Props|Schema|Types?)$/;
+// The ONLY hardcoded exclusions are conventions, not project-specific guesses: standard TEST files (the same
+// thing the grow drops unless --include-tests) and a `.d.ts` type-declaration (a language-spec fact — never a
+// mechanism). NOT archived/generated/legacy/vendor/… — those are per-repo conventions (Brice: a project may
+// keep real code in `generated/`); the dev excludes their own dead dirs via `--exclude`, and the LLM judge (which
+// sees the path + fan-in) filters archived/data code semantically. A structural `enum` is dropped by kind below.
+const _TEST_FILE = /(?:^|\/)(?:tests?|__tests__|e2e|cypress)(?:\/|$)|\.(?:test|spec|cy|e2e-spec|stories|test-samples)\.[jt]sx?$/i;
+const _TYPE_DECL = /\.d\.ts$/i;
 
 const _camel = (s: string) => s.replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+// A term and a name-word match on EXACT equality or a PREFIX relation — `booking`~`bookings`, `manage`~`managed`
+// (plural/tense differ only by a suffix). NOT arbitrary substring: that made `age` match `managed` (m-an-AGE-d),
+// so every `*Age*` method matched the verb and buried the real mechanism (the Acme bug). Prefix needs
+// ≥4 shared chars so a short word can't over-match.
+const _wordHit = (w: string, t: string): boolean => w === t || (Math.min(w.length, t.length) >= 4 && (t.startsWith(w) || w.startsWith(t)));
 // LEXICAL relevance (NOT embeddings): a term hit in the NAME (createBooking ~ "bookings") ≫ one in the path.
 function _score(d: Def, terms: string[]): number {
-  const nameW = _camel(d.name), enclPath = `${d.enclosing} ${d.file}`.toLowerCase();
+  const nameW = _camel(d.name);
+  // path segments (a def under .../bookings/ is booking code even if its own name isn't) — matched whole-segment
+  // so `manage` can't hit `managed` and vice-versa via a loose substring.
+  const seg = `${d.enclosing} ${d.file}`.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
   let s = 0;
   for (const t of terms) {
-    if (nameW.some((w) => t.includes(w) || w.includes(t))) s += 3;   // strong — in the symbol name
-    else if (enclPath.includes(t)) s += 1;                           // weak — enclosing class / path
+    if (nameW.some((w) => _wordHit(w, t))) s += 3;        // strong — in the symbol name
+    else if (seg.some((w) => _wordHit(w, t))) s += 1;     // weak — enclosing class / path segment
   }
   return s;
 }
 
 export async function detectCentersRepoWide(
-  repo: string, intent: string, opts: { k?: number; cap?: number; judge?: CenterJudge; debug?: (l: string) => void } = {},
+  repo: string, intent: string, opts: { k?: number; cap?: number; excludeDirs?: string[]; includeTests?: boolean; judge?: CenterJudge; debug?: (l: string) => void } = {},
 ): Promise<Center[]> {
   const k = Math.max(1, opts.k ?? 4);
   const terms = _terms(intent);
@@ -47,11 +55,16 @@ export async function detectCentersRepoWide(
   const defs = await enumerate_defs(repo);
   let callers = new Map<string, string[]>();
   try { callers = await symbolCallers(repo); } catch { /* no callsite index → fan-in 0, order by lexical */ }
-  // RECALL net — defs whose identity lexically matches, tests/DTO/enum/constants excluded, DEDUPED, RANKED by
-  // lexical score then FAN-IN (a dead-end constant loses to a called bean at equal name-match), then capped.
+  // the dev's OWN dead dirs (--exclude) — normalized to path prefixes/segments. Their call, not the engine's.
+  const exDirs = (opts.excludeDirs ?? []).map((d) => d.replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean);
+  const inExcluded = (f: string) => exDirs.some((d) => { const p = f.replace(/^\.\//, ""); return p === d || p.startsWith(d + "/") || p.includes("/" + d + "/"); });
+  // RECALL net — defs whose identity lexically matches, DEDUPED, RANKED by lexical score then FAN-IN (a dead-end
+  // loses to a called bean at equal name-match), then capped. Exclusions are conventions/config only: type-decls,
+  // tests (unless --include-tests), the dev's --exclude dirs, and structural `enum`/`module` kinds. The LLM judge
+  // does the rest of the filtering (archived/data/off-intent) SEMANTICALLY — no hardcoded per-repo dir guesses.
   const seen = new Set<string>();
   const recall = defs
-    .filter((d) => d.kind !== "module" && d.kind !== "enum" && !_NOISE_FILE.test(d.file) && !_DATA_NAME.test(d.name))
+    .filter((d) => d.kind !== "module" && d.kind !== "enum" && !_TYPE_DECL.test(d.file) && (opts.includeTests || !_TEST_FILE.test(d.file)) && !inExcluded(d.file))
     .map((d) => ({ d, s: _score(d, terms), fan: callers.get(d.name)?.length ?? 0 }))
     .filter((x) => x.s > 0)
     .filter((x) => { const key = `${x.d.name} ${x.d.file}`; if (seen.has(key)) return false; seen.add(key); return true; })

@@ -408,7 +408,7 @@ async function runCodebase(a: Args): Promise<number> {
       const { centerJudgeLlm } = await import("../codebase/grow/center_judge.js");
       emit(`Picking the concern's mechanism for "${a.intent}"…`);
       const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
-      const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
+      const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
       if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
       a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
       anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
