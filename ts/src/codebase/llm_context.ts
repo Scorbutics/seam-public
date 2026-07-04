@@ -877,6 +877,10 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
   // for the --grow-from handle + center-matching. Disambiguates a bare `createBooking` across sibling beans.
   const qual = (h: any): string => (h?.enclosing && h.enclosing !== h.label ? `${h.enclosing}.${h.label}` : (h?.label ?? "?"));
+  // a BOUNDARY node (a route/table/queue/… crossing site) is the medium, never an interaction ENTRY — it renders
+  // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
+  const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
+  const isBoundaryNode = (id: string): boolean => _BOUND.has(hunkById.get(id)?.kind ?? "");
   // COUPLING interactions — a node sharing a data-key BOUNDARY with a mechanism (the bean writes a table a reporting
   // job READS → that job is an interaction though it never CALLS the bean). 2 hops over crossings; boundary skipped.
   const crossAdj = new Map<string, Set<string>>();
@@ -907,7 +911,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const n of upstream) for (const b of (crossAdj.get(n) ?? [])) boundaries.add(b);
   const _isSym = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
-    if (upstream.has(y) || boundaries.has(y) || !hunkById.has(y)) continue;   // Java call-side / another boundary / non-region → not a counterpart
+    if (upstream.has(y) || boundaries.has(y) || isBoundaryNode(y) || !hunkById.has(y)) continue;   // Java call-side / a boundary node (route/…) / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
     if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
     // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names its OP as the route node's label
@@ -919,7 +923,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
-  const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label; }).sort((a, b) =>
+  const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label && !isBoundaryNode(r.entry); }).sort((a, b) =>
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
     (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
