@@ -16,7 +16,11 @@ import { SCAN } from "./config.js";
 // client) — never a module you'd anchor an INTENT on, and parsing/embedding it dominates recall cost.
 // Skipping it from the candidate table is language-agnostic and only affects RECALL (a large real file
 // is still resolvable as an import target). Adjustable; 128 KB clears typical hand-written modules.
-const _MAX_CANDIDATE_BYTES = 128 * 1024;
+// A source file bigger than this is skipped as an anchor/def candidate. 128 KB was too low for enterprise
+// code: a monolithic EJB/service bean (the actual MECHANISM) is often >128 KB, so it was size-skipped and the
+// center pick never saw it — only its small helpers in the same package (Acme: getAge, BookingsConstants,
+// never BookingsBean). 1 MB covers a ~25 K-line hand-written file; genuinely generated giants sit in SKIP_DIRS.
+const _MAX_CANDIDATE_BYTES = 1024 * 1024;
 
 // Shared by every anchor-candidate enumerator (def table + lexical name floor) so a vendored bundle is
 // excluded from ALL recall paths, not just one. Missing/unstattable → treat as skip.

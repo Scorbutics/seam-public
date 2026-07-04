@@ -18,8 +18,10 @@ const _STOP = new Set(["how", "are", "is", "the", "a", "an", "of", "to", "in", "
 function _terms(intent: string): string[] {
   return [...new Set(intent.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3 && !_STOP.has(w)))];
 }
-// NOISE — never a mechanism: tests/fixtures + DTO/type-decl file shapes.
-const _NOISE_FILE = /(?:^|\/)(?:tests?|__tests__|e2e|cypress|spec|mocks?|fixtures?)(?:\/|$)|\.(?:test|spec|cy|e2e-spec|stories|test-samples|d|input|output|dto)\.[jt]sx?$/i;
+// NOISE — never a mechanism: a segment that is a TEST/fixture/archived/generated/legacy tree (a whole segment
+// OR a `test-…`/`archive…` prefixed one — Acme's `archived/bt/test-review-manage/` leaked in via
+// "managed"~"manage"), or a DTO/type-decl file shape.
+const _NOISE_FILE = /(?:^|\/)(?:tests?|test[-_][^/]*|__tests__|e2e|cypress|spec|mocks?|fixtures?|archived?|archive[-_][^/]*|generated?|gen|legacy|deprecated|vendor|examples?|samples?)(?:\/|$)|\.(?:test|spec|cy|e2e-spec|stories|test-samples|d|input|output|dto)\.[jt]sx?$/i;
 // DATA/config classes are not mechanisms — a `*Constants`/`*Config`/`*Enum`/`*Dto` is behaviour-free, so picking
 // it strands the concern on a dead-end (Acme: `BookingsConstants`, fan-in 0, 0 interactions).
 const _DATA_NAME = /(?:Constants?|Config(?:uration)?|Enum|Dto|Vo|Props|Schema|Types?)$/;
