@@ -85,9 +85,14 @@ export async function detectCentersRepoWide(repo: string, intent: string, opts: 
       if (scopeDirs.some((sd) => { const b = sd.replace(/\/$/, ""); return rel === b || rel.startsWith(b + "/"); })) scopedFiles.add(rel);
     }
     const defs = (await enumerate_defs(repo, 100000, scopedFiles)).filter(structural);
-    // the LLM already chose WHERE; every def there is a candidate, ranked by fan-in, then the stage-2 judge names
-    // the mechanism. No keyword filter — that was the brittle part.
-    recall = dedup(defs.map((d) => ({ d, fan: callers.get(d.name)?.length ?? 0 }))).sort((a, b) => b.fan - a.fan).slice(0, opts.cap ?? 60);
+    // the LLM already chose WHERE; the mechanism is a BEAN/SERVICE (a class) or a top-level function — NOT a class
+    // METHOD. Offering methods ranked by bare-name fan-in surfaced generic accessors (get/save/toString called
+    // 1000× repo-wide via name-collision) and the LLM picked `getMember` over `BookingsBean`. So present only
+    // mechanism-level defs: classes/interfaces + top-level functions (empty `enclosing`), never class methods.
+    const mechLevel = (d: Def) => d.kind === "class" || d.kind === "interface" || !d.enclosing;
+    recall = dedup(defs.filter(mechLevel).map((d) => ({ d, fan: callers.get(d.name)?.length ?? 0 })))
+      .sort((a, b) => (Number(b.d.kind === "class" || b.d.kind === "interface") - Number(a.d.kind === "class" || a.d.kind === "interface")) || (b.fan - a.fan))
+      .slice(0, opts.cap ?? 60);
   } else {
     // OFFLINE floor — deterministic lexical net (prefix-matched, whole-segment path), whole-repo (capped).
     const defs = (await enumerate_defs(repo)).filter(structural);
