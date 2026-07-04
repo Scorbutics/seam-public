@@ -23,6 +23,12 @@ import { build_footprint } from "./footprint.js";
 import type { FootprintOpts, ResolvedGraph } from "./graph.js";
 
 const CACHE = "footprint-v1";
+// ENGINE EPOCH — folded into every cache key so a seam UPDATE auto-invalidates stale answers. The graph cache
+// keys on repo SOURCE + learned matchers, NOT the engine version, so without this a warm `.seam` replays the
+// PREVIOUS binary's cached grow/footprint even after the resolution logic changed (the "I updated seam but see
+// the old result, --no-cache made no difference" trap). BUMP this whenever a change alters cached output
+// (resolution/grow/coupling/render-of-cached-graph); any bump makes every stored entry miss → recompute once.
+const ENGINE_EPOCH = "2";   // 2: provablyForeign sibling-collision drop + mechNodes/enclosing/via concern render
 type Entry = { e: string; g: ResolvedGraph };   // e = repo content epoch under which g was computed
 type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified|coupling" → entry
 
@@ -54,7 +60,7 @@ function epochOf(repo: string): string {
     let st; try { st = statSync(join(repo, rel)); } catch { continue; }
     parts.push(`${rel}:${Math.round(st.mtimeMs)}:${st.size}`);
   }
-  const e = parts.length ? _hash(parts.sort().join("\n")) : "";
+  const e = parts.length ? _hash(ENGINE_EPOCH + "\n" + parts.sort().join("\n")) : "";   // engine epoch → a seam update invalidates
   _epoch.set(repo, e);
   return e;
 }
