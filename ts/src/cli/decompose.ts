@@ -36,7 +36,7 @@ import {
 } from "../diff/facts.js";
 import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage, fastCheapBackend } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
-import { emit, emitTimingSummary } from "../core/progress.js";
+import { emit, emitTimingSummary, timingOn } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 import { type Args, parseArgs, resolveEngines } from "./args.js";
@@ -968,4 +968,7 @@ async function main(argv: string[]): Promise<number> {
   return 0;
 }
 
-main(process.argv.slice(2)).then((code) => { emitTimingSummary(); process.exit(code); });
+// The @@SEAM_TIMING@@ per-phase summary is a PROFILING artifact (a big JSON blob repeating every wave/step) —
+// noise in normal human/LLM output. Emit it ONLY when timing is explicitly requested (--trace / SEAM_TIMING=1),
+// alongside the per-node timing firehose it belongs with. The live @@SEAM_PROGRESS@@ phase markers are unaffected.
+main(process.argv.slice(2)).then((code) => { if (timingOn()) emitTimingSummary(); process.exit(code); });
