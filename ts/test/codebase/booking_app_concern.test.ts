@@ -62,6 +62,15 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
     expect(interactions).toMatch(/install \(web\/bookingService\.js[\s\S]*via[^\n]*updateBooking/);
   });
 
+  // KNOWN GAP — two endpoint-map ops on the SAME path differing only by HTTP method (`getBookings` GET +
+  // `createBooking` POST → the bare base) collapse: the shared-key index is keyed by (kind, value) with no
+  // method, so createBooking is invisible while distinct-route ops (updateBooking) show. Fixing needs a
+  // method-aware key on BOTH sides (JS descriptor verb ⇄ Java @GET/@POST). Pinned so it isn't forgotten.
+  test.todo("createBooking (POST) surfaces despite sharing the base path with getBookings (GET)", () => {
+    const { out } = concern();
+    expect(out.slice(out.indexOf("## Interactions"))).toContain("createBooking");
+  });
+
   test("a front-end file from each family appears as an interaction (the cross-stack reach)", () => {
     if (!available()) return;
     const { out } = concern();

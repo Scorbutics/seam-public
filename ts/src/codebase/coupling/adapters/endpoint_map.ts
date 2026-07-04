@@ -84,6 +84,10 @@ export function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     seen.add(value);
     const label = _descriptorKey(src, em.index);   // the operation name (`updateBooking`) — the boundary's human label
     out.push({ kind: HTTP_ROUTE_META.kind, value, line: lineOf(text, em.index), produces: false, ...(label ? { label } : {}) });   // a consumer (the client calls it)
+    // KNOWN GAP (booking_app_concern.test.ts `.todo`): two ops on the SAME path differing only by HTTP METHOD
+    // (`getBookings` GET + `createBooking` POST → the bare base) collapse to ONE key here (the index is keyed by
+    // (kind,value), no method) → the second op (createBooking) is invisible on the concern map. A real fix needs
+    // a method-aware key on BOTH sides (JS descriptor verb ⇄ Java @GET/@POST), not just this scan.
   }
   return out;
 }
