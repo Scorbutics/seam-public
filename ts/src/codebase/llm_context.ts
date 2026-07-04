@@ -938,6 +938,17 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     w(`[concern] mechanisms: ${[...mechNodes].filter((c) => centerSet.has(c)).map((c) => qual(hunkById.get(c))).join(", ")} | +${mechNodes.size - centerSet.size} method node(s) in scope`);
     w(`[concern] interactions: ${rayList.length} enumerated, cap ${cap}`);
     rayList.forEach((r, i) => w(`[concern]   ${i < cap ? "show " : "CUT  "}${qual(hunkById.get(r.entry))} [${seamOf.get(r.entry)?.tier ?? "?"}] — via ${viasStr(r)}`));
+    // GROWN-BUT-UNSHOWN: a code node in the footprint that is neither a mechanism/operation nor an interaction
+    // (entry or folded via). Its callIn/cross counts say WHY: callIn=0 & cross=0 → an orphan the grow reached by
+    // some other edge (not a call-consumer of the mechanism, not a crossing counterpart) → the concern is
+    // center-centric and it isn't wired to the center; cross>0 → a coupling counterpart the boundary scan didn't
+    // reach (its boundary isn't on the mechanism's upstream). This is the "AcmeCheckBookingsService / CRUD
+    // route grown but absent" probe.
+    const shownIds = new Set<string>([...mechNodes, ...rayList.map((r) => r.entry)]);
+    for (const cid of mechNodes) for (const c of (callIn.get(cid) ?? [])) if (!mechNodes.has(c) && shownIds.has(entryOf(c))) shownIds.add(c);
+    const unshown = nodes.filter((id) => { const h = hunkById.get(id); return h?.file && symLike(h.label) && !shownIds.has(id); });
+    w(`[concern] grown-but-unshown code node(s): ${unshown.length}`);
+    for (const id of unshown.slice(0, 60)) { const h = hunkById.get(id); w(`[concern]   unshown ${qual(h)} (${h.file}) [${seamOf.get(id)?.tier ?? "?"}] callIn=${callIn.get(id)?.size ?? 0} cross=${crossAdj.get(id)?.size ?? 0}`); }
   }
   const out: string[] = [];
   // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
