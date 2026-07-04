@@ -422,15 +422,15 @@ bun ts/src/cli/decompose.ts --scan --auto --repo . --intent "load member booking
 `--depth N` follows N consumer hops; `resolutionQuality` / `unresolved` / `blindspots` in the output
 report where static resolution gave out.
 
-When an `--intent` is given with a fast local SLM, the wave grow judges each ring against the intent
-(the `grow-border` pass). A set of **opt-in deterministic layers** shrink or replace that per-wave LLM
-call — each a grounded prior fed to the same border, never dropping a node that bears a real
-data/route/queue crossing (invariant I4): `SEAM_UBIQUITY=1` (demote shared-infrastructure hubs by
-cross-module fan-in), `SEAM_GROW_BORDER_RESIDUAL=1` (send only the ambiguous middle band to the SLM),
-`SEAM_CONCERN_MAP=1` (learn a per-repo side-concern taxonomy once → `.seam/concern-map.json`, apply it
-LLM-free forever), and `SEAM_GROW_BORDER_FIELD=intent|centroid|blend` (the border's embedding field;
-`intent` is the default and the one that discriminates). The SLM border stays the default — the
-deterministic layers reduce its work but don't yet match its precision on peer-domain departures.
+The wave grow is **deterministic by default** — the tier rule, hub collapse and coupling-border carry
+it, and the **LLM is out of the grow loop** (reserved for the two genuinely-semantic steps: the
+data-coupling flywheel and the center pick). The old per-wave SLM intent-border (`grow-border`) is now
+**opt-in** (`SEAM_GROW_BORDER_LLM=1`); when on, a set of grounded deterministic priors shrink its work,
+each fed to the same border and never dropping a node that bears a real crossing (invariant I4):
+`SEAM_UBIQUITY=1` (demote shared-infrastructure hubs by cross-module fan-in), `SEAM_GROW_BORDER_RESIDUAL=1`
+(send only the ambiguous middle band to the SLM), `SEAM_CONCERN_MAP=1` (learn a per-repo side-concern
+taxonomy once → `.seam/concern-map.json`, apply it LLM-free forever), and
+`SEAM_GROW_BORDER_FIELD=intent|centroid|blend` (`intent` is the default and the one that discriminates).
 See `ts/eval/grow-phase{1..4}-matrix.md` for the measured trade-offs.
 
 ### `--concern` — a concern map, center-first

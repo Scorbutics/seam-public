@@ -6,6 +6,7 @@
 #   curl -fsSL .../install.sh | bash -s -- --mcp          # only the MCP server (Claude; not Copilot)
 #   curl -fsSL .../install.sh | bash -s -- --skill --mcp  # both (also the default)
 #   curl -fsSL .../install.sh | bash -s -- --copilot-mcp  # ALSO register the MCP with Copilot (off by default)
+#   curl -fsSL .../install.sh | bash -s -- --branch <ref> # install/track a specific branch or tag (else: main)
 #
 # Installs from SOURCE (one git checkout + `bun install`), not a prebuilt binary, so it keeps
 # full tree-sitter facts for all languages and updates with a re-run. The skills and the MCP server
@@ -30,16 +31,19 @@ die()  { printf '%s[seam]%s %s\n' "$c_err"  "$c_off" "$*" >&2; exit 1; }
 
 # ── flags ─────────────────────────────────────────────────────────────────────
 do_skill=0; do_mcp=0; do_copilot_mcp=0
-for a in "$@"; do
-  case "$a" in
+while [ "$#" -gt 0 ]; do
+  case "$1" in
     --skill) do_skill=1 ;;
     --mcp)   do_mcp=1 ;;
     --copilot-mcp) do_copilot_mcp=1 ;;   # opt back IN to registering the seam MCP with Copilot (off by default — Copilot is unreliable with MCP; its skill drives the CLI)
+    --branch|--ref) shift; [ "$#" -gt 0 ] || die "--branch needs a value (a branch or tag)"; REF="$1" ;;   # install/track a specific branch or tag (same as SEAM_REF=)
+    --branch=*|--ref=*) REF="${1#*=}" ;;
     -h|--help)
-      sed -n '2,18p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
+      sed -n '2,19p' "$0" 2>/dev/null | sed 's/^# \{0,1\}//'
       exit 0 ;;
-    *) die "unknown argument: $a (expected --skill, --mcp, and/or --copilot-mcp)" ;;
+    *) die "unknown argument: $1 (expected --skill, --mcp, --copilot-mcp, and/or --branch <ref>)" ;;
   esac
+  shift
 done
 # default (no host flag at all): install both the skills and the MCP
 if [ "$do_skill" -eq 0 ] && [ "$do_mcp" -eq 0 ] && [ "$do_copilot_mcp" -eq 0 ]; then do_skill=1; do_mcp=1; fi
