@@ -32,6 +32,12 @@ const _CLASS_CONSUMER_PARSE_CAP = 120;   // parse at most this many consumers fo
 interface CallIndex { callers: Map<string, string[]>; bases: Map<string, string[]>; }
 const _callIndexCache = new Map<string, CallIndex>();
 export function resetCallIndex(): void { _callIndexCache.clear(); }
+// Repo-wide symbol fan-in (method name → the distinct files that call it), from the cached callsite index — no
+// grow. center_repo.ts uses it as a DEAD-END SIGNAL (not a ranker): a constants/data class has 0 method-call
+// fan-in, so a candidate with fan-in 0 is flagged to the LLM (and deprioritised) as likely-isolated.
+export async function symbolCallers(repo: string): Promise<Map<string, string[]>> {
+  return (await _callIndex(repo)).callers;
+}
 async function _callIndex(repo: string): Promise<CallIndex> {
   let ci = _callIndexCache.get(repo);
   if (ci) return ci;

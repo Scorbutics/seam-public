@@ -13,12 +13,14 @@ export function centerJudgeLlm(model?: string, claudeBin?: string | null): Cente
     const lines = [
       `A developer asks: "${intent}".`,
       ``,
-      `Below are candidate definitions from the codebase (id: symbol — file):`,
-      ...cands.map((c, i) => `  c${i}: ${c.symbol} — ${c.file}`),
+      `Below are candidate definitions from the codebase (id: symbol — file — callers=fan-in):`,
+      ...cands.map((c, i) => `  c${i}: ${c.symbol} — ${c.file} — callers=${c.fanIn}`),
       ``,
-      `Which are the CORE MECHANISM the question is about — the service/function that PERFORMS the behaviour`,
+      `Which are the CORE MECHANISM the question is about — the service/bean/function that PERFORMS the behaviour`,
       `(e.g. "how are bookings created" → the createBooking service, not a UI form or a payload type)? EXCLUDE`,
-      `UI components, tests, DTOs/inputs/outputs/models, config, and thin wrappers/helpers.`,
+      `UI components, tests, DTOs/inputs/outputs/models, config, and thin wrappers/helpers. Prefer a def that is`,
+      `actually USED (callers > 0) or that clearly orchestrates the behaviour — a zero-caller CONSTANTS/DATA class`,
+      `is a dead-end, never the mechanism.`,
       `Output ONLY a JSON array of the 1-4 chosen: [{"id":"c3"},{"id":"c12"}].`,
     ];
     let out: Map<string, unknown>;

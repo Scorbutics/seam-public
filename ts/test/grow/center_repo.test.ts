@@ -16,6 +16,8 @@ beforeAll(() => {
   w("src/dto/create-booking.input.ts", `export class CreateBookingInput { name!: string; }\n`);   // DTO — name matches, but .input. file → excluded
   w("test/booking.spec.ts", `export function createBookingCase() {}\n`);                            // test — excluded
   w("src/util/logger.ts", `export function log(x: string) { return x; }\n`);                        // off-intent
+  w("src/bookings-constants.ts", `export class BookingsConstants { static readonly MAX = 5; }\n`);    // constants — a dead-end, must be excluded
+  w("src/booking-status.ts", `export enum BookingStatus { Pending, Confirmed }\n`);                   // enum data — must be excluded
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
@@ -27,6 +29,8 @@ describe("detectCentersRepoWide — recall net + pick (no grow, no anchor)", () 
     expect(syms).not.toContain("CreateBookingInput");                // .input.ts DTO file excluded from the net
     expect(syms).not.toContain("createBookingCase");                 // test file excluded
     expect(centers.every((c) => !/logger/.test(c.file))).toBe(true); // off-intent def not scored in
+    expect(syms).not.toContain("BookingsConstants");                 // *Constants data class — a dead-end (Acme bug)
+    expect(syms).not.toContain("BookingStatus");                     // enum — excluded
   });
 
   test("an injected judge (the LLM path) overrides the lexical floor — the pick is the model's", async () => {
