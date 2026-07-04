@@ -639,7 +639,10 @@ function collectAnchorKeys(
   carrierAccs: KeyHit[], proposed: KeyHit[],
 ): Map<string, AnchorKey> {
   const anchorKeys = new Map<string, AnchorKey>();
-  const accessId = (k: KeyHit) => `${k.kind} ${k.value} ${k.produces}`;
+  // key by (kind,value,produces,LABEL): two operations on the SAME route with distinct op names (`createBooking`
+  // POST + `getBookings` GET → the bare base) are DISTINCT boundaries — collapsing on (kind,value) alone dropped
+  // the second op from the map. An unlabelled key (a raw table/route) has "" and behaves exactly as before.
+  const accessId = (k: KeyHit) => `${k.kind} ${k.value} ${k.produces} ${k.label ?? ""}`;
   // 1+2: the located FLOOR (scan + carrier) — span-filtered, earliest line wins, tagged by source
   const addFloor = (hit: KeyHit, source: KeySource) => {
     if (hit.line < spanLo || hit.line > spanHi) return;
@@ -736,7 +739,10 @@ interface NodeScope extends PipelineCtx { anchorPath: string; coOccurrence: Map<
 // STEP 4 — DRAW: get-or-mint the synthetic boundary node standing for a key (ONE per kind+value, even when
 // the node both produces and consumes it). Anchored at `file` (the current node's file).
 function drawBoundary(s: NodeScope, boundaryByKey: Map<string, string>, key: AnchorKey, file: string): string {
-  const id = keyId(key.kind, key.value);
+  // key the boundary NODE by (kind,value,LABEL) so two ops on ONE route (`createBooking`/`getBookings` on the
+  // bare base) get DISTINCT nodes and BOTH surface — each still grounds to the same @Path via the value-based
+  // complement lookup in crossBoundary. An unlabelled key (raw route/table) → no suffix → one node per route.
+  const id = keyId(key.kind, key.value) + (key.label ? `\0${key.label}` : "");
   let boundaryId = boundaryByKey.get(id);
   if (boundaryId === undefined) {
     // LABEL the boundary with the operation name (an endpoint-map `updateBooking`) when the adapter provides one —

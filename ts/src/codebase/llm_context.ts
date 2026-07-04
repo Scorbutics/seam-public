@@ -914,11 +914,19 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     if (upstream.has(y) || boundaries.has(y) || isBoundaryNode(y) || !hunkById.has(y)) continue;   // Java call-side / a boundary node (route/…) / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
     if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
-    // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names its OP as the route node's label
-    // (`updateBooking`) instead of a raw `/path`, and the ops fold into one code entry (`install`). Surface the
-    // op NAMES as the via so the map shows what the client does — `via updateBooking`, not just `the /… boundary`.
-    const ops = [...(crossAdj.get(y) ?? [])].map((r) => hunkById.get(r)).filter((rh) => rh?.kind === "route" && _isSym(rh.label));
-    if (ops.length) for (const rh of ops) addRay(e, rh.label);
+    // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names each OP as a route node's label
+    // (`createBooking`/`getBookings`/`updateBooking`) instead of a raw `/path`, and they fold into one code entry
+    // (`install`). The ops CHAIN as route nodes off one another (install → updateBooking → createBooking → …),
+    // so collect every op-labelled route boundary reachable from the counterpart THROUGH the route-node chain
+    // (hopping only route→route, ≤ a small cap) → the map shows `via createBooking, getBookings, updateBooking`.
+    const ops = new Set<string>();
+    const seenR = new Set<string>([y]); const stack = [...(crossAdj.get(y) ?? [])];
+    while (stack.length && seenR.size < 64) { const r = stack.pop()!; if (seenR.has(r)) continue; seenR.add(r);
+      const rh = hunkById.get(r); if (rh?.kind !== "route") continue;   // hop ONLY through route boundary nodes (stops at code/producers)
+      if (_isSym(rh.label)) ops.add(rh.label);
+      for (const nx of (crossAdj.get(r) ?? [])) if (!seenR.has(nx)) stack.push(nx);
+    }
+    if (ops.size) for (const op of ops) addRay(e, op);
     else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
