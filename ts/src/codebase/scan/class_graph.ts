@@ -156,6 +156,20 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   // PARTIAL contract (an unrelated typed var stays a surfaced lead).
   const staticForeign = (s: { recvId: string | null; recvNew: string | null }, typeNames: Set<string>): boolean =>
     !!owner && !!family && !!s.recvId && !s.recvNew && typeNames.has(s.recvId) && !family.has(s.recvId) && !ownerBaseSet.has(s.recvId);
+  // PROVABLY-FOREIGN resolved receiver: the receiver resolves (a field/var declaration, or `new T()`) to a
+  // DEFINITE type that is neither the owner, a subtype (family), nor a base/interface of it — so the virtual
+  // call dispatches to THAT type's method, NEVER the owner's. Unlike provablySibling this needs NO shared base:
+  // a same-named method on an UNRELATED class is a NAME COLLISION, not a consumer — `bean.createBooking()`
+  // (bean: BookingsBean) while resolving callers of BookingsService.createBooking must NOT wire the two sibling
+  // services together (the observed fold where one bean's UI service swallowed the other's). An UNRESOLVED
+  // receiver (DI/factory/untyped) stays PARTIAL — that ambiguity is real. Grounded on the declared type (a
+  // closed structural fact), so it degrades identically for every typed language.
+  const provablyForeign = (s: { recvId: string | null; recvNew: string | null }, instTypes: Map<string, Set<string>>): boolean => {
+    if (!owner) return false;
+    const tys = s.recvNew ? [s.recvNew] : (s.recvId ? [...(instTypes.get(s.recvId) ?? [])] : []);
+    if (!tys.length) return false;   // unresolved receiver → PARTIAL (keep — the ambiguity is real)
+    return tys.every((t) => t !== owner && !family?.has(t) && !ownerBaseSet.has(t));   // every resolved type dispatches ELSEWHERE
+  };
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
@@ -163,7 +177,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   const resolvedMethods = new Set<string>();   // every method name a call site was found for (any provenance)
   for (const pf of pending) {
     for (const s of pf.sites) {
-      if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames)) continue;   // dispatches to a different type — not a consumer of this class
+      if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames) || provablyForeign(s, pf.instTypes)) continue;   // dispatches to a different type — not a consumer of this class
       resolvedMethods.add(s.method);
       const enc = _enclosing(pf.units, s.line);
       const [sym, kind, start, end] = enc ? enc : [stem(pf.fn), "module", s.line, s.line];

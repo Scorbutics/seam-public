@@ -104,8 +104,10 @@ describe("import-scan vs Python", () => {
     // Subclass instance (typed) → FULL; transitive subclass via `new` → FULL.
     expect(edgeFor("run")).toMatchObject({ kind: "call", provenance: "RESOLVED_FULL" });
     expect(edgeFor("runDeep")).toMatchObject({ kind: "call", provenance: "RESOLVED_FULL" });
-    // Same-named method on an UNRELATED class → stays PARTIAL (not falsely asserted as a consumer).
-    expect(edgeFor("makeReport")).toMatchObject({ kind: "call", provenance: "RESOLVED_PARTIAL" });
+    // Same-named method on an UNRELATED class whose receiver is RESOLVED (`report: Report`) provably dispatches
+    // to THAT class, never the owner → dropped (a name collision, not even a partial lead — provablyForeign). An
+    // UNRESOLVED receiver (DI/factory/untyped) would still stay PARTIAL; only a definite foreign type is cut.
+    expect(edgeFor("makeReport")).toBeUndefined();
   });
 
   test("DOWN dependency graph (what the anchor uses)", async () => {
