@@ -851,11 +851,20 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     : [(nodes.filter(onIntent).sort(byFan)[0]) ?? nodes.slice().sort(byFan)[0]];
   centerIds = centerIds.filter(Boolean).sort(byFan);
   const centerSet = new Set(centerIds);
+  // The mechanism INCLUDES its own method nodes: a consumer that calls `bean.createBooking()` reaches the
+  // mechanism through the METHOD node (`BookingsBean.createBooking`), not the class the center pick named — and
+  // may never reference the class directly (an injected / parameter-passed bean), so scanning consumers of the
+  // class alone MISSES it (Acme: `AcmeCheckBookingsService.createBooking` grown but not an interaction).
+  // centerSet stays the DISPLAY set (the mechanism lines); mechNodes is the interaction boundary (a method is
+  // never its own interaction, and the entry walk halts at any mechanism node).
+  const centerLabels = new Set([...centerSet].map((c) => hunkById.get(c)?.label).filter(Boolean));
+  const mechNodes = new Set<string>(centerSet);
+  for (const id of nodes) { const h = hunkById.get(id); if (h?.enclosing && centerLabels.has(h.enclosing)) mechNodes.add(id); }
   const primary = hunkById.get(centerIds[0]);
-  // INTERACTIONS = consumers of ANY mechanism, each walked UP to its entry point (stopping at any mechanism), so a
-  // ray is named by its interaction. Deduped by entry; a mechanism is never its own interaction.
+  // INTERACTIONS = consumers of ANY mechanism (its class OR its methods), each walked UP to its entry point
+  // (stopping at any mechanism), so a ray is named by its interaction. Deduped by entry.
   const entryOf = (start: string): string => {
-    let cur = start; const seen = new Set<string>(centerSet);
+    let cur = start; const seen = new Set<string>(mechNodes);
     for (let hop = 0; hop < 8; hop++) {
       if (seen.has(cur)) break; seen.add(cur);
       const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));   // CALL-graph callers only (skip crossings)
@@ -874,8 +883,8 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
     (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
   const rays = new Map<string, { entry: string; via: string }>();   // entry id → {entry, how it reaches a mechanism}
-  for (const cid of centerIds)
-    for (const consumer of (callIn.get(cid) ?? [])) { if (centerSet.has(consumer)) continue; const e = entryOf(consumer); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: qual(hunkById.get(consumer)) }); }
+  for (const cid of mechNodes)   // consumers of the mechanism's CLASS or any of its METHODS
+    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; const e = entryOf(consumer); if (!mechNodes.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: qual(hunkById.get(consumer)) }); }
   // CROSS-STACK interactions — the boundary (a route/table/queue) can sit on an INTERMEDIATE that reaches the
   // mechanism (a REST endpoint the bean sits BEHIND), NOT on the center itself: a Java bean's JS front-end
   // consumer crosses the route to the ENDPOINT, never to the bean, so a center-only crossing scan hides it (the
@@ -883,8 +892,8 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // UPSTREAM closure (every node that reaches a center through calls) and surface the crossing counterpart of ANY
   // of them. The boundary node (b) is skipped; the counterpart (y) is the interaction, walked up to its OWN
   // (front-end) entry — and if that entry climbed out of the grown region, surface the counterpart itself.
-  const upstream = new Set<string>(centerSet);
-  const ust = [...centerSet];
+  const upstream = new Set<string>(mechNodes);
+  const ust = [...mechNodes];
   while (ust.length) { const n = ust.pop()!; for (const c of (callIn.get(n) ?? [])) if (!upstream.has(c)) { upstream.add(c); ust.push(c); } }
   // the BOUNDARY nodes the mechanism sits on (the route/table/key sites, crossing-adjacent to the upstream); their
   // OTHER neighbours are the cross-stack counterparts (code sharing the boundary). Skip a boundary itself as a
@@ -894,7 +903,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
     if (upstream.has(y) || boundaries.has(y) || !hunkById.has(y)) continue;   // Java call-side / another boundary / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
-    if (!centerSet.has(e) && !upstream.has(e) && !boundaries.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` });
+    if (!mechNodes.has(e) && !upstream.has(e) && !boundaries.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` });
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
@@ -908,6 +917,21 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${qual(h)} (${h?.file ?? "?"}:${h?.start ?? 0})`;
+  // SETTLING DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT + which
+  // mechanism consumers were FOLDED into a shared entry (their own name not shown). Tells a "why is X missing"
+  // apart: absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; folded =
+  // it shares an entry with another interaction (deepen that entry).
+  if (process.env.SEAM_FP_DEBUG) {
+    const w = (s: string) => process.stderr.write(s + "\n");
+    w(`[concern] mechanisms: ${[...mechNodes].filter((c) => centerSet.has(c)).map((c) => qual(hunkById.get(c))).join(", ")} | +${mechNodes.size - centerSet.size} method node(s) in scope`);
+    w(`[concern] interactions: ${rayList.length} enumerated, cap ${cap}`);
+    rayList.forEach((r, i) => w(`[concern]   ${i < cap ? "show " : "CUT  "}${qual(hunkById.get(r.entry))} [${seamOf.get(r.entry)?.tier ?? "?"}] — via ${r.via}`));
+    const shownEntries = new Set(rayList.map((r) => r.entry));
+    for (const cid of mechNodes) for (const consumer of (callIn.get(cid) ?? [])) {
+      if (mechNodes.has(consumer)) continue; const e = entryOf(consumer);
+      if (e !== consumer && shownEntries.has(e)) w(`[concern]   folded ${qual(hunkById.get(consumer))} → shown under entry ${qual(hunkById.get(e))}`);
+    }
+  }
   const out: string[] = [];
   // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
   // grow reached shows its fan-in; one the node budget didn't expand is still listed (picked, not reached) so the
