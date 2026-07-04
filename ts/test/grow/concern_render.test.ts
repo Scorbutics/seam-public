@@ -89,6 +89,30 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).toMatch(/interactions: 5/);                                                 // 4 call + 1 coupling
   });
 
+  test("no dead/undefined handles, file-level nodes omit the broken deepen handle, all picked centers render", () => {
+    const hunk = (id: string, label: string, file: string, start = 1) => ({ id, label, file, start, end: start, role: "core", tier: "supporting" });
+    const model = {
+      mode: "codebase", anchor: "C", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "x", seams: [
+        { id: "sC", label: "resolveSub", tier: "spine", hunks: [hunk("C", "resolveSub", "svc/sub.ts", 5)] },
+        { id: "sF", label: "fnEntry", tier: "supporting", hunks: [hunk("F", "fnEntry", "svc/caller.ts")] },              // a valid symbol interaction
+        { id: "sM", label: "sweep.ts", tier: "supporting", hunks: [hunk("M", "sweep.ts", "svc/sweep.ts", 0)] },          // a FILE/module node (label = filename)
+        { id: "sD", label: "?", tier: "supporting", hunks: [{ id: "D", label: undefined, file: undefined, start: 0, role: "core", tier: "supporting" }] },  // DEAD node (no file)
+      ] }],
+      edges: [{ from: "F", to: "C", kind: "call" }, { from: "M", to: "C", kind: "call" }, { from: "D", to: "C", kind: "call" }],
+      blindspots: [],
+    };
+    // two centers passed; only "resolveSub" is a real node — the other is picked-but-not-reached.
+    const out = renderConcern(model, { intent: "how", centers: [{ file: "svc/sub.ts", symbol: "resolveSub" }, { file: "svc/other.ts", symbol: "notGrown" }] });
+    expect(out).not.toContain("undefined");                              // no `undefined#undefined` handle
+    expect(out).not.toMatch(/\? \(\?:0\)/);                              // no dead `? (?:0)` line
+    expect(out).toMatch(/mechanisms: 2/);                                // BOTH picked centers counted
+    expect(out).toContain("notGrown (svc/other.ts) — picked, not reached in this region");
+    expect(out).toContain("seam --grow-from svc/caller.ts#fnEntry");     // valid symbol → deepen handle
+    expect(out).toContain("sweep.ts (svc/sweep.ts:0)");                  // file node rendered…
+    expect(out).not.toContain("#sweep.ts");                              // …but WITHOUT a broken file#filename handle
+  });
+
   test("a big concern caps the interaction list (with a +N more note)", () => {
     const prev = process.env.SEAM_CONCERN_CAP; process.env.SEAM_CONCERN_CAP = "2";
     try {

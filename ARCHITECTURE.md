@@ -450,6 +450,20 @@ with repo size is the handful of **O(repo)** whole-repo index builds; the design
 The discipline throughout: **profile the measured bottleneck on a real repo, don't assume** — the first
 hypothesis here (anchor-recall embeddings) was wrong; the wall was the DI-index parse.
 
+- **Persistent graph cache — `SEAM_GRAPH_CACHE=1`, OPT-IN (`docs/GRAPH_CACHE.md`, `scan/footprint_cache.ts`).**
+  The next escalation: cache the *resolved graph*, sharded per source file, so a query on known territory is a
+  read, not a recompute. `shardedIncrementalScanAsync` splits the async indices into per-file shards; then two
+  memoizations, both guarded by a **content epoch** (a hash of every source file's `(rel,mtime,size)` from a
+  direct stat-walk — timing-independent, so cold and warm agree; any source change invalidates all): **P3**
+  memoizes `build_footprint` per node (the profiled warm hot spot — 448×~15ms re-deriving neighborhoods), and
+  **P5** memoizes the whole settled grow (`cachedGrow` wraps `grow_to_terminals`, over-broad key = opts + all
+  `SEAM_*` env), so a same-config warm run skips the wave entirely. **P4** memoizes the anchor coupling overlay
+  under a coupling epoch (source ⊕ the learned-adapter store). Only DETERMINISTIC grows are cached (no LLM
+  border/coupling). Measured **cold→warm** on real repos: cal.com 110s→1.9s, private-app 13s→1.2s, byte-identical.
+  It stays **off by default** for the first main merge (validate-first); flip after real-repo confirmation.
+  (Profiling caught the real wall again: `build_footprint` per-node re-derivation, not resolution — resolution
+  is already index-cached.)
+
 ---
 
 ## 9. Key decisions & rationale (the load-bearing "why")

@@ -876,23 +876,38 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     const bounds = crossAdj.get(cid) ?? new Set<string>();
     for (const b of bounds) for (const y of (crossAdj.get(b) ?? [])) if (!centerSet.has(y) && !bounds.has(y) && hunkById.has(y)) { const e = entryOf(y); if (!centerSet.has(e) && !rays.has(e)) rays.set(e, { entry: e, via: `the ${hunkById.get(b)?.label ?? "shared key"} boundary` }); }
   }
-  const rayList = [...rays.values()].sort((a, b) =>
+  // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
+  // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
+  const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label; }).sort((a, b) =>
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
     (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
+  // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
+  // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
+  const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${h?.label ?? "?"} (${h?.file ?? "?"}:${h?.start ?? 0})`;
   const out: string[] = [];
+  // MECHANISMS — render EVERY picked center (opts.centers), so the header count matches the pick. A center the
+  // grow reached shows its fan-in; one the node budget didn't expand is still listed (picked, not reached) so the
+  // agent knows it's part of the concern. Falls back to the detected centerIds when no centers were passed.
+  const mechLines: string[] = [];
+  if (opts.centers?.length) {
+    for (const c of opts.centers) { const cid = matchNode(c); const h = cid ? hunkById.get(cid) : null;
+      mechLines.push(h ? `  ${where(h)} — fan-in ${fanIn(cid!)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`
+        : `  ${c.symbol} (${c.file}) — picked, not reached in this region`); }
+  } else for (const cid of centerIds) { const h = hunkById.get(cid); mechLines.push(`  ${where(h)} — fan-in ${fanIn(cid)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`); }
+  const mechCount = opts.centers?.length ?? centerIds.length;
   out.push("# Concern map — the mechanisms and the interactions around them",
-    [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${centerIds.length}`, `resolution: ${model.resolutionQuality ?? "?"}`,
+    [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${mechCount}`, `resolution: ${model.resolutionQuality ?? "?"}`,
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
-  out.push("", `## Mechanisms (the concern's shared beans — the star's center${centerIds.length > 1 ? " cluster" : ""})`);
-  for (const cid of centerIds) { const h = hunkById.get(cid); out.push(`  ${where(h)} — fan-in ${fanIn(cid)} consumer(s)${h?.hub ? ` — hub (${h.hub.reason}, fan ${h.hub.fan})` : ""}`); }
+  out.push("", `## Mechanisms (the concern's shared beans — the star's center${mechCount > 1 ? " cluster" : ""})`, ...mechLines);
   out.push("", "## Interactions (each entry point that uses a mechanism — deepen the ones that matter)");
   for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
-    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${r.via}  →  seam --grow-from ${eh?.file}#${eh?.label}${q}`); }
+    const handle = symLike(eh?.label) ? `  →  seam --grow-from ${eh.file}#${eh.label}${q}` : "";   // file/module node → describe it, no broken deepen handle
+    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${r.via}${handle}`); }
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];

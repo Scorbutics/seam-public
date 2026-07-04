@@ -433,6 +433,32 @@ LLM-free forever), and `SEAM_GROW_BORDER_FIELD=intent|centroid|blend` (the borde
 deterministic layers reduce its work but don't yet match its precision on peer-domain departures.
 See `ts/eval/grow-phase{1..4}-matrix.md` for the measured trade-offs.
 
+### `--concern` — a concern map, center-first
+
+A plural question ("how are bookings created?") has no single entry point — it has a shared
+**mechanism**. `--concern --intent "…"` picks that mechanism directly: a lexical **recall net** over the
+repo's defs → an **LLM pick** of the core service(s) (the one semantic step; offline → the lexical
+floor), then it grows the **star** of interactions around them. No anchor selection, no throwaway
+detection grow. An **agent** that already knows the mechanism passes `--center file#symbol` and skips the
+LLM entirely — straight to the grow. The output is a compact map (mechanisms + each interaction with a
+`--grow-from` handle to deepen) meant to let an agent read the right files instead of grep-hunting them.
+
+### Cross-stack coupling (JS ⇄ Java) — the reverse edge
+
+Route coupling bridges a frontend call to its backend handler by a shared URL. When the frontend
+**indirects** the URL (`resourceUrl = getEndpointFor('api/operations'); http.post(this.resourceUrl)`),
+the call site has no literal — so the **reverse cross-edge** grounds the route literal wherever it sits
+in the file and matches it (subpath-safe, class+method `@Path` composed) to the backend route. This
+bridges e.g. a JHipster Angular service to its Spring controller **deterministically** under
+`--data-coupling floor`, no LLM.
+
+### `SEAM_GRAPH_CACHE=1` — instant on known territory (opt-in)
+
+A persistent, per-source-file **graph cache** memoizes the resolved footprint so a warm query is a read,
+not a recompute — measured **cold→warm** ≈ 110s→2s (cal.com), byte-identical. Content-keyed and
+invalidated on any source change; **off by default** while it's validated on real repos. See
+`docs/GRAPH_CACHE.md`.
+
 **Structural shapes** (non-flow questions — all deterministic/offline, see
 [§Beyond the flow](#beyond-the-flow--structural-questions-the-shapes)):
 
