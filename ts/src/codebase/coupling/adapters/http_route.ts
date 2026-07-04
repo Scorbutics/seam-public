@@ -14,6 +14,7 @@
 import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { lineOf, maskComments } from "./util.js";
+import { httpClientCallRegex } from "../frameworks/http_clients.js";
 
 export const HTTP_ROUTE_META = { kind: "http-route", nodeKind: "route", produceEdge: "route-serve", consumeEdge: "route-fetch", handlerEdge: "route-serve" } as const;
 
@@ -68,14 +69,15 @@ function handler_path(file: string): string | null {
 // HTTP-method handlers a route file exports (App Router `export function GET`/`export const GET = …`,
 // Pages Router `export default`). Each is anchored at its own line so a per-method anchor lands in range.
 const METHOD_EXPORT = /\bexport\s+(?:async\s+)?(?:default\b|(?:function\s+|const\s+|let\s+|var\s+)(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b)/g;
-// A fetch-like call whose first arg is a string path: fetch / $fetch / Nuxt useFetch / request /
-// axios[.method] / ky[.method] / AngularJS-or-vue-resource $http[.method] / $resource. (`$http({url:…})`
-// config-object form isn't caught — only the positional-path form, the common case. A CUSTOM axios/ky
-// INSTANCE — `const api = axios.create(); api.get("/x")` — is NOT caught: the receiver name is arbitrary
-// and a bare `.get("/x")` would collide with Express route DEFINITIONS; that case is the LLM tier's job.)
-// NB: a leading `\b` does NOT match before `$` (both sides non-word), silently missing `$http`/`$fetch`;
-// the lookbehind excludes word-char/`$` only (NOT `.`) so member forms like `this.$http.get` match too.
-const FETCH_CALL = /(?<![\w$])(?:fetch|\$fetch|useFetch|\$http(?:\.\w+)?|\$resource|request|axios(?:\.\w+)?|ky(?:\.\w+)?)\s*\(\s*[`'"]([^`'"]*)/g;
+// A fetch-like call whose first arg is a string path. WHICH receiver names count (fetch / $fetch / useFetch /
+// $http[.method] / $resource / request / axios[.method] / ky[.method]) is per-ecosystem VOCABULARY, sourced from
+// the http-client registry (community-extensible via `frameworks.json` httpClients) — NOT baked here. The scan
+// SHAPE (a string-literal path arg) is generic. (`$http({url:…})` config-object form isn't caught — only the
+// positional-path form, the common case. A CUSTOM axios/ky INSTANCE — `const api = axios.create();
+// api.get("/x")` — is NOT caught: the receiver name is arbitrary and a bare `.get("/x")` would collide with
+// Express route DEFINITIONS; that case is the LLM tier's job.) NB: the registry builds a `(?<![\w$])` lookbehind
+// (excludes word-char/`$` only, NOT `.`) so member forms like `this.$http.get` match and `$http`/`$fetch` aren't
+// silently missed the way a leading `\b` would (both sides non-word).
 // REVERSE CROSS-EDGE (Brice): a route literal that is NOT at a fetch site — the ubiquitous carrier-indirection
 // where the URL is stashed in a field and the `http.*` call reads the field: Angular/JHipster
 // `resourceUrl = getEndpointFor('api/operations'); http.post(this.resourceUrl, …)`. The FETCH_CALL above sees a
@@ -103,6 +105,7 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     }
   }
   let c: RegExpExecArray | null;
+  const FETCH_CALL = httpClientCallRegex();
   FETCH_CALL.lastIndex = 0;
   while ((c = FETCH_CALL.exec(text)) !== null) {
     const raw = c[1];

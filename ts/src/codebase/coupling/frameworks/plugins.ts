@@ -15,6 +15,8 @@ import { homedir } from "node:os";
 import type { KeyKind } from "../types.js";
 import { registerAdapter } from "../adapters/index.js";
 import { registerRouteAnnotations, type RouteAnnotation } from "./route_annotations.js";
+import { registerHttpClients, type HttpClient } from "./http_clients.js";
+import { registerOrmMethods, type OrmMethod } from "./orm_methods.js";
 
 const userRoot = (): string => { const e = process.env.SEAM_CONFIG_HOME; return e && e.trim() ? e : join(homedir(), ".config", "seam"); };
 
@@ -44,8 +46,14 @@ function _loadManifest(path: string): void {
   try {
     const j = JSON.parse(readFileSync(path, "utf-8"));
     const anns = (j.routeAnnotations ?? []) as RouteAnnotation[];
-    const valid = anns.filter((a) => a && typeof a.annotation === "string");
-    if (valid.length) registerRouteAnnotations(valid);
+    const validAnns = anns.filter((a) => a && typeof a.annotation === "string");
+    if (validAnns.length) registerRouteAnnotations(validAnns);
+    const clients = (j.httpClients ?? []) as HttpClient[];
+    const validClients = clients.filter((c) => c && typeof c.name === "string");
+    if (validClients.length) registerHttpClients(validClients);
+    const orm = (j.ormMethods ?? []) as OrmMethod[];
+    const validOrm = orm.filter((o) => o && typeof o.method === "string" && (o.role === "read" || o.role === "write"));
+    if (validOrm.length) registerOrmMethods(validOrm);
   } catch (e) { process.stderr.write(`[plugins] skipped invalid manifest ${path}: ${(e as Error).message}\n`); }
 }
 

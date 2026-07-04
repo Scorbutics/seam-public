@@ -6,9 +6,7 @@
 import type { KeyHit, KeyKind } from "../types.js";
 import { DB_TABLE_META } from "./db_table.js";
 import { lineOf } from "./util.js";
-
-const READ = new Set(["where", "find_by", "find_by!", "find_each", "find_in_batches", "pluck", "includes", "preload", "eager_load", "references"]);
-const WRITE = new Set(["create", "create!", "update_all", "delete_all", "destroy_all", "insert", "insert!", "insert_all", "insert_all!", "upsert", "upsert_all"]);
+import { isOrmRead, isOrmWrite } from "../frameworks/orm_methods.js";
 
 function pluralize(w: string): string {
   if (/(?:s|x|z|ch|sh)$/.test(w)) return w + "es";
@@ -27,8 +25,8 @@ function scan(file: string, text: string): KeyHit[] {
   let m: RegExpExecArray | null;
   while ((m = re.exec(text)) !== null) {
     const method = m[2];
-    const write = WRITE.has(method);
-    if (!write && !READ.has(method)) continue;
+    const write = isOrmWrite(method);
+    if (!write && !isOrmRead(method)) continue;
     out.push({ kind: "db-table", value: tableize(m[1]), line: lineOf(text, m.index), produces: write });
   }
   return out;

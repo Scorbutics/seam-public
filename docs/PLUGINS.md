@@ -18,14 +18,35 @@ That's data. Drop `~/.config/seam/frameworks.json`:
     { "annotation": "MyGet",  "httpMethod": "GET",  "framework": "myfw" },
     { "annotation": "MyPost", "httpMethod": "POST", "framework": "myfw" },
     { "annotation": "MyRoute", "framework": "myfw" }
+  ],
+  "httpClients": [
+    { "name": "wretch", "framework": "wretch" },
+    { "name": "gaxios", "verbForms": true, "framework": "gaxios" }
+  ],
+  "ormMethods": [
+    { "method": "scan_all", "role": "read",  "orm": "myorm" },
+    { "method": "upsert_row", "role": "write", "orm": "myorm" }
   ]
 }
 ```
 
-`annotation` is the bare decorator/annotation name (no `@`). `httpMethod` is optional (omit for a base path like
-JAX-RS `@Path` / Spring `@RequestMapping` where the verb is elsewhere). Seam's route scan is already
-framework-agnostic on *shape* (`@Name("/literal")`, class+method path composition) — the manifest only supplies
-the names and verbs, so `@MyGet("/users/{id}")` grounds to a `fetch("/users/…")` **with** its method.
+Three vocabularies, all optional:
+
+- **`routeAnnotations`** — the producer half of the HTTP-route boundary. `annotation` is the bare
+  decorator/annotation name (no `@`); `httpMethod` is optional (omit for a base path like JAX-RS `@Path` / Spring
+  `@RequestMapping` where the verb is elsewhere). Seam's route scan is already framework-agnostic on *shape*
+  (`@Name("/literal")`, class+method path composition) — the manifest only supplies the names and verbs, so
+  `@MyGet("/users/{id}")` grounds to a `fetch("/users/…")` **with** its method.
+- **`httpClients`** — the consumer half: which receiver names count as a fetch-like call whose first string
+  argument is a route path. `name` is the token as written (`wretch`, `$http`); set `verbForms: true` if it's
+  also called as `<name>.<verb>(...)` (axios/ky-style: `gaxios.post("/x")`). A *custom instance* with an
+  arbitrary receiver (`const api = axios.create(); api.get(...)`) is the LLM tier's job, not a manifest row.
+- **`ormMethods`** — for an ActiveRecord-style ORM, which `Model.<method>` calls **read** vs **write** the model's
+  table (table = `tableize(Model)`). `method` is the token as written (trailing `!`/`?` included); `role` is
+  `"read"` or `"write"`. Keep these AR-distinctive — ambiguous names (`find`/`save`/`delete`) are deliberately
+  excluded so ordinary `Const.method` (`File.delete`, `JSON.parse`) doesn't false-match a table.
+
+All three change the coupling floor output, so adding one invalidates a stale cache automatically.
 
 ## 2. Code adapter — `plugins/*.mjs` (the 20% case)
 

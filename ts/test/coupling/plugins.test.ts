@@ -7,10 +7,12 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { _loadManifestFrom, _loadCodeAdaptersFrom } from "../../src/codebase/coupling/frameworks/plugins.js";
 import { isRouteAnnotation, routeAnnotationMethod, _resetRouteAnnotations } from "../../src/codebase/coupling/frameworks/route_annotations.js";
+import { httpClientCallRegex, _resetHttpClients } from "../../src/codebase/coupling/frameworks/http_clients.js";
+import { isOrmRead, _resetOrmMethods } from "../../src/codebase/coupling/frameworks/orm_methods.js";
 import { scan_file_keys, _resetAdapterPlugins } from "../../src/codebase/coupling/adapters/index.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "plugins");
-afterEach(() => { _resetRouteAnnotations(); _resetAdapterPlugins(); });
+afterEach(() => { _resetRouteAnnotations(); _resetHttpClients(); _resetOrmMethods(); _resetAdapterPlugins(); });
 
 describe("framework plugins", () => {
   test("a declarative frameworks.json manifest registers route-annotation vocabulary", () => {
@@ -18,6 +20,21 @@ describe("framework plugins", () => {
     _loadManifestFrom(join(FX, "frameworks.json"));
     expect(isRouteAnnotation("MyRoute")).toBe(true);     // …registered from data
     expect(routeAnnotationMethod("MyRoute")).toBe("GET");
+  });
+
+  test("a manifest registers http-client vocabulary (a new fetch-like receiver grounds a route consumer)", () => {
+    expect(httpClientCallRegex().test('acmeGet("/api/x")')).toBe(false);   // unknown before load
+    _loadManifestFrom(join(FX, "frameworks.json"));
+    const re = httpClientCallRegex();
+    re.lastIndex = 0;
+    const m = re.exec('acmeGet("/api/orders")');
+    expect(m?.[1]).toBe("/api/orders");                                     // …now a recognised consumer call
+  });
+
+  test("a manifest registers ORM read/write vocabulary", () => {
+    expect(isOrmRead("lookup_all")).toBe(false);        // unknown before load
+    _loadManifestFrom(join(FX, "frameworks.json"));
+    expect(isOrmRead("lookup_all")).toBe(true);          // …registered from data
   });
 
   test("a code KeyKind adapter is loaded and detects keys the builtins can't", async () => {

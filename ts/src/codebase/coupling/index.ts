@@ -25,6 +25,9 @@ import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./ke
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
 import { listMatchers } from "./key_store.js";
+import { routeAnnotationNames } from "./frameworks/route_annotations.js";
+import { httpClientCallRegex } from "./frameworks/http_clients.js";
+import { ormVocab } from "./frameworks/orm_methods.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
@@ -175,7 +178,10 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // cached floor re-scans instead of serving pre-fix keys — otherwise a logic fix is invisible on a warm repo.
 const _ADAPTER_LOGIC_VERSION = "2";
 function floorConfigSalt(): string {
-  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${allAdapters().map((a) => a.kind).join(",")}|plugins=${ADAPTERS_VERSION}`;
+  // Fold the framework VOCAB (route annotations / http clients / ORM methods) in too: a manifest that adds a
+  // route annotation or ORM method changes the floor output, so a warm repo must re-scan, not serve stale keys.
+  const vocab = `|rann=${[...routeAnnotationNames()].sort().join(",")}|hclients=${httpClientCallRegex().source}|orm=${ormVocab()}`;
+  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${allAdapters().map((a) => a.kind).join(",")}|plugins=${ADAPTERS_VERSION}${vocab}`;
 }
 
 // One file's RAW floor contribution — the per-file MAP half of the floor build, kept raw (param sites
