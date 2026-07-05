@@ -42,8 +42,10 @@ beforeAll(() => {
 afterAll(() => { rmSync(repoU, { recursive: true, force: true }); rmSync(repoI, { recursive: true, force: true }); });
 
 const filesOf = (data: any) => new Set((data.nodes as any[]).map((n) => String(n.file).replace(/^\.\//, "")));
+// the OTHER containment mechanisms (now default-ON) are forced off so `ubiquity` is the only variable.
 const growU = (ubiquity: boolean) => grow_to_terminals(repoU, "web/dash.ts", "loadDash",
-  { dataCoupling: true, intent: "how the dashboard loads bookings", wave: true, borderLlm: false, ubiquity, ubiquityFan: 3 });
+  { dataCoupling: true, intent: "how the dashboard loads bookings", ubiquity, ubiquityFan: 3,
+    hubCollapse: false, hubGate: false, tierGrow: false });
 const featCount = (data: any) => [...filesOf(data)].filter((f) => /^feat\d\//.test(f)).length;
 const terminalReached = (data: any) => [...filesOf(data)].some((f) => f === "data/repo.ts");
 
@@ -70,7 +72,7 @@ describe("ubiquity — a crossing-bearing hub is NEVER gated (I4)", () => {
     if (!available()) return;
     const routeCount = (data: any) => [...filesOf(data)].filter((f) => /^svc\d\/route/.test(f)).length;
     const g = (ubiquity: boolean) => grow_to_terminals(repoI, "data/repo.ts", "query",
-      { dataCoupling: true, intent: "how bookings are queried and served", wave: true, borderLlm: false, ubiquity, ubiquityFan: 3 });
+      { dataCoupling: true, intent: "how bookings are queried and served", ubiquity, ubiquityFan: 3 });
     const [base]: [any, any[]] = await g(false);
     const [gated]: [any, any[]] = await g(true);
     expect(routeCount(base)).toBeGreaterThanOrEqual(5);   // baseline: the wide crossing fan is present

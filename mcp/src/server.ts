@@ -441,14 +441,15 @@ const LLM_ENGINE = z.enum(["hybrid", "llm"]).default("hybrid")
     + "sampling. 'det' is not valid for auto-grow.");
 
 server.registerTool("grow_intent", {
-  title: "Grow an intent footprint across a codebase (LLM-directed)",
+  title: "Grow an intent footprint across a codebase",
   description:
     "Answer a question about a codebase by GROWING a footprint toward it: seed from an anchor symbol, "
-    + "then let the model iteratively choose the next consumer (up) or dependency (down) to follow until "
-    + "the footprint covers the answer, and decompose the result into seams. This is Seam's "
-    + "auto-orchestration loop — the model directs every move, served by a local claude/copilot binary "
-    + "when present (cheap dedicated tier), else YOUR model over MCP sampling. So it works WITHOUT a "
-    + "sampling-capable client as long as a claude/copilot CLI is on PATH. For a single non-iterative "
+    + "then DETERMINISTICALLY follow the resolved crossings (calls, data-coupling boundaries, string-dispatch) "
+    + "outward to the flow's terminals until the footprint covers the answer, and decompose the result into "
+    + "seams. The grow itself is deterministic and offline (reproducible in seconds); the model is used only "
+    + "for OPTIONAL final seam labeling (`engine`) and for cross-framework coupling discovery "
+    + "(`crossFramework`, learned once then cached), served by a local claude/copilot binary when present "
+    + "(cheap dedicated tier), else YOUR model over MCP sampling. For a single non-iterative "
     + "scan, use `intent_footprint` instead. "
     + "WHEN TO CALL: the question is how a feature / intent / mechanism WORKS or FLOWS across multiple "
     + "files and you need the ordered path (anchor → … → where it culminates) — prefer ONE call here over "
@@ -470,20 +471,22 @@ server.registerTool("grow_intent", {
     anchorFile: z.string().describe("Path to the file holding the anchor symbol (relative to repo or absolute)."),
     symbol: z.string().describe("The anchor symbol to seed the footprint from."),
     intent: z.string().describe("The natural-language question to grow the footprint toward."),
-    maxSteps: z.number().int().min(1).max(8).default(4).describe("Maximum number of grow moves the model may make."),
+    maxSteps: z.number().int().min(1).max(8).default(4).describe("Maximum number of deterministic grow moves (frontier expansions)."),
     crossFramework: CROSS_FRAMEWORK,
     spineOnly: SPINE_ONLY,
     engine: LLM_ENGINE,
   },
 }, async ({ repo, anchorFile, symbol, intent, maxSteps, crossFramework, spineOnly, engine }, extra) => {
   try {
-    // --skeleton: LLM consumer (see intent_footprint) — the grow itself is still LLM-directed (auto-anchor
-    // + move picks), but the FINAL seam-intent labeling pass is skipped; the consuming model tiers/labels.
+    // --skeleton: LLM consumer (see intent_footprint) — the deterministic grow runs, but the FINAL
+    // seam-intent labeling pass is skipped; the consuming model tiers/labels.
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
       "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
     if (spineOnly) base.push("--spine-only");   // deterministic off-intent crop (intent is always set here)
     base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
-    return await decompose(server, base, engine, true, extra);   // grow is LLM-only (hybrid/llm)
+    // grow is deterministic; the engine here is always hybrid/llm (final seam labeling) — and crossFramework
+    // adds the coupling flywheel — so a bridge/backend is always needed.
+    return await decompose(server, base, engine, true, extra);
   } catch (e) { return errReply(e); }
 });
 

@@ -34,7 +34,7 @@ import { render } from "../diff/report_text.js";
 import {
   changed_newside, ExternalFactsProvider, MergedFactsProvider, RegexFactsProvider, FACTS_SCHEMA_VERSION, type FactsProvider,
 } from "../diff/facts.js";
-import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage, fastCheapBackend } from "../core/llm.js";
+import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
 import { emit, emitTimingSummary, timingOn } from "../core/progress.js";
 import { readFileSync } from "node:fs";
@@ -450,12 +450,11 @@ async function runCodebase(a: Args): Promise<number> {
       return 0;
     }
     if (a.auto) {
-      // P5: LLM-directional auto-orchestration — grow toward the intent, then decompose.
+      // AUTO-GROW — deterministically follow the resolved crossings to the terminals, then decompose.
       if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
       const orch = await import("../codebase/grow/index.js");
-      // `--grow det` (default) follows the resolved crossings to the terminals deterministically — no LLM
-      // move-picker (the intent is still used downstream, by the tier pass). `--grow llm` = the old
-      // LLM-orchestrated grow.
+      // Grow is deterministic (the intent is used downstream by the tier pass, not to pick moves). The
+      // former LLM move-picker (`--grow llm`) was removed — the deterministic frontier walk reproduces it.
       // FILE anchor (a module.exports/Vue-plugin with no named symbol): grow file-level — an empty symbol
       // makes build_footprint use build_module_graph (the whole file's exports as the seed).
       const growSymbol = fileAnchor ? "" : a.symbol!;
@@ -465,41 +464,26 @@ async function runCodebase(a: Args): Promise<number> {
       // CLI default maxSteps=4 is for OTHER modes; treat it as "unset" here so the det grow keeps its 12. A deep
       // flow (a UI → a far data-hub service) needs a bigger budget than 80 to climb all the way — raise both.
       const growSteps = a.maxSteps > 4 ? a.maxSteps : 12;
-      // WAVE (flood) mode: the SOFT BORDER is the terminator, so maxNodes is a high runaway SAFETY backstop, not
-      // the budget — the single-pick default of 80 would truncate the shape long before the border. An explicit
-      // --max-nodes still wins. Single-pick keeps 80.
-      // 80 truncates a flood immediately; an unbounded one is minutes (~0.5s/node until per-wave builds are
-      // parallelised). 500 is a runtime-sane safety backstop — big enough for most intent-regions, and an honest
-      // flood-safety-cap blindspot fires if the shape needs more (raise --max-nodes). An explicit --max-nodes wins.
-      // Mirror orchestrate's _GROW_WAVE default (env override, else ON when a fast SLM backend is configured)
-      // so the node BUDGET matches the picker the grow will actually run — else an 80-cap truncates a flood.
-      const wEnv = process.env.SEAM_GROW_WAVE;
-      const waveGrow = (wEnv === undefined || wEnv === "") ? fastCheapBackend() : (wEnv === "1" || wEnv === "true");
-      const growNodes = a.maxNodes ?? (waveGrow ? 500 : 80);
+      // WAVE (flood) is the sole grow mode: CONVERGENCE (the deterministic tier/hub containment) is the terminator,
+      // so maxNodes is a high runaway SAFETY backstop, not the budget. 80 truncates a flood immediately; an
+      // unbounded one is minutes. 500 is a runtime-sane safety backstop — big enough for most intent-regions, and
+      // an honest flood-safety-cap blindspot fires if the shape needs more (raise --max-nodes). --max-nodes wins.
+      const growNodes = a.maxNodes ?? 500;
       // STREAM (Phase 4): --stream emits ONE NDJSON record per settled wave on STDOUT (progress stays on stderr,
       // I7). The reader may hang up early (got its answer at wave 2) → stdout EPIPE → stop growing, exit 0 (no
       // stack trace). A monotonic wave counter spans multi-anchor grows so records stay ordered.
       let streamWave = 0;
       if (a.stream) process.stdout.on("error", (e: any) => { if (e?.code === "EPIPE") process.exit(0); });
       const onWave = a.stream ? (rec: any) => { try { process.stdout.write(JSON.stringify({ wave: ++streamWave, added: rec.added, edges: rec.edges, frontier: rec.frontier }) + "\n"); } catch { process.exit(0); } } : undefined;
+      // The deterministic convergence tier rule + hub collapse + ubiquity containment are the ENGINE default now
+      // (grow_to_terminals; env vars still override, set =0 to opt out) — every caller gets them, so no per-CLI
+      // wiring is needed. maxNodes stays the runaway backstop — convergence terminates the flood first.
       const gOpts: any = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
-      if (a.stream) gOpts.wave = true;   // --stream is wave-mode only — the per-wave records come from the flood loop
-      // PRODUCT DEFAULT (Phase 5.1 flip) — the convergence tier rule + hub collapse are ON in WAVE mode. Validated
-      // recall-safe on the author repo (docs: grow-phase1-matrix §5.1); the env vars still override (set =0 to opt
-      // out). Wired HERE at the composition root, so the library default (grow_to_terminals) stays OFF — every
-      // in-process caller (harness, tests) is byte-identical; only the product flips. maxNodes stays the runaway
-      // backstop — convergence terminates the flood first, so it is not the budget.
-      if (waveGrow || gOpts.wave) {
-        const envOn = (v?: string) => (v === undefined || v === "") ? undefined : (v === "1" || v === "true");
-        gOpts.tierGrow = envOn(process.env.SEAM_TIER_GROW) ?? true;
-        gOpts.hubCollapse = envOn(process.env.SEAM_HUB_COLLAPSE) ?? true;
-      }
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
       // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
       const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling): Promise<[any, any[]]> => {
-        if (a.grow === "llm") return orch.auto_orchestrate(a.repo, af, sym, a.intent!, { maxSteps: a.maxSteps, model: a.model, claudeBin: a.claudeBin, dataCoupling: dc, dataCouplingLlm: dc && dcLlm });
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
         if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx });
@@ -527,7 +511,7 @@ async function runCodebase(a: Args): Promise<number> {
         }
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
-      process.stderr.write(`[auto:${a.grow}] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
+      process.stderr.write(`[auto] ${hist!.length} move(s): ` + (hist!.map((h) => `${h.node}(+${h.added}${h.dir ? " " + h.dir : ""})`).join(", ") || "none") + "\n");
       // CONCERN RE-ANCHOR (--concern): a plural "how is X managed?" question has no entry point — it has a shared
       // MECHANISM. The auto-anchor grew from ONE interaction (a point); detect the center STRUCTURALLY (highest
       // fan-in node in the region) and RE-GROW from it so the answer is the center-rooted STAR of interactions, the

@@ -96,7 +96,7 @@ live path, then persist their shard — so it warms lazily, exactly like the fly
    pre-learn epoch and misses next run → recompute; once the flywheel SETTLES (no new blind files →
    `key-adapters.json` stops changing → epoch stabilises) the answer replays and the wave + coupling pass are
    skipped (private-app `--data-coupling llm`: settled warm = 0 waves / 0 learning / 0 coupling-materialize, ~0.8s).
-   Only an **LLM border** (no persisted state to key on) and a **streaming** (`onWave`) grow stay live.
+   Only a **streaming** (`onWave`) grow stays live.
 6. **Flip the flywheel to always-lazy** — learn matchers under `floor` too (cheap to amortize now), `off` =
    no learning.
 

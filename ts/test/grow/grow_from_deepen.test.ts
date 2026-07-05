@@ -39,7 +39,7 @@ describe("deepening — grow FROM a frontier node reaches its guarded fan and me
     if (!available() || !(await transformersAvailable())) return;
     // base region — record is on the frontier (off-intent pivot the tier rule parked), its fan not grown.
     const [base]: [any, any[]] = await grow_to_terminals(repo, "api/createHandler.ts", "createBooking",
-      { dataCoupling: true, intent: "how are bookings created", wave: true, borderLlm: false, tierGrow: true });
+      { dataCoupling: true, intent: "how are bookings created", tierGrow: true });
     const model: any = await decompose(from_resolved_graph(base), { repo, intent: "how are bookings created" });
     const fp = (model.frontier ?? []).find((f: any) => f.symbol === "record");
     expect(fp).toBeDefined();                        // record surfaced as a deepening handle
@@ -47,7 +47,7 @@ describe("deepening — grow FROM a frontier node reaches its guarded fan and me
 
     // DEEPEN — re-anchor the wave grow at the frontier node (what `--grow-from telemetry/telemetry.ts#record` does).
     const [deep]: [any, any[]] = await grow_to_terminals(repo, fp.file, fp.symbol,
-      { dataCoupling: true, intent: "telemetry and metrics recording", wave: true, borderLlm: false });
+      { dataCoupling: true, intent: "telemetry and metrics recording" });
     expect(offCount(deep)).toBeGreaterThan(0);       // the deepen reaches the fan record guarded
 
     // MERGEABLE — union the two regions; the shared node (record) unifies by content key (appears once), and the

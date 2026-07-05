@@ -45,11 +45,10 @@ dependencies — then decomposes *that* into seams. Codebase mode is **honest ab
 edges it can't resolve come back as `SUGGESTED` / `blindspots` (a boundary to verify), never asserted
 as real.
 
-Codebase mode doesn't *guess* where an intent lives — it **grows the footprint deterministically**
-(`--grow det`, the default): it follows the resolved crossings (imports, shared-keys, HTTP routes) to
-the terminals with **zero LLM**, skipping moves that would flood the map with a generic util. The
-model is asked only to *name and tier* what the trace already found — it **never invents an edge**
-(`--grow llm` keeps the older LLM-directed move-picker).
+Codebase mode doesn't *guess* where an intent lives — it **grows the footprint deterministically**:
+it follows the resolved crossings (imports, shared-keys, HTTP routes) to the terminals with **zero
+LLM**, skipping moves that would flood the map with a generic util. The model is asked only to *name
+and tier* what the trace already found — it **never invents an edge**.
 
 You don't have to know the anchor. Given **just a natural-language intent** (`--auto` with no
 `--symbol`), the engine **selects the starting symbol itself**: it probes the best name-matched
@@ -71,7 +70,8 @@ opt out): `SEAM_HUB_COLLAPSE` keeps a ubiquitous type/util as ONE marked node in
 fan, and `SEAM_TIER_GROW` grows to convergence under a three-tier rule (follow a crossing/continuation;
 fan through an on-intent pivot; park an off-intent pivot on the frontier). They tolerate a little
 off-intent overgrowth (ranked to the bottom + surfaced on the frontier) rather than ever drop a real
-on-intent mechanism — the semantic "is this called dependency on-intent?" cut stays the LLM border's job.
+on-intent mechanism — the semantic "is this called dependency on-intent?" cut is left to the reader/agent
+(the grow itself stays fully deterministic).
 
 ## Beyond the flow — structural questions (the shapes)
 
@@ -405,7 +405,7 @@ bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts -
     --intent "rate-limit the public API" --emit-seams footprint.json
 
 # AUTO-ANCHOR: give ONLY an intent — the engine selects the anchor, grows it deterministically to the
-# terminals (`--grow det`, default; zero LLM), and decomposes (no --anchor-file / --symbol).
+# terminals (zero LLM), and decomposes (no --anchor-file / --symbol).
 # Prints `[auto-anchor:llm|structural] <symbol> (<file>)`.  (needs a `claude` CLI for anchor-judge + tiering)
 bun ts/src/cli/decompose.ts --scan --auto --repo . \
     --intent "how does the seam JSON contract get stamped" --emit-seams footprint.json
@@ -422,15 +422,13 @@ bun ts/src/cli/decompose.ts --scan --auto --repo . --intent "load member booking
 `--depth N` follows N consumer hops; `resolutionQuality` / `unresolved` / `blindspots` in the output
 report where static resolution gave out.
 
-The wave grow is **deterministic by default** — the tier rule, hub collapse and coupling-border carry
-it, and the **LLM is out of the grow loop** (reserved for the two genuinely-semantic steps: the
-data-coupling flywheel and the center pick). The old per-wave SLM intent-border (`grow-border`) is now
-**opt-in** (`SEAM_GROW_BORDER_LLM=1`); when on, a set of grounded deterministic priors shrink its work,
-each fed to the same border and never dropping a node that bears a real crossing (invariant I4):
-`SEAM_UBIQUITY=1` (demote shared-infrastructure hubs by cross-module fan-in), `SEAM_GROW_BORDER_RESIDUAL=1`
-(send only the ambiguous middle band to the SLM), `SEAM_CONCERN_MAP=1` (learn a per-repo side-concern
-taxonomy once → `.seam/concern-map.json`, apply it LLM-free forever), and
-`SEAM_GROW_BORDER_FIELD=intent|centroid|blend` (`intent` is the default and the one that discriminates).
+The wave grow is **fully deterministic — there is no LLM in the grow loop** (the LLM is reserved for the
+two genuinely-semantic steps OUTSIDE it: the data-coupling flywheel and the `--concern` center pick). The
+flood is bounded by deterministic containment that's **on for every caller** (`=0`/`opts=false` opts out),
+none of which ever drops a node bearing a real crossing (invariant I4): the **tier rule** (three-tier
+convergence move-admission), **hub collapse** (`SEAM_HUB_COLLAPSE` — a ubiquitous type/util stays as one
+marked `hub:` node instead of flooding its fan; subsumes `SEAM_HUB_GATE`/`SEAM_UBIQUITY`), the deterministic
+**coupling border** (`_borderCouplingDet`), and the soft embedding tol-border (`SEAM_GROW_BORDER_TOL`).
 See `ts/eval/grow-phase{1..4}-matrix.md` for the measured trade-offs.
 
 ### `--concern` — a concern map, center-first
@@ -618,8 +616,7 @@ a subagent standing in for the MCP server's sampling). It covers **both** modes:
 - **Diff review** — *"review by seam"*, *"decompose this diff"* → emit prompts → subagent per pass →
   inject → render.
 - **Codebase intent discovery** — *"where does X live"*, *"map the footprint of X"* → a deterministic
-  grow to its terminals (default `--grow det`, zero LLM), or an LLM-directed grow (`--grow llm`)
-  driven over the interactive `--llm-bridge` — with
+  grow to its terminals (zero LLM) — with
   the **anchor auto-selected from just the intent** when no symbol is given (an `expand` + `anchor-judge`
   pass precede the grow moves).
 
@@ -701,7 +698,7 @@ opposite**:
 
 | | **Augment** context engine | **Seam** codebase mode |
 |---|---|---|
-| **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); the footprint **grows deterministically** to its terminals (default `--grow det`, zero LLM), LLM only to *tier* it |
+| **Retrieval** | custom-trained **vector embeddings** + quantized similarity, with a semantic dependency-graph layer | **deterministic resolved edges** (imports, **data-coupling shared-keys**, HTTP routes, string-dispatch); the footprint **grows deterministically** to its terminals (zero LLM), LLM only to *tier* it |
 | **Index** | the whole repo, continuous, **real-time** (100M+ lines) | an **on-demand footprint** from one anchor, per question |
 | **Output** | invisible context feeding the model | a **transparent map** — a flood-fill region, roles, wiring, intent tiers |
 | **Confidence** | a similarity score | **provenance** (`RESOLVED` / `PARTIAL` / `SUGGESTED`) + named **blindspots** |

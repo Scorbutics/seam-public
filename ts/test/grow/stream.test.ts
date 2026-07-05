@@ -26,8 +26,10 @@ describe("stream — per-wave records union to the final region, waves non-decre
   test("onWave fires per settled wave; union(added) == final nodes; wave numbers non-decreasing", async () => {
     if (!available()) return;
     const recs: any[] = [];
+    // containment OFF → a plain flood with NO crop, so the streamed union == the final region exactly.
     const [data]: [any, any[]] = await grow_to_terminals(repo, "chain/h0.ts", "step0",
-      { dataCoupling: false, intent: "how does the chain reach its terminal", wave: true, borderLlm: false,
+      { dataCoupling: false, intent: "how does the chain reach its terminal",
+        tierGrow: false, hubCollapse: false, ubiquity: false,
         onWave: (rec) => recs.push(rec) });
     expect(recs.length).toBeGreaterThanOrEqual(1);              // at least the seed record
     // wave numbers non-decreasing (seed=0, then 1,2,…)
@@ -50,7 +52,7 @@ describe("stream — early close is graceful (EPIPE → exit 0)", () => {
     if (!available()) return;
     const proc = Bun.spawn(["bun", "src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
       "--anchor-file", "chain/h0.ts", "--symbol", "step0", "--intent", "how does the chain reach its terminal", "--stream", "--no-data-coupling"],
-      { cwd: join(import.meta.dir, "../.."), env: { ...process.env, SEAM_GROW_WAVE: "1" }, stdout: "pipe", stderr: "ignore" });
+      { cwd: join(import.meta.dir, "../.."), env: { ...process.env }, stdout: "pipe", stderr: "ignore" });
     // read ONE record, then hang up (cancel the stream) — the engine's next write should EPIPE and exit 0, not throw.
     const reader = proc.stdout.getReader();
     await reader.read();            // the first NDJSON record

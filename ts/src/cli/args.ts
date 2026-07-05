@@ -16,7 +16,7 @@ export interface Args {
   center?: string;     // --center <file>#<symbol>: skip center detection, use this node as the concern center
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
-  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean; grow: string;
+  llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean;
   checkBackend?: boolean; affinity?: boolean; interfaceConsumers?: boolean; listPasses?: boolean;
   excludeDirs?: string[]; includeTests: boolean;   // footprint exclusion: folders to drop; tests dropped unless --include-tests
   trace?: boolean;   // --trace: --verbose + the per-node timing firehose (SEAM_TIMING)
@@ -36,7 +36,7 @@ export function resolveEngines(a: Args): { cluster: string; roles: string; wirin
 }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, grow: "det", includeTests: false };
+  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, includeTests: false };
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
@@ -87,7 +87,7 @@ export function parseArgs(argv: string[]): Args {
       case "--expand-line": a.expandLine = parseInt(next() ?? "0", 10); break;
       case "--down": a.down = true; break;
       case "--bidirectional": a.bidirectional = true; break;   // footprint = consumers (forward) + deps (backward)
-      case "--grow": a.grow = (next() ?? "det").toLowerCase(); break;   // auto-grow strategy: det (deterministic, default) | llm
+      case "--grow": { const g = (next() ?? "").toLowerCase(); if (g === "llm") process.stderr.write("warning: --grow llm was removed; grow is always deterministic now\n"); break; }   // DEPRECATED no-op (grow is deterministic); consumes its value for back-compat
       case "--cross-from": a.crossFrom = next(); break;
       case "--emit-candidates": a.emitCandidates = next(); break;
       case "--attribution": a.attribution = next(); break;

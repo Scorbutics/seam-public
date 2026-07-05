@@ -140,7 +140,7 @@ describe("renderConcern — end-to-end: growing from a POINT still recovers the 
   test("center = the shared mechanism (fan-in 4); all 4 sibling interactions are in the star", async () => {
     if (!available()) return;
     const [data]: [any, any[]] = await grow_to_terminals(repo, "member/memberBookings.ts", "loadBookings",
-      { dataCoupling: true, intent: "how are bookings managed across the app", wave: true, borderLlm: false, tierGrow: true });
+      { dataCoupling: true, intent: "how are bookings managed across the app", tierGrow: true });
     const model: any = await decompose(from_resolved_graph(data), { repo, intent: "how are bookings managed across the app" });
     const out = renderConcern(model, { intent: "how are bookings managed across the app" });
     expect(out).toContain("manageBooking");                // the mechanism, not the member point we anchored on
@@ -153,7 +153,7 @@ describe("renderConcern — end-to-end: growing from a POINT still recovers the 
 
 describe("concern center — WRONG-ANCHOR RESISTANCE (the plan's killer property)", () => {
   const grow = (file: string, sym: string) => grow_to_terminals(repo, file, sym,
-    { dataCoupling: true, intent: "how are bookings managed across the app", wave: true, borderLlm: false, tierGrow: true });
+    { dataCoupling: true, intent: "how are bookings managed across the app", tierGrow: true });
   const points = [
     ["member/memberBookings.ts", "loadBookings"],
     ["admin/adminBookings.ts", "assignBookingAdviser"],

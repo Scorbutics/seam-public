@@ -40,8 +40,10 @@ beforeAll(() => {
 });
 afterAll(() => { rmSync(repoA, { recursive: true, force: true }); rmSync(repoB, { recursive: true, force: true }); });
 
+// the OTHER containment mechanisms (now default-ON) are forced off so `hubGate` is the only variable.
 const growA = (hubGate: boolean) => grow_to_terminals(repoA, "web/memberBookings.ts", "loadBookings",
-  { dataCoupling: true, intent: "how are a member's bookings loaded and displayed", wave: true, borderLlm: false, hubGate, hubFan: 5 });
+  { dataCoupling: true, intent: "how are a member's bookings loaded and displayed", hubGate, hubFan: 5,
+    hubCollapse: false, ubiquity: false, tierGrow: false });
 const filesOf = (data: any) => new Set((data.nodes as any[]).map((n) => String(n.file)));
 const terminalReached = (data: any) => [...filesOf(data)].some((f) => f.includes("app/api/bookings/route.ts"));
 const siblingCount = (data: any) => [...filesOf(data)].filter((f) => /sib\d/.test(f)).length;
@@ -69,7 +71,7 @@ describe("hub-gate — a crossing-bearing fan is NEVER gated (terminal-preservat
     if (!available()) return;
     const routeCount = (data: any) => [...filesOf(data)].filter((f) => /api\/r\d\/route/.test(f)).length;
     const g = (hubGate: boolean) => grow_to_terminals(repoB, "lib/db.ts", "queryBookings",
-      { dataCoupling: true, intent: "how are bookings queried and served over the API", wave: true, borderLlm: false, hubGate, hubFan: 5 });
+      { dataCoupling: true, intent: "how are bookings queried and served over the API", hubGate, hubFan: 5 });
     const [base]: [any, any[]] = await g(false);
     const [gated]: [any, any[]] = await g(true);
     expect(routeCount(base)).toBeGreaterThanOrEqual(5);      // baseline: the wide crossing fan is present

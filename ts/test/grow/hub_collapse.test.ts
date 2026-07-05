@@ -36,9 +36,11 @@ beforeAll(() => {
 });
 afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 
-// collapse OFF and ubiquity OFF → the plain flood (the overgrow to contain). collapse ON → the contained + marked shape.
+// collapse OFF and ubiquity OFF → the plain flood (the overgrow to contain). collapse ON → the contained + marked
+// shape. The OTHER containment mechanisms (now default-ON) are forced off so hubCollapse is the only variable.
 const grow = (hubCollapse: boolean) => grow_to_terminals(repo, "web/memberBookings.ts", "loadBookings",
-  { dataCoupling: true, intent: "how are a member's bookings loaded and displayed", wave: true, borderLlm: false, hubCollapse, hubUbiquity: 4 });
+  { dataCoupling: true, intent: "how are a member's bookings loaded and displayed", hubCollapse, hubUbiquity: 4,
+    ubiquity: false, hubGate: false, tierGrow: false });
 const filesOf = (data: any) => new Set((data.nodes as any[]).map((n) => String(n.file)));
 const terminalReached = (data: any) => [...filesOf(data)].some((f) => f.includes("app/api/bookings/route.ts"));
 const siblingCount = (data: any) => [...filesOf(data)].filter((f) => SIBS.some((s) => f.includes(`${s}/${s}Service`))).length;
@@ -93,7 +95,7 @@ describe("hub-collapse — a wide DOWN dependency fan (the mechanism chain) is N
   test("grantAccess's 8 downstream helpers all survive under hub collapse (grounded continuation)", async () => {
     if (!available()) return;
     const [col]: [any, any[]] = await grow_to_terminals(deprepo, "api/subscribe.ts", "subscribe",
-      { dataCoupling: true, intent: "how is paid access granted on subscribe", wave: true, borderLlm: false, hubCollapse: true, hubFan: 4, hubUbiquity: 4 });
+      { dataCoupling: true, intent: "how is paid access granted on subscribe", hubCollapse: true, hubFan: 4, hubUbiquity: 4 });
     const files = new Set((col.nodes as any[]).map((n) => String(n.file)));
     const helpers = ["resolveType", "lookupPrice", "checkQuota", "writeGrant", "auditLog", "notifyUser", "syncCache", "tagMember"];
     const reached = helpers.filter((h) => [...files].some((f) => f.includes(`logic/${h}.ts`)));

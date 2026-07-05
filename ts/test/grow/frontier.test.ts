@@ -4,7 +4,7 @@
 // never prune a crossing; complexity is the final tiebreak. The off-intent hub fan is capped in P3, not here.
 // Pure → injected scores.
 import { describe, expect, test } from "bun:test";
-import { _nextFrontier, _nextMove, type Move } from "../../src/codebase/grow/orchestrate.js";
+import { _nextFrontier, _orderMoves, type Move } from "../../src/codebase/grow/orchestrate.js";
 
 type N = { id: string; complexity?: number };
 const pick = (cand: N[], crossings: string[], score: Record<string, number>, typeRefOnly: string[] = []) =>
@@ -36,13 +36,14 @@ describe("_nextFrontier — connectivity (crossings) first, then intent, then co
   });
 });
 
-// _nextMove — the BIDIRECTIONAL frontier: intent BAND outranks CLOSENESS so a clearly-relevant FAR node beats a
+// _orderMoves — the BIDIRECTIONAL frontier: intent BAND outranks CLOSENESS so a clearly-relevant FAR node beats a
 // near generic (the acme failure: a far data-hub consumer starved while near generics ate the budget),
-// while closeness still orders nodes of SIMILAR relevance (the explosion bound). Pure → injected scores/dist.
-describe("_nextMove — intent band beats closeness; closeness breaks ties within a band", () => {
+// while closeness still orders nodes of SIMILAR relevance (the explosion bound). The wavefront processes the
+// WHOLE ordered frontier per wave, so the HEAD (`_orderMoves(...)[0]`) is the highest-priority move. Pure.
+describe("_orderMoves — intent band beats closeness; closeness breaks ties within a band", () => {
   const mv = (id: string, dir: "up" | "down" = "up", direction?: string): Move => ({ node: { id, direction }, dir });
   const pickMove = (moves: Move[], crossings: string[], score: Record<string, number>, dist: Record<string, number>, typeRefOnly: string[] = []) =>
-    _nextMove(moves, new Set(crossings), (n) => score[n.id] ?? 0, new Set(typeRefOnly), (id) => dist[id] ?? 99)?.node.id;
+    _orderMoves(moves, new Set(crossings), (n) => score[n.id] ?? 0, new Set(typeRefOnly), (id) => dist[id] ?? 99)[0]?.node.id;
 
   test("a clearly-relevant FAR node beats a near GENERIC node (the fix)", () => {
     const near = mv("near"), far = mv("far");

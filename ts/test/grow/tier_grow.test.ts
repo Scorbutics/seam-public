@@ -35,7 +35,7 @@ beforeAll(() => {
 afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 
 const grow = (tierGrow: boolean) => grow_to_terminals(repo, "api/createHandler.ts", "createBooking",
-  { dataCoupling: true, intent: "how are bookings created and cancelled", wave: true, borderLlm: false, tierGrow });
+  { dataCoupling: true, intent: "how are bookings created and cancelled", tierGrow });
 const filesOf = (data: any) => new Set((data.nodes as any[]).map((n) => String(n.file)));
 const siblingReached = (data: any) => [...filesOf(data)].some((f) => f.includes("api/cancelHandler"));
 const offCount = (data: any) => [...filesOf(data)].filter((f) => OFF.some((o) => f.includes(`${o}/${o}Feature`))).length;
@@ -90,7 +90,7 @@ describe("tier rule — a deep single-continuation terminal is reached in one ca
   test("the wave-5 terminal arrives in ONE grow", async () => {
     if (!available()) return;
     const [data]: [any, any[]] = await grow_to_terminals(deepRepo, "chain/h0.ts", "step0",
-      { dataCoupling: true, intent: "how does the chain reach its terminal", wave: true, borderLlm: false, tierGrow: true });
+      { dataCoupling: true, intent: "how does the chain reach its terminal", tierGrow: true });
     const files = new Set((data.nodes as any[]).map((n) => String(n.file)));
     expect([...files].some((f) => f.includes("chain/h5.ts"))).toBe(true);   // the deep terminal, one call
   });
