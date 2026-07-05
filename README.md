@@ -404,9 +404,9 @@ bun ts/src/cli/decompose.ts --scan --repo . --classifier det \
 bun ts/src/cli/decompose.ts --scan --repo . --anchor-file ts/src/diff/seams.ts --symbol emit_seams_json \
     --intent "rate-limit the public API" --emit-seams footprint.json
 
-# AUTO-ANCHOR: give ONLY an intent — the engine selects the anchor, grows it deterministically to the
-# terminals (zero LLM), and decomposes (no --anchor-file / --symbol).
-# Prints `[auto-anchor:llm|structural] <symbol> (<file>)`.  (needs a `claude` CLI for anchor-judge + tiering)
+# CENTER-FIRST: give ONLY an intent — the engine detects the concern's MECHANISM(s), grows deterministically
+# to the terminals (zero LLM), and decomposes (no --anchor-file / --symbol). `--center file#symbol` pins it.
+# Prints `[center-first] <n> mechanism(s): …`.  (a `claude` CLI sharpens the mechanism pick + tiering; offline → lexical floor)
 bun ts/src/cli/decompose.ts --scan --auto --repo . \
     --intent "how does the seam JSON contract get stamped" --emit-seams footprint.json
 
@@ -616,9 +616,8 @@ a subagent standing in for the MCP server's sampling). It covers **both** modes:
 - **Diff review** — *"review by seam"*, *"decompose this diff"* → emit prompts → subagent per pass →
   inject → render.
 - **Codebase intent discovery** — *"where does X live"*, *"map the footprint of X"* → a deterministic
-  grow to its terminals (zero LLM) — with
-  the **anchor auto-selected from just the intent** when no symbol is given (an `expand` + `anchor-judge`
-  pass precede the grow moves).
+  grow to its terminals (zero LLM) — with the **concern's mechanism detected from just the intent**
+  (center-first) when no symbol is given.
 
 It auto-triggers on those phrasings, or invoke it explicitly with `/seam`. This is the zero-setup path
 when there's no model CLI on PATH; if `claude` *is* available, plain `decompose.ts … --emit-seams`

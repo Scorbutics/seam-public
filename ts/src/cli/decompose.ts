@@ -397,47 +397,32 @@ async function runCodebase(a: Args): Promise<number> {
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
   } else if (a.scan) {
-    // Auto-anchor: --auto with --intent but NO --symbol → SELECT the anchor instead of the user picking
-    // one (a bad pick linked to nothing hides the real result).
-    if (a.auto && a.intent && !a.symbol && a.concern && !a.center) {
-      // CENTER-FIRST (--concern, no --symbol/--center): picking the mechanism from an intent PHRASE is a SEMANTIC
-      // mapping, so ask the LLM DIRECTLY over a lexical recall net — NO anchor selection, NO throwaway detection
-      // grow. The picked mechanism(s) ARE the anchors; the loop below grows from them (coupling ON). An agent
-      // passes --center and skips this entirely (zero LLM). Offline → the deterministic lexical floor.
-      const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
-      const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
-      emit(`Picking the concern's mechanism for "${a.intent}"…`);
-      const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
-      const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
-      if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
-      a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
-      anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
-      centerPicked = true;
-      process.stderr.write(`[center-first] ${picked.length} mechanism(s): ${picked.map((c) => c.symbol).join(", ")}\n`);
-    } else if (a.auto && a.intent && !a.symbol) {
-      // The full auto-anchor pipeline behind ONE call: entry-point seed + intent-expand (concurrent,
-      // LLM-gated) feeding the probe→judge select_anchor. The entry seed is a SEED candidate (decide-LAST),
-      // not a preemptive override; embed recall is the default (degrades to lexical where transformers.js
-      // is absent). The CLI only does presentation (logging/err) on the returned data.
-      const { find_anchor } = await import("../codebase/anchor/index.js");
-      emit(`Selecting the entry point for "${a.intent}" (LLM anchoring)…`);
-      const sel = await find_anchor(a.repo, a.intent, { dataCoupling: a.dataCoupling, model: a.model, claudeBin: a.claudeBin, anchorRecall: a.anchorRecall === "lexical" ? "lexical" : "embed", select: a.anchorSelect === "probe" ? "probe" : "pick" });
-      // Diagnostics go to STDERR (alongside the @@SEAM_PROGRESS@@ markers) so STDOUT can carry pure JSON
-      // when no --emit-seams file is given (a clean `seam … > out.json`).
-      if (sel.entryCandidate) process.stderr.write(`[entry-candidate] ${sel.entryCandidate.path} → ${sel.entryCandidate.symbol} (${sel.entryCandidate.file})\n`);
-      if (!sel.chosen) err(`auto-anchor: no connected anchor found for "${a.intent}"`);
-      a.anchorFile = sel.chosen!.file; a.symbol = sel.chosen!.name;
-      fileAnchor = (sel.chosen as any).kind === "module";   // a file-identity anchor → grow the whole file
-      anchorAlternatives = sel.alternatives;
-      // MULTI-ANCHOR: the LLM may return a SET of complementary entry points (a list screen AND a CRUD screen
-      // in different files). The primary is the back-compat single anchor; the rest are grown + merged below.
-      anchorSet = (sel.anchors && sel.anchors.length > 1) ? sel.anchors : null;
-      const via = sel.chosen!.terms?.includes("~entry") ? "entry" : sel.chosenBy;
-      process.stderr.write(`[auto-anchor:${via}] ${fileAnchor ? "file " : ""}${sel.chosen!.name} (${sel.chosen!.file})${anchorSet ? ` + ${anchorSet.length - 1} more anchor(s): ${anchorSet.slice(1).map((x: any) => x.name).join(", ")}` : ""}\n`);
-      // honest signal: the chosen anchor LOOKS like computation/strategy with no traceable flow. Defer the
-      // message until AFTER the decompose — if the grow + seam-intent actually find a culmination, the
-      // guess was wrong (conservative on controllers), so don't print a contradictory [no-flow].
-      noFlowHint = !!sel.noFlow;
+    // No explicit --symbol → CENTER-FIRST is the SOLE no-symbol strategy (the LLM auto-anchor judge was
+    // removed): detect the concern's MECHANISM(s) from the intent and grow from them. This IS --concern, so
+    // mark it — the concern re-anchor + render engage below. `--center file#symbol` PINS the mechanism (zero LLM).
+    if (a.auto && a.intent && !a.symbol) {
+      a.concern = true;
+      if (a.center) {
+        const h = a.center.indexOf("#");
+        a.anchorFile = a.center.slice(0, h); a.symbol = a.center.slice(h + 1);
+        anchorSet = [{ name: a.symbol, file: a.anchorFile, kind: "function" }];
+        centerPicked = true;
+        process.stderr.write(`[center-first] pinned center: ${a.symbol} (${a.anchorFile})\n`);
+      } else {
+        // Picking the mechanism from an intent PHRASE is a SEMANTIC mapping → ask the LLM over a lexical recall
+        // net (offline → the deterministic lexical floor). The picked mechanism(s) ARE the anchors; the loop
+        // below grows from them (coupling ON).
+        const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
+        const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
+        emit(`Picking the concern's mechanism for "${a.intent}"…`);
+        const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+        const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
+        if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
+        a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
+        anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
+        centerPicked = true;
+        process.stderr.write(`[center-first] ${picked.length} mechanism(s): ${picked.map((c) => c.symbol).join(", ")}\n`);
+      }
     }
     if (!a.anchorFile) err("--scan requires --anchor-file");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
