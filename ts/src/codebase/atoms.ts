@@ -24,7 +24,11 @@ export const _CLASS_KINDS = new Set(["class_declaration", "abstract_class_declar
   "class_specifier", "struct_specifier", "interface_declaration", "enum_declaration", "record_declaration",
   "class"]);   // Ruby's class node is the bare kind `class` (others use class_declaration/_definition/_specifier) —
                // without it Ruby methods aren't seen as in-class, so they're mislabelled functions (no call-site pass)
-export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration"]);
+// Ruby `method` / `singleton_method` (a `def self.x`) are the class's methods — Ruby-exclusive kinds (JS uses
+// method_definition, Java method_declaration), so listing them here is collision-free and lets `_class_methods`
+// (hence `_type_methods` → the whole call-site consumer pass) SEE a Ruby class's methods. Without them a Ruby
+// class anchor found ZERO methods to hunt, so the entire consumer grow returned empty (the require-less-Ruby gap).
+export const _METHOD_KINDS = new Set(["method_definition", "method_declaration", "constructor_declaration", "method", "singleton_method"]);
 export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_identifier"]);
 // The identifier LEAVES a declared name resolves to once the C/C++ declarator chain is unwrapped — the
 // terminal a `name`/`declarator` field points at. Used to read the real NAME off a typed declaration

@@ -1,40 +1,53 @@
-// RUBY CROSS-FILE CONSUMERS (KNOWN GAP — pinned by the multi-repo gauntlet on PSDK). A central Ruby class
-// (`GameState`) is called from other files that DON'T `require` it (Ruby games/PSDK load everything through a
-// central loader, so there are no import edges), via three idioms: a direct `GameState.new.save`, a global
-// `$game.save`, and a qualified `PFM.game.save`. On PSDK, growing from `GameState` finds ZERO consumers — Ruby
-// call-site + receiver resolution under-indexes these, so a Ruby concern map is currently near-empty. Fixing it
-// is a language-specific undertaking (Ruby require-less linking + `.new`/global/module-accessor receiver typing).
-// The `test.todo`s below encode the target so the work is tracked, not forgotten; the first test asserts the
-// class at least PARSES (defs are found), so the fixture is valid.
+// RUBY CROSS-FILE CONSUMERS (was a KNOWN GAP — pinned by the multi-repo gauntlet on PSDK, now FIXED). A central
+// Ruby class (`GameState`) is called from other files that DON'T `require` it (Ruby games/PSDK load everything
+// through a central loader, so there are no import edges), via three idioms: a direct `GameState.new.save`, a
+// global `$game.save`, and a qualified `PFM.game.save`. Growing from `GameState` used to find ZERO consumers —
+// the root cause was `_METHOD_KINDS` omitting Ruby's `method`/`singleton_method` node kinds, so a Ruby class
+// anchor found ZERO methods to hunt and the whole consumer pass returned empty. With that fixed (+ Ruby
+// `Const.new` receiver typing) the real grow path (build_consumers_graph, which merges the receiver-agnostic
+// call-site pass) surfaces all three: the PROVABLE direct instantiation as RESOLVED_FULL (followed), and the two
+// dataflow-indirected idioms ($game / PFM.game) as RESOLVED_PARTIAL leads (honest — typing them needs
+// interprocedural dataflow). A name-collision (`Other.new.save`) is DROPPED (provably-foreign receiver).
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { defs_in_file } from "../../src/codebase/scan/def_table.js";
-import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "ruby-consumers");
-const read = (rel: string) => readFileSync(join(REPO, rel), "utf-8");
+const grow = () => build_consumers_graph(REPO, "game_state.rb", "GameState", { dataCoupling: false });
+const consumerOf = (g: any, file: string) =>
+  (g.nodes as any[]).find((n) => (n.file ?? "").endsWith(file) && n.id !== "GameState");
+const edgeFrom = (g: any, nodeId: string) => (g.edges as any[]).find((e) => e.from === nodeId);
 
 describe("ruby cross-file consumers of a require-less class", () => {
-  test("the class parses (fixture is valid)", () => {
+  test("a direct `GameState.new.save` caller is found and PROVABLE (RESOLVED_FULL)", async () => {
     if (!available()) return;
-    const names = new Set(defs_in_file("game_state.rb", read("game_state.rb")).map((d) => d.name));
-    expect(names.has("GameState")).toBe(true);
+    const g = await grow();
+    const n = consumerOf(g, "direct.rb");
+    expect(n).toBeDefined();
+    expect(edgeFrom(g, n.id)?.provenance).toBe("RESOLVED_FULL");   // GameState.new is a grounded instantiation → followed
   });
 
-  // TARGET (currently 0 consumers found) — each idiom should surface as a consumer of GameState.
-  test.todo("a direct `GameState.new.save` caller is found", async () => {
-    const g = await build_class_graph(REPO, "game_state.rb", "GameState", { depth: 1 });
-    expect((g.nodes as any[]).some((n) => (n.file ?? "").endsWith("direct.rb"))).toBe(true);
+  test("a global `$game.save` caller is found (a PARTIAL lead)", async () => {
+    if (!available()) return;
+    const g = await grow();
+    const n = consumerOf(g, "global.rb");
+    expect(n).toBeDefined();
+    expect(edgeFrom(g, n.id)?.provenance).toBe("RESOLVED_PARTIAL");   // $game type needs dataflow — honest lead
   });
-  test.todo("a global `$game.save` caller is found", async () => {
-    const g = await build_class_graph(REPO, "game_state.rb", "GameState", { depth: 1 });
-    expect((g.nodes as any[]).some((n) => (n.file ?? "").endsWith("global.rb"))).toBe(true);
+
+  test("a qualified `PFM.game.save` caller is found (a PARTIAL lead)", async () => {
+    if (!available()) return;
+    const g = await grow();
+    const n = consumerOf(g, "qualified.rb");
+    expect(n).toBeDefined();
+    expect(edgeFrom(g, n.id)?.provenance).toBe("RESOLVED_PARTIAL");
   });
-  test.todo("a qualified `PFM.game.save` caller is found", async () => {
-    const g = await build_class_graph(REPO, "game_state.rb", "GameState", { depth: 1 });
-    expect((g.nodes as any[]).some((n) => (n.file ?? "").endsWith("qualified.rb"))).toBe(true);
+
+  test("a name-collision `Other.new.save` is NOT a consumer (provably-foreign receiver)", async () => {
+    if (!available()) return;
+    const g = await grow();
+    expect(consumerOf(g, "foreign.rb")).toBeUndefined();   // dispatches to Other#save, not GameState#save
   });
 });

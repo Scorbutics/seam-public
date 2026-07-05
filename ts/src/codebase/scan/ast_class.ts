@@ -175,6 +175,16 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
     if (obj.type === "identifier") recvId = ctx.text(obj);
     else if (_NEW.has(obj.type)) { const c = ctx.children(obj).find((x) => x.type === "identifier" || _MEMBER.has(x.type)); recvNew = c ? ctx.text(c) : null; }
     else if (_MEMBER.has(obj.type)) { const ip = ctx.children(obj).find((c) => _MEMBER_NAME.has(c.type)); recvId = ip ? ctx.text(ip) : null; }
+    // Ruby `Const.new.method()` — the receiver is itself a CALL node (Ruby has no `_NEW` kind; `.new` is an
+    // ordinary call), so a `new` call on a Constant receiver IS an instantiation → recvNew = that constant.
+    // Grounded (a constant receiver + the `new` factory method), so it promotes the provable direct-instance
+    // case to FULL and lets provablyForeign drop an unrelated `Other.new.method()` name-collision. The bare
+    // last segment matches the class-family index (keyed by class name). Only Ruby yields a call-as-receiver.
+    else if (_CALL.has(obj.type)) {
+      const mth = obj.childForFieldName?.(_CALL_NAME_FIELD.find((f) => obj.childForFieldName?.(f)) ?? "");
+      const rcv = _CALL_RECV_FIELD.map((f) => obj.childForFieldName?.(f)).find(Boolean);
+      if (mth && ctx.text(mth) === "new" && rcv && /^[A-Z]/.test(ctx.text(rcv))) recvNew = ctx.text(rcv).split("::").pop() ?? null;
+    }
     out.push({ method: m, line: ctx.span(call)[0], recvId, recvNew });
   }
   return out;
