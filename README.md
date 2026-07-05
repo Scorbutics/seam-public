@@ -427,7 +427,7 @@ two genuinely-semantic steps OUTSIDE it: the data-coupling flywheel and the `--c
 flood is bounded by deterministic containment that's **on for every caller** (`=0`/`opts=false` opts out),
 none of which ever drops a node bearing a real crossing (invariant I4): the **tier rule** (three-tier
 convergence move-admission), **hub collapse** (`SEAM_HUB_COLLAPSE` — a ubiquitous type/util stays as one
-marked `hub:` node instead of flooding its fan; subsumes `SEAM_HUB_GATE`/`SEAM_UBIQUITY`), the deterministic
+marked `hub:` node instead of flooding its fan; subsumes the bare hub-fan + ubiquity gates), the deterministic
 **coupling border** (`_borderCouplingDet`), and the soft embedding tol-border (`SEAM_GROW_BORDER_TOL`).
 See `ts/eval/grow-phase{1..4}-matrix.md` for the measured trade-offs.
 
@@ -771,4 +771,4 @@ Known limits:
   `pyproject`) and the surviving seams are mostly link-only config blocks, so the review surface is
   sparse and the one real code core lands with low (~50%) confidence.
 - **No GitHub PR ingestion yet**, no line-level roles, no chunking for very large diffs (the
-  classifier warns near the context window, `--context-window`, default 200k).
+  classifier warns near the context window, default 200k).

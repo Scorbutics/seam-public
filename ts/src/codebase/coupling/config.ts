@@ -19,7 +19,7 @@ export const COUPLING = {
   // materializes only `hubReaderCap` complement(s) instead of `readerCap`; the rest is recorded as the
   // existing shared-key-fanout blindspot (honest, not silent). A domain table with a handful of users is
   // unaffected. Structural (degree), not a name match — tunable via env for big monorepos.
-  hubFan: Number(process.env.SEAM_HUB_FAN ?? 16),          // fan-in above which a key is treated as an infra hub
+  hubFan: Number(process.env.SEAM_COUPLING_HUB_FAN ?? 16),          // fan-in above which a key is treated as an infra hub (distinct from the grow's SEAM_HUB_FAN)
   hubReaderCap: Number(process.env.SEAM_HUB_READER_CAP ?? 1),  // complements materialized for a hub key
   nodeKeyCap: Number(process.env.SEAM_NODE_KEY_CAP ?? 16),  // index: max shared keys ONE node surfaces (caps a hub file emitting dozens of UI events — keeps the most specific; $SEAM_NODE_KEY_CAP)
   complementBudget: Number(process.env.SEAM_COMPLEMENT_BUDGET ?? 250), // grow-wide cap on materialized complement units (tree-sitter parses) — bounds a hub's data-coupling fan so a bad/central anchor can't run for ages; $SEAM_COMPLEMENT_BUDGET

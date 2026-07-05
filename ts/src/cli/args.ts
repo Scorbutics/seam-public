@@ -87,7 +87,6 @@ export function parseArgs(argv: string[]): Args {
       case "--expand-line": a.expandLine = parseInt(next() ?? "0", 10); break;
       case "--down": a.down = true; break;
       case "--bidirectional": a.bidirectional = true; break;   // footprint = consumers (forward) + deps (backward)
-      case "--grow": { const g = (next() ?? "").toLowerCase(); if (g === "llm") process.stderr.write("warning: --grow llm was removed; grow is always deterministic now\n"); break; }   // DEPRECATED no-op (grow is deterministic); consumes its value for back-compat
       case "--cross-from": a.crossFrom = next(); break;
       case "--emit-candidates": a.emitCandidates = next(); break;
       case "--attribution": a.attribution = next(); break;
@@ -125,9 +124,6 @@ export function parseArgs(argv: string[]): Args {
       case "--data-coupling": { const m = (next() ?? "auto").toLowerCase(); a.dataCoupling = m !== "off"; a.dataCouplingLlm = m === "llm"; a.dataCouplingAuto = m === "auto"; a.dataCouplingExplicit = true; break; }
       case "-v": case "--verbose": a.verbose = true; break;
       case "--trace": a.verbose = true; a.trace = true; break;   // --verbose + the per-node timing firehose
-      case "--context-window": case "-o": case "--out":
-        next(); break; // accepted-and-ignored on the ported paths
-      case "--open": case "--debug": break; // boolean, ignored on the ported paths
       default:
         if (v.startsWith("-")) { process.stderr.write(`warning: unknown flag ignored: ${v}\n`); }
     }

@@ -132,7 +132,7 @@ export function _nextFrontier<T extends { id: string; complexity?: number }>(
 // hop (take the reverse — the climb-up — only once the near forward frontier is spent), then complexity.
 // A core node at or beyond this hop-distance from the anchor is treated as a SHARED backend hub (its up-climb
 // reaches sibling entry points), not the central seam (whose up-climb is redundant). Env-tunable.
-const _UPCLIMB_MIN_DIST = (() => { const v = parseInt(process.env.SEAM_UPCLIMB_MIN_DIST ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 2; })();
+const _UPCLIMB_MIN_DIST = 2;   // legacy hop-distance up-climb gate (fallback when the embedding field is absent; tierGrow supersedes it — no longer env-tunable)
 // Intent BANDS — coarse buckets of the (0..1) intent score so a MEANINGFULLY-more-relevant node jumps the
 // frontier, while CLOSENESS still orders nodes of SIMILAR relevance. Raw intent-before-closeness would let a
 // hair-more-relevant FAR node thrash the budget (and undo the bound); banding only promotes a clearly-relevant
@@ -429,7 +429,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // floor" pre-grow, so it stays fully inclusive: the tier/hub containment is gated off under stableFloor (the same
   // flag that skips the deterministic coupling border), so the probe maps the widest reachable set.
   const stableFloor = coStruct.ctx?.stableFloor;
-  // HUB GATE (opt-in via SEAM_HUB_GATE / opts.hubGate) — a DETERMINISTIC bound on the off-intent overgrow
+  // HUB GATE (opts.hubGate; on by default via hubCollapse) — a DETERMINISTIC bound on the off-intent overgrow
   // the profiling exposed: a hub node (a shared repo/util/accessor) whose expansion adds a WIDE fan of pure
   // NON-crossing consumers. Those consumers are sibling/other-feature entry points, not this flow's spine, so
   // treating all N as spine is the 62%-off-intent bloat (and, on a big repo, the seconds-per-hub build). We
@@ -444,7 +444,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // everywhere but never a call target on the spine). DEFAULT ON — the deterministic containment carries the grow
   // (env=0 / opts=false opts out); the discarded scoping PROBE stays inclusive (no containment).
   const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !stableFloor;
-  const hubGate = (opts.hubGate ?? _envFlag(process.env.SEAM_HUB_GATE) ?? false) || hubCollapse;
+  const hubGate = (opts.hubGate ?? false) || hubCollapse;   // env SEAM_HUB_GATE removed — it was OR'd with the default-on hubCollapse, so it could never toggle anything
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
   const hubTypeFan = Math.max(2, opts.hubTypeFan ?? (parseInt(process.env.SEAM_HUB_TYPE_FAN ?? "5", 10) || 5));      // lower fan-in for a type-ref-only hub (the MyString shape)
@@ -460,13 +460,13 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // no worse than a flood). `parked` collects the tier-3 residue for the decision-point frontier (Phase 2.2).
   const tierGrow = (opts.tierGrow ?? _envFlag(process.env.SEAM_TIER_GROW) ?? true) && !stableFloor;   // the scoping PROBE stays inclusive (no tier gating)
   const parked = new Map<string, "decision" | "hub" | "border" | "budget">();   // node id → why its expansion stopped (frontier cutBy)
-  // UBIQUITY PRIOR (SEAM_UBIQUITY / opts.ubiquity) — a DETERMINISTIC cross-module fan-in read from the reverse-
+  // UBIQUITY PRIOR (opts.ubiquity; on by default) — a DETERMINISTIC cross-module fan-in read from the reverse-
   // import index (grow/ubiquity.ts): a node reached from ≥`ubiquityFan` DISTINCT modules is shared infrastructure.
   // It (a) DEMOTES such a node in the frontier order (grow it last) and (b) STOPS the flood from expanding THROUGH
   // it — but ONLY when it bears NO grounded crossing (I4: a shared DAO on the flow's crossing is scored high yet
   // never gated). DEFAULT ON (env=0 / opts=false opts out); no index → empty → no effect (I1/I3).
   // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
-  const ubiquity = (opts.ubiquity ?? _envFlag(process.env.SEAM_UBIQUITY) ?? true) || hubCollapse;
+  const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // env SEAM_UBIQUITY removed — OR'd with default-on hubCollapse, so it couldn't toggle anything
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
