@@ -254,7 +254,15 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // i.e. it was a redundant SECOND LLM pass over the same files. `SEAM_PER_FILE_KEYS=1` restores it (the
   // framework-agnostic regeneration opt-in / the literal-axis fallback).
   const perFileKeys = process.env.SEAM_PER_FILE_KEYS === "1";
+  let shapelessSkipped = 0;
   for (const c of clusters) {
+    // NO SUSPECTED EDGE: a floor-blind file with no data-access shape (a DTO/serializer/entity) has nothing for
+    // the flywheel to learn — skip the LLM, but CACHE it covered so a warm run doesn't re-scan it (it settles).
+    if (!c.shaped) {
+      for (const m of c.members) persistFileKeys(repo, m.ck, { name: "no-boundary-shape", description: "floor-blind but no data-access shape — no edge to learn", keys: [] });
+      shapelessSkipped += c.members.length;
+      continue;
+    }
     if (blindFiles.length < COUPLING.keyBudget) blindFiles.push({ file: c.rep.file, text: c.rep.text });   // matcher synth: one rep per pattern
     if (!opts.llm) continue;
     if (perFileKeys && ctx.keyBudget > 0) { ctx.keyBudget -= 1; toSynth.push(c.rep); }                      // per-file pass (opt-in) — persists the rep's keys
@@ -263,6 +271,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
     for (const m of c.members) if (!(perFileKeys && m.ck === c.rep.ck))
       persistFileKeys(repo, m.ck, { name: `cluster-covered`, description: `keys via cluster rule (${c.signature || "shapeless"})`, keys: [] });
   }
+  if (shapelessSkipped) emit(`Skipped ${shapelessSkipped} floor-blind file(s) with no data-access shape (no suspected edge to learn)…`);
   if (verbose() && collapsed > 0)
     process.stderr.write(`[coupling] clustered blind files by shape:\n${clusters.filter((c) => c.members.length > 1).map((c) => `   · ${c.signature || "(shapeless)"} ×${c.members.length} → rep ${c.rep.file}`).join("\n")}\n`);
   // pass 2 — one batched LLM call per chunk for the uncached files
@@ -390,6 +399,7 @@ async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opt
   const candList = [...cands.values()];
   const toSynth: typeof candList = [];
   for (const c of await clusterBlindFiles(candList)) {
+    if (!c.shaped) { for (const m of c.members) persistFileKeys(repo, m.ck, { name: "no-boundary-shape", description: "no data-access shape — no edge to learn", keys: [] }); continue; }   // no suspected edge → skip the LLM
     if (ctx.keyBudget <= 0) break;
     ctx.keyBudget -= 1; toSynth.push(c.rep);
     for (const m of c.members) if (m.ck !== c.rep.ck)

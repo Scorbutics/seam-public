@@ -88,26 +88,39 @@ function _dominant(tokens: string[]): string {
   return [...count].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))[0][0];
 }
 
-export interface BlindCluster<T> { signature: string; rep: T; members: T[] }
+// `shaped` = the file exhibits a SUSPECTED data-access edge — a member CHAIN (`recv.x.verb()`, ORM/repo) or a
+// STRING-KEYED call (`f('k')`). A floor-blind file with NO such shape (a pure DTO / serializer / entity — the
+// `EncryptedByteArrayUserType` infra flood) is blind because it's STRUCTURE, not because it hides a boundary, so
+// there is nothing for the matcher flywheel to learn from it. The caller SKIPS `!shaped` clusters — the flywheel
+// only spends LLM where an edge is suspected (Brice: "only blind files where the edges are suspected"). The signal
+// is STRUCTURAL (a closed call-shape set from the atoms registry), never a keyword guess (CLAUDE.md).
+export interface BlindCluster<T> { signature: string; shaped: boolean; rep: T; members: T[] }
 
 // Cluster floor-blind files by their dominant structural shape: same distinctive signature → one cluster
-// (LLM the representative, the rest ground via the learned rule). Shapeless files and unique signatures
-// stay singletons (always sent). Tree-sitter unavailable → one cluster per file (no collapse).
+// (LLM the representative, the rest ground via the learned rule). Shapeless files stay singletons but are marked
+// `shaped:false` so the caller drops them. Tree-sitter unavailable → one cluster per file, all `shaped:true` (we
+// can't read the shape, so keep the old behaviour). Opt out of the shape gate with SEAM_COUPLING_SHAPE_GATE=0.
 export async function clusterBlindFiles<T extends { file: string; text: string }>(files: T[]): Promise<BlindCluster<T>[]> {
-  if (!available() || files.length < 2) return files.map((f) => ({ signature: "", rep: f, members: [f] }));
-  const groups = new Map<string, { sig: string; richness: number; member: T }[]>();
+  // OPT-IN: the shape gate drops floor-blind files with no data-access shape (a DTO/serializer/entity — the infra
+  // flood the flywheel wastes LLM on). Default-OFF because a purely-structural "has an edge" signal has a real
+  // recall cost on 2-level ORM/model calls (`Payment.where` — no string, no deep chain), so it stays a lever to
+  // enable (SEAM_COUPLING_SHAPE_GATE=1) and measure on a real repo before any default flip.
+  const gate = process.env.SEAM_COUPLING_SHAPE_GATE === "1";   // gate only decides DROPPING; clustering-collapse always runs
+  if (!available()) return files.map((f) => ({ signature: "", shaped: true, rep: f, members: [f] }));
+  const groups = new Map<string, { sig: string; richness: number; member: T; shaped: boolean }[]>();
   for (const f of files) {
     const lang = lang_for(f.file);
     const ctx = lang ? await makeCtx(f.text, lang) : null;
-    const tokens = ctx ? await _shapeTokens(ctx) : [];
-    const sig = _dominant(tokens);
-    const key = sig || `\0solo:${f.file}`;   // shapeless → its own group (NUL prefix can't collide with a real signature)
-    (groups.get(key) ?? groups.set(key, []).get(key)!).push({ sig, richness: tokens.length, member: f });
+    const tokens = ctx ? await _shapeTokens(ctx) : null;   // null = unsupported lang → can't read shape → keep (shaped)
+    const sig = tokens ? _dominant(tokens) : "";
+    const shaped = !gate || tokens === null || tokens.length > 0;   // computed-empty ⇒ no suspected edge ⇒ drop
+    const key = shaped ? (sig || `\0solo:${f.file}`) : `\0noshape:${f.file}`;   // NUL prefix can't collide with a real signature
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push({ sig, richness: tokens?.length ?? 0, member: f, shaped });
   }
   const clusters: BlindCluster<T>[] = [];
   for (const entries of groups.values()) {
     const rep = entries.reduce((a, b) => (b.richness > a.richness ? b : a));   // richest example = clearest to the LLM
-    clusters.push({ signature: rep.sig, rep: rep.member, members: entries.map((e) => e.member) });
+    clusters.push({ signature: rep.sig, shaped: rep.shaped, rep: rep.member, members: entries.map((e) => e.member) });
   }
   // LEVERAGE order: a shared-shape cluster's single rep covers ALL its members via the learned rule, so when
   // the LLM budget caps the reps, spend it on the big clusters first (one call → many files grounded) before
