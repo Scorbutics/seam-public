@@ -50,7 +50,7 @@ function _hash(s: string): string {
 // the PREVIOUS run's state → a stale hit (the exact bug the invalidation test caught). A direct walk reflects
 // the live tree regardless of index timing: ANY source add/edit/delete bumps the epoch and invalidates every
 // entry — coarse but correct, and it closes the alias / new-impl hole by construction. Computed once/process.
-function epochOf(repo: string): string {
+export function epochOf(repo: string): string {
   const cached = _epoch.get(repo);
   if (cached !== undefined) return cached;
   const parts: string[] = [];
