@@ -5,25 +5,23 @@
 // embed-string to the intent, reusing the cached def-embedding index (no LLM call, reproducible, offline).
 // Validated to recover the intent path (XPLAN flow ranks top, JSON-schema/DocuSign noise sinks) on a real
 // repo. ADDITIVE: it only ANNOTATES seams with a `relevance` score (and a rank-banded `tier`) — it never
-// drops or reorders them. A consumer (the agent, or a future --spine-only) ranks/crops; the engine doesn't.
+// drops or reorders them. The consumer (the agent, or the concern/agent render) ranks; the engine doesn't.
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
 import { embedScoreDefs } from "../scan/def_embed.js";
 
 // Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
 // emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present result beats none.
-// Mutates `model` in place; on failure leaves seams un-annotated and the --spine-only crop off.
-export async function annotateForEmit(repo: string, intent: string | undefined, spineOnly: boolean | undefined, model: any): Promise<void> {
+// Mutates `model` in place; on failure leaves seams un-annotated.
+export async function annotateForEmit(repo: string, intent: string | undefined, model: any): Promise<void> {
   // When the LLM border shaped the grow (model.llmBorder), the kept footprint is ALREADY intent-scoped by the
   // LLM — so the embedding RE-rank is redundant and can mis-score what the LLM correctly kept (the documented
   // 0.11-on-a-real-mechanism-node case). Skip it and degrade exactly as when embeddings are absent (the LLM is
   // the ranker). Embeddings stay the deterministic FALLBACK ranker only when there's no LLM border (no backend).
-  if (model.llmBorder) { if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true }; return; }
+  if (model.llmBorder) return;
   try {
-    const ranked = await annotateIntentRelevance(repo, intent, model.clusters);
-    if (spineOnly) model.spineOnly = ranked ? { omitted: cropOffIntent(model.clusters) } : { omitted: 0, unavailable: true };
+    await annotateIntentRelevance(repo, intent, model.clusters);
   } catch (e) {
     process.stderr.write(`intent-relevance annotation skipped: ${(e as Error).message}\n`);
-    if (spineOnly) model.spineOnly = { omitted: 0, unavailable: true };
   }
 }
 
@@ -53,26 +51,6 @@ export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
   scored.forEach((s, i) => { (s as any).tier = isOff(s) ? "off" : band(i); });
 }
 
-
-// --spine-only crop: deterministically drop the OFF-intent band (tier === "off"), keeping spine +
-// supporting in full. HONEST + lossless-by-reference — each dropped seam leaves a compact stub
-// (label + relevance + file) in `cluster.omitted`, so the consumer SEES what was cut and can re-query full;
-// nothing is silently hidden. No-op when tiers are absent (embeddings unavailable) — so it degrades to the
-// full closure rather than cropping blind (the engine never judges-by-hiding without a basis). Returns the
-// omitted count. Reproducible (the tier is the embedding ranking, not an LLM).
-export function cropOffIntent(clusters: any[]): number {
-  let omitted = 0;
-  for (const cl of clusters ?? []) {
-    const keep: any[] = [], drop: any[] = [];
-    for (const s of (cl.seams ?? [])) (s.tier === "off" ? drop : keep).push(s);
-    if (!drop.length) continue;
-    cl.seams = keep;
-    cl.omitted = drop.map((s) => ({ id: s.id, label: s.label, relevance: s.relevance, file: s.primary?.file }))
-      .sort((a: any, b: any) => (b.relevance ?? 0) - (a.relevance ?? 0));
-    omitted += drop.length;
-  }
-  return omitted;
-}
 
 // Within a SEAM, flag the most intent-relevant MEMBERS as the spine. The structural floor collapses a
 // tangled (god-object / DI-heavy) closure into one big seam, so seam-level tiering has nothing to separate

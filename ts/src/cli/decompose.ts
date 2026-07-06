@@ -572,7 +572,7 @@ async function runCodebase(a: Args): Promise<number> {
       const usage = get_usage().as_dict();
       if (usage) model2.usage = usage;
       if (!llmBorder) emit(`Ranking ${nSeams} seam(s) by intent relevance (embeddings)…`);   // LLM border already ranked → no embedding pass
-      await annotateForEmit(a.repo, a.intent, a.spineOnly, model2);   // embed relevance (guarded; skipped when the LLM border ranked)
+      await annotateForEmit(a.repo, a.intent, model2);   // embed relevance (guarded; skipped when the LLM border ranked)
       applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
       const payload = JSON.stringify(stamped);
@@ -715,7 +715,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitSeams) {
     const usage = get_usage().as_dict();
     if (usage) model.usage = usage;
-    await annotateForEmit(a.repo, a.intent, a.spineOnly, model);   // deterministic embed relevance (guarded — never blocks emit)
+    await annotateForEmit(a.repo, a.intent, model);   // deterministic embed relevance (guarded — never blocks emit)
     writeFileSync(a.emitSeams, JSON.stringify(stamp(model)));
     process.stdout.write(`Seams: ${a.emitSeams}\n`);
   }

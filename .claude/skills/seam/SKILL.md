@@ -5,7 +5,7 @@ description: >-
   serving Seam's LLM passes from THIS Claude session via spawned subagents instead of a `claude -p`
   subprocess — no `claude` binary, no PATH, no API key needed. Two modes: DIFF review (group a git
   diff's hunks into seams) and CODEBASE intent discovery (trace where a symbol/intent lives — a static
-  footprint, or an LLM-grown one). Use when asked to "review by seam", "decompose this diff", "run
+  footprint, or a DETERMINISTICALLY-grown one). Use when asked to "review by seam", "decompose this diff", "run
   Seam", "where does X live", "map the footprint of X", or to grow an intent across a codebase.
   ROUTING — reach for Seam when the answer is a PATH/FLOW/STRUCTURE across multiple files (how a
   feature works, where a flow ends, what's the blast radius, mapping a flow before editing it):
@@ -22,7 +22,7 @@ description: >-
   (meaning, not edges) use embeddings/RAG — Seam routes those away honestly rather than faking them.
   DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
   have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
-  selection and traces+decomposes from it (~11s vs ~28s auto-anchor). grep to ORIENT, Seam to TRACE.
+  selection and traces+decomposes from it (~11s; no-symbol runs center-first mechanism detection first). grep to ORIENT, Seam to TRACE.
   ALSO for INTERNAL PLANNING before implementing: if a change touches a LOGIC/DATA flow (a spine) you
   haven't mapped and understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST
   (orient grep → named-anchor grow) to plan against a verified spine, not a guess — not just for "how
@@ -32,8 +32,8 @@ description: >-
 
 # Seam (host-served LLM, diff + codebase)
 
-Seam's engine (`ts/src/cli/decompose.ts`) makes its own LLM calls — diff clustering, and the codebase
-auto-grow orchestration loop. Normally it shells out to `claude -p`. Inside Claude Code there is often
+Seam's engine (`ts/src/cli/decompose.ts`) makes its own LLM calls — diff clustering, and a FEW residual
+codebase passes (the grow itself is deterministic now — see §C). Normally it shells out to `claude -p`. Inside Claude Code there is often
 **no `claude` binary on PATH** (the CLI is bundled in the VS Code extension). This skill avoids that:
 it runs Seam's deterministic passes locally and **serves every LLM pass from the running session** by
 spawning a subagent per pass — the same isolation a `claude -p` subprocess gave, but on this session's
@@ -45,7 +45,7 @@ There are two product modes, sharing the same host-served-LLM mechanics:
 |---|---|---|---|
 | **Diff review** | *What does this change do; how do I review it by intent?* | `reconcile`, `cluster` (1–2) | batch (§A) |
 | **Codebase — static footprint** | *Where does this symbol/intent live; who consumes it?* | **none** (deterministic) | direct run (§B) |
-| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | `expand`+`anchor-judge` (if auto-anchor) + `orchestrate` ×N (+ `discover`) | interactive bridge (§C) |
+| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | **grow is deterministic** — LLM only for: `center-pick` (no `--symbol`), the final `seam-intent` tier (unless `--skeleton`), the coupling flywheel (`--data-coupling llm`) | direct run, or bridge for the residual pass(es) (§C) |
 | **Structural shapes** | *Who calls X · what X depends on · what breaks if X changes (impact) · can A reach B · a module's boundary · the subsystem around X · how A and B differ* | **none** (deterministic) | direct run (§D) |
 | **Ask (router)** | *Any of the above, from a natural-language question* | `shape-route` (1) + the routed shape | bridge (§E) |
 
@@ -104,7 +104,7 @@ instructions ask for — no prose, no markdown fences."* (Without the no-tools i
 may mistake the prompt for a task about the current repo and waste a turn exploring.) Spawn the passes
 **concurrently** (they are independent). **Route each pass to the subagent tier in its `model` field**:
 the engine stamps the right tier per pass — the cheap passes carry `claude-haiku-4-5`, the genuinely
-SEMANTIC anchor/intent passes (`entrypoint-select`, `anchor-judge`, `seam-intent`) carry
+SEMANTIC intent passes (`center-pick`, `seam-intent`, `shape-route`) carry
 `claude-sonnet-4-6` (they wobble run-to-run on a weak model — the stability harness pinned them as the
 dominant instability). So a pass whose `model` names **sonnet/opus → spawn that stronger tier**; a
 `haiku` model (or `thinking > 0` as a secondary hint) → haiku is fine. Each subagent runs in its own
@@ -188,50 +188,61 @@ This is the cheapest entry point — instant, offline, zero LLM calls. Use it wh
 
 ---
 
-## §C — Codebase auto-grow (interactive bridge — subagent pump)
+## §C — Codebase auto-grow (deterministic; bridge only for the residual pass)
 
-`--auto` is an LLM-in-the-loop: the model repeatedly picks the next node + direction to follow toward
-an intent, the engine expands the footprint, and it decomposes the grown result. Step N's prompt
-depends on step N−1's answer, so the batch contract (§A) can't serve it. Instead use the engine's
-**interactive bridge** (`--llm-bridge`), the same channel the MCP server uses — you become the host
-pump, answering each request with a subagent.
+`--auto` grows a footprint toward an intent, then decomposes it. **The grow itself is now fully
+DETERMINISTIC** — it floods the resolved crossings (calls, data-coupling, string-dispatch) to the flow's
+terminals, bounded by deterministic containment (hub-collapse / tier-convergence). There is **no LLM
+move-picker** and **no per-step pump**. The only LLM passes that can occur are:
 
-`--auto` **requires `--intent`** and is inherently LLM (no `det`). It takes `--symbol` two ways:
+- **`center-pick`** — ONLY when you omit `--symbol` (the no-symbol path is CENTER-FIRST: the engine picks
+  the concern's *mechanism* from the intent). One pass at the start.
+- **`seam-intent`** — the final tiering/labeling pass, **skipped by `--skeleton`** (recommended for an LLM
+  consumer — you tier/label the emitted skeleton yourself).
+- **the coupling flywheel** (`discover-keys` / `discover-key-matchers`) — ONLY with `--data-coupling llm`;
+  batched + cached (learn-once → deterministic forever).
 
-- **You name the anchor (PREFER THIS)** — pass `--anchor-file` + `--symbol` (e.g. from a cursor pick,
-  a §B scan, or a symbol you already grepped/read). Seam then SKIPS the whole anchor-selection stage
-  (entrypoint-select + expand + probe + anchor-judge) and goes straight to grow → decompose: **~11s vs
-  ~28s for auto-anchor**, and an LLM caller's context-informed pick is usually as good. Default to this
-  whenever you already have a candidate symbol — which, after a couple of orienting greps, you usually do.
-- **Auto-anchor (omit `--symbol`)** — the engine SELECTS the anchor for the intent: it probes the
-  top name-matched candidates with a shallow deterministic grow, drops the ones whose footprint
-  dead-ends (so a name-matching-but-isolated symbol can't be picked and hide the real result), then
-  serves ONE `anchor-judge` LLM pass to choose which connected footprint is the intent's entry point.
-  This is the right default when you only have a question, not a symbol. It prints
-  `[auto-anchor:llm|structural] <symbol> (<file>)` so you can see what it chose.
+**So with `--symbol` + `--skeleton` + floor coupling (the recommended LLM-consumer call) there are ZERO
+LLM passes — run it DIRECT like §B, no bridge.** You only need the bridge (or a `claude` binary) when a
+residual pass exists: `center-pick` (no symbol), `seam-intent` (no `--skeleton`), or the `llm` flywheel.
 
-### C1 — Start the engine in the background
+`--auto` **requires `--intent`**. Two ways to seed it:
 
-Run it with `run_in_background: true` (it blocks on each LLM pass until you answer):
+- **You name the anchor (PREFER THIS)** — pass `--anchor-file` + `--symbol` (from a cursor pick, a §B
+  scan, or a symbol you grepped/read). Seam grows straight from it: **~11s**, zero anchor-selection LLM.
+  Default to this whenever you already have a candidate symbol — which, after a couple of orienting greps,
+  you usually do.
+- **Center-first (omit `--symbol`)** — the engine detects the concern's MECHANISM(s) from the intent (a
+  lexical recall net → one `center-pick` LLM pass; offline → the deterministic lexical floor) and grows
+  from them. This is the right default when you only have a question, not a symbol. It prints
+  `[center-first] <n> mechanism(s): …`. `--center file#symbol` PINS the mechanism (zero LLM).
+
+### C1 — Run it
+
+**Best LLM-consumer output = `--format agent`** (the token-budgeted agent render: spine-first, dimmed
+off-intent tail, cross-stack blindspots collapsed). With `--symbol` + `--skeleton` + floor coupling it's
+fully deterministic — run it in the FOREGROUND, no bridge:
 
 ```bash
-# you name the anchor:
+# you name the anchor → deterministic, no bridge, best LLM output:
 $ENGINE --scan --auto --repo "<REPO>" --anchor-file "<F>" --symbol "<S>" \
-        --intent "<question>" --max-steps <N> --classifier hybrid --skeleton \
-        --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
-# …or auto-anchor (engine selects) — just drop --anchor-file/--symbol:
-$ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> \
-        --classifier hybrid --skeleton --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
+        --intent "<question>" --max-steps <N> --skeleton --format agent
 ```
 
-With auto-anchor, the deterministic probe runs in-process FIRST (no bridge traffic, but a few seconds
-of apparent silence before `req-0`), then `req-0` is the `anchor-judge` pass; the `orchestrate`/
-`discover` moves follow.
+If you omit `--symbol` (center-first) OR add `--data-coupling llm`, there IS a residual LLM pass. Either
+run plainly if a `claude` binary is on PATH (the engine serves it), or start it in the **background** with
+`--llm-bridge "$OUT/bridge"` and pump the one/few passes as in C2 (usually just `center-pick`, once):
 
-`--skeleton` keeps the grow LLM-directed (you still pump the `anchor-judge` + `orchestrate`/`discover`
-moves) but **drops the final `seam-intent` tiering pass from the pump** — one fewer (and the largest,
-output-bound) round-trip, because as the in-session model you tier/label the emitted skeleton yourself.
-Drop `--skeleton` only when the run is for the human VS Code view (then you also serve the tiering pass).
+```bash
+# center-first (no --symbol) or --data-coupling llm → serve the residual pass(es) over the bridge:
+$ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> --skeleton \
+        --format agent --llm-bridge "$OUT/bridge"      # run in background, then pump §C2
+```
+
+`--skeleton` drops the final `seam-intent` tiering pass — as the in-session model you tier/label the
+emitted `--format agent` skeleton yourself (validated: equal-or-better answer at ~⅓ the tokens). Drop
+`--skeleton` only when the run is for the human VS Code view (`--emit-seams`), where the prose labels +
+tier grouping are the value.
 
 ### C2 — Pump the bridge, one pass per turn
 
@@ -242,22 +253,23 @@ For `n = 0, 1, 2, …` until the background engine exits (i.e. `$OUT/seams.json`
 ends):
 1. **Wait** for `$OUT/bridge/req-<n>.json` to exist (use the **Monitor** tool with an until-condition
    — foreground `sleep` is disallowed). Per-pass deadline is 300 s; well within a turn.
-2. **Read** it → `{ seq, tag, prompt, model, thinking }`. With auto-anchor the first passes are
-   `expand` (propose recall keywords for the intent) then `anchor-judge` (pick the anchor) — both only
-   when `--symbol` was omitted. Then `orchestrate` (a grow move), `discover` (a dependency-scan move),
-   and finally `relevance`/`seam-intent` (scoring the grown footprint against the intent). **Route by the
-   `model` field** (step 3): the engine sends the semantic passes (`entrypoint-select`, `anchor-judge`,
-   `seam-intent`) with `claude-sonnet-4-6` and the cheap ones with `claude-haiku-4-5` — honor it (they
-   were proven to need the stronger tier). Don't assume the tag; just answer whatever `prompt` asks for.
+2. **Read** it → `{ seq, tag, prompt, model, thinking }`. The grow is deterministic, so the passes you
+   may see are few: `center-pick` / `center-dir-pick` (pick the concern's mechanism — only when `--symbol`
+   was omitted), the coupling flywheel (`discover-keys` / `discover-key-matchers` — only with
+   `--data-coupling llm`), and `seam-intent` (the final tiering — only WITHOUT `--skeleton`). **Route by the
+   `model` field** (step 3): the engine sends the semantic passes (`center-pick`, `seam-intent`) with
+   `claude-sonnet-4-6` and the cheap ones with `claude-haiku-4-5` — honor it. Don't assume the tag; just
+   answer whatever `prompt` asks for.
 3. **Spawn a subagent of the pass's `model` tier** with `prompt` verbatim + *"This is a pure classification task — answer from
    the text above ALONE; do NOT use tools or explore a repo. Output ONLY the JSON array — no prose, no
-   fences."* (A grow/`orchestrate` prompt names real symbols, so without this a subagent may go
+   fences."* (A prompt may name real symbols, so without this a subagent may go
    exploring the repo and blow the 300 s deadline.)
 4. **Write the reply** to `$OUT/bridge/resp-<n>.json` as `{"text": "<reply>"}` — atomically: write
    `resp-<n>.tmp` then `mv` it to `resp-<n>.json` (the engine must never read a half-written answer).
 
-When the engine finishes it writes `$OUT/seams.json` and exits. Typical: ≤ `--max-steps` (default 4)
-grow moves plus a few `discover` moves — a handful of turns.
+When the engine finishes it writes the output (`$OUT/seams.json`, or `--format agent` to stdout) and
+exits. Typical: ONE `center-pick` (no-symbol) and/or a few cached flywheel passes — usually 1–2 turns,
+often zero (a `--symbol` + `--skeleton` + floor run has no passes at all — just run it foreground).
 
 ---
 
@@ -314,7 +326,7 @@ $ENGINE --scan --repo "<REPO>" --ask "<question>" --classifier hybrid \
 
 `req-0` is the `shape-route` pass (semantic → `claude-sonnet-4-6`, spawn that tier). If it routes to a
 structural shape the engine then runs it in-process (no more reqs) and writes `seams.json`; if it routes
-to `flow` the usual `orchestrate`/`discover` reqs follow. If it routes **away**, the run prints
+to `flow` the deterministic grow runs (at most a `center-pick`/flywheel req follows). If it routes **away**, the run prints
 `[route:grep|rag]` + guidance and emits no shape model — relay that (use grep/RAG), don't force a shape.
 *(If a `claude` binary is on PATH, just run `--ask` plainly without `--llm-bridge` — the engine serves
 the routing pass itself, faster; see the Prerequisites.)*
@@ -406,7 +418,7 @@ $ENGINE --git HEAD --repo . --emit-prompts "$OUT/prompts.json"   # A1
 $ENGINE --git HEAD --repo . --inject-llm "$OUT/answers.json" --emit-seams "$OUT/seams.json"  # A3
 
 # ── Codebase static footprint (§B) — no subagent ─────────────────────────────
-$ENGINE --scan --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo --format ascii
+$ENGINE --scan --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo --format agent
 
 # ── Structural shapes (§D) — deterministic, no subagent ──────────────────────
 $ENGINE --scan --repo /path/to/app --query consumers --anchor-file lib/foo.ts --symbol createFoo --format llm-context
@@ -416,9 +428,9 @@ $ENGINE --scan --repo /path/to/app --query reaches --anchor-file lib/a.ts --symb
 $ENGINE --scan --repo /path/to/app --ask "who calls createFoo?" --classifier hybrid \
         --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"   # …or plainly if a `claude` binary is on PATH
 
-# ── Codebase auto-grow (§C) — background + pump ──────────────────────────────
-#  (run in background, then loop: Monitor for req-<n>.json → subagent → resp-<n>.json)
+# ── Codebase auto-grow (§C) — DETERMINISTIC with --symbol + --skeleton → run foreground, no bridge ──
 $ENGINE --scan --auto --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo \
-        --intent "how does foo flow through the app" --max-steps 4 --classifier hybrid \
-        --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"
+        --intent "how does foo flow through the app" --max-steps 4 --skeleton --format agent
+#  …omit --symbol (center-first) or add --data-coupling llm → one residual pass: run in background with
+#  --llm-bridge "$OUT/bridge" and pump §C2 (Monitor for req-<n>.json → subagent → resp-<n>.json).
 ```

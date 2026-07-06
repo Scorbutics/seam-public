@@ -48,9 +48,8 @@ the JSON is the reliable contract.
 - `blindspots` — statically-opaque edges (cross-language, DI, string dispatch) as `SUGGESTED` leads, never
   asserted facts.
 - A broad closure is **normal** — the engine shows everything and ranks; *you* decide what to foreground
-  using `tier`. To make Seam crop it for you, add **`--spine-only`**: it keeps spine+supporting and moves
-  off-intent seams to `cluster.omitted` (compact stubs — nothing is hidden, the count is reported). Use it
-  when the closure is large and you only want the certain path; re-run without it for the full picture.
+  using `tier` (`spine` / `supporting` / `off`). The concern/agent render already orders and dims by it —
+  read the spine first and treat the `off` tail as context.
 
 ## Routing rules
 

@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { bandTiers, annotateIntentRelevance, cropOffIntent, markSpineMembers } from "../../src/codebase/grow/intent_rank.js";
+import { bandTiers, annotateIntentRelevance, markSpineMembers } from "../../src/codebase/grow/intent_rank.js";
 
 describe("rank-banding (pure, deterministic)", () => {
   test("top third → spine, middle → supporting, tail → off", () => {
@@ -65,32 +65,6 @@ describe("markSpineMembers — surface the intent path INSIDE a collapsed (god-o
     markSpineMembers(hunks);
     expect(hunks[0].spine).toBe(true);
     expect(hunks[1].spine).toBeUndefined();
-  });
-});
-
-// REGRESSION: under skeleton (no LLM seam-intent pass) the embedding tiering runs AFTER emit_seams, so the
-// cluster's `spine` array — computed in emit from the tiers present THEN — was frozen empty even though the
-describe("cropOffIntent (--spine-only) — deterministic, honest, lossless-by-reference", () => {
-  test("drops tier=off, keeps spine+supporting, leaves stubs in cluster.omitted", () => {
-    const clusters = [{ seams: [
-      { id: "a", label: "Spine", tier: "spine", relevance: 0.9, primary: { file: "a.ts", symbol: "A" } },
-      { id: "b", label: "Sup", tier: "supporting", relevance: 0.5, primary: { file: "b.ts", symbol: "B" } },
-      { id: "c", label: "Off", tier: "off", relevance: 0.1, primary: { file: "c.ts", symbol: "C" } },
-    ] }];
-    const omitted = cropOffIntent(clusters);
-    expect(omitted).toBe(1);
-    expect(clusters[0].seams.map((s) => s.id)).toEqual(["a", "b"]);   // spine+supporting kept in full
-    expect((clusters[0] as any).omitted).toEqual([{ id: "c", label: "Off", relevance: 0.1, file: "c.ts" }]);  // off → compact stub
-  });
-  test("no off seams → no crop, no omitted array", () => {
-    const clusters = [{ seams: [{ id: "a", tier: "spine" }] }];
-    expect(cropOffIntent(clusters)).toBe(0);
-    expect((clusters[0] as any).omitted).toBeUndefined();
-  });
-  test("untiered seams (embeddings unavailable) are NOT cropped — degrades to full", () => {
-    const clusters = [{ seams: [{ id: "a" }, { id: "b" }] }];   // no tier
-    expect(cropOffIntent(clusters)).toBe(0);
-    expect(clusters[0].seams).toHaveLength(2);
   });
 });
 

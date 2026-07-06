@@ -9,7 +9,7 @@ export interface Args {
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
   scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
-  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean; spineOnly?: boolean;
+  emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
   concern?: boolean;   // --concern: CENTER-anchor a plural "how is X managed?" question — detect the shared mechanism + re-grow from it
@@ -93,7 +93,6 @@ export function parseArgs(argv: string[]): Args {
       case "--auto": a.auto = true; break;
       case "--skeleton": a.skeleton = true; break;   // LLM-consumer output: skip the LLM seam-intent pass (det skeleton: spine + structural labels + blindspots)
       case "--no-skeleton": case "--rank": a.skeleton = false; break;   // force the LLM seam-ranking pass back ON (overrides the llm-context default below)
-      case "--spine-only": a.spineOnly = true; break;   // crop the OFF-intent band (deterministic embed tier) — opt-in token/speed view; off-seams become compact stubs in cluster.omitted
 
       case "--max-steps": a.maxSteps = parseInt(next() ?? "4", 10); break;
       case "--max-nodes": a.maxNodes = parseInt(next() ?? "0", 10) || undefined; break;   // grow node budget (auto mode); unset → engine default (80)

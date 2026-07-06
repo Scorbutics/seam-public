@@ -271,8 +271,8 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
   [`docs/SEAM_JSON_CONTRACT.md`](docs/SEAM_JSON_CONTRACT.md). Additive fields don't bump it; breaking
   changes do, and clients warn on a higher major.
 - **Intent relevance** — a grown footprint is the full structural closure; each seam is ranked by a
-  **deterministic embedding** of how on-intent it is (`relevance` + `tier`), and `--spine-only` crops the
-  off-intent band. The query↔passage design (what gets embedded) is in
+  **deterministic embedding** of how on-intent it is (`relevance` + `tier`), which the concern/agent
+  render uses to order and dim. The query↔passage design (what gets embedded) is in
   [`docs/INTENT_RELEVANCE.md`](docs/INTENT_RELEVANCE.md).
 - **Distribution** — a one-line [`install.sh`](install.sh) sets up the `seam` CLI + the Claude/Copilot
   skills + the MCP server from source (`curl … | bash`); run the engine directly from a checkout (`bun`);

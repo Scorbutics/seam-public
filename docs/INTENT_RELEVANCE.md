@@ -69,18 +69,8 @@ Relevance is **orthogonal to `role`**: `role` (core / link / environment / test)
 (decides-vs-connects); `relevance`/`tier` is *intent-similarity*. A seam can be a `link` and on the `spine`.
 
 It is **additive** — it annotates only; it never drops or reorders seams. The full closure is always
-emitted. Cropping is a separate, opt-in consumer choice (`--spine-only`, below).
-
-## `--spine-only`
-
-An opt-in **view** for an LLM consumer that pays per token. It crops the `off` band using the deterministic
-tier (still 100% reproducible — it's the embedding ranking, **not** an LLM), keeping `spine` + `supporting`
-in full. It is **honest and lossless-by-reference**: dropped seams survive as compact stubs
-(`{label, relevance, file}`) in `cluster.omitted`, and the run reports the omitted count — nothing is
-silently hidden, and the caller can re-query without `--spine-only` for the full closure. It **no-ops to the
-full closure** when embeddings are unavailable (never crops blind). Full output is strictly more robust (the
-consuming model sees everything and can override the ranking); `--spine-only` trades that for fewer tokens —
-a conscious, opt-in choice.
+emitted; the concern/agent render uses the `tier` to ORDER and DIM (never delete), and the consuming
+model can override the ranking.
 
 ## Where it's used
 
@@ -88,7 +78,7 @@ a conscious, opt-in choice.
   whose name doesn't lexically match the intent. Additive over the lexical floor; the LLM judge still
   selects. Embeddings **rank** reliably but single-best **selection** is weaker than an LLM judge, so this
   is a recall floor, not a verdict.
-- **Grow intent-ranking** — `annotateIntentRelevance` / `cropOffIntent`, as above.
+- **Grow intent-ranking** — `annotateIntentRelevance`, as above.
 
 Both go through the one scan-layer primitive `embedScoreDefs(repo, intent)` (so anchor and grow share it
 with no layering back-edge).
@@ -98,7 +88,7 @@ with no layering back-edge).
 - **Deterministic** — same model + same code → same vectors → same ranking. No sampling.
 - **Cost** — first intent-grow on a repo embeds the def table once (~10 s for ~1.3 k defs), then it's
   cached/incremental. No API call; cheaper and faster than an LLM relevance pass.
-- **Honest** — a recall *floor*, not a sharp pick. The tier is a *highlight*, never a deletion (default);
-  `--spine-only` makes the crop explicit and reports what it omitted. The spine does **not** surface as a
-  single deterministic graph *path* (shortest-path collapses through import hubs) — the relevance *ranking*
-  is the deterministic spine signal, not an ordered path.
+- **Honest** — a recall *floor*, not a sharp pick. The tier is a *highlight*, never a deletion — the render
+  orders and dims by it but keeps the full closure. The spine does **not** surface as a single deterministic
+  graph *path* (shortest-path collapses through import hubs) — the relevance *ranking* is the deterministic
+  spine signal, not an ordered path.
