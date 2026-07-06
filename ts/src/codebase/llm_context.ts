@@ -938,7 +938,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
-  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "20", 10) || 20);   // a big concern stays scannable
+  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "50", 10) || 50);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   const where = (h: any) => `${qual(h)} (${h?.file ?? "?"}:${h?.start ?? 0})`;
   // the operations reaching a mechanism through this entry, distinct, capped + counted (a fat orchestrator stays
