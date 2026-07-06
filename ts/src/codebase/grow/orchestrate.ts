@@ -15,7 +15,7 @@ import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
 import { RegionCentroid } from "./field.js";
-import { embedScoreDefs } from "../scan/def_embed.js";
+import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
@@ -763,9 +763,21 @@ type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional
 // changing → epoch stabilises), the answer cache hits and the wave + the coupling pass are skipped entirely
 // (the graph READ the user expects). Only genuinely non-replayable grows stay live: an LLM BORDER (no persisted
 // state to key on) and a STREAMING grow (onWave callback can't be served from cache).
+// The Phase-5 answer-cache key material for a grow. INTENT-AWARE: the intent shapes the grow ONLY through the
+// embedding field (tier-grow's up-climb gate, move ordering, the coupling key-ranker + deterministic coupling
+// border — all via embedScore*). When embeddings are UNAVAILABLE, every intent-read is a no-op → the grow is
+// provably intent-INDEPENDENT, so the intent must NOT be in the key: a one-word intent change then REUSES the
+// settled footprint (the warm-cache win) instead of re-running the whole wave. With embeddings the intent
+// genuinely changes the grown set, so it stays in the key (no stale answer). ctx/callbacks/model are dropped —
+// they don't affect the structural result.
+export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvailable: boolean, env: string): string {
+  const keyOpts = embeddingsAvailable ? opts : { ...opts, intent: undefined };
+  return `${symbol}\n${JSON.stringify(keyOpts, (k, v) => (k === "ctx" || k === "onWave" || k === "model" || k === "claudeBin" || typeof v === "function" ? undefined : v))}\n${env}`;
+}
+
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const deterministic = !opts.onWave;
-  const km = `${symbol}\n${JSON.stringify(opts, (k, v) => (k === "ctx" || k === "onWave" || k === "model" || k === "claudeBin" || typeof v === "function" ? undefined : v))}\n${seamEnvSnapshot()}`;
+  const km = growCacheKeyMaterial(symbol, opts, await transformersAvailable(), seamEnvSnapshot());   // transformersAvailable() is env-stable + memoised
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }
 
