@@ -271,7 +271,46 @@ const _gtag = (ctx?: EngineCtx): string => (ctx?.stableFloor ? "grow·probe" : "
 // Apply ONE (node, direction) expansion to the footprint: build that node's directional footprint, reject a
 // flood (a widely-used util), and merge. The wavefront flood calls this for every ready head in a wave.
 // Returns the (possibly unchanged) footprint and how many nodes it added.
-async function _applyMove(repo: string, data: any, move: Move, label: string, coStruct: any, prune: (g: any) => any, history: any[]): Promise<{ data: any; added: number }> {
+// The wave's incremental graph index — the node/edge identity maps carried ACROSS moves so the footprint is
+// ASSEMBLED ONCE (the graph is built incrementally, per Brice's model) instead of re-derived each move. `merge_resolved`
+// deep-CLONES the whole footprint AND rebuilds these maps on EVERY move → O(n²) cloning that dominated the warm
+// re-walk on a large repo (the multi-second cost). Here they persist and each move APPENDS in place → O(total nodes).
+export type GrowIndex = { byKey: Map<string, string>; usedIds: Set<string>; eset: Set<string> };
+export const _mkIndex = (data: any): GrowIndex => ({
+  byKey: new Map<string, string>((data.nodes as any[]).map((n) => [_key(n), n.id])),
+  usedIds: new Set<string>((data.nodes as any[]).map((n) => n.id)),
+  eset: new Set<string>((data.edges as any[]).map((e) => `${e.from} ${e.to} ${e.kind ?? ""}`)),
+});
+// MUTATE `data` in place with `add`, updating `idx` incrementally. Semantically identical to merge_resolved(data, add)
+// by node/edge identity (same id-collision rename, same key dedup) — but no structuredClone and no per-move map rebuild.
+export function _mergeInto(data: any, add: any, idx: GrowIndex, expandAnchor?: string | null): number {
+  const { byKey, usedIds, eset } = idx;
+  const idmap = new Map<string, string>();
+  let added = 0;
+  for (const n of add.nodes as any[]) {
+    const k = _key(n);
+    const ex = byKey.get(k);
+    if (ex) { idmap.set(n.id, ex); continue; }
+    let nid = n.id;
+    if (usedIds.has(nid)) { nid = `x${usedIds.size}`; while (usedIds.has(nid)) nid = `x${usedIds.size}_${nid}`; }
+    idmap.set(n.id, nid); usedIds.add(nid); byKey.set(k, nid);
+    data.nodes.push({ ...n, id: nid }); added++;
+  }
+  for (const e of add.edges as any[]) {
+    const f = idmap.get(e.from) ?? e.from, t = idmap.get(e.to) ?? e.to;
+    const key = `${f} ${t} ${e.kind ?? ""}`;
+    if (usedIds.has(f) && usedIds.has(t) && !eset.has(key)) { eset.add(key); data.edges.push({ ...e, from: f, to: t }); }
+  }
+  for (const bs of add.blindspots ?? []) (data.blindspots ??= []).push({ ...bs, node: idmap.get(bs.node) ?? bs.node });
+  for (const u of add.unresolved ?? []) (data.unresolved ??= []).push({ ...u, node: idmap.get(u.node) ?? u.node });
+  const addAnchors = (add.anchors ?? [add.anchor?.id]).map((a: string) => idmap.get(a) ?? a);
+  const extra = expandAnchor ? [idmap.get(expandAnchor) ?? expandAnchor] : [];
+  data.anchors = [...new Set([...(data.anchors ?? [data.anchor?.id]), ...addAnchors, ...extra].filter((a) => a))];
+  data.complete = Boolean(data.complete ?? true) && Boolean(add.complete ?? true);
+  return added;
+}
+
+async function _applyMove(repo: string, data: any, move: Move, label: string, coStruct: any, prune: (g: any) => any, history: any[], idx: GrowIndex): Promise<{ data: any; added: number }> {
   const next = move.node;
   const down = move.dir === "down";
   // QUALIFY with the enclosing class so same-named methods in different classes are distinguishable in the
@@ -310,20 +349,18 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
     add = prune(await build_footprint_cached(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
   } catch { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
   // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
-  // answer — data-coupling fan is exempt (self-bounded + the intent).
-  const have = new Set(data.nodes.map((x: any) => _key(x)));
-  const flood = add.nodes.filter((n: any) => !have.has(_key(n)) && !n.coupling).length;
+  // answer — data-coupling fan is exempt (self-bounded + the intent). `idx.byKey` IS the present-key set (carried
+  // across moves), so the flood check is O(add) not O(footprint) — no per-move rebuild of the whole node set.
+  const flood = add.nodes.filter((n: any) => !idx.byKey.has(_key(n)) && !n.coupling).length;
   if (flood > _MOVE_CAP) { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (too broad, +${flood} > ${_MOVE_CAP})`); history.push({ node: next.symbol, added: 0, skipped: `too broad (+${flood})` }); return { data, added: 0 }; }
   // carry the move direction outward as the new nodes' DEFAULT (original) direction — the fwd-first tiebreak
   // continues the same way (consumers up, deps down), but each new node may still later reverse.
   const tag = down ? "backward" : "forward";
   for (const n of add.nodes) if (n.id !== add.anchor?.id && !n.direction) n.direction = tag;
-  const before = data.nodes.length;
-  const merged = merge_resolved(data, add, add.anchor?.id);
-  const added = merged.nodes.length - before;
+  const added = _mergeInto(data, add, idx, add.anchor?.id);   // append in place (O(add)); no full-footprint clone
   dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} → +${added} node(s)`);
   history.push({ node: next.symbol, added, ...(down ? { dir: "down" } : {}) });
-  return { data: merged, added };
+  return { data, added };
 }
 
 // WAVEFRONT (flood-fill) is the SOLE grow mode. Instead of re-ranking the whole frontier and taking ONE best move
@@ -367,6 +404,7 @@ export function _reachPhrases(n: any, edges: any[], isReacher: (id: string) => b
 
 async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, prune: (g: any) => any, excludedFile: (f?: string) => boolean, maxSteps: number, maxNodes: number): Promise<[any, any[]]> {
   const history: any[] = [];
+  const idx = _mkIndex(data);   // the incremental graph index — built ONCE from the seed, appended in place each move (no per-move clone)
   const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
   // INTENT-WEIGHTED FRONTIER: rank the next node to grow by its passage's intent-relevance (cached def
   // embeddings); empty without an intent or embeddings → the complexity fallback. Computed ONCE per grow.
@@ -640,7 +678,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         if (expanded.has(k)) continue;
         expanded.add(k);
         const before = hubGate ? new Set<string>((data.nodes as any[]).map((n) => n.id)) : null;
-        const r = await _applyMove(repo, data, move, `wave ${step + 1}·${++moveNo}`, coStruct, prune, history);
+        const r = await _applyMove(repo, data, move, `wave ${step + 1}·${++moveNo}`, coStruct, prune, history, idx);
         data = r.data;
         waveAdded += r.added;
         // HUB GATE: this move added a wide fan — is it a PURE (non-spine) hub fan, or does it bear a crossing?
