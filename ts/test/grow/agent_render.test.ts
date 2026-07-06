@@ -69,12 +69,27 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toContain("seam --grow-from telemetry/telemetry.ts#record");
     expect(out).toContain("## Blindspots");
     expect(out).toContain("string-dispatch");
-    // the off-path region was CROPPED and SAID SO (not silently dropped)
-    expect(out).toContain("off-path:");
-    expect(out).toMatch(/off-path: \d+ seam\(s\) — cropped/);
+    // the off-path region was CROPPED to a relevance-ranked HEAD and SAID SO (not silently dropped, not a bare count)
+    expect(out).toMatch(/off-path \(top \d+ of \d+ by intent relevance/);
     // and it actually shrank vs the uncropped render
     const full = renderAgent(model, { tokenBudget: 100000, intent: "how are bookings created" });
     expect(out.length).toBeLessThan(full.length);
+  });
+
+  // INTENT CROP AT RENDER — the cropped region head is the most intent-RELEVANT seams (not the nearest/arbitrary),
+  // so a structural union (grown intent-free for cache reuse) is tightened to the on-intent subset at render.
+  test("tight budget: the region HEAD is ranked by intent relevance (on-intent surfaces, off-intent tail cropped)", () => {
+    const model = makeModel({ offN: 0 });
+    // 30 off seams: one clearly on-intent (high relevance), the rest low — only the head should survive the crop.
+    for (let i = 0; i < 30; i++) model.clusters[0].seams.push({
+      id: `o${i}`, label: `offConcern${i}`, tier: "off", relevance: i === 7 ? 0.95 : 0.5 - i * 0.01,
+      region: { shell: 2, direction: "up" }, primary: { file: `o/o${i}.ts`, line: 1, symbol: `offConcern${i}` },
+      hunks: [{ id: `o${i}h`, file: `o/o${i}.ts`, start: 1, role: "link", label: `offConcern${i}` }],
+    });
+    const out = renderAgent(model, { tokenBudget: 350, intent: "how are bookings created" });
+    expect(out).toMatch(/off-path \(top \d+ of 30 by intent relevance/);
+    expect(out).toContain("offConcern7");        // the high-relevance seam is in the head
+    expect(out).not.toContain("offConcern29");    // a low-relevance one is cropped
   });
 
   test("no spine tier → falls back to shell ordering (no Spine section)", () => {

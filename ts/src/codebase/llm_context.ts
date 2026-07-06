@@ -739,20 +739,27 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
     return out;
   };
+  // INTENT CROP AT RENDER — the grown footprint may be the FULL structural closure (structural grow: the wave is
+  // intent-free so the cache reuses across intents) or already intent-shaped (guided grow). Either way the render
+  // RANKS the remaining region by intent relevance and, under budget, shows a relevance-ranked HEAD + a rolled-up
+  // count — so the ON-INTENT seams stay VISIBLE (not lost in a wholesale "N cropped") while the off-intent tail
+  // degrades. This is where the intent tightens a structural union without re-growing (the crop the cache moved here).
+  const byRel = (a: Seam, b: Seam) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)) || (_shellOf(a) - _shellOf(b));
   const regionSection = (dropOff: boolean, dropSupporting: boolean): string[] => {
-    const out: string[] = ["", hasSpine ? "## Region (remaining, by relevance)" : "## Region (by shell — nearest the anchor first)"];
+    const out: string[] = ["", hasSpine ? "## Region (remaining, by intent relevance)" : "## Region (by shell — nearest the anchor first)"];
     if (!hasSpine) {   // no-intent / skeleton fallback: order every seam by shell (hops from the anchor)
       [...seams].sort((a, b) => (_shellOf(a) - _shellOf(b))).forEach((s) => out.push(seamLine(s)));
       return out;
     }
-    if (supporting.length) {
-      if (dropSupporting) out.push(`  supporting: ${supporting.length} seam(s) — cropped to fit the ${budget}-token budget (raise --token-budget to see them)`);
-      else { out.push("supporting:"); [...supporting].sort((a, b) => _shellOf(a) - _shellOf(b)).forEach((s) => out.push(seamLine(s))); }
-    }
-    if (offSeams.length) {
-      if (dropOff) out.push(`  off-path: ${offSeams.length} seam(s) — cropped to fit the ${budget}-token budget`);
-      else { out.push("off-path:"); [...offSeams].sort((a, b) => _shellOf(a) - _shellOf(b)).forEach((s) => out.push(seamLine(s))); }
-    }
+    const rankedRegion = (list: Seam[], label: string, drop: boolean, headN: number): void => {
+      if (!list.length) return;
+      const sorted = [...list].sort(byRel);
+      if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); return; }
+      out.push(`${label} (top ${headN} of ${list.length} by intent relevance — raise --token-budget for the rest):`);
+      sorted.slice(0, headN).forEach((s) => out.push(seamLine(s)));
+    };
+    rankedRegion(supporting, "supporting", dropSupporting, 10);
+    rankedRegion(offSeams, "off-path", dropOff, 4);
     return out;
   };
   const hubsSection = (dropSamples: boolean): string[] => {
