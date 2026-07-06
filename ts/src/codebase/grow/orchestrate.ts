@@ -468,6 +468,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
   const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // env SEAM_UBIQUITY removed — OR'd with default-on hubCollapse, so it couldn't toggle anything
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
+  const upHopCap = Math.max(0, opts.upHop ?? (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. Hoisted above the wave loop so the post-loop frontier block sees it.
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
@@ -526,6 +527,22 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const dist = new Map<string, number>([[anchorId, 0]]);
     for (const queue = [anchorId]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
     const distOf = (id: string) => dist.get(id) ?? 999;
+    // PLAIN-CALL UP-DEPTH (SEAM_UP_HOP) — the deterministic, intent-FREE up-fan border. Hops climbing the CONSUMER
+    // fan (an edge `from→to` means `from` consumes `to`, so `to`'s consumers are the `from`s) from the anchor,
+    // RESETTING to 0 across a data-coupling CROSSING (a route/table/queue boundary → the other stack's own callers
+    // get a fresh budget). An up-move of a node at depth ≥ the cap is PARKED as a frontier decision point, not
+    // grown — this contains the intra-backend plain-call up-flood (bean→bean→bean) while keeping the cross-stack
+    // reach (route→UI→its callers). Structural: no intent needed. Recomputed each wave (edges grow); the CAP is hoisted.
+    const upDepth = new Map<string, number>([[anchorId, 0]]);
+    if (upHopCap) {
+      const consumers = new Map<string, { id: string; crossing: boolean }[]>();   // node → who consumes it (the climb targets)
+      for (const e of data.edges as any[]) (consumers.get(String(e.to)) ?? consumers.set(String(e.to), []).get(String(e.to))!).push({ id: String(e.from), crossing: _is_crossing(e) });
+      for (const uq = [anchorId]; uq.length; ) {
+        const u = uq.shift()!; const du = upDepth.get(u)!;
+        for (const { id: c, crossing } of consumers.get(u) ?? []) { const nd = crossing ? 0 : du + 1; if (nd < (upDepth.get(c) ?? Infinity)) { upDepth.set(c, nd); uq.push(c); } }
+      }
+    }
+    const upDepthOf = (id: string) => upDepth.get(id) ?? 0;
     // SOFT INTENT-BORDER — the SHAPE: nodes reachable from the anchor along a path whose embedding relevance never
     // falls more than `borderTol` below the path's high-water mark. Flood toward MORE-relevant nodes freely,
     // tolerate a shallow dip (a low-embedding bridge that recovers), HALT at a relevance cliff. Fixpoint
@@ -582,6 +599,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       const tierUp = tierGrow && haveField() && !crossingWard;   // apply the tier gate to this node's up-climb
       for (const d of ["up", "down"] as const) {
         if (expanded.has(expKey(n, d))) continue;
+        // PLAIN-CALL UP-FAN BORDER (structural, intent-free): a node ≥ upHopCap plain-call hops up from the anchor
+        // has climbed too far into the consumer web — PARK its up-fan as a frontier decision point (deepenable),
+        // don't grow it. Crossing-ward nodes (bear a route/table/coupling crossing) are exempt (spine-ward, and
+        // a crossing already reset their depth). DOWN is never gated (the grounded mechanism chain).
+        if (d === "up" && upHopCap && !crossingWard && upDepthOf(n.id) >= upHopCap) { parked.set(n.id, "decision"); continue; }
         if (d === "up" && tierUp) {
           // tier 3 — a ubiquitous/type hub, or an off-intent pivot: KEEP the node, PARK its fan as a decision point.
           if (hub) { parked.set(n.id, hubCollapse ? "hub" : "decision"); continue; }
@@ -689,7 +711,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the IR as `data.frontier` and capped/filtered at emit. Each entry carries its `id` (node identity → the caller
   // unions deepened regions by it) + provenance (`reachedVia`) + `cutBy`. Ranked by intent score desc (the move
   // ordering's signal), then decision-before-budget, then symbol — deterministic. Present only under tierGrow (I3).
-  if (tierGrow && parked.size) {
+  if ((tierGrow || upHopCap) && parked.size) {
     const byId = new Map<string, any>((data.nodes as any[]).map((n) => [n.id, n]));
     const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
     const present = new Set<string>(byId.keys());
@@ -748,7 +770,7 @@ export async function _borderCouplingDet(repo: string, data: any, intent: string
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
-type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null };
+type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; upHop?: number };
 
 // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run on known territory
 // skips the wave orchestration entirely. Over-broad key (symbol + every serializable opt + all SEAM_* env) so
