@@ -777,7 +777,12 @@ export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvaila
 
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const deterministic = !opts.onWave;
-  const km = growCacheKeyMaterial(symbol, opts, await transformersAvailable(), seamEnvSnapshot());   // transformersAvailable() is env-stable + memoised
+  const emb = await transformersAvailable();   // env-stable + memoised
+  // Say it out loud: whether the intent SHAPES this grow (embeddings ON → tier-grow uses the intent field, the
+  // grow is intent-dependent + keyed per-intent) or NOT (embeddings OFF → structural grow, intent used only to
+  // crop the output; the answer cache reuses across intents). Answers "is Acme using embeddings?".
+  if (opts.intent) process.stderr.write(`[grow] intent field: ${emb ? "ON (embeddings shape the grow → keyed per-intent)" : "OFF (structural grow; intent only crops the output → cache reuses across intents)"}\n`);
+  const km = growCacheKeyMaterial(symbol, opts, emb, seamEnvSnapshot());
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }
 
