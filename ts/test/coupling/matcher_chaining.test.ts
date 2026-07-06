@@ -39,8 +39,8 @@ afterEach(() => {
 describe("matcher synth is fed the per-file-hit files first (chaining)", () => {
   test("an alphabetically-LATE file with a primed per-file hit reaches the matcher prompt before early blind filler", async () => {
     // early blind filler (sorts first, no coupling) + a late file that the per-file pass "found" keys in
-    write("a00_early.ts", "export const x = 1;\n");
-    write("a01_early.ts", "export const y = 2;\n");
+    write("a00_early.ts", "export const x = fooStore.read('x');\n");
+    write("a01_early.ts", "export const y = barStore.read('y');\n");
     const storeText = "localStorage.setItem('compactMode', v);\nexport const read = () => localStorage.getItem('compactMode');\n";
     write("zz_store.ts", storeText);
 

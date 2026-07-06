@@ -59,8 +59,21 @@ function _hasStringArg(ctx: Ctx, call: any): boolean {
 // A call only counts as a data shape when it's either a member CHAIN (`recv.member.verb()` — the member is
 // the key, ORM/repo) or carries a STRING-LITERAL key arg (`recv.method('k')`); a bare `arr.map(fn)` doesn't.
 // Returns the multiset.
-async function _shapeTokens(ctx: Ctx): Promise<string[]> {
+// Returns BOTH the strict cluster tokens AND a lenient `hasSignal`, in ONE traversal:
+//  • tokens — the DISTINCTIVE shapes for CLUSTERING (deep member CHAIN `recv.x.verb()` or a STRING-KEYED call).
+//  • hasSignal — the LENIENT DISCARD signal: ANY member-access call (incl. a 2-level `Payment.where` the strict
+//    tokens miss) OR any string-literal call arg. A file with NEITHER is a pure declaration (DTO/interface/enum,
+//    or bare-local-call logic) that PROVABLY can't carry a cross-FILE shared key → safe to discard. Conservative:
+//    we KEEP on any doubt (keeping a file is safe — just less saving; dropping a real edge is a recall loss).
+async function _shapeScan(ctx: Ctx): Promise<{ tokens: string[]; hasSignal: boolean }> {
   const tokens: string[] = [];
+  // LENIENT DISCARD signal — LANGUAGE-AGNOSTIC: a file with NO CALL node at all is a pure declaration (interface /
+  // DTO / enum / type alias — no method call, no data access) that CANNOT reach a store/route/queue, so it can't
+  // carry a cross-file coupling. Anything with ANY call (`Payment.where`, `prisma.x.find`, a Ruby `save_data`,
+  // even `attr_accessor`) is KEPT — closing the JS-centric member gap (Ruby models `X.method()` without a member
+  // node). `_CALL` is a registry node-kind, never a keyword; a bare string check was dropped (it matched TS `:
+  // string` TYPE annotations, wrongly keeping every typed interface). Keep on any doubt — dropping a real edge is recall.
+  const hasSignal = ctx.collect(ctx.root, (k) => _CALL.has(k)).length > 0;
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
     // callee = the first child that's a member chain or a bare name (the args list comes after it)
     const callee = ctx.children(call).find((c) => _MEMBER.has(c.type) || _NAME_KINDS.has(c.type));
@@ -68,7 +81,7 @@ async function _shapeTokens(ctx: Ctx): Promise<string[]> {
     if (_MEMBER.has(callee.type)) {
       const obj = ctx.children(callee)[0];
       const deep = obj && _MEMBER.has(obj.type);                  // `recv.member.verb(…)` — the member is the key
-      if (deep || _hasStringArg(ctx, call)) {                     // a data shape (ORM chain OR string-keyed channel)
+      if (deep || _hasStringArg(ctx, call)) {                     // a DISTINCTIVE data shape (ORM chain OR string-keyed channel)
         const root = _rootId(ctx, callee);                        // cluster by the ROOT RECEIVER, not the method
         if (root && !_SELF_REFS.has(root)) tokens.push(`recv:${root}`);
       }
@@ -76,7 +89,7 @@ async function _shapeTokens(ctx: Ctx): Promise<string[]> {
       tokens.push(`call:${ctx.text(callee)}`);        // bare `f('lit')` — no receiver, cluster by callee name
     }
   }
-  return tokens;
+  return { tokens, hasSignal };
 }
 
 // The DOMINANT (most frequent) shape-token — the file's cluster signature. Empty when the file shows no
@@ -101,19 +114,20 @@ export interface BlindCluster<T> { signature: string; shaped: boolean; rep: T; m
 // `shaped:false` so the caller drops them. Tree-sitter unavailable → one cluster per file, all `shaped:true` (we
 // can't read the shape, so keep the old behaviour). Opt out of the shape gate with SEAM_COUPLING_SHAPE_GATE=0.
 export async function clusterBlindFiles<T extends { file: string; text: string }>(files: T[]): Promise<BlindCluster<T>[]> {
-  // OPT-IN: the shape gate drops floor-blind files with no data-access shape (a DTO/serializer/entity — the infra
-  // flood the flywheel wastes LLM on). Default-OFF because a purely-structural "has an edge" signal has a real
-  // recall cost on 2-level ORM/model calls (`Payment.where` — no string, no deep chain), so it stays a lever to
-  // enable (SEAM_COUPLING_SHAPE_GATE=1) and measure on a real repo before any default flip.
-  const gate = process.env.SEAM_COUPLING_SHAPE_GATE === "1";   // gate only decides DROPPING; clustering-collapse always runs
+  // DEFAULT-ON: discard a floor-blind file that carries NO coupling signal at all — no member-access call, no
+  // string-literal key (a pure DTO/interface/enum, or bare-local-call logic). It PROVABLY can't share a cross-file
+  // key, so the flywheel wastes LLM on it. This is LENIENT (keeps any 2-level `Payment.where` ORM call), which
+  // closes the strict gate's recall hole — so it's safe as a default, not a per-stack knob. Opt out: SEAM_COUPLING_SHAPE_GATE=0.
+  const gate = process.env.SEAM_COUPLING_SHAPE_GATE !== "0";   // gate only decides DROPPING; clustering-collapse always runs
   if (!available()) return files.map((f) => ({ signature: "", shaped: true, rep: f, members: [f] }));
   const groups = new Map<string, { sig: string; richness: number; member: T; shaped: boolean }[]>();
   for (const f of files) {
     const lang = lang_for(f.file);
     const ctx = lang ? await makeCtx(f.text, lang) : null;
-    const tokens = ctx ? await _shapeTokens(ctx) : null;   // null = unsupported lang → can't read shape → keep (shaped)
+    const scan = ctx ? await _shapeScan(ctx) : null;   // null = unsupported lang → can't read → keep (shaped)
+    const tokens = scan?.tokens ?? null;
     const sig = tokens ? _dominant(tokens) : "";
-    const shaped = !gate || tokens === null || tokens.length > 0;   // computed-empty ⇒ no suspected edge ⇒ drop
+    const shaped = !gate || scan === null || scan.hasSignal;   // no coupling signal at all ⇒ pure declaration ⇒ drop
     const key = shaped ? (sig || `\0solo:${f.file}`) : `\0noshape:${f.file}`;   // NUL prefix can't collide with a real signature
     (groups.get(key) ?? groups.set(key, []).get(key)!).push({ sig, richness: tokens?.length ?? 0, member: f, shaped });
   }

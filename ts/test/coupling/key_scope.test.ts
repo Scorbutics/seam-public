@@ -41,16 +41,16 @@ class BatchCapture extends HostBus {
 
 describe("llmKeyIndex — per-file synthesis is bounded to the scope", () => {
   test("only the in-scope module's blind files reach the LLM; another module is excluded", async () => {
-    w("modA/package.json", "{}"); w("modA/a.ts", "export function fa() { return 1; }\n");   // blind, in scope
-    w("modB/package.json", "{}"); w("modB/b.ts", "export function fb() { return 2; }\n");   // blind, OUT of scope
+    w("modA/package.json", "{}"); w("modA/a.ts", "export function fa() { return cacheA.read('a'); }\n");   // blind, in scope
+    w("modB/package.json", "{}"); w("modB/b.ts", "export function fb() { return storeB.read('b'); }\n");   // blind, OUT of scope
     const bus = new BatchCapture(); set_host_bus(bus);
     await llmKeyIndex(REPO, { llm: true, scope: "modA/" }, new EngineCtx());
     expect(bus.prompt).toContain("modA/a.ts");      // the anchor module's file was synthesised
     expect(bus.prompt).not.toContain("modB/b.ts");  // the other module was NOT fed to the LLM (warms lazily later)
   });
   test("SEAM_WARM_ADAPTERS=1 restores the whole-repo pass (both modules)", async () => {
-    w("modA/package.json", "{}"); w("modA/a.ts", "export function fa() { return 1; }\n");
-    w("modB/package.json", "{}"); w("modB/b.ts", "export function fb() { return 2; }\n");
+    w("modA/package.json", "{}"); w("modA/a.ts", "export function fa() { return cacheA.read('a'); }\n");
+    w("modB/package.json", "{}"); w("modB/b.ts", "export function fb() { return storeB.read('b'); }\n");
     const prev = process.env.SEAM_WARM_ADAPTERS; process.env.SEAM_WARM_ADAPTERS = "1";
     try {
       const bus = new BatchCapture(); set_host_bus(bus);

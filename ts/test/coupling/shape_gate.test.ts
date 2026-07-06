@@ -25,9 +25,12 @@ describe("coupling shape gate — only files with a suspected data-access edge a
     expect(infraC.shaped).toBe(false);
   });
 
-  test("GATE OFF (default): every file is shaped:true — no dropping, behaviour unchanged", async () => {
+  test("SEAM_COUPLING_SHAPE_GATE=0 disables it: every file is shaped:true (no dropping)", async () => {
     if (!available()) return;
-    const clusters = await clusterBlindFiles([shaped, infra]);
-    expect(clusters.every((c) => c.shaped)).toBe(true);
+    process.env.SEAM_COUPLING_SHAPE_GATE = "0";
+    try {
+      const clusters = await clusterBlindFiles([shaped, infra]);
+      expect(clusters.every((c) => c.shaped)).toBe(true);
+    } finally { delete process.env.SEAM_COUPLING_SHAPE_GATE; }
   });
 });
