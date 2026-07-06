@@ -341,6 +341,12 @@ async function runCodebase(a: Args): Promise<number> {
   // The LIB default stays OFF (grow_to_terminals) so unit tests / embedders keep the intent-shaped grow. Opt out: SEAM_GROW_STRUCTURAL=0.
   const isConcern = a.concern || (a.auto && !!a.intent && !a.symbol && !a.growFrom);   // explicit --concern, or the implicit no-symbol center-first
   if (!isConcern && process.env.SEAM_GROW_STRUCTURAL === undefined) process.env.SEAM_GROW_STRUCTURAL = "1";
+  // MULTI-ANCHOR MERGED grow is default-ON for the product: a mechanism CLUSTER (concern) — or any multi-anchor
+  // covering set — grows as ONE graph so each shared node is expanded ONCE, not re-walked per center (the "grown
+  // 4-5×" waste). Validated on a pinned cluster: the ANSWER (mechanisms) is unchanged, only the peripheral
+  // interaction list rebalances (~25%, broader coverage), for 4× fewer expansions. Inert unless there are ≥2
+  // anchors (only grow_centers_scoped reads it). LIB default OFF (unit tests). Opt out: SEAM_CENTERS_MERGED=0.
+  if (process.env.SEAM_CENTERS_MERGED === undefined) process.env.SEAM_CENTERS_MERGED = "1";
   // DEEPEN (Phase 2.3) — `--grow-from <file>#<symbol>` re-anchors the WAVE grow at a decision-point/frontier node
   // and emits the SAME contract-shape model the caller unions by node id. It is a thin router into the normal
   // `--scan --anchor-file --symbol` grow path (reuse, not a new engine): the full wave/tier/border/hub machinery

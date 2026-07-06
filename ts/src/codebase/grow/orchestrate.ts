@@ -908,6 +908,9 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
 // (Brice's "the growing is partially redone"). Here the shared `expanded` set + one accumulating graph dedupe it;
 // containment (distance / up-hop / border) is measured from the NEAREST center (_phaseExpand is multi-anchor).
 async function _growCentersMergedImpl(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts): Promise<[any, any[]]> {
+  // Say the intent-field state out loud (as grow_to_terminals does) — the merged path bypasses that entry, so
+  // without this a structural cluster re-grow would print no diagnostic.
+  if (opts.intent) { const emb = await transformersAvailable(); const shapes = emb && !opts.structuralGrow; process.stderr.write(`[grow] intent field: ${shapes ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${opts.structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`); }
   const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
   const { excludedFile, prune } = _makeExclusion(opts);
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
