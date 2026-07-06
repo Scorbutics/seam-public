@@ -561,10 +561,17 @@ async function runCodebase(a: Args): Promise<number> {
           // node budget. MERGE is content-keyed (merge_resolved), so the anchor's own re-grow dedups idempotently.
           try {
             const cctx = new EngineCtx(); let merged: any = data;
-            for (const c of fresh) {
+            const clusterCenters = fresh.map((c: any) => ({ file: c.file, symbol: c.symbol }));
+            // >1 mechanism → discover coupling ONCE over the union + grow the cluster in PARALLEL
+            // (grow_centers_scoped, same as the center-first path); a single mechanism keeps the direct
+            // footprint-scoped grow. Either way merged ON TOP of the anchor's own region (never replace it).
+            const results = clusterCenters.length > 1
+              ? await orch.grow_centers_scoped(a.repo, clusterCenters, { ...gOpts, ctx: cctx, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCoupling && dcLlm })
+              : [await growAnchorFootprint(clusterCenters[0].file, clusterCenters[0].symbol, cctx)];
+            for (const r of results) {
+              if (!r) continue;
               if ((merged.nodes?.length ?? 0) >= growNodes) { process.stderr.write(`[concern] node budget ${growNodes} reached — stopping at ${merged.nodes.length} node(s)\n`); break; }
-              const [cd] = await growAnchorFootprint(c.file, c.symbol, cctx);
-              merged = mergeFootprints(merged, cd, cd.anchor?.id);
+              merged = mergeFootprints(merged, r[0], r[0].anchor?.id);
             }
             if (merged?.nodes?.length) data = merged;
           } catch (e) { process.stderr.write(`[concern] cluster re-anchor failed (${(e as Error).message}) — keeping the point region\n`); }
