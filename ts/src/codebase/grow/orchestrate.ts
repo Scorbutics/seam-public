@@ -405,7 +405,8 @@ export function _reachPhrases(n: any, edges: any[], isReacher: (id: string) => b
 async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, prune: (g: any) => any, excludedFile: (f?: string) => boolean, maxSteps: number, maxNodes: number): Promise<[any, any[]]> {
   const history: any[] = [];
   const idx = _mkIndex(data);   // the incremental graph index — built ONCE from the seed, appended in place each move (no per-move clone)
-  const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1").map((n: any) => _key(n)));
+  const _anchorIdSet = new Set<string>(((data.centerAnchors as string[] | undefined)?.length ? data.centerAnchors : [data.anchor?.id ?? "n1"]).filter(Boolean));
+  const expanded = new Set<string>(data.nodes.filter((n: any) => n.id === "n1" || _anchorIdSet.has(n.id)).map((n: any) => _key(n)));
   // INTENT-WEIGHTED FRONTIER: rank the next node to grow by its passage's intent-relevance (cached def
   // embeddings); empty without an intent or embeddings → the complexity fallback. Computed ONCE per grow.
   // opts.wave OVERRIDES the env toggle (production reads env; a caller — a test — passes it directly so it never
@@ -559,11 +560,17 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // CLOSENESS — hop distance from the anchor (undirected BFS over the current footprint). The bound on
     // bidirectional expansion: nearer moves win, so the fan radiates from the anchor and the node budget caps a
     // LOCAL neighbourhood rather than a deep one-directional dive (which starved the sibling UIs).
-    const anchorId = data.anchor?.id ?? "n1";
+    // MULTI-ANCHOR: a concern cluster is grown as ONE graph seeded from ALL its mechanism centers, so every
+    // anchor-rooted structure (distance, up-hop depth, the border peak, grounded set) is seeded from the WHOLE
+    // set — closeness/containment is measured from the NEAREST center. Single-anchor is just anchorIds=[one] →
+    // byte-identical to before. `data.anchors` carries the (merged, re-ided) center ids; fall back to the anchor.
+    const anchorIds = ((data.centerAnchors as string[] | undefined)?.length ? data.centerAnchors : [data.anchor?.id ?? "n1"]).filter(Boolean) as string[];
+    const anchorSet = new Set<string>(anchorIds);
+    const anchorId = anchorIds[0];
     const adj = new Map<string, string[]>();
     for (const e of data.edges as any[]) { (adj.get(e.from) ?? adj.set(e.from, []).get(e.from))!.push(e.to); (adj.get(e.to) ?? adj.set(e.to, []).get(e.to))!.push(e.from); }
-    const dist = new Map<string, number>([[anchorId, 0]]);
-    for (const queue = [anchorId]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
+    const dist = new Map<string, number>(anchorIds.map((a) => [a, 0]));
+    for (const queue = [...anchorIds]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
     const distOf = (id: string) => dist.get(id) ?? 999;
     // PLAIN-CALL UP-DEPTH (SEAM_UP_HOP) — the deterministic, intent-FREE up-fan border. Hops climbing the CONSUMER
     // fan (an edge `from→to` means `from` consumes `to`, so `to`'s consumers are the `from`s) from the anchor,
@@ -571,11 +578,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // get a fresh budget). An up-move of a node at depth ≥ the cap is PARKED as a frontier decision point, not
     // grown — this contains the intra-backend plain-call up-flood (bean→bean→bean) while keeping the cross-stack
     // reach (route→UI→its callers). Structural: no intent needed. Recomputed each wave (edges grow); the CAP is hoisted.
-    const upDepth = new Map<string, number>([[anchorId, 0]]);
+    const upDepth = new Map<string, number>(anchorIds.map((a) => [a, 0]));
     if (upHopCap) {
       const consumers = new Map<string, { id: string; crossing: boolean }[]>();   // node → who consumes it (the climb targets)
       for (const e of data.edges as any[]) (consumers.get(String(e.to)) ?? consumers.set(String(e.to), []).get(String(e.to))!).push({ id: String(e.from), crossing: _is_crossing(e) });
-      for (const uq = [anchorId]; uq.length; ) {
+      for (const uq = [...anchorIds]; uq.length; ) {
         const u = uq.shift()!; const du = upDepth.get(u)!;
         for (const { id: c, crossing } of consumers.get(u) ?? []) { const nd = crossing ? 0 : du + 1; if (nd < (upDepth.get(c) ?? Infinity)) { upDepth.set(c, nd); uq.push(c); } }
       }
@@ -588,7 +595,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     let inShape: Set<string> | null = null;
     if (borderTol != null) {
       const scoreById = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, _fieldScore(n)]));
-      const peak = new Map<string, number>([[anchorId, scoreById.get(anchorId) ?? 0]]);
+      const peak = new Map<string, number>(anchorIds.map((a) => [a, scoreById.get(a) ?? 0]));
       for (let pass = 0, changed = true; changed && pass <= data.nodes.length; pass++) {
         changed = false;
         for (const [u, nbrs] of adj) {
@@ -611,14 +618,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // structural PARTIAL that isn't a bare-name call (interface-impl / dispatch), a coupling crossing, an import
     // — IS followed. Symmetric with _fanCouple's coupling-fan gate; recomputed per wave as grounded edges appear.
     const nameMatchEdge = (e: any) => (e.provenance === "RESOLVED_PARTIAL" || e.provenance === "SUGGESTED") && e.kind === "call";
-    const grounded = new Set<string>([anchorId]);
+    const grounded = new Set<string>(anchorIds);
     for (const e of data.edges as any[]) if (!nameMatchEdge(e)) { grounded.add(e.from); grounded.add(e.to); }
     // BIDIRECTIONAL MOVES — each reached node offers BOTH directions (a dependency may climb back UP to its other
     // consumers — the sibling entry points — not only descend). UP of a CORE node is still skipped (the central
     // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
     const moves: Move[] = [];
     for (const n of data.nodes as any[]) {
-      if (n.id === "n1" || n.id === anchorId || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
+      if (n.id === "n1" || anchorSet.has(n.id) || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
       if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
@@ -895,6 +902,40 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   return [data, history];
 }
 
+// MULTI-ANCHOR merged grow — grow a whole mechanism CLUSTER (a concern's centers) as ONE graph: seed EVERY center,
+// couple each, then run ONE wave over the union so each node is expanded EXACTLY ONCE. The per-center
+// grow_centers_scoped grew each center independently and merged, re-walking the shared region ~once per center
+// (Brice's "the growing is partially redone"). Here the shared `expanded` set + one accumulating graph dedupe it;
+// containment (distance / up-hop / border) is measured from the NEAREST center (_phaseExpand is multi-anchor).
+async function _growCentersMergedImpl(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts): Promise<[any, any[]]> {
+  const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
+  const { excludedFile, prune } = _makeExclusion(opts);
+  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
+  if (opts.intent && !opts.structuralGrow && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);
+  const coStruct = { ...co, dataCoupling: false };
+  const coupled = new Set<string>();
+  // SEED every center into ONE graph — merge_resolved accumulates `data.anchors` (each center's re-ided node),
+  // which _phaseExpand seeds all its anchor-rooted structures from.
+  let data: any = null;
+  for (const c of centers) {
+    const seed = await _phaseSeed(repo, c.file, c.symbol, opts, coStruct, prune);
+    data = data ? merge_resolved(data, seed, seed.anchor?.id) : seed;
+  }
+  if (!data) return [{ nodes: [], edges: [], anchors: [] }, []];
+  // mark the CENTER node ids (matched by file+symbol — robust to merge_resolved's id remapping) so _phaseExpand
+  // seeds its anchor-rooted containment from the whole cluster, NOT from `data.anchors` (which coupling pollutes).
+  const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
+  data.centerAnchors = centers.map((c) => (data.nodes as any[]).find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)?.id).filter(Boolean);
+  for (const c of centers) data = await _phaseCoupling(repo, c.file, data, opts, co, coStruct, prune, coupled);   // couple each seed onto the shared graph
+  const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // ONE wave — each node expanded once
+  data = grown;
+  if (co.dataCoupling !== false) await _fanCouple(repo, data, opts, co.ctx, coupled);
+  if (co.dataCoupling !== false && opts.intent && !opts.structuralGrow && !co.ctx?.stableFloor && (_envFlag(process.env.SEAM_COUPLING_BORDER_DET) ?? true))
+    await _borderCouplingDet(repo, data, opts.intent, Number(process.env.SEAM_COUPLING_MARGIN ?? opts.couplingMargin ?? 0.25) || 0.25, Math.max(1, parseInt(process.env.SEAM_COUPLING_FAN ?? "1", 10) || 1));
+  if (opts.flagTruncation) { data.blindspots ??= []; for (const h of history) if (h.skipped === "build failed") data.blindspots.push({ node: h.node, mechanism: "unfollowable", evidence: "the resolver could not expand this node (unsupported file / parse failure) — the path beyond it is not mapped", candidates: [] }); }
+  return [data, history];
+}
+
 // FOOTPRINT-SCOPED grow (the `--data-coupling llm` path). A cheap deterministic FLOOR pre-grow yields the
 // flow's files (across every module it spans); the real LLM grow then scopes its per-file coupling discovery
 // to THOSE — bounded by the answer's size, cross-module complete — instead of the anchor's whole module.
@@ -939,6 +980,11 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
     grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: dcLlm, ctx: cx })
       .catch((e) => { dbg(`[centers] grow ${c.symbol} failed: ${(e as Error).message}`); return null; });
   if (!centers.length) return [];
+  // MERGED (SEAM_CENTERS_MERGED): grow the whole cluster as ONE graph — each node expanded once, no re-walk of the
+  // overlap. Returns a SINGLE [data, history] (the caller's merge loop folds the one element). Default-off pending
+  // footprint-drift validation vs the per-center grow-then-merge.
+  if (_envFlag(process.env.SEAM_CENTERS_MERGED) ?? false)
+    return [await _growCentersMergedImpl(repo, centers, opts as any).catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; })];
 
   if (!opts.dataCouplingLlm) {
     // Floor / off coupling: the deterministic floor writes no flywheel, so this is race-free. Warm the shared
