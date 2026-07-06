@@ -331,6 +331,16 @@ async function runReaches(a: Args): Promise<number> {
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
   reset_usage();
+  // STRUCTURAL GROW is default-ON for the ANCHORED flow-grow (CLI/MCP): the wave is intent-INDEPENDENT (up-hop
+  // K=2 + hub + ubiquity contain it, the intent field is not built), so the answer cache REUSES across intents —
+  // change the intent by a word and the settled footprint is served warm (the <4s responsive path). Intent then
+  // only crops at RENDER (the relevance-ranked region head). Validated on Acme (reuse works, output
+  // parity, cold is not a regression — it skips the embedding field so it's ~as fast as guided despite the bigger
+  // union). SCOPED OUT of the concern / center-first path: that path's CENTER DETECTION is a SEMANTIC judgment
+  // (which mechanism answers the intent) that needs the intent field — structural would collapse the cluster.
+  // The LIB default stays OFF (grow_to_terminals) so unit tests / embedders keep the intent-shaped grow. Opt out: SEAM_GROW_STRUCTURAL=0.
+  const isConcern = a.concern || (a.auto && !!a.intent && !a.symbol && !a.growFrom);   // explicit --concern, or the implicit no-symbol center-first
+  if (!isConcern && process.env.SEAM_GROW_STRUCTURAL === undefined) process.env.SEAM_GROW_STRUCTURAL = "1";
   // DEEPEN (Phase 2.3) — `--grow-from <file>#<symbol>` re-anchors the WAVE grow at a decision-point/frontier node
   // and emits the SAME contract-shape model the caller unions by node id. It is a thin router into the normal
   // `--scan --anchor-file --symbol` grow path (reuse, not a new engine): the full wave/tier/border/hub machinery
