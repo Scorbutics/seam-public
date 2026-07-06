@@ -10,6 +10,7 @@
 // is not silently dropped, it becomes a frontier decision point. Guards on tree-sitter (available()) for the .vsix.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
@@ -67,5 +68,59 @@ describe("up-hop border — the plain-call consumer chain is contained; the cros
     expect(has(cap, "web/page.ts")).toBe(true);
     // (c) SURFACED — the parked node is a frontier decision point (deepenable), NOT silently dropped.
     expect(frontierHas(cap, "svc/svcD.ts") || has(cap, "svc/svcC.ts")).toBe(true);
+  });
+});
+
+// The SAME invariant on a REALISTIC Java-EJB shape — the Acme case Brice actually hits. A CDI bean
+// (`CoreBean`) is climbed by a plain-call `@Inject` consumer CHAIN (Svc1←Svc2←Svc3←Svc4, the intra-backend
+// flood) AND reached across a JAX-RS route from a JS UI (`@Path("core")` ⇄ `$http.get('/rest/core/...')`, the
+// deterministic reverse cross-edge). The cap must cut the plain chain at K hops while the crossing branch — a
+// far node whose up-depth a crossing RESET — survives. All-deterministic (coupling FLOOR, tier OFF): proves the
+// structural border works on the shape private-app/booking-fixture are too thin to exhibit. Guards on tree-sitter.
+const jrepo = join(tmpdir(), "seam-uphop-java-" + process.pid);
+const jgit = (...a: string[]) => spawnSync("git", ["-C", jrepo, ...a], { encoding: "utf-8" });
+const jw = (rel: string, t: string) => { const p = join(jrepo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };
+
+beforeAll(() => {
+  mkdirSync(jrepo, { recursive: true }); jgit("init", "-q"); jgit("config", "user.email", "t@t.t"); jgit("config", "user.name", "t");
+  jw("ejb/com/x/CoreBean.java", "package com.x;\nimport javax.enterprise.context.ApplicationScoped;\n@ApplicationScoped\npublic class CoreBean {\n  public String core(String id) { return id; }\n}\n");
+  // the plain-call @Inject consumer chain climbing UP from CoreBean (Svc4 is 4 hops up).
+  jw("ejb/com/x/Svc1.java", "package com.x;\nimport javax.inject.Inject;\npublic class Svc1 {\n  @Inject CoreBean core;\n  public String svc1(String id) { return core.core(id); }\n}\n");
+  jw("ejb/com/x/Svc2.java", "package com.x;\nimport javax.inject.Inject;\npublic class Svc2 {\n  @Inject Svc1 s;\n  public String svc2(String id) { return s.svc1(id); }\n}\n");
+  jw("ejb/com/x/Svc3.java", "package com.x;\nimport javax.inject.Inject;\npublic class Svc3 {\n  @Inject Svc2 s;\n  public String svc3(String id) { return s.svc2(id); }\n}\n");
+  jw("ejb/com/x/Svc4.java", "package com.x;\nimport javax.inject.Inject;\npublic class Svc4 {\n  @Inject Svc3 s;\n  public String svc4(String id) { return s.svc3(id); }\n}\n");
+  // the crossing branch: a JAX-RS resource injects CoreBean; a JS UI fetches its route (server→client cross-edge).
+  jw("svc/com/x/CoreResource.java", 'package com.x;\nimport javax.inject.Inject;\n@Path("core")\npublic class CoreResource {\n  @Inject CoreBean core;\n  @GET @Path("get/{id}")\n  public Response get(@PathParam("id") String id) { return Response.ok(core.core(id)).build(); }\n}\n');
+  jw("web/js/coreUi.js", "export function loadCore(id) {\n  return $http.get('/rest/core/get/' + id);\n}\n");
+  jgit("add", "-A");
+});
+afterAll(() => { rmSync(jrepo, { recursive: true, force: true }); });
+
+const jgrow = (upHop: number) => grow_to_terminals(jrepo, "ejb/com/x/CoreBean.java", "core",
+  { dataCoupling: true, bidirectional: true, upHop, tierGrow: false, hubGate: false, ubiquity: false, hubCollapse: false });
+const jhas = (data: any, frag: string) => [...new Set((data.nodes as any[]).map((n) => String(n.file)))].some((f) => f.includes(frag));
+
+describe("up-hop border (Java EJB) — the @Inject bean chain is capped, the JAX-RS crossing survives", () => {
+  test("BASELINE (upHop 0): the whole @Inject consumer chain floods up", async () => {
+    if (!available()) return;   // no tree-sitter → no Java units
+    const [data]: [any, any[]] = await jgrow(0);
+    expect(jhas(data, "Svc3.java")).toBe(true);
+    expect(jhas(data, "Svc4.java")).toBe(true);
+  });
+
+  test("CAP (upHop 2): the chain is cut at K hops, the route→UI crossing branch is preserved", async () => {
+    if (!available()) return;
+    const [base]: [any, any[]] = await jgrow(0);
+    const [cap]: [any, any[]] = await jgrow(2);
+    // (a) CONTAINED — the deep plain-call @Inject hops are dropped.
+    expect(jhas(cap, "Svc3.java")).toBe(false);
+    expect(jhas(cap, "Svc4.java")).toBe(false);
+    expect(cap.nodes.length).toBeLessThan(base.nodes.length);
+    // (b) RECALL — the near hop is kept, and the JAX-RS route resets the up-depth so the JS UI across it survives.
+    expect(jhas(cap, "Svc1.java")).toBe(true);
+    expect(jhas(cap, "svc/com/x/CoreResource.java")).toBe(true);
+    expect(jhas(cap, "web/js/coreUi.js")).toBe(true);
+    // (c) SURFACED — the cut point (the deepest kept hop) is a frontier decision point.
+    expect(((cap as any).frontier ?? []).length).toBeGreaterThan(0);
   });
 });
