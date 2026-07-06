@@ -31,10 +31,6 @@ describe("structural grow — the scoped CLI default", () => {
     expect(growDiag(["--anchor-file", "ejb/BookingsBean.java", "--symbol", "BookingsBean"], { SEAM_GROW_STRUCTURAL: "0" }))
       .not.toContain("structural grow");
   });
-
-  test("the CONCERN / center-first path stays intent-GUIDED (its center detection is semantic)", () => {
-    if (!available()) return;
-    expect(growDiag(["--anchor-file", "ejb/BookingsBean.java", "--symbol", "BookingsBean", "--concern"]))
-      .not.toContain("structural grow");
-  });
+  // The concern path is NOT blanket-structural — its center detection stays intent-guided while only the
+  // from-center grow goes structural. That split is asserted in test/cli/concern_structural.test.ts.
 });

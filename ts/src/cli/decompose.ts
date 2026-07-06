@@ -478,11 +478,14 @@ async function runCodebase(a: Args): Promise<number> {
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
       // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
-      const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling): Promise<[any, any[]]> => {
+      // `structural` forces the intent-FREE grow (cache reuses across intents) — set when growing FROM a CONFIRMED
+      // center (the mechanism was already picked semantically); left off (env-driven) for a DETECTION grow whose
+      // region must stay intent-shaped so center-detection reads the right fan-in.
+      const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
-        if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx });
-        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCoupling: dc, dataCouplingLlm: false, ctx });
+        if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx, structuralGrow: structural || undefined });
+        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCoupling: dc, dataCouplingLlm: false, ctx, structuralGrow: structural || undefined });
       };
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
       let hist: any[] = [];
@@ -508,14 +511,17 @@ async function runCodebase(a: Args): Promise<number> {
           // MULTI-CENTER concern: discover coupling ONCE over the union scope, grow the mechanisms in PARALLEL
           // (each a forked ctx sharing the warmed flywheel read-only), then merge sequentially under the budget.
           const centers = anchors.map((anc) => ({ file: anc.file, symbol: symOf(anc), name: anc.name }));
-          const results = await orch.grow_centers_scoped(a.repo, centers, { ...gOpts, ctx, dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm });
+          // center-first (centerPicked): the mechanisms are CONFIRMED → grow them STRUCTURALLY (intent-free →
+          // the answer cache reuses across intent rewordings that pick the same centers). A plain multi-anchor
+          // covering set (non-concern) keeps the env-driven default.
+          const results = await orch.grow_centers_scoped(a.repo, centers, { ...gOpts, ctx, dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined });
           for (let i = 0; i < results.length; i++) {
             if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)\n`); break; }
             mergeOne(results[i], centers[i].name);
           }
         } else {
           const anc = anchors[0];
-          mergeOne(await growAnchorFootprint(anc.file, symOf(anc), ctx, dcForCenters), anc.name);
+          mergeOne(await growAnchorFootprint(anc.file, symOf(anc), ctx, dcForCenters, centerPicked), anc.name);
         }
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
@@ -575,9 +581,11 @@ async function runCodebase(a: Args): Promise<number> {
             // >1 mechanism → discover coupling ONCE over the union + grow the cluster in PARALLEL
             // (grow_centers_scoped, same as the center-first path); a single mechanism keeps the direct
             // footprint-scoped grow. Either way merged ON TOP of the anchor's own region (never replace it).
+            // The cluster was CONFIRMED by intent-weighted detection above; grow it STRUCTURALLY (intent-free →
+            // the re-grow reuses the cache when a reworded intent detects the same cluster).
             const results = clusterCenters.length > 1
-              ? await orch.grow_centers_scoped(a.repo, clusterCenters, { ...gOpts, ctx: cctx, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCoupling && dcLlm })
-              : [await growAnchorFootprint(clusterCenters[0].file, clusterCenters[0].symbol, cctx)];
+              ? await orch.grow_centers_scoped(a.repo, clusterCenters, { ...gOpts, ctx: cctx, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCoupling && dcLlm, structuralGrow: true })
+              : [await growAnchorFootprint(clusterCenters[0].file, clusterCenters[0].symbol, cctx, a.dataCoupling, true)];
             for (const r of results) {
               if (!r) continue;
               if ((merged.nodes?.length ?? 0) >= growNodes) { process.stderr.write(`[concern] node budget ${growNodes} reached — stopping at ${merged.nodes.length} node(s)\n`); break; }
