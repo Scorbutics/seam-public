@@ -65,31 +65,49 @@ function _hasStringArg(ctx: Ctx, call: any): boolean {
 //    tokens miss) OR any string-literal call arg. A file with NEITHER is a pure declaration (DTO/interface/enum,
 //    or bare-local-call logic) that PROVABLY can't carry a cross-FILE shared key → safe to discard. Conservative:
 //    we KEEP on any doubt (keeping a file is safe — just less saving; dropping a real edge is a recall loss).
-async function _shapeScan(ctx: Ctx): Promise<{ tokens: string[]; hasSignal: boolean }> {
-  const tokens: string[] = [];
+// Ruby constants / Java scoped names that _NAME_KINDS may not list — a call receiver can be any of these.
+const _NAMEISH = new Set(["constant", "scoped_identifier", "identifier", "simple_identifier", "type_identifier"]);
+// The ROOT RECEIVER of a call, CROSS-GRAMMAR (this is the fix for Java/Ruby, where clustering did nothing):
+//  • JS/TS   `a.b.c()`     — a member_expression callee; walk to its leftmost id.
+//  • Java    `rs.getBytes()` (method_invocation) / Ruby `Payment.where()` (call) — the call node itself holds
+//    [receiver, ".", method, args]; ≥2 name children BEFORE the arg list ⇒ the first is the receiver.
+//  • bare    `f()`         — one name, no receiver → null (not a channel).
+// Returns { recv, deep } — deep = a ≥3-level member chain (`prisma.user.find`), the strongest ORM/repo signal.
+function _callReceiver(ctx: Ctx, call: any): { recv: string; deep: boolean } | null {
+  const kids = ctx.children(call);
+  const memberCallee = kids.find((c) => _MEMBER.has(c.type));
+  if (memberCallee) {
+    const root = _rootId(ctx, memberCallee);
+    if (!root || _SELF_REFS.has(root)) return null;
+    const obj = ctx.children(memberCallee)[0];
+    return { recv: root, deep: !!(obj && _MEMBER.has(obj.type)) };
+  }
+  const argsIdx = kids.findIndex((c) => _ARGS.has(c.type));
+  const names = (argsIdx >= 0 ? kids.slice(0, argsIdx) : kids).filter((c) => _NAME_KINDS.has(c.type) || _NAMEISH.has(c.type));
+  if (names.length >= 2) { const recv = ctx.text(names[0]); return recv && !_SELF_REFS.has(recv) ? { recv, deep: names.length >= 3 } : null; }
+  return null;
+}
+
+async function _shapeScan(ctx: Ctx): Promise<{ tokens: string[]; weak: string[]; hasSignal: boolean }> {
+  const tokens: string[] = [];   // STRICT coupling shapes (deep chain / string-keyed) — the primary cluster signature
+  const weak: string[] = [];     // WEAK fallback: a bare 2-level receiver (`booking.save()`, `Payment.where()`, `rs.getBytes()`).
   // LENIENT DISCARD signal — LANGUAGE-AGNOSTIC: a file with NO CALL node at all is a pure declaration (interface /
-  // DTO / enum / type alias — no method call, no data access) that CANNOT reach a store/route/queue, so it can't
-  // carry a cross-file coupling. Anything with ANY call (`Payment.where`, `prisma.x.find`, a Ruby `save_data`,
-  // even `attr_accessor`) is KEPT — closing the JS-centric member gap (Ruby models `X.method()` without a member
-  // node). `_CALL` is a registry node-kind, never a keyword; a bare string check was dropped (it matched TS `:
-  // string` TYPE annotations, wrongly keeping every typed interface). Keep on any doubt — dropping a real edge is recall.
+  // DTO / enum / type alias) that CANNOT reach a store/route/queue → can't couple. Anything with a call is KEPT.
   const hasSignal = ctx.collect(ctx.root, (k) => _CALL.has(k)).length > 0;
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    // callee = the first child that's a member chain or a bare name (the args list comes after it)
-    const callee = ctx.children(call).find((c) => _MEMBER.has(c.type) || _NAME_KINDS.has(c.type));
-    if (!callee) continue;
-    if (_MEMBER.has(callee.type)) {
-      const obj = ctx.children(callee)[0];
-      const deep = obj && _MEMBER.has(obj.type);                  // `recv.member.verb(…)` — the member is the key
-      if (deep || _hasStringArg(ctx, call)) {                     // a DISTINCTIVE data shape (ORM chain OR string-keyed channel)
-        const root = _rootId(ctx, callee);                        // cluster by the ROOT RECEIVER, not the method
-        if (root && !_SELF_REFS.has(root)) tokens.push(`recv:${root}`);
-      }
-    } else if (_NAME_KINDS.has(callee.type) && _hasStringArg(ctx, call)) {
-      tokens.push(`call:${ctx.text(callee)}`);        // bare `f('lit')` — no receiver, cluster by callee name
+    const r = _callReceiver(ctx, call);
+    if (r) {
+      // deep chain / string-keyed = a DISTINCTIVE coupling shape → strict. A bare 2-level `recv.verb()` (a repo /
+      // model / entity call — `Payment.where`, `rs.getBytes` — the strict rule misses) → WEAK: still clusters files
+      // that share the receiver (one rep LLM'd for the whole channel) and grounds ORM/repo access. Same receiver ⇒
+      // same channel ⇒ recall-safe. This now fires on Java/Ruby too, so their per-file flood finally collapses.
+      (r.deep || _hasStringArg(ctx, call) ? tokens : weak).push(`recv:${r.recv}`);
+    } else {
+      const callee = ctx.children(call).find((c) => _NAME_KINDS.has(c.type) || _NAMEISH.has(c.type));
+      if (callee && _hasStringArg(ctx, call)) tokens.push(`call:${ctx.text(callee)}`);   // bare `f('lit')`
     }
   }
-  return { tokens, hasSignal };
+  return { tokens, weak, hasSignal };
 }
 
 // The DOMINANT (most frequent) shape-token — the file's cluster signature. Empty when the file shows no
@@ -125,11 +143,13 @@ export async function clusterBlindFiles<T extends { file: string; text: string }
     const lang = lang_for(f.file);
     const ctx = lang ? await makeCtx(f.text, lang) : null;
     const scan = ctx ? await _shapeScan(ctx) : null;   // null = unsupported lang → can't read → keep (shaped)
-    const tokens = scan?.tokens ?? null;
-    const sig = tokens ? _dominant(tokens) : "";
+    // signature = the STRICT coupling shape if any, else the WEAK 2-level receiver (so shapeless-but-has-calls files
+    // cluster by their repo/model receiver instead of each becoming its own LLM rep). Both dominant-most.
+    const sig = scan ? (scan.tokens.length ? _dominant(scan.tokens) : _dominant(scan.weak)) : "";
+    const richness = (scan?.tokens.length ?? 0) + (scan?.weak.length ?? 0);
     const shaped = !gate || scan === null || scan.hasSignal;   // no coupling signal at all ⇒ pure declaration ⇒ drop
     const key = shaped ? (sig || `\0solo:${f.file}`) : `\0noshape:${f.file}`;   // NUL prefix can't collide with a real signature
-    (groups.get(key) ?? groups.set(key, []).get(key)!).push({ sig, richness: tokens?.length ?? 0, member: f, shaped });
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push({ sig, richness, member: f, shaped });
   }
   const clusters: BlindCluster<T>[] = [];
   for (const entries of groups.values()) {
