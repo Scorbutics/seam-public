@@ -381,7 +381,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const vecByKey = new Map<string, number[]>();   // def key → its embedding vector (for the region-centroid field)
   const scoredFiles = new Set<string>();
   const densify = async (): Promise<void> => {       // embed the reached files not yet scored
-    if (!opts.intent) return;
+    if (opts.structuralGrow || !opts.intent) return;   // STRUCTURAL: don't build the field → no tier gate, no intent ordering (intent-free set)
     const want = new Set<string>();
     for (const n of data.nodes as any[]) { const f = n.file ? normpath(n.file) : ""; if (f && !scoredFiles.has(f)) want.add(f); }
     if (!want.size) return;
@@ -468,7 +468,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
   const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // env SEAM_UBIQUITY removed — OR'd with default-on hubCollapse, so it couldn't toggle anything
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
-  const upHopCap = Math.max(0, opts.upHop ?? (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. Hoisted above the wave loop so the post-loop frontier block sees it.
+  const upHopCap = Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0)));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. STRUCTURAL grow defaults K=2 (it's the sole container). Hoisted above the wave loop so the post-loop frontier block sees it.
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
@@ -770,7 +770,7 @@ export async function _borderCouplingDet(repo: string, data: any, intent: string
 // ORCHESTRATOR — the phases in order (docs/grow-architecture.md). Each is a Footprint→Footprint with a single
 // concern, so a bad footprint is localisable to one phase. P4 (relevance/prune) is still partly inside P2's
 // frontier today (the Step-2 split); P5 (decompose) is the caller. Behaviour is pinned by grow_contract.test.
-type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; upHop?: number };
+type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional?: boolean; dataCoupling?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; flagTruncation?: boolean; intent?: string; excludeDirs?: string[]; includeTests?: boolean; ctx?: EngineCtx; hubGate?: boolean; hubFan?: number; hubCollapse?: boolean; hubUbiquity?: number; hubTypeFan?: number; tierGrow?: boolean; tierMargin?: number; couplingMargin?: number; onWave?: (rec: { wave: number; added: any[]; edges: any[]; frontier: string[] }) => void; ubiquity?: boolean; ubiquityFan?: number; borderField?: string; borderTol?: number | null; upHop?: number; structuralGrow?: boolean };
 
 // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run on known territory
 // skips the wave orchestration entirely. Over-broad key (symbol + every serializable opt + all SEAM_* env) so
@@ -800,11 +800,17 @@ export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvaila
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const deterministic = !opts.onWave;
   const emb = await transformersAvailable();   // env-stable + memoised
-  // Say it out loud: whether the intent SHAPES this grow (embeddings ON → tier-grow uses the intent field, the
-  // grow is intent-dependent + keyed per-intent) or NOT (embeddings OFF → structural grow, intent used only to
-  // crop the output; the answer cache reuses across intents). Answers "is Acme using embeddings?".
-  if (opts.intent) process.stderr.write(`[grow] intent field: ${emb ? "ON (embeddings shape the grow → keyed per-intent)" : "OFF (structural grow; intent only crops the output → cache reuses across intents)"}\n`);
-  const km = growCacheKeyMaterial(symbol, opts, emb, seamEnvSnapshot());
+  // STRUCTURAL GROW (SEAM_GROW_STRUCTURAL / opts.structuralGrow) — force the grow intent-INDEPENDENT even WITH
+  // embeddings: up-hop (default K=2) + hub + ubiquity do ALL the containment, the intent field is not built, so
+  // the grown SET is identical for every intent and the answer cache REUSES across intents (the warm graph-node
+  // reuse). Intent then only CROPS/RANKS at render. Off (default) → the intent field shapes the grow as before.
+  const structuralGrow = opts.structuralGrow ?? _envFlag(process.env.SEAM_GROW_STRUCTURAL) ?? false;
+  opts = { ...opts, structuralGrow };
+  // Whether the intent SHAPES this grow (embeddings ON and NOT structural → intent-dependent, keyed per-intent)
+  // or NOT (embeddings off OR structural → the grown set is intent-independent; intent only crops → cache reuses).
+  const intentShapesGrow = emb && !structuralGrow;
+  if (opts.intent) process.stderr.write(`[grow] intent field: ${intentShapesGrow ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`);
+  const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }
 
@@ -814,7 +820,7 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   // ctx shared across all grow moves (repo indices built once). A caller may pass its OWN ctx to share the
   // expensive repo-wide indices across SEVERAL grows (e.g. the anchor probes build the coupling index ONCE).
   const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
-  if (opts.intent && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap
+  if (opts.intent && !opts.structuralGrow && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap — SKIP under structural (else intent picks which complements survive the cap → set is intent-dependent)
   const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the P3 overlay only
   const coupled = new Set<string>();   // files already coupled — carried across the seed + post-expand fans (couple each once)
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
@@ -833,7 +839,7 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   // Bound the coupling table-fan with the intent field so the fully-det agent feed is tight instead of drowning in
   // a shared key's off-intent consumers. Skip the throwaway stable-floor probe (its result is discarded; only the
   // real grow's footprint is rendered). Opt out with SEAM_COUPLING_BORDER_DET=0.
-  if (co.dataCoupling !== false && opts.intent && !co.ctx?.stableFloor
+  if (co.dataCoupling !== false && opts.intent && !opts.structuralGrow && !co.ctx?.stableFloor
       && (_envFlag(process.env.SEAM_COUPLING_BORDER_DET) ?? true))
     // Complements need a HIGHER bar than call-graph pivots: they're sibling consumers of a shared key, topically
     // near the intent (embeddings are generous), so the on-intent flow (in the call graph) is unaffected while the
