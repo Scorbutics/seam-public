@@ -19,8 +19,11 @@ import type { GraphNode, GraphEdge } from "./graph.js";
 // no-op when there are no leading annotations — so annotation-free anchors are unaffected.
 export function _annotationLo(text: string, lo: number): number {
   const lines = text.split("\n");
-  let i = lo - 1;
-  while (i >= 0 && (lines[i].trim() === "" || lines[i].trim().startsWith("@"))) i--;
+  // Clamp to the file's last line: a node's `lo` can point PAST the end of the text we re-read (a stale/
+  // mismatched range after an edit, or a coupling probe on a file whose ranges came from a different read).
+  // Without this bound `lines[lo-1]` is `undefined` and `.trim()` throws — silently killing the whole grow.
+  let i = Math.min(lo - 1, lines.length - 1);
+  while (i >= 0 && ((lines[i] ?? "").trim() === "" || (lines[i] ?? "").trim().startsWith("@"))) i--;
   return Math.max(0, i + 1);
 }
 

@@ -986,8 +986,20 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
   // MERGED (SEAM_CENTERS_MERGED): grow the whole cluster as ONE graph — each node expanded once, no re-walk of the
   // overlap. Returns a SINGLE [data, history] (the caller's merge loop folds the one element). Default-off pending
   // footprint-drift validation vs the per-center grow-then-merge.
-  if (_envFlag(process.env.SEAM_CENTERS_MERGED) ?? false)
-    return [await _growCentersMergedImpl(repo, centers, opts as any).catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; })];
+  if (_envFlag(process.env.SEAM_CENTERS_MERGED) ?? false) {
+    // P5 answer-cache the WHOLE merged grow, keyed on the CENTER SET (not a single anchor) — exactly as the
+    // single-anchor grow_to_terminals wraps its impl. Without this, a warm concern run with the SAME detected
+    // centers re-ran the entire wave AND its coupling (~20-30s deterministic) despite the graph node being cached:
+    // the merged path had lost the settled-grow cache the per-center path got for free (each grow_to_terminals →
+    // cachedGrow). Cache key: sorted "file#symbol" of every center → same centers ⇒ same key ⇒ warm HIT.
+    const emb = await transformersAvailable();
+    const structural = opts.structuralGrow ?? _envFlag(process.env.SEAM_GROW_STRUCTURAL) ?? false;
+    const centerKey = centers.map((c) => `${c.file}#${c.symbol}`).sort().join("+");
+    const km = growCacheKeyMaterial(centerKey, opts, emb && !structural, seamEnvSnapshot());
+    return [await cachedGrow(repo, centers[0].file, km, opts.dataCoupling !== false, !opts.onWave,
+      () => _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any))
+      .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; })];
+  }
 
   if (!opts.dataCouplingLlm) {
     // Floor / off coupling: the deterministic floor writes no flywheel, so this is race-free. Warm the shared
