@@ -7,9 +7,11 @@
 // sibling. Deterministic (dataCouplingLlm degrades to the floor offline); hermetic; guards on tree-sitter.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
-import { grow_centers_scoped } from "../../src/codebase/grow/orchestrate.js";
+import { grow_centers_scoped, grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
+import { merge_resolved } from "../../src/codebase/scan/expand.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -42,4 +44,32 @@ describe("grow_centers_scoped — one shared union scope, every mechanism grown"
     expect(ctx.footprintFiles!.has("web/a.js")).toBe(true);
     expect(ctx.footprintFiles!.has("web/b.js")).toBe(true);
   }, 30_000);   // union pre-grow + a learn + a parallel grow
+});
+
+// NON-REGRESSION on the COMPLEX booking-app fixture (the Acme-shaped cross-stack repro): the parallel
+// multi-center grow must produce the SAME footprint as the pre-change sequential loop. Offline (floor coupling)
+// the union discovery scope is inert (the floor is repo-wide deterministic), so the two must be IDENTICAL —
+// this pins that the parallelisation + per-center fork don't drop or reorder any node. (The union scope's real
+// effect — a broader LLM discovery + no budget-starvation — only ADDS coupling with a live backend, never drops.)
+describe("grow_centers_scoped — footprint-identical to the sequential loop on booking-app (floor)", () => {
+  const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "booking-app");
+  const centers = [
+    { file: "ejb/BookingsBean.java", symbol: "BookingsBean" },
+    { file: "ejb/BookingsService.java", symbol: "BookingsService" },
+    { file: "ejb/ManageBookingsService.java", symbol: "ManageBookingsService" },
+  ];
+  const opts = { maxSteps: 40, maxNodes: 500, dataCoupling: true, dataCouplingLlm: false, intent: "how are bookings managed" };
+  const fset = (d: any) => new Set((d.nodes as any[]).map((n) => `${n.file}#${n.symbol}`));
+
+  test("parallel grow_centers_scoped === sequential per-center merge (same node set)", async () => {
+    if (!available()) return;
+    const resN = await grow_centers_scoped(REPO, centers, { ...opts, ctx: new EngineCtx() } as any);
+    let dN: any = null; for (const r of resN) if (r) dN = dN ? merge_resolved(dN, r[0], r[0].anchor?.id) : r[0];
+    const ctxO = new EngineCtx(); let dO: any = null;
+    for (const c of centers) { const [d] = await grow_to_terminals(REPO, c.file, c.symbol, { ...opts, ctx: ctxO } as any); dO = dO ? merge_resolved(dO, d, d.anchor?.id) : d; }
+    const N = fset(dN), O = fset(dO);
+    expect([...N].filter((x) => !O.has(x))).toEqual([]);   // NEW drops nothing OLD had
+    expect([...O].filter((x) => !N.has(x))).toEqual([]);   // NEW adds nothing OLD lacked (offline: identical)
+    expect(N.size).toBeGreaterThan(20);                     // it actually grew the cross-stack footprint
+  }, 60_000);
 });
