@@ -348,25 +348,6 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   try {
     add = prune(await build_footprint_cached(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
   } catch { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
-  // PAYLOAD TYPE-REF FAN-OUT CAP (SEAM_TYPEREF_FAN>0) — a call-reached ENTITY whose DOWN expansion adds a WIDE fan
-  // of type-ref-only TYPES (its @Type serializer / column-type fields — the `User`→`*UserType` flood, ~40 leaves
-  // nothing CALLS) bloats the footprint with data-model infra. Crop that fan (keep the CALL deps — the mechanism
-  // chain), recording how many were collapsed. Grounded: type-ref vs call is a structural EDGE KIND; the cap fires
-  // only on a WIDE payload fan (a couple of DTOs stay). Off by default.
-  const trFanCap = down ? (parseInt(process.env.SEAM_TYPEREF_FAN ?? "0", 10) || 0) : 0;
-  if (trFanCap) {
-    const aid = add.anchor?.id;
-    const trFrom = new Set<string>(); const nonTr = new Set<string>();
-    for (const e of add.edges as any[]) { if (e.kind === "type-ref") { if (e.from === aid) trFrom.add(e.to); } else { nonTr.add(e.from); nonTr.add(e.to); } }
-    const payload = [...trFrom].filter((t) => t !== aid && !nonTr.has(t));   // reached ONLY by a type-ref from the expanded node → payload, not a called mechanism
-    if (payload.length > trFanCap) {
-      const drop = new Set(payload);
-      add.nodes = (add.nodes as any[]).filter((n) => !drop.has(n.id));
-      add.edges = (add.edges as any[]).filter((e) => !drop.has(e.from) && !drop.has(e.to));
-      (add.blindspots ??= []).push({ node: next.symbol, mechanism: "payload-type-fan", evidence: `${payload.length} data-model type(s) referenced by ${qual} — collapsed (nothing calls them; deepen to inspect)`, candidates: [] });
-      dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — collapsed ${payload.length} payload type-ref(s) (> ${trFanCap})`);
-    }
-  }
   // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
   // answer — data-coupling fan is exempt (self-bounded + the intent). `idx.byKey` IS the present-key set (carried
   // across moves), so the flood check is O(add) not O(footprint) — no per-move rebuild of the whole node set.
