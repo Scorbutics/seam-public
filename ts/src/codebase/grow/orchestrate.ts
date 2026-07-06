@@ -836,3 +836,46 @@ export async function grow_footprint_scoped(repo: string, anchorFile: string, sy
   process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
   return grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: true, ctx });
 }
+
+// MULTI-CENTER concern grow: discover coupling ONCE over the union scope, then grow the mechanisms in PARALLEL.
+// A concern is a CLUSTER of mechanisms; growing each through its own `grow_footprint_scoped` meant K separate
+// "floor pre-grow → LLM discovery → grow" rounds (the visible repetition) AND K concurrent flywheel writers if
+// parallelised naively. Instead:
+//  (1) ONE UNION floor pre-grow — cheap, deterministic, run in PARALLEL (each on a forked ctx with
+//      stableFloor=true, which writes NOTHING to the flywheel and has its OWN budgets) — yields the whole
+//      concern's file scope;
+//  (2) the FIRST center grows with LLM coupling on the SHARED ctx, warming the flywheel + the scoped grounding
+//      index EXACTLY ONCE (sequential — the only writer);
+//  (3) the remaining centers grow CONCURRENTLY on FORKED ctxs that SHARE that warmed cache by reference (same
+//      union → same discovery cacheKey → cache HIT: no re-learn, no write race) with their OWN consumable budgets.
+// Returns the per-center [data, hist] in center order (null for a center whose grow threw). The CALLER merges.
+export async function grow_centers_scoped(repo: string, centers: { file: string; symbol: string }[],
+    opts: { ctx: EngineCtx; dataCouplingLlm?: boolean; [k: string]: any }): Promise<([any, any[]] | null)[]> {
+  const ctx = opts.ctx;
+  const run = (c: { file: string; symbol: string }, cx: EngineCtx, dcLlm: boolean): Promise<[any, any[]] | null> =>
+    grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: dcLlm, ctx: cx })
+      .catch((e) => { dbg(`[centers] grow ${c.symbol} failed: ${(e as Error).message}`); return null; });
+  if (!centers.length) return [];
+
+  if (!opts.dataCouplingLlm) {
+    // Floor / off coupling: the deterministic floor writes no flywheel, so this is race-free. Warm the shared
+    // repo indices on the FIRST center (avoids K concurrent cold getOrSet builds), then the rest in parallel.
+    const first = await run(centers[0], ctx, false);
+    const rest = await Promise.all(centers.slice(1).map((c) => run(c, ctx.fork(), false)));
+    return [first, ...rest];
+  }
+  // (1) UNION floor pre-grow (parallel; stableFloor forks write nothing and carry their own budgets).
+  emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+  const floors = await Promise.all(centers.map((c) => {
+    const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
+    return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
+  }));
+  const union = new Set<string>();
+  for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
+  ctx.footprintFiles = union;
+  process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${union.size} files across the concern (shared across ${centers.length} mechanisms)\n`);
+  // (2) LEARN once on the shared ctx (the sole flywheel writer), then (3) the rest in parallel on forks (cache hit).
+  const first = await run(centers[0], ctx, true);
+  const rest = await Promise.all(centers.slice(1).map((c) => run(c, ctx.fork(), true)));
+  return [first, ...rest];
+}

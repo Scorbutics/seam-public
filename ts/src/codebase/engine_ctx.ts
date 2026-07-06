@@ -62,6 +62,23 @@ export class EngineCtx {
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
   complementBudget = COUPLING.complementBudget; // crossBoundary: complement units materialized this run (grow-wide) — bounds a hub's fan
+
+  // FORK — a sibling ctx for a CONCURRENT center-grow. SHARES every repo-wide index Map BY REFERENCE (built
+  // once, read-concurrent-safe: the getOrSet builders are idempotent, and the parallel forks run AFTER the
+  // first center has warmed the flywheel, so they only READ it) but gets FRESH per-run mutable state — its own
+  // consumable budgets and `stableFloor=false` — so K parallel centers don't clobber each other's budgets
+  // (the fields agent B flagged as racing). `footprintFiles` is SHARED (the union scope) so a fork's coupling
+  // discovery hits the warmed cacheKey instead of re-learning; `rankKeys` is shared (one intent).
+  fork(): EngineCtx {
+    const c = new EngineCtx();
+    c.sharedKey = this.sharedKey; c.carrierChannel = this.carrierChannel; c.langIndex = this.langIndex;
+    c.llmKey = this.llmKey; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs;
+    c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
+    c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
+    c.rankKeys = this.rankKeys;
+    c.footprintFiles = this.footprintFiles;   // share the union scope → the fork's discovery hits the warmed cacheKey
+    return c;   // fresh budgets + stableFloor=false from the field initializers
+  }
 }
 
 // Canonical cache helper: return the cached value if present, else compute, store, and return it.

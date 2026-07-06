@@ -11,7 +11,7 @@
 // Backward-compat: this MERGES the two former split files. On load it also reads the legacy `key-matchers.json`
 // ({matchers}) and the legacy schema-2 `key-adapters.json` ({adapters}) and folds them in; on write it emits
 // the unified schema-3 `key-adapters.json` ({rules, files}) and removes the now-redundant legacy matchers file.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { KeyAdapter, KeyHit } from "./types.js";
 import { type KeyMatcher, matcherKey } from "./key_ir.js";
@@ -63,7 +63,11 @@ function _writeStore(dir: string): void {
   const files: Record<string, KeyAdapter> = {};
   for (const [k, v] of store.files) files[k] = v;
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, _file), JSON.stringify({ schema: SCHEMA, rules: store.rules, files, learnedSigs: [...store.learnedSigs] }, null, 2));
+  // ATOMIC write (tmp + rename) so a concurrent center-grow / an external reader never observes a half-written
+  // key-adapters.json (a torn read would corrupt the coupling epoch hash). renameSync is atomic within a dir.
+  const dest = join(dir, _file), tmp = `${dest}.tmp`;
+  writeFileSync(tmp, JSON.stringify({ schema: SCHEMA, rules: store.rules, files, learnedSigs: [...store.learnedSigs] }, null, 2));
+  renameSync(tmp, dest);
   try { if (existsSync(join(dir, _legacyMatchers))) unlinkSync(join(dir, _legacyMatchers)); } catch { /* best-effort */ }
 }
 

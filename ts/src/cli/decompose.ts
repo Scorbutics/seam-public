@@ -485,14 +485,27 @@ async function runCodebase(a: Args): Promise<number> {
         const anchors = anchorSet ?? [{ name: a.symbol!, file: a.anchorFile!, kind: fileAnchor ? "module" : "function" }];
         const ctx = new EngineCtx();
         const maxNodes = growNodes;   // the per-anchor budget, reused as the GLOBAL merged budget (--max-nodes)
-        for (const anc of anchors) {
-          if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining anchor(s)\n`); break; }
-          // CONCERN: the first grow is only for center DETECTION (fan-in over the call graph); its coupling is
-          // discarded when we re-anchor on the cluster, so skip it — the cluster re-grow does the real coupling.
-          const [d, h] = await growAnchorFootprint(anc.file, symOf(anc), ctx, a.concern && !centerPicked ? false : a.dataCoupling);
-          hist = hist.concat(h.map((x: any) => ({ ...x, anchor: anc.name })));
+        // CONCERN detection-only first grow (auto-anchor legacy): coupling discarded on re-anchor → skip it.
+        const dcForCenters = a.concern && !centerPicked ? false : a.dataCoupling;
+        const mergeOne = (r: [any, any[]] | null, name: string): void => {
+          if (!r) return;
+          const [d, h] = r;
+          hist = hist.concat(h.map((x: any) => ({ ...x, anchor: name })));
           if ((d as any).llmBorder) llmBorder = true;   // the LLM border shaped this grow → it is the intent ranker (survives the merge)
           data = data ? mergeFootprints(data, d, d.anchor?.id) : d;
+        };
+        if (anchors.length > 1) {
+          // MULTI-CENTER concern: discover coupling ONCE over the union scope, grow the mechanisms in PARALLEL
+          // (each a forked ctx sharing the warmed flywheel read-only), then merge sequentially under the budget.
+          const centers = anchors.map((anc) => ({ file: anc.file, symbol: symOf(anc), name: anc.name }));
+          const results = await orch.grow_centers_scoped(a.repo, centers, { ...gOpts, ctx, dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm });
+          for (let i = 0; i < results.length; i++) {
+            if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)\n`); break; }
+            mergeOne(results[i], centers[i].name);
+          }
+        } else {
+          const anc = anchors[0];
+          mergeOne(await growAnchorFootprint(anc.file, symOf(anc), ctx, dcForCenters), anc.name);
         }
       }
       catch (e) { err(`auto-grow failed: ${(e as Error).message}`); }
