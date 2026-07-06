@@ -596,6 +596,11 @@ async function runCodebase(a: Args): Promise<number> {
       applyIntentMatch(model2, anchorAlternatives);   // honest off-intent gate + ranked alternative anchors
       const stamped = stamp(model2);
       const payload = JSON.stringify(stamped);
+      // DEFAULT is the token-budgeted AGENT surface, NOT a raw JSON dump — the useful thing for a human or an
+      // LLM reading the terminal is the spine + hubs + frontier + gaps, which already say WHERE to re-query /
+      // grep for what's missing. The full model stays one flag away: `--format json` (stdout) or `--emit-seams
+      // <file>` (the machine contract the extension/MCP use). (--concern already resolved `none`→`concern` above.)
+      if (a.format === "none") a.format = "agent";
       if (a.stream) {                                 // STREAM: the per-wave records already went to stdout; close with the full model
         process.stdout.write(JSON.stringify({ done: true, model: stamped }) + "\n");
         if (a.emitSeams) { writeFileSync(a.emitSeams, payload); process.stderr.write(`Seams: ${a.emitSeams}\n`); }   // optional file sink, on stderr (stdout stays pure NDJSON)
@@ -603,7 +608,10 @@ async function runCodebase(a: Args): Promise<number> {
         emit(`Writing seams JSON → ${a.emitSeams}…`);
         writeFileSync(a.emitSeams, payload);
         process.stdout.write(`Seams: ${a.emitSeams}\n`);
-      } else if (a.format === "llm-context") {        // HUMAN-readable region view directly (no temp file)
+      } else if (a.format === "json") {               // EXPLICIT raw model to stdout (the machine escape — `seam … > out.json`)
+        process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → JSON on stdout.\n`);
+        process.stdout.write(payload + "\n");
+      } else if (a.format === "llm-context") {        // the FULL region view (no crop) — heavier, for when you want everything
         const { renderLlmContext } = await import("../codebase/llm_context.js");
         process.stdout.write(renderLlmContext(stamped) + "\n");
       } else if (a.format === "waves") {              // the same region read as FLOOD ORDER (wave-by-wave + parent links)
@@ -612,15 +620,12 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "scenarios") {          // the region's end-to-end flows as Mermaid sequence diagrams
         const { renderScenarios } = await import("../codebase/llm_context.js");
         process.stdout.write(renderScenarios(stamped) + "\n");
-      } else if (a.format === "agent") {              // the token-budgeted agent surface: spine · region · hubs · frontier · gaps
-        const { renderAgent } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
-      } else if (a.format === "concern") {            // CENTER-first star (prototype) — plural "how is X managed?" questions
+      } else if (a.format === "concern") {            // CENTER-first star — plural "how is X managed?" questions
         const { renderConcern } = await import("../codebase/llm_context.js");
         process.stdout.write(renderConcern(stamped, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters }) + "\n");
-      } else {                                        // no sink → STDOUT carries the JSON (clean `seam … > out.json`)
-        process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → stdout (pass --emit-seams <path> for a file, or --format llm-context for a readable view).\n`);
-        process.stdout.write(payload + "\n");
+      } else {                                        // DEFAULT + fallback: the token-budgeted agent surface (spine · region · hubs · frontier · gaps)
+        const { renderAgent } = await import("../codebase/llm_context.js");
+        process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
       }
       return 0;
     }

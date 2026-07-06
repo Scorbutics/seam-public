@@ -46,7 +46,7 @@ export function parseArgs(argv: string[]): Args {
       case "--submodules": a.submodules = true; break;   // also include each git submodule's diff (paths prefixed by the submodule dir)
       case "--from-classified": a.fromClassified = next(); break;
       case "--repo": a.repo = next(); break;
-      case "--format": a.format = next(); break;
+      case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | waves | scenarios | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
       case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
       case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout
       case "--classifier": a.classifier = next(); break;

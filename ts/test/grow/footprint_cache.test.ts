@@ -28,7 +28,7 @@ const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(joi
 function growFiles(coupling: "off" | "floor" | "llm" = "off"): string[] {
   const out = execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
     "--anchor-file", "svc/handler.ts", "--symbol", "handle", "--intent", "how is the payload saved",
-    "--data-coupling", coupling, "--format", "none"],
+    "--data-coupling", coupling, "--format", "json"],   // raw model on stdout (the default is now the agent render)
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1" }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
   const m = JSON.parse(out);
   const files = new Set<string>();

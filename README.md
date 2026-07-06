@@ -58,10 +58,12 @@ which connected footprint is the intent's entry point** — then grows that one.
 split as everywhere else: structure measures connectedness (a fact), the LLM judges relevance (the
 meaning). LLM query-expansion widens recall so *"registration"* still finds `RegisterPage`.
 
-**Agent-facing surface (opt-in).** For a coding agent that calls Seam instead of running a grep loop,
-three additions read the same emitted model: **`--format agent`** — one token-budgeted map (spine ·
-region · collapsed hubs · a ranked *decision-point frontier*, each with the exact `--grow-from`
-command to deepen it · unresolved gaps); **`--grow-from <file>#<symbol>`** — deepen from a frontier
+**Agent-facing surface.** A codebase grow's **default output is the `agent` map** — one token-budgeted
+view (spine · region · collapsed hubs · a ranked *decision-point frontier*, each with the exact
+`--grow-from` command to deepen it · unresolved gaps) — NOT a raw JSON dump: the useful thing for a human
+or an LLM at the terminal is the map that says WHERE to re-query or grep, not the full closure. The raw
+model is one flag away — `--format json` (stdout) or `--emit-seams <file>` (the machine contract the
+extension/MCP use). Two more agent additions: **`--grow-from <file>#<symbol>`** — deepen from a frontier
 node (re-anchors the wave grow, warm on the `.seam` indices; `--intent` redirects the branch);
 **`--stream`** — NDJSON per settled wave on stdout, EPIPE-graceful for early stop. Two deterministic,
 zero-LLM containment mechanisms back them, **ON by default in wave mode** (validated recall-safe on
