@@ -202,6 +202,37 @@ full wave (even over cheap P3 reads) keeps the wave's per-wave overhead (`assign
 made incremental (O(N)). So the end state is **P3-cache neighbour source (fidelity) + incremental wave
 (speed)** — the two are separable and independently gated.
 
+## THE DECISIVE CONCLUSION (2026-07) — measured, not theorised
+
+Measuring the warm wave (P3 cache warm, P5 answer cleared → the wave re-runs over cheap cached
+neighbours, byte-identical to the grow because it IS the grow):
+
+| approach | private-app warm | cal.com warm | fidelity |
+|---|---|---|---|
+| flood over the map union (no wave overhead) | ~25 ms | ~25 ms | ✗ hub gate diverges |
+| **wave over the P3 cache** (= the grow) | **155 ms** | **3.9 s** | ✓ **byte-identical** |
+
+Two hard facts fall out:
+1. **The border CANNOT be decoupled into a separate flood and stay faithful** — the hub gate is
+   accumulation-order-dependent by design (it protects the established spine), so any traversal that
+   doesn't reproduce the grow's exact accumulation diverges. Fidelity ⇒ run the wave.
+2. **The wave over cached neighbours is already byte-identical and cheap on small footprints (155 ms),
+   but its PER-WAVE overhead is O(waves·N)** — `from_resolved_graph` + `assign_roles` + the dist/up-hop/
+   hub BFS are rebuilt from scratch every wave. On cal.com (436 nodes, ~tens of waves) that's 3.9 s; on
+   Acme it is the "2 min warm". **This — not discovery — is the scaling wall.**
+
+**So the real lever is: make the wave's per-wave overhead INCREMENTAL (O(N) total, not O(waves·N)).**
+Maintain roles/distance/up-depth/hub-classification incrementally as nodes are admitted, instead of
+rebuilding a `Graph` and re-running `assign_roles`/BFS each wave. This keeps the wave byte-identical
+(harness-gated) and turns 3.9 s → target ~100 ms, which IS the fast+faithful warm path. Discovery stays
+cached (P3, persistent). The map/projection *flood* is retired as a fidelity dead-end; its lesson —
+"discovery is cached, bordering is the wave" — stands, but bordering is the SAME wave made fast, not a
+separate cut.
+
+**Recommended next work (supersedes Phases 3–6 above):** profile `_phaseExpand`'s per-wave hot spots
+(likely `from_resolved_graph`+`assign_roles`), make them incremental, harness-gate byte-identity, measure
+private-app/cal.com, then Acme. This also speeds the COLD grow (it pays the same per-wave overhead).
+
 ## Definition of done
 
 `project == grow` byte-identical on private-app + cal.com + Dubbo + Acme, warm concern latency ms-to-seconds
