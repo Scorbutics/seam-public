@@ -51,3 +51,16 @@ export function emitTimingSummary(): void {
 }
 
 export function resetTimings(): void { _t0 = null; _phases.length = 0; }
+
+// STAGE SUMMARY (SEAM_TIMING) — coarse buckets a human reads to find the bottleneck of a concern run, without
+// parsing the per-phase `[time]` firehose: detection / probe / structural / coupling / render. Sites call
+// `addStage(bucket, ms)`; the concern path resets at the start and prints `[stage-summary]` at the end.
+const _stageAcc = new Map<string, number>();
+export function addStage(name: string, ms: number): void { if (ms > 0) _stageAcc.set(name, (_stageAcc.get(name) ?? 0) + ms); }
+export function resetStages(): void { _stageAcc.clear(); }
+export function stageSummary(): string {
+  if (!_stageAcc.size) return "";
+  const total = [..._stageAcc.values()].reduce((a, b) => a + b, 0);
+  const parts = [..._stageAcc.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}ms`);
+  return `[stage-summary] ${parts.join(" | ")} | total ${total}ms`;
+}

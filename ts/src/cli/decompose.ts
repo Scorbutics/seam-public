@@ -36,7 +36,7 @@ import {
 } from "../diff/facts.js";
 import { HostBus, InteractiveHostBus, set_host_bus, get_host_bus, reset_usage, get_usage } from "../core/llm.js";
 import { stampSeamModel } from "../core/contract.js";
-import { emit, emitTimingSummary, timingOn } from "../core/progress.js";
+import { emit, emitTimingSummary, timingOn, addStage, resetStages, stageSummary } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
 import { type Args, parseArgs, resolveEngines } from "./args.js";
@@ -331,6 +331,7 @@ async function runReaches(a: Args): Promise<number> {
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
   reset_usage();
+  resetStages();   // stage-summary buckets (SEAM_TIMING) — detection/probe/structural/coupling/render, printed at the end
   // STRUCTURAL GROW is default-ON for the ANCHORED flow-grow (CLI/MCP): the wave is intent-INDEPENDENT (up-hop
   // K=2 + hub + ubiquity contain it, the intent field is not built), so the answer cache REUSES across intents —
   // change the intent by a word and the settled footprint is served warm (the <4s responsive path). Intent then
@@ -432,7 +433,9 @@ async function runCodebase(a: Args): Promise<number> {
         const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
         emit(`Picking the concern's mechanism for "${a.intent}"…`);
         const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+        const _tDet = Date.now();
         const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
+        addStage("detection", Date.now() - _tDet);
         if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
         a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
         anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
@@ -608,7 +611,9 @@ async function runCodebase(a: Args): Promise<number> {
       // The LLM seam-ranking (refine/tier) is OFF by default now (Brice: "useless" + it was the 4-min cost). The
       // deterministic annotateForEmit (embeddings, below) supplies the spine/supporting/off tiers instead — LLM stays
       // reserved for the flywheel. Opt back in with --no-skeleton. (Concern already forced skeleton at line 558.)
+      const _tRender = Date.now();
       const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton ?? true });
+      addStage("render", Date.now() - _tRender);
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
@@ -992,4 +997,4 @@ async function main(argv: string[]): Promise<number> {
 // The @@SEAM_TIMING@@ per-phase summary is a PROFILING artifact (a big JSON blob repeating every wave/step) —
 // noise in normal human/LLM output. Emit it ONLY when timing is explicitly requested (--trace / SEAM_TIMING=1),
 // alongside the per-node timing firehose it belongs with. The live @@SEAM_PROGRESS@@ phase markers are unaffected.
-main(process.argv.slice(2)).then((code) => { if (timingOn()) emitTimingSummary(); process.exit(code); });
+main(process.argv.slice(2)).then((code) => { if (timingOn()) { emitTimingSummary(); const s = stageSummary(); if (s) process.stderr.write(s + "\n"); } process.exit(code); });

@@ -5,7 +5,7 @@
 // deterministic frontier walk + wave/tier/hub machinery reproduce its result offline in a fraction
 // of the time. The wave grow is now fully DETERMINISTIC — the former opt-in per-wave LLM intent border
 // was removed; the tier/hub/coupling containment carries the grow offline.
-import { emit, dbg, timingOn } from "../../core/progress.js";
+import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
@@ -944,7 +944,8 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   const coupled = new Set<string>();   // files already coupled — carried across the seed + post-expand fans (couple each once)
   // COARSE PHASE TIMING (diagnostic, SEAM_TIMING=1) — attributes warm cost to structural wave vs data-coupling, so
   // the "the cost really comes from data-coupling" hypothesis is measured, not assumed.
-  const _t = () => Date.now(); const _tm = timingOn(); const _lap = (p: string, t0: number) => { if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${_t() - t0}ms\n`); };
+  const _t = () => Date.now(); const _tm = timingOn();
+  const _lap = (p: string, t0: number) => { const ms = _t() - t0; if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${ms}ms\n`); addStage(/^P[12]/.test(p) ? (co.ctx?.stableFloor ? "probe" : "structural") : "coupling", ms); };
   let _ts = _t();
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
