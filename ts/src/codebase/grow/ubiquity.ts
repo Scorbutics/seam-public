@@ -11,7 +11,11 @@
 import { module_scope } from "../../core/resolve/languages/index.js";
 import { fileImporters } from "../../core/resolve/consumers.js";
 import { normpath } from "../../core/resolve/walk.js";
+import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/index_cache.js";
+import { epochOf } from "../scan/footprint_cache.js";
 import type { EngineCtx } from "../engine_ctx.js";
+
+const _UBIQ = "ubiquity-v1";
 
 const _norm = (f: string): string => normpath(f).replace(/^\.\//, "");
 
@@ -32,6 +36,16 @@ export function moduleKey(repo: string, file: string): string {
 export async function ubiquityIndex(repo: string, ctx?: EngineCtx): Promise<Map<string, number>> {
   const cached = ctx?.ubiquity.get(repo);
   if (cached) return cached;
+  // DISK cache — `fileImporters` RESOLVES every import's module target across the whole repo (~4s on a 5.7k-file
+  // monorepo like cal.com), and its result was cached IN-MEMORY only, so every fresh process/grow re-paid it — the
+  // dominant warm-grow cost (profiled: 4s of a 4s "warm" grow, the wave itself ran 0 waves). Persist the derived
+  // index content-keyed on the source epoch, exactly like the impl/import indices, so a warm run LOADS it. Pure
+  // caching → byte-identical. `SEAM_GRAPH_CACHE=0` (graphCacheEnabled) falls back to the in-mem-only path.
+  const epoch = graphCacheEnabled() ? epochOf(repo) : "";
+  if (epoch) {
+    const disk = loadShard<{ e: string; entries: [string, number][] }>(repo, _UBIQ, "index");
+    if (disk && disk.e === epoch) { const m = new Map<string, number>(disk.entries); ctx?.ubiquity.set(repo, m); return m; }
+  }
   const importers = await fileImporters(repo);
   const out = new Map<string, number>();
   for (const [target, imps] of importers) {
@@ -40,6 +54,7 @@ export async function ubiquityIndex(repo: string, ctx?: EngineCtx): Promise<Map<
     out.set(_norm(target), mods.size);
   }
   ctx?.ubiquity.set(repo, out);
+  if (epoch) saveShard(repo, _UBIQ, "index", { e: epoch, entries: [...out] });
   return out;
 }
 
