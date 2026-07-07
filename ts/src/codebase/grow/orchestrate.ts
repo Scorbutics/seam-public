@@ -902,40 +902,41 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   return [data, history];
 }
 
-// MULTI-ANCHOR merged grow — grow a whole mechanism CLUSTER (a concern's centers) as ONE graph: seed EVERY center,
-// couple each, then run ONE wave over the union so each node is expanded EXACTLY ONCE. The per-center
-// grow_centers_scoped grew each center independently and merged, re-walking the shared region ~once per center
-// (Brice's "the growing is partially redone"). Here the shared `expanded` set + one accumulating graph dedupe it;
-// containment (distance / up-hop / border) is measured from the NEAREST center (_phaseExpand is multi-anchor).
+// MULTI-ANCHOR merged concern grow — a concern is the PROJECTION of its mechanism cluster: the UNION of each
+// center's own settled closure. CRITICALLY each center is grown through the single-anchor `grow_to_terminals`,
+// which is P5 answer-cached BY SYMBOL (structural ⇒ intent-free ⇒ the closure is identical for every intent that
+// picks that center — the "graph node cache"). So two RELATED concerns that share centers reuse those closures as
+// cache HITS and pay only for their NOVEL centers — the whole point of a warm/learned repo. The union is assembled
+// in place (`_mergeInto` + one `GrowIndex`) so a node shared by two centers lands EXACTLY ONCE, O(n).
+//
+// This SUPERSEDES the old monolithic single-wave merged grow (seed-all → one wave over the union): that expanded
+// each node once but keyed its whole answer on the center SET, so any change to the set (a related concern) re-grew
+// every center from scratch — zero cross-concern reuse (Brice's "the grow is highly identical between 2 concerns").
+// The single-wave's only edge was expanding a shared node once vs once-per-center; the per-node footprint cache (P3)
+// makes that re-expansion a cache hit, so the reuse win dominates the re-walk cost.
 async function _growCentersMergedImpl(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts): Promise<[any, any[]]> {
-  // Say the intent-field state out loud (as grow_to_terminals does) — the merged path bypasses that entry, so
+  // Say the intent-field state out loud (as grow_to_terminals does) — the caller bypasses that entry, so
   // without this a structural cluster re-grow would print no diagnostic.
   if (opts.intent) { const emb = await transformersAvailable(); const shapes = emb && !opts.structuralGrow; process.stderr.write(`[grow] intent field: ${shapes ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${opts.structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`); }
-  const maxSteps = opts.maxSteps ?? 12, maxNodes = opts.maxNodes ?? 80;
-  const { excludedFile, prune } = _makeExclusion(opts);
-  const co = { dataCoupling: opts.dataCoupling, dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin, ctx: opts.ctx ?? new EngineCtx() };
-  if (opts.intent && !opts.structuralGrow && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);
-  const coStruct = { ...co, dataCoupling: false };
-  const coupled = new Set<string>();
-  // SEED every center into ONE graph — merge_resolved accumulates `data.anchors` (each center's re-ided node),
-  // which _phaseExpand seeds all its anchor-rooted structures from.
-  let data: any = null;
+  const ctx = opts.ctx ?? new EngineCtx();   // ONE shared ctx: the coupling indices/flywheel build once across centers
+  let data: any = null; let idx: GrowIndex | null = null;
+  const history: any[] = [];
   for (const c of centers) {
-    const seed = await _phaseSeed(repo, c.file, c.symbol, opts, coStruct, prune);
-    data = data ? merge_resolved(data, seed, seed.anchor?.id) : seed;
+    // per-center closure — P5-cached by SYMBOL (the reused unit across concerns). Sequential so the shared ctx has a
+    // single flywheel writer; a cached center returns instantly (HIT skip wave), so this is cheap once warm.
+    const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx })
+      .catch((e) => { dbg(`[centers] merged center ${c.symbol} failed: ${(e as Error).message}`); return null; });
+    if (!r) continue;
+    const [cd, ch] = r;
+    if (!data) { data = cd; idx = _mkIndex(data); }
+    else _mergeInto(data, cd, idx!, cd.anchor?.id);   // dedup shared nodes ONCE, in place (O(n))
+    history.push(...ch);
   }
   if (!data) return [{ nodes: [], edges: [], anchors: [] }, []];
-  // mark the CENTER node ids (matched by file+symbol — robust to merge_resolved's id remapping) so _phaseExpand
-  // seeds its anchor-rooted containment from the whole cluster, NOT from `data.anchors` (which coupling pollutes).
+  // mark the CENTER node ids (matched by file+symbol — robust to id remapping) so the render's center-first shape
+  // roots the star on the whole cluster.
   const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
   data.centerAnchors = centers.map((c) => (data.nodes as any[]).find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)?.id).filter(Boolean);
-  for (const c of centers) data = await _phaseCoupling(repo, c.file, data, opts, co, coStruct, prune, coupled);   // couple each seed onto the shared graph
-  const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // ONE wave — each node expanded once
-  data = grown;
-  if (co.dataCoupling !== false) await _fanCouple(repo, data, opts, co.ctx, coupled);
-  if (co.dataCoupling !== false && opts.intent && !opts.structuralGrow && !co.ctx?.stableFloor && (_envFlag(process.env.SEAM_COUPLING_BORDER_DET) ?? true))
-    await _borderCouplingDet(repo, data, opts.intent, Number(process.env.SEAM_COUPLING_MARGIN ?? opts.couplingMargin ?? 0.25) || 0.25, Math.max(1, parseInt(process.env.SEAM_COUPLING_FAN ?? "1", 10) || 1));
-  if (opts.flagTruncation) { data.blindspots ??= []; for (const h of history) if (h.skipped === "build failed") data.blindspots.push({ node: h.node, mechanism: "unfollowable", evidence: "the resolver could not expand this node (unsupported file / parse failure) — the path beyond it is not mapped", candidates: [] }); }
   return [data, history];
 }
 
