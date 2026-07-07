@@ -679,6 +679,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       // isFlowSubject markers (route/table/queue boundary nodes) are excluded in the LIVE grow — expanding a marker
       // would flood via build_footprint. In PROJECTION mode (coStruct.neighbors = the map) expanding it just reads the
       // map's already-discovered edges, which is how a coupling-reached dep (a route's handler → requireAdmin) enters.
+      // isFlowSubject markers (route/table/queue boundary nodes) are excluded in the LIVE grow — expanding a marker
+      // would flood via build_footprint. In PROJECTION mode (coStruct.neighbors = the map) expanding it just reads the
+      // map's already-discovered edges, which is how a coupling-reached dep (a route's handler → requireAdmin) enters.
       if (n.id === "n1" || anchorSet.has(n.id) || !n.file || !n.symbol || (isFlowSubject(n.kind) && !coStruct.neighbors) || excludedFile(n.file)) continue;
       if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it

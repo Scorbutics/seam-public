@@ -153,14 +153,23 @@ parked frontier, coupling-node handling.
   `build_footprint` (live grow byte-identical, full suite 952 pass). When set, the SAME wave reads
   the neighbourhood from a graph. `projectConcern` now **runs `_phaseExpand` over the map** through
   the seam — one border implementation, not two.
-- **Phase 2 — core landed, one residual.** Projecting over a grow's own footprint reproduces it at
-  **93% recall, 0 over-grow, 0 map-frontier misses**, and — crucially — the hub/ubiquity gate now
-  applies (the cal.com over-reach is gone by construction). Marker nodes are expandable in projection
-  mode (gated `&& !coStruct.neighbors`) so coupling-reached deps (a route → `requireAdmin`) enter;
-  wave↔splice iterates to convergence. **Residual:** ~17 nodes are off-border coupling *complements*
-  the grow auto-keeps beyond the up-hop border — a coupling-overlay semantics difference (arguably the
-  bloat the border *should* trim, per `coupling-overlay-bloat`), not a discovery/border bug. Closing it
-  = make the projection's coupling match the grow's auto-keep (or decide the grow over-keeps). Next.
+- **Phase 2 — core landed; the approach is PROVEN, one residual to close.**
+  - **cal.com: BYTE-IDENTICAL** — project over the grow's own footprint = 394 ≡ 394, 0 over-grow, 0
+    misses. The repo that had ~40% divergence with the hand-rolled BFS is now exact, because the
+    hub/ubiquity gate applies by construction. This is the proof the decoupling is the right design.
+  - **private-app: 93% with coupling / ~76% structural-only**, always **0 over-grow**. Marker nodes are
+    expandable in projection mode (gated `&& !coStruct.neighbors`); wave↔splice iterates to convergence.
+  - **Residual, precisely characterised** (private-app is route/table-dense; cal.com isn't — hence the split):
+    (a) off-border coupling *complements* the grow auto-keeps beyond the up-hop border (a coupling-
+    overlay semantics diff — likely the `coupling-overlay-bloat` the border *should* trim); (b) a handful
+    of nodes from **wave-accumulation-order sensitivity** — the up-hop-reset / hub-fan computations
+    depend on the exact edge-set/order the wave sees, and the map's accumulated edges differ slightly
+    from `build_footprint`'s per-node resolved neighbours (an out-edge can enter the map via a *consumer's*
+    up-expansion, not the node's own down-expansion), so the border coordinate lands slightly differently.
+    **Next (a focused, harness-gated fidelity pass):** make those two computations *edge-set-invariant* —
+    up-hop from a stored per-node depth, hub-fan from the global ubiquity index rather than the move's
+    incremental `added` — and reconcile the coupling auto-keep. The live grow must stay byte-identical
+    (same code), so each change is gated on the suite.
 
 ## Definition of done
 
