@@ -947,6 +947,49 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   return [data, history];
 }
 
+// ── PROJECTION (map/projection prototype, SEAM_PROJECT) ──────────────────────────────────────────────────────
+// Apply a concern's structural BORDER to a cached MAP as a static graph CUT — WITHOUT re-discovering (no file reads,
+// no edge re-resolution, no coupling, no LLM). The map is a previously-grown footprint (nodes + typed edges, incl.
+// coupling edges). This is DISCOVERY (expensive, cached as the map) separated from BORDERING (cheap, per-concern
+// topology): a single bounded reachability over ALL map edges from the centers —
+//   • DOWN (deps: edges FROM a kept node) are followed to terminals (always, like the grow);
+//   • UP (consumers: edges TO a kept node) are followed only within the up-hop cap — the SAME plain-call up-depth the
+//     wave computes (BFS over the consumer fan, RESET to 0 across a data-coupling CROSSING → the other stack gets a
+//     fresh budget), so cross-stack reach (route→UI→its callers) survives while the intra-backend bean→bean→bean
+//     flood is contained. Coupling edges are just edges in the map, so the overlay comes along for free.
+// The intent border stays SEMANTIC → it lives at render (the crop), never here. Returns null = a FRONTIER MISS (the
+// map doesn't cover every center) → the caller lazy-grows that region and retries. Centers matched by file+symbol.
+export function projectConcern(map: any, centers: { file: string; symbol: string }[], opts: { upHop?: number } = {}): [any, any[]] | null {
+  const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
+  const nodes: any[] = map.nodes ?? [], edges: any[] = map.edges ?? [];
+  const centerNodes = centers.map((c) => nodes.find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)).filter(Boolean);
+  if (centerNodes.length < centers.length) return null;   // map doesn't cover every center → frontier miss → caller grows
+  const byId = new Map<string, any>(nodes.map((n) => [n.id, n]));
+  const anchorIds = centerNodes.map((n) => n.id);
+  const K = Math.max(0, opts.upHop ?? 2);
+  // OUT (deps) / IN (consumers) adjacency by node id.
+  const out = new Map<string, any[]>(), inc = new Map<string, any[]>();
+  for (const e of edges) { (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push(e); (inc.get(e.to) ?? inc.set(e.to, []).get(e.to)!).push(e); }
+  // BOUNDED FLOOD over the map with the up-hop border computed INLINE (a relaxation BFS, so a crossing reached via a
+  // DOWN dep still seeds its consumers' up-depth — the separate consumer-only precompute missed route→consumer chains):
+  //   • upDepth(center)=0; DOWN dep inherits the parent's up-depth (a crossing resets it to 0); UP consumer is
+  //     parent+1 (a crossing resets to 0).
+  //   • deps DOWN are admitted ALWAYS; consumers UP only while up-depth ≤ K (the plain-call bean→bean→bean container).
+  // Re-push on relaxation (a better/lower up-depth) so a node reached first via a long path is corrected. Coupling
+  // edges are ordinary edges here, so the overlay is projected with the structure and cross-stack reach survives.
+  const upDepth = new Map<string, number>(anchorIds.map((a) => [a, 0]));
+  const reached = new Set<string>(anchorIds);
+  for (const q = [...anchorIds]; q.length; ) {
+    const u = q.shift()!, du = upDepth.get(u) ?? 0;
+    for (const e of out.get(u) ?? []) { const v = e.to; if (!byId.has(v)) continue; const nd = _is_crossing(e) ? 0 : du; const imp = nd < (upDepth.get(v) ?? Infinity); if (imp) upDepth.set(v, nd); if (!reached.has(v) || imp) { reached.add(v); q.push(v); } }   // DOWN dep — always
+    for (const e of inc.get(u) ?? []) { const w = e.from; if (!byId.has(w)) continue; const nd = _is_crossing(e) ? 0 : du + 1; if (nd > K) continue; const imp = nd < (upDepth.get(w) ?? Infinity); if (imp) upDepth.set(w, nd); if (!reached.has(w) || imp) { reached.add(w); q.push(w); } }   // UP consumer — within border
+  }
+  const outNodes = [...reached].map((id) => ({ ...byId.get(id) }));
+  const outEdges = edges.filter((e) => reached.has(e.from) && reached.has(e.to)).map((e) => ({ ...e }));
+  const data: any = { nodes: outNodes, edges: outEdges, anchor: { ...centerNodes[0] }, centerAnchors: anchorIds, language: map.language, complete: true };
+  return [data, []];
+}
+
 // MULTI-ANCHOR merged concern grow — a concern is the PROJECTION of its mechanism cluster: the UNION of each
 // center's own settled closure. CRITICALLY each center is grown through the single-anchor `grow_to_terminals`,
 // which is P5 answer-cached BY SYMBOL (structural ⇒ intent-free ⇒ the closure is identical for every intent that
