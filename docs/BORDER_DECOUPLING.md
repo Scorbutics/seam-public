@@ -171,6 +171,37 @@ parked frontier, coupling-node handling.
     incremental `added` — and reconcile the coupling auto-keep. The live grow must stay byte-identical
     (same code), so each change is gated on the suite.
 
+## Fidelity investigation — the residual is fully diagnosed (2026-07)
+
+Bisecting `project(F) vs F` with each border predicate toggled isolated the divergence **entirely to the
+hub gate** (up-hop and tier are edge-set-invariant; with hub off, private-app is byte-identical too):
+
+- With **hub off** (up-hop 2 + tier on): private-app 282/283 — identical.
+- With **hub on**: private-app 256/272 — the 16-node gap is 100% hub-gated fan members.
+
+**Why the hub gate resists a simple invariant rewrite.** Its trigger (`r.added ≥ hubFan`) AND its crop
+(`addedIds` = nodes NEW to the region this move) both key off *what was already accumulated*. That
+accumulation-dependence is **semantically load-bearing**: the crop deliberately removes only the fan
+members that are NEW (reached solely via the hub), protecting the already-established spine. Gating on the
+node's *total* fan and cropping the whole fan by content-key (the "invariant" version) **cropped the spine
+itself** (the center's own callers are consumers of the hub) → proj collapsed to 72 nodes. Reverted.
+
+**Root cause, precisely.** The projection over the map diverges because `neighbors(node,dir)` reads the
+map's *accumulated union* of edges, which is a **superset** of what `build_footprint(node,dir)` returned in
+the grow (an out-edge can enter the map via a *consumer's* up-expansion, not the node's own down-expansion).
+So the projection's accumulation ORDER differs from the grow's → the hub crop's "established spine" differs
+→ different fan members are cropped.
+
+**The clean fix (next).** Make the neighbour source *equal* `build_footprint`'s per-node output, not the map
+union — either (a) source neighbours from the **P3 cache** (`build_footprint_cached`, warm = cheap disk/mem
+reads, no resolution) so accumulation is byte-identical to the grow; or (b) store **per-edge provenance**
+(which node's expansion in which direction discovered each edge) so `neighbors` returns exactly that node's
+own footprint. Option (a) is simplest and makes `project == grow` by construction. **Caveat:** running the
+full wave (even over cheap P3 reads) keeps the wave's per-wave overhead (`assign_roles` / `from_resolved_graph`
+/ hub-classification recomputed each wave = O(waves·N)); getting to *milliseconds* then needs that overhead
+made incremental (O(N)). So the end state is **P3-cache neighbour source (fidelity) + incremental wave
+(speed)** — the two are separable and independently gated.
+
 ## Definition of done
 
 `project == grow` byte-identical on private-app + cal.com + Dubbo + Acme, warm concern latency ms-to-seconds
