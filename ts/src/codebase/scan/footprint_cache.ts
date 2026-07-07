@@ -73,7 +73,7 @@ export function epochOf(repo: string): string {
 // by the source epoch. The two files below change ONLY when a matcher is learned (the flywheel), so hashing
 // just them is stable on a warm floor run yet bumps the moment the store grows — correct AND cache-friendly.
 const _LEARNED_FILES = ["key-adapters.json", "key-matchers.json"];
-function couplingEpochOf(repo: string): string {
+export function couplingEpochOf(repo: string): string {
   const cached = _cEpoch.get(repo);
   if (cached !== undefined) return cached;
   const src = epochOf(repo);

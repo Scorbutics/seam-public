@@ -11,6 +11,7 @@ import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
@@ -498,6 +499,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // build_footprint is keyed by, so the SAME logical node re-added by the coupling overlay at a different
   // line/kind is NOT re-expanded (kills the visible re-crossing).
   const expKey = (n: any, d: string) => `${normpath(n.file ?? "")}#${n.symbol ?? ""}#${d}`;
+  // MAP COMPLETENESS (SEAM map/projection) — the (node,direction) pairs this grow actually EXPANDED, so the persistent
+  // map knows its FRONTIER: a projection reaching a node NOT expanded in a needed direction is a miss that lazy-grows.
+  // Anchors are fully expanded (both directions, via _phaseSeed); each applied move records its (node,dir) below.
+  const _mapExp = new Set<string>();
+  for (const n of data.nodes as any[]) if (n.id === "n1" || _anchorIdSet.has(n.id)) { _mapExp.add(expKey(n, "up")); _mapExp.add(expKey(n, "down")); }
   // SOFT INTENT-BORDER tolerance. Unset → border OFF (flood every reachable node). A float t≥0
   // floods through a node as long as relevance hasn't fallen more than t below the path's high-water mark.
   const borderTol = opts.borderTol ?? (process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : null);
@@ -722,6 +728,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         const k = expKey(move.node, move.dir);
         if (expanded.has(k)) continue;
         expanded.add(k);
+        _mapExp.add(k);   // map completeness: this node was expanded in THIS direction (build_footprint is per-direction)
         const before = hubGate ? new Set<string>((data.nodes as any[]).map((n) => n.id)) : null;
         const r = await _applyMove(repo, data, move, `wave ${step + 1}·${++moveNo}`, coStruct, prune, history, idx);
         data = r.data;
@@ -807,6 +814,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     front.sort((a, b) => (b.score - a.score) || (cutRank(a.cutBy) - cutRank(b.cutBy)) || (a.symbol < b.symbol ? -1 : a.symbol > b.symbol ? 1 : 0));
     (data as any).frontier = front;   // uncapped; emit filters-present + caps + reports the cut count
   }
+  (data as any)._expanded = [..._mapExp];   // map completeness → the frontier a projection must lazy-fill
   return [data, history];
 }
 
@@ -987,7 +995,58 @@ export function projectConcern(map: any, centers: { file: string; symbol: string
   const outNodes = [...reached].map((id) => ({ ...byId.get(id) }));
   const outEdges = edges.filter((e) => reached.has(e.from) && reached.has(e.to)).map((e) => ({ ...e }));
   const data: any = { nodes: outNodes, edges: outEdges, anchor: { ...centerNodes[0] }, centerAnchors: anchorIds, language: map.language, complete: true };
-  return [data, []];
+  // FRONTIER MISSES — reached STRUCTURAL nodes not expanded in the map in a direction the flood used (DOWN from every
+  // node; UP only where it can still climb, up-depth < K). Each is a spot the map is INCOMPLETE → the caller lazy-grows
+  // it (a cheap 1-hop build) and re-projects. Empty ⇒ the projection is COMPLETE (the fast path). Coupling nodes are
+  // overlay (not structurally grown) → never a miss. Reads the map's expansion set (`exp`) or a raw footprint's `_expanded`.
+  const expSet = new Set<string>((map.exp ?? map._expanded ?? []) as string[]);
+  const isExp = (n: any, d: string) => expSet.has(`${_norm(n.file)}#${n.symbol ?? ""}#${d}`);
+  const misses: { file: string; symbol: string; dir: string; range: any }[] = [];
+  const seen = new Set<string>();
+  for (const id of reached) {
+    const n = byId.get(id);
+    if (!n || n.coupling || !n.symbol) continue;
+    for (const d of ["down", "up"]) {
+      if (d === "up" && (upDepth.get(id) ?? Infinity) >= K) continue;   // a border leaf never climbs up
+      // COMPLETE(n,D) = expanded in D, OR degree-D is 0. On a CONVERGED map (grown to natural terminals, no budget
+      // truncation), degree-D==0 ⟺ a real D-terminal ⟺ complete — so a leaf is NOT a false miss. (This is why the map
+      // must be filled at convergence; a truncated map's budget-cut nodes would look like terminals.)
+      if (isExp(n, d)) continue;
+      if ((d === "down" ? (out.get(id)?.length ?? 0) : (inc.get(id)?.length ?? 0)) === 0) continue;
+      const mk = `${_norm(n.file)}#${n.symbol}#${d}`;
+      if (!seen.has(mk)) { seen.add(mk); misses.push({ file: n.file, symbol: n.symbol, dir: d, range: n.range }); }
+    }
+  }
+  return [data, misses];
+}
+
+// PROJECT-OR-GROW (SEAM map/projection) — the warm path. Try to answer a concern by PROJECTING the persistent map (a
+// topological cut, ~ms); where the map is INCOMPLETE (frontier misses) LAZY-FILL those nodes with a cheap 1-hop build
+// and re-project, up to a few rounds; only if the map doesn't cover the centers at all (or won't converge) return null
+// so the caller GROWS (which then merges into the map, so next time it projects). Returns the projected footprint +
+// the residual misses (empty on the complete fast path). DISCOVERY is paid once (into the map); BORDERING is cheap.
+export async function projectOrGrow(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts = {}): Promise<[any, any[]] | null> {
+  const K = opts.upHop ?? 2;
+  // FAST PATH — project the current map; if it covers the concern (no frontier misses) we're done in ~ms.
+  const proj0 = projectConcern(loadMap(repo) as any, centers, { upHop: K });
+  if (proj0 && proj0[1].length === 0 && proj0[0].nodes.length) { process.stderr.write(`[project] map covers the concern → projected ${proj0[0].nodes.length} node(s), no grow\n`); return [proj0[0], []]; }
+  // FILL — grow each center to CONVERGENCE (a high budget, so the map is maximal and degree-0 ⟺ terminal) and merge
+  // into the map. Paid once per region; the NEXT related concern whose centers land in this region projects for free.
+  const ctx = opts.ctx ?? new EngineCtx();
+  const fillNodes = Math.max(3000, opts.maxNodes ?? 200);
+  for (const c of centers) {
+    const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx, maxNodes: fillNodes }).catch((e) => { dbg(`[project] fill ${c.symbol} failed: ${(e as Error).message}`); return null; });
+    if (r) mergeGrowIntoMap(repo, r[0]);
+  }
+  // PROJECT the now-filled map. This is authoritative (the fill converged the region).
+  const proj = projectConcern(loadMap(repo) as any, centers, { upHop: K });
+  if (!proj || !proj[0].nodes.length) return null;   // couldn't cover (centers unresolved) → caller grows the old way
+  // SETTLE — a converged grow can't expand a few residuals (coupling-adjacent / cross-lang leaves). They're as complete
+  // as the grow makes them, so MARK them expanded; otherwise every warm run re-enters this fill path. Now the NEXT run
+  // sees 0 misses → the true fast path.
+  if (proj[1].length) mergeGrowIntoMap(repo, { nodes: [], edges: [], _expanded: proj[1].map((m) => expandedKey(m.file, m.symbol, m.dir)) });
+  process.stderr.write(`[project] filled the map, projected ${proj[0].nodes.length} node(s) (${proj[1].length} residual miss(es) settled)\n`);
+  return [proj[0], []];
 }
 
 // MULTI-ANCHOR merged concern grow — a concern is the PROJECTION of its mechanism cluster: the UNION of each
@@ -1009,6 +1068,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   const ctx = opts.ctx ?? new EngineCtx();   // ONE shared ctx: the coupling indices/flywheel build once across centers
   let data: any = null; let idx: GrowIndex | null = null;
   const history: any[] = [];
+  const expUnion = new Set<string>();   // union each center's map-completeness set (survives the _mergeInto that drops it)
   for (const c of centers) {
     // per-center closure — P5-cached by SYMBOL (the reused unit across concerns). Sequential so the shared ctx has a
     // single flywheel writer; a cached center returns instantly (HIT skip wave), so this is cheap once warm.
@@ -1016,6 +1076,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
       .catch((e) => { dbg(`[centers] merged center ${c.symbol} failed: ${(e as Error).message}`); return null; });
     if (!r) continue;
     const [cd, ch] = r;
+    for (const x of (cd._expanded ?? []) as string[]) expUnion.add(x);
     if (!data) { data = cd; idx = _mkIndex(data); }
     else _mergeInto(data, cd, idx!, cd.anchor?.id);   // dedup shared nodes ONCE, in place (O(n))
     history.push(...ch);
@@ -1025,6 +1086,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // roots the star on the whole cluster.
   const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
   data.centerAnchors = centers.map((c) => (data.nodes as any[]).find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)?.id).filter(Boolean);
+  data._expanded = [...expUnion];   // map completeness for the projection's frontier detection
   return [data, history];
 }
 
@@ -1083,9 +1145,17 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
     // cachedGrow). Cache key: sorted "file#symbol" of every center → same centers ⇒ same key ⇒ warm HIT.
     const emb = await transformersAvailable();
     const structural = opts.structuralGrow ?? _envFlag(process.env.SEAM_GROW_STRUCTURAL) ?? false;
+    // MAP/PROJECTION (SEAM_PROJECT, prototype): try to answer by PROJECTING the persistent map (a topological cut over
+    // the already-discovered graph, ~ms) with cheap lazy-fill for its frontier; only fall through to GROW when the map
+    // doesn't cover the concern. Scoped to the deterministic (floor) path — the map stores structural + floor-coupling
+    // edges. The grow below MERGES its footprint into the map, so the next related concern projects.
+    if ((_envFlag(process.env.SEAM_PROJECT) ?? false) && !opts.dataCouplingLlm) {
+      const proj = await projectOrGrow(repo, centers, { ...opts, structuralGrow: true }).catch((e) => { dbg(`[project] failed: ${(e as Error).message}`); return null; });
+      if (proj) return [proj];
+    }
     const centerKey = centers.map((c) => `${c.file}#${c.symbol}`).sort().join("+");
     const km = growCacheKeyMaterial(centerKey, opts, emb && !structural, seamEnvSnapshot());
-    return [await cachedGrow(repo, centers[0].file, km, opts.dataCoupling !== false, !opts.onWave,
+    const res = await cachedGrow(repo, centers[0].file, km, opts.dataCoupling !== false, !opts.onWave,
       async () => {
         // LLM coupling: SCOPE discovery to the concern's union BEFORE the per-center grows (mirrors the non-merged
         // branch below). Without this the merged path grew each center with UNSCOPED LLM coupling (whole module per
@@ -1105,7 +1175,10 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
         }
         return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
       })
-      .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; })];
+      .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
+    // feed the DISCOVERY into the persistent map so the next related concern can PROJECT instead of re-grow.
+    if ((_envFlag(process.env.SEAM_PROJECT) ?? false) && res) { try { mergeGrowIntoMap(repo, res[0]); } catch (e) { dbg(`[project] map merge failed: ${(e as Error).message}`); } }
+    return [res];
   }
 
   if (!opts.dataCouplingLlm) {
