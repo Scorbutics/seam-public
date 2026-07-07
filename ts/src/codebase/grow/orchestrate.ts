@@ -5,7 +5,7 @@
 // deterministic frontier walk + wave/tier/hub machinery reproduce its result offline in a fraction
 // of the time. The wave grow is now fully DETERMINISTIC — the former opt-in per-wave LLM intent border
 // was removed; the tier/hub/coupling containment carries the grow offline.
-import { emit, dbg } from "../../core/progress.js";
+import { emit, dbg, timingOn } from "../../core/progress.js";
 
 import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
@@ -57,14 +57,52 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
 // (`getBookingService`, no boundary of its own) reaches RESOURCES whose @Path routes must still cross to their
 // consumers. Whole-file (not the node's span) so EVERY handler in the resource crosses, not just one op. The
 // resolveCoupling gate skips a file with no boundary cheaply, so this is bounded to the few real boundaries.
+// MEASUREMENT (SEAM_TIMING): count per-file coupling calls and how many RE-COUPLE a file already resolved earlier
+// this process (across grows) — quantifies the "skip coupling on previously-grown nodes" opportunity.
+const _fcSeen = new Set<string>(); let _fcCalls = 0, _fcRepeats = 0, _fcRepeatMs = 0;
+export function _fileCouplingStats() { return { calls: _fcCalls, repeats: _fcRepeats, repeatMs: _fcRepeatMs }; }
+export function _resetFileCouplingStats() { _fcSeen.clear(); _fcCalls = 0; _fcRepeats = 0; _fcRepeatMs = 0; }
+// PER-FILE COUPLING CACHE (SEAM_COUPLING_FILE_CACHE, default ON): the fan couples EACH reached boundary file's
+// whole-file crossings, and re-ran `resolveCoupling` (floor deduce + grounding + flywheel) for that file on EVERY
+// grow that reaches it — the "re-couple a node we already grew" cost Brice named (measured: ~43% of fan calls are
+// repeats). The FLOOR delta is a pure function of (file, coupling-epoch), so memoise it via the SAME P4 machinery
+// as the anchor delta. Bridge edges are built FROM the reached node's per-grow id, so we compute with a PLACEHOLDER
+// source and REHYDRATE on reuse: renumber the delta's own node ids into a fresh range and remap the placeholder to
+// the real source id. NO closure — the delta is just that ONE file's crossings, so no bloat. LLM path stays live.
+const _FAN_SRC = "__FANSRC__";
+function _rehydrateFanDelta(delta: { nodes: any[]; edges: any[]; blindspots: any[] }, srcId: string, counter: number): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
+  const idmap = new Map<string, string>();
+  // Renumber into the DISTINCT `fc` (fan-cache) namespace — NOT `dc`: `_mergeCouplingOverlay` re-ids id collisions
+  // by minting `dc${data.nodes.length++}`, the SAME space a `dc`-renumber would use, so it would stomp our ids onto
+  // other overlay nodes (an INVENTORY event node inheriting a queue node's consumer edges — the discriminator leak).
+  // `fc<counter>` (counter threaded monotonically across the grow's fan) can't collide with `dc`/`n`/`x` ids.
+  const nodes = delta.nodes.map((n) => { const nid = `fc${counter++}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
+  const rid = (x: string) => x === _FAN_SRC ? srcId : (idmap.get(x) ?? x);
+  const edges = delta.edges.map((e) => ({ ...e, from: rid(e.from), to: rid(e.to) }));
+  const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: rid(b.node) }));
+  return { nodes, edges, blindspots, counter };
+}
 async function _fileCouplingDelta(repo: string, file: string, anchorId: string, counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
   const empty = { nodes: [], edges: [], blindspots: [], counter };
   const ar = _read(repo, file);
   if (!ar) return empty;
   const hi = (ar[0].match(/\n/g) ?? []).length;
-  const delta = await resolveCoupling(repo, anchorId, file, ar[0], 0, hi, counter, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
-  delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
-  return delta;
+  const _repeat = _fcSeen.has(normpath(file)); _fcSeen.add(normpath(file)); _fcCalls++; const _t0 = timingOn() ? Date.now() : 0;
+  const cacheOn = !opts.dataCouplingLlm && (_envFlag(process.env.SEAM_COUPLING_FILE_CACHE) ?? true);
+  const compute = async (srcId: string, ctr: number) => {
+    const delta = await resolveCoupling(repo, srcId, file, ar[0], 0, hi, ctr, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
+    delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
+    return delta;
+  };
+  let out: { nodes: any[]; edges: any[]; blindspots: any[]; counter: number };
+  if (!cacheOn) out = await compute(anchorId, counter);
+  else {
+    // compute the placeholder-sourced, zero-based delta ONCE per (file, epoch); rehydrate per reach.
+    const cached = await cachedCouplingDelta(repo, file, "fan|whole", false, () => compute(_FAN_SRC, 0));
+    out = _rehydrateFanDelta(cached, anchorId, counter);
+  }
+  if (_repeat) { _fcRepeats++; if (_t0) { _fcRepeatMs += Date.now() - _t0; if (timingOn()) process.stderr.write(`[time] ${cacheOn ? "RE-COUPLE(cached)" : "RE-COUPLE"} ${normpath(file)}: ${Date.now() - _t0}ms\n`); } }
+  return out;
 }
 
 // Merge the coupling overlay onto the settled footprint. DEDUP BY CONTENT (`_key` = file#line#kind), like
@@ -868,17 +906,24 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   if (opts.intent && !opts.structuralGrow && !co.ctx.rankKeys) co.ctx.rankKeys = makeIntentKeyRanker(opts.intent);   // intent prior for the coupling hub-fan cap — SKIP under structural (else intent picks which complements survive the cap → set is intent-dependent)
   const coStruct = { ...co, dataCoupling: false };   // STRUCTURAL builds — coupling is the P3 overlay only
   const coupled = new Set<string>();   // files already coupled — carried across the seed + post-expand fans (couple each once)
+  // COARSE PHASE TIMING (diagnostic, SEAM_TIMING=1) — attributes warm cost to structural wave vs data-coupling, so
+  // the "the cost really comes from data-coupling" hypothesis is measured, not assumed.
+  const _t = () => Date.now(); const _tm = timingOn(); const _lap = (p: string, t0: number) => { if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${_t() - t0}ms\n`); };
+  let _ts = _t();
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
   dbg(`[${_gtag(co.ctx)}] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
+  _lap("P1 seed", _ts); _ts = _t();
   data = await _phaseCoupling(repo, anchorFile, data, opts, co, coStruct, prune, coupled);   // P3 coupling bridges (seed)
   dbg(`[${_gtag(co.ctx)}] P3 coupling: +${data.nodes.length - seedN} bridge node(s)`);
+  _lap("P3 seed-coupling", _ts); _ts = _t();
   const [grown, history] = await _phaseExpand(repo, data, opts, coStruct, prune, excludedFile, maxSteps, maxNodes);   // P2 expand
   data = grown;
   dbg(`[${_gtag(co.ctx)}] P2 expand: ${history.length} step(s) → ${data.nodes.length} node(s) total (budget ${maxSteps} steps / ${maxNodes} nodes)`);
+  _lap("P2 expand (structural wave)", _ts); _ts = _t();
   // P3 (deep) — couple the boundary files the bidirectional walk CLIMBED to (sibling resources reached during
   // expand, not in the seed), so their routes cross to their UIs. `coupled` skips the seed files already done.
-  if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[${_gtag(co.ctx)}] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); }
+  if (co.dataCoupling !== false) { const n0 = data.nodes.length; await _fanCouple(repo, data, opts, co.ctx, coupled); dbg(`[${_gtag(co.ctx)}] P3 deep-couple: +${data.nodes.length - n0} bridge node(s)`); _lap("P3 deep-couple", _ts); _ts = _t(); }
   // INTENT-BORDER THE COUPLING OVERLAY (deterministic): the seed+deep coupling fan bypassed the structural border
   // (its complements were auto-kept), drowning the on-intent flow in off-intent consumers of shared hub tables.
   // Bound the coupling table-fan with the intent field so the fully-det agent feed is tight instead of drowning in
@@ -889,8 +934,8 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
     // Complements need a HIGHER bar than call-graph pivots: they're sibling consumers of a shared key, topically
     // near the intent (embeddings are generous), so the on-intent flow (in the call graph) is unaffected while the
     // fan is cut. Dedicated SEAM_COUPLING_MARGIN (default 0.25 — the complement-score cliff on the author repo).
-    await _borderCouplingDet(repo, data, opts.intent, Number(process.env.SEAM_COUPLING_MARGIN ?? opts.couplingMargin ?? 0.25) || 0.25,
-      Math.max(1, parseInt(process.env.SEAM_COUPLING_FAN ?? "1", 10) || 1));   // a 1:1 crossing is a TERMINAL (always kept, I4); only a marker with >1 materialized complement is a fan to field-gate
+    { await _borderCouplingDet(repo, data, opts.intent, Number(process.env.SEAM_COUPLING_MARGIN ?? opts.couplingMargin ?? 0.25) || 0.25,
+      Math.max(1, parseInt(process.env.SEAM_COUPLING_FAN ?? "1", 10) || 1)); _lap("border-coupling (det)", _ts); }   // a 1:1 crossing is a TERMINAL (always kept, I4); only a marker with >1 materialized complement is a fan to field-gate
   // TRUNCATION HONESTY (real grow only): flag a node the resolver could not expand (unsupported file / parse
   // failure) — the path beyond it is silently unmapped. struct_score ignores blindspots so selection is unaffected.
   if (opts.flagTruncation) {
