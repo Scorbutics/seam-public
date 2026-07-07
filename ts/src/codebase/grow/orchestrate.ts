@@ -967,7 +967,7 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
 //     flood is contained. Coupling edges are just edges in the map, so the overlay comes along for free.
 // The intent border stays SEMANTIC → it lives at render (the crop), never here. Returns null = a FRONTIER MISS (the
 // map doesn't cover every center) → the caller lazy-grows that region and retries. Centers matched by file+symbol.
-export function projectConcern(map: any, centers: { file: string; symbol: string }[], opts: { upHop?: number } = {}): [any, any[]] | null {
+export function projectConcern(map: any, centers: { file: string; symbol: string }[], opts: { upHop?: number; maxNodes?: number } = {}): [any, any[]] | null {
   const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
   const nodes: any[] = map.nodes ?? [], edges: any[] = map.edges ?? [];
   const centerNodes = centers.map((c) => nodes.find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)).filter(Boolean);
@@ -975,22 +975,31 @@ export function projectConcern(map: any, centers: { file: string; symbol: string
   const byId = new Map<string, any>(nodes.map((n) => [n.id, n]));
   const anchorIds = centerNodes.map((n) => n.id);
   const K = Math.max(0, opts.upHop ?? 2);
+  const maxNodes = Math.max(1, opts.maxNodes ?? 200);   // BUDGET — the answer is ≤ this many nodes (as the grow is)
   // OUT (deps) / IN (consumers) adjacency by node id.
   const out = new Map<string, any[]>(), inc = new Map<string, any[]>();
   for (const e of edges) { (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push(e); (inc.get(e.to) ?? inc.set(e.to, []).get(e.to)!).push(e); }
-  // BOUNDED FLOOD over the map with the up-hop border computed INLINE (a relaxation BFS, so a crossing reached via a
-  // DOWN dep still seeds its consumers' up-depth — the separate consumer-only precompute missed route→consumer chains):
-  //   • upDepth(center)=0; DOWN dep inherits the parent's up-depth (a crossing resets it to 0); UP consumer is
-  //     parent+1 (a crossing resets to 0).
-  //   • deps DOWN are admitted ALWAYS; consumers UP only while up-depth ≤ K (the plain-call bean→bean→bean container).
-  // Re-push on relaxation (a better/lower up-depth) so a node reached first via a long path is corrected. Coupling
-  // edges are ordinary edges here, so the overlay is projected with the structure and cross-stack reach survives.
+  // PASS 1 — UP-HOP DEPTH over the WHOLE map (relaxation BFS, unbounded but cheap: just numbers). upDepth(center)=0;
+  // DOWN inherits the parent's depth; UP is parent+1; a data-coupling CROSSING resets to 0 (the other stack gets a
+  // fresh budget → cross-stack reach survives). This is the border coordinate; a node with upDepth ≤ K is in-border.
   const upDepth = new Map<string, number>(anchorIds.map((a) => [a, 0]));
-  const reached = new Set<string>(anchorIds);
   for (const q = [...anchorIds]; q.length; ) {
     const u = q.shift()!, du = upDepth.get(u) ?? 0;
-    for (const e of out.get(u) ?? []) { const v = e.to; if (!byId.has(v)) continue; const nd = _is_crossing(e) ? 0 : du; const imp = nd < (upDepth.get(v) ?? Infinity); if (imp) upDepth.set(v, nd); if (!reached.has(v) || imp) { reached.add(v); q.push(v); } }   // DOWN dep — always
-    for (const e of inc.get(u) ?? []) { const w = e.from; if (!byId.has(w)) continue; const nd = _is_crossing(e) ? 0 : du + 1; if (nd > K) continue; const imp = nd < (upDepth.get(w) ?? Infinity); if (imp) upDepth.set(w, nd); if (!reached.has(w) || imp) { reached.add(w); q.push(w); } }   // UP consumer — within border
+    for (const e of out.get(u) ?? []) { const v = e.to; if (!byId.has(v)) continue; const nd = _is_crossing(e) ? 0 : du; if (nd < (upDepth.get(v) ?? Infinity)) { upDepth.set(v, nd); q.push(v); } }
+    for (const e of inc.get(u) ?? []) { const w = e.from; if (!byId.has(w)) continue; const nd = _is_crossing(e) ? 0 : du + 1; if (nd <= K && nd < (upDepth.get(w) ?? Infinity)) { upDepth.set(w, nd); q.push(w); } }
+  }
+  // PASS 2 — BUDGETED BFS by hop-distance from the centers (nearest first), admitting in-border neighbours until the
+  // node budget fills. Mirrors the grow's budgeted wave, so the projected set ≈ the grown set. Nodes that WOULD have
+  // been admitted past the budget are the projection's own frontier (never in `reached`, so never a completeness miss).
+  const reached = new Set<string>(anchorIds);
+  const dist = new Map<string, number>(anchorIds.map((a) => [a, 0]));
+  const expandedByProj = new Set<string>();   // nodes actually DEQUEUED+expanded (their completeness matters)
+  for (const q = [...anchorIds]; q.length; ) {
+    const u = q.shift()!, du = dist.get(u) ?? 0;
+    expandedByProj.add(u);
+    const admit = (x: string) => { if (!byId.has(x) || reached.has(x) || reached.size >= maxNodes) return; reached.add(x); dist.set(x, du + 1); q.push(x); };
+    for (const e of out.get(u) ?? []) admit(e.to);                                                 // DOWN dep — always
+    for (const e of inc.get(u) ?? []) if ((upDepth.get(e.from) ?? Infinity) <= K) admit(e.from);   // UP consumer — in-border
   }
   const outNodes = [...reached].map((id) => ({ ...byId.get(id) }));
   const outEdges = edges.filter((e) => reached.has(e.from) && reached.has(e.to)).map((e) => ({ ...e }));
@@ -999,20 +1008,21 @@ export function projectConcern(map: any, centers: { file: string; symbol: string
   // node; UP only where it can still climb, up-depth < K). Each is a spot the map is INCOMPLETE → the caller lazy-grows
   // it (a cheap 1-hop build) and re-projects. Empty ⇒ the projection is COMPLETE (the fast path). Coupling nodes are
   // overlay (not structurally grown) → never a miss. Reads the map's expansion set (`exp`) or a raw footprint's `_expanded`.
+  // FRONTIER MISSES — an INTERIOR node (one the projection expanded, not a budget-edge node) that is NOT expanded in
+  // the MAP in a direction the flood used (DOWN from every interior node; UP only where it's still in-border). Strict:
+  // completeness = expanded-D in the map's `exp`. This works on a BUDGETED (non-converged) map because we only require
+  // completeness for the ≤maxNodes the projection actually traversed — a node the grow parked (budget/hub/border) that
+  // the projection reaches will show up here and get lazy-filled; the projection's OWN budget-edge nodes are excluded.
   const expSet = new Set<string>((map.exp ?? map._expanded ?? []) as string[]);
   const isExp = (n: any, d: string) => expSet.has(`${_norm(n.file)}#${n.symbol ?? ""}#${d}`);
   const misses: { file: string; symbol: string; dir: string; range: any }[] = [];
   const seen = new Set<string>();
-  for (const id of reached) {
+  for (const id of expandedByProj) {
     const n = byId.get(id);
     if (!n || n.coupling || !n.symbol) continue;
     for (const d of ["down", "up"]) {
       if (d === "up" && (upDepth.get(id) ?? Infinity) >= K) continue;   // a border leaf never climbs up
-      // COMPLETE(n,D) = expanded in D, OR degree-D is 0. On a CONVERGED map (grown to natural terminals, no budget
-      // truncation), degree-D==0 ⟺ a real D-terminal ⟺ complete — so a leaf is NOT a false miss. (This is why the map
-      // must be filled at convergence; a truncated map's budget-cut nodes would look like terminals.)
       if (isExp(n, d)) continue;
-      if ((d === "down" ? (out.get(id)?.length ?? 0) : (inc.get(id)?.length ?? 0)) === 0) continue;
       const mk = `${_norm(n.file)}#${n.symbol}#${d}`;
       if (!seen.has(mk)) { seen.add(mk); misses.push({ file: n.file, symbol: n.symbol, dir: d, range: n.range }); }
     }
@@ -1027,26 +1037,37 @@ export function projectConcern(map: any, centers: { file: string; symbol: string
 // the residual misses (empty on the complete fast path). DISCOVERY is paid once (into the map); BORDERING is cheap.
 export async function projectOrGrow(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts = {}): Promise<[any, any[]] | null> {
   const K = opts.upHop ?? 2;
-  // FAST PATH — project the current map; if it covers the concern (no frontier misses) we're done in ~ms.
-  const proj0 = projectConcern(loadMap(repo) as any, centers, { upHop: K });
+  const budget = Math.max(1, opts.maxNodes ?? 200);
+  const pOpts = { upHop: K, maxNodes: budget };
+  // FAST PATH — project the current map at the display BUDGET; if the ≤budget answer has no frontier miss, done in ~ms.
+  const proj0 = projectConcern(loadMap(repo) as any, centers, pOpts);
   if (proj0 && proj0[1].length === 0 && proj0[0].nodes.length) { process.stderr.write(`[project] map covers the concern → projected ${proj0[0].nodes.length} node(s), no grow\n`); return [proj0[0], []]; }
-  // FILL — grow each center to CONVERGENCE (a high budget, so the map is maximal and degree-0 ⟺ terminal) and merge
-  // into the map. Paid once per region; the NEXT related concern whose centers land in this region projects for free.
+  // FILL — grow each center at the SAME (display) budget as the answer, NOT to convergence: the discovery cost matches
+  // the normal grow (seconds), and the projection only needs the ≤budget nodes it returns to be complete. Merge in.
   const ctx = opts.ctx ?? new EngineCtx();
-  const fillNodes = Math.max(3000, opts.maxNodes ?? 200);
   for (const c of centers) {
-    const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx, maxNodes: fillNodes }).catch((e) => { dbg(`[project] fill ${c.symbol} failed: ${(e as Error).message}`); return null; });
+    const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx, maxNodes: budget }).catch((e) => { dbg(`[project] fill ${c.symbol} failed: ${(e as Error).message}`); return null; });
     if (r) mergeGrowIntoMap(repo, r[0]);
   }
-  // PROJECT the now-filled map. This is authoritative (the fill converged the region).
-  const proj = projectConcern(loadMap(repo) as any, centers, { upHop: K });
-  if (!proj || !proj[0].nodes.length) return null;   // couldn't cover (centers unresolved) → caller grows the old way
-  // SETTLE — a converged grow can't expand a few residuals (coupling-adjacent / cross-lang leaves). They're as complete
-  // as the grow makes them, so MARK them expanded; otherwise every warm run re-enters this fill path. Now the NEXT run
-  // sees 0 misses → the true fast path.
-  if (proj[1].length) mergeGrowIntoMap(repo, { nodes: [], edges: [], _expanded: proj[1].map((m) => expandedKey(m.file, m.symbol, m.dir)) });
-  process.stderr.write(`[project] filled the map, projected ${proj[0].nodes.length} node(s) (${proj[1].length} residual miss(es) settled)\n`);
-  return [proj[0], []];
+  // LAZY-FILL — re-project; each residual miss is an interior node the grow parked (budget/hub/border) that the
+  // projection reaches. Complete it with a cheap 1-hop build (P3-cached), merge, and re-project. Bounded rounds; the
+  // miss set is ≤ budget so this converges fast. Whatever remains after the rounds is SETTLED (marked expanded) so the
+  // warm run is fast.
+  const rounds = ((): number => { const n = parseInt(process.env.SEAM_PROJECT_FILL_ROUNDS ?? "3", 10); return Number.isFinite(n) && n >= 0 ? n : 3; })();
+  for (let r = 0; r <= rounds; r++) {
+    const proj = projectConcern(loadMap(repo) as any, centers, pOpts);
+    if (!proj || !proj[0].nodes.length) return null;   // centers unresolved → caller grows the old way
+    if (!proj[1].length || r === rounds) {
+      if (proj[1].length) mergeGrowIntoMap(repo, { nodes: [], edges: [], _expanded: proj[1].map((m) => expandedKey(m.file, m.symbol, m.dir)) });   // settle
+      process.stderr.write(`[project] projected ${proj[0].nodes.length} node(s) after ${r} lazy-fill round(s) (${proj[1].length} settled)\n`);
+      return [proj[0], []];
+    }
+    for (const m of proj[1]) {
+      try { const add: any = await build_footprint_cached(repo, m.file, m.symbol, { direction: m.dir as any, anchorLine: (m.range ?? [0])[0], dataCoupling: false }); add._expanded = [expandedKey(m.file, m.symbol, m.dir)]; mergeGrowIntoMap(repo, add); }
+      catch { mergeGrowIntoMap(repo, { nodes: [], edges: [], _expanded: [expandedKey(m.file, m.symbol, m.dir)] }); }
+    }
+  }
+  return null;
 }
 
 // MULTI-ANCHOR merged concern grow — a concern is the PROJECTION of its mechanism cluster: the UNION of each
