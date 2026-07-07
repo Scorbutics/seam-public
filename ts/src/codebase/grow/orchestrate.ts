@@ -11,7 +11,22 @@ import { from_resolved_graph } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+import { epochOf } from "../scan/footprint_cache.js";
 import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
+
+// CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
+// its file scope before the real grow (the "second grow"). That scope is STRUCTURAL — it depends only on source
+// content, not the coupling epoch — so it stays valid across the flywheel's settling runs (when the P5 answer cache
+// misses because the coupling epoch keeps changing) and across the same cluster re-asked with a reworded intent.
+// Keyed on (repo, sorted center set, SOURCE epoch). Bounded to a small cap and dropped oldest-first so a long-lived
+// process (the MCP server) can't grow it without limit; deliberately memory-only — a per-concern file-set on disk
+// would grow linearly with distinct clusters, which we do NOT want.
+const _SCOPE_MEMO = new Map<string, Set<string>>();
+const _SCOPE_CAP = 64;
+function _scopeMemoSet(key: string, files: Set<string>): void {
+  if (_SCOPE_MEMO.size >= _SCOPE_CAP) _SCOPE_MEMO.delete(_SCOPE_MEMO.keys().next().value as string);   // evict oldest
+  _SCOPE_MEMO.set(key, files);
+}
 import { makeIntentKeyRanker } from "./key_ranker.js";
 import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
 import type { HubMarker } from "../../core/graph_ir.js";
@@ -1202,15 +1217,26 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
         // pre-grow (cheap, deterministic, forks write no flywheel) yields ctx.footprintFiles once; the per-center
         // grows inside _growCentersMergedImpl (sequential, shared ctx) then learn ONCE and reuse.
         if (opts.dataCouplingLlm && !ctx.footprintFiles) {
-          emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
-          const floors = await Promise.all(centers.map((c) => {
-            const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
-            return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
-          }));
-          const union = new Set<string>();
-          for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
-          ctx.footprintFiles = union;
-          process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${union.size} files across the concern (shared across ${centers.length} mechanisms)\n`);
+          // reuse the concern's floor SCOPE if we've computed it for this cluster on this source (in-memory memo) —
+          // skips the whole floor PROBE (the "second grow"). Structural key = source epoch, so it survives the
+          // flywheel's settling runs where the answer cache (coupling-epoch keyed) keeps missing.
+          const scopeKey = `${repo}#${centerKey}#${epochOf(repo)}`;
+          const memo = _SCOPE_MEMO.get(scopeKey);
+          if (memo) {
+            ctx.footprintFiles = new Set(memo);
+            process.stderr.write(`[data-coupling] footprint scope reused from memo (${memo.size} files) — probe skipped\n`);
+          } else {
+            emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+            const floors = await Promise.all(centers.map((c) => {
+              const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
+              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
+            }));
+            const union = new Set<string>();
+            for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
+            ctx.footprintFiles = union;
+            _scopeMemoSet(scopeKey, new Set(union));
+            process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${union.size} files across the concern (shared across ${centers.length} mechanisms)\n`);
+          }
         }
         return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
       })
