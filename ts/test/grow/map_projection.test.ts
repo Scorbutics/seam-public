@@ -66,7 +66,7 @@ describe("map/projection — fill once, project related concerns for free", () =
       const map = loadMap(repo);
       expect([...map.nodes].some((n: any) => n.symbol === "centerB")).toBe(true);   // B landed in A's map (reached, not a center)
       // project B directly over the map — no grow needed.
-      const projB = projectConcern(map as any, [{ file: "src/b.ts", symbol: "centerB" }], { upHop: 2 });
+      const projB = await projectConcern(repo, map as any, [{ file: "src/b.ts", symbol: "centerB" }], { upHop: 2 });
       expect(projB).not.toBeNull();
       const B = nodeset(projB![0]);
       expect(B.has("centerB")).toBe(true);

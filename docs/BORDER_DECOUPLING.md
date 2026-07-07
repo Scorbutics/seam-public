@@ -1,0 +1,169 @@
+# Decoupling the border from the grow — design & implementation plan
+
+## Product goal
+
+On a **warm / learned** repository, answering a concern must be **~milliseconds**, not minutes.
+Today Acme takes ~2 min on a *warm* run because every query **re-grows** the region: it
+re-discovers structure, re-resolves edges, re-materialises coupling — even though nothing changed.
+That makes the product close to unusable at scale.
+
+The fix is architectural, not another cache: **separate DISCOVERY from BORDERING.**
+
+- **Discovery** — reading files, resolving call/import/dep edges, resolving data-coupling
+  crossings, running the flywheel. Expensive, **intent-independent**, a pure function of the code.
+  Paid **once** into a persistent **map**; re-paid only for files that changed.
+- **Bordering (selection)** — deciding *which* of the discovered nodes are the concern's answer:
+  the up-hop border, hub/ubiquity gating, the intent/relevance tier ordering, the node budget.
+  **Cheap**, per-concern, pure graph math over the map.
+
+A concern's answer becomes a **projection** (a bordered, budgeted selection) over the cached map.
+Cold pays discovery once; every warm query is a projection.
+
+## Why the first prototype diverged (and the one rule that fixes it)
+
+The `SEAM_PROJECT` prototype proved the *idea* on private-app (warm 11–25 ms, byte-identical) but
+**diverged from the grow on cal.com** (≈40%: 44 missing / 67 extra) once the region (3440 nodes) far
+exceeded the budget (200). Root cause: **the projection re-implemented a *different* border** — a
+plain distance-ordered BFS with no hub/ubiquity gate — instead of running the grow's *own* border
+logic. When region ≫ budget the answer is an *ordering-dependent selection*, so a different ordering
+picks a different 200.
+
+> **The invariant:** there must be **exactly one** implementation of the border/selection, used by
+> **both** the grow (cold) and the projection (warm). Then `project == grow` **by construction**, at
+> any budget, on any repo. The prototype's mistake was having two.
+
+So the work is not "make the projection better" — it's **extract the grow's selection into a pure
+function over a graph, and have the grow call it too.**
+
+## Target architecture
+
+```
+                    ┌─────────────────────────────────────────────┐
+   source files ──► │  DISCOVERY  (expensive, intent-free, cached) │ ──► THE MAP
+                    │  build_footprint + coupling, per node        │     (persistent graph:
+                    │  bounded structurally, written to the map    │      nodes + typed edges
+                    └─────────────────────────────────────────────┘      + per-node metadata)
+                                                                              │
+   concern(centers, intent, budget) ──────────────────────────────────────► │
+                    ┌─────────────────────────────────────────────┐          ▼
+                    │  SELECTION  (cheap, per-concern, PURE)       │ ◄──── selectConcern(map, …)
+                    │  up-hop • hub/ubiquity • tier/relevance      │           the SAME function
+                    │  order • node budget → the answer           │           the grow uses cold
+                    └─────────────────────────────────────────────┘
+                                        │
+                                        ▼  intent crop / render (unchanged)
+```
+
+- **The map** is the discovered graph: `nodes`, typed `edges` (call/import/dep/interface-impl/
+  route/data-coupling/type-ref), and the per-node facts selection needs (fan-in for ubiquity,
+  edge kinds, ranges). Content-keyed (`_key`), persisted, incrementally extended.
+- **`selectConcern(map, centers, opts)`** is the grow's border logic *lifted* to read neighbours
+  from the map instead of calling `build_footprint`. Everything else — frontier ordering, tier
+  rule, hub/ubiquity gate, up-hop, budget, parked-frontier — is the **same code**.
+- **The grow** becomes: *discover the region into the map* → `selectConcern(map, …)`. The warm
+  path skips discovery and calls `selectConcern` directly.
+
+## The cost model (why this is viable where the prototype wasn't)
+
+The expensive thing is **discovery** (`build_footprint` × region, coupling). It is:
+- **intent-independent** → the same map serves every concern/intent on that region;
+- **content-keyed & persistent** → paid once per region *ever*, re-paid only for changed files;
+- **incremental** → a query discovers only the part of its region not yet mapped.
+
+So the economics flip from *"pay discovery every query"* to *"pay discovery once, project forever."*
+On a learned repo, essentially all queries are projections (ms). The first query that touches a new
+region still pays that region's discovery — that cost is inherent (it's `build_footprint × nodes`)
+and is what we amortise, not eliminate. Discovery can additionally be **warmed in the background /
+at index time** so even first-touch is hidden.
+
+**Bounding discovery.** The 5-min cal.com blow-up was the **unbounded DOWN-dep flood** (deps are
+followed to terminals by design). Discovery must be bounded by the **structural** border only
+(up-hop + hub/ubiquity — intent-free), *not* the budget and *not* intent. That region is larger than
+one answer but bounded and shared; the per-node cache makes re-touch free. If a repo's structural
+region is still too large, discovery is chunked and resumable (see Phase 5).
+
+## Implementation phases
+
+Each phase is independently shippable behind `SEAM_PROJECT` (default-off) and gated by a validation
+that must pass before the next.
+
+### Phase 1 — Extract `selectConcern` from the wave (the linchpin)
+Lift the border/ordering/budget out of `_phaseExpand` into a pure `selectConcern(graph, centers,
+opts)` that reads neighbours from `graph` (a nodes+edges object) rather than `build_footprint`.
+Keep **all** of: frontier ordering, tier rule, hub-collapse, ubiquity gate, up-hop, node budget,
+parked frontier, coupling-node handling.
+- Refactor `_phaseExpand` to: (a) discover into an in-memory graph exactly as today, then (b) return
+  `selectConcern(thatGraph, …)`. i.e. the grow's own answer now goes *through* `selectConcern`.
+- **Gate:** the full existing suite is byte-identical (the grow's output is unchanged — we only
+  routed it through the extracted function). This proves the extraction is faithful *before* the map
+  exists. No new behaviour.
+
+### Phase 2 — Discovery writes the map; warm path selects
+- Discovery (the wave's `build_footprint` + coupling) writes every discovered node/edge + per-node
+  facts into the persistent map (`map_store`, already sharded/epoch-keyed; extend to store the
+  selection facts: fan-in, kinds, ranges).
+- `projectOrGrow`: if the map covers the centers' **structural region**, call `selectConcern(map, …)`
+  (warm, ms); else discover the missing region into the map, then select.
+- **Gate:** on private-app AND cal.com, warm `selectConcern(map)` == cold grow **byte-identical** at the
+  same budget (this is the fidelity the prototype failed — it must pass here because it's the same
+  code). Warm latency ms.
+
+### Phase 3 — Structural completeness / frontier model
+- Track per node which directions were *discovered* (complete) vs the structural frontier (where
+  discovery stopped). `selectConcern` never needs a node beyond the discovered region (the up-hop +
+  hub border bounds it), so "map covers the region" is decidable without the converged-vs-budget
+  confusion that sank the prototype.
+- **Gate:** a related concern whose centers/region are already mapped selects with **zero** discovery
+  (the node-level reuse), verified on private-app + cal.com.
+
+### Phase 4 — Coupling & intent as first-class map/selection
+- Coupling crossings are discovery → stored as map edges (per-file coupling cache already resolves
+  them once). Intent/relevance is **selection** → `selectConcern` takes the intent field and orders/
+  tiers with it, so one map answers many intents. Confirm the intent tiering matches the grow's.
+- **Gate:** intent-varying concerns over one map reproduce their respective grows; coupling crossings
+  present and correct.
+
+### Phase 5 — Scale: incremental & resumable discovery on Acme
+- Discovery is chunked (bounded work per call, resumable), and warmable in the background / at index
+  time. Measure Acme: first-touch cost, warm projection latency, cross-concern reuse.
+- **Gate:** Acme warm concern **< a few seconds** (target ms once the map is warm), faithful to the
+  grow; the "2-min warm" is gone.
+
+### Phase 6 — Wire into the CLI/MCP concern path, flip defaults
+- Route the concern/`--concern` path and the MCP `grow_intent` through `projectOrGrow`.
+- Re-run the cal.com + Dubbo + Acme matrix. **Flip `SEAM_PROJECT` (and its friends) default-on only
+  when** warm is ms-to-seconds AND `project == grow` on all three.
+
+## Risks & open questions
+
+- **Extraction fidelity (Phase 1)** — the wave's ordering is entangled with discovery (e.g. hub-gate
+  inspects the *accumulating* region). Extraction must preserve that. Mitigation: extract, then prove
+  byte-identity on the whole suite *before* introducing the map. This is the make-or-break gate.
+- **Discovery region size** — even structurally bounded, a dense repo's region may be large; hence
+  incremental + background discovery (Phase 5). We amortise, not eliminate, first-touch cost.
+- **Map staleness** — keyed on the coupling epoch (source ⊕ learned matchers); a changed file drops
+  its shards. Same model as the existing graph cache; no retro-push (accepted tradeoff).
+- **Determinism vs accumulation** — a concern's answer must not silently change as unrelated regions
+  are added to the map. `selectConcern` is bounded by the concern's own border, so accumulation
+  elsewhere is inert; Phase 2's byte-identity gate guards this.
+
+## Status (living)
+
+- **Phase 1 — DONE.** The neighbour-source seam (`coStruct.neighbors`) is in `_applyMove`; default =
+  `build_footprint` (live grow byte-identical, full suite 952 pass). When set, the SAME wave reads
+  the neighbourhood from a graph. `projectConcern` now **runs `_phaseExpand` over the map** through
+  the seam — one border implementation, not two.
+- **Phase 2 — core landed, one residual.** Projecting over a grow's own footprint reproduces it at
+  **93% recall, 0 over-grow, 0 map-frontier misses**, and — crucially — the hub/ubiquity gate now
+  applies (the cal.com over-reach is gone by construction). Marker nodes are expandable in projection
+  mode (gated `&& !coStruct.neighbors`) so coupling-reached deps (a route → `requireAdmin`) enter;
+  wave↔splice iterates to convergence. **Residual:** ~17 nodes are off-border coupling *complements*
+  the grow auto-keeps beyond the up-hop border — a coupling-overlay semantics difference (arguably the
+  bloat the border *should* trim, per `coupling-overlay-bloat`), not a discovery/border bug. Closing it
+  = make the projection's coupling match the grow's auto-keep (or decide the grow over-keeps). Next.
+
+## Definition of done
+
+`project == grow` byte-identical on private-app + cal.com + Dubbo + Acme, warm concern latency ms-to-seconds
+on Acme, discovery paid once per region and incrementally, defaults flipped on.
+```

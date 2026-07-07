@@ -35,7 +35,7 @@ describe("projectConcern — the structural border is a static cut over the cach
     // REFERENCE: grow the same center with the TIGHT up-hop=2.
     const [refD] = await grow_to_terminals(repo, "src/term.ts", "term", { structuralGrow: true, upHop: 2, dataCoupling: false, maxNodes: 60, ctx: new EngineCtx() });
     // PROJECT the wide map with K=2 — no re-grow, pure topology.
-    const proj = projectConcern(mapD, [{ file: "src/term.ts", symbol: "term" }], { upHop: 2 });
+    const proj = await projectConcern(repo, mapD, [{ file: "src/term.ts", symbol: "term" }], { upHop: 2 });
     expect(proj).not.toBeNull();
     const P = syms(proj![0]), R = syms(refD);
     expect([...R].filter((x) => !P.has(x))).toEqual([]);   // projection drops nothing the K=2 grow kept
@@ -47,7 +47,7 @@ describe("projectConcern — the structural border is a static cut over the cach
   test("a center absent from the map is a FRONTIER MISS (returns null → caller lazy-grows)", async () => {
     if (!available()) return;
     const [mapD] = await grow_to_terminals(repo, "src/term.ts", "term", { structuralGrow: true, upHop: 2, dataCoupling: false, maxNodes: 60, ctx: new EngineCtx() });
-    const miss = projectConcern(mapD, [{ file: "src/nowhere.ts", symbol: "ghost" }], { upHop: 2 });
+    const miss = await projectConcern(repo, mapD, [{ file: "src/nowhere.ts", symbol: "ghost" }], { upHop: 2 });
     expect(miss).toBeNull();
   }, 30_000);
 });

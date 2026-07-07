@@ -385,7 +385,14 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   }
   let add: any;
   try {
-    add = prune(await build_footprint_cached(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
+    // NEIGHBOUR SOURCE (border-decoupling, Phase 1) — the ONE seam that separates DISCOVERY from SELECTION. Default:
+    // resolve the node's 1-hop from source (`build_footprint`) — the cold grow, byte-identical to before. When the
+    // caller supplies `coStruct.neighbors` (the MAP), the SAME wave/border loop reads the neighbourhood from the
+    // already-discovered graph instead — so a projection is just this wave over the map, and `project == grow` by
+    // construction (one border implementation, not two). Returns null → treated as a build failure (frontier miss).
+    add = coStruct.neighbors
+      ? prune(coStruct.neighbors(next, down ? "down" : "up") ?? (() => { throw new Error("frontier miss"); })())
+      : prune(await build_footprint_cached(repo, next.file, next.symbol, { direction: down ? "down" : "up", anchorLine: (next.range ?? [0])[0], callerFiles, ...coStruct }));
   } catch { dbg(`[${_gtag(coStruct?.ctx)}]   ${label}: ${arrow} ${qual} — skip (build failed)`); history.push({ node: next.symbol, added: 0, skipped: "build failed" }); return { data, added: 0 }; }
   // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the
   // answer — data-coupling fan is exempt (self-bounded + the intent). `idx.byKey` IS the present-key set (carried
@@ -669,7 +676,10 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
     const moves: Move[] = [];
     for (const n of data.nodes as any[]) {
-      if (n.id === "n1" || anchorSet.has(n.id) || !n.file || !n.symbol || isFlowSubject(n.kind) || excludedFile(n.file)) continue;
+      // isFlowSubject markers (route/table/queue boundary nodes) are excluded in the LIVE grow — expanding a marker
+      // would flood via build_footprint. In PROJECTION mode (coStruct.neighbors = the map) expanding it just reads the
+      // map's already-discovered edges, which is how a coupling-reached dep (a route's handler → requireAdmin) enters.
+      if (n.id === "n1" || anchorSet.has(n.id) || !n.file || !n.symbol || (isFlowSubject(n.kind) && !coStruct.neighbors) || excludedFile(n.file)) continue;
       if (!grounded.has(n.id)) continue;             // reached only by a bare-name call match → surface it, don't flood through it
       if (inShape && !inShape.has(n.id)) continue;   // beyond the soft border → keep the node, but don't flood THROUGH it
       const isCore = roleById.get(n.id) === "core";
@@ -967,67 +977,72 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
 //     flood is contained. Coupling edges are just edges in the map, so the overlay comes along for free.
 // The intent border stays SEMANTIC → it lives at render (the crop), never here. Returns null = a FRONTIER MISS (the
 // map doesn't cover every center) → the caller lazy-grows that region and retries. Centers matched by file+symbol.
-export function projectConcern(map: any, centers: { file: string; symbol: string }[], opts: { upHop?: number; maxNodes?: number } = {}): [any, any[]] | null {
+export async function projectConcern(repo: string, map: any, centers: { file: string; symbol: string }[], opts: { upHop?: number; maxNodes?: number; ctx?: EngineCtx; intent?: string; maxSteps?: number } = {}): Promise<[any, { file: string; symbol: string; dir: string; range: any }[]] | null> {
   const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
   const nodes: any[] = map.nodes ?? [], edges: any[] = map.edges ?? [];
   const centerNodes = centers.map((c) => nodes.find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)).filter(Boolean);
   if (centerNodes.length < centers.length) return null;   // map doesn't cover every center → frontier miss → caller grows
   const byId = new Map<string, any>(nodes.map((n) => [n.id, n]));
-  const anchorIds = centerNodes.map((n) => n.id);
-  const K = Math.max(0, opts.upHop ?? 2);
-  const maxNodes = Math.max(1, opts.maxNodes ?? 200);   // BUDGET — the answer is ≤ this many nodes (as the grow is)
-  // OUT (deps) / IN (consumers) adjacency by node id.
   const out = new Map<string, any[]>(), inc = new Map<string, any[]>();
   for (const e of edges) { (out.get(e.from) ?? out.set(e.from, []).get(e.from)!).push(e); (inc.get(e.to) ?? inc.set(e.to, []).get(e.to)!).push(e); }
-  // PASS 1 — UP-HOP DEPTH over the WHOLE map (relaxation BFS, unbounded but cheap: just numbers). upDepth(center)=0;
-  // DOWN inherits the parent's depth; UP is parent+1; a data-coupling CROSSING resets to 0 (the other stack gets a
-  // fresh budget → cross-stack reach survives). This is the border coordinate; a node with upDepth ≤ K is in-border.
-  const upDepth = new Map<string, number>(anchorIds.map((a) => [a, 0]));
-  for (const q = [...anchorIds]; q.length; ) {
-    const u = q.shift()!, du = upDepth.get(u) ?? 0;
-    for (const e of out.get(u) ?? []) { const v = e.to; if (!byId.has(v)) continue; const nd = _is_crossing(e) ? 0 : du; if (nd < (upDepth.get(v) ?? Infinity)) { upDepth.set(v, nd); q.push(v); } }
-    for (const e of inc.get(u) ?? []) { const w = e.from; if (!byId.has(w)) continue; const nd = _is_crossing(e) ? 0 : du + 1; if (nd <= K && nd < (upDepth.get(w) ?? Infinity)) { upDepth.set(w, nd); q.push(w); } }
-  }
-  // PASS 2 — BUDGETED BFS by hop-distance from the centers (nearest first), admitting in-border neighbours until the
-  // node budget fills. Mirrors the grow's budgeted wave, so the projected set ≈ the grown set. Nodes that WOULD have
-  // been admitted past the budget are the projection's own frontier (never in `reached`, so never a completeness miss).
-  const reached = new Set<string>(anchorIds);
-  const dist = new Map<string, number>(anchorIds.map((a) => [a, 0]));
-  const expandedByProj = new Set<string>();   // nodes actually DEQUEUED+expanded (their completeness matters)
-  for (const q = [...anchorIds]; q.length; ) {
-    const u = q.shift()!, du = dist.get(u) ?? 0;
-    expandedByProj.add(u);
-    const admit = (x: string) => { if (!byId.has(x) || reached.has(x) || reached.size >= maxNodes) return; reached.add(x); dist.set(x, du + 1); q.push(x); };
-    for (const e of out.get(u) ?? []) admit(e.to);                                                 // DOWN dep — always
-    for (const e of inc.get(u) ?? []) if ((upDepth.get(e.from) ?? Infinity) <= K) admit(e.from);   // UP consumer — in-border
-  }
-  const outNodes = [...reached].map((id) => ({ ...byId.get(id) }));
-  const outEdges = edges.filter((e) => reached.has(e.from) && reached.has(e.to)).map((e) => ({ ...e }));
-  const data: any = { nodes: outNodes, edges: outEdges, anchor: { ...centerNodes[0] }, centerAnchors: anchorIds, language: map.language, complete: true };
-  // FRONTIER MISSES — reached STRUCTURAL nodes not expanded in the map in a direction the flood used (DOWN from every
-  // node; UP only where it can still climb, up-depth < K). Each is a spot the map is INCOMPLETE → the caller lazy-grows
-  // it (a cheap 1-hop build) and re-projects. Empty ⇒ the projection is COMPLETE (the fast path). Coupling nodes are
-  // overlay (not structurally grown) → never a miss. Reads the map's expansion set (`exp`) or a raw footprint's `_expanded`.
-  // FRONTIER MISSES — an INTERIOR node (one the projection expanded, not a budget-edge node) that is NOT expanded in
-  // the MAP in a direction the flood used (DOWN from every interior node; UP only where it's still in-border). Strict:
-  // completeness = expanded-D in the map's `exp`. This works on a BUDGETED (non-converged) map because we only require
-  // completeness for the ≤maxNodes the projection actually traversed — a node the grow parked (budget/hub/border) that
-  // the projection reaches will show up here and get lazy-filled; the projection's OWN budget-edge nodes are excluded.
-  const expSet = new Set<string>((map.exp ?? map._expanded ?? []) as string[]);
-  const isExp = (n: any, d: string) => expSet.has(`${_norm(n.file)}#${n.symbol ?? ""}#${d}`);
-  const misses: { file: string; symbol: string; dir: string; range: any }[] = [];
-  const seen = new Set<string>();
-  for (const id of expandedByProj) {
-    const n = byId.get(id);
-    if (!n || n.coupling || !n.symbol) continue;
-    for (const d of ["down", "up"]) {
-      if (d === "up" && (upDepth.get(id) ?? Infinity) >= K) continue;   // a border leaf never climbs up
-      if (isExp(n, d)) continue;
-      const mk = `${_norm(n.file)}#${n.symbol}#${d}`;
-      if (!seen.has(mk)) { seen.add(mk); misses.push({ file: n.file, symbol: n.symbol, dir: d, range: n.range }); }
+  // NEIGHBOUR SOURCE = the MAP. The node + its map neighbours in `dir` (structural + coupling edges alike). This is the
+  // seam _applyMove reads instead of build_footprint → the SAME wave/border runs, sourced from the discovered graph.
+  const neighbors = (node: any, dir: string): any => {
+    const es = (dir === "down" ? out.get(node.id) : inc.get(node.id)) ?? [];
+    const nbr: any[] = [], eOut: any[] = [];
+    for (const e of es) { const other = byId.get(dir === "down" ? e.to : e.from); if (other) { nbr.push({ ...other }); eOut.push({ ...e }); } }
+    return { nodes: [{ ...node }, ...nbr], edges: eOut, anchor: { ...node } };
+  };
+  // SEED = centers + their 1-hop both ways (mirrors _phaseSeed — the wave excludes the anchor's OWN consumer expansion,
+  // so a bare-center seed would never climb).
+  const seedNodes = new Map<string, any>(centerNodes.map((n) => [n.id, { ...n }]));
+  const seedEdges: any[] = [];
+  for (const cn of centerNodes) for (const dir of ["down", "up"]) { const ex = neighbors(cn, dir); for (const n of ex.nodes) if (!seedNodes.has(n.id)) seedNodes.set(n.id, n); seedEdges.push(...ex.edges); }
+  const data: any = { nodes: [...seedNodes.values()], edges: seedEdges, anchor: { ...centerNodes[0] }, centerAnchors: centerNodes.map((n) => n.id), language: map.language, complete: true };
+  const maxNodes = Math.max(1, opts.maxNodes ?? 200);
+  const { excludedFile, prune } = _makeExclusion(opts as any);
+  const coStruct: any = { dataCoupling: false, ctx: opts.ctx ?? new EngineCtx(), neighbors };
+  // RUN THE GROW'S OWN WAVE over the map — same frontier order, tier rule, hub/ubiquity gate, up-hop, budget. So the
+  // projected set == the grown set BY CONSTRUCTION (one border implementation). No file I/O, no coupling resolution.
+  // ITERATE wave→splice: the FIRST wave produces the structural core; splicing the incident coupling markers then lets
+  // the NEXT wave expand THEM (a route → its handler's deps → its own routes' consumers), the multi-hop coupling chain.
+  // Converges when a round adds nothing (the map is finite); bounded for safety.
+  const adjAll = new Map<string, string[]>();
+  for (const e of edges) { (adjAll.get(e.from) ?? adjAll.set(e.from, []).get(e.from)!).push(e.to); (adjAll.get(e.to) ?? adjAll.set(e.to, []).get(e.to)!).push(e.from); }
+  const spliceCoupling = (g: any): number => {
+    const kept = new Set<string>(g.nodes.map((n: any) => n.id));
+    const couplingIds = new Set<string>();
+    for (const q = [...kept]; q.length; ) { const u = q.shift()!; for (const other of adjAll.get(u) ?? []) { const on = byId.get(other); if (on?.coupling && !couplingIds.has(other)) { couplingIds.add(other); q.push(other); } } }
+    if (!couplingIds.size) return 0;
+    const inSet = (id: string) => kept.has(id) || couplingIds.has(id);
+    const cNodes = [...couplingIds].filter((id) => !kept.has(id)).map((id) => ({ ...byId.get(id) }));
+    const cEdges = edges.filter((e) => (couplingIds.has(e.from) || couplingIds.has(e.to)) && inSet(e.from) && inSet(e.to)).map((e) => ({ ...e }));
+    return _mergeInto(g, { nodes: cNodes, edges: cEdges, anchors: [] }, _mkIndex(g));
+  };
+  let grown: any;
+  { let g = data;
+    for (let pass = 0; pass < 3; pass++) {
+      [g] = await _phaseExpand(repo, g, { ...opts, structuralGrow: true, maxNodes } as any, coStruct, prune, excludedFile, opts.maxSteps ?? 40, maxNodes);
+      const added = spliceCoupling(g);
+      if (!added) break;   // converged — no new coupling to feed the next wave
+      g.centerAnchors = centerNodes.map((n) => n.id);   // re-seed the wave from the same centers
     }
+    grown = g;
   }
-  return [data, misses];
+  // FRONTIER MISSES — a (node,dir) the wave EXPANDED over the map but the MAP did not have (a map-frontier: neighbours()
+  // returned nothing there, so the wave under-grew). `grown._expanded` is what the wave expanded; `map.exp` is what the
+  // map actually holds → the difference is where the map is incomplete → the caller lazy-fills. Empty ⇒ complete.
+  const mapExp = new Set<string>((map.exp ?? map._expanded ?? []) as string[]);
+  const rangeByFS = new Map<string, any>(); for (const n of nodes) if (n.symbol) rangeByFS.set(`${_norm(n.file)}#${n.symbol}`, n.range);
+  const misses: { file: string; symbol: string; dir: string; range: any }[] = [];
+  for (const x of (grown._expanded ?? []) as string[]) {
+    if (mapExp.has(x)) continue;
+    const i1 = x.lastIndexOf("#"); if (i1 < 0) continue; const dir = x.slice(i1 + 1); const rest = x.slice(0, i1);
+    const i2 = rest.lastIndexOf("#"); if (i2 < 0) continue; const file = rest.slice(0, i2), symbol = rest.slice(i2 + 1);
+    if (!symbol) continue;
+    misses.push({ file, symbol, dir, range: rangeByFS.get(`${_norm(file)}#${symbol}`) });
+  }
+  return [grown, misses];
 }
 
 // PROJECT-OR-GROW (SEAM map/projection) — the warm path. Try to answer a concern by PROJECTING the persistent map (a
@@ -1040,7 +1055,7 @@ export async function projectOrGrow(repo: string, centers: { file: string; symbo
   const budget = Math.max(1, opts.maxNodes ?? 200);
   const pOpts = { upHop: K, maxNodes: budget };
   // FAST PATH — project the current map at the display BUDGET; if the ≤budget answer has no frontier miss, done in ~ms.
-  const proj0 = projectConcern(loadMap(repo) as any, centers, pOpts);
+  const proj0 = await projectConcern(repo, loadMap(repo) as any, centers, { ...pOpts, ctx: opts.ctx });
   if (proj0 && proj0[1].length === 0 && proj0[0].nodes.length) { process.stderr.write(`[project] map covers the concern → projected ${proj0[0].nodes.length} node(s), no grow\n`); return [proj0[0], []]; }
   // FILL — grow each center at the SAME (display) budget as the answer, NOT to convergence: the discovery cost matches
   // the normal grow (seconds), and the projection only needs the ≤budget nodes it returns to be complete. Merge in.
@@ -1055,7 +1070,7 @@ export async function projectOrGrow(repo: string, centers: { file: string; symbo
   // warm run is fast.
   const rounds = ((): number => { const n = parseInt(process.env.SEAM_PROJECT_FILL_ROUNDS ?? "3", 10); return Number.isFinite(n) && n >= 0 ? n : 3; })();
   for (let r = 0; r <= rounds; r++) {
-    const proj = projectConcern(loadMap(repo) as any, centers, pOpts);
+    const proj = await projectConcern(repo, loadMap(repo) as any, centers, { ...pOpts, ctx: opts.ctx });
     if (!proj || !proj[0].nodes.length) return null;   // centers unresolved → caller grows the old way
     if (!proj[1].length || r === rounds) {
       if (proj[1].length) mergeGrowIntoMap(repo, { nodes: [], edges: [], _expanded: proj[1].map((m) => expandedKey(m.file, m.symbol, m.dir)) });   // settle
