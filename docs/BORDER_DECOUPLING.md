@@ -233,6 +233,31 @@ separate cut.
 (likely `from_resolved_graph`+`assign_roles`), make them incremental, harness-gate byte-identity, measure
 private-app/cal.com, then Acme. This also speeds the COLD grow (it pays the same per-wave overhead).
 
+## RESOLUTION (2026-07) — the warm-slowness was an uncached index, not the border
+
+The border-decoupling exploration led to the *actual* root cause, and it is neither the wave nor
+discovery nor coupling: **`ubiquityIndex` (the reverse-import fan-in) was rebuilt from scratch on every
+process/grow** — `fileImporters` resolves every import's module target across the whole repo (~4 s on
+cal.com's 5.7k files) and was cached in-memory only. Profiling the "warm wave" showed it ran **0 waves**
+(the seed already exceeds the node budget) yet took 3.9 s — all of it `ubiquityIndex`.
+
+**Fix (shipped):** persist the ubiquity index to `.seam/ubiquity-v1`, content-keyed on the source epoch —
+the same pattern as the impl/import indices. Pure caching → **byte-identical**.
+
+**Result — warm, byte-identical, on the real merged-concern path:**
+
+| repo | cold | **warm concern** | fidelity |
+|---|---|---|---|
+| private-app  (307 nodes) | 3.1 s | **18 ms** | cold ≡ warm |
+| cal.com (678 nodes) | 102 s | **156 ms** | cold ≡ warm; project-over-footprint 394≡394 |
+
+**So the map/projection flood is RETIRED as unnecessary.** The product's warm path is the *grow itself*,
+made fast by caching the last uncached repo-wide index — with zero fidelity risk (no border re-implementation,
+byte-identical). The "decouple the border" framing was the wrong lever; "cache every repo-wide index the
+grow touches" was the right one. Next: run Acme (now that private-app + cal.com are proven fast +
+byte-identical) — if any residual warm cost remains, profile for the *next* uncached repo-wide query
+(candidates: the coupling floor/param indices, the consumer inverse-import index) and persist it the same way.
+
 ## Definition of done
 
 `project == grow` byte-identical on private-app + cal.com + Dubbo + Acme, warm concern latency ms-to-seconds
