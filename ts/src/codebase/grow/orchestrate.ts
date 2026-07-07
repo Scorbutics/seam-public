@@ -1043,7 +1043,25 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
     const centerKey = centers.map((c) => `${c.file}#${c.symbol}`).sort().join("+");
     const km = growCacheKeyMaterial(centerKey, opts, emb && !structural, seamEnvSnapshot());
     return [await cachedGrow(repo, centers[0].file, km, opts.dataCoupling !== false, !opts.onWave,
-      () => _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any))
+      async () => {
+        // LLM coupling: SCOPE discovery to the concern's union BEFORE the per-center grows (mirrors the non-merged
+        // branch below). Without this the merged path grew each center with UNSCOPED LLM coupling (whole module per
+        // center) → far more blind files → the flywheel fired repeatedly ("14 LLM calls every run"). The union floor
+        // pre-grow (cheap, deterministic, forks write no flywheel) yields ctx.footprintFiles once; the per-center
+        // grows inside _growCentersMergedImpl (sequential, shared ctx) then learn ONCE and reuse.
+        if (opts.dataCouplingLlm && !ctx.footprintFiles) {
+          emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+          const floors = await Promise.all(centers.map((c) => {
+            const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
+            return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
+          }));
+          const union = new Set<string>();
+          for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
+          ctx.footprintFiles = union;
+          process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${union.size} files across the concern (shared across ${centers.length} mechanisms)\n`);
+        }
+        return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
+      })
       .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; })];
   }
 
