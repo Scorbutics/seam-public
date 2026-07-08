@@ -35,7 +35,7 @@ describe("concern map surfaces operations folded into a shared entry", () => {
   test("createBooking/updateBooking appear in the via list of the orchestrator entry (not silently folded)", () => {
     if (!available()) return;   // needs tree-sitter (Java parse)
     const out = concernRender();
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     const bookLine = interactions.split("\n").find((l) => l.includes("book (")) ?? "";
     expect(bookLine).toContain("createBooking");   // folded operation now listed in the via
     expect(bookLine).toContain("updateBooking");

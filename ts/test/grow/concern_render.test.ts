@@ -43,9 +43,10 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).toContain("## Mechanisms");
     expect(out).toContain("manageBooking");
     expect(out).toContain("fan-in 4 consumer(s)");
-    // all four interactions surface as rays, each with its own --grow-from
+    // all four interactions surface as rays, each with its own deepen handle (recipe stated once; handle bare per line)
+    expect(out).toContain("deepen any: seam --grow-from <file>#<symbol>");
     for (const [label, file] of [["loadBookings", "member/m.ts"], ["assignAdviser", "admin/a.ts"], ["runReminders", "jobs/j.ts"], ["cancelViaApi", "api/x.ts"]])
-      expect(out).toContain(`seam --grow-from ${file}#${label}`);
+      expect(out).toContain(`grow: ${file}#${label}`);
     expect(out).toMatch(/interactions: 4/);
   });
 
@@ -74,19 +75,23 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).not.toContain("cdi/BookingsBean.ts#BookingsBean");
   });
 
-  test("a COUPLING-only interaction (reads a table the center writes, never calls it) is a ray; the boundary is not", () => {
+  test("a COUPLING interaction is THREADED through the boundary as a flow edge (In), and the center's write shows as Out", () => {
     const m = makeConcernModel();
-    // add a table boundary the center WRITES + a reporting job that READS it (no call to the center).
+    // add a table boundary (kind:"table") the center WRITES + a reporting job that READS it (no call to the center).
     m.clusters[0].seams.push(
-      { id: "sT", label: "bookings", tier: "supporting", hunks: [{ id: "T", label: "bookings", file: "db/bookings", start: 0, role: "environment", tier: "supporting" }] },
+      { id: "sT", label: "bookings", tier: "supporting", hunks: [{ id: "T", label: "bookings", file: "db/bookings", start: 0, role: "environment", tier: "supporting", kind: "table" }] },
       { id: "sR", label: "report", tier: "supporting", hunks: [{ id: "R", label: "bookingRevenueReport", file: "reporting/report.ts", start: 1, role: "core", tier: "supporting" }] },
     );
     m.edges.push({ from: "C", to: "T", kind: "db-write" }, { from: "T", to: "R", kind: "db-read" });
     const out = renderConcern(m, { intent: "how are bookings managed" });
-    expect(out).toContain("seam --grow-from reporting/report.ts#bookingRevenueReport");   // the coupling reader is an interaction
-    expect(out).toContain("via the bookings boundary");                                    // named by the shared key
-    expect(out).not.toContain("grow-from db/bookings#bookings");                            // the boundary itself is NOT a ray
-    expect(out).toMatch(/interactions: 5/);                                                 // 4 call + 1 coupling
+    // IN — the coupling reader is a ray, THREADED through the table as an edge (the crossing is IN the flow, not prose)
+    expect(out).toContain("grow: reporting/report.ts#bookingRevenueReport");
+    expect(out).toMatch(/bookingRevenueReport.*──db "bookings"──▶ ●/);
+    // OUT — the center's own write of the table shows as an outbound edge off ●
+    expect(out).toContain("## Out");
+    expect(out).toMatch(/● ──writes──▶ db "bookings"/);
+    expect(out).not.toContain("db/bookings#bookings");   // the boundary itself is NOT a ray
+    expect(out).toMatch(/interactions: 5/);              // 4 call + 1 coupling
   });
 
   test("no dead/undefined handles, file-level nodes omit the broken deepen handle, all picked centers render", () => {
@@ -108,7 +113,7 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).not.toMatch(/\? \(\?:0\)/);                              // no dead `? (?:0)` line
     expect(out).toMatch(/mechanisms: 2/);                                // BOTH picked centers counted
     expect(out).toContain("notGrown (svc/other.ts) — picked, not reached in this region");
-    expect(out).toContain("seam --grow-from svc/caller.ts#fnEntry");     // valid symbol → deepen handle
+    expect(out).toContain("grow: svc/caller.ts#fnEntry");                // valid symbol → deepen handle
     expect(out).toContain("sweep.ts (svc/sweep.ts:0)");                  // file node rendered…
     expect(out).not.toContain("#sweep.ts");                              // …but WITHOUT a broken file#filename handle
   });
@@ -117,7 +122,7 @@ describe("renderConcern — center-first star (pure model)", () => {
     const prev = process.env.SEAM_CONCERN_CAP; process.env.SEAM_CONCERN_CAP = "2";
     try {
       const out = renderConcern(makeConcernModel(), { intent: "how are bookings managed" });   // 4 interactions, cap 2
-      expect((out.match(/seam --grow-from/g) ?? []).length).toBe(2);
+      expect((out.match(/ {3}grow: /g) ?? []).length).toBe(2);   // per-line deepen handles (the recipe line is separate)
       expect(out).toContain("+2 more interaction(s)");
     } finally { if (prev === undefined) delete process.env.SEAM_CONCERN_CAP; else process.env.SEAM_CONCERN_CAP = prev; }
   });

@@ -40,7 +40,7 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
   test("both backend services (member BookingsService + manage ManageBookingsService) surface as interactions", () => {
     if (!available()) return;
     const { out } = concern();
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     expect(interactions).toContain("BookingsService");            // member JAX-RS resource
     expect(interactions).toContain("ManageBookingsService");      // manage JAX-RS resource (sibling)
   });
@@ -56,7 +56,7 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
   test("a declarative endpoint-map client surfaces its OPERATION name, not just the wrapper function", () => {
     if (!available()) return;
     const { out } = concern();
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     // bookingService.js fires ops through a { endpoint, method } map, folding them into `install`; the render
     // names the op (a distinct-route boundary is labelled by the operation) — `updateBooking`, not just a path.
     expect(interactions).toMatch(/install \(web\/bookingService\.js[\s\S]*via[^\n]*updateBooking/);
@@ -67,7 +67,7 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
   // collides away. This was the last Acme gap ("still not createBooking").
   test("createBooking (POST) surfaces alongside getBookings (GET) on the shared base path", () => {
     if (!available()) return;
-    const interactions = concern().out.slice(concern().out.indexOf("## Interactions"));
+    const interactions = concern().out.slice(concern().out.indexOf("## In "));
     const install = interactions.split("\n").find((l) => l.includes("install (web/bookingService.js")) ?? "";
     expect(install).toContain("createBooking");
     expect(install).toContain("getBookings");
@@ -77,7 +77,7 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
   test("a front-end file from each family appears as an interaction (the cross-stack reach)", () => {
     if (!available()) return;
     const { out } = concern();
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     expect(interactions).toContain("memberBookings.js");         // member summary screen (loadBookings)
     expect(interactions).toContain("bookingsCalendar.js");       // manage calendar screen
   });
@@ -92,7 +92,7 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
     const { out, graph } = concern("4");
     const mechCount = Number((out.match(/mechanisms: (\d+)/) ?? [])[1] ?? "0");
     expect(mechCount).toBeGreaterThan(1);                        // a CLUSTER, not a single point
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     expect(interactions).toContain("memberBookings.js");         // both cross-stack UI families still reached
     expect(interactions).toContain("bookingsCalendar.js");
     const files = new Set((graph.nodes as any[]).map((n) => n.file));

@@ -47,7 +47,7 @@ describe("sibling consumers of the same bean are distinct, not folded together",
       "--anchor-file", BEAN, "--symbol", "BookingsBean", "--concern", "--intent", "how are bookings managed",
       "--data-coupling", "floor", "--format", "concern"],
       { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_CONCERN_CENTERS: "1" }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     expect(interactions).toContain("BookingsService.createBooking");
     expect(interactions).toContain("AcmeCheckBookingsService.createBooking");   // the swallowed sibling now shows
   }, 30000);

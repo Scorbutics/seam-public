@@ -39,7 +39,7 @@ describe("concern map surfaces method-level consumers of a class mechanism", () 
   test("a consumer that calls a bean method (via an interface, no class ref) appears as an interaction", () => {
     if (!available()) return;   // needs tree-sitter (Java parse + interface resolution)
     const out = concernRender();
-    const interactions = out.slice(out.indexOf("## Interactions"));
+    const interactions = out.slice(out.indexOf("## In "));
     // the method-level caller is surfaced as an interaction (not just grown) — the Acme gap
     expect(interactions).toContain("AcmeCheckBookingsService.createBooking");
     expect(interactions).toContain("AcmeCheckBookingsService.cancelBooking");

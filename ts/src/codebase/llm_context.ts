@@ -903,6 +903,19 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
   const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
   const isBoundaryNode = (id: string): boolean => _BOUND.has(hunkById.get(id)?.kind ?? "");
+  // A boundary rendered as a flow EDGE label — the MEDIUM (from the boundary node's structural kind, the registry's
+  // closed set) + the shared key/route — so the coupling shows AS a link in the chain
+  // (acmeBooking.js ──HTTP /booking/*──▶ ●) instead of being buried in a separate "Blindspots" list. THIS is the
+  // agent's ask: the crossing is a first-class edge in the flow, not prose.
+  const _MEDIUM_LABEL: Record<string, string> = {
+    route: "HTTP", "http-route": "HTTP", annotation: "HTTP", "db-table": "db", table: "db",
+    queue: "queue", topic: "topic", event: "event", cache: "cache", key: "key", binding: "binds", file: "file",
+  };
+  const crossingEdge = (bid: string): string => {
+    const h = hunkById.get(bid); const med = _MEDIUM_LABEL[h?.kind ?? ""] ?? "crosses"; const key = h?.label ?? "?";
+    return med === "db" ? `${med} "${key}"` : `${med} ${key}`;
+  };
+  const rayCross = new Map<string, Set<string>>();   // interaction entry → the boundary id(s) its ray crosses (for the inline edge)
   // COUPLING interactions — a node sharing a data-key BOUNDARY with a mechanism (the bean writes a table a reporting
   // job READS → that job is an interaction though it never CALLS the bean). 2 hops over crossings; boundary skipped.
   const crossAdj = new Map<string, Set<string>>();
@@ -950,6 +963,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     }
     if (ops.size) for (const op of ops) addRay(e, op);
     else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
+    if (!mechNodes.has(e)) (rayCross.get(e) ?? rayCross.set(e, new Set()).get(e)!).add(b);   // this ray crosses boundary b → thread it as an edge
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
@@ -957,6 +971,15 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
     (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
     (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
+  // OUT crossings — the boundaries the MECHANISM itself produces to / consumes: the db table it writes, the queue it
+  // publishes — the "what a booking DOES" half of the star. Direction from the crossing edge (_CROSS_SOURCE =
+  // code→boundary = writes; _CROSS_SINK = boundary→code = reads). Rendered as `● ──writes──▶ db "Booking"`.
+  const outCross = new Map<string, string>();   // boundary id → verb (writes / reads)
+  for (const e of edges) {
+    if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
+    if (mechNodes.has(f) && isBoundaryNode(t)) outCross.set(t, _CROSS_SOURCE.has(e.kind) ? "writes" : "reads");
+    else if (mechNodes.has(t) && isBoundaryNode(f)) outCross.set(f, _CROSS_SINK.has(e.kind) ? "reads" : "writes");
+  }
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
@@ -968,7 +991,10 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const _VIA_CAP = Math.max(1, parseInt(process.env.SEAM_CONCERN_VIAS ?? "8", 10) || 8);
   const viasStr = (r: { entry: string; vias: Set<string> }): string => {
     const self = qual(hunkById.get(r.entry));
-    const v = [...r.vias].sort((a, b) => (Number(b === self) - Number(a === self)) || (a < b ? -1 : 1));
+    // DROP the raw "the /X boundary" vias — the crossing is now rendered as the flow EDGE (──HTTP /X──▶), so
+    // repeating it in the via list is noise. Operation-named vias (createBooking, getBookings) stay: they say
+    // WHICH ops reach the mechanism, which the edge (the path) doesn't.
+    const v = [...r.vias].filter((x) => !/^the .+ boundary$/.test(x)).sort((a, b) => (Number(b === self) - Number(a === self)) || (a < b ? -1 : 1));
     return v.slice(0, _VIA_CAP).join(", ") + (v.length > _VIA_CAP ? `, … (+${v.length - _VIA_CAP})` : "");
   };
   // DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT. "Why is X missing":
@@ -1019,16 +1045,30 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
       mechLines.push(h ? mechLine(h, cid) : `  ${c.symbol} (${c.file}) — picked, not reached in this region`); }
   } else for (const cid of centerIds) mechLines.push(mechLine(hunkById.get(cid), cid));
   const mechCount = opts.centers?.length ?? centerIds.length;
+  // `●` = the mechanism (the star's center). Interactions thread INTO it (In); the center's own boundary writes
+  // fan OUT of it (Out) — the two halves that read as flows around the center.
+  const dot = mechCount > 1 ? "●" : `● ${qual(primary)}`;
   out.push("# Concern map — the mechanisms and the interactions around them",
     [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${mechCount}`, `resolution: ${model.resolutionQuality ?? "?"}`,
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
-  out.push("", `## Mechanisms (the concern's shared beans — the star's center${mechCount > 1 ? " cluster" : ""})`, ...mechLines);
-  out.push("", "## Interactions (each entry point that uses a mechanism — deepen the ones that matter)");
+  out.push("", `## Mechanisms ● (the concern's shared beans — the star's center${mechCount > 1 ? " cluster" : ""})`, ...mechLines);
+  // IN — who triggers the mechanism, each interaction THREADED through the boundary crossing it traverses
+  // (entry ──HTTP /route──▶ ●), so the coupling edge is part of the flow, not a footnote. Deepen recipe stated ONCE.
+  out.push("", `## In — what triggers ${dot}  (entry ──crossing──▶ ●)`);
+  if (rayList.length) out.push(`  deepen any: seam --grow-from <file>#<symbol>${q}`);
   for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
     const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
-    const handle = symLike(eh?.label) ? `  →  seam --grow-from ${eh.file}#${eh.label}${q}` : "";   // file/module node → describe it, no broken deepen handle
-    out.push(`  ${where(eh)}${rel} — reaches a mechanism via ${viasStr(r)}${handle}`); }
+    const xs = [...new Set([...(rayCross.get(r.entry) ?? [])].map(crossingEdge))].slice(0, 2);
+    const edge = xs.length ? ` ──${xs.join(" / ")}──▶ ●` : " ──▶ ●";   // the boundary crossing as the flow edge
+    const via = viasStr(r); const viaStr = via ? `  (via ${via})` : "";
+    const handle = symLike(eh?.label) ? `   grow: ${eh.file}#${eh.label}` : "";   // bare handle; the recipe above is the full command
+    out.push(`  ${where(eh)}${rel}${edge}${viaStr}${handle}`); }
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
+  // OUT — what the mechanism itself does: the boundaries it writes/reads (db table, queue), threaded as edges off ●.
+  if (outCross.size) {
+    out.push("", `## Out — what ${dot} does  (● ──writes/reads──▶ boundary)`);
+    for (const [bid, verb] of outCross) out.push(`  ● ──${verb}──▶ ${crossingEdge(bid)}`);
+  }
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];
   if (bs.length) { const keys = [...new Set(bs.map((b) => (b.candidates ?? [])[0]?.symbol ?? b.mechanism).filter(Boolean))];
