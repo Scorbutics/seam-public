@@ -704,8 +704,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const tierOf = (s: Seam) => s.tier ?? "";
   const hasSpine = seams.some((s) => tierOf(s) === "spine");
   const spineSeams = seams.filter((s) => tierOf(s) === "spine");
-  const supporting = seams.filter((s) => tierOf(s) !== "spine" && tierOf(s) !== "off");
-  const offSeams = seams.filter((s) => tierOf(s) === "off");
+  // CROSS-STACK PROMOTION — a CODE seam reached via a shared-key CROSSING (HTTP route / db / queue) from within
+  // the map is the OTHER SIDE of a stack boundary (Acme: the JS frontend behind the Java REST endpoint). The region
+  // would bury it in off-path — but it IS the differentiator (grep can't link the two sides), so lift it into its
+  // own group right after the spine. Boundary nodes (the route/table plumbing) are NOT promoted — only real code.
+  const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
+  const primaryHunk = (s: Seam) => (s.hunks ?? []).find((h) => h.label === s.primary?.symbol && h.file === s.primary?.file) ?? (s.hunks ?? [])[0];
+  const isBoundarySeam = (s: Seam) => _BOUND.has((primaryHunk(s) as any)?.kind ?? "");
+  const crossInto = (s: Seam): boolean => { const ids = seamIds(s); for (const e of (model.edges ?? []) as any[]) if (_CROSS_KINDS.has(e.kind) && ids.has(String(e.to)) && !ids.has(String(e.from)) && allIds.has(String(e.from))) return true; return false; };
+  // "Other side" is a DIFFERENT language than the spine (Java backend ⇄ JS frontend) — the file EXTENSION is the
+  // structural signal (the file's own type, not a name guess). A same-language self-route hop is NOT cross-stack.
+  const _ext = (f?: string) => { const s = f ?? ""; const i = s.lastIndexOf("."); return i >= 0 ? s.slice(i + 1).toLowerCase() : ""; };
+  const spineExts = new Set(spineSeams.map((s) => _ext(s.primary?.file)).filter(Boolean));
+  const crossStack = hasSpine && spineExts.size
+    ? seams.filter((s) => tierOf(s) !== "spine" && !isBoundarySeam(s) && !spineExts.has(_ext(s.primary?.file)) && crossInto(s))
+    : [];
+  const crossSet = new Set(crossStack);
+  const supporting = seams.filter((s) => tierOf(s) !== "spine" && tierOf(s) !== "off" && !crossSet.has(s));
+  const offSeams = seams.filter((s) => tierOf(s) === "off" && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
   // DEDUPE: a hub-marked hunk appears in every seam it wires (a hub wires many), so a naive scan lists it once per
   // seam — the same `BookingsBean` line a dozen times. Key by (file, label, reason) → one line per collapsed hub.
@@ -737,6 +753,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!hasSpine) return [];
     const out = ["", "## Spine (the primary path, anchor → … → outcome)"];
     spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
+    return out;
+  };
+  // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
+  // after the spine (not in the region) so the shared-key link a grep can't follow is PROMINENT, per the ask.
+  const crossStackSection = (): string[] => {
+    if (!crossStack.length) return [];
+    const seen = new Set<string>();
+    const uniq = [...crossStack].sort(byRel).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const out = ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)"];
+    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
+    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more cross-stack node(s) — raise --token-budget)`);
     return out;
   };
   // INTENT CROP AT RENDER — the grown footprint may be the FULL structural closure (structural grow: the wave is
@@ -839,7 +866,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out = assemble(...steps[0]);
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped

@@ -130,6 +130,27 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect((out.match(/BookingsBean \(cdi\/BookingsBean\.java:3\)/g) ?? []).length).toBe(1);   // 4 seams → ONE region line
   });
 
+  test("CROSS-STACK promotion — a JS node reached via a crossing from the Java spine is lifted into its own section (not off-path); a same-language crossing is NOT", () => {
+    const model = {
+      mode: "codebase", anchor: "n1", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "bookings", seams: [
+        { id: "sBe", label: "BookingsService", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "ejb/BookingsService.java", line: 5, symbol: "BookingsService" }, hunks: [{ id: "be", file: "ejb/BookingsService.java", start: 5, role: "core", label: "BookingsService" }] },
+        { id: "sFe", label: "install", tier: "off", region: { shell: 3, direction: "down" }, primary: { file: "web/bookingService.js", line: 8, symbol: "install" }, hunks: [{ id: "fe", file: "web/bookingService.js", start: 8, role: "link", label: "install" }] },
+        { id: "sJx", label: "sameStack", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "ejb/Other.java", line: 1, symbol: "sameStack" }, hunks: [{ id: "jx", file: "ejb/Other.java", start: 1, role: "link", label: "sameStack" }] },
+      ] }],
+      edges: [{ from: "be", to: "fe", kind: "db-read" }, { from: "be", to: "jx", kind: "db-read" }],   // both reached via a crossing
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are bookings managed" });
+    const cs = out.indexOf("## Cross-stack"), rg = out.indexOf("## Region");
+    expect(cs).toBeGreaterThan(-1);
+    expect(cs).toBeLessThan(rg);                                   // promoted section sits ABOVE the region
+    const crossBlock = out.slice(cs, rg);
+    expect(crossBlock).toContain("install (web/bookingService.js:8)");   // the JS frontend is promoted…
+    expect(crossBlock).not.toContain("sameStack");                       // …but the same-language (Java) crossing is NOT
+    expect(out.slice(rg)).toContain("sameStack");                        // it stays in the region
+  });
+
   test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
     const model = makeModel({ offN: 0 });
     (model as any).blindspots = [
