@@ -12,10 +12,11 @@ import { available } from "../../src/codebase/atoms.js";
 const TS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPO = join(TS_DIR, "test", "fixtures", "booking-app");
 
-// run a codebase grow and return the `[grow] intent field:` diagnostic line(s) from STDERR (spawnSync so we read stderr).
+// run a codebase grow and return the `[grow] intent field:` diagnostic line(s) from STDERR (spawnSync so we read
+// stderr). --verbose because diagnostics are QUIET by default now (a bare `--format agent` run prints only the map).
 function growDiag(extraArgs: string[], env: Record<string, string> = {}): string {
   const r = spawnSync("bun", ["src/cli/decompose.ts", "--repo", REPO, "--scan", "--auto",
-    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "agent", ...extraArgs],
+    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "agent", "--verbose", ...extraArgs],
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0", ...env }, encoding: "utf-8" });
   return (r.stderr ?? "").split("\n").filter((l) => l.includes("[grow] intent field:")).join("\n");
 }

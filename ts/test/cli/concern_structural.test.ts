@@ -18,7 +18,7 @@ const REPO = join(TS_DIR, "test", "fixtures", "booking-app");
 function stderr(extraArgs: string[]): string {
   const r = spawnSync("bun", ["src/cli/decompose.ts", "--repo", REPO, "--scan", "--auto", "--concern",
     "--anchor-file", "ejb/BookingsBean.java", "--symbol", "BookingsBean",
-    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "concern", ...extraArgs],
+    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "concern", "--verbose", ...extraArgs],
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0" }, encoding: "utf-8" });
   return r.stderr ?? "";
 }

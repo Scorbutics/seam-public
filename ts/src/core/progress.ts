@@ -24,6 +24,24 @@ export const timingOn = (): boolean => !!process.env.SEAM_TIMING;   // the --tra
 // @@PROGRESS@@ marker the extension parses, and NOT the per-node timing firehose (that is --trace).
 export function dbg(message: string): void { if (verbose()) process.stderr.write(`${message}\n`); }
 
+// QUIET MODE — when an LLM/agent consumes the stdout render (`--format agent`/`llm-context`/`concern`/…), the
+// stderr progress markers (@@SEAM_PROGRESS@@) and the `[tag]` diagnostics are NOISE: the shell interleaves them
+// into what the agent reads. installQuietFilter() drops exactly those lines — the diagnostic CONVENTION (a
+// @@SEAM…@@ marker, or a leading `[lower-tag]`) — while letting genuine errors/warnings through. ONE choke point
+// instead of gating 50+ scattered `process.stderr.write("[…]")` sites. `--verbose` (and the --emit-seams /
+// --llm-bridge extension paths) never install it, so the extension still gets its progress markers. emit() still
+// runs (timing is recorded); only the visible line is suppressed.
+let _quiet = false;
+export function quiet(): boolean { return _quiet; }
+export function installQuietFilter(): void {
+  if (_quiet) return;
+  _quiet = true;
+  const orig = process.stderr.write.bind(process.stderr);
+  const isDiag = (s: string): boolean => s.startsWith(PREFIX) || s.startsWith(TIMING_PREFIX) || /^\[[a-z][\w-]*\] /.test(s);
+  (process.stderr.write as any) = (chunk: any, ...rest: any[]): boolean =>
+    (typeof chunk === "string" && isDiag(chunk)) ? true : (orig as any)(chunk, ...rest);
+}
+
 // An emit() marks a phase's START; its duration is measured FORWARD (until the next phase begins, or
 // the run ends). This is what lets the dominant cost show up correctly even when it's the LAST phase
 // (e.g. the seam-intent LLM pass: its emit fires, then the slow call runs, then the run ends).

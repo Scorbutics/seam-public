@@ -791,6 +791,14 @@ async function main(argv: string[]): Promise<number> {
   // (coupling-debug, anchor-debug, sub-step timing) via SEAM_VERBOSE, which `verbose()`/`timingOn()` read.
   if (a.verbose) process.env.SEAM_VERBOSE = "1";
   if (a.trace) process.env.SEAM_TIMING = "1";   // --trace adds the per-node timing firehose on top of --verbose
+  // QUIET BY DEFAULT for a plain-CLI stdout consumer (an agent reading `--format agent` etc.): drop the
+  // @@SEAM_PROGRESS@@ markers + `[tag]` diagnostics so only the map lands on the reader. NOT when --verbose
+  // (the user asked to see them), NOR for the extension/bridge paths (--emit-seams / --emit-prompts /
+  // --inject-llm / --llm-bridge), which PARSE the progress markers. Errors always pass through.
+  if (!a.verbose && !a.emitSeams && !a.emitPrompts && !a.injectLlm && !a.llmBridge) {
+    const { installQuietFilter } = await import("../core/progress.js");
+    installQuietFilter();
+  }
   // COMMUNITY FRAMEWORK PLUGINS (declarative route-annotation manifests + code adapters) — loaded ONCE, before
   // any coupling scan, from the trusted user config dir (+ repo dir, data always / code under SEAM_REPO_PLUGINS).
   if (a.dataCoupling !== false) { try { const { loadFrameworkPlugins } = await import("../codebase/coupling/frameworks/plugins.js"); await loadFrameworkPlugins(a.repo); } catch { /* plugins are best-effort */ } }

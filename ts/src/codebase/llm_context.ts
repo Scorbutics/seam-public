@@ -772,11 +772,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     }
     return out;
   };
+  // CAPPED — a coupling-heavy repo has a WIDE frontier; dumping every decision point (each with a full
+  // `seam --grow-from … --intent "…"` line, the intent restated every time) is what blew the output to ~90KB.
+  // Show the top EXEMPT_N (scaled by budget so "raise --token-budget" is honest) and roll up the rest; state
+  // the deepen recipe ONCE, not per line.
+  const EXEMPT_N = Math.max(6, Math.floor(budget / 500));   // ~8 at the 4000-token default; grows with the budget
   const frontierSection = (): string[] => {
     if (!frontier.length) return [];
-    const out = ["", "## Frontier (decision points — deepen the ones that matter)"];
-    for (const f of frontier) out.push(`  ${f.symbol} (${f.file}) — ${f.reachedVia} [${f.cutBy}]  →  seam --grow-from ${f.file}#${f.symbol}${q("")}`);
-    if (model.frontierCut) out.push(`  (+${model.frontierCut} more decision point(s) cut by the cap — raise SEAM_FRONTIER_CAP)`);
+    const out = ["", "## Frontier (decision points — deepen the ones that matter)",
+      `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`];
+    const shown = frontier.slice(0, EXEMPT_N);
+    for (const f of shown) out.push(`  ${f.symbol} (${f.file}) — ${f.reachedVia} [${f.cutBy}]`);
+    const rest = (frontier.length - shown.length) + (model.frontierCut ?? 0);
+    if (rest > 0) out.push(`  (+${rest} more decision point(s) — raise --token-budget / SEAM_FRONTIER_CAP)`);
     return out;
   };
   const gapsSection = (): string[] => {
@@ -787,16 +795,23 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       // SHARED-KEY-FANOUT boundaries are a CLASS, not individual leads — a coupling-heavy repo emits dozens
       // (`members` written in 17 files, `admin` in 7…). Rendered one-per-line they drown the exempt section and
       // blow the budget. COLLAPSE them to a summary that keeps the honest signal (count + the distinct keys +
-      // the directive) without the flood. Non-fanout blindspots (real per-node leads) stay one-per-line.
+      // the directive) without the flood. Non-fanout blindspots (real per-node leads) stay one-per-line — but
+      // CAPPED too (a big CDI repo's @Inject fan is dozens of them), top BS_N + an honest rolled-up count.
       const FANOUT = new Set(["shared-key-fanout", "llm-proposed-key"]);
       const fanout = bs.filter((b) => FANOUT.has(b.mechanism));
       const ambient = new Map<string, string[]>();
+      const leads: any[] = [];
       for (const b of bs) {
         if (FANOUT.has(b.mechanism)) continue;
         if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
+        leads.push(b);
+      }
+      const shownLeads = leads.slice(0, EXEMPT_N);
+      for (const b of shownLeads) {
         const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
         out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
       }
+      if (leads.length > shownLeads.length) out.push(`  (+${leads.length - shownLeads.length} more opaque edge(s) with candidates — raise --token-budget)`);
       for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
       if (fanout.length) {
         const keyOf = (b: any) => (b.candidates ?? [])[0]?.symbol ?? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1]) ?? b.node;

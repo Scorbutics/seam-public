@@ -41,12 +41,13 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.indexOf("## Spine")).toBeLessThan(out.indexOf("## Region"));
     expect(out.indexOf("## Region")).toBeLessThan(out.indexOf("## Frontier"));
     expect(out.indexOf("## Frontier")).toBeLessThan(out.indexOf("## Blindspots"));
-    // the frontier entry names the exact deepening invocation, carrying the intent to redirect
-    expect(out).toContain("seam --grow-from telemetry/telemetry.ts#record --intent \"how are bookings created\"");
+    // the deepen recipe is stated ONCE (carrying the intent to redirect), not restated per frontier line
+    expect(out).toContain("deepen any: seam --grow-from <file>#<symbol> --intent \"how are bookings created\"");
+    expect(out).toContain("record (telemetry/telemetry.ts)");   // the frontier entry itself (no per-line invocation)
     // the hub is collapsed with fan + sample consumers; the crossing key shows on the spine
     expect(out).toContain("hub: ubiquity, fan 9");
     expect(out).toContain("[crossing: bookings]");
-    expect(out).toContain("(+2 more decision point(s) cut");
+    expect(out).toContain("(+2 more decision point(s)");
   });
 
   test("a hub wiring many seams is listed ONCE, not per-seam (dedup — the Acme BookingsBean bug)", () => {
@@ -66,7 +67,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toContain("## Spine");
     expect(out).toContain("createBooking");
     expect(out).toContain("hub: ubiquity, fan 9");
-    expect(out).toContain("seam --grow-from telemetry/telemetry.ts#record");
+    expect(out).toContain("record (telemetry/telemetry.ts)");   // frontier entry survives the crop (exempt)
     expect(out).toContain("## Blindspots");
     expect(out).toContain("string-dispatch");
     // the off-path region was CROPPED to a relevance-ranked HEAD and SAID SO (not silently dropped, not a bare count)
