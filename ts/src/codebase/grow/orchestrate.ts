@@ -1246,9 +1246,14 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
             process.stderr.write(`[data-coupling] footprint scope reused from memo (${memo.size} files) — probe skipped\n`);
           } else {
             emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+            // BORDERED probe (default): the scope only needs the answer's OWN files — the LLM discovers THEIR keys and
+            // complements are matched against the REPO-WIDE floor index, so a same-stack structural flood (the old
+            // inclusive stableFloor probe, 8-19s on Acme) buys nothing but cost. Grow each center bordered + coupling-off
+            // (≈ the answer's structural pass). SEAM_PROBE_INCLUSIVE=1 restores the fully-inclusive floor probe.
+            const _inclusive = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;
             const floors = await Promise.all(centers.map((c) => {
-              const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
-              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
+              const fc = ctx.fork(); fc.footprintFiles = undefined; if (_inclusive) fc.stableFloor = true;
+              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _inclusive ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
             }));
             const union = new Set<string>();
             for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
@@ -1274,9 +1279,10 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
   }
   // (1) UNION floor pre-grow (parallel; stableFloor forks write nothing and carry their own budgets).
   emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+  const _inclusive = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;   // BORDERED probe default (see merged branch)
   const floors = await Promise.all(centers.map((c) => {
-    const fc = ctx.fork(); fc.stableFloor = true; fc.footprintFiles = undefined;
-    return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCouplingLlm: false, ctx: fc }).then(([d]) => d).catch(() => null);
+    const fc = ctx.fork(); fc.footprintFiles = undefined; if (_inclusive) fc.stableFloor = true;
+    return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _inclusive ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
   }));
   const union = new Set<string>();
   for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
