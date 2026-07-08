@@ -39,6 +39,15 @@ This is the structural↔semantic rule in MOTION: STRUCTURE deduces the FACT (th
 model only judges the MEANING (which key, which intent). If a change pushes "everything to the LLM", matches a
 keyword, or blind-resolves to fabricate an edge, it violates this — redesign it as grounded propagation.
 
+The GROW is INTENT-FREE and EMBEDDING-FREE — this is a hard invariant, not a preference. The wave/footprint is
+purely STRUCTURAL (resolved edges, grounded boundaries, deterministic containment) so a node's footprint is
+CACHEABLE PER FILE and REUSABLE across every intent (the graph-node cache: one materialised structural footprint,
+many questions). The moment intent or embeddings enter the grow, the result becomes per-intent and the per-file
+cache can no longer be materialised — it collapses. So intent/embeddings apply ONLY at RENDER time: they CROP,
+RANK, and dim the already-grown structural footprint, never steer the walk. (This supersedes any earlier wording
+that applied embeddings "inside" a grow decision — inside the grow, selection among candidates must be
+DETERMINISTIC and STRUCTURAL.)
+
 In plan and agent modes, do not hesitate to ask questions if you need more information, in particular for huge complex tasks.
 
 For the architecture / high complexity code related tasks, behave like a Senior Software engineer / an architect.
