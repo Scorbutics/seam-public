@@ -118,4 +118,28 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     // and the section did not blow up: at most a couple of fanout-related lines, not 30
     expect((out.match(/shared-key/g) ?? []).length).toBeLessThanOrEqual(2);
   });
+
+  test("region DEDUPES by symbol identity — a bean wired into N seams renders ONCE, not N× (Acme BookingsBean 4×)", () => {
+    const model = makeModel({ offN: 0 });
+    for (let i = 0; i < 4; i++) model.clusters[0].seams.push({
+      id: `dupe${i}`, label: "BookingsBean", tier: "supporting", region: { shell: 2, direction: "down" },
+      primary: { file: "cdi/BookingsBean.java", line: 3, symbol: "BookingsBean" },
+      hunks: [{ id: `dh${i}`, file: "cdi/BookingsBean.java", start: 3, role: "link", label: "BookingsBean" }],
+    } as any);
+    const out = renderAgent(model, { tokenBudget: 8000, intent: "how are bookings managed" });
+    expect((out.match(/BookingsBean \(cdi\/BookingsBean\.java:3\)/g) ?? []).length).toBe(1);   // 4 seams → ONE region line
+  });
+
+  test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
+    const model = makeModel({ offN: 0 });
+    (model as any).blindspots = [
+      { node: "sharp", mechanism: "di", evidence: "injected", candidates: [{ symbol: "OnlyImpl" }, { symbol: "Alt" }] },   // 2 candidates = sharpest
+      ...Array.from({ length: 6 }, (_, i) => ({ node: `n${i}`, mechanism: "dispatch", evidence: "dyn", candidates: [{ symbol: `a${i}` }, { symbol: `b${i}` }, { symbol: `c${i}` }] })),   // 3 each
+    ];
+    const out = renderAgent(model, { tokenBudget: 4000, intent: "x" });
+    expect(out).toContain("actionable (resolves to a known candidate set");   // the triage header
+    expect(out.indexOf("sharp:")).toBeGreaterThan(-1);                        // the sharp lead is shown…
+    expect(out.indexOf("sharp:")).toBeLessThan(out.indexOf("n0:"));           // …and ranks ABOVE the 3-candidate ones
+    expect(out).toMatch(/\+2 more resolvable lead\(s\)/);                     // 7 leads, cap 5 → +2 rolled up
+  });
 });

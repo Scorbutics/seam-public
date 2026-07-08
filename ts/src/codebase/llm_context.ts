@@ -751,11 +751,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       [...seams].sort((a, b) => (_shellOf(a) - _shellOf(b))).forEach((s) => out.push(seamLine(s)));
       return out;
     }
+    // DEDUP by symbol identity — a hub the grow reached by N paths (or a bean wired into N seams that escaped the
+    // hub collapse) otherwise renders the SAME `where()` line N times (Acme: BookingsBean 4× in supporting), pure
+    // noise. Keep the highest-relevance occurrence (the list is pre-sorted by relevance). Then crop.
+    const dedup = (list: Seam[]): Seam[] => { const seen = new Set<string>(); return list.filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; }); };
     const rankedRegion = (list: Seam[], label: string, drop: boolean, headN: number): void => {
       if (!list.length) return;
-      const sorted = [...list].sort(byRel);
+      const sorted = dedup([...list].sort(byRel));
       if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); return; }
-      out.push(`${label} (top ${headN} of ${list.length} by intent relevance — raise --token-budget for the rest):`);
+      out.push(`${label} (top ${headN} of ${sorted.length} by intent relevance — raise --token-budget for the rest):`);
       sorted.slice(0, headN).forEach((s) => out.push(seamLine(s)));
     };
     rankedRegion(supporting, "supporting", dropSupporting, 10);
@@ -806,12 +810,20 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
         leads.push(b);
       }
-      const shownLeads = leads.slice(0, EXEMPT_N);
+      // SEVERITY TRIAGE — 133 blindspots is overwhelming; the actionable ones are the RESOLVABLE leads (a node
+      // that resolves to one of a SMALL candidate set — a DI interface with 2 impls on the path), not the ambient
+      // noise (external-libraries, already collapsed below). Rank the leads SHARPEST-first (fewest candidates = the
+      // tightest "it's one of these" lead) and show the top BLINDSPOT_N; the rest roll up.
+      const BLINDSPOT_N = Math.max(5, Math.floor(budget / 800));   // ~5 at the default; grows with --token-budget
+      const nCands = (b: any) => new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean)).size;
+      const rankedLeads = [...leads].sort((a, b) => (nCands(a) - nCands(b)) || (String(a.mechanism) < String(b.mechanism) ? -1 : 1));
+      const shownLeads = rankedLeads.slice(0, BLINDSPOT_N);
+      if (shownLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
       for (const b of shownLeads) {
         const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
         out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
       }
-      if (leads.length > shownLeads.length) out.push(`  (+${leads.length - shownLeads.length} more opaque edge(s) with candidates — raise --token-budget)`);
+      if (leads.length > shownLeads.length) out.push(`  (+${leads.length - shownLeads.length} more resolvable lead(s) — raise --token-budget)`);
       for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
       if (fanout.length) {
         const keyOf = (b: any) => (b.candidates ?? [])[0]?.symbol ?? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1]) ?? b.node;
