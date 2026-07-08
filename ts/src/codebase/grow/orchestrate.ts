@@ -104,7 +104,12 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
   if (!ar) return empty;
   const hi = (ar[0].match(/\n/g) ?? []).length;
   const _repeat = _fcSeen.has(normpath(file)); _fcSeen.add(normpath(file)); _fcCalls++; const _t0 = timingOn() ? Date.now() : 0;
-  const cacheOn = !opts.dataCouplingLlm && (_envFlag(process.env.SEAM_COUPLING_FILE_CACHE) ?? true);
+  // Cache the fan delta for BOTH floor AND llm. `cachedCouplingDelta` keys on the COUPLING epoch, which folds the
+  // learned-matcher state — so an LLM delta MISSES while the flywheel is still learning (the epoch keeps changing →
+  // correct, re-resolve) and HITS once it settles (epoch stable → skip resolveCoupling entirely). This kills the
+  // "resolveCoupling per file every run" repetition on the LLM path (Acme): the fan couples hundreds of beans, most
+  // `GATE: no boundary → skipped`, and each was re-parsed every grow.
+  const cacheOn = (_envFlag(process.env.SEAM_COUPLING_FILE_CACHE) ?? true);
   const compute = async (srcId: string, ctr: number) => {
     const delta = await resolveCoupling(repo, srcId, file, ar[0], 0, hi, ctr, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
     delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
@@ -113,8 +118,8 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
   let out: { nodes: any[]; edges: any[]; blindspots: any[]; counter: number };
   if (!cacheOn) out = await compute(anchorId, counter);
   else {
-    // compute the placeholder-sourced, zero-based delta ONCE per (file, epoch); rehydrate per reach.
-    const cached = await cachedCouplingDelta(repo, file, "fan|whole", false, () => compute(_FAN_SRC, 0));
+    // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
+    const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0));
     out = _rehydrateFanDelta(cached, anchorId, counter);
   }
   if (_repeat) { _fcRepeats++; if (_t0) { _fcRepeatMs += Date.now() - _t0; if (timingOn()) process.stderr.write(`[time] ${cacheOn ? "RE-COUPLE(cached)" : "RE-COUPLE"} ${normpath(file)}: ${Date.now() - _t0}ms\n`); } }
