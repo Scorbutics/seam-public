@@ -6,7 +6,8 @@ description: >-
   for it when the answer is a PATH / FLOW / STRUCTURE spanning multiple files, not a single fact. Run it
   as a CLI (it prints a JSON model you read); this skill says WHEN and HOW. Triggers: "how does X work",
   "where does X live", "map the footprint of X", "what's the blast radius of X", "review this diff/PR by
-  intent", "trace this flow across the codebase".
+  intent", "trace this flow across the codebase". Run it as a CLI — it prints a compact, ranked intent
+  MAP on stdout that you read directly (not a giant JSON blob); this skill says WHEN and HOW.
 ---
 
 # Seam — route structural questions to the `seam` CLI
@@ -25,31 +26,37 @@ MCP sampling.
 
 Use **`seam`** (installed to `~/.local/bin/seam` by install.sh). If it isn't on `PATH`, run the engine
 directly: **`bun ~/.seam/ts/src/cli/decompose.ts`** (the install pins the exact checkout path below).
-Every invocation should write the model with `--emit-seams <file>` and then you read that JSON.
+
+**Read the map on STDOUT — do NOT dump JSON.** For codebase questions pass **`--format agent`**: a compact,
+token-budgeted map (a numbered SPINE + a relevance-ranked region + collapsed blindspots) meant to be read
+directly. `--emit-seams <file>` writes the full model as JSON — that is the machine contract for the VS Code
+extension, NOT for you: it is often ~40× larger and BURIES the answer. Only use it if you specifically need
+a field the map omits.
 
 ## Pick the call by the shape of the question
 
 | The question | Command | You read |
 |---|---|---|
-| *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --emit-seams /tmp/seam.json` (or `--file <patch>`) | clusters → seams + roles + wiring |
-| *"Where does this symbol/module live — who consumes it, what does it wire?"* (you have an anchor) | `seam --scan --repo <repo> --center <f>[#<s>] --intent "<q>" --skeleton --emit-seams /tmp/seam.json` | a static footprint, decomposed into seams |
-| *"How does &lt;intent&gt; work / where does it culminate?"* (a question, maybe no symbol) | `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --emit-seams /tmp/seam.json` (several: `--center <f1>#<s1>,<f2>#<s2>`; or omit `--center` to detect the mechanism from the intent) | an auto-grown footprint: the center's flood-fill region + culmination |
-| *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --emit-seams /tmp/seam.json` | the resolved SET / shape (deterministic, no LLM) |
+| *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --format llm` (or `--file <patch>`) | a markdown summary: clusters → seams + roles |
+| *"Where does this symbol/module live — who consumes it, what does it wire?"* | `seam --scan --repo <repo> --center <f>[#<s>] --intent "<q>" --skeleton --format agent` | a compact footprint map |
+| *"How does &lt;intent&gt; work / where does it culminate?"* | `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several mechanisms: `--center <f1>#<s1>,<f2>#<s2>`; omit `--center` to let Seam detect them from the intent) | an auto-grown map: spine → culmination |
+| *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
 
-Then read `/tmp/seam.json` and answer from it. A text report is also available (drop `--emit-seams`), but
-the JSON is the reliable contract.
+Read what it prints on stdout. (`--emit-seams <file>` is available for the VS Code extension — a big JSON
+model, not for reading in-CLI.)
 
-## Reading the JSON
+## Reading the map (`--format agent`)
 
-- `clusters[].seams[]` — each seam has `label`, `hunks[]` (with `role`, `file`, line span), and wiring.
-- **`relevance` (0..1) and `tier` (spine / supporting / off)** on each grown seam — a **deterministic
-  embedding** ranking of how on-intent the seam is (no LLM; reproducible). **Trust the `spine` band; treat
-  `off` as background.** `tier` is orthogonal to `role`.
-- `blindspots` — statically-opaque edges (cross-language, DI, string dispatch) as `SUGGESTED` leads, never
-  asserted facts.
-- A broad closure is **normal** — the engine shows everything and ranks; *you* decide what to foreground
-  using `tier` (`spine` / `supporting` / `off`). The concern/agent render already orders and dims by it —
-  read the spine first and treat the `off` tail as context.
+- **Spine** — the numbered primary path (`anchor → … → outcome`). Read this FIRST; it's the answer's backbone.
+- **Region** — the rest, grouped by intent tier (`supporting` / `off`); each line is
+  `symbol (file:line) — role — how it's reached`. A broad region is NORMAL — the map already orders and
+  dims by relevance, so skim the `off` tail as background rather than treating every line as central.
+- **blindspots** — statically-opaque edges (cross-language, DI, string dispatch) surfaced as SUGGESTED leads
+  to verify, never asserted facts. When the map ends at one, COMPOSE: re-run from the other side.
+- A diff run (`--format llm`) prints clusters → seams + roles instead of a spine; a shape (`--format
+  llm-context`) prints the resolved member set. The machine JSON (`--emit-seams`, shape
+  `clusters[].seams[].hunks[]` with `role`/`tier`/`relevance`/`blindspots`) is for the extension — parse it
+  only if you must read a specific field.
 
 ## Routing rules
 
