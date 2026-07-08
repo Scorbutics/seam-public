@@ -240,15 +240,25 @@ step, not an option:
 
 ### C1 — Run it
 
-**Best LLM-consumer output = `--format agent`** (the token-budgeted agent render: spine-first, dimmed
-off-intent tail, cross-stack blindspots collapsed). With `--center` + `--skeleton` + floor coupling it's
-fully deterministic — run it in the FOREGROUND, no bridge:
+**Pick the render by the question's SHAPE:**
+- **STAR** — *"how is X managed / handled across the app"* (one mechanism, many entry points): add
+  `--concern --format concern`. The concern map threads each coupling crossing INTO the flow —
+  **In** (`entry ──HTTP /route──▶ ●`) and **Out** (`● ──writes──▶ db "table"`) around the center ● — which
+  is what a "how is X managed" answer wants.
+- **LINE** — *"how does X flow / where does it culminate"* (trace one path): `--format agent` (spine-first,
+  dimmed off-intent tail, blindspots collapsed).
+
+Both are token-budgeted and deterministic with `--center` + `--skeleton` + floor coupling — run in the
+FOREGROUND, no bridge:
 
 ```bash
-# you name the center(s) → deterministic, no bridge, best LLM output:
+# STAR (how is X managed):
+$ENGINE --scan --auto --concern --repo "<REPO>" --center "<F>#<S>" \
+        --intent "<question>" --max-steps <N> --skeleton --format concern
+#   …several mechanisms → --center "<F1>#<S1>,<F2>#<S2>"
+# LINE (how does X flow):
 $ENGINE --scan --auto --repo "<REPO>" --center "<F>#<S>" \
         --intent "<question>" --max-steps <N> --skeleton --format agent
-#   …several mechanisms → --center "<F1>#<S1>,<F2>#<S2>"   (a multi-center concern star)
 ```
 
 If you omit `--center` (center-first) OR add `--data-coupling llm`, there IS a residual LLM pass. Either

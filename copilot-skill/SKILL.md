@@ -39,7 +39,8 @@ a field the map omits.
 |---|---|---|
 | *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --format llm` (or `--file <patch>`) | a markdown summary: clusters → seams + roles |
 | *"Where does this symbol/module live — who consumes it, what does it wire?"* | `seam --scan --repo <repo> --center <f>[#<s>] --intent "<q>" --skeleton --format agent` | a compact footprint map |
-| *"How does &lt;intent&gt; work / where does it culminate?"* | **pick the center FIRST (see below), then** `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several mechanisms: `--center <f1>#<s1>,<f2>#<s2>`) | an auto-grown map: spine → culmination |
+| *"How is &lt;X&gt; MANAGED / handled across the app?"* (a STAR — one mechanism, many entry points) | **pick the center FIRST (see below), then** `seam --scan --auto --concern --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format concern` | a center-first map: In (entry ──HTTP/db──▶ ●) / Out (● ──writes──▶ db) |
+| *"How does &lt;X&gt; FLOW / where does it culminate?"* (a LINE — trace one path) | **pick the center FIRST, then** `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several: `--center <f1>#<s1>,<f2>#<s2>`) | an auto-grown spine → culmination |
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
 
 Read what it prints on stdout. (`--emit-seams <file>` is available for the VS Code extension — a big JSON
