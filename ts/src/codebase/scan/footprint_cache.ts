@@ -44,23 +44,48 @@ function _hash(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-// The repo content epoch: a hash of every source file's (rel, mtime, size), read by a DIRECT stat-walk of the
+// The repo content epoch: a hash of every source file's (rel, CONTENT-HASH), read by a DIRECT stat-walk of the
 // current filesystem. It must NOT be derived from an index manifest — that manifest is refreshed lazily DURING
 // the grow (when impls_of first runs), so at the moment the first cached node is looked up it can still hold
 // the PREVIOUS run's state → a stale hit (the exact bug the invalidation test caught). A direct walk reflects
 // the live tree regardless of index timing: ANY source add/edit/delete bumps the epoch and invalidates every
 // entry — coarse but correct, and it closes the alias / new-impl hole by construction. Computed once/process.
+//
+// WHY CONTENT, NOT MTIME. A `(rel, mtime, size)` epoch flips whenever ANYTHING touches a file's mtime — an IDE
+// reindex, a `git checkout`/`stash`, a regenerated sibling — even if the bytes are identical. On a live dev
+// checkout that flip fires between nearly every run → the ENTIRE cache goes MISS(stale) on unchanged files (the
+// probe then eats the full re-resolve and the real grow reads what the probe just re-warmed: the "6-19s warm"
+// bug). So we key the epoch on a CONTENT hash. To avoid re-reading every file each run, we MEMOIZE each file's
+// content-hash under its (mtime,size) in a persisted shard: a file is re-read ONLY when its (mtime,size) moved
+// (an edit OR a bare touch); if a touch left the bytes identical the memo yields the same hash and the epoch —
+// and the whole warm cache — HOLDS. Change-detection is exactly as strong as before ((mtime,size) is still the
+// re-read trigger); we simply no longer let a no-op touch masquerade as a content change.
+const CONTENT_MEMO = "content-hash-v1";
+type ContentEntry = { m: number; s: number; h: string };   // (mtime, size) → content hash; content-provably-stable while (m,s) hold
 export function epochOf(repo: string): string {
   const cached = _epoch.get(repo);
   if (cached !== undefined) return cached;
+  const useDisk = graphCacheEnabled();
+  const memo: Record<string, ContentEntry> = useDisk ? (loadShard<Record<string, ContentEntry>>(repo, CONTENT_MEMO, "index") ?? {}) : {};
+  let dirty = false;
   const parts: string[] = [];
+  const seen = new Set<string>();
   for (const [dir, files] of walk(repo, SKIP_DIRS)) for (const fn of files) {
     const rel = relative(repo, join(dir, fn)).replace(/\\/g, "/");
     if (!endsWithSourceExt(rel)) continue;
     let st; try { st = statSync(join(repo, rel)); } catch { continue; }
-    parts.push(`${rel}:${Math.round(st.mtimeMs)}:${st.size}`);
+    const m = Math.round(st.mtimeMs), s = st.size;
+    seen.add(rel);
+    let e = memo[rel];
+    if (!e || e.m !== m || e.s !== s) {   // first sight OR (mtime,size) moved → re-read; a no-op touch re-hashes to the SAME h
+      let content: string; try { content = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
+      e = { m, s, h: _hash(content) }; memo[rel] = e; dirty = true;
+    }
+    parts.push(`${rel}:${e.h}`);
   }
+  if (useDisk) for (const k of Object.keys(memo)) if (!seen.has(k)) { delete memo[k]; dirty = true; }   // prune deleted files
   const e = parts.length ? _hash(ENGINE_EPOCH + "\n" + parts.sort().join("\n")) : "";   // engine epoch → a seam update invalidates
+  if (useDisk && dirty) saveShard(repo, CONTENT_MEMO, "index", memo);
   _epoch.set(repo, e);
   return e;
 }
