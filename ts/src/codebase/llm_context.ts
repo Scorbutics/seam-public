@@ -396,7 +396,7 @@ export function renderLlmContext(model: any): string {
       // candidate edges is an actionable per-node lead even if their symbol names didn't survive emit
       // (the evidence still names the unresolved target, e.g. "OwnerRepository has 2 implementations").
       if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
-      const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
+      const cands = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))].slice(0, 6);
       out.push(`- ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
     }
     for (const [mech, nodes] of ambient)
@@ -847,7 +847,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       const shownLeads = rankedLeads.slice(0, BLINDSPOT_N);
       if (shownLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
       for (const b of shownLeads) {
-        const cands = [...new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean))].slice(0, 6);
+        const cands = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))].slice(0, 6);
         out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
       }
       if (leads.length > shownLeads.length) out.push(`  (+${leads.length - shownLeads.length} more resolvable lead(s) — raise --token-budget)`);

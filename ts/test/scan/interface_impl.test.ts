@@ -37,11 +37,27 @@ describe("interface→impl resolution", () => {
     expect(ie[0].provenance).toBe("RESOLVED_PARTIAL");  // inferred runtime binding, not asserted
   });
 
-  test("multiple impls: an honest blindspot with candidates, not a guess", async () => {
+  test("multiple impls (≤ cap): the footprint crosses the DI facade into the impls — not a dead blindspot", async () => {
     const g = await build_dependency_graph(MULTI, "src/main/java/app/Consumer.java", "Consumer");
-    expect(g.edges.some((e: any) => e.kind === "interface-impl")).toBe(false);   // no guessed binding
-    const bs = (g.blindspots || []).find((b: any) => b.mechanism === "interface-multiple-impls" && b.node === "Service")!;
-    expect(bs).toBeTruthy();
-    expect([...bs.candidates].sort()).toEqual(["AltService", "DefaultService"]);
+    const files = g.nodes.map((n: any) => (n.file || "").split("/").pop());
+    // both impls (2 ≤ the default cap) are reached via interface-impl edges — the layer behind the facade is visible
+    expect(files).toContain("DefaultService.java");
+    expect(files).toContain("AltService.java");
+    const ie = g.edges.filter((e: any) => e.kind === "interface-impl");
+    expect(ie.length).toBeGreaterThanOrEqual(2);
+    expect(ie.every((e: any) => e.provenance === "RESOLVED_PARTIAL")).toBe(true);   // inferred bindings, not asserted
+  });
+
+  test("the impls NOT taken (beyond the cap) are flagged as a --grow-from-able blindspot", async () => {
+    const prev = process.env.SEAM_IMPL_CAP; process.env.SEAM_IMPL_CAP = "1";
+    try {
+      const g = await build_dependency_graph(MULTI, "src/main/java/app/Consumer.java", "Consumer");
+      expect(g.edges.filter((e: any) => e.kind === "interface-impl").length).toBe(1);   // cap 1 → one impl followed
+      const bs = (g.blindspots || []).find((b: any) => b.mechanism === "interface-multiple-impls" && b.node === "Service")!;
+      expect(bs).toBeTruthy();
+      expect(bs.candidates.length).toBe(1);                        // the OTHER impl is flagged, not lost
+      expect(bs.candidates[0]).toHaveProperty("file");            // …carrying file + symbol so it is directly
+      expect(bs.candidates[0]).toHaveProperty("symbol");          //    --grow-from-able ("grow again from there")
+    } finally { if (prev === undefined) delete process.env.SEAM_IMPL_CAP; else process.env.SEAM_IMPL_CAP = prev; }
   });
 });

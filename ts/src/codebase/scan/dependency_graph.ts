@@ -2,7 +2,8 @@
 // imports, same-package type refs (Java siblings), DI interface→impl bindings, deterministic string-
 // dispatch (tier-2), opt-in LLM coupling (tier-3), and the shared-key overlay. INTERNAL to the phase —
 // the public entry is footprint.build_footprint. Port of build_dependency_graph.
-import { basename } from "node:path";
+import { basename, join } from "node:path";
+import { statSync } from "node:fs";
 import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath } from "../../core/resolve/walk.js";
@@ -204,12 +205,38 @@ function _intraFileCalleePass(s: DepScan): void {
   }
 }
 
+// DETERMINISTIC rank of a multi-impl candidate set — NO intent/embeddings (the grow stays cacheable per file;
+// the "which one for THIS question" is the render's job). Prefer CONCRETE, NON-TEST impls, structurally HEAVIEST
+// first (file size = a cheap grounded proxy for a real mechanism vs a no-op/stub/map backend); path as a stable
+// tiebreak. The heaviest concrete impls are the ones that actually cross a boundary (persist/HTTP/queue), which
+// the downstream grounded coupling detection then confirms.
+function _rankImpls(repo: string, cands: { cls: string; file: string }[]): { cls: string; file: string }[] {
+  const isTest = (f: string) => /(^|\/)(test|tests|__tests__|src[/\\]test)([/\\]|$)/i.test(f);
+  const size = (f: string) => { try { return statSync(join(repo, f)).size; } catch { return 0; } };
+  return [...cands].map((c) => ({ c, test: isTest(c.file) ? 1 : 0, sz: size(c.file) }))
+    .sort((a, b) => (a.test - b.test) || (b.sz - a.sz) || (a.c.file < b.c.file ? -1 : 1))
+    .map((x) => x.c);
+}
+
+// 3) INTERFACE→IMPL pass. SOLE impl → the runtime binding, followed. MULTIPLE impls → the container's choice
+// can't be picked statically, but PARKING them all left the whole layer behind a DI facade (Keycloak: `UserModel`
+// → 6 impls, one the JPA persistence) invisible. Instead follow a DETERMINISTIC, CAPPED subset (the heaviest
+// concrete impls — _rankImpls) so the footprint crosses into the real impl, and FLAG the impls NOT taken as a
+// blindspot carrying their `{symbol,file}` so the dev can `--grow-from` them. SEAM_IMPL_CAP bounds the fan (0 =
+// the old park-all behaviour). Deterministic ⇒ cacheable.
 async function _interfaceImplPass(s: DepScan): Promise<void> {
+  const capRaw = parseInt(process.env.SEAM_IMPL_CAP ?? "3", 10);
+  const cap = Number.isFinite(capRaw) ? Math.max(0, capRaw) : 3;
   for (const dn of [...s.nodes]) {
     const cands = await impls_of(s.repo, dn.symbol);
-    if (cands.length === 1) await _addDep(s, cands[0].cls, cands[0].file, null, "interface-impl", "RESOLVED_PARTIAL");
-    else if (cands.length > 1) s.blindspots.push({ node: dn.symbol, mechanism: "interface-multiple-impls",
-      evidence: `${dn.symbol} has ${cands.length} implementations — the runtime DI (CDI/Spring) binding can't be picked statically`, candidates: cands.map((c) => c.cls) });
+    if (!cands.length) continue;
+    if (cands.length === 1) { await _addDep(s, cands[0].cls, cands[0].file, null, "interface-impl", "RESOLVED_PARTIAL"); continue; }
+    const ranked = _rankImpls(s.repo, cands);
+    const take = ranked.slice(0, cap), rest = ranked.slice(cap);
+    for (const c of take) await _addDep(s, c.cls, c.file, null, "interface-impl", "RESOLVED_PARTIAL");
+    if (rest.length) s.blindspots.push({ node: dn.symbol, mechanism: "interface-multiple-impls",
+      evidence: `${dn.symbol} has ${cands.length} implementations${take.length ? ` (followed ${take.length}, structurally-ranked)` : ""} — the runtime DI binding can't be picked statically; grow the rest explicitly`,
+      candidates: rest.map((c) => ({ symbol: c.cls, file: c.file })) });
   }
 }
 
