@@ -548,7 +548,12 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // CLAUDE.md) and adds the marker + the `type` classification (the `MyString` shape: a util TYPE referenced
   // everywhere but never a call target on the spine). DEFAULT ON — the deterministic containment carries the grow
   // (env=0 / opts=false opts out); the discarded scoping PROBE stays inclusive (no containment).
-  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !stableFloor;
+  // NOTE: the scoping PROBE (stableFloor) keeps HUB-COLLAPSE on (unlike tier/intent-border below). The probe only
+  // exists to enumerate the flow's files for coupling scope; a non-crossing MEGA-HUB fan (e.g. `User`'s 493 plain
+  // consumers) is off-spine sibling code, NOT coupling-relevant — and the hub gate's I4 invariant NEVER drops a
+  // crossing-bearing node — so gating it shrinks the probe from a whole-repo flood (8.7s on Acme) to ~the answer's
+  // size without losing any coupling file. Opt back to the old fully-inclusive probe with SEAM_PROBE_INCLUSIVE=1.
+  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !(stableFloor && (_envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false));
   const hubGate = (opts.hubGate ?? false) || hubCollapse;   // env SEAM_HUB_GATE removed — it was OR'd with the default-on hubCollapse, so it could never toggle anything
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
