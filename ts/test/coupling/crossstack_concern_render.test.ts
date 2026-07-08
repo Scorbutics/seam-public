@@ -45,11 +45,11 @@ describe("cross-stack concern render — a Java bean's JS front-end consumers su
     const out = concernRender();
     // the front-end JS file is on the map (the whole cross-stack point)
     expect(out).toContain("bookingService.js");
-    // and it's surfaced as a route-boundary interaction (via the shared route), not a raw call caller (the JS
-    // never calls the bean) — the exact route label varies by path (class+method vs method @Path), so don't pin it
-    expect(out).toMatch(/loadAvailableTimes[\s\S]*reaches a mechanism via the \S+ boundary/);
+    // and it's surfaced as a route-boundary interaction THREADED through the crossing edge (──HTTP /route──▶ ●),
+    // not a raw call caller (the JS never calls the bean) — the exact route label varies, so don't pin it
+    expect(out).toMatch(/loadAvailableTimes[\s\S]*──HTTP [^\n]*──▶ ●/);
     // with a valid deepen handle (a real JS symbol, not the synthetic boundary node)
-    expect(out).toContain("--grow-from web-acmecheck/src/main/webapp/js/services/bookingService.js#loadAvailableTimes");
+    expect(out).toContain("grow: web-acmecheck/src/main/webapp/js/services/bookingService.js#loadAvailableTimes");
     // the boundary node itself (a bare `/route` node) is NOT rendered as an interaction entry
     expect(out).not.toMatch(/^\s+\/[\w/-]* \(\S+:\d+\)/m);
   }, 30000);
