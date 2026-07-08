@@ -39,11 +39,33 @@ a field the map omits.
 |---|---|---|
 | *"What does this diff/PR do; how do I review it by intent?"* | `seam --git <range> --repo <repo> --format llm` (or `--file <patch>`) | a markdown summary: clusters → seams + roles |
 | *"Where does this symbol/module live — who consumes it, what does it wire?"* | `seam --scan --repo <repo> --center <f>[#<s>] --intent "<q>" --skeleton --format agent` | a compact footprint map |
-| *"How does &lt;intent&gt; work / where does it culminate?"* | `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several mechanisms: `--center <f1>#<s1>,<f2>#<s2>`; omit `--center` to let Seam detect them from the intent) | an auto-grown map: spine → culmination |
+| *"How does &lt;intent&gt; work / where does it culminate?"* | **pick the center FIRST (see below), then** `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several mechanisms: `--center <f1>#<s1>,<f2>#<s2>`) | an auto-grown map: spine → culmination |
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
 
 Read what it prints on stdout. (`--emit-seams <file>` is available for the VS Code extension — a big JSON
 model, not for reading in-CLI.)
+
+## ALWAYS pick the center yourself — do NOT omit `--center`
+
+For a footprint or a grow, **you choose the mechanism, then Seam traces from it.** This is a mandatory
+first step — never run the grow with only `--intent` and let the engine guess:
+
+1. **Find the mechanism symbol(s)** for the intent — one quick search. Look for the class/service/handler
+   named after the domain noun in the question. E.g. for *"how are bookings managed"*:
+   ```bash
+   rg -il 'booking' --type java        # → BookingService.java, BookingsController.java, …
+   ```
+   Pick the 1–3 that actually implement the behaviour (a `*Service` / `*Manager` / `*Controller` /
+   `*Handler`), not tests or DTOs.
+
+2. **Pass them as `--center`** — `--center "path/BookingService.java#manage"`, or the whole class
+   `--center "path/BookingService.java"`, or several comma-separated
+   `--center "path/BookingService.java,path/BookingsController.java"`.
+
+**Why:** YOU understand the question better than the engine's fallback text-matcher. Passing the center is
+faster (no extra center-pick LLM pass), more accurate (you avoid it guessing a ubiquitous or sibling node),
+and deterministic. Omit `--center` ONLY if, after searching, you genuinely cannot find any candidate symbol
+— and say so explicitly. Do not default to omitting it.
 
 ## Reading the map (`--format agent`)
 
@@ -63,9 +85,9 @@ model, not for reading in-CLI.)
 - **Seam to MAP, grep to DRILL.** Reach for Seam when the answer is a flow / path / structure across
   *multiple files*. For a single-symbol lookup or one-fact answer, grep is instant and Seam is overkill.
 - Prefer **one** Seam call over stitching a flow together with many greps.
-- **Pass the center you already have** as `--center <f>#<s>` (or several, comma-separated) — Seam traces
-  from it instead of re-discovering the entry point (faster, and your pick is usually right). Omit
-  `--center` only when you don't know where the flow starts (it detects the mechanism from the intent).
+- **ALWAYS pass `--center`** (see the section above): grep for the mechanism symbol(s), then
+  `--center <f>#<s>` (or several, comma-separated). Don't run a grow on `--intent` alone — picking the
+  center yourself is faster, more accurate, and deterministic. No-`--center` is a last resort, not the default.
 - **Footprints COMPOSE.** When one ends at a cross-stack blindspot (a shared key/route whose other side
   isn't in the footprint — e.g. backend→frontend), run Seam AGAIN anchored on the **other side** (the key
   as `--intent`, or the consumer file as `--center`) and stitch — not a manual grep sweep.

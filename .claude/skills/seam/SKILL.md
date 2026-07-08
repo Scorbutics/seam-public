@@ -224,16 +224,19 @@ move-picker** and **no per-step pump**. The only LLM passes that can occur are:
 LLM passes — run it DIRECT like §B, no bridge.** You only need the bridge (or a `claude` binary) when a
 residual pass exists: `center-pick` (no `--center`), `seam-intent` (no `--skeleton`), or the `llm` flywheel.
 
-`--auto` **requires `--intent`**. Two ways to seed it:
+`--auto` **requires `--intent`**. Seed it by naming the CENTER(S) yourself — this is the mandatory first
+step, not an option:
 
-- **You name the center(s) (PREFER THIS)** — pass `--center file#symbol` (from a cursor pick, a §B scan, or
-  a symbol you grepped/read); give **several** comma-separated when the concern spans a few mechanisms. Seam
-  grows straight from them: **~11s**, zero center-selection LLM. Default to this whenever you already have a
-  candidate symbol — which, after a couple of orienting greps, you usually do.
-- **Center-first (omit `--center`)** — the engine detects the concern's MECHANISM(s) from the intent (a
-  lexical recall net → one `center-pick` LLM pass; offline → the deterministic lexical floor) and grows
-  from them. This is the right default when you only have a question, not a symbol. It prints
-  `[center-first] <n> mechanism(s): …`.
+- **You name the center(s) (ALWAYS DO THIS)** — orient FIRST (a quick grep/read for the mechanism symbol
+  behind the intent: the `*Service`/`*Handler`/`*Manager`/class named after the domain noun), then pass
+  `--center file#symbol` (or **several** comma-separated when the concern spans a few mechanisms). Seam grows
+  straight from them: **~11s**, zero center-selection LLM, and you avoid it guessing a ubiquitous/sibling
+  node. You almost always CAN find a candidate in one or two greps — so do that rather than reaching for the
+  fallback below.
+- **Center-first (omit `--center`) — LAST RESORT ONLY** — if, after searching, you genuinely cannot identify
+  any candidate symbol, the engine will detect the mechanism(s) from the intent (a `center-pick` LLM pass;
+  offline → the deterministic lexical floor) and print `[center-first] <n> mechanism(s): …`. It is slower and
+  can mis-pick — don't default to it.
 
 ### C1 — Run it
 
