@@ -39,7 +39,7 @@ import { stampSeamModel } from "../core/contract.js";
 import { emit, emitTimingSummary, timingOn, addStage, resetStages, stageSummary } from "../core/progress.js";
 import { readFileSync } from "node:fs";
 
-import { type Args, parseArgs, resolveEngines } from "./args.js";
+import { type Args, parseArgs, parseCenters, resolveEngines } from "./args.js";
 
 function err(msg: string): never { process.stderr.write(`error: ${msg}\n`); process.exit(2); }
 
@@ -95,7 +95,7 @@ async function runAsk(a: Args): Promise<number> {
 // there. Mirrors the codebase model envelope so --emit-seams clients stay compatible.
 async function runConsumerSet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
   if (!a.symbol) err("--query consumers requires --symbol (the callee whose callers you want)");
-  if (!a.anchorFile) err("--query consumers requires --anchor-file");
+  if (!a.anchorFile) err("--query consumers requires --center <file>[#symbol]");
   const { projectConsumerSet } = await import("../codebase/grow/project_set.js");
   const { renderConsumerSet } = await import("../codebase/llm_context.js");
   emit(`Resolving consumers of ${a.symbol}…`);
@@ -143,7 +143,7 @@ async function runConsumerSet(a: Args, scan: typeof import("../codebase/scan/ind
 // `none` = a leaf with no deps). No name-recall — dependencies are the anchor's own resolved out-edges.
 async function runDependencySet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
   if (!a.symbol) err("--query dependencies requires --symbol (whose dependencies you want)");
-  if (!a.anchorFile) err("--query dependencies requires --anchor-file");
+  if (!a.anchorFile) err("--query dependencies requires --center <file>[#symbol]");
   const { projectDependencySet } = await import("../codebase/grow/project_set.js");
   const { renderDependencySet } = await import("../codebase/llm_context.js");
   emit(`Resolving dependencies of ${a.symbol}…`);
@@ -176,7 +176,7 @@ async function runDependencySet(a: Args, scan: typeof import("../codebase/scan/i
 // Refactor query — the FACTS bundle for "how to refactor X": impact + dependencies + contract in one
 // run. A composition; emits a `shape: "refactor"` model. The change PLAN over the facts stays the caller's.
 async function runRefactorFacts(a: Args): Promise<number> {
-  if (!(a.symbol && a.anchorFile)) err("--query refactor requires --symbol and --anchor-file");
+  if (!(a.symbol && a.anchorFile)) err("--query refactor requires --center <file>#<symbol>");
   const { gatherRefactorFacts } = await import("../codebase/grow/refactor_facts.js");
   const { renderRefactorFacts } = await import("../codebase/llm_context.js");
   emit(`Gathering refactor facts for ${a.symbol}…`);
@@ -200,7 +200,7 @@ async function runRefactorFacts(a: Args): Promise<number> {
 // Impact query — the transitive blast radius of a symbol (who's affected if you change it). A non-grow
 // shape; emits a `shape: "impact"` model. The refactoring safety net.
 async function runImpact(a: Args): Promise<number> {
-  if (!(a.symbol && a.anchorFile)) err("--query impact requires --symbol and --anchor-file");
+  if (!(a.symbol && a.anchorFile)) err("--query impact requires --center <file>#<symbol>");
   const { projectImpact } = await import("../codebase/grow/impact.js");
   const { renderImpact } = await import("../codebase/llm_context.js");
   emit(`Computing the impact of ${a.symbol}…`);
@@ -227,7 +227,7 @@ async function runImpact(a: Args): Promise<number> {
 // Compare query — diff two symbols' dependency sets (shared / A-only / B-only). FROM = --symbol/--anchor-file,
 // B = --to-symbol/--to-file. A non-grow shape; emits a `shape: "comparison"` model.
 async function runCompare(a: Args): Promise<number> {
-  if (!(a.symbol && a.anchorFile)) err("--query compare requires --symbol and --anchor-file (anchor A)");
+  if (!(a.symbol && a.anchorFile)) err("--query compare requires --center <file>#<symbol> (side A) + --to-file/--to-symbol (side B)");
   if (!(a.toSymbol && a.toFile)) err("--query compare requires --to-symbol and --to-file (anchor B)");
   const { projectCompare } = await import("../codebase/grow/compare.js");
   const { renderComparison } = await import("../codebase/llm_context.js");
@@ -253,7 +253,7 @@ async function runCompare(a: Args): Promise<number> {
 // Neighborhood query — the cohesive subsystem around an anchor: a bounded ball + a weak-community
 // core/periphery partition (file grain). A non-grow shape; emits a `shape: "neighborhood"` model.
 async function runNeighborhood(a: Args): Promise<number> {
-  if (!(a.symbol && a.anchorFile)) err("--query neighborhood requires --symbol and --anchor-file");
+  if (!(a.symbol && a.anchorFile)) err("--query neighborhood requires --center <file>#<symbol>");
   const { projectNeighborhood } = await import("../codebase/grow/neighborhood.js");
   const { renderNeighborhood } = await import("../codebase/llm_context.js");
   emit(`Mapping the subsystem around ${a.symbol}…`);
@@ -279,7 +279,7 @@ async function runNeighborhood(a: Args): Promise<number> {
 // Contract query — a module's boundary: what crosses IN (used exports + consumers) and OUT (resolved
 // imports), plus fan-in/out. A non-grow shape; emits a `shape: "contract"` model.
 async function runContract(a: Args): Promise<number> {
-  if (!a.anchorFile) err("--query contract requires --anchor-file (the module)");
+  if (!a.anchorFile) err("--query contract requires --center <file> (the module)");
   const { projectContract } = await import("../codebase/grow/contract.js");
   const { renderContract } = await import("../codebase/llm_context.js");
   emit(`Mapping the contract of ${basename(a.anchorFile!)}…`);
@@ -304,7 +304,7 @@ async function runContract(a: Args): Promise<number> {
 // Reachability query — "can FROM reach TO?" answered as a verified yes/no + a witness path of resolved
 // edges (a bounded BFS over dependency footprints). A non-grow shape; emits a `shape: "reaches"` model.
 async function runReaches(a: Args): Promise<number> {
-  if (!(a.symbol && a.anchorFile)) err("--query reaches requires --symbol and --anchor-file (the FROM)");
+  if (!(a.symbol && a.anchorFile)) err("--query reaches requires --center <file>#<symbol> (the FROM) + --to-symbol (the TO)");
   if (!a.toSymbol) err("--query reaches requires --to-symbol (the TARGET)");
   const { findReach } = await import("../codebase/grow/reach.js");
   const { renderReach } = await import("../codebase/llm_context.js");
@@ -417,14 +417,17 @@ async function runCodebase(a: Args): Promise<number> {
     // No explicit --symbol → CENTER-FIRST is the SOLE no-symbol strategy (the LLM auto-anchor judge was
     // removed): detect the concern's MECHANISM(s) from the intent and grow from them. This IS --concern, so
     // mark it — the concern re-anchor + render engage below. `--center file#symbol` PINS the mechanism (zero LLM).
-    if (a.auto && a.intent && !a.symbol) {
+    // CONCERN-first fires when the caller named CENTER(s) (--center = "these are the concern's mechanisms") OR gave
+    // no symbol at all (detect them). An explicit --symbol (the legacy single-anchor path) opts OUT into a plain grow.
+    if (a.auto && a.intent && (a.center || !a.symbol)) {
       a.concern = true;
       if (a.center) {
-        const h = a.center.indexOf("#");
-        a.anchorFile = a.center.slice(0, h); a.symbol = a.center.slice(h + 1);
-        anchorSet = [{ name: a.symbol, file: a.anchorFile, kind: "function" }];
+        // PIN the center(s) — one or many (comma-separated), file#symbol or bare-file. Zero LLM (the dev chose them).
+        const cs = parseCenters(a.center);
+        a.anchorFile = cs[0].file; a.symbol = cs[0].symbol;
+        anchorSet = cs.map((c) => ({ name: c.symbol ?? c.file, file: c.file, kind: c.symbol ? "function" : "module" }));
         centerPicked = true;
-        process.stderr.write(`[center-first] pinned center: ${a.symbol} (${a.anchorFile})\n`);
+        process.stderr.write(`[center-first] pinned ${cs.length} center(s): ${cs.map((c) => c.symbol ?? c.file).join(", ")}\n`);
       } else {
         // Picking the mechanism from an intent PHRASE is a SEMANTIC mapping → ask the LLM over a lexical recall
         // net (offline → the deterministic lexical floor). The picked mechanism(s) ARE the anchors; the loop
@@ -436,14 +439,14 @@ async function runCodebase(a: Args): Promise<number> {
         const _tDet = Date.now();
         const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
         addStage("detection", Date.now() - _tDet);
-        if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center file#symbol or --symbol`);
+        if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center <file>#<symbol> (one or a comma-separated list)`);
         a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
         anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
         centerPicked = true;
         process.stderr.write(`[center-first] ${picked.length} mechanism(s): ${picked.map((c) => c.symbol).join(", ")}\n`);
       }
     }
-    if (!a.anchorFile) err("--scan requires --anchor-file");
+    if (!a.anchorFile) err("--scan requires --center <file>[#symbol] (or --intent for center-first detection)");
     // CLASS anchor, phase 1: emit the LSP-verification candidates and exit (the extension verifies
     // them, then re-invokes with --attribution).
     if (a.emitCandidates) {
@@ -548,7 +551,7 @@ async function runCodebase(a: Args): Promise<number> {
         if (a.skeleton === undefined) a.skeleton = true;
       } else if (a.concern && data) {
         const { detectCenters } = await import("../codebase/grow/center.js");
-        const explicit = a.center ? [{ file: a.center.slice(0, a.center.indexOf("#")), symbol: a.center.slice(a.center.indexOf("#") + 1) }] : null;
+        const explicit = a.center ? parseCenters(a.center).map((c) => ({ file: c.file, symbol: c.symbol ?? "" })) : null;
         // INTENT-WEIGHT the center pick: score the region's files against the intent (embeddings, cached) so a
         // ubiquitous OFF-INTENT entity (`User`, fan-in 61) is excluded in favour of the on-intent mechanisms. A
         // broad concern has a CLUSTER of beans, not one — detectCenters returns the top-K by fan×relevance.

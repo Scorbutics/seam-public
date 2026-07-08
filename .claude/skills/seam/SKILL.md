@@ -20,12 +20,13 @@ description: >-
   discriminator: use Seam when the answer's correctness needs RESOLVED EDGES. For a quick one-fact
   lookup grep is still instant (Seam to MAP/VERIFY, grep to DRILL); for "what code is ABOUT X"
   (meaning, not edges) use embeddings/RAG — Seam routes those away honestly rather than faking them.
-  DEFAULT to passing the anchor you already have: if you've located a candidate symbol (you usually
-  have), give it as `--symbol` (codebase auto-grow §C with a named anchor) — Seam skips anchor
-  selection and traces+decomposes from it (~11s; no-symbol runs center-first mechanism detection first). grep to ORIENT, Seam to TRACE.
+  DEFAULT to passing the center you already have: if you've located a candidate symbol (you usually
+  have), give it as `--center file#symbol` (or several, comma-separated, for a multi-mechanism concern) —
+  Seam skips center detection and traces+decomposes from it (~11s; omit `--center` to run center-first
+  mechanism detection from the intent). grep to ORIENT, Seam to TRACE.
   ALSO for INTERNAL PLANNING before implementing: if a change touches a LOGIC/DATA flow (a spine) you
   haven't mapped and understanding it would take 2+ symbol-discovery greps across files, run Seam FIRST
-  (orient grep → named-anchor grow) to plan against a verified spine, not a guess — not just for "how
+  (orient grep → named-center grow) to plan against a verified spine, not a guess — not just for "how
   does X work". NOT for presentation/display-only changes (layout/styling/visuals): no spine → noFlow,
   just grep/read. File-count alone doesn't trigger Seam — a flow to trace does.
 ---
@@ -45,13 +46,13 @@ There are two product modes, sharing the same host-served-LLM mechanics:
 |---|---|---|---|
 | **Diff review** | *What does this change do; how do I review it by intent?* | `reconcile`, `cluster` (1–2) | batch (§A) |
 | **Codebase — static footprint** | *Where does this symbol/intent live; who consumes it?* | **none** (deterministic) | direct run (§B) |
-| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | **grow is deterministic** — LLM only for: `center-pick` (no `--symbol`), the final `seam-intent` tier (unless `--skeleton`), the coupling flywheel (`--data-coupling llm`) | direct run, or bridge for the residual pass(es) (§C) |
+| **Codebase — auto-grow** | *Grow a footprint toward a question, then decompose it* | **grow is deterministic** — LLM only for: `center-pick` (no `--center`), the final `seam-intent` tier (unless `--skeleton`), the coupling flywheel (`--data-coupling llm`) | direct run, or bridge for the residual pass(es) (§C) |
 | **Structural shapes** | *Who calls X · what X depends on · what breaks if X changes (impact) · can A reach B · a module's boundary · the subsystem around X · how A and B differ* | **none** (deterministic) | direct run (§D) |
 | **Ask (router)** | *Any of the above, from a natural-language question* | `shape-route` (1) + the routed shape | bridge (§E) |
 
 ## Prerequisites
 
-- A git repo (diff mode) or a target repo + an anchor file (codebase mode).
+- A git repo (diff mode) or a target repo + a `--center` (codebase mode) — see the node-addressing note below.
 - **`SEAM`** = the Seam repo root (the checkout containing `ts/src/cli/decompose.ts`). Default to this
   repo; if run elsewhere, use `seam.toolPath` or ask.
 - **`ENGINE`** = how to invoke the engine. Resolve once, in this order:
@@ -72,6 +73,23 @@ There are two product modes, sharing the same host-served-LLM mechanics:
   in-Claude-Code case). Rule of thumb: dedicated cheap passes (engine `claude -p`) > Opus subagents.
 
 Use a scratch dir for intermediates: `OUT=$(mktemp -d)`.
+
+## Addressing a node — `--center` (the ONE flag, all codebase modes)
+
+Every codebase mode (§B footprint, §C grow, §D shapes) addresses its target node the SAME way: **`--center`**.
+It supersedes the old `--anchor-file`/`--symbol` pair — use `--center` everywhere.
+
+- **`--center <file>#<symbol>`** — a single node (a function/class/method). This is the usual form.
+- **`--center <file>`** — bare file = the whole MODULE (all its exports); the natural target for `--query
+  contract` or a module footprint.
+- **`--center <file>#<sym>,<file2>#<sym2>,…`** — a comma-separated list of centers → a **multi-mechanism
+  concern star** (§C): Seam grows each and renders them as one center-rooted map. Pass the 2–3 mechanisms you
+  already identified instead of one anchor; it's zero-LLM (you chose them) and skips center detection.
+- **Omit `--center` entirely** (with `--auto --intent`) → **center-first**: Seam detects the mechanism(s) from
+  the intent (one `center-pick` LLM pass, or the deterministic lexical floor offline).
+
+So: grep to ORIENT (find a candidate symbol) → pass it as `--center file#symbol`. Give SEVERAL when the
+question spans a few mechanisms; give NONE when you only have a question, not a symbol.
 
 ---
 
@@ -157,12 +175,12 @@ A consumers/module footprint is decomposed **deterministically** (clustering and
 even for large footprints). So there is nothing to host-serve — just run and render:
 
 ```bash
-$ENGINE --scan --repo "<REPO>" --anchor-file "<F>" [--symbol "<S>"] [--depth <N>] \
+$ENGINE --scan --repo "<REPO>" --center "<F>[#<S>]" [--depth <N>] \
         --emit-seams "$OUT/seams.json"     # or --format ascii | llm
 ```
 
-- `--anchor-file` + `--symbol` → single-symbol anchor (its consumers + the symbols that wire it).
-  Omit `--symbol` → **module mode** (all the file's exports).
+- `--center <F>#<S>` → single-symbol anchor (its consumers + the symbols that wire it).
+  `--center <F>` (bare file) → **module mode** (all the file's exports).
 - `--depth N` follows N consumer hops (default 1).
 - Honest about gaps: statically-opaque edges come back as `SUGGESTED` / `blindspots`, never asserted.
 
@@ -182,7 +200,7 @@ This is the cheapest entry point — instant, offline, zero LLM calls. Use it wh
 > round-trip needed). Omit `--skeleton` only when the output is going to the human VS Code view, where
 > the prose labels + tier grouping are the value.
 
-> Note: single-symbol anchors only grow if the repo's static resolver actually links consumers. Small
+> Note: single-symbol centers only grow if the repo's static resolver actually links consumers. Small
 > internal utilities (and the Seam repo's own symbols) often resolve **isolated** — that's correct,
 > not a failure. Real app repos resolve consumers and grow.
 
@@ -195,46 +213,47 @@ DETERMINISTIC** — it floods the resolved crossings (calls, data-coupling, stri
 terminals, bounded by deterministic containment (hub-collapse / tier-convergence). There is **no LLM
 move-picker** and **no per-step pump**. The only LLM passes that can occur are:
 
-- **`center-pick`** — ONLY when you omit `--symbol` (the no-symbol path is CENTER-FIRST: the engine picks
-  the concern's *mechanism* from the intent). One pass at the start.
+- **`center-pick`** — ONLY when you omit `--center` (the no-center path is CENTER-FIRST: the engine picks
+  the concern's *mechanism(s)* from the intent). One pass at the start.
 - **`seam-intent`** — the final tiering/labeling pass, **skipped by `--skeleton`** (recommended for an LLM
   consumer — you tier/label the emitted skeleton yourself).
 - **the coupling flywheel** (`discover-keys` / `discover-key-matchers`) — ONLY with `--data-coupling llm`;
   batched + cached (learn-once → deterministic forever).
 
-**So with `--symbol` + `--skeleton` + floor coupling (the recommended LLM-consumer call) there are ZERO
+**So with `--center` + `--skeleton` + floor coupling (the recommended LLM-consumer call) there are ZERO
 LLM passes — run it DIRECT like §B, no bridge.** You only need the bridge (or a `claude` binary) when a
-residual pass exists: `center-pick` (no symbol), `seam-intent` (no `--skeleton`), or the `llm` flywheel.
+residual pass exists: `center-pick` (no `--center`), `seam-intent` (no `--skeleton`), or the `llm` flywheel.
 
 `--auto` **requires `--intent`**. Two ways to seed it:
 
-- **You name the anchor (PREFER THIS)** — pass `--anchor-file` + `--symbol` (from a cursor pick, a §B
-  scan, or a symbol you grepped/read). Seam grows straight from it: **~11s**, zero anchor-selection LLM.
-  Default to this whenever you already have a candidate symbol — which, after a couple of orienting greps,
-  you usually do.
-- **Center-first (omit `--symbol`)** — the engine detects the concern's MECHANISM(s) from the intent (a
+- **You name the center(s) (PREFER THIS)** — pass `--center file#symbol` (from a cursor pick, a §B scan, or
+  a symbol you grepped/read); give **several** comma-separated when the concern spans a few mechanisms. Seam
+  grows straight from them: **~11s**, zero center-selection LLM. Default to this whenever you already have a
+  candidate symbol — which, after a couple of orienting greps, you usually do.
+- **Center-first (omit `--center`)** — the engine detects the concern's MECHANISM(s) from the intent (a
   lexical recall net → one `center-pick` LLM pass; offline → the deterministic lexical floor) and grows
   from them. This is the right default when you only have a question, not a symbol. It prints
-  `[center-first] <n> mechanism(s): …`. `--center file#symbol` PINS the mechanism (zero LLM).
+  `[center-first] <n> mechanism(s): …`.
 
 ### C1 — Run it
 
 **Best LLM-consumer output = `--format agent`** (the token-budgeted agent render: spine-first, dimmed
-off-intent tail, cross-stack blindspots collapsed). With `--symbol` + `--skeleton` + floor coupling it's
+off-intent tail, cross-stack blindspots collapsed). With `--center` + `--skeleton` + floor coupling it's
 fully deterministic — run it in the FOREGROUND, no bridge:
 
 ```bash
-# you name the anchor → deterministic, no bridge, best LLM output:
-$ENGINE --scan --auto --repo "<REPO>" --anchor-file "<F>" --symbol "<S>" \
+# you name the center(s) → deterministic, no bridge, best LLM output:
+$ENGINE --scan --auto --repo "<REPO>" --center "<F>#<S>" \
         --intent "<question>" --max-steps <N> --skeleton --format agent
+#   …several mechanisms → --center "<F1>#<S1>,<F2>#<S2>"   (a multi-center concern star)
 ```
 
-If you omit `--symbol` (center-first) OR add `--data-coupling llm`, there IS a residual LLM pass. Either
+If you omit `--center` (center-first) OR add `--data-coupling llm`, there IS a residual LLM pass. Either
 run plainly if a `claude` binary is on PATH (the engine serves it), or start it in the **background** with
 `--llm-bridge "$OUT/bridge"` and pump the one/few passes as in C2 (usually just `center-pick`, once):
 
 ```bash
-# center-first (no --symbol) or --data-coupling llm → serve the residual pass(es) over the bridge:
+# center-first (no --center) or --data-coupling llm → serve the residual pass(es) over the bridge:
 $ENGINE --scan --auto --repo "<REPO>" --intent "<question>" --max-steps <N> --skeleton \
         --format agent --llm-bridge "$OUT/bridge"      # run in background, then pump §C2
 ```
@@ -254,7 +273,7 @@ ends):
 1. **Wait** for `$OUT/bridge/req-<n>.json` to exist (use the **Monitor** tool with an until-condition
    — foreground `sleep` is disallowed). Per-pass deadline is 300 s; well within a turn.
 2. **Read** it → `{ seq, tag, prompt, model, thinking }`. The grow is deterministic, so the passes you
-   may see are few: `center-pick` / `center-dir-pick` (pick the concern's mechanism — only when `--symbol`
+   may see are few: `center-pick` / `center-dir-pick` (pick the concern's mechanism — only when `--center`
    was omitted), the coupling flywheel (`discover-keys` / `discover-key-matchers` — only with
    `--data-coupling llm`), and `seam-intent` (the final tiering — only WITHOUT `--skeleton`). **Route by the
    `model` field** (step 3): the engine sends the semantic passes (`center-pick`, `seam-intent`) with
@@ -268,8 +287,8 @@ ends):
    `resp-<n>.tmp` then `mv` it to `resp-<n>.json` (the engine must never read a half-written answer).
 
 When the engine finishes it writes the output (`$OUT/seams.json`, or `--format agent` to stdout) and
-exits. Typical: ONE `center-pick` (no-symbol) and/or a few cached flywheel passes — usually 1–2 turns,
-often zero (a `--symbol` + `--skeleton` + floor run has no passes at all — just run it foreground).
+exits. Typical: ONE `center-pick` (no `--center`) and/or a few cached flywheel passes — usually 1–2 turns,
+often zero (a `--center` + `--skeleton` + floor run has no passes at all — just run it foreground).
 
 ---
 
@@ -282,30 +301,30 @@ rather than fabricating a result. Run and render:
 
 ```bash
 # who calls a symbol — the RESOLVED caller set (tier-labelled; no comment/same-name false-positives)
-$ENGINE --scan --repo "<REPO>" --query consumers --anchor-file "<F>" --symbol "<S>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query consumers --center "<F>#<S>" --format llm-context
 #   add --recall name → also list name-grounded UNVERIFIED leads (Ruby globals / C/C++ — no symbol imports)
 
 # what a symbol DEPENDS ON — the symmetric inverse (its resolved out-edges)
-$ENGINE --scan --repo "<REPO>" --query dependencies --anchor-file "<F>" --symbol "<S>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query dependencies --center "<F>#<S>" --format llm-context
 
 # TRANSITIVE blast radius — what breaks if you change X (refactoring safety net; surface + opaque gaps)
-$ENGINE --scan --repo "<REPO>" --query impact --anchor-file "<F>" --symbol "<S>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query impact --center "<F>#<S>" --format llm-context
 
 # "How to refactor X" — the FACTS bundle (impact + dependencies + contract) in ONE call. The change
 # PLAN over them is YOUR judgement (Seam supplies verified facts; it does not decide the refactor).
-$ENGINE --scan --repo "<REPO>" --query refactor --anchor-file "<F>" --symbol "<S>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query refactor --center "<F>#<S>" --format llm-context
 
 # can A reach B? — verified yes/no + a witness path (or unreachable / exhausted / no-out-edges)
-$ENGINE --scan --repo "<REPO>" --query reaches --anchor-file "<F>" --symbol "<A>" --to-symbol "<B>" [--to-file "<Bf>"] --format llm-context
+$ENGINE --scan --repo "<REPO>" --query reaches --center "<F>#<A>" --to-symbol "<B>" [--to-file "<Bf>"] --format llm-context
 
 # a module's BOUNDARY — used exports + consumers, dead exports, outbound deps, fan-in/out
-$ENGINE --scan --repo "<REPO>" --query contract --anchor-file "<F>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query contract --center "<F>" --format llm-context
 
 # the cohesive SUBSYSTEM around a symbol (core vs periphery, weak-community)
-$ENGINE --scan --repo "<REPO>" --query neighborhood --anchor-file "<F>" --symbol "<S>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query neighborhood --center "<F>#<S>" --format llm-context
 
 # how two symbols DIFFER by what they depend on (shared / A-only / B-only)
-$ENGINE --scan --repo "<REPO>" --query compare --anchor-file "<Fa>" --symbol "<A>" --to-file "<Fb>" --to-symbol "<B>" --format llm-context
+$ENGINE --scan --repo "<REPO>" --query compare --center "<Fa>#<A>" --to-file "<Fb>" --to-symbol "<B>" --format llm-context
 ```
 
 These emit a `shape:"set"|"reaches"|"contract"|"neighborhood"|"comparison"` model (`--emit-seams` for
@@ -345,7 +364,7 @@ roles** for the user — or point them at `seams.json` for the VS Code extension
 footprint ends at a `blindspot` with mechanism `llm-proposed-key` or `shared-key-fanout`, that is a
 data-flow boundary (a shared key/route/event whose other side — often a frontend or another service —
 isn't in this footprint). The right next move is to run Seam AGAIN from the other side: a second §B/§C
-run with the unresolved key as `--intent` (or the consumer file as `--anchor-file`), then stitch the
+run with the unresolved key as `--intent` (or the consumer file as `--center`), then stitch the
 two footprints together for the user. Do this rather than falling back to a manual grep sweep over the
 UI — it keeps the cross-stack half of the flow on the same structural footing as the first half.
 
@@ -418,19 +437,19 @@ $ENGINE --git HEAD --repo . --emit-prompts "$OUT/prompts.json"   # A1
 $ENGINE --git HEAD --repo . --inject-llm "$OUT/answers.json" --emit-seams "$OUT/seams.json"  # A3
 
 # ── Codebase static footprint (§B) — no subagent ─────────────────────────────
-$ENGINE --scan --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo --format agent
+$ENGINE --scan --repo /path/to/app --center lib/foo.ts#createFoo --format agent
 
 # ── Structural shapes (§D) — deterministic, no subagent ──────────────────────
-$ENGINE --scan --repo /path/to/app --query consumers --anchor-file lib/foo.ts --symbol createFoo --format llm-context
-$ENGINE --scan --repo /path/to/app --query reaches --anchor-file lib/a.ts --symbol handler --to-symbol writeDb --format llm-context
+$ENGINE --scan --repo /path/to/app --query consumers --center lib/foo.ts#createFoo --format llm-context
+$ENGINE --scan --repo /path/to/app --query reaches --center lib/a.ts#handler --to-symbol writeDb --format llm-context
 
 # ── Ask / router (§E) — background + pump like §C ────────────────────────────
 $ENGINE --scan --repo /path/to/app --ask "who calls createFoo?" --classifier hybrid \
         --llm-bridge "$OUT/bridge" --emit-seams "$OUT/seams.json"   # …or plainly if a `claude` binary is on PATH
 
-# ── Codebase auto-grow (§C) — DETERMINISTIC with --symbol + --skeleton → run foreground, no bridge ──
-$ENGINE --scan --auto --repo /path/to/app --anchor-file lib/foo.ts --symbol createFoo \
+# ── Codebase auto-grow (§C) — DETERMINISTIC with --center + --skeleton → run foreground, no bridge ──
+$ENGINE --scan --auto --repo /path/to/app --center lib/foo.ts#createFoo \
         --intent "how does foo flow through the app" --max-steps 4 --skeleton --format agent
-#  …omit --symbol (center-first) or add --data-coupling llm → one residual pass: run in background with
+#  …omit --center (center-first) or add --data-coupling llm → one residual pass: run in background with
 #  --llm-bridge "$OUT/bridge" and pump §C2 (Monitor for req-<n>.json → subagent → resp-<n>.json).
 ```

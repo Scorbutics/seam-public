@@ -2,7 +2,7 @@
 // its opt-outs. An LLM consumer ranks/interprets the structure itself, so Seam's own LLM ranking pass is
 // redundant latency/cost there; for human/JSON formats it stays on.
 import { describe, expect, test } from "bun:test";
-import { parseArgs } from "../../src/cli/args.js";
+import { parseArgs, parseCenters } from "../../src/cli/args.js";
 
 describe("parseArgs — llm-context defaults the LLM seam-ranking pass OFF (skeleton)", () => {
   test("--format llm-context ⇒ skeleton on (skip the seam-intent/refine LLM passes)", () => {
@@ -29,6 +29,41 @@ describe("parseArgs — llm-context defaults the LLM seam-ranking pass OFF (skel
     // …and --rank / --no-skeleton force the LLM pass back on there too
     expect(parseArgs(["--format", "waves", "--rank"]).skeleton).toBe(false);
     expect(parseArgs(["--format", "scenarios", "--no-skeleton"]).skeleton).toBe(false);
+  });
+});
+
+describe("--center — the universal node address (supersedes --anchor-file/--symbol)", () => {
+  test("file#symbol expands to the internal anchor (so every mode — footprint/shapes/grow — accepts it)", () => {
+    const a = parseArgs(["--center", "svc/foo.ts#createFoo"]);
+    expect(a.anchorFile).toBe("svc/foo.ts");
+    expect(a.symbol).toBe("createFoo");
+  });
+  test("bare file = a MODULE anchor (no symbol)", () => {
+    const a = parseArgs(["--center", "svc/foo.ts"]);
+    expect(a.anchorFile).toBe("svc/foo.ts");
+    expect(a.symbol).toBeUndefined();
+  });
+  test("a symbol may itself be qualified — split is on the FIRST '#' only", () => {
+    const a = parseArgs(["--center", "svc/foo.ts#Ns#deep"]);
+    expect(a.anchorFile).toBe("svc/foo.ts");
+    expect(a.symbol).toBe("Ns#deep");
+  });
+  test("an explicit --anchor-file/--symbol still WINS (back-compat)", () => {
+    const a = parseArgs(["--center", "svc/foo.ts#createFoo", "--anchor-file", "svc/bar.ts", "--symbol", "other"]);
+    expect(a.anchorFile).toBe("svc/bar.ts");
+    expect(a.symbol).toBe("other");
+  });
+  test("parseCenters — a comma-separated multi-center list (concern star)", () => {
+    expect(parseCenters("a.ts#x, b.ts#y ,c.ts")).toEqual([
+      { file: "a.ts", symbol: "x" }, { file: "b.ts", symbol: "y" }, { file: "c.ts" },
+    ]);
+    // the FIRST center is what the arg expansion addresses
+    expect(parseArgs(["--center", "a.ts#x,b.ts#y"]).symbol).toBe("x");
+  });
+  test("no --center leaves the anchor untouched", () => {
+    const a = parseArgs(["--anchor-file", "svc/foo.ts", "--symbol", "createFoo"]);
+    expect(a.center).toBeUndefined();
+    expect(a.anchorFile).toBe("svc/foo.ts");
   });
 });
 

@@ -13,7 +13,7 @@ export interface Args {
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
   concern?: boolean;   // --concern: CENTER-anchor a plural "how is X managed?" question — detect the shared mechanism + re-grow from it
-  center?: string;     // --center <file>#<symbol>: skip center detection, use this node as the concern center
+  center?: string;     // --center <file>[#<symbol>][,<file>[#<symbol>]…]: the universal node address (supersedes --anchor-file/--symbol). file-only = module anchor; comma-separated = multi-center concern star
   down: boolean; crossFrom?: string;
   emitCandidates?: string; attribution?: string; auto: boolean; maxSteps: number; maxNodes?: number;
   llmBridge?: string; dataCoupling: boolean; dataCouplingLlm: boolean; dataCouplingAuto: boolean; dataCouplingExplicit?: boolean; cache: boolean; bidirectional: boolean;
@@ -80,7 +80,8 @@ export function parseArgs(argv: string[]): Args {
       case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
       case "--grow-from": a.growFrom = next(); break;
       case "--concern": a.concern = true; break;
-      case "--center": a.center = next(); break;
+      case "--center": a.center = next(); break;   // universal node address: file | file#symbol | comma-list; expanded to the anchor below, read as a list by the concern grow
+      // --anchor-file / --symbol are the LEGACY node address, superseded by --center (kept for back-compat + internal use).
       case "--expand-graph": a.expandGraph = next(); break;
       case "--expand-file": a.expandFile = next(); break;
       case "--expand-symbol": a.expandSymbol = next(); break;
@@ -133,5 +134,24 @@ export function parseArgs(argv: string[]): Args {
   // whole run on a slow backend). Default them OFF (the det skeleton: spine + structural labels + blindspots).
   // `--rank` / `--no-skeleton` forces them back on.
   if ((a.format === "llm-context" || a.format === "waves" || a.format === "scenarios") && a.skeleton === undefined) a.skeleton = true;
+  // --center is the UNIVERSAL node address (supersedes --anchor-file/--symbol). Expand the FIRST center into the
+  // internal anchor so EVERY mode — static footprint (§B), structural shapes (§D), single-anchor + concern grow
+  // (§C) — accepts --center. A bare `file` is a MODULE anchor (no symbol); `file#symbol` pins one node. An
+  // explicit --anchor-file/--symbol still wins if the caller passed one (back-compat). The concern path reads the
+  // full list (parseCenters) to grow a multi-center star; here we only need the addressing anchor.
+  if (a.center) {
+    const cs = parseCenters(a.center);
+    if (cs.length) { if (!a.anchorFile) a.anchorFile = cs[0].file; if (!a.symbol && cs[0].symbol) a.symbol = cs[0].symbol; }
+  }
   return a;
+}
+
+// Split a --center spec into addressed nodes. It is a comma-separated list of `file` or `file#symbol` (split on
+// the FIRST '#' so a symbol may be qualified); a bare `file` is a module anchor (symbol undefined). Empty entries
+// drop out. This is the ONE parser for the flag, shared by the arg expansion above and the concern grow.
+export function parseCenters(spec: string): { file: string; symbol?: string }[] {
+  return spec.split(",").map((s) => s.trim()).filter(Boolean).map((s) => {
+    const h = s.indexOf("#");
+    return h >= 0 ? { file: s.slice(0, h), symbol: s.slice(h + 1) } : { file: s };
+  });
 }
