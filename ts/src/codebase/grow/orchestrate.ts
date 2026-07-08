@@ -945,7 +945,15 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   // COARSE PHASE TIMING (diagnostic, SEAM_TIMING=1) — attributes warm cost to structural wave vs data-coupling, so
   // the "the cost really comes from data-coupling" hypothesis is measured, not assumed.
   const _t = () => Date.now(); const _tm = timingOn();
-  const _lap = (p: string, t0: number) => { const ms = _t() - t0; if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${ms}ms\n`); addStage(/^P[12]/.test(p) ? (co.ctx?.stableFloor ? "probe" : "structural") : "coupling", ms); };
+  const _stageOf = (p: string): string => {
+    if (co.ctx?.stableFloor) return "probe";                       // the floor scoping pre-grow, all phases
+    if (/^P[12]/.test(p)) return "structural";                     // P1 seed + P2 wave
+    if (/seed-coupling/.test(p)) return "coupling-seed";
+    if (/deep-couple/.test(p)) return "coupling-deep";
+    if (/border/.test(p)) return "coupling-border";
+    return "coupling";
+  };
+  const _lap = (p: string, t0: number) => { const ms = _t() - t0; if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${ms}ms\n`); addStage(_stageOf(p), ms); };
   let _ts = _t();
   let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
