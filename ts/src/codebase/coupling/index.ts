@@ -715,6 +715,23 @@ function collectComplementFiles(index: GroundingIndex, key: AnchorKey, anchorPat
   return complementFiles;
 }
 
+// The SAME-SIDE peers of a key — its CO-PRODUCERS (a table's OTHER writers) when the anchor produces it, or
+// co-consumers when it reads. otherSide/crossBoundary draw the OPPOSITE side (writer→readers); this is the
+// missing symmetric rung (writer↔co-writers) that "how is X processed" needs — every OTHER entry point that
+// writes the same table (Stripe/Wix webhooks writing `payments`, not just the admin routes that read it). Same
+// grounded shared-key seed; self dropped, deduped to file→earliest line. Exact key only (a table's co-writers);
+// route co-handlers are a different question, so no route-alias fuzz here.
+function collectSameSideFiles(index: GroundingIndex, key: AnchorKey, anchorPath: string): Map<string, number> {
+  const exact = index.get(keyId(key.kind, key.value));
+  const same = (key.produces ? exact?.producers : exact?.consumers) ?? [];
+  const files = new Map<string, number>();
+  for (const access of same) {
+    if (normpath(access.file) === anchorPath) continue;
+    if (!files.has(access.file) || access.line < files.get(access.file)!) files.set(access.file, access.line);
+  }
+  return files;
+}
+
 // The RECURSION-WIDE context: the graph accumulator + the STEP-3 grounding index, shared by every chained
 // hop. Built ONCE in resolveCoupling; runPipeline + crossBoundary thread it instead of re-passing
 // graph/repo/index/ctx through a dozen positional args (the old 12-arg `attach`).
@@ -825,6 +842,41 @@ async function crossBoundary(
   }
 }
 
+// SAME-SIDE rung (PROTOTYPE, gated SEAM_COPRODUCERS) — draw the key's CO-ACCESSORS onto its boundary: the OTHER
+// writers of a table the anchor writes (or other readers of one it reads). crossBoundary gives writer→readers;
+// this gives writer↔co-writers — the alternate ENTRY POINTS "how is X processed" needs (Stripe/Wix webhooks that
+// also write `payments`). Same edge kind + direction as the anchor's wireNear (a co-producer accesses the boundary
+// the same way the anchor does → `peer ──produce──▶ boundary`), so they sit UPSTREAM of the boundary (alternate
+// sources), surfaced in the region, not on the downstream spine. No recursion: surface the entry point, deepen
+// on demand. Capped + damped like the reader fan (a hot table has many writers), overflow → a fanout blindspot.
+async function crossSameSide(s: NodeScope, boundaryId: string, key: AnchorKey, sameSideFiles: Map<string, number>): Promise<void> {
+  const { graph, repo, ctx } = s;
+  const adapter = kindOf(key.kind);
+  const edgeKind = key.produces ? adapter.produceEdge : adapter.consumeEdge;
+  // NEUTRAL order (stable file/line), NOT co-occurrence: a pure `payments`-only writer (Stripe/Wix) must not be
+  // ranked LAST (where the global complementBudget cuts it) behind a route that also touches `members`. Every
+  // co-producer is an equally-real entry point; don't let cross-key overlap reorder them.
+  const ranked: [string, number][] = [...sameSideFiles.entries()].sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : a[1] - b[1]));
+  // CAP by the HUB threshold, not READER_CAP: a table's WRITERS are its entry-point set — bounded and ALL relevant
+  // to "how is X processed" (unlike a reader/display fan, which READER_CAP rightly trims). Co-occurrence ranking
+  // (shared OTHER keys) would demote the PUREST co-producers — a Stripe/Wix webhook that writes ONLY `payments`
+  // scores below an admin route that also touches `members` — the opposite of what we want. So materialize the
+  // WHOLE writer set for a non-hub key; damp only a genuine hub (>hubFan writers) to hubReaderCap.
+  const cap = sameSideFiles.size > COUPLING.hubFan ? COUPLING.hubReaderCap : sameSideFiles.size;
+  for (const [file, line] of ranked.slice(0, cap)) {
+    if (ctx.complementBudget <= 0) break;
+    ctx.complementBudget--;
+    const _pt0 = performance.now();
+    const unit = await complement_unit(repo, file, line);
+    s.stats.parses++; s.stats.parseMs += performance.now() - _pt0;
+    const peerId = graph.addNode({ symbol: unit.symbol, kind: unit.kind, file, range: [unit.start, unit.end], enclosing: "", complexity: Math.max(1, unit.end - unit.start + 1), coupling: true });
+    graph.addEdge({ from: peerId, to: boundaryId, kind: edgeKind, provenance: "RESOLVED_PARTIAL", line });
+  }
+  if (ranked.length > cap) graph.addBlindspot({ node: boundaryId, mechanism: "shared-key-fanout",
+    evidence: `'${key.value}' (${key.kind}) is ALSO ${key.produces ? "written" : "read"} by ${ranked.length} other file(s) (showing ${cap}) — alternate ${key.produces ? "producers" : "consumers"}, a data-flow boundary`,
+    candidates: ranked.slice(cap).map(([file]) => ({ file, symbol: key.value, provenance: "SUGGESTED" })) });
+}
+
 // THE PER-NODE PIPELINE BODY — run one span (the anchor, or a chained complement) through steps 1-inline..5
 // and append the boundaries it surfaces to the shared graph. For each key it PRODUCES surface the consumers,
 // for each it CONSUMES surface the producers. `carrierAccs`/`proposed` are ANCHOR-only (empty on every hop);
@@ -916,6 +968,11 @@ async function runPipeline(
     surfacedKeys.add(keyId(key.kind, key.value));                        // mark before recursing
     wireNear(s, node.id, boundaryId, key);                              // STEP 5 (near)
     await crossBoundary(s, boundaryId, key, complementFiles, surfacedKeys);   // STEP 5 (far) + chain
+    // STEP 5b (PROTOTYPE, opt-in) — the SAME-SIDE co-accessors: a table's OTHER writers (alternate entry points).
+    if (process.env.SEAM_COPRODUCERS === "1") {
+      const sameSideFiles = collectSameSideFiles(p.index, key, anchorPath);
+      if (sameSideFiles.size) await crossSameSide(s, boundaryId, key, sameSideFiles);
+    }
   }
   if (grounded.length > cap) s.graph.addBlindspot({ node: node.id, mechanism: "node-key-fanout",
     evidence: `${node.file} touches ${grounded.length} shared keys (showing the ${cap} most specific) — a coupling hub`,

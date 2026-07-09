@@ -327,6 +327,39 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toContain("createBooking");
   });
 
+  // CO-PRODUCERS ("## Also writes") — the OTHER writers of the table this flow writes (a table's alternate ENTRY
+  // POINTS: a Stripe/Wix webhook writing `payments`, not just the routes that READ it). Gated (SEAM_COPRODUCERS);
+  // focused on the spine's SINK table; excludes the anchor's own module (its in-flow writes are the main path).
+  test("also-writes: surfaces external co-producers of the spine's sink table, excluding the anchor's own module", () => {
+    const prev = process.env.SEAM_COPRODUCERS;
+    process.env.SEAM_COPRODUCERS = "1";
+    try {
+      const model = {
+        mode: "codebase", anchor: "ph", resolutionQuality: "FULL",
+        clusters: [{ id: "g1", intent: "how are payments processed", seams: [
+          { id: "proc", label: "processOne", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "app/pay/index.ts", line: 1, symbol: "processOne" }, hunks: [{ id: "ph", file: "app/pay/index.ts", start: 1, role: "core", label: "processOne" }] },
+          { id: "pay", label: "payments", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "app/pay/index.ts", line: 40, symbol: "payments" }, hunks: [{ id: "payh", file: "app/pay/index.ts", start: 40, role: "environment", label: "payments", kind: "table" }] },
+          // an EXTERNAL co-producer (a webhook, different module) that also writes `payments`
+          { id: "hook", label: "payments", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "app/hooks/stripe.ts", line: 10, symbol: "payments" }, hunks: [{ id: "wh", file: "app/hooks/stripe.ts", start: 10, role: "environment", label: "payments", kind: "table" }] },
+          // the anchor's OWN module also writes payments (a phase) — the main flow, NOT an alternate entry point
+          { id: "phase", label: "payments", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "app/pay/phase.ts", line: 5, symbol: "payments" }, hunks: [{ id: "phh", file: "app/pay/phase.ts", start: 5, role: "environment", label: "payments", kind: "table" }] },
+        ] }],
+        edges: [{ from: "ph", to: "payh", kind: "db-write", line: 12 }, { from: "wh", to: "payh", kind: "db-write", line: 8 }, { from: "phh", to: "payh", kind: "db-write", line: 6 }],
+        blindspots: [],
+      };
+      const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are payments processed" });
+      expect(out).toContain("## Also writes");
+      const aw = out.slice(out.indexOf("## Also writes"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(aw).toContain("app/hooks/stripe.ts");     // the external webhook co-producer is surfaced…
+      expect(aw).not.toContain("app/pay/phase.ts");    // …but the anchor's OWN module's write is not (it's the main flow)
+    } finally { if (prev === undefined) delete process.env.SEAM_COPRODUCERS; else process.env.SEAM_COPRODUCERS = prev; }
+  });
+
+  test("also-writes: silent by default (co-producer rung is opt-in)", () => {
+    const out = renderAgent(makeModel(), { tokenBudget: 4000, intent: "how are bookings created" });
+    expect(out).not.toContain("## Also writes");   // gated off → no section
+  });
+
   test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
     const model = makeModel({ offN: 0 });
     (model as any).blindspots = [

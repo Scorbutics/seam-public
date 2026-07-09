@@ -831,8 +831,41 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !isBoundarySeam(s) && !spineExts.has(_ext(s.primary?.file)) && crossInto(s))
     : [];
   const crossSet = new Set(crossStack);
-  const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
-  const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s));
+
+  // CO-PRODUCERS ("## Also writes") — OTHER seams that WRITE a store boundary this flow also writes: the table's
+  // alternate ENTRY POINTS (Stripe/Wix webhooks writing `payments`, not just the admin routes that READ it). The
+  // coupling's same-side rung surfaced them as `peer ──produce──▶ boundary` nodes; without this they sink into the
+  // cropped region tail (low intent relevance). Lift them into their own EXEMPT section — "how is X processed"
+  // wants every writer. Structural: a produce edge INTO a boundary the spine also produces into.
+  const _PRODUCE_KINDS = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
+  const spineMemberIds = new Set<string>();
+  for (const s of spineSeams) for (const h of (s.hunks ?? [])) spineMemberIds.add(String((h as any).id));
+  // Match by the boundary's TABLE LABEL, not its node id: the grow draws a separate `payments` boundary node per
+  // grounding call, so the spine's write-target and a co-producer's write-target are DIFFERENT node ids for the
+  // SAME table. Key on label.
+  // Focus on the spine's SINK table(s) — the boundary the flow TERMINATES at (`payments`) — not every table any
+  // spine member happens to touch (a payment flow also writes members/admin/… → 13 tables of co-producer noise).
+  const writtenTables = new Set<string>();
+  for (const s of spineSeams) if (isBoundarySeam(s)) { const t = (primaryHunk(s) as any)?.label; if (t) writtenTables.add(t); }
+  if (!writtenTables.size)   // fallback: a spine whose sink boundary wasn't itself made a spine seam → its members' write targets
+    for (const e of (model.edges ?? []) as any[]) if (_PRODUCE_KINDS.has(e.kind) && spineMemberIds.has(String(e.from))) { const t = label.get(String(e.to)); if (t) writtenTables.add(t); }
+  // Direction-agnostic: the coupling draws the produce edge as boundary──db-write──▶write-site (the co-producer
+  // node is itself table-labelled), so match a member that is EITHER endpoint of a produce edge whose OTHER end
+  // (or itself) carries a written-table label.
+  const producesInto = (s: Seam): boolean => (s.hunks ?? []).some((h: any) => { const hid = String((h as any).id); return (model.edges ?? []).some((e: any) => _PRODUCE_KINDS.has(e.kind) && (String(e.from) === hid || String(e.to) === hid) && (writtenTables.has(label.get(String(e.from)) ?? "") || writtenTables.has(label.get(String(e.to)) ?? ""))); });
+  // The co-producer write-sites are kind=`table` (the coupling labels a write-site by its table) — so we do NOT
+  // exclude isBoundarySeam here (that would drop the very nodes we want). We DO drop the anchor's own module: its
+  // in-flow phase writes are the main path, not an alternate entry point — a co-producer must live OUTSIDE the
+  // anchor file's directory (a genuinely separate writer: a webhook, an admin route).
+  const anchorDir = (seamOfId.has(String(model.anchor)) ? (fileOfId.get(String(model.anchor)) ?? "") : "").replace(/\/[^/]*$/, "");
+  const coProducers = (process.env.SEAM_COPRODUCERS === "1" && writtenTables.size)   // gated: the same-side rung is opt-in
+    ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s) && producesInto(s)
+        && !!s.primary?.file && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
+    : [];
+  const coProdSet = new Set(coProducers.map((s) => s.id));
+
+  const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
+  const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
   // DEDUPE: a hub-marked hunk appears in every seam it wires (a hub wires many), so a naive scan lists it once per
   // seam — the same `BookingsBean` line a dozen times. Key by (file, label, reason) → one line per collapsed hub.
@@ -918,6 +951,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
     spineAlternates.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
     if (spineAlternates.length > EXEMPT_N) out.push(`  (+${spineAlternates.length - EXEMPT_N} more sink(s) — raise --token-budget)`);
+    return out;
+  };
+  // ALSO WRITES — the OTHER producers of a store boundary this flow writes: the table's alternate ENTRY POINTS
+  // (a grep for the write can find these files, but not that they share THIS flow's table). Exempt from the region
+  // crop (a Stripe webhook writing `payments` is a first-class answer to "how are payments processed", not tail).
+  const byRelDesc = (a: Seam, b: Seam) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0));
+  const alsoWritesSection = (): string[] => {
+    if (!coProducers.length) return [];
+    const seen = new Set<string>();
+    const uniq = [...coProducers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const out = ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)"];
+    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
+    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more producer(s) — raise --token-budget)`);
     return out;
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
@@ -1031,7 +1077,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...alsoReachesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out = assemble(...steps[0]);
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
