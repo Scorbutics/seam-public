@@ -33,6 +33,7 @@ import { makeMaskCtx } from "./adapters/util.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
 import { COUPLING } from "./config.js";
 import { emit, verbose, timingOn, dbg } from "../../core/progress.js";
+import { isTestFile } from "../../core/resolve/consumers.js";
 
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
@@ -727,6 +728,7 @@ function collectSameSideFiles(index: GroundingIndex, key: AnchorKey, anchorPath:
   const files = new Map<string, number>();
   for (const access of same) {
     if (normpath(access.file) === anchorPath) continue;
+    if (isTestFile(access.file)) continue;   // a test/fixture that writes the table is not an alternate ENTRY POINT
     if (!files.has(access.file) || access.line < files.get(access.file)!) files.set(access.file, access.line);
   }
   return files;

@@ -858,9 +858,12 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // in-flow phase writes are the main path, not an alternate entry point — a co-producer must live OUTSIDE the
   // anchor file's directory (a genuinely separate writer: a webhook, an admin route).
   const anchorDir = (seamOfId.has(String(model.anchor)) ? (fileOfId.get(String(model.anchor)) ?? "") : "").replace(/\/[^/]*$/, "");
+  // test/fixture files that write the table are NOT alternate entry points. Mirrors core/resolve/consumers
+  // `_TEST_RE` (llm_context is import-free by design — a pure projection); keep the two in sync if that changes.
+  const _isTest = (f?: string) => !!f && /(\.(test|spec)\.[a-z]+$)|((^|\/)(tests?|__tests__|spec)\/)/i.test(f);
   const coProducers = (process.env.SEAM_COPRODUCERS === "1" && writtenTables.size)   // gated: the same-side rung is opt-in
     ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s) && producesInto(s)
-        && !!s.primary?.file && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
+        && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
     : [];
   const coProdSet = new Set(coProducers.map((s) => s.id));
 
