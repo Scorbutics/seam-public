@@ -861,7 +861,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // test/fixture files that write the table are NOT alternate entry points. Mirrors core/resolve/consumers
   // `_TEST_RE` (llm_context is import-free by design — a pure projection); keep the two in sync if that changes.
   const _isTest = (f?: string) => !!f && /(\.(test|spec)\.[a-z]+$)|((^|\/)(tests?|__tests__|spec)\/)/i.test(f);
-  const coProducers = (process.env.SEAM_COPRODUCERS === "1" && writtenTables.size)   // gated: the same-side rung is opt-in
+  const coProducers = (process.env.SEAM_COPRODUCERS !== "0" && writtenTables.size)   // default-ON; opt-OUT via SEAM_COPRODUCERS=0
     ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s) && producesInto(s)
         && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
     : [];

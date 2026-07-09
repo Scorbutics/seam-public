@@ -355,9 +355,10 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     } finally { if (prev === undefined) delete process.env.SEAM_COPRODUCERS; else process.env.SEAM_COPRODUCERS = prev; }
   });
 
-  test("also-writes: silent by default (co-producer rung is opt-in)", () => {
+  test("also-writes: silent when the flow writes no shared table with other producers", () => {
+    // default-ON, but makeModel's flow writes no db-table (only a `call` edge) → no co-producers → no section.
     const out = renderAgent(makeModel(), { tokenBudget: 4000, intent: "how are bookings created" });
-    expect(out).not.toContain("## Also writes");   // gated off → no section
+    expect(out).not.toContain("## Also writes");
   });
 
   test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
