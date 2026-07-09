@@ -235,10 +235,21 @@ export async function enumerate_defs(repo: string, limit = 4000, files?: Set<str
     _defTableMem.set(key, out);
     return out;
   }
-  // SCOPED (`files`) recall — already bounded (a few footprint files); a direct read, not memoised.
+  // SCOPED (`files`) recall — route through the SAME content-keyed per-file cache as the whole-repo path, so a
+  // WARM re-run re-parses only CHANGED footprint files. This path used to `readFileSync` + tree-sitter-parse
+  // EVERY footprint file EVERY run (a "direct read, not memoised") — the dominant warm cost on a big repo (~1.2s
+  // re-parsing unchanged Keycloak files just to re-rank by intent). Iterate `want` DIRECTLY (we already know the
+  // files) instead of re-scanning candidate_source_files (which re-runs `git ls-files` + stats every candidate).
   const out: Def[] = [];
-  for (const rel of candidate_source_files(repo)) {
-    if (!want.has(normpath(rel))) continue;
+  const wantRel = [...want];
+  if (indexCacheEnabled()) {
+    for (const { data } of await incrementalScanFiles(repo, wantRel, _DEF_TABLE_SALT, _scan_defs_file, "def-table")) {
+      for (const d of data.defs) { out.push(d); if (out.length >= limit) return out; }
+      if (opts.moduleDefs) { out.push(data.mod); if (out.length >= limit) return out; }
+    }
+    return out;
+  }
+  for (const rel of wantRel) {
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
     const { defs, mod } = await _scan_defs_file(rel, text);
