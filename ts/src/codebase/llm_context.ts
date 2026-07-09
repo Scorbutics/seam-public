@@ -898,6 +898,16 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   }
   const showPipeline = pipeline.length >= 2;   // a genuine sequence, not a lone delegate the spine already shows
 
+  // SUBJECT-CONTINUITY (gated SEAM_SUBJECT_DIM) — the anchor's module writes HUB tables (private-app: `members`), so its
+  // members-coupling drags in UNRELATED modules that merely share that hub (support-ticket→`bug_reports`,
+  // scoring-cycle→`member_social_medias`), whose OTHER tables surface as region noise. Demote a region coupling
+  // seam whose TABLE isn't in the flow's SUBJECT set — the tables the anchor's own module touches (+ the spine
+  // sink). Recall-safe: a DEMOTION (sinks below on-subject, out of the capped head), never a drop.
+  const _tableOf = (s: Seam) => (isBoundarySeam(s) ? ((primaryHunk(s) as any)?.label ?? "") : "");
+  const subjectTables = new Set<string>(writtenTables);
+  for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
+  const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM === "1" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
+
   const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
   const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
@@ -981,10 +991,13 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // ALSO REACHES — the OTHER grounded downstream sinks the intent didn't crown as primary. Shown right under the
   // spine so a wrong primary pick is one glance from correction (repoint --intent), and no real terminal is hidden.
   const alsoReachesSection = (): string[] => {
-    if (!spineAlternates.length) return [];
+    // Drop OFF-SUBJECT sinks (a `bug_reports` / `member_social_medias` boundary reached only via the shared
+    // `members` hub is not a real alternate OUTCOME of the payment flow) — they stay in the region, demoted.
+    const alts = spineAlternates.filter((s) => !offSubject(s));
+    if (!alts.length) return [];
     const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
-    spineAlternates.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
-    if (spineAlternates.length > EXEMPT_N) out.push(`  (+${spineAlternates.length - EXEMPT_N} more sink(s) — raise --token-budget)`);
+    alts.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
+    if (alts.length > EXEMPT_N) out.push(`  (+${alts.length - EXEMPT_N} more sink(s) — raise --token-budget)`);
     return out;
   };
   // ALSO WRITES — the OTHER producers of a store boundary this flow writes: the table's alternate ENTRY POINTS
@@ -1029,7 +1042,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // RANKS the remaining region by intent relevance and, under budget, shows a relevance-ranked HEAD + a rolled-up
   // count — so the ON-INTENT seams stay VISIBLE (not lost in a wholesale "N cropped") while the off-intent tail
   // degrades. This is where the intent tightens a structural union without re-growing (the crop the cache moved here).
-  const byRel = (a: Seam, b: Seam) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)) || (_shellOf(a) - _shellOf(b));
+  const byRel = (a: Seam, b: Seam) => (Number(offSubject(a)) - Number(offSubject(b)))   // off-subject coupling sinks last
+    || (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)) || (_shellOf(a) - _shellOf(b));
   const regionSection = (dropOff: boolean, dropSupporting: boolean): string[] => {
     const out: string[] = ["", hasSpine ? "## Region (remaining, by intent relevance)" : "## Region (by shell — nearest the anchor first)"];
     if (!hasSpine) {   // no-intent / skeleton fallback: order every seam by shell (hops from the anchor)

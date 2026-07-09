@@ -392,6 +392,33 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     } finally { if (prev === undefined) delete process.env.SEAM_PIPELINE; else process.env.SEAM_PIPELINE = prev; }
   });
 
+  // SUBJECT-CONTINUITY (gated SEAM_SUBJECT_DIM) — an off-subject sink (a table the flow's own module never
+  // touches, reached only via a shared hub) is dropped from "## Also reaches"; an on-subject one is kept.
+  test("subject-continuity: off-subject sink dropped from also-reaches, on-subject kept (gated)", () => {
+    const prev = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "1";
+    try {
+      const model = {
+        mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+        clusters: [{ id: "g1", intent: "how are payments processed", seams: [
+          { id: "a", label: "processOne", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/pay/orch.ts", line: 1, symbol: "processOne" }, hunks: [{ id: "ah", file: "svc/pay/orch.ts", start: 1, role: "core", label: "processOne" }] },
+          { id: "pay", label: "payments", tier: "supporting", relevance: 0.9, region: { shell: 1, direction: "down" }, primary: { file: "svc/pay/orch.ts", line: 40, symbol: "payments" }, hunks: [{ id: "payh", file: "svc/pay/orch.ts", start: 40, role: "environment", label: "payments", kind: "table" }] },
+          // the anchor's OWN module also touches `members` → members is a SUBJECT table (seed, needs no edge)
+          { id: "memSubj", label: "members", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "svc/pay/phase.ts", line: 5, symbol: "members" }, hunks: [{ id: "msh", file: "svc/pay/phase.ts", start: 5, role: "environment", label: "members", kind: "table" }] },
+          // an ON-subject alternate sink (members, from another module) — kept
+          { id: "memS", label: "members", tier: "off", relevance: 0.2, region: { shell: 2, direction: "down" }, primary: { file: "svc/admin/x.ts", line: 1, symbol: "members" }, hunks: [{ id: "memh", file: "svc/admin/x.ts", start: 1, role: "environment", label: "members", kind: "table" }] },
+          // an OFF-subject alternate sink (bug_reports, a table the pay module never touches) — dropped
+          { id: "bugS", label: "bug_reports", tier: "off", relevance: 0.15, region: { shell: 2, direction: "down" }, primary: { file: "svc/support/y.ts", line: 1, symbol: "bug_reports" }, hunks: [{ id: "bugh", file: "svc/support/y.ts", start: 1, role: "environment", label: "bug_reports", kind: "table" }] },
+        ] }],
+        edges: [{ from: "ah", to: "payh", kind: "db-write", line: 40 }, { from: "ah", to: "memh", kind: "db-write" }, { from: "ah", to: "bugh", kind: "db-write" }],
+        blindspots: [],
+      };
+      const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are payments processed" });
+      const reach = out.slice(out.indexOf("## Also reaches"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(reach).toContain("svc/admin/x.ts");     // members sink (on-subject) kept
+      expect(reach).not.toContain("bug_reports");    // bug_reports sink (off-subject) dropped
+    } finally { if (prev === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = prev; }
+  });
+
   test("pipeline: silent for a lone delegate (needs >=2 sequential steps) and off by default", () => {
     // default (gated off): never shows. Even gated on, a single delegation isn't a "pipeline".
     expect(renderAgent(makeModel(), { tokenBudget: 4000, intent: "x" })).not.toContain("## Pipeline");
