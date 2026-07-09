@@ -703,7 +703,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const cands: { r: number; s: string }[] = [];
     for (const e of (model.edges ?? []) as any[]) {
       const f = String(e.from), t = String(e.to);
-      if (ids.has(t) && !ids.has(f) && allIds.has(f)) cands.push({ r: _WAVE_RANK(e.kind), s: `${_WAVE_VERB[e.kind] ?? "reached from"} ${label.get(f)}` });
+      if (!(ids.has(t) && !ids.has(f) && allIds.has(f))) continue;
+      // A RESOLVED_PARTIAL `call` edge is a NAME-MATCH lead (an unresolved receiver — "may not be your method",
+      // core/resolution.ts says a PARTIAL link must not be FOLLOWED), NOT a confirmed caller. Rendering it as a flat
+      // "called by X" invents callers for an over-loaded name (keycloak has 56 `createUser` methods → false callers,
+      // even a self-reference). Qualify it as "possibly" and rank it AFTER grounded (FULL) callers so a real caller
+      // wins the 2-slot cap. This is the render-side twin of the resolver's don't-follow-a-PARTIAL contract.
+      const partialCall = e.kind === "call" && e.provenance === "RESOLVED_PARTIAL";
+      const verb = partialCall ? "possibly called by" : (_WAVE_VERB[e.kind] ?? "reached from");
+      cands.push({ r: _WAVE_RANK(e.kind) + (partialCall ? 0.5 : 0), s: `${verb} ${label.get(f)}` });
     }
     cands.sort((a, b) => a.r - b.r);
     const uniq = [...new Set(cands.map((c) => c.s))].slice(0, 2);

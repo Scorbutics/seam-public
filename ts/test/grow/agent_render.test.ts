@@ -206,6 +206,31 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(step1).not.toContain("invoker");             // …a call into a SIBLING (the merged-blob leak) does NOT
   });
 
+  // A RESOLVED_PARTIAL `call` edge is a NAME-MATCH lead (unresolved receiver — "may not be your method"), not a
+  // confirmed caller: on an over-loaded name (keycloak has 56 `createUser` methods) a flat "called by X" invents
+  // false callers. The reach line must hedge PARTIAL callers ("possibly called by") and rank grounded (FULL) ones
+  // first. This is the render-side twin of the resolver's don't-follow-a-PARTIAL contract.
+  test("anchor reach: a name-match (PARTIAL) caller reads 'possibly called by'; a FULL caller 'called by' and ranks first", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a user created", seams: [
+        { id: "aseam", label: "createUser", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "api/UsersResource.java", line: 131, symbol: "createUser" }, hunks: [{ id: "ah", file: "api/UsersResource.java", start: 131, role: "core", label: "createUser" }] },
+        { id: "fS", label: "realCaller", tier: "off", region: { shell: 1, direction: "up" }, primary: { file: "api/Bootstrap.java", line: 1, symbol: "realCaller" }, hunks: [{ id: "fc", file: "api/Bootstrap.java", start: 1, role: "link", label: "realCaller" }] },
+        { id: "nmS", label: "importUsers", tier: "off", region: { shell: 1, direction: "up" }, primary: { file: "api/Other.java", line: 1, symbol: "importUsers" }, hunks: [{ id: "nm", file: "api/Other.java", start: 1, role: "link", label: "importUsers" }] },
+      ] }],
+      edges: [
+        { from: "fc", to: "ah", kind: "call", provenance: "RESOLVED_FULL" },     // a grounded caller
+        { from: "nm", to: "ah", kind: "call", provenance: "RESOLVED_PARTIAL" },  // a bare-name collision lead
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user created" });
+    const step1 = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(step1).toContain("called by realCaller");            // FULL → confident
+    expect(step1).toContain("possibly called by importUsers");  // PARTIAL name-match → hedged
+    expect(step1.indexOf("called by realCaller")).toBeLessThan(step1.indexOf("possibly called by importUsers")); // FULL first
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
