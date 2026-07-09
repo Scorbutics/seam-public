@@ -810,7 +810,17 @@ async function crossBoundary(
   // HUB DAMPING: a key shared by a flood of files is infra (a shared EntityManager/session), not a domain
   // channel — materialize only hubReaderCap of it (the tail stays a fanout blindspot below). Bounds the
   // sprawl AT EACH re-anchor, so the grow stops chasing the hub fan instead of compounding it step over step.
-  const cap = complementFiles.size > COUPLING.hubFan ? COUPLING.hubReaderCap : READER_CAP;
+  //
+  // SUBJECT READERS (gated SEAM_SUBJECT_READERS): the READERS of a table the node PRODUCES are the "…and where is
+  // it displayed" half — for a NON-hub table (a domain channel, not `members`), ALL of them are on-intent, so
+  // READER_CAP=6 + co-occurrence ranking wrongly demotes a PURE-subject reader (shares only this table) below a
+  // reader that also touches a busier table, capping it out (private-app: member/invoice's `payments` read damped; the
+  // admin routes surfaced via `members` instead → mislabeled). Materialize the WHOLE non-hub reader set; the
+  // hubFan gate still damps a genuine hub (`members`, 61 readers → hubReaderCap). Producers (consume side) keep
+  // READER_CAP. complementBudget still bounds the total.
+  const isReaderSide = !complementProduces;   // key.produces → complements are the readers (consumers) of what's written
+  const subjectReaders = process.env.SEAM_SUBJECT_READERS === "1" && isReaderSide;
+  const cap = complementFiles.size > COUPLING.hubFan ? COUPLING.hubReaderCap : (subjectReaders ? complementFiles.size : READER_CAP);
   for (const [file, line] of rankedComplements.slice(0, cap)) {
     // GROW-WIDE FANOUT BUDGET: each complement is a tree-sitter parse (the data-coupling bottleneck). A hub
     // key/anchor fans out to hundreds — bound the TOTAL across the whole grow so a central anchor can't run

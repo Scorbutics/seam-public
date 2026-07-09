@@ -400,6 +400,33 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     } finally { if (prev === undefined) delete process.env.SEAM_PIPELINE; else process.env.SEAM_PIPELINE = prev; }
   });
 
+  // ALSO READ (gated SEAM_SUBJECT_READERS) — the symmetric of "## Also writes": an external file that READS the
+  // subject table surfaces in "## Also read" (correctly labelled by the subject, not a co-touched hub); the
+  // anchor's own module is excluded (its reads are the mechanism).
+  test("also-read: external readers of the subject table surface, anchor's own module excluded (gated)", () => {
+    const prev = process.env.SEAM_SUBJECT_READERS; process.env.SEAM_SUBJECT_READERS = "1";
+    try {
+      const model = {
+        mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+        clusters: [{ id: "g1", intent: "how are payments processed", seams: [
+          { id: "a", label: "processOne", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/pay/orch.ts", line: 1, symbol: "processOne" }, hunks: [{ id: "ah", file: "svc/pay/orch.ts", start: 1, role: "core", label: "processOne" }] },
+          { id: "pay", label: "payments", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/pay/orch.ts", line: 40, symbol: "payments" }, hunks: [{ id: "payh", file: "svc/pay/orch.ts", start: 40, role: "environment", label: "payments", kind: "table" }] },
+          // an EXTERNAL reader of payments — surfaces in "## Also read"
+          { id: "rdr", label: "listPayments", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "app/admin/list.ts", line: 12, symbol: "listPayments" }, hunks: [{ id: "rh", file: "app/admin/list.ts", start: 12, role: "link", label: "listPayments" }] },
+          // the anchor's OWN module also reads payments (a phase select) — the mechanism, NOT a consumer
+          { id: "ph", label: "phaseRead", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "svc/pay/phase.ts", line: 8, symbol: "phaseRead" }, hunks: [{ id: "phh", file: "svc/pay/phase.ts", start: 8, role: "link", label: "phaseRead" }] },
+        ] }],
+        edges: [{ from: "ah", to: "payh", kind: "db-write", line: 40 }, { from: "payh", to: "rh", kind: "db-read" }, { from: "payh", to: "phh", kind: "db-read" }],
+        blindspots: [],
+      };
+      const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are payments processed" });
+      const read = out.slice(out.indexOf("## Also read"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(out).toContain("## Also read");
+      expect(read).toContain("app/admin/list.ts");     // external payments reader surfaced (the display side)
+      expect(read).not.toContain("svc/pay/phase.ts");  // the anchor's own module read is the mechanism, not a consumer
+    } finally { if (prev === undefined) delete process.env.SEAM_SUBJECT_READERS; else process.env.SEAM_SUBJECT_READERS = prev; }
+  });
+
   // SUBJECT-CONTINUITY (gated SEAM_SUBJECT_DIM) — an off-subject sink (a table the flow's own module never
   // touches, reached only via a shared hub) is dropped from "## Also reaches"; an on-subject one is kept.
   test("subject-continuity: off-subject sink dropped from also-reaches, on-subject kept (gated)", () => {

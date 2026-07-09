@@ -868,6 +868,20 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     : [];
   const coProdSet = new Set(coProducers.map((s) => s.id));
 
+  // ALSO READ (gated SEAM_SUBJECT_READERS) — the symmetric half of "## Also writes": the OTHER files that READ the
+  // subject table (the "…and where is it displayed" side — admin lists, the member invoice page). The coupling
+  // materialises them (subject-reader cap), but a file reading BOTH the subject AND a hub table gets assembled into
+  // one seam labelled by the hub, and pure readers get cropped from the region — so surface them by their db-READ
+  // edge to the subject boundary, in a dedicated exempt section. Excludes the anchor's own module (its reads are
+  // the mechanism, not consumers) and tests.
+  const _READ_KINDS = new Set(["db-read", "consume", "read", "select", "find", "route-fetch"]);
+  const readsFrom = (s: Seam): boolean => (s.hunks ?? []).some((h: any) => { const hid = String((h as any).id); return (model.edges ?? []).some((e: any) => _READ_KINDS.has(e.kind) && (String(e.from) === hid || String(e.to) === hid) && (writtenTables.has(label.get(String(e.from)) ?? "") || writtenTables.has(label.get(String(e.to)) ?? ""))); });
+  const readers = (process.env.SEAM_SUBJECT_READERS === "1" && writtenTables.size)
+    ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s) && readsFrom(s)
+        && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
+    : [];
+  const readerSet = new Set(readers.map((s) => s.id));
+
   // PIPELINE (gated SEAM_PIPELINE) — the anchor's OWN sequential downstream delegation calls, flow-ordered by
   // call-site line. For a direct-writer ORCHESTRATOR (processOne: `.update(payments)` → runPhaseProvision →
   // enrich → invoice → notify) the linear spine collapses to anchor→sink and buries the real mechanism in the
@@ -908,8 +922,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
   const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM !== "0" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
 
-  const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
-  const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s));
+  const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !readerSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
+  const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !readerSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
   // DEDUPE: a hub-marked hunk appears in every seam it wires (a hub wires many), so a naive scan lists it once per
   // seam — the same `BookingsBean` line a dozen times. Key by (file, label, reason) → one line per collapsed hub.
@@ -1012,6 +1026,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const out = ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)"];
     uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
     if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more producer(s) — raise --token-budget)`);
+    return out;
+  };
+  // ALSO READ — the OTHER files that read the subject table (the display/consume side): admin lists, the member
+  // invoice page. Exempt from the region crop so the "…and where is it displayed" half isn't lost to a hub label.
+  const alsoReadSection = (): string[] => {
+    if (!readers.length) return [];
+    const seen = new Set<string>();
+    const uniq = [...readers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const out = ["", "## Also read (where this flow's data is consumed — the display/read side)"];
+    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
+    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more consumer(s) — raise --token-budget)`);
     return out;
   };
   // PIPELINE — the anchor's sequential downstream steps in call order (the mechanism a thin direct-writer spine
@@ -1139,7 +1164,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out = assemble(...steps[0]);
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
