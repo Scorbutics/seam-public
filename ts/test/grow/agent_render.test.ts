@@ -361,6 +361,42 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).not.toContain("## Also writes");
   });
 
+  // PIPELINE (gated SEAM_PIPELINE) — a direct-writer orchestrator's spine collapses to anchor→sink and buries the
+  // mechanism; surface the anchor's own sequential delegation calls, flow-ordered by call-site line, types excluded.
+  test("pipeline: the anchor's sequential delegations, in call order, types dropped (gated)", () => {
+    const prev = process.env.SEAM_PIPELINE; process.env.SEAM_PIPELINE = "1";
+    try {
+      const model = {
+        mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+        clusters: [{ id: "g1", intent: "how is it processed", seams: [
+          { id: "a", label: "processOne", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/orch.ts", line: 1, symbol: "processOne" }, hunks: [{ id: "ah", file: "svc/orch.ts", start: 1, role: "core", label: "processOne" }] },
+          { id: "ph", label: "phases", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/phases.ts", line: 1, symbol: "phases" }, hunks: [
+            { id: "p1", file: "svc/phase1.ts", start: 5, label: "runPhase1", kind: "function" },
+            { id: "p2", file: "svc/phase2.ts", start: 8, label: "runPhase2", kind: "function" },
+            { id: "p3", file: "svc/phase3.ts", start: 3, label: "runPhase3", kind: "function" },
+            { id: "ty", file: "svc/types.ts", start: 1, label: "MyType", kind: "interface" },
+          ] },
+        ] }],
+        // out-of-order + a type-ref + a line-0 ref that must all be handled
+        edges: [{ from: "ah", to: "p2", kind: "import", line: 154 }, { from: "ah", to: "p1", kind: "import", line: 140 }, { from: "ah", to: "p3", kind: "call", line: 200 }, { from: "ah", to: "ty", kind: "import", line: 120 }, { from: "ah", to: "nofile", kind: "import", line: 0 }],
+        blindspots: [],
+      };
+      const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is it processed" });
+      const pipe = out.slice(out.indexOf("## Pipeline"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(out).toContain("## Pipeline");
+      expect(pipe).not.toContain("MyType");   // a pure type-ref is not an execution step
+      expect(pipe.indexOf("runPhase1")).toBeGreaterThan(-1);
+      expect(pipe.indexOf("runPhase1")).toBeLessThan(pipe.indexOf("runPhase2"));   // flow order by call-site line…
+      expect(pipe.indexOf("runPhase2")).toBeLessThan(pipe.indexOf("runPhase3"));   // …not edge-list order
+      expect(pipe).toContain("called at orch.ts:140");   // the call site in the anchor
+    } finally { if (prev === undefined) delete process.env.SEAM_PIPELINE; else process.env.SEAM_PIPELINE = prev; }
+  });
+
+  test("pipeline: silent for a lone delegate (needs >=2 sequential steps) and off by default", () => {
+    // default (gated off): never shows. Even gated on, a single delegation isn't a "pipeline".
+    expect(renderAgent(makeModel(), { tokenBudget: 4000, intent: "x" })).not.toContain("## Pipeline");
+  });
+
   test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
     const model = makeModel({ offN: 0 });
     (model as any).blindspots = [

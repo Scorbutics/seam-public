@@ -687,7 +687,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const seamOfId = new Map<string, string>();
   const fileOfId = new Map<string, string>();
   const startOfId = new Map<string, number>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { const k = String(id); label.set(k, h.label ?? s.label); seamOfId.set(k, s.id); if (h.file) fileOfId.set(k, h.file); if (typeof h.start === "number") startOfId.set(k, h.start); } }
+  const kindOfId = new Map<string, string>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { const k = String(id); label.set(k, h.label ?? s.label); seamOfId.set(k, s.id); if (h.file) fileOfId.set(k, h.file); if (typeof h.start === "number") startOfId.set(k, h.start); if (h.kind) kindOfId.set(k, h.kind); } }
   const allIds = new Set(label.keys());
   const seamIds = (s: Seam) => new Set((s.hunks ?? []).map((h) => String((h as any).id)).filter((x) => x !== "undefined"));
   // reachedVia for a SEAM: the resolved relation(s) that reached it from a node OUTSIDE the seam (same vocabulary
@@ -867,6 +868,36 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     : [];
   const coProdSet = new Set(coProducers.map((s) => s.id));
 
+  // PIPELINE (gated SEAM_PIPELINE) — the anchor's OWN sequential downstream delegation calls, flow-ordered by
+  // call-site line. For a direct-writer ORCHESTRATOR (processOne: `.update(payments)` → runPhaseProvision →
+  // enrich → invoice → notify) the linear spine collapses to anchor→sink and buries the real mechanism in the
+  // region, because the phases are SIBLING calls of the anchor (a fan), not nodes between anchor and sink. A
+  // linear spine can't hold a fan; surface it here as a numbered sequence. Only when the anchor fans to ≥2
+  // in-repo delegations (a real pipeline, not a single delegate already on the spine).
+  // NODE-level: the anchor SEAM is often a big merged blob (private-app `index` = 327 members incl. the phases), so
+  // anchor→phase is an INTRA-seam edge. Work from the anchor NODE's own outgoing calls to their callee NODES.
+  // A DELEGATION from the anchor's body is an `import`/`call` edge carrying the USE line (the dep-graph tags a
+  // used import with its call-site line, not the import statement): `import@140->runPhaseProvision`. Require a
+  // real line (>0) so top-level file-refs (line 0) and pure type-refs drop out; order by line = execution order.
+  const _CALL_KINDS = new Set(["call", "import", "invokes", "dispatch"]);
+  const _TYPE_KINDS = new Set(["interface", "type", "enum", "type-alias"]);   // pure type-refs — not execution steps
+  const pipeline: { id: string; line: number }[] = [];
+  if (process.env.SEAM_PIPELINE === "1") {
+    const anchorNode = String(model.anchor);
+    const seen = new Set<string>([anchorNode]);
+    const cands: { id: string; line: number }[] = [];
+    for (const e of (model.edges ?? []) as any[]) {
+      if (!_CALL_KINDS.has(e.kind) || String(e.from) !== anchorNode || !(Number(e.line) > 0)) continue;
+      const to = String(e.to);
+      if (seen.has(to) || !label.has(to) || _TYPE_KINDS.has(kindOfId.get(to) ?? "")) continue;   // resolved, non-TYPE callee
+      seen.add(to);
+      cands.push({ id: to, line: Number(e.line) });
+    }
+    cands.sort((a, b) => a.line - b.line);   // FLOW ORDER: the anchor's calls in source (execution) order
+    pipeline.push(...cands);
+  }
+  const showPipeline = pipeline.length >= 2;   // a genuine sequence, not a lone delegate the spine already shows
+
   const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
   const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
@@ -967,6 +998,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const out = ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)"];
     uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
     if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more producer(s) — raise --token-budget)`);
+    return out;
+  };
+  // PIPELINE — the anchor's sequential downstream steps in call order (the mechanism a thin direct-writer spine
+  // buries). Numbered = flow order; each carries its call site in the anchor (anchorFile:line ──▶ step).
+  const _anchorFileBase = (fileOfId.get(String(model.anchor)) ?? "").split("/").pop();
+  const pipelineSection = (): string[] => {
+    if (!showPipeline) return [];
+    const out = ["", "## Pipeline (the anchor's sequential steps, in call order)"];
+    pipeline.slice(0, EXEMPT_N).forEach((p, i) => {
+      const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
+      out.push(`  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`);
+    });
+    if (pipeline.length > EXEMPT_N) out.push(`  (+${pipeline.length - EXEMPT_N} more step(s) — raise --token-budget)`);
     return out;
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
@@ -1080,7 +1124,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out = assemble(...steps[0]);
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
