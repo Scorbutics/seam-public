@@ -227,6 +227,31 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Region"))).not.toContain("AuditEntity");        // and NOT duplicated into the region
   });
 
+  // DIRECT-WRITE PRIOR — the sink the ANCHOR writes directly (a produce edge from the anchor node) outranks a
+  // higher-relevance but PERIPHERAL sink. On Keycloak the embedding rated UserVerifiableCredentialEntity (0.35)
+  // over the plain UserEntity (0.16) that addUser's own em.persist writes — structure names the fact, embeddings
+  // only order the rest. Here `audit` has HIGHER relevance but is written by a helper; the anchor writes `user`.
+  test("direct-write prior: the sink the anchor writes directly wins over a higher-relevance peripheral sink", () => {
+    const model = {
+      mode: "codebase", anchor: "addh", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "persist a user", seams: [
+        { id: "add", label: "addUser", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "jpa/UserProvider.java", line: 1, symbol: "addUser" }, hunks: [{ id: "addh", file: "jpa/UserProvider.java", start: 1, role: "core", label: "addUser" }] },
+        // the anchor DIRECTLY writes UserEntity (lower relevance) …
+        { id: "u", label: "UserEntity", tier: "off", relevance: 0.16, region: { shell: 1, direction: "down" }, primary: { file: "jpa/UserEntity.java", line: 1, symbol: "UserEntity" }, hunks: [{ id: "uh", file: "jpa/UserEntity.java", start: 1, role: "environment", label: "UserEntity", kind: "db-table" }] },
+        // … while a HELPER writes AuditEntity (HIGHER relevance, but not the anchor's own write)
+        { id: "aw", label: "audit", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "jpa/Audit.java", line: 1, symbol: "audit" }, hunks: [{ id: "awh", file: "jpa/Audit.java", start: 1, role: "link", label: "audit" }] },
+        { id: "a", label: "AuditEntity", tier: "off", relevance: 0.42, region: { shell: 2, direction: "down" }, primary: { file: "jpa/AuditEntity.java", line: 1, symbol: "AuditEntity" }, hunks: [{ id: "ah", file: "jpa/AuditEntity.java", start: 1, role: "environment", label: "AuditEntity", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "addh", to: "uh", kind: "db-write", line: 134 }, { from: "addh", to: "awh", kind: "call" }, { from: "awh", to: "ah", kind: "db-write" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches") > -1 ? out.indexOf("## Also reaches") : out.indexOf("## Region"));
+    expect(spine).toContain("UserEntity");        // the anchor's DIRECT write is the outcome…
+    expect(spine).not.toContain("AuditEntity");   // …not the higher-relevance peripheral sink
+    expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");   // which is surfaced as an alternate
+  });
+
   // FRONTIER-⟂ — no grounded sink, but the flow provably continues into an OPAQUE node the grow couldn't follow
   // (a runtime-DI multi-impl). The spine terminates THERE honestly — naming the break + candidate impls — instead
   // of falling to an inferred guess. An honest broken path that says WHERE it lost the thread > a smooth wrong one.

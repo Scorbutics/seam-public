@@ -763,9 +763,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // direction "down" to count as an outcome (else an inbound caller-route gets crowned — the booking case).
     const _STORE = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
     const isStoreSink = (s: Seam) => _STORE.has((primaryHunk(s) as any)?.kind ?? "");
+    // STRUCTURAL PRIOR — a sink the ANCHOR writes DIRECTLY (a produce/write edge FROM an anchor-seam node) is what
+    // THIS operation persists: a grounded fact that outranks a weak name-embedding. On Keycloak the embedding rates
+    // the token-rich but PERIPHERAL `UserVerifiableCredentialEntity` (0.346) over the plain, CENTRAL `UserEntity`
+    // (0.158) that addUser's own `em.persist` writes — the direct-write prior corrects it. CLAUDE.md in motion:
+    // STRUCTURE names the fact (the anchor writes this table), embeddings only order the REST (the also-reaches).
+    const _PRODUCE = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
+    const anchorNode = String(model.anchor);   // the anchor NODE, not its (coarse, god-class) seam
+    const directIds = new Set<string>();
+    for (const e of (model.edges ?? []) as any[]) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) directIds.add(String(e.to));
+    const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
     const cands = seams.filter((s) => isBoundarySeam(s) && dist.has(s.id) && s.id !== anchorSeam
         && (isStoreSink(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (rel(b) - rel(a)) || (dist.get(b.id)! - dist.get(a.id)!) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (rel(b) - rel(a)) || (dist.get(b.id)! - dist.get(a.id)!) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     const pathTo = (toId: string): string[] => { const p: string[] = []; for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { p.unshift(cur); if (cur === anchorSeam) break; } return p; };
     if (!cands.length) {
       // FRONTIER-⟂ TERMINAL — no grounded sink, but the flow provably continues DOWNSTREAM into an OPAQUE node the
