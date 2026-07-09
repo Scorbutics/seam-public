@@ -971,9 +971,17 @@ async function runPipeline(
     wireNear(s, node.id, boundaryId, key);                              // STEP 5 (near)
     await crossBoundary(s, boundaryId, key, complementFiles, surfacedKeys);   // STEP 5 (far) + chain
     // STEP 5b (PROTOTYPE, opt-in) — the SAME-SIDE co-accessors: a table's OTHER writers (alternate entry points).
+    // GUARD: draw a key's co-producers ONCE per grow (ctx-scoped), not per producing-node. Every node that writes
+    // `payments` would otherwise re-materialize the same co-producer set (~17× on private-app) — the merge dedups the
+    // OUTPUT but each pass still parses + drains the shared complementBudget. The set is content-deduped at merge,
+    // so the single draw (on the first producing-node's boundary) is sufficient; the render matches by table label.
     if (process.env.SEAM_COPRODUCERS === "1") {
-      const sameSideFiles = collectSameSideFiles(p.index, key, anchorPath);
-      if (sameSideFiles.size) await crossSameSide(s, boundaryId, key, sameSideFiles);
+      const kid = keyId(key.kind, key.value);
+      if (!s.ctx.sameSideDrawn.has(kid)) {
+        s.ctx.sameSideDrawn.add(kid);
+        const sameSideFiles = collectSameSideFiles(p.index, key, anchorPath);
+        if (sameSideFiles.size) await crossSameSide(s, boundaryId, key, sameSideFiles);
+      }
     }
   }
   if (grounded.length > cap) s.graph.addBlindspot({ node: node.id, mechanism: "node-key-fanout",

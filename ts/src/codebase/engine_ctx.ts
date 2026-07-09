@@ -62,6 +62,7 @@ export class EngineCtx {
   keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
   synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
   complementBudget = COUPLING.complementBudget; // crossBoundary: complement units materialized this run (grow-wide) — bounds a hub's fan
+  sameSideDrawn = new Set<string>();  // crossSameSide: keys whose CO-PRODUCERS were already drawn this grow — draw once, not per producing-node (the merge dedups the output; this dedups the WORK/budget)
 
   // FORK — a sibling ctx for a CONCURRENT center-grow. SHARES every repo-wide index Map BY REFERENCE (built
   // once, read-concurrent-safe: the getOrSet builders are idempotent, and the parallel forks run AFTER the
