@@ -13,6 +13,7 @@ import { SUPABASE, DB_TABLE_META } from "./db_table.js";
 import { RAW_SQL } from "./raw_sql.js";
 import { ACTIVE_RECORD } from "./active_record.js";
 import { JOOQ } from "./jooq.js";
+import { JPA_ENTITY } from "./jpa_entity.js";
 import { HTTP_ROUTE } from "./http_route.js";
 import { ENDPOINT_MAP } from "./endpoint_map.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
@@ -28,7 +29,7 @@ import { ARCHETYPES, ARCHETYPE_METAS } from "./archetypes.js";
 // `$`-discriminated shape stable across Vue 2/3, common enough that the LLM flywheel being off by default
 // (cold-grow stability) AND the local coupling gate skipping a `this.$x` anchor left it undetected. It's
 // deterministic floor (VUE_INJECT) so it works without the flywheel and the gate sees the boundary.
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, HTTP_ROUTE, ENDPOINT_MAP, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, VUE_INJECT, MEMBER_ACCESS];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, JPA_ENTITY, HTTP_ROUTE, ENDPOINT_MAP, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, VUE_INJECT, MEMBER_ACCESS];
 
 // MARKUP/TEMPLATE file extensions that carry framework couplings (Vue SFC, HTML/AngularJS/Angular
 // templates). STRUCTURAL: which file types can hold a shared key is a fact about the file type, independent

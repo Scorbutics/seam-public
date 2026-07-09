@@ -176,7 +176,7 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // `alogic` = adapter-LOGIC version: the salt already keys on the adapter SET (kinds), but not on a kind's
 // extraction LOGIC. Bump this when an adapter's scan changes (e.g. endpoint_map multi-line descriptors) so a
 // cached floor re-scans instead of serving pre-fix keys — otherwise a logic fix is invisible on a warm repo.
-const _ADAPTER_LOGIC_VERSION = "2";
+const _ADAPTER_LOGIC_VERSION = "3";   // 3: added the JPA @Entity/@Table db-table adapter (its `db-table` kind is already in the kind-list, so bump here to invalidate the warm coupling floor)
 function floorConfigSalt(): string {
   // Fold the framework VOCAB (route annotations / http clients / ORM methods) in too: a manifest that adds a
   // route annotation or ORM method changes the floor output, so a warm repo must re-scan, not serve stale keys.

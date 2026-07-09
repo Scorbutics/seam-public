@@ -28,7 +28,7 @@ const CACHE = "footprint-v1";
 // PREVIOUS binary's cached grow/footprint even after the resolution logic changed (the "I updated seam but see
 // the old result, --no-cache made no difference" trap). BUMP this whenever a change alters cached output
 // (resolution/grow/coupling/render-of-cached-graph); any bump makes every stored entry miss → recompute once.
-const ENGINE_EPOCH = "3";   // 3: multi-impl DI follow (interface→impl crosses N deterministic impls, not just sole)
+const ENGINE_EPOCH = "4";   // 4: JPA @Entity/@Table → db-table adapter (JPA persist/find/JPQL grounds the DB boundary)
 type Entry = { e: string; g: ResolvedGraph };   // e = repo content epoch under which g was computed
 type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified|coupling" → entry
 
