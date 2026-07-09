@@ -112,7 +112,12 @@ export function routeSuffixMatch(a: string, b: string): boolean { return routeMa
 // sub-path/wildcard handler and vice-versa. Dedup is handled downstream (complementFiles).
 export function otherSide(index: GroundingIndex, kind: string, value: string, produces: boolean): Access[] {
   const exact = index.get(keyId(kind, value));
-  const out: Access[] = [...((produces ? exact?.consumers : exact?.producers) ?? [])];
+  // Drop TEST/fixture accesses — a `.integration-test`/`.e2e-spec`/seed file that reads or writes the key is not a
+  // real coupling counterpart of the flow (an intent's subject `booking` was flooded by integration-test writers on
+  // cal.com, crowding out the real producers). The shared-key INDEX keeps them (it's content-cached + also feeds
+  // hub-fan stats); this OTHER-SIDE lookup — the single choke point that turns an index entry into a crossing node —
+  // is where the flow's counterpart set is drawn, so it's the right place to match the engine-wide test exclusion.
+  const out: Access[] = ((produces ? exact?.consumers : exact?.producers) ?? []).filter((a) => !isTestFile(a.file));
   if (kind !== _HTTP_ROUTE) return out;
   const prefix = `${_HTTP_ROUTE} `;
   // Score every fuzzy route match by SPECIFICITY (shared literal segments). ALWAYS keep the SPECIFIC matches
@@ -127,7 +132,7 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
     const val = k.slice(prefix.length);
     if (val === value) continue;   // exact already counted
     const spec = routeMatchSpecificity(val, value);
-    if (spec >= 1) scored.push({ spec, accesses: produces ? v.consumers : v.producers });
+    if (spec >= 1) scored.push({ spec, accesses: (produces ? v.consumers : v.producers).filter((a) => !isTestFile(a.file)) });
   }
   const hasSpecific = scored.some((s) => s.spec >= 2);
   for (const s of scored) if (s.spec >= 2) out.push(...s.accesses);   // a SPECIFIC (≥2-literal) match is always kept
@@ -376,7 +381,12 @@ export async function couplingOtherSides(
   const out: CouplingOtherSide[] = [];
   const seen = new Set<string>();
   for (const key of anchorKeys.values()) {
-    const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f)).slice(0, _TARGETED_CAND_CAP);
+    // EXCLUDE test files from the coupling crossing candidates — a `.integration-test`/`.e2e-spec`/seed file that
+    // writes the subject table (`booking`) is NOT a real co-writer/reader of the flow, it's a fixture. The grow
+    // excludes tests everywhere else by default; this path (grep → candidate scan) was the last one that didn't, so
+    // an intent's subject write-set got flooded by integration-test writers (cal.com `booking`) and the real
+    // producers were crowded out. Structural (path shape), matches the engine-wide default test exclusion.
+    const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f) && !isTestFile(f)).slice(0, _TARGETED_CAND_CAP);
     let materialised = 0;
     for (const cand of candidates) {
       if (materialised >= READER_CAP) break;
