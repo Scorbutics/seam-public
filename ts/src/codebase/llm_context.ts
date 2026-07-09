@@ -898,7 +898,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   }
   const showPipeline = pipeline.length >= 2;   // a genuine sequence, not a lone delegate the spine already shows
 
-  // SUBJECT-CONTINUITY (gated SEAM_SUBJECT_DIM) — the anchor's module writes HUB tables (private-app: `members`), so its
+  // SUBJECT-CONTINUITY (default-ON; opt-OUT SEAM_SUBJECT_DIM=0) — the anchor's module writes HUB tables (private-app: `members`), so its
   // members-coupling drags in UNRELATED modules that merely share that hub (support-ticket→`bug_reports`,
   // scoring-cycle→`member_social_medias`), whose OTHER tables surface as region noise. Demote a region coupling
   // seam whose TABLE isn't in the flow's SUBJECT set — the tables the anchor's own module touches (+ the spine
@@ -906,7 +906,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const _tableOf = (s: Seam) => (isBoundarySeam(s) ? ((primaryHunk(s) as any)?.label ?? "") : "");
   const subjectTables = new Set<string>(writtenTables);
   for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
-  const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM === "1" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
+  const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM !== "0" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
 
   const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
   const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s));

@@ -216,7 +216,11 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       edges: [{ from: "ctrlh", to: "svch", kind: "call" }, { from: "svch", to: "utblh", kind: "db-write" }, { from: "svch", to: "awh", kind: "call" }, { from: "awh", to: "atblh", kind: "db-write" }],
       blindspots: [],
     };
+    // pin subject-continuity OFF: this asserts the base intent-pick / also-reaches contract, and `AuditEntity` is
+    // deliberately off-subject (subject-dim, now default-on, would legitimately drop it — tested separately).
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches"));
     expect(spine).toContain("UserEntity");                    // the intent-relevant sink is the spine outcome…
     expect(spine).not.toContain("AuditEntity");               // …NOT the deeper, off-intent audit sink
@@ -271,7 +275,11 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       edges: [{ from: "ctrlh", to: "svch", kind: "call", line: 20 }, { from: "svch", to: "uh", kind: "db-write", line: 55 }, { from: "svch", to: "audh", kind: "call" }, { from: "audh", to: "ah", kind: "db-write" }],
       blindspots: [],
     };
+    // pin subject-continuity OFF (default-on) — this asserts the base delegate-prior contract; AuditEntity is
+    // off-subject and would be legitimately dropped by subject-dim (tested separately).
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches") > -1 ? out.indexOf("## Also reaches") : out.indexOf("## Region"));
     expect(spine).toContain("UserEntity");        // svc (the anchor's sole delegate) writes it → borrowed as the direct sink
     expect(spine).not.toContain("AuditEntity");   // written by audit, TWO hops from ctrl (not a direct callee) → not borrowed; stays an alternate
