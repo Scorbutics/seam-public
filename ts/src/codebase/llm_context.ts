@@ -680,10 +680,14 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const budget = Math.max(300, opts.tokenBudget ?? 4000);
   const tok = (lines: string[]) => Math.ceil(lines.join("\n").length / 4);
 
-  // id → label + the seam each node lives in (for reach phrases that stop at the seam boundary).
+  // id → label + the seam each node lives in (for reach phrases that stop at the seam boundary). Plus id → file /
+  // start, so the spine can print the EXACT CALL SITE per hop (caller file:line) — the verify-by-glance the agent
+  // trusts instead of re-grepping.
   const label = new Map<string, string>();
   const seamOfId = new Map<string, string>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { label.set(String(id), h.label ?? s.label); seamOfId.set(String(id), s.id); } }
+  const fileOfId = new Map<string, string>();
+  const startOfId = new Map<string, number>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { const k = String(id); label.set(k, h.label ?? s.label); seamOfId.set(k, s.id); if (h.file) fileOfId.set(k, h.file); if (typeof h.start === "number") startOfId.set(k, h.start); } }
   const allIds = new Set(label.keys());
   const seamIds = (s: Seam) => new Set((s.hunks ?? []).map((h) => String((h as any).id)).filter((x) => x !== "undefined"));
   // reachedVia for a SEAM: the resolved relation(s) that reached it from a node OUTSIDE the seam (same vocabulary
@@ -834,6 +838,26 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return out;
   };
   const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
+  // THE CALL SITE between two consecutive spine seams — the resolved edge connecting them, rendered from its OWN
+  // caller/callee (edge.from is always the caller, edge.line the call-site line in the caller's file — see
+  // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
+  // most concrete edge (a real call/write over a bare reference), falling back to the seam's own start line when a
+  // derived crossing edge carries no line. Returns null when the two seams share no resolved edge.
+  const spineHop = (a: Seam, b: Seam): string | null => {
+    const ai = seamIds(a), bi = seamIds(b);
+    let best: any = null;
+    for (const e of (model.edges ?? []) as any[]) {
+      if (e.kind === "contains") continue;
+      const f = String(e.from), t = String(e.to);
+      const fwd = ai.has(f) && bi.has(t), rev = bi.has(f) && ai.has(t);
+      if (!fwd && !rev) continue;
+      if (!best || _WAVE_RANK(e.kind) < _WAVE_RANK(best.kind) || (e.line && !best.line)) best = e;
+    }
+    if (!best) return null;
+    const f = String(best.from);
+    const site = `${fileOfId.get(f) ?? "?"}:${best.line || startOfId.get(f) || "?"}`;
+    return `${site} ──${best.kind}──▶ ${label.get(String(best.to)) ?? "?"}`;
+  };
   // SPINE — three honest states, never a confident-but-wrong path (the trust rule): (a) GROUNDED — the anchor→sink
   // path terminating at a real boundary (db/route/queue); (b) INFERRED — no boundary was reached, so the tier band
   // is shown but LABELLED as inferred, never presented as a proven flow; (c) NONE — under an intent, an anchor that
@@ -850,7 +874,12 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       ? "## Spine (partial — the flow continues into an opaque boundary static resolution can't follow)"
       : "## Spine (inferred — no grounded boundary reached; relevance-ordered, verify — the flow may not terminate at a boundary)";
     const out = ["", header];
-    spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
+    spineSeams.forEach((s, i) => {
+      out.push(seamLine(s, i + 1));
+      // THE CALL SITE — the exact resolved edge connecting this step to the next (caller file:line ──kind──▶
+      // callee). This is the verify-by-glance line: an agent reads it instead of re-grepping to trust the hop.
+      if (i < spineSeams.length - 1) { const hop = spineHop(s, spineSeams[i + 1]); if (hop) out.push(`       ↳ ${hop}`); }
+    });
     // ⟂ BREAK — name where the flow left the static graph (the DI hole / unresolved edge) + the candidate impls to
     // deepen into. This is the honest terminus of a partial spine: not "here's a guess", but "it continues HERE".
     if (spineTerminal === "frontier" && spineBreak) {

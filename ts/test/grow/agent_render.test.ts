@@ -181,6 +181,25 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Region"))).toContain("AdminRouter");   // the drift-marked seam lands in the region instead
   });
 
+  // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
+  // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
+  test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
+    const model = {
+      mode: "codebase", anchor: "ctrlh", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "persist a user", seams: [
+        { id: "ctrl", label: "UserController", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/UserController.java", line: 12, symbol: "UserController" }, hunks: [{ id: "ctrlh", file: "api/UserController.java", start: 12, role: "core", label: "UserController" }] },
+        { id: "svc", label: "persist", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/UserService.java", line: 8, symbol: "persist" }, hunks: [{ id: "svch", file: "svc/UserService.java", start: 8, role: "link", label: "persist" }] },
+        { id: "utbl", label: "UserEntity", tier: "supporting", relevance: 0.9, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserEntity.java", line: 1, symbol: "UserEntity" }, hunks: [{ id: "utblh", file: "jpa/UserEntity.java", start: 1, role: "environment", label: "UserEntity", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "ctrlh", to: "svch", kind: "call", line: 41 }, { from: "svch", to: "utblh", kind: "db-write", line: 23 }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    expect(spine).toContain("api/UserController.java:41 ──call──▶ persist");    // the caller call-site line, not a label
+    expect(spine).toContain("svc/UserService.java:23 ──db-write──▶ UserEntity"); // the write site + the table it hits
+  });
+
   // P2 — INTENT picks the primary among MULTIPLE downstream sinks; the rest render as "also reaches" (never hidden).
   test("intent picks the relevant sink (higher relevance) over a deeper one; the other sink is 'also reaches'", () => {
     const model = {
