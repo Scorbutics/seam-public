@@ -702,12 +702,11 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const cross = (s: Seam): string => (s.writes && s.writes.length ? `  [crossing: ${s.writes.join(", ")}]` : "");
 
   const tierOf = (s: Seam) => s.tier ?? "";
-  const hasSpine = seams.some((s) => tierOf(s) === "spine");
-  const spineSeams = seams.filter((s) => tierOf(s) === "spine");
   // CROSS-STACK PROMOTION — a CODE seam reached via a shared-key CROSSING (HTTP route / db / queue) from within
   // the map is the OTHER SIDE of a stack boundary (Acme: the JS frontend behind the Java REST endpoint). The region
   // would bury it in off-path — but it IS the differentiator (grep can't link the two sides), so lift it into its
   // own group right after the spine. Boundary nodes (the route/table plumbing) are NOT promoted — only real code.
+  // (Defined here — before the spine — because the terminal-anchored spine BELOW keys on isBoundarySeam.)
   const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
   const primaryHunk = (s: Seam) => (s.hunks ?? []).find((h) => h.label === s.primary?.symbol && h.file === s.primary?.file) ?? (s.hunks ?? [])[0];
   const isBoundarySeam = (s: Seam) => _BOUND.has((primaryHunk(s) as any)?.kind ?? "");
@@ -715,13 +714,79 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // "Other side" is a DIFFERENT language than the spine (Java backend ⇄ JS frontend) — the file EXTENSION is the
   // structural signal (the file's own type, not a name guess). A same-language self-route hop is NOT cross-stack.
   const _ext = (f?: string) => { const s = f ?? ""; const i = s.lastIndexOf("."); return i >= 0 ? s.slice(i + 1).toLowerCase() : ""; };
+
+  // TERMINAL-ANCHORED SPINE (render projection — the emitted model stays flood-fill/region; the spine is a lens).
+  // The spine is the seam-path from the anchor DOWNSTREAM to a GROUNDED BOUNDARY sink (db-table / route / queue) —
+  // the deepest one the flow PRODUCES into — NOT the emit-time `tier==="spine"` band (the BFS-deepest node, which
+  // drifts to a routing terminus and buries the persistence path: Keycloak UserResource ended at the admin-client
+  // routing chain while `db-table UserEntity` sat in supporting). DIRECTED along the flow (src→dst, reversed for a
+  // consumers-lead footprint) so the outcome is where control/data FLOWS TO (a db-write sink), never an UPSTREAM
+  // caller/inbound route — those are the ENTRY (surfaced by reachSeam's "via … from" + cross-stack), not the
+  // outcome. Deterministic + structural HERE (intent picks AMONG downstream boundaries in a later pass). Rescues
+  // an on-path boundary even where its identifiers embed weakly (a low-tier db-table is still the outcome). Falls
+  // back to the tier band ONLY when the flow reaches NO downstream boundary (a same-language call chain / policy
+  // fan) — the honest "reaches no boundary" case then renders as region-by-shell (no fabricated spine).
+  const _terminalSpine = (): { path: Seam[]; alternates: Seam[]; grounded: boolean } => {
+    const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false };
+    const anchorSeam = seamOfId.get(String(model.anchor));
+    if (!anchorSeam) return empty;
+    const fwd = model.lead === "forward";   // consumers-lead footprint → the flow runs dst→src (mirror _seam_graph)
+    const adj = new Map<string, Set<string>>();
+    const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+    for (const e of (model.edges ?? []) as any[]) {
+      if (e.kind === "contains") continue;
+      const a = seamOfId.get(String(e.from)), b = seamOfId.get(String(e.to));
+      if (!a || !b || a === b) continue;
+      if (fwd) link(b, a); else link(a, b);   // DOWNSTREAM only: from the anchor OUT to its sinks, not back to callers
+    }
+    const dist = new Map<string, number>([[anchorSeam, 0]]); const prev = new Map<string, string>(); const q = [anchorSeam];
+    while (q.length) { const c = q.shift()!; const d = dist.get(c)!; for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); prev.set(nb, c); q.push(nb); } }
+    const byId = new Map(seams.map((s) => [s.id, s]));
+    // candidate SINKS = the reachable DOWNSTREAM grounded boundaries. region.direction is the emit's authoritative
+    // up/down classification: a "down" boundary is a dependency/SINK the flow produces into (a db-write target); an
+    // "up" boundary is an inbound CALLER route — the entry, never the outcome. Requiring "down" stops an upstream
+    // caller-route (reachable through a crossing whose edge direction doesn't track the call direction) from being
+    // crowned the sink. Default "down" so models that omit direction aren't excluded (the hand-built render tests).
+    // INTENT picks the PRIMARY among the sinks — the ONE semantic judgement, here at render (CLAUDE.md: structure
+    // enumerates the candidates, the model/embeddings judge which one the intent MEANS): rank by the emitted
+    // `relevance` (deterministic embeddings vs the intent) so "persist a USER" crowns db-table UserEntity, not the
+    // deepest arbitrary entity — then depth / weight / stable id. With no relevance (offline / no intent) it is
+    // ≡ -1 and DEPTH leads = the pure-structural default. The rest are ALTERNATES (also-reaches), never hidden.
+    const rel = (s: Seam) => (typeof (s as any).relevance === "number" ? (s as any).relevance : -1);
+    // A DATA-STORE boundary (db-table / queue / cache / topic / file) is inherently TERMINAL — you don't "call
+    // downstream" into a table, you SHARE it, so a shared-key coupling to it is a sink whatever its region
+    // direction. A RELAY boundary (route) can be an upstream CALLER or a downstream handler, so it must be
+    // direction "down" to count as an outcome (else an inbound caller-route gets crowned — the booking case).
+    const _STORE = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
+    const isStoreSink = (s: Seam) => _STORE.has((primaryHunk(s) as any)?.kind ?? "");
+    const cands = seams.filter((s) => isBoundarySeam(s) && dist.has(s.id) && s.id !== anchorSeam
+        && (isStoreSink(s) || ((s as any).region?.direction ?? "down") === "down"))
+      .sort((a, b) => (rel(b) - rel(a)) || (dist.get(b.id)! - dist.get(a.id)!) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+    if (!cands.length) return empty;
+    const pathIds: string[] = [];
+    for (let cur: string | undefined = cands[0].id; cur; cur = prev.get(cur)) { pathIds.unshift(cur); if (cur === anchorSeam) break; }
+    const path = pathIds.map((id) => byId.get(id)!).filter(Boolean);
+    // ALSO REACHES — the OTHER downstream sinks the intent didn't crown (deduped by symbol, off-path only). A wrong
+    // primary pick is then one glance from correction (repoint --intent), never a silently-buried terminal.
+    const onPath = new Set(pathIds); const seen = new Set<string>(); const alternates: Seam[] = [];
+    for (const s of cands.slice(1)) { if (onPath.has(s.id)) continue; const k = `${s.primary?.file}#${s.primary?.symbol}`; if (seen.has(k)) continue; seen.add(k); alternates.push(s); }
+    return { path, alternates, grounded: true };
+  };
+  const _spine = _terminalSpine();
+  const spineGrounded = _spine.grounded;
+  const spineSeams = spineGrounded ? _spine.path : seams.filter((s) => tierOf(s) === "spine");
+  const spineSet = new Set(spineSeams.map((s) => s.id));
+  const spineAlternates = _spine.alternates;
+  const altSet = new Set(spineAlternates.map((s) => s.id));
+  const hasSpine = spineSeams.length > 0;
+
   const spineExts = new Set(spineSeams.map((s) => _ext(s.primary?.file)).filter(Boolean));
   const crossStack = hasSpine && spineExts.size
-    ? seams.filter((s) => tierOf(s) !== "spine" && !isBoundarySeam(s) && !spineExts.has(_ext(s.primary?.file)) && crossInto(s))
+    ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !isBoundarySeam(s) && !spineExts.has(_ext(s.primary?.file)) && crossInto(s))
     : [];
   const crossSet = new Set(crossStack);
-  const supporting = seams.filter((s) => tierOf(s) !== "spine" && tierOf(s) !== "off" && !crossSet.has(s));
-  const offSeams = seams.filter((s) => tierOf(s) === "off" && !crossSet.has(s));
+  const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
+  const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
   // DEDUPE: a hub-marked hunk appears in every seam it wires (a hub wires many), so a naive scan lists it once per
   // seam — the same `BookingsBean` line a dozen times. Key by (file, label, reason) → one line per collapsed hub.
@@ -749,10 +814,29 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return out;
   };
   const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
+  // SPINE — three honest states, never a confident-but-wrong path (the trust rule): (a) GROUNDED — the anchor→sink
+  // path terminating at a real boundary (db/route/queue); (b) INFERRED — no boundary was reached, so the tier band
+  // is shown but LABELLED as inferred, never presented as a proven flow; (c) NONE — under an intent, an anchor that
+  // reaches no downstream boundary says so (a leaf / policy / wrong center), instead of banding a fake spine.
   const spineSection = (): string[] => {
-    if (!hasSpine) return [];
-    const out = ["", "## Spine (the primary path, anchor → … → outcome)"];
+    if (!hasSpine) {
+      if (!opts.intent) return [];   // no intent → no flow question → stay silent (region-by-shell speaks for itself)
+      return ["", "## Spine — none: this anchor reaches no grounded boundary (db-table / route / queue) downstream.",
+        "  The flow may not terminate here (a leaf / a policy or compute concern), or the center/intent is off — read the region below."];
+    }
+    const out = ["", spineGrounded
+      ? "## Spine (the primary path, anchor → … → outcome)"
+      : "## Spine (inferred — no grounded boundary reached; relevance-ordered, verify — the flow may not terminate at a boundary)"];
     spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
+    return out;
+  };
+  // ALSO REACHES — the OTHER grounded downstream sinks the intent didn't crown as primary. Shown right under the
+  // spine so a wrong primary pick is one glance from correction (repoint --intent), and no real terminal is hidden.
+  const alsoReachesSection = (): string[] => {
+    if (!spineAlternates.length) return [];
+    const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
+    spineAlternates.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
+    if (spineAlternates.length > EXEMPT_N) out.push(`  (+${spineAlternates.length - EXEMPT_N} more sink(s) — raise --token-budget)`);
     return out;
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
@@ -866,7 +950,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...alsoReachesSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out = assemble(...steps[0]);
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped

@@ -151,6 +151,89 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(rg)).toContain("sameStack");                        // it stays in the region
   });
 
+  // TERMINAL-ANCHORED SPINE — the spine is the anchor→GROUNDED-BOUNDARY path (the deepest data-flow sink), NOT
+  // the emit-time `tier==="spine"` band (the BFS-deepest node, which drifts to a routing terminus). Contract:
+  // (a) a db-table boundary reached through a service IS the spine's outcome even when its tier is `off` (the
+  // structure rescues a weakly-embedded boundary); (b) a HIGH-tier routing seam that is NOT on the anchor→sink
+  // path is kept OFF the spine (no drift); (c) the spine reads anchor → service → db-table, in order.
+  test("terminal-anchored spine: reaches the db-table sink (rescuing a low-tier boundary), not the drift-marked routing seam", () => {
+    const model = {
+      mode: "codebase", anchor: "ctrlh", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "persist a user", seams: [
+        { id: "ctrl", label: "UserController", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/UserController.java", line: 1, symbol: "UserController" }, hunks: [{ id: "ctrlh", file: "api/UserController.java", start: 1, role: "core", label: "UserController" }] },
+        { id: "svc", label: "UserService", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/UserService.java", line: 1, symbol: "UserService" }, hunks: [{ id: "svch", file: "svc/UserService.java", start: 1, role: "link", label: "UserService" }] },
+        // the grounded terminal — a db-table boundary, deliberately tier `off` (embeds weakly) to prove the RESCUE
+        { id: "ent", label: "UserEntity", tier: "off", relevance: 0.1, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserEntity.java", line: 1, symbol: "UserEntity" }, hunks: [{ id: "enth", file: "jpa/UserEntity.java", start: 1, role: "environment", label: "UserEntity", kind: "db-table" }] },
+        // the DRIFT bait — a high-tier routing seam hanging off the controller, NOT on the anchor→db path
+        { id: "route", label: "AdminRouter", tier: "spine", region: { shell: 1, direction: "up" }, primary: { file: "api/AdminRouter.java", line: 1, symbol: "AdminRouter" }, hunks: [{ id: "routeh", file: "api/AdminRouter.java", start: 1, role: "core", label: "AdminRouter" }] },
+      ] }],
+      edges: [{ from: "ctrlh", to: "svch", kind: "call" }, { from: "svch", to: "enth", kind: "db-write" }, { from: "ctrlh", to: "routeh", kind: "call" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    expect(out).toContain("## Spine");
+    expect(spine).toContain("UserEntity");                              // the db-table sink IS the outcome (rescued from tier=off)
+    expect(spine).toContain("UserService");                            // the intermediate mechanism is on the path
+    expect(spine).not.toContain("AdminRouter");                        // the high-tier routing dead-end is NOT on the spine (no drift)
+    expect(spine.indexOf("UserController")).toBeLessThan(spine.indexOf("UserService"));   // reads anchor → service → …
+    expect(spine.indexOf("UserService")).toBeLessThan(spine.indexOf("UserEntity"));       // … → db-table sink, in order
+    expect(out.slice(out.indexOf("## Region"))).toContain("AdminRouter");   // the drift-marked seam lands in the region instead
+  });
+
+  // P2 — INTENT picks the primary among MULTIPLE downstream sinks; the rest render as "also reaches" (never hidden).
+  test("intent picks the relevant sink (higher relevance) over a deeper one; the other sink is 'also reaches'", () => {
+    const model = {
+      mode: "codebase", anchor: "ctrlh", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "persist a user", seams: [
+        { id: "ctrl", label: "UserController", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/UserController.java", line: 1, symbol: "UserController" }, hunks: [{ id: "ctrlh", file: "api/UserController.java", start: 1, role: "core", label: "UserController" }] },
+        { id: "svc", label: "UserService", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/UserService.java", line: 1, symbol: "UserService" }, hunks: [{ id: "svch", file: "svc/UserService.java", start: 1, role: "link", label: "UserService" }] },
+        // the ON-INTENT sink: high relevance, shallower
+        { id: "utbl", label: "UserEntity", tier: "supporting", relevance: 0.9, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserEntity.java", line: 1, symbol: "UserEntity" }, hunks: [{ id: "utblh", file: "jpa/UserEntity.java", start: 1, role: "environment", label: "UserEntity", kind: "db-table" }] },
+        // a DEEPER but off-intent sink (audit log) — deterministic depth would pick it; intent must NOT
+        { id: "aw", label: "AuditWriter", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/AuditWriter.java", line: 1, symbol: "AuditWriter" }, hunks: [{ id: "awh", file: "svc/AuditWriter.java", start: 1, role: "link", label: "AuditWriter" }] },
+        { id: "atbl", label: "AuditEntity", tier: "off", relevance: 0.2, region: { shell: 3, direction: "down" }, primary: { file: "jpa/AuditEntity.java", line: 1, symbol: "AuditEntity" }, hunks: [{ id: "atblh", file: "jpa/AuditEntity.java", start: 1, role: "environment", label: "AuditEntity", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "ctrlh", to: "svch", kind: "call" }, { from: "svch", to: "utblh", kind: "db-write" }, { from: "svch", to: "awh", kind: "call" }, { from: "awh", to: "atblh", kind: "db-write" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches"));
+    expect(spine).toContain("UserEntity");                    // the intent-relevant sink is the spine outcome…
+    expect(spine).not.toContain("AuditEntity");               // …NOT the deeper, off-intent audit sink
+    expect(out).toContain("## Also reaches");
+    const alt = out.slice(out.indexOf("## Also reaches"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    expect(alt).toContain("AuditEntity");                     // the un-crowned sink is surfaced, not hidden
+    expect(out.indexOf("## Also reaches")).toBeLessThan(out.indexOf("## Region"));   // placed right under the spine
+    expect(out.slice(out.indexOf("## Region"))).not.toContain("AuditEntity");        // and NOT duplicated into the region
+  });
+
+  // P2 — the trust rule: under an intent, an anchor that reaches NO downstream boundary says so (noFlow), rather
+  // than banding a fake spine. (No intent → no flow question → stay silent, no noFlow line — see the fallback test.)
+  test("noFlow: an intent query that reaches no grounded boundary is told so, not given a fabricated spine", () => {
+    const model = {
+      mode: "codebase", anchor: "ch", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "compute a score", seams: [
+        { id: "c", label: "Scorer", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "calc/Scorer.java", line: 1, symbol: "Scorer" }, hunks: [{ id: "ch", file: "calc/Scorer.java", start: 1, role: "core", label: "Scorer" }] },
+        { id: "h", label: "helper", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "calc/Helper.java", line: 1, symbol: "helper" }, hunks: [{ id: "hh", file: "calc/Helper.java", start: 1, role: "link", label: "helper" }] },
+      ] }],
+      edges: [{ from: "ch", to: "hh", kind: "call" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 4000, intent: "how is the score computed" });
+    expect(out).toContain("## Spine — none");                          // honest: no boundary reached
+    expect(out).toContain("reaches no grounded boundary");
+    expect(out).not.toMatch(/## Spine \(the primary path/);            // NOT a fabricated confident spine
+  });
+
+  test("no grounded boundary reachable → falls back to the tier band (spine preserved for non-coupling flows)", () => {
+    // anchor maps to a seam, but NO edge reaches a boundary-kind seam → the terminal trace is empty → fall back to
+    // the emit-time tier="spine" band (a same-language call chain keeps its structural spine; noFlow is a later pass).
+    const out = renderAgent(makeModel(), { tokenBudget: 4000, intent: "how are bookings created" });
+    expect(out).toContain("## Spine");                 // makeModel's anchor ("n1") doesn't map → fallback → tier spine shows
+    expect(out).toContain("createBooking");
+  });
+
   test("blindspots are TRIAGED — sharpest (fewest candidates) lead first, top-5 shown + a rollup", () => {
     const model = makeModel({ offN: 0 });
     (model as any).blindspots = [
