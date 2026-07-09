@@ -57,7 +57,7 @@ export async function _resolve_import(repo: string, importingFile: string, ref: 
 // Broadened beyond `.test/.spec` + tests-dir to the conventions real repos use: e2e / integration suffixes
 // (dot OR hyphen: `.e2e.ts`, `foo-spec.ts`, `x.integration-test.ts`), the e2e/mock/cypress/playwright dirs, and
 // `seed-*` data scripts — which otherwise leak as co-producers / also-reaches sinks (cal.com) and pollute the grow.
-const _TEST_RE = /(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|((^|\/)(tests?|__tests__|__mocks__|spec|e2e|cypress|playwright)\/)|((^|\/)seed[-_.][^/]*$)/i;
+const _TEST_RE = /(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|([-_.](testing|fixture|mock)\.[a-z0-9]+$)|((^|\/)(tests?|__tests__|__mocks__|mocks?|fixtures?|testing|spec|e2e|cypress|playwright)\/)|((^|\/)seed[-_.][^/]*$)/i;
 export function isTestFile(file: string): boolean { return _TEST_RE.test(file.replace(/\\/g, "/")); }
 export function _kind_for(file: string, kind: string): string {
   return isTestFile(file) ? "test" : kind;
