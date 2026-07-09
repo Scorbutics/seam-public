@@ -252,6 +252,32 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");   // which is surfaced as an alternate
   });
 
+  // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
+  // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
+  // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the
+  // higher-relevance AuditEntity — the one-hop delegate prior must still crown UserEntity.
+  test("delegating anchor: the delegate's write (one call-hop) beats a deeper higher-relevance peripheral sink", () => {
+    const model = {
+      mode: "codebase", anchor: "ctrlh", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "persist a user", seams: [
+        { id: "ctrl", label: "createUser", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/UserResource.java", line: 1, symbol: "createUser" }, hunks: [{ id: "ctrlh", file: "api/UserResource.java", start: 1, role: "core", label: "createUser" }] },
+        { id: "svc", label: "addUser", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/UserService.java", line: 1, symbol: "addUser" }, hunks: [{ id: "svch", file: "svc/UserService.java", start: 1, role: "link", label: "addUser" }] },
+        { id: "u", label: "UserEntity", tier: "off", relevance: 0.16, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserEntity.java", line: 1, symbol: "UserEntity" }, hunks: [{ id: "uh", file: "jpa/UserEntity.java", start: 1, role: "environment", label: "UserEntity", kind: "db-table" }] },
+        { id: "aud", label: "audit", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/Audit.java", line: 1, symbol: "audit" }, hunks: [{ id: "audh", file: "svc/Audit.java", start: 1, role: "link", label: "audit" }] },
+        { id: "a", label: "AuditEntity", tier: "off", relevance: 0.44, region: { shell: 3, direction: "down" }, primary: { file: "jpa/AuditEntity.java", line: 1, symbol: "AuditEntity" }, hunks: [{ id: "ah", file: "jpa/AuditEntity.java", start: 1, role: "environment", label: "AuditEntity", kind: "db-table" }] },
+      ] }],
+      // ctrl writes nothing; it CALLS only svc (a pure delegate). svc writes UserEntity AND calls audit deeper —
+      // so AuditEntity is written TWO hops from ctrl (via audit), NOT by a direct callee → not borrowed.
+      edges: [{ from: "ctrlh", to: "svch", kind: "call", line: 20 }, { from: "svch", to: "uh", kind: "db-write", line: 55 }, { from: "svch", to: "audh", kind: "call" }, { from: "audh", to: "ah", kind: "db-write" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches") > -1 ? out.indexOf("## Also reaches") : out.indexOf("## Region"));
+    expect(spine).toContain("UserEntity");        // svc (the anchor's sole delegate) writes it → borrowed as the direct sink
+    expect(spine).not.toContain("AuditEntity");   // written by audit, TWO hops from ctrl (not a direct callee) → not borrowed; stays an alternate
+    expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");
+  });
+
   // FRONTIER-⟂ — no grounded sink, but the flow provably continues into an OPAQUE node the grow couldn't follow
   // (a runtime-DI multi-impl). The spine terminates THERE honestly — naming the break + candidate impls — instead
   // of falling to an inferred guess. An honest broken path that says WHERE it lost the thread > a smooth wrong one.

@@ -769,9 +769,21 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // (0.158) that addUser's own `em.persist` writes — the direct-write prior corrects it. CLAUDE.md in motion:
     // STRUCTURE names the fact (the anchor writes this table), embeddings only order the REST (the also-reaches).
     const _PRODUCE = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
+    const _CALL = new Set(["call", "invokes", "dispatch"]);   // control-flow delegation edges
     const anchorNode = String(model.anchor);   // the anchor NODE, not its (coarse, god-class) seam
+    const edges = (model.edges ?? []) as any[];
     const directIds = new Set<string>();
-    for (const e of (model.edges ?? []) as any[]) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) directIds.add(String(e.to));
+    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) directIds.add(String(e.to));
+    // PURE-DELEGATE one-hop: a controller that writes NOTHING itself persists THROUGH its delegate — so its
+    // effective write is the delegate's. When the anchor has no own writes, borrow the direct writes of the nodes
+    // it CALLS (one hop only, so an orchestrator's deep subtree doesn't flood back in and re-introduce the noise
+    // the anchor-node scoping removed). A pass-through to a sole writer resolves to that one table; a fan of
+    // sibling writers stays multiple (relevance then orders them — no worse than before, the rest are also-reaches).
+    if (!directIds.size) {
+      const callees = new Set<string>();
+      for (const e of edges) if (_CALL.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
+      if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
+    }
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
     const cands = seams.filter((s) => isBoundarySeam(s) && dist.has(s.id) && s.id !== anchorSeam
         && (isStoreSink(s) || ((s as any).region?.direction ?? "down") === "down"))
