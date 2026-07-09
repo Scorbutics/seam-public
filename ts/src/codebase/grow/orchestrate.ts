@@ -261,9 +261,14 @@ async function _phaseCoupling(repo: string, anchorFile: string, data: any, opts:
   if (co.dataCoupling === false) return data;
   let overlay = await _anchorCouplingDelta(repo, anchorFile, data, opts, co.ctx);
   if (!overlay.nodes.length) {
-    const mod: any = prune(await build_footprint(repo, anchorFile, null, { ...coStruct }));
-    const modOverlay = await _anchorCouplingDelta(repo, anchorFile, mod, opts, co.ctx);
-    if (modOverlay.nodes.length) { data = mod; overlay = modOverlay; }
+    // The anchor's OWN span surfaced no boundary — a DI-delegating method (createUser → session.users().addUser) has
+    // no direct route/table in its body, and a JAX-RS method's route needs the CLASS-level @Path that lives outside
+    // the method span. WIDEN the coupling scan to the whole FILE (range [0,0] ⇒ file-wide key range) but ATTACH the
+    // crossings to the METHOD anchor and KEEP the method's rich downstream seed. The former fallback re-grew the file
+    // as a MODULE and REPLACED `data` — discarding the method's real flow (its 58 down-deps) and re-anchoring to the
+    // class at :0, which drifted the spine to the file's unrelated route consumers. Widen the range, never re-anchor.
+    const wide = await _anchorCouplingDelta(repo, anchorFile, { anchor: { id: data.anchor?.id ?? "n1", range: [0, 0] }, nodes: data.nodes }, opts, co.ctx);
+    if (wide.nodes.length) overlay = wide;
   }
   _mergeCouplingOverlay(data, overlay);
   coupled.add(normpath(anchorFile));

@@ -707,7 +707,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     }
     cands.sort((a, b) => a.r - b.r);
     const uniq = [...new Set(cands.map((c) => c.s))].slice(0, 2);
-    return uniq.length ? uniq.join(", ") : "the anchor / region root";
+    if (uniq.length) return uniq.join(", ");
+    // No in-footprint caller. Only the ACTUAL anchor is "the anchor / region root"; another node with no resolved
+    // caller reached the footprint some other way (coupling / a cut UP-fan) — say so honestly, don't imply it's the anchor.
+    return s.id === _anchorSeamId ? "the anchor / region root" : "no resolved caller in the footprint";
   };
   const cross = (s: Seam): string => (s.writes && s.writes.length ? `  [crossing: ${s.writes.join(", ")}]` : "");
 
@@ -949,7 +952,9 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- section builders (each returns its lines) ----
   const header = (): string[] => {
-    const h = [`anchor: ${cl.intent ?? model.anchor ?? "?"}`];
+    // Prefer the anchor NODE's own label (the pinned method) over the cluster label, which resolves to the bigger
+    // enclosing symbol (the class) when the anchor is a member of a class-primaried seam.
+    const h = [`anchor: ${label.get(String(model.anchor)) ?? cl.intent ?? model.anchor ?? "?"}`];
     if (opts.intent) h.push(`intent: ${opts.intent}`);
     h.push(`resolution: ${model.resolutionQuality ?? "?"}`, `seams: ${seams.length}`,
       `unresolved: ${(model.unresolved ?? []).length}`, `blindspots: ${(model.blindspots ?? []).length}`);
@@ -958,7 +963,20 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (im?.offIntent) out.push(`⚠ low intent match (top ${im.max} < ${im.floor}) — this anchor's flow may not answer the intent`);
     return out;
   };
-  const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
+  // The anchor NODE (model.anchor) is often assembled into a seam whose PRIMARY is a bigger sibling (e.g. the
+  // enclosing class outweighs the method), so where(seam) would print the class at :0 instead of the pinned method.
+  // Node-scope the anchor's own line to the anchor node's identity so `#createUser` renders as createUser:143, not
+  // the class it lives in. Every OTHER seam still prints its structural primary.
+  const _anchorWhere: string | null = (() => {
+    const a = String(model.anchor);
+    const f = fileOfId.get(a);
+    if (!f) return null;
+    const l = label.get(a) ?? "?";
+    const c = _container(f);
+    const q = c && c !== l ? `${c}.${l}` : l;
+    return `${q} (${f}:${startOfId.get(a) ?? 0})`;
+  })();
+  const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${(s.id === _anchorSeamId && _anchorWhere) ? _anchorWhere : where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
   // THE CALL SITE between two consecutive spine seams — the resolved edge connecting them, rendered from its OWN
   // caller/callee (edge.from is always the caller, edge.line the call-site line in the caller's file — see
   // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
