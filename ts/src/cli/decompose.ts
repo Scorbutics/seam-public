@@ -420,15 +420,25 @@ async function runCodebase(a: Args): Promise<number> {
     // CONCERN-first fires when the caller named CENTER(s) (--center = "these are the concern's mechanisms") OR gave
     // no symbol at all (detect them). An explicit --symbol (the legacy single-anchor path) opts OUT into a plain grow.
     if (a.auto && a.intent && (a.center || !a.symbol)) {
-      a.concern = true;
-      if (a.center) {
+      const _centers = a.center ? parseCenters(a.center) : null;
+      // A SINGLE `--center File#method` (an explicit symbol) with NO `--concern` is a DIRECT line-trace anchor —
+      // pin it like `--symbol` and grow from THAT method; do NOT force a concern STAR. The star re-centers to the
+      // class/mechanism and drowns the method's own downstream path — a REST method (`createUser`) widened to its
+      // whole resource tree (113 moves across every admin endpoint), so its persistence spine went inferred.
+      // Concern fires only for: a detected/no-symbol center, a MULTI-center list (a real star), or explicit --concern.
+      if (_centers && _centers.length === 1 && _centers[0].symbol && !a.concern && a.format === "agent") {
+        a.anchorFile = _centers[0].file; a.symbol = _centers[0].symbol;
+        process.stderr.write(`[anchor] pinned method ${_centers[0].symbol} — direct trace (no concern star)\n`);
+      } else if (a.center) {
+        a.concern = true;
         // PIN the center(s) — one or many (comma-separated), file#symbol or bare-file. Zero LLM (the dev chose them).
-        const cs = parseCenters(a.center);
+        const cs = _centers!;
         a.anchorFile = cs[0].file; a.symbol = cs[0].symbol;
         anchorSet = cs.map((c) => ({ name: c.symbol ?? c.file, file: c.file, kind: c.symbol ? "function" : "module" }));
         centerPicked = true;
         process.stderr.write(`[center-first] pinned ${cs.length} center(s): ${cs.map((c) => c.symbol ?? c.file).join(", ")}\n`);
       } else {
+        a.concern = true;
         // Picking the mechanism from an intent PHRASE is a SEMANTIC mapping → ask the LLM over a lexical recall
         // net (offline → the deterministic lexical floor). The picked mechanism(s) ARE the anchors; the loop
         // below grows from them (coupling ON).
