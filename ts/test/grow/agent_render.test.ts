@@ -231,6 +231,38 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(step1.indexOf("called by realCaller")).toBeLessThan(step1.indexOf("possibly called by importUsers")); // FULL first
   });
 
+  // BLOB-SIBLING GUARD — the anchor node is often assembled into a MERGED seam with unrelated siblings (private-app: `signUp`
+  // merged with a `notifyPayment` that writes the `payments` hub). Expanding the whole seam let a SIBLING's boundary
+  // become the anchor's spine outcome — the payments/workflowReminder hijack. The spine must expand the anchor seam
+  // ONLY via edges incident to the anchor NODE, so its OWN flow's sink (members) is crowned even when a sibling's sink
+  // (payments) scores HIGHER on intent relevance.
+  test("the anchor's own-flow sink is crowned, not a merged-blob sibling's higher-relevance boundary", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "backward",
+      clusters: [{ id: "g1", intent: "how does signup persist a user", seams: [
+        { id: "aseam", label: "signUp", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "svc/auth.ts", line: 1, symbol: "signUp" }, hunks: [
+          { id: "ah", file: "svc/auth.ts", start: 1, role: "core", label: "signUp", kind: "function" },
+          { id: "sib", file: "svc/auth.ts", start: 50, role: "link", label: "notifyPayment", kind: "function" },   // a blob sibling in the same seam
+        ] },
+        { id: "svcS", label: "completeOnboarding", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/onboarding.ts", line: 1, symbol: "completeOnboarding" }, hunks: [{ id: "svc", file: "svc/onboarding.ts", start: 1, role: "link", label: "completeOnboarding", kind: "function" }] },
+        { id: "svc2S", label: "createMember", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "svc/members.ts", line: 1, symbol: "createMember" }, hunks: [{ id: "svc2", file: "svc/members.ts", start: 1, role: "link", label: "createMember", kind: "function" }] },
+        { id: "memS", label: "members", tier: "supporting", relevance: 0.1, region: { shell: 3, direction: "down" }, primary: { file: "db/members.ts", line: 1, symbol: "members" }, hunks: [{ id: "mem", file: "db/members.ts", start: 1, role: "environment", label: "members", kind: "db-table" }] },
+        { id: "payS", label: "payments", tier: "supporting", relevance: 0.9, region: { shell: 1, direction: "down" }, primary: { file: "db/payments.ts", line: 1, symbol: "payments" }, hunks: [{ id: "pay", file: "db/payments.ts", start: 1, role: "environment", label: "payments", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "ah", to: "svc", kind: "call" },         // the ANCHOR's own flow: signUp → completeOnboarding …
+        { from: "svc", to: "svc2", kind: "call" },       // … → createMember (so `members` is 3 hops, NOT a 1-hop directSink)
+        { from: "svc2", to: "mem", kind: "db-write" },   // … → writes `members` (the true subject, LOW relevance)
+        { from: "sib", to: "pay", kind: "db-write" },    // a BLOB SIBLING writes `payments` (HIGH relevance) — must NOT be the outcome
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does signup persist a user" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("members");        // the anchor's OWN-flow sink is crowned…
+    expect(spine).not.toContain("payments");   // …the blob sibling's boundary is NOT, despite higher relevance
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {

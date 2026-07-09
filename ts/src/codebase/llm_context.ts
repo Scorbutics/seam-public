@@ -751,17 +751,51 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false, terminal: "none" as "grounded" | "frontier" | "none" };
     const anchorSeam = seamOfId.get(String(model.anchor));
     if (!anchorSeam) return empty;
+    const anchorNode = String(model.anchor);   // the anchor NODE, not its (often god-class / merged-blob) seam
     const fwd = model.lead === "forward";   // consumers-lead footprint → the flow runs dst→src (mirror _seam_graph)
     const adj = new Map<string, Set<string>>();
     const link = (a: string, b: string) => (adj.get(a) ?? adj.set(a, new Set()).get(a)!).add(b);
+    // A DATA-STORE boundary (a db-table / queue / cache / …) is TERMINAL in the spine: you write INTO it or read
+    // FROM it, you don't flow THROUGH it. Fanning OUT of a store to its OTHER accessors reaches PEER entry points
+    // (a table's co-writers / co-readers — surfaced in "Also writes"/"Also read"), NOT this flow's downstream. That
+    // sideways fan is exactly how a hub table hijacks the spine: private-app `signUp` writes `members` (a 60-writer hub)
+    // whose co-writer fan reaches the unrelated `payments` subsystem, so the walk crossed members→a co-writer→payments
+    // and crowned payments. So NEVER traverse an edge whose flow-UPSTREAM end is a store node — the boundary is a
+    // sink, not a through-node. Safe by construction for the DI case (keycloak createUser→UserEntity is reached by
+    // writing INTO UserEntity, a code→store edge — kept; the store just doesn't fan further) and for cross-stack
+    // (a route is a RELAY, not a _STORE kind, so route→consumer hops are untouched). (Opt out: SEAM_SPINE_STORE_TERMINAL=0.)
+    const _STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
+    const _storeTerminal = process.env.SEAM_SPINE_STORE_TERMINAL !== "0";
+    const storeSeamIds = new Set<string>();   // seams holding a data-store boundary hunk — TERMINAL in the spine
+    if (_storeTerminal) for (const s of seams) if ((s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""))) storeSeamIds.add(s.id);
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
-      const a = seamOfId.get(String(e.from)), b = seamOfId.get(String(e.to));
+      const srcN = fwd ? String(e.to) : String(e.from);   // the DOWNSTREAM-source node (fwd = consumers-lead → flow runs to→from)
+      const dstN = fwd ? String(e.from) : String(e.to);
+      const a = seamOfId.get(srcN), b = seamOfId.get(dstN);
       if (!a || !b || a === b) continue;
-      if (fwd) link(b, a); else link(a, b);   // DOWNSTREAM only: from the anchor OUT to its sinks, not back to callers
+      // BLOB-SIBLING GUARD — the anchor seam is often a MERGED blob (private-app: `signUp` merged with a sibling `POST`
+      // that reads `payments`). A blob sibling's boundary is NOT the anchor's outcome, yet expanding the whole seam
+      // makes it one (the spine crowned `payments` via a one-hop `payments→POST` read off a co-member). So the anchor
+      // seam expands ONLY via edges incident to the anchor NODE — its own flow — the same node-scoping directSink and
+      // reachSeam already apply. Downstream (non-anchor) seams still expand at seam granularity.
+      if (a === anchorSeam && srcN !== anchorNode) continue;
+      link(a, b);   // DOWNSTREAM only: from the anchor OUT to its sinks, not back to callers
     }
     const dist = new Map<string, number>([[anchorSeam, 0]]); const prev = new Map<string, string>(); const q = [anchorSeam];
-    while (q.length) { const c = q.shift()!; const d = dist.get(c)!; for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); prev.set(nb, c); q.push(nb); } }
+    // A data-store boundary is TERMINAL: once the flow reaches a table/queue it IS the outcome, so the BFS records it
+    // (it stays a candidate sink) but never EXPANDS it. Expanding a store is precisely what fans the spine off a HUB
+    // table to its PEER accessors (a table's other writers/readers — alternate entry points, not this flow's
+    // downstream): private-app `signUp` writes the `members` hub, whose co-writers reach the unrelated `payments`, so the
+    // walk crossed members→a co-writer→payments and crowned payments. Not-expanding stores cuts that fan while KEEPING
+    // the store itself as the crowned sink. Safe: keycloak createUser→UserEntity is reached by writing INTO UserEntity
+    // (UserEntity is the terminal, unexpanded — correct); a cross-stack route is a RELAY, not a store, so route→
+    // consumer hops are untouched.
+    while (q.length) {
+      const c = q.shift()!; const d = dist.get(c)!;
+      if (c !== anchorSeam && storeSeamIds.has(c)) continue;   // reached a store → terminal, don't traverse THROUGH it
+      for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); prev.set(nb, c); q.push(nb); }
+    }
     const byId = new Map(seams.map((s) => [s.id, s]));
     // candidate SINKS = the reachable DOWNSTREAM grounded boundaries. region.direction is the emit's authoritative
     // up/down classification: a "down" boundary is a dependency/SINK the flow produces into (a db-write target); an
@@ -787,7 +821,6 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // STRUCTURE names the fact (the anchor writes this table), embeddings only order the REST (the also-reaches).
     const _PRODUCE = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
     const _CALL = new Set(["call", "invokes", "dispatch"]);   // control-flow delegation edges
-    const anchorNode = String(model.anchor);   // the anchor NODE, not its (coarse, god-class) seam
     const edges = (model.edges ?? []) as any[];
     const directIds = new Set<string>();
     for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) directIds.add(String(e.to));
