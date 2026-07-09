@@ -991,9 +991,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // ALSO REACHES — the OTHER grounded downstream sinks the intent didn't crown as primary. Shown right under the
   // spine so a wrong primary pick is one glance from correction (repoint --intent), and no real terminal is hidden.
   const alsoReachesSection = (): string[] => {
-    // Drop OFF-SUBJECT sinks (a `bug_reports` / `member_social_medias` boundary reached only via the shared
-    // `members` hub is not a real alternate OUTCOME of the payment flow) — they stay in the region, demoted.
-    const alts = spineAlternates.filter((s) => !offSubject(s));
+    // Drop OFF-SUBJECT sinks (a `bug_reports`/`member_social_medias` boundary reached only via a shared hub is not
+    // a real alternate OUTCOME) and TEST/fixture sinks (an e2e that writes the table isn't an outcome) — they stay
+    // in the region, demoted.
+    const alts = spineAlternates.filter((s) => !offSubject(s) && !_isTest(s.primary?.file));
     if (!alts.length) return [];
     const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
     alts.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
