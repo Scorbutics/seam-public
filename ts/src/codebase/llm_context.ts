@@ -693,8 +693,13 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const seamIds = (s: Seam) => new Set((s.hunks ?? []).map((h) => String((h as any).id)).filter((x) => x !== "undefined"));
   // reachedVia for a SEAM: the resolved relation(s) that reached it from a node OUTSIDE the seam (same vocabulary
   // as the frontier's reachedVia — the incoming edge kind → its wave verb). Best 1–2, ranked by relation concreteness.
+  const _anchorSeamId = seamOfId.get(String(model.anchor));
   const reachSeam = (s: Seam): string => {
-    const ids = seamIds(s);
+    // For the ANCHOR seam, attribute "reached from" to the anchor NODE only, not the whole seam. A big merged
+    // anchor blob (private-app `index` = 327 members) otherwise reports a call into a SIBLING as "the anchor called by X"
+    // — e.g. `processOne called by signUp`, when nothing calls processOne (it's an HTTP-invoked edge fn; signUp
+    // calls a sibling). Node-scoping keeps real callers (keycloak addUser ← createUser) and drops the blob leak.
+    const ids = (s.id === _anchorSeamId) ? new Set([String(model.anchor)]) : seamIds(s);
     const cands: { r: number; s: string }[] = [];
     for (const e of (model.edges ?? []) as any[]) {
       const f = String(e.from), t = String(e.to);
@@ -876,8 +881,11 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // the mechanism, not consumers) and tests.
   const _READ_KINDS = new Set(["db-read", "consume", "read", "select", "find", "route-fetch"]);
   const readsFrom = (s: Seam): boolean => (s.hunks ?? []).some((h: any) => { const hid = String((h as any).id); return (model.edges ?? []).some((e: any) => _READ_KINDS.has(e.kind) && (String(e.from) === hid || String(e.to) === hid) && (writtenTables.has(label.get(String(e.from)) ?? "") || writtenTables.has(label.get(String(e.to)) ?? ""))); });
+  // NOTE: NOT excluded by altSet — a file that both READS the subject AND reached a hub boundary as a sink (private-app
+  // admin/payments/[id]: reads `payments`, joins `members`) belongs in "## Also read" on its SUBJECT read, not
+  // swallowed into a `members` sink in "## Also reaches". The reader claim wins; alsoReaches drops readerSet below.
   const readers = (process.env.SEAM_SUBJECT_READERS === "1" && writtenTables.size)
-    ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s) && readsFrom(s)
+    ? seams.filter((s) => !spineSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s) && readsFrom(s)
         && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
     : [];
   const readerSet = new Set(readers.map((s) => s.id));
@@ -1008,7 +1016,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // Drop OFF-SUBJECT sinks (a `bug_reports`/`member_social_medias` boundary reached only via a shared hub is not
     // a real alternate OUTCOME) and TEST/fixture sinks (an e2e that writes the table isn't an outcome) — they stay
     // in the region, demoted.
-    const alts = spineAlternates.filter((s) => !offSubject(s) && !_isTest(s.primary?.file));
+    const alts = spineAlternates.filter((s) => !offSubject(s) && !_isTest(s.primary?.file) && !readerSet.has(s.id));
     if (!alts.length) return [];
     const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
     alts.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));

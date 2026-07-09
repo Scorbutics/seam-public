@@ -181,6 +181,31 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Region"))).toContain("AdminRouter");   // the drift-marked seam lands in the region instead
   });
 
+  // ANCHOR REACH is NODE-scoped, not seam-scoped: a big merged anchor seam otherwise reports a call into a
+  // SIBLING member as "the anchor called by X" (private-app: processOne "called by signUp", an HTTP-invoke into a
+  // sibling). Only real callers of the anchor NODE should show.
+  test("anchor 'called by' is node-scoped: a call into a sibling in the merged anchor seam is not attributed to the anchor", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is it processed", seams: [
+        // the anchor seam is a MERGED blob: processOne + a sibling `helper`, same seam
+        { id: "aseam", label: "processOne", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/index.ts", line: 1, symbol: "processOne" }, hunks: [
+          { id: "ah", file: "svc/index.ts", start: 1, role: "core", label: "processOne" },
+          { id: "sib", file: "svc/index.ts", start: 80, role: "link", label: "helper" },
+        ] },
+        { id: "tbl", label: "payments", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/index.ts", line: 40, symbol: "payments" }, hunks: [{ id: "th", file: "svc/index.ts", start: 40, role: "environment", label: "payments", kind: "table" }] },
+        { id: "extS", label: "invoker", tier: "off", region: { shell: 1, direction: "up" }, primary: { file: "app/page.tsx", line: 1, symbol: "invoker" }, hunks: [{ id: "ext", file: "app/page.tsx", start: 1, role: "link", label: "invoker" }] },
+        { id: "rcS", label: "processAll", tier: "off", region: { shell: 1, direction: "up" }, primary: { file: "svc/batch.ts", line: 1, symbol: "processAll" }, hunks: [{ id: "rc", file: "svc/batch.ts", start: 1, role: "link", label: "processAll" }] },
+      ] }],
+      edges: [{ from: "ah", to: "th", kind: "db-write", line: 40 }, { from: "ext", to: "sib", kind: "call" }, { from: "rc", to: "ah", kind: "call" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is it processed" });
+    const step1 = out.slice(out.indexOf("## Spine"), out.indexOf("──db-write")); // the anchor line
+    expect(step1).toContain("called by processAll");   // a real caller of the anchor NODE shows…
+    expect(step1).not.toContain("invoker");             // …a call into a SIBLING (the merged-blob leak) does NOT
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
