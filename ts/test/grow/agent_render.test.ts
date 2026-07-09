@@ -208,6 +208,29 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Region"))).not.toContain("AuditEntity");        // and NOT duplicated into the region
   });
 
+  // FRONTIER-⟂ — no grounded sink, but the flow provably continues into an OPAQUE node the grow couldn't follow
+  // (a runtime-DI multi-impl). The spine terminates THERE honestly — naming the break + candidate impls — instead
+  // of falling to an inferred guess. An honest broken path that says WHERE it lost the thread > a smooth wrong one.
+  test("frontier-⟂: a flow that dead-ends at an opaque DI hole names the break + candidates (not 'inferred')", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a user loaded", seams: [
+        { id: "a", label: "UserController", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/UserController.java", line: 1, symbol: "UserController" }, hunks: [{ id: "ah", file: "api/UserController.java", start: 1, role: "core", label: "UserController" }] },
+        // the flow continues into session.users() — a runtime provider-factory the resolver can't follow (DI hole)
+        { id: "u", label: "session.users", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/KeycloakSession.java", line: 1, symbol: "users" }, hunks: [{ id: "uh", file: "svc/KeycloakSession.java", start: 1, role: "link", label: "users" }] },
+      ] }],
+      edges: [{ from: "ah", to: "uh", kind: "call" }],   // NO boundary kind anywhere → no grounded sink
+      blindspots: [{ node: "uh", mechanism: "interface-multiple-impls", evidence: "UserProvider has 6 implementations", candidates: [{ symbol: "JpaUserProvider" }, { symbol: "LdapUserProvider" }] }],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 4000, intent: "how is a user loaded" });
+    expect(out).toContain("## Spine (partial");                     // honest partial terminus, NOT "inferred"/"none"
+    expect(out).not.toContain("inferred");
+    expect(out).toContain("⟂ [interface-multiple-impls");           // the break is named at the DI hole
+    expect(out).toContain("UserProvider has 6 implementations");
+    expect(out).toContain("JpaUserProvider");                       // the candidate impls to deepen into
+    expect(out.indexOf("UserController")).toBeLessThan(out.indexOf("⟂"));   // path leads UP TO the break, then stops
+  });
+
   // P2 — the trust rule: under an intent, an anchor that reaches NO downstream boundary says so (noFlow), rather
   // than banding a fake spine. (No intent → no flow question → stay silent, no noFlow line — see the fallback test.)
   test("noFlow: an intent query that reaches no grounded boundary is told so, not given a fabricated spine", () => {

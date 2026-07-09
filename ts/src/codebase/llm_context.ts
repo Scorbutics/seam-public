@@ -726,8 +726,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // an on-path boundary even where its identifiers embed weakly (a low-tier db-table is still the outcome). Falls
   // back to the tier band ONLY when the flow reaches NO downstream boundary (a same-language call chain / policy
   // fan) — the honest "reaches no boundary" case then renders as region-by-shell (no fabricated spine).
-  const _terminalSpine = (): { path: Seam[]; alternates: Seam[]; grounded: boolean } => {
-    const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false };
+  const _terminalSpine = (): { path: Seam[]; alternates: Seam[]; grounded: boolean; terminal: "grounded" | "frontier" | "none"; breakInfo?: any } => {
+    const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false, terminal: "none" as "grounded" | "frontier" | "none" };
     const anchorSeam = seamOfId.get(String(model.anchor));
     if (!anchorSeam) return empty;
     const fwd = model.lead === "forward";   // consumers-lead footprint → the flow runs dst→src (mirror _seam_graph)
@@ -762,19 +762,39 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const cands = seams.filter((s) => isBoundarySeam(s) && dist.has(s.id) && s.id !== anchorSeam
         && (isStoreSink(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (rel(b) - rel(a)) || (dist.get(b.id)! - dist.get(a.id)!) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
-    if (!cands.length) return empty;
-    const pathIds: string[] = [];
-    for (let cur: string | undefined = cands[0].id; cur; cur = prev.get(cur)) { pathIds.unshift(cur); if (cur === anchorSeam) break; }
+    const pathTo = (toId: string): string[] => { const p: string[] = []; for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { p.unshift(cur); if (cur === anchorSeam) break; } return p; };
+    if (!cands.length) {
+      // FRONTIER-⟂ TERMINAL — no grounded sink, but the flow provably continues DOWNSTREAM into an OPAQUE node the
+      // grow COULD NOT follow (a runtime-DI multi-impl, an unresolved import, a string dispatch). Terminate the
+      // spine THERE, honestly — naming the break + the candidate set — instead of falling to an inferred guess.
+      // An honest broken path that says WHERE it lost the thread beats a smooth wrong one (the trust rule).
+      const OPAQUE = new Set(["interface-multiple-impls", "unresolved-import", "string-dispatch", "dynamic-dispatch", "dynamic-import"]);
+      const bsByNode = new Map<string, any>();
+      for (const b of (model.blindspots ?? []) as any[]) if (OPAQUE.has(b.mechanism)) bsByNode.set(String(b.node), b);
+      if (bsByNode.size) {
+        const stops = seams.filter((s) => dist.has(s.id) && s.id !== anchorSeam && (s.hunks ?? []).some((h: any) => bsByNode.has(String(h.id))))
+          .sort((a, b) => (dist.get(b.id)! - dist.get(a.id)!) || (a.id < b.id ? -1 : 1));
+        if (stops.length) {
+          const ids = pathTo(stops[0].id);
+          const bs = (stops[0].hunks ?? []).map((h: any) => bsByNode.get(String(h.id))).find(Boolean);
+          return { path: ids.map((id) => byId.get(id)!).filter(Boolean), alternates: [], grounded: false, terminal: "frontier", breakInfo: bs };
+        }
+      }
+      return empty;
+    }
+    const pathIds = pathTo(cands[0].id);
     const path = pathIds.map((id) => byId.get(id)!).filter(Boolean);
     // ALSO REACHES — the OTHER downstream sinks the intent didn't crown (deduped by symbol, off-path only). A wrong
     // primary pick is then one glance from correction (repoint --intent), never a silently-buried terminal.
     const onPath = new Set(pathIds); const seen = new Set<string>(); const alternates: Seam[] = [];
     for (const s of cands.slice(1)) { if (onPath.has(s.id)) continue; const k = `${s.primary?.file}#${s.primary?.symbol}`; if (seen.has(k)) continue; seen.add(k); alternates.push(s); }
-    return { path, alternates, grounded: true };
+    return { path, alternates, grounded: true, terminal: "grounded" };
   };
   const _spine = _terminalSpine();
   const spineGrounded = _spine.grounded;
-  const spineSeams = spineGrounded ? _spine.path : seams.filter((s) => tierOf(s) === "spine");
+  const spineTerminal = _spine.terminal;
+  const spineBreak = _spine.breakInfo;
+  const spineSeams = _spine.path.length ? _spine.path : seams.filter((s) => tierOf(s) === "spine");
   const spineSet = new Set(spineSeams.map((s) => s.id));
   const spineAlternates = _spine.alternates;
   const altSet = new Set(spineAlternates.map((s) => s.id));
@@ -824,10 +844,20 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       return ["", "## Spine — none: this anchor reaches no grounded boundary (db-table / route / queue) downstream.",
         "  The flow may not terminate here (a leaf / a policy or compute concern), or the center/intent is off — read the region below."];
     }
-    const out = ["", spineGrounded
+    const header = spineTerminal === "grounded"
       ? "## Spine (the primary path, anchor → … → outcome)"
-      : "## Spine (inferred — no grounded boundary reached; relevance-ordered, verify — the flow may not terminate at a boundary)"];
+      : spineTerminal === "frontier"
+      ? "## Spine (partial — the flow continues into an opaque boundary static resolution can't follow)"
+      : "## Spine (inferred — no grounded boundary reached; relevance-ordered, verify — the flow may not terminate at a boundary)";
+    const out = ["", header];
     spineSeams.forEach((s, i) => out.push(seamLine(s, i + 1)));
+    // ⟂ BREAK — name where the flow left the static graph (the DI hole / unresolved edge) + the candidate impls to
+    // deepen into. This is the honest terminus of a partial spine: not "here's a guess", but "it continues HERE".
+    if (spineTerminal === "frontier" && spineBreak) {
+      const cands = [...new Set((spineBreak.candidates ?? []).map((c: any) => (c.file ? `${c.file}#${c.symbol}` : c.symbol)).filter(Boolean))].slice(0, 4);
+      out.push(`  ⟂ [${spineBreak.mechanism}: ${spineBreak.evidence}]${cands.length ? ` — candidates: ${cands.join(", ")}` : ""}`,
+        `    static resolution stops here; deepen with seam --grow-from <candidate>${opts.intent ? ` --intent "${opts.intent}"` : ""}`);
+    }
     return out;
   };
   // ALSO REACHES — the OTHER grounded downstream sinks the intent didn't crown as primary. Shown right under the
