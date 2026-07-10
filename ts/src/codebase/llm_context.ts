@@ -468,6 +468,11 @@ const _WAVE_VERB: Record<string, string> = {
 };
 for (const [kind, m] of _MEDIUM_OF) _WAVE_VERB[kind] = m.wave;   // every shared-key crossing names its medium
 const _WAVE_RANK = (k: string): number => (k === "call" ? 0 : _CROSS_KINDS.has(k) ? 1 : k === "import" || k === "reference" || k === "interface-impl" ? 2 : k === "contains" ? 4 : 3);
+// STORE kinds — the persistent-boundary subset of media (a table/queue/event/cache/topic/file/key/binding, as
+// opposed to a route which is a RELAY, not a store). BOUND kinds = STORE plus the relay/annotation boundaries.
+// One shared pair instead of the three/two near-identical re-declarations this file used to carry.
+const _STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
+const _BOUND_KINDS = new Set([...(_STORE_KINDS as Set<string>), "route", "http-route", "annotation"]);
 const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
 
 // FLOOD TREE — for each seam, the connected seam CLOSER to the anchor (strictly lower shell) that reached it;
@@ -728,9 +733,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // would bury it in off-path — but it IS the differentiator (grep can't link the two sides), so lift it into its
   // own group right after the spine. Boundary nodes (the route/table plumbing) are NOT promoted — only real code.
   // (Defined here — before the spine — because the terminal-anchored spine BELOW keys on isBoundarySeam.)
-  const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
   const primaryHunk = (s: Seam) => (s.hunks ?? []).find((h) => h.label === s.primary?.symbol && h.file === s.primary?.file) ?? (s.hunks ?? [])[0];
-  const isBoundarySeam = (s: Seam) => _BOUND.has((primaryHunk(s) as any)?.kind ?? "");
+  const isBoundarySeam = (s: Seam) => _BOUND_KINDS.has((primaryHunk(s) as any)?.kind ?? "");
   const crossInto = (s: Seam): boolean => { const ids = seamIds(s); for (const e of (model.edges ?? []) as any[]) if (_CROSS_KINDS.has(e.kind) && ids.has(String(e.to)) && !ids.has(String(e.from)) && allIds.has(String(e.from))) return true; return false; };
   // "Other side" is a DIFFERENT language than the spine (Java backend ⇄ JS frontend) — the file EXTENSION is the
   // structural signal (the file's own type, not a name guess). A same-language self-route hop is NOT cross-stack.
@@ -764,7 +768,6 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // sink, not a through-node. Safe by construction for the DI case (keycloak createUser→UserEntity is reached by
     // writing INTO UserEntity, a code→store edge — kept; the store just doesn't fan further) and for cross-stack
     // (a route is a RELAY, not a _STORE kind, so route→consumer hops are untouched). (Opt out: SEAM_SPINE_STORE_TERMINAL=0.)
-    const _STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
     const _storeTerminal = process.env.SEAM_SPINE_STORE_TERMINAL !== "0";
     const storeSeamIds = new Set<string>();   // seams holding a data-store boundary hunk — TERMINAL in the spine
     if (_storeTerminal) for (const s of seams) if ((s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""))) storeSeamIds.add(s.id);
@@ -812,8 +815,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // downstream" into a table, you SHARE it, so a shared-key coupling to it is a sink whatever its region
     // direction. A RELAY boundary (route) can be an upstream CALLER or a downstream handler, so it must be
     // direction "down" to count as an outcome (else an inbound caller-route gets crowned — the booking case).
-    const _STORE = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
-    const isStoreSink = (s: Seam) => _STORE.has((primaryHunk(s) as any)?.kind ?? "");
+    const isStoreSink = (s: Seam) => _STORE_KINDS.has((primaryHunk(s) as any)?.kind ?? "");
     // STRUCTURAL PRIOR — a sink the ANCHOR writes DIRECTLY (a produce/write edge FROM an anchor-seam node) is what
     // THIS operation persists: a grounded fact that outranks a weak name-embedding. On Keycloak the embedding rates
     // the token-rich but PERIPHERAL `UserVerifiableCredentialEntity` (0.346) over the plain, CENTRAL `UserEntity`
@@ -1050,14 +1052,13 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
   // most concrete edge (a real call/write over a bare reference), falling back to the seam's own start line when a
   // derived crossing edge carries no line. Returns null when the two seams share no resolved edge.
-  const _STORE_KINDS_HOP = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
   const spineHop = (a: Seam, b: Seam): string | null => {
     const ai = seamIds(a), bi = seamIds(b);
     // A hop INTO a data-store: the WRITE is the outcome, so prefer a produce edge (and its write line) over a
     // co-located read on the same table. "…and stored" must show the actual persist — private-app weekly_tasks reaches the
     // crown via BOTH a `.upsert` (db-write :411) and an idempotency `.select` (db-read :417); the tie on _WAVE_RANK
     // let the read win. Routes are relays, not stores, so cross-stack route hops are untouched.
-    const bStore = _STORE_KINDS_HOP.has((primaryHunk(b) as any)?.kind ?? "");
+    const bStore = _STORE_KINDS.has((primaryHunk(b) as any)?.kind ?? "");
     const _score = (k: string) => (bStore && _PRODUCE_KINDS.has(k)) ? -1 : (bStore && _READ_KINDS.has(k)) ? 9 : _WAVE_RANK(k);
     let best: any = null;
     for (const e of (model.edges ?? []) as any[]) {
@@ -1339,8 +1340,7 @@ export function renderConcern(model: any, opts: { intent?: string; tokenBudget?:
   const qual = (h: any): string => (h?.enclosing && h.enclosing !== h.label ? `${h.enclosing}.${h.label}` : (h?.label ?? "?"));
   // a BOUNDARY node (a route/table/queue/… crossing site) is the medium, never an interaction ENTRY — it renders
   // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
-  const _BOUND = new Set(["route", "http-route", "db-table", "table", "queue", "event", "cache", "key", "binding", "annotation", "topic", "file"]);
-  const isBoundaryNode = (id: string): boolean => _BOUND.has(hunkById.get(id)?.kind ?? "");
+  const isBoundaryNode = (id: string): boolean => _BOUND_KINDS.has(hunkById.get(id)?.kind ?? "");
   // A boundary rendered as a flow EDGE label — the MEDIUM (from the boundary node's structural kind, the registry's
   // closed set) + the shared key/route — so the coupling shows AS a link in the chain
   // (acmeBooking.js ──HTTP /booking/*──▶ ●) instead of being buried in a separate "Blindspots" list. THIS is the
