@@ -27,24 +27,26 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
-const footprintSymbols = async (providerHop: boolean): Promise<Set<string>> => {
+const footprint = async (providerHop: boolean): Promise<{ files: Set<string>; syms: Set<string> }> => {
   const prev = process.env.SEAM_PROVIDER_HOP;
   process.env.SEAM_PROVIDER_HOP = providerHop ? "1" : "0";
   _resetImplIndexMem();
   try {
     const g: any = await build_footprint(REPO, "app/Handler.java", "addGroup", { direction: "down", dataCoupling: false });
-    return new Set((g.nodes ?? []).map((n: any) => String(n.symbol)));
+    return { files: new Set((g.nodes ?? []).map((n: any) => String(n.file))), syms: new Set((g.nodes ?? []).map((n: any) => String(n.symbol))) };
   } finally { if (prev === undefined) delete process.env.SEAM_PROVIDER_HOP; else process.env.SEAM_PROVIDER_HOP = prev; }
 };
 
 describe("DI provider-factory hop (SEAM_PROVIDER_HOP)", () => {
-  test("with the hop ON, session.groups() is followed to the GroupProvider impl (JpaGroupProvider)", async () => {
+  test("with the hop ON, session.groups().createGroup() is followed to the impl's SPECIFIC method (method-precise)", async () => {
     if (!available()) return;
-    expect(await footprintSymbols(true)).toContain("JpaGroupProvider");
+    const fp = await footprint(true);
+    expect(fp.files).toContain("app/JpaGroupProvider.java");   // reached the GroupProvider impl…
+    expect(fp.syms).toContain("createGroup");                  // …bound to the chained method, not the whole class
   });
 
   test("with the hop OFF (default), the factory chain is NOT followed (opt-in, no behaviour change)", async () => {
     if (!available()) return;
-    expect(await footprintSymbols(false)).not.toContain("JpaGroupProvider");
+    expect((await footprint(false)).files).not.toContain("app/JpaGroupProvider.java");
   });
 });

@@ -231,13 +231,21 @@ function _implCap(): number {
 // Follow ONE interface to its impl(s): sole impl → the runtime binding (RESOLVED_PARTIAL interface-impl edge);
 // multiple → a DETERMINISTIC capped/ranked subset + a blindspot listing the rest. Shared by the @Inject field pass
 // (_interfaceImplPass) and the DI provider-factory pass (_providerFactoryPass). Returns true if any impl existed.
-async function _followInterface(s: DepScan, iface: string, cap: number, line: number | null = null): Promise<boolean> {
+async function _followInterface(s: DepScan, iface: string, cap: number, method: string | null = null, line: number | null = null): Promise<boolean> {
   const cands = await impls_of(s.repo, iface);
   if (!cands.length) return false;
-  if (cands.length === 1) { await _addDep(s, cands[0].cls, cands[0].file, line, "interface-impl", "RESOLVED_PARTIAL"); return true; }
+  // Bind ONE impl. With a chained method (`groups().createGroup()`), add the impl's SPECIFIC method
+  // (JpaRealmProvider.createGroup) so the crown lands on THAT method's persist (GroupEntity), not a sibling's in a
+  // multi-interface mega-class (RoleEntity). Fall back to the class when the method isn't defined in this impl
+  // (inherited/abstract) or none was chained (an @Inject field).
+  const bind = async (c: { cls: string; file: string }) => {
+    if (method) { const n = s.nodes.length; await _addDep(s, method, c.file, line, "interface-impl", "RESOLVED_PARTIAL"); if (s.nodes.length > n) return; }
+    await _addDep(s, c.cls, c.file, line, "interface-impl", "RESOLVED_PARTIAL");
+  };
+  if (cands.length === 1) { await bind(cands[0]); return true; }
   const ranked = _rankImpls(s.repo, cands);
   const take = ranked.slice(0, cap), rest = ranked.slice(cap);
-  for (const c of take) await _addDep(s, c.cls, c.file, line, "interface-impl", "RESOLVED_PARTIAL");
+  for (const c of take) await bind(c);
   if (rest.length) s.blindspots.push({ node: iface, mechanism: "interface-multiple-impls",
     evidence: `${iface} has ${cands.length} implementations${take.length ? ` (followed ${take.length}, structurally-ranked)` : ""} — the runtime DI binding can't be picked statically; grow the rest explicitly`,
     candidates: rest.map((c) => ({ symbol: c.cls, file: c.file })) });
@@ -262,29 +270,37 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   if (!anchor) return;
   const [, , alo, ahi] = anchor;
   const cap = _implCap();
-  const seeded = new Set<string>();
-  const follow = async (iface: string) => { if (!seeded.has(iface)) { seeded.add(iface); await _followInterface(s, iface, cap); } };
-  // Method names INVOKED in the anchor span (qualified `x.m()` or bare `m()`), collected once.
-  const called = new Set<string>();
-  for (const c of s.actx.collect(s.actx.root, (k: string) => /invocation|call_expression/.test(k))) {
-    const [cl] = s.actx.span(c);
-    if (cl < alo || cl > ahi) continue;
-    const nm = (c as any).childForFieldName?.("name");
-    if (nm) called.add(s.actx.text(nm));
-    else { const id = s.actx.children(c).find((x: any) => x.type.includes("identifier")); if (id) called.add(s.actx.text(id)); }
-  }
-  // (a) ACCESSOR form — the anchor body calls a grounded provider accessor (`session.groups()`).
   const accessors = await provider_accessors(s.repo);
-  for (const [m, ifaces] of accessors) if (called.has(m)) for (const i of ifaces) await follow(i);
-  // (b) SERVICE-LOCATOR form — getProvider(X.class)/getInstance(X.class)/getBean(X.class) where X is a provider interface.
-  const rd = _read(s.repo, s.anchorFile);
-  if (rd) {
-    const body = rd[0].split("\n").slice(Math.max(0, alo - 1), ahi).join("\n");
-    const RE = /\b(?:getProvider|getInstance|getBean)\s*\(\s*([A-Za-z_$][\w$]*)\s*\.class\b/g;
-    const xs = new Set<string>(); let mm: RegExpExecArray | null;
-    while ((mm = RE.exec(body))) xs.add(mm[1]);
-    for (const x of xs) if (!seeded.has(x) && await is_provider_interface(s.repo, x)) await follow(x);
+  const _LOCATOR = new Set(["getProvider", "getInstance", "getBean"]);
+  const isInv = (k: string) => /invocation|call_expression/.test(k);
+  const nameOf = (n: any): string => { const f = n?.childForFieldName?.("name"); return f ? s.actx!.text(f) : ""; };
+  const classArg = (inv: any): string | null => {   // X from `getProvider(X.class)` — the first argument's `Y.class`
+    const args = inv?.childForFieldName?.("arguments"); if (!args) return null;
+    const m = s.actx!.text(args).match(/([A-Za-z_$][\w$]*)\s*\.\s*class/); return m ? m[1] : null;
+  };
+  // CHAINED provider calls in the anchor span: `x.groups().createGroup(...)` / `getProvider(X.class).create(...)` →
+  // (interface, chained method). This is what lets the hop bind the impl's SPECIFIC method, not the whole class.
+  const chained = new Map<string, Set<string>>();   // interface → chained method names
+  const addChain = (i: string, m: string) => { if (m) (chained.get(i) ?? chained.set(i, new Set()).get(i)!).add(m); };
+  const called = new Set<string>();                 // provider accessor NAMES called (chained or bare)
+  const locators = new Set<string>();               // interfaces from a getProvider(X.class) (chained or bare)
+  for (const outer of s.actx.collect(s.actx.root, isInv)) {
+    const [cl] = s.actx.span(outer); if (cl < alo || cl > ahi) continue;
+    const obj = (outer as any).childForFieldName?.("object");   // the receiver (Java method_invocation)
+    const objName = obj && isInv(obj.type) ? nameOf(obj) : "";
+    if (objName && accessors.has(objName)) { called.add(objName); for (const i of accessors.get(objName)!) addChain(i, nameOf(outer)); }
+    else if (objName && _LOCATOR.has(objName)) { const x = classArg(obj); if (x) { locators.add(x); addChain(x, nameOf(outer)); } }
+    else { const on = nameOf(outer); if (accessors.has(on)) called.add(on); if (_LOCATOR.has(on)) { const x = classArg(outer); if (x) locators.add(x); } }
   }
+  const seeded = new Set<string>();
+  const seed = async (iface: string, method: string | null) => {
+    const key = `${iface}#${method ?? ""}`; if (seeded.has(key)) return; seeded.add(key);
+    await _followInterface(s, iface, cap, method);
+  };
+  // METHOD-PRECISE first (a chained call), then the CLASS-level fallback for a bare accessor/locator with no chain.
+  for (const [i, ms] of chained) for (const m of ms) await seed(i, m);
+  for (const m of called) for (const i of accessors.get(m) ?? []) if (!chained.has(i)) await seed(i, null);
+  for (const x of locators) if (!chained.has(x) && await is_provider_interface(s.repo, x)) await seed(x, null);
 }
 
 // Summarise the unresolved imports gathered by the import pass into one blindspot.
