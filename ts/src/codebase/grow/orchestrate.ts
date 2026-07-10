@@ -28,7 +28,8 @@ function _scopeMemoSet(key: string, files: Set<string>): void {
   _SCOPE_MEMO.set(key, files);
 }
 import { makeIntentKeyRanker } from "./key_ranker.js";
-import { ubiquityIndex, ubiquityOf, ubiquityConsumers } from "./ubiquity.js";
+import { ubiquityIndex, ubiquityConsumers } from "./ubiquity.js";
+import { makeHubClassifier } from "./border_policies.js";
 import type { HubMarker } from "../../core/graph_ir.js";
 import { RegionCentroid } from "./field.js";
 import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
@@ -621,18 +622,9 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     for (const e of data.edges) { (edgeKinds.get(e.from) ?? edgeKinds.set(e.from, []).get(e.from))!.push(e.kind); (edgeKinds.get(e.to) ?? edgeKinds.set(e.to, []).get(e.to))!.push(e.kind); }
     const typeRefOnly = new Set<string>();
     for (const [id, kinds] of edgeKinds) if (kinds.length && kinds.every((k) => k === "type-ref")) typeRefOnly.add(id);
-    // HUB CLASSIFICATION (I4-safe) — ONE deterministic test serving the ubiquity gate AND hub-collapse. A node
-    // that BEARS a grounded crossing / is a flow-subject / is a coupling node is NEVER a hub (it's on the spine).
-    // Otherwise: ubiquity fan-in ≥ threshold → a shared-infra hub; under collapse, a type-ref-only node with a
-    // lower fan-in → the `MyString` shape. Returns the marker (reason + fan) or null. `sampleConsumers` is filled
-    // lazily (needs an async index read) only when the node is actually collapsed. Ubiquity off / no index → null.
-    const hubInfo = (n: any): { reason: HubMarker["reason"]; fan: number } | null => {
-      if (!ubiquity || crossingBearers.has(n.id) || isFlowSubject(n.kind) || n.coupling) return null;
-      const u = ubiquityOf(ubiqScore!, n.file);
-      if (u >= (hubCollapse ? hubUbiquity : ubiquityFan)) return { reason: "ubiquity", fan: u };
-      if (hubCollapse && typeRefOnly.has(n.id) && u >= hubTypeFan) return { reason: "type", fan: u };
-      return null;
-    };
+    // HUB CLASSIFICATION — see border_policies.ts. `sampleConsumers` is filled lazily (needs an async index
+    // read) only when the node is actually collapsed. Ubiquity off / no index → null.
+    const hubInfo = makeHubClassifier({ ubiquity, crossingBearers, hubCollapse, hubUbiquity, ubiquityFan, typeRefOnly, hubTypeFan, ubiqScore });
     const isHub = (n: any): boolean => hubInfo(n) != null;
     // frontier = a real symbol (not a boundary node) we haven't re-anchored yet, not excluded. CORE nodes are
     // excluded on the FORWARD/consumer side (the central seam is already covered — re-growing it adds noise), but
