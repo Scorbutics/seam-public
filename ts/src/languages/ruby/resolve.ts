@@ -54,5 +54,6 @@ export function imports(text: string): ImportRef[] {
 
 export const PROVIDER: LanguageProvider = {
   name: "ruby", extensions: EXTENSIONS, resolve: floor_resolve, imports, implMarkers: [],
+  handlerFileConvention: /_controller\.rb$/, carrierEngine: true,
   lsp: { language: "ruby", command: system("ruby-lsp", "--stdio"), languageId: "ruby", rootMarkers: ["Gemfile", ".ruby-version"] },
 };

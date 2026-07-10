@@ -5,7 +5,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join, relative } from "node:path";
-import { endsWithSourceExt, provider_for, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { endsWithSourceExt, hasValidatedRegexDefs, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { walk, normpath } from "../../core/resolve/walk.js";
 import { incrementalScanFiles, indexCacheEnabled } from "../../core/resolve/index_cache.js";
 import { defs_in_file_treesitter } from "./def_treesitter.js";
@@ -186,7 +186,7 @@ export function module_def(rel: string, text: string): Def {
 // when grammars are absent — the offline .vsix). The module def is cheap (string ops, no parse) so it's
 // always computed and cached; whether it's emitted is the assembler's `moduleDefs` decision.
 async function _scan_defs_file(rel: string, text: string): Promise<{ defs: Def[]; mod: Def }> {
-  const defs = provider_for(rel)?.name === "typescript"
+  const defs = hasValidatedRegexDefs(rel)
     ? defs_in_file(rel, text)
     : (await defs_in_file_treesitter(rel, text)) ?? defs_in_file(rel, text);
   return { defs, mod: module_def(rel, text) };

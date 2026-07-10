@@ -78,6 +78,16 @@ export interface LanguageProvider {
   // the MAIN-entry line inside a module entry (ctx = an atoms Ctx, duck-typed). null ⇒ can't decide.
   entrypoint?: (ctx: any) => number | null;
   lsp?: ServerSpec;      // how to launch the language's LSP server (undefined ⇒ no server, floor only)
+  // basename regex marking a route/handler/controller file BY THIS LANGUAGE's convention (Rails
+  // `_controller.rb`, a Java `*Resource.java`, …) — the recall net coupling's L3 gate uses across all
+  // languages. undefined ⇒ this language has no such convention (or isn't registered here yet).
+  handlerFileConvention?: RegExp;
+  // true ⇒ this language's coupling is carried by the tree-sitter CARRIER engine (a data-file/DSL walk)
+  // rather than the span-local key matcher — currently Ruby only. undefined/false ⇒ matcher-only.
+  carrierEngine?: boolean;
+  // true ⇒ the regex def-extractor (defs_in_file) is the VALIDATED path for this language; other
+  // languages fall back to the language-agnostic tree-sitter extractor. Currently TS/JS only.
+  regexDefsValidated?: boolean;
 }
 
 // Locate a binary on PATH (the sync `shutil.which` equivalent). Returns the absolute path or null.

@@ -16,7 +16,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
-import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { SKIP_DIRS, hasCarrierEngine, isHandlerFileByLanguage } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -487,11 +487,11 @@ async function _learn(
   ]);
 
   // The CARRIER engine is Ruby's native home (its data-file coupling isn't a span-local key). It is gated to
-  // Ruby anchors: enabling it for JS/TS made the carrier walk PARSE every JS file tree-sitter-wide, which on
-  // a big repo exhausts the web-tree-sitter WASM heap (the `_astCache` keeps every tree) → an out-of-bounds
-  // crash. And it was redundant there: JS/TS cross-stack couplings (a custom Vue.http / DI) are carried by
-  // the MATCHER flywheel (llmKeyIndex, above), not the carrier. So keep the carrier Ruby-only.
-  if (!anchorFile.endsWith(".rb") && !anchorFile.endsWith(".rake")) {
+  // languages that register a carrier engine (Ruby only): enabling it for JS/TS made the carrier walk PARSE
+  // every JS file tree-sitter-wide, which on a big repo exhausts the web-tree-sitter WASM heap (the
+  // `_astCache` keeps every tree) → an out-of-bounds crash. And it was redundant there: JS/TS cross-stack
+  // couplings (a custom Vue.http / DI) are carried by the MATCHER flywheel (llmKeyIndex, above), not the carrier.
+  if (!hasCarrierEngine(anchorFile)) {
     return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
   }
 
@@ -521,12 +521,11 @@ export function _handlerShaped(file: string): boolean {
   const segs = file.toLowerCase().split("/");
   if (segs.some((s) => ["controllers", "controller", "handlers", "routes", "endpoints", "resolvers", "webhooks"].includes(s))) return true;
   const base = segs[segs.length - 1];
-  return base === "route.ts" || base === "route.js"
-    || /(_controller\.rb|controller\.(ts|js|java|kt|cs|php|py)|\.handler\.(ts|js)|_handler\.go|resource\.java)$/.test(base);
+  return isHandlerFileByLanguage(base);
 }
 
 async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText: string, lo: number, hi: number, llmOpts: _LlmOpts, opts: CouplingOpts, ctx: EngineCtx): Promise<boolean> {
-  if (anchorFile.endsWith(".rb") || anchorFile.endsWith(".rake")) return true;   // carrier (Ruby) coupling isn't span-local
+  if (hasCarrierEngine(anchorFile)) return true;   // carrier (Ruby) coupling isn't span-local
   const footprint = !!ctx.footprintFiles;
   // GROUNDED L3 TRIGGER — a footprint grow used to BYPASS this gate (return true), so the per-anchor LLM
   // (anchorProposedKeys) ran on EVERY coupled node = a per-file LLM sweep that finds nothing 95%+ of the time on

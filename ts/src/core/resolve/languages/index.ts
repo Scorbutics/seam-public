@@ -11,14 +11,37 @@ import { PROVIDER as JAVA } from "../../../languages/java/resolve.js";
 import { PROVIDER as RUBY } from "../../../languages/ruby/resolve.js";
 
 // A minimal (LSP-only) provider: no floor / import parser, but a server spec so spec_for_file maps it.
-const minimal = (name: string, extensions: string[], lsp: ServerSpec): LanguageProvider => ({ name, extensions, lsp });
+// `extra` carries any other closed-set capability (handlerFileConvention, …) without a floor resolver.
+const minimal = (name: string, extensions: string[], lsp: ServerSpec, extra: Partial<LanguageProvider> = {}): LanguageProvider =>
+  ({ name, extensions, lsp, ...extra });
 
 export const PROVIDERS: LanguageProvider[] = [
   TS, PY, JAVA, RUBY,
-  minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] }),
+  minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] },
+    { handlerFileConvention: /controller\.kt$/ }),
   minimal("c", [".c", ".h"], { language: "c", command: system("clangd"), languageId: "c", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
   minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"], { language: "cpp", command: system("clangd"), languageId: "cpp", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
 ];
+
+// Handler/controller-file recall net (coupling L3's SIGNAL #5), driven by each language's own
+// registered convention. `_EXTRA_CONVENTIONS` covers naming conventions for stacks with no registered
+// LanguageProvider yet (C#, PHP, Go) — outside the project's minimum language set, so they stay a
+// residual regex here rather than a per-language module.
+const _EXTRA_CONVENTIONS = /(controller\.(cs|php)|_handler\.go)$/;
+export function isHandlerFileByLanguage(basename: string): boolean {
+  return PROVIDERS.some((p) => p.handlerFileConvention?.test(basename)) || _EXTRA_CONVENTIONS.test(basename);
+}
+
+// Whether `file`'s language routes its data-coupling through the tree-sitter CARRIER engine (Ruby's
+// data-file/DSL walk) rather than the span-local key matcher.
+export function hasCarrierEngine(file: string): boolean {
+  return !!provider_for(file)?.carrierEngine;
+}
+
+// Whether `file`'s language has a VALIDATED regex def-extractor (TS/JS) vs needing the tree-sitter fallback.
+export function hasValidatedRegexDefs(file: string): boolean {
+  return !!provider_for(file)?.regexDefsValidated;
+}
 
 export { SKIP_DIRS };
 
