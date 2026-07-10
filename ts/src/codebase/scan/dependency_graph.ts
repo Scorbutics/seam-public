@@ -257,7 +257,7 @@ async function _interfaceImplPass(s: DepScan): Promise<void> {
   for (const dn of [...s.nodes]) await _followInterface(s, dn.symbol, cap);
 }
 
-// DI PROVIDER-FACTORY pass (opt-in SEAM_PROVIDER_HOP=1) — follow a chained `session.groups().createGroup()` /
+// DI PROVIDER-FACTORY pass (DEFAULT-ON, opt out SEAM_PROVIDER_HOP=0) — follow a chained `session.groups().createGroup()` /
 // `session.getProvider(X.class).create()` PAST the runtime factory to the interface's impls, so a DI-hidden
 // persistence (Keycloak `session.groups()`→JpaRealmProvider→em.persist(GroupEntity)) is reached instead of leaving
 // the spine stranded at the REST entry. GROUNDED, never a name guess: (a) the accessor form seeds ONLY on a method
@@ -266,7 +266,7 @@ async function _interfaceImplPass(s: DepScan): Promise<void> {
 // capped/ranked/blindspotted set the @Inject pass produces. Runs per build (the wave expands each hop's node, so a
 // multi-hop chain — RealmModel→RealmAdapter→session.groups()→GroupProvider — resolves as the walk descends).
 async function _providerFactoryPass(s: DepScan): Promise<void> {
-  if (process.env.SEAM_PROVIDER_HOP !== "1" || !s.actx) return;   // OPT-IN (crown-relevance among mega-class entities not yet default-ready)
+  if (process.env.SEAM_PROVIDER_HOP === "0" || !s.actx) return;   // DEFAULT-ON (opt out with =0); reaches DI-hidden persistence
   const anchor = s.aunits.find((u) => u[0] === s.symbol);
   if (!anchor) return;
   const [, , alo, ahi] = anchor;
@@ -394,7 +394,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); }
     else { await _samePackagePass(s); _intraFileCalleePass(s); _de("samePackage+intraCallee", _t); }
     _t = _dt();
-    await _providerFactoryPass(s); _de("providerFactory", _t); _t = _dt();   // DI factory hop (opt-in SEAM_PROVIDER_HOP=1), before the @Inject pass
+    await _providerFactoryPass(s); _de("providerFactory", _t); _t = _dt();   // DI factory hop (default-on, opt out =0), before the @Inject pass
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);
     await _stringDispatchPass(s, arange[0], arange[1]); _de("stringDispatch", _t); _t = _dt();
