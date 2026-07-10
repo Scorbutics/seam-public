@@ -22,6 +22,17 @@ describe("JPA @Entity db-table adapter", () => {
     expect(w(h)).toContain("GroupEntity");           // remove(var) → var's type
   });
 
+  test("em.remove is a WRITE tagged op:delete; persist/merge are creates (undefined op) — so a create wins the write-site", () => {
+    // Both persist and remove touch the SAME entity in one span; the dedup must keep the CREATE (persist) as the
+    // table's representative write site, not the remove that sits at an earlier line — else `em.remove` masquerades
+    // as the create for a "…is created" flow (the keycloak GroupEntity :830-remove vs :854-persist bug).
+    const h = JPA_ENTITY.scan("Provider.java", `void del() { em.remove(existing); GroupEntity existing; }\nvoid add() { em.persist(new GroupEntity()); }`);
+    const remove = h.find((x) => x.value === "GroupEntity" && x.produces && x.op === "delete");
+    const persist = h.find((x) => x.value === "GroupEntity" && x.produces && !x.op);
+    expect(remove).toBeDefined();     // em.remove(var) → a delete-tagged write
+    expect(persist).toBeDefined();    // em.persist(new X) → an untagged (create) write
+  });
+
   test("persist(var) resolves to the NEAREST-preceding declaration — a local shadows a same-named field", () => {
     // ClientAdapter shape: a field `ClientEntity entity` at the class top, and a LOCAL `ProtocolMapperEntity entity`
     // just above `em.persist(entity)`. The write must be attributed to the LOCAL (ProtocolMapperEntity), not the

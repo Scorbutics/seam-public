@@ -22,9 +22,9 @@ function scan(file: string, text0: string): KeyHit[] {
   const text = maskComments(text0);
   const out: KeyHit[] = [];
   const seen = new Set<string>();
-  const add = (value: string, line: number, produces: boolean): void => {
+  const add = (value: string, line: number, produces: boolean, op?: string): void => {
     const k = `${value}|${line}|${produces}`; if (seen.has(k)) return; seen.add(k);
-    out.push({ kind: "db-table", value, line, produces });
+    out.push({ kind: "db-table", value, line, produces, ...(op ? { op } : {}) });
   };
   let m: RegExpExecArray | null;
 
@@ -54,12 +54,14 @@ function scan(file: string, text0: string): KeyHit[] {
     return (preceding ?? any)?.type;
   };
 
-  // 2) EntityManager writes — persist/merge/remove name (or type-resolve) their entity arg.
-  const emWrite = /\.(?:persist|merge|remove)\s*\(\s*(?:new\s+([A-Z]\w*)|([A-Z]\w*)\.class|([a-z_]\w*))/g;
+  // 2) EntityManager writes — persist/merge/remove name (or type-resolve) their entity arg. `remove` is a DELETE:
+  //    still a write, but tagged op:"delete" so it never wins over a create/persist as the table's representative
+  //    write site (else `em.remove(x)` at an earlier line masquerades as the create for a "…is created" flow).
+  const emWrite = /\.(persist|merge|remove)\s*\(\s*(?:new\s+([A-Z]\w*)|([A-Z]\w*)\.class|([a-z_]\w*))/g;
   while ((m = emWrite.exec(text))) {
     const ln = lineOf(text, m.index);
-    const e = m[1] || m[2] || (m[3] ? resolveVar(m[3], ln) : undefined);
-    if (e) add(e, ln, true);
+    const e = m[2] || m[3] || (m[4] ? resolveVar(m[4], ln) : undefined);
+    if (e) add(e, ln, true, m[1] === "remove" ? "delete" : undefined);
   }
   // 3) reads — find/getReference on an `X.class`.
   const emRead = /\.(?:find|getReference)\s*\(\s*([A-Z]\w*)\.class/g;

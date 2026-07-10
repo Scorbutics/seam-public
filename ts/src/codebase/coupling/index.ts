@@ -660,12 +660,17 @@ function collectAnchorKeys(
   // POST + `getBookings` GET → the bare base) are DISTINCT boundaries — collapsing on (kind,value) alone dropped
   // the second op from the map. An unlabelled key (a raw table/route) has "" and behaves exactly as before.
   const accessId = (k: KeyHit) => `${k.kind} ${k.value} ${k.produces} ${k.label ?? ""}`;
-  // 1+2: the located FLOOR (scan + carrier) — span-filtered, earliest line wins, tagged by source
+  // 1+2: the located FLOOR (scan + carrier) — span-filtered, earliest line wins EXCEPT a create beats a delete:
+  // a destructive write (op:"delete", e.g. `em.remove`) never wins over a create/persist as a table's representative
+  // producer, so the spine's write site is the create, not a delete that happens to sit at an earlier line.
+  const _isDel = (k: { op?: string }) => k.op === "delete";
   const addFloor = (hit: KeyHit, source: KeySource) => {
     if (hit.line < spanLo || hit.line > spanHi) return;
     const id = accessId(hit);
-    if (!anchorKeys.has(id) || hit.line < anchorKeys.get(id)!.line)
-      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source, ...(hit.label ? { label: hit.label } : {}) });
+    const cur = anchorKeys.get(id);
+    const better = !cur || (_isDel(cur) && !_isDel(hit)) || (_isDel(cur) === _isDel(hit) && hit.line < cur.line);
+    if (better)
+      anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source, ...(hit.label ? { label: hit.label } : {}), ...(hit.op ? { op: hit.op } : {}) });
   };
   for (const hit of scan_file_keys(anchorFile, anchorText)) addFloor(hit, "scan");
   for (const hit of carrierAccs) addFloor(hit, "carrier");
