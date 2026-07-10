@@ -564,7 +564,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // crossing-bearing node — so gating it shrinks the probe from a whole-repo flood (8.7s on Acme) to ~the answer's
   // size without losing any coupling file. Opt back to the old fully-inclusive probe with SEAM_PROBE_INCLUSIVE=1.
   const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !(stableFloor && (_envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false));
-  const hubGate = (opts.hubGate ?? false) || hubCollapse;   // env SEAM_HUB_GATE removed — it was OR'd with the default-on hubCollapse, so it could never toggle anything
+  const hubGate = (opts.hubGate ?? false) || hubCollapse;   // opts.hubGate only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
   const hubTypeFan = Math.max(2, opts.hubTypeFan ?? (parseInt(process.env.SEAM_HUB_TYPE_FAN ?? "5", 10) || 5));      // lower fan-in for a type-ref-only hub (the MyString shape)
@@ -586,7 +586,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // it — but ONLY when it bears NO grounded crossing (I4: a shared DAO on the flow's crossing is scored high yet
   // never gated). DEFAULT ON (env=0 / opts=false opts out); no index → empty → no effect (I1/I3).
   // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
-  const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // env SEAM_UBIQUITY removed — OR'd with default-on hubCollapse, so it couldn't toggle anything
+  const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // opts.ubiquity only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
   const upHopCap = Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0)));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. STRUCTURAL grow defaults K=2 (it's the sole container). Hoisted above the wave loop so the post-loop frontier block sees it.
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
