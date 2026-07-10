@@ -7,7 +7,7 @@
 // was removed; the tier/hub/coupling containment carries the grow offline.
 import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 
-import { from_resolved_graph } from "../../core/graph_ir.js";
+import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
@@ -650,8 +650,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     const anchorId = anchorIds[0];
     const adj = new Map<string, string[]>();
     for (const e of data.edges as any[]) { (adj.get(e.from) ?? adj.set(e.from, []).get(e.from))!.push(e.to); (adj.get(e.to) ?? adj.set(e.to, []).get(e.to))!.push(e.from); }
-    const dist = new Map<string, number>(anchorIds.map((a) => [a, 0]));
-    for (const queue = [...anchorIds]; queue.length; ) { const u = queue.shift()!; const du = dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!dist.has(v)) { dist.set(v, du + 1); queue.push(v); } }
+    const dist = bfsDistance(adj, anchorIds);
     const distOf = (id: string) => dist.get(id) ?? 999;
     // PLAIN-CALL UP-DEPTH (SEAM_UP_HOP) — the deterministic, intent-FREE up-fan border. Hops climbing the CONSUMER
     // fan (an edge `from→to` means `from` consumes `to`, so `to`'s consumers are the `from`s) from the anchor,

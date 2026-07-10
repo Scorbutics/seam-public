@@ -175,6 +175,21 @@ export function undirected_adjacency(edges: Edge[]): Map<string, Set<string>> {
   return adj;
 }
 
+// Hop-distance BFS from one or more seed nodes over any adjacency map (undirected or already-directed).
+// Shared by every "closeness to anchor" computation across codebase/grow and codebase/codebase.ts — one
+// queue/dist loop instead of a hand-rolled copy per call site.
+export function bfsDistance(adj: Map<string, Iterable<string>>, seeds: Iterable<string>): Map<string, number> {
+  const dist = new Map<string, number>();
+  const q: string[] = [];
+  for (const s of seeds) if (!dist.has(s)) { dist.set(s, 0); q.push(s); }
+  while (q.length) {
+    const u = q.shift()!;
+    const d = dist.get(u)!;
+    for (const v of adj.get(u) ?? []) if (!dist.has(v)) { dist.set(v, d + 1); q.push(v); }
+  }
+  return dist;
+}
+
 export function assert_resolved_only(edges: Edge[]): void {
   const bad = edges.filter((e) => !isResolved(e.provenance));
   if (bad.length) {

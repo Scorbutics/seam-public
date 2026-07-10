@@ -6,7 +6,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
 import {
   type Edge, type Graph, type Node, type BlindSpot, Provenance, connected_components,
-  wellformedness,
+  wellformedness, bfsDistance,
 } from "../core/graph_ir.js";
 import * as atoms from "./atoms.js";
 import { RENDER } from "./config.js";
@@ -364,9 +364,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   const indeg = new Map<string, number>();
   for (const e of g.resolved_edges()) if (e.kind !== "contains") indeg.set(e.dst, (indeg.get(e.dst) ?? 0) + 1);
   const adj = g.adjacency();
-  const dist = new Map<string, number>([[g.anchor, 0]]);
-  const q = [g.anchor];
-  while (q.length) { const c = q.shift()!; const d = dist.get(c)!; for (const nb of adj.get(c) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
+  const dist = bfsDistance(adj, [g.anchor]);
   const subjectNodes = new Map<string, Set<string>>();   // db-table name → node ids that touch it (boundary + direct neighbours)
   for (const n of g.nodes.values()) {
     if (!isDomainSubject(n.kind) || !n.label) continue;
@@ -584,13 +582,8 @@ function _seam_graph(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "b
     else if (lead === "forward") link(b, a);
     else { link(a, b); link(b, a); }
   }
-  const dist = new Map<string, number>();
   const anchorSeam = nodeSeam.get(g.anchor) ?? seams.find((s) => s.tier === "spine")?.id;
-  if (anchorSeam) {
-    dist.set(anchorSeam, 0);
-    const q = [anchorSeam];
-    while (q.length) { const cur = q.shift()!; const d = dist.get(cur)!; for (const nb of adj.get(cur) ?? []) if (!dist.has(nb)) { dist.set(nb, d + 1); q.push(nb); } }
-  }
+  const dist = anchorSeam ? bfsDistance(adj, [anchorSeam]) : new Map<string, number>();
   return { nodeSeam, dist, anchorSeam };
 }
 
@@ -1027,10 +1020,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
   // ↓ deps). A seam's `shell` = its nearest node; `direction` = its dominant. BFS over the UNDIRECTED resolved
   // graph, computed once. Intent-gated on emit → non-intent oracles stay byte-identical. (The region view reads
   // this; the spine is being retired in favour of it.)
-  const _dist = new Map<string, number>([[g.anchor, 0]]);
-  { const adj = new Map<string, string[]>();
-    for (const e of g.resolved_edges()) { (adj.get(e.src) ?? adj.set(e.src, []).get(e.src)!).push(e.dst); (adj.get(e.dst) ?? adj.set(e.dst, []).get(e.dst)!).push(e.src); }
-    for (const q = [g.anchor]; q.length;) { const u = q.shift()!; const du = _dist.get(u)!; for (const v of (adj.get(u) ?? [])) if (!_dist.has(v)) { _dist.set(v, du + 1); q.push(v); } } }
+  const _dist = bfsDistance(g.adjacency(), [g.anchor]);
   const _seamRegion = (ids: string[]): { shell: number; direction: string } => {
     const shells = ids.map((i) => _dist.get(i)).filter((d): d is number => d !== undefined);
     const dirs = ids.map((i) => (g.nodes.get(i) as any)?.direction).filter(Boolean);
