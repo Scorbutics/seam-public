@@ -21,6 +21,8 @@ import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { routeSegs, routeMatchSpecificity, routeSuffixMatch } from "./adapters/http_route.js";
+export { routeMatchSpecificity, routeSuffixMatch };
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
@@ -68,39 +70,10 @@ const _HTTP_ROUTE = "http-route";
 // A GENERIC 1-literal route match (a bare `/summarize/*` shared by many services) is a coupling ONLY if it
 // grounds to at most this many files — a SOLE mount. Above it, the shared segment is a coincidental common word.
 const _GENERIC_ROUTE_FANOUT_CAP = 1;
-// Route patterns rarely equal a caller URL byte-for-byte: a handler `@WebServlet("/document/*")` is
-// mounted under a context path the caller spells in full (`/manage/rest/member/document`). So for
-// http-route keys ONLY, couple a handler to a caller when one path's segments are a whole-SEGMENT SUFFIX
-// of the other's (after dropping a trailing `/*` wildcard) — whole-segment so `/doc` ≁ `/mydoc`.
-const routeSegs = (value: string): string[] => value.split("/").filter(Boolean);   // keep "*" (a path param) as a wildcard segment
-const _segEq = (a: string, b: string): boolean => a === b || a === "*" || b === "*";   // a `{param}`/`*` matches any literal segment
-// Two route paths COUPLE when the shorter aligns CONTIGUOUSLY inside the longer from a shared anchor segment —
-// a param `*` matching any literal — accepting EITHER the shorter as a complete sub-path of the longer (a full-
-// URL caller ⇄ a relative handler) OR a caller TRUNCATED by string concatenation, where the overlap ends at the
-// longer's boundary (`$http.get("/x/summarize/0/" + id)` loses its tail → `/x/summarize/0`, grounding to
-// `@Path("summarize/{page}/{id}")` → `…/summarize/*/*`). A truncated match needs ≥2 contiguous segments so a
-// single shared word can't ground unrelated routes. Every crossing it grounds is RESOLVED_PARTIAL (relevance prunes).
-// The SPECIFICITY of the best alignment between two routes: the count of LITERAL segments they agree on (a
-// `*` param is not distinctive), or -1 when they don't align at all. Alignment = the shorter occurs contiguously
-// in the longer (param-aware), either fully consumed or running to the longer's boundary (a concat-truncated
-// caller). Used both as the boolean match (≥1 shared literal) AND, in otherSide, to keep only the MOST specific
-// match — so a generic `/summarize/*` can't ground a caller that also has a fuller `/…/booking/summarize/*/*`.
-export function routeMatchSpecificity(a: string, b: string): number {
-  const A = routeSegs(a), B = routeSegs(b);
-  if (!A.length || !B.length) return -1;
-  const [long, short] = A.length >= B.length ? [A, B] : [B, A];
-  let best = -1;
-  for (let off = 0; off < long.length; off++) {
-    let i = 0, lit = 0;
-    while (i < short.length && off + i < long.length && _segEq(long[off + i], short[i])) {
-      if (short[i] !== "*" && long[off + i] !== "*") lit++;
-      i++;
-    }
-    if ((i === short.length || off + i === long.length) && i >= 1) best = Math.max(best, lit);
-  }
-  return best;
-}
-export function routeSuffixMatch(a: string, b: string): boolean { return routeMatchSpecificity(a, b) >= 1; }
+// Route-specificity matching (routeSegs/routeMatchSpecificity/routeSuffixMatch) moved to
+// adapters/http_route.ts, imported above — route patterns rarely equal a caller URL byte-for-byte (a
+// handler `@WebServlet("/document/*")` is mounted under a context path the caller spells in full), so
+// http-route keys ONLY couple by shared-SUFFIX specificity; see that module for the full rationale.
 // The OTHER side of an access — its COMPLEMENTS. If the anchor PRODUCES the key we return its consumers;
 // if it CONSUMES, we return its producers:
 //   produces `payments`  → [report.rb:12, dash.tsx:88]   (the readers)

@@ -41,6 +41,30 @@ export function normPath(p: string): string {
   return p;
 }
 
+// ROUTE-SPECIFICITY matching — a fuzzy fallback for `otherSide` (coupling/index.ts): two route keys can share
+// only a SUFFIX (a full-URL caller `/api/booking/summarize/*/*` vs a method-level `/summarize/*/*` handler), so
+// an exact-key lookup misses the coupling. Scored by shared LITERAL segment count so a generic (1-literal)
+// fragment can't outrank — or wrongly ground — a more specific (≥2-literal) match. `routeSuffixMatch` is the
+// boolean form (≥1 shared literal).
+export const routeSegs = (value: string): string[] => value.split("/").filter(Boolean);   // keep "*" (a path param) as a wildcard segment
+const _segEq = (a: string, b: string): boolean => a === b || a === "*" || b === "*";   // a `{param}`/`*` matches any literal segment
+export function routeMatchSpecificity(a: string, b: string): number {
+  const A = routeSegs(a), B = routeSegs(b);
+  if (!A.length || !B.length) return -1;
+  const [long, short] = A.length >= B.length ? [A, B] : [B, A];
+  let best = -1;
+  for (let off = 0; off < long.length; off++) {
+    let i = 0, lit = 0;
+    while (i < short.length && off + i < long.length && _segEq(long[off + i], short[i])) {
+      if (short[i] !== "*" && long[off + i] !== "*") lit++;
+      i++;
+    }
+    if ((i === short.length || off + i === long.length) && i >= 1) best = Math.max(best, lit);
+  }
+  return best;
+}
+export function routeSuffixMatch(a: string, b: string): boolean { return routeMatchSpecificity(a, b) >= 1; }
+
 // The URL a route-handler FILE serves, from its location (file-based routing). null if not a handler file.
 function handler_path(file: string): string | null {
   const edge = EDGE_FN.exec(file);
