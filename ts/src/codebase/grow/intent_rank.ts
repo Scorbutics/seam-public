@@ -7,7 +7,14 @@
 // repo. ADDITIVE: it only ANNOTATES seams with a `relevance` score (and a rank-banded `tier`) — it never
 // drops or reorders them. The consumer (the agent, or the concern/agent render) ranks; the engine doesn't.
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
-import { embedScoreDefs } from "../scan/def_embed.js";
+import { embedScoreDefs, embedScoreStrings } from "../scan/def_embed.js";
+
+// Data-store boundary kinds — a sink of these is a table/queue the flow persists into. Their LABEL (the table
+// name) is the semantic signal, but a `member_access` table (`bookingRepository`) has no matching DEF, so a
+// def-only embed leaves it unscored (rel=-1) and it loses the spine crown to any scored off-subject write.
+const _STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
+const _isStoreSeam = (s: any): boolean => (s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""));
+const _storeLabel = (s: any): string | undefined => s.primary?.symbol ?? s.label;
 
 // Deterministic intent-relevance is an OPTIONAL enrichment (embeddings). It must NEVER block the core seam
 // emit: embedScoreDefs can fail/abort on a large repo (WASM heap), and a degraded-but-present result beats none.
@@ -95,20 +102,35 @@ export async function annotateIntentRelevance(repo: string, intent: string | und
   const scoreOf = (file?: string, sym?: string): number | undefined =>
     sym ? (byKey.get(`${file}::${sym}`) ?? byName.get(sym)) : undefined;
 
-  for (const cl of clusters) {
-    const seams = cl.seams ?? [];
-    for (const s of seams) {
-      const ss = scoreOf(s.primary?.file, s.primary?.symbol);
-      if (ss !== undefined) s.relevance = round3(ss);
-      // per-MEMBER relevance (skip synthetic caller/summary hunks — they have no own def to score)
-      for (const h of (s.hunks ?? [])) {
-        if (h.caller || h.summary) continue;
-        const hs = scoreOf(h.file, h.label);
-        if (hs !== undefined) h.relevance = round3(hs);
-      }
-      markSpineMembers(s.hunks ?? []);
+  for (const cl of clusters) for (const s of (cl.seams ?? [])) {
+    const ss = scoreOf(s.primary?.file, s.primary?.symbol);
+    if (ss !== undefined) s.relevance = round3(ss);
+    // per-MEMBER relevance (skip synthetic caller/summary hunks — they have no own def to score)
+    for (const h of (s.hunks ?? [])) {
+      if (h.caller || h.summary) continue;
+      const hs = scoreOf(h.file, h.label);
+      if (hs !== undefined) h.relevance = round3(hs);
     }
-    bandTiers(seams);
   }
+  // LABEL FALLBACK — a boundary/table sink a def-embed couldn't score (a member_access table has no def) is scored
+  // by its LABEL string vs the intent, on the SAME cosine scale. This is what lets a "how is a booking cancelled"
+  // intent crown `bookingRepository` over an equally-direct `WorkflowRepository` write: the table NAME carries the
+  // subject. Deterministic (embeddings, cached), additive, and degrades to a no-op if embeddings abort.
+  const need = new Set<string>();
+  for (const cl of clusters) for (const s of (cl.seams ?? [])) {
+    if (typeof s.relevance === "number" || !_isStoreSeam(s)) continue;
+    const lbl = _storeLabel(s); if (lbl) need.add(lbl);
+  }
+  if (need.size) {
+    try {
+      const ls = await embedScoreStrings(intent, [...need]);
+      for (const cl of clusters) for (const s of (cl.seams ?? [])) {
+        if (typeof s.relevance === "number" || !_isStoreSeam(s)) continue;
+        const sc = ls.get(_storeLabel(s) ?? "");
+        if (sc !== undefined) s.relevance = round3(sc);
+      }
+    } catch { /* embeddings aborted — leave the store sinks unscored, as before */ }
+  }
+  for (const cl of clusters) { for (const s of (cl.seams ?? [])) markSpineMembers(s.hunks ?? []); bandTiers(cl.seams ?? []); }
   return true;
 }
