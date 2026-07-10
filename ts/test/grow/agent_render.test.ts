@@ -285,6 +285,29 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).not.toContain("## Spine (inferred");                   // …and the spine is GROUNDED, not inferred
   });
 
+  // WRITE-OVER-READ HOP — a hop INTO a data-store must show the WRITE (the outcome), not a co-located read on the
+  // same table. private-app `weekly_tasks` is reached by both a `.upsert` (db-write) and an idempotency `.select` (db-read);
+  // both tie on _WAVE_RANK, so the read arbitrarily won and "…and stored" showed a `db-read` at the select line.
+  test("a spine hop into a store shows the db-write, not a co-located db-read on the same table", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how are weekly tasks stored", seams: [
+        { id: "aseam", label: "saveTasks", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "repo.ts", line: 1, symbol: "saveTasks" }, hunks: [{ id: "ah", file: "repo.ts", start: 1, role: "core", label: "saveTasks", kind: "function" }] },
+        { id: "tblS", label: "weekly_tasks", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "repo.ts", line: 411, symbol: "weekly_tasks" }, hunks: [{ id: "tbl", file: "repo.ts", start: 411, role: "environment", label: "weekly_tasks", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "ah", to: "tbl", kind: "db-read", line: 417 },    // an idempotency .select — listed FIRST (would win the tie)
+        { from: "ah", to: "tbl", kind: "db-write", line: 411 },   // the actual .upsert — the outcome
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are weekly tasks stored" });
+    const hop = out.slice(out.indexOf("## Spine")).split("\n").find((l) => l.includes("──") && l.includes("weekly_tasks")) ?? "";
+    expect(hop).toContain("──db-write──▶ weekly_tasks");   // the WRITE is shown…
+    expect(hop).not.toContain("db-read");                  // …not the co-located read
+    expect(hop).toContain(":411");                         // …at the write line, not the select line (:417)
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {

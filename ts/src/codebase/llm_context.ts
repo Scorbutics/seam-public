@@ -1036,15 +1036,22 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // dependency_graph). So it reads `caller/File.java:41 ──call──▶ callee`, whichever spine ordering. Picks the
   // most concrete edge (a real call/write over a bare reference), falling back to the seam's own start line when a
   // derived crossing edge carries no line. Returns null when the two seams share no resolved edge.
+  const _STORE_KINDS_HOP = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
   const spineHop = (a: Seam, b: Seam): string | null => {
     const ai = seamIds(a), bi = seamIds(b);
+    // A hop INTO a data-store: the WRITE is the outcome, so prefer a produce edge (and its write line) over a
+    // co-located read on the same table. "…and stored" must show the actual persist — private-app weekly_tasks reaches the
+    // crown via BOTH a `.upsert` (db-write :411) and an idempotency `.select` (db-read :417); the tie on _WAVE_RANK
+    // let the read win. Routes are relays, not stores, so cross-stack route hops are untouched.
+    const bStore = _STORE_KINDS_HOP.has((primaryHunk(b) as any)?.kind ?? "");
+    const _score = (k: string) => (bStore && _PRODUCE_KINDS.has(k)) ? -1 : (bStore && _READ_KINDS.has(k)) ? 9 : _WAVE_RANK(k);
     let best: any = null;
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
       const f = String(e.from), t = String(e.to);
       const fwd = ai.has(f) && bi.has(t), rev = bi.has(f) && ai.has(t);
       if (!fwd && !rev) continue;
-      if (!best || _WAVE_RANK(e.kind) < _WAVE_RANK(best.kind) || (e.line && !best.line)) best = e;
+      if (!best || _score(e.kind) < _score(best.kind) || (_score(e.kind) === _score(best.kind) && e.line && !best.line)) best = e;
     }
     if (!best) return null;
     const f = String(best.from);
