@@ -651,9 +651,18 @@ export async function resolveCoupling(
 //   2. carrier-channel accesses (Ruby homemade data-file wrappers)   → source "carrier"  ┘ FLOOR (isFloor)
 //   3. LLM-proposed keys — kept only where the floor didn't already cover them → source "llm"
 // e.g. a `Payment.create(...)` write in the span → AnchorKey{ kind:"db-table", value:"payments", produces:true, source:"scan" }.
+// Receiver tokens the flywheel judged HTTP clients — a member_access db-table on one is a false positive (a REST
+// SDK call, `adminClient.users.create`, not a `users` write). Derived from the classifier's OWN verdict (the
+// `channel`/http-route matchers it persisted), so no separate state: the same LLM judgment that made adminClient's
+// route matcher suppresses its phantom table.
+function _httpRecvTokens(matchers: KeyMatcher[]): Set<string> {
+  const out = new Set<string>();
+  for (const m of matchers) if ((m as any).via === "channel" && (m as any).kind === "http-route" && (m as any).token) out.add((m as any).token);
+  return out;
+}
 function collectAnchorKeys(
   anchorFile: string, anchorText: string, spanLo: number, spanHi: number,
-  carrierAccs: KeyHit[], proposed: KeyHit[],
+  carrierAccs: KeyHit[], proposed: KeyHit[], httpRecv: Set<string> = new Set(),
 ): Map<string, AnchorKey> {
   const anchorKeys = new Map<string, AnchorKey>();
   // key by (kind,value,produces,LABEL): two operations on the SAME route with distinct op names (`createBooking`
@@ -666,6 +675,7 @@ function collectAnchorKeys(
   const _isDel = (k: { op?: string }) => k.op === "delete";
   const addFloor = (hit: KeyHit, source: KeySource) => {
     if (hit.line < spanLo || hit.line > spanHi) return;
+    if (hit.kind === "db-table" && hit.recv && httpRecv.has(hit.recv)) return;   // an HTTP-client receiver → member_access phantom, drop
     const id = accessId(hit);
     const cur = anchorKeys.get(id);
     const better = !cur || (_isDel(cur) && !_isDel(hit)) || (_isDel(cur) === _isDel(hit) && hit.line < cur.line);
@@ -914,7 +924,7 @@ async function runPipeline(
 ): Promise<void> {
   p.stats.nodes++;
   // STEP 1 (inline scan) + STEP 2 — the keys this span touches, tagged by source
-  const keys = collectAnchorKeys(node.file, node.text, node.lo, node.hi, carrierAccs, proposed);
+  const keys = collectAnchorKeys(node.file, node.text, node.lo, node.hi, carrierAccs, proposed, _httpRecvTokens(p.matchers));
   // STEP 1b — the node's const-resolved param keys, read back from the repo param index (the per-file scan
   // above can't resolve `getParameter(TOKEN_KEY)` → "token"). Floor source, so an ungrounded one is dropped.
   for (const hit of paramKeysForSpan(p.paramIndex, node.file, node.lo, node.hi)) {

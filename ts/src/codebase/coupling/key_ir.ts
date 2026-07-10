@@ -269,8 +269,16 @@ function runRepository(m: Extract<KeyMatcher, { via: "repository" }>, text: stri
   const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*(?:${verbs})\\s*[(<]`, "g");
   const out: KeyHit[] = [];
   let mt: RegExpExecArray | null;
-  while ((mt = re.exec(masked)) !== null)
+  while ((mt = re.exec(masked)) !== null) {
+    // ROOT / this-field ONLY: a repository RECEIVER is a top-level bean/field (`userRepo.find`, `this.userRepo.find`),
+    // NOT a nested resource on ANOTHER object (`adminClient.users.create` — an HTTP SDK, not a `users` table). That
+    // 3-part `obj.token.verb` shape is member_access's domain (receiver-agnostic). Reject a preceding `<ident>.`
+    // unless it's this/self/super — else the learned `users`/`clients` repo matcher fabricates a table on every
+    // frontend admin-client call.
+    const pre = /([A-Za-z_$][\w$]*)\s*\.\s*$/.exec(masked.slice(Math.max(0, mt.index - 48), mt.index));
+    if (pre && pre[1] !== "this" && pre[1] !== "self" && pre[1] !== "super") continue;
     if (plausibleKeyValue(m.token)) out.push({ kind: m.kind, value: m.token, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  }
   return out;
 }
 

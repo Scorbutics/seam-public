@@ -41,7 +41,9 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   _RE.lastIndex = 0;
   while ((m = _RE.exec(code)) !== null) {
     if (SELF.has(m[1])) continue;
-    out.push({ kind: "db-table", value: m[2], line: lineOf(code, m.index), produces: _WRITE.has(m[3]) });
+    // carry the RECEIVER (`adminClient`) so the coupling can drop this db-table when the flywheel has judged that
+    // receiver an HTTP client — `adminClient.users.create` is a REST call, not a `users` write (same shape as an ORM).
+    out.push({ kind: "db-table", value: m[2], line: lineOf(code, m.index), produces: _WRITE.has(m[3]), recv: m[1] });
   }
   return out;
 }
