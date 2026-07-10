@@ -829,9 +829,14 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // it CALLS (one hop only, so an orchestrator's deep subtree doesn't flood back in and re-introduce the noise
     // the anchor-node scoping removed). A pass-through to a sole writer resolves to that one table; a fan of
     // sibling writers stays multiple (relevance then orders them — no worse than before, the rest are also-reaches).
+    // A DI BINDING is a delegation too: a REST handler that binds an interface (`interface-impl`, incl. the DI
+    // provider-factory hop) persists THROUGH the bound impl — so the impl's write is the handler's effective write.
+    // Without this, a handler whose whole persistence is behind `session.groups()`→JpaRealmProvider→GroupEntity has
+    // no directSink and the spine stays inferred though the grounded write IS one hop past the binding.
+    const _DELEGATE = new Set([..._CALL, "interface-impl"]);
     if (!directIds.size) {
       const callees = new Set<string>();
-      for (const e of edges) if (_CALL.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
+      for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
       if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
     }
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));

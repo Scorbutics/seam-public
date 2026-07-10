@@ -308,6 +308,30 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(hop).toContain(":411");                         // …at the write line, not the select line (:417)
   });
 
+  // DI-BINDING DELEGATE — a REST handler that persists THROUGH a DI binding (an `interface-impl` edge to the bound
+  // impl, e.g. the session.groups()→JpaRealmProvider provider-hop) has no own write, so its effective write is the
+  // impl's. The directSink borrow must follow the binding, else the grounded persist (UserEntity/GroupEntity) is
+  // reached but never crowned and the spine stays "inferred → HTTP consumers".
+  test("a table written by a DI-bound impl is crowned as the handler's persist (interface-impl delegate borrow)", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",   // fwd reverses the BFS → only the borrow can reach the sink
+      clusters: [{ id: "g1", intent: "how is a group created and persisted", seams: [
+        { id: "aseam", label: "addGroup", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "api/GroupsResource.java", line: 1, symbol: "addGroup" }, hunks: [{ id: "ah", file: "api/GroupsResource.java", start: 1, role: "core", label: "addGroup", kind: "method" }] },
+        { id: "implS", label: "JpaRealmProvider", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/JpaRealmProvider.java", line: 1, symbol: "JpaRealmProvider" }, hunks: [{ id: "impl", file: "jpa/JpaRealmProvider.java", start: 1, role: "link", label: "JpaRealmProvider", kind: "class" }] },
+        { id: "tblS", label: "GroupEntity", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "jpa/GroupEntity.java", line: 1, symbol: "GroupEntity" }, hunks: [{ id: "tbl", file: "jpa/GroupEntity.java", start: 1, role: "environment", label: "GroupEntity", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "ah", to: "impl", kind: "interface-impl" },   // the DI binding (provider-factory / @Inject)
+        { from: "impl", to: "tbl", kind: "db-write" },        // the impl persists the entity
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a group created and persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("GroupEntity");                 // the DI-crossed persist is crowned…
+    expect(out).not.toContain("## Spine (inferred");        // …and the spine is GROUNDED, not inferred
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
