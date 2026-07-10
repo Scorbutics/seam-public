@@ -37,6 +37,17 @@ describe("JPA @Entity db-table adapter", () => {
     expect(r(h)).toContain("ClientEntity");  // JPQL from X
   });
 
+  test("JPQL `from X` grounds ONLY a PascalCase entity — lowercase words after `from` are not tables", () => {
+    // The keyword matches case-insensitively (`from`/`FROM`), but a JPA entity is always PascalCase. A
+    // case-insensitive entity match fabricated garbage lowercase "tables" (`from where`, `select … from query`)
+    // that then anchored the spine on a non-entity — regression guard for the `[A-Z]` + `i`-flag bug.
+    const h = JPA_ENTITY.scan("Dao.java", `em.createQuery("select r from RealmEntity r where r.enabled = true");\nem.createNamedQuery("SELECT c FROM ClientEntity c");`);
+    expect(r(h)).toContain("RealmEntity");    // lowercase keyword `from`, PascalCase entity
+    expect(r(h)).toContain("ClientEntity");   // uppercase keyword `FROM`, PascalCase entity
+    expect(r(h)).not.toContain("where");      // a lowercase word after `from`/`select` is NOT an entity
+    expect(r(h)).not.toContain("query");      // nor a lowercase local a JPQL fragment happens to name
+  });
+
   test("gated to .java, and comments don't match", () => {
     expect(JPA_ENTITY.scan("model.py", `@Entity\nclass UserEntity: pass`)).toEqual([]);
     const h = JPA_ENTITY.scan("X.java", `// em.persist(new SecretEntity());\nem.find(RealEntity.class, id);`);

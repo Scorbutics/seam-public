@@ -67,10 +67,13 @@ function scan(file: string, text0: string): KeyHit[] {
   // 4) Spring-Data / Hibernate save of a freshly-constructed entity.
   const save = /\.(?:save|saveAndFlush|saveOrUpdate|persistAndFlush)\s*\(\s*new\s+([A-Z]\w*)/g;
   while ((m = save.exec(text))) add(m[1], lineOf(text, m.index), true);
-  // 5) JPQL `from X` inside a query/named-query string.
-  const jpql = /\bfrom\s+([A-Z]\w*)\b/gi;
+  // 5) JPQL `from X` inside a query/named-query string. The keyword is case-INSENSITIVE (`from`/`FROM`), but the
+  //    ENTITY must be PascalCase — a JPA entity always starts uppercase. Guard on the first char: the `i` flag would
+  //    otherwise let `([A-Z]\w*)` match a lowercase word (`from where`, `from stream`, `select … from query`),
+  //    fabricating garbage lowercase "tables" that then anchor the spine on a non-entity.
+  const jpql = /\bfrom\s+([A-Za-z]\w*)\b/gi;
   const strings = (text0.match(/"(?:[^"\\]|\\.)*"/g) ?? []).join("\n");   // scan STRING literals (JPQL lives in strings)
-  while ((m = jpql.exec(strings))) add(m[1], 0, false);
+  while ((m = jpql.exec(strings))) { if (/^[A-Z]/.test(m[1])) add(m[1], 0, false); }
   return out;
 }
 
