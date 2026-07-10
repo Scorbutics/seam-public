@@ -15,7 +15,7 @@ import {
 } from "./graph.js";
 import { expanduser, _read, _name_of, _named_units, _usage_lines, _call_lines } from "./ast_units.js";
 import { _type_methods, _class_method_usage, _called_types } from "./ast_class.js";
-import { impls_of } from "./interface_index.js";
+import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "./attach.js";
 import { timingOn } from "../../core/progress.js";
 
@@ -224,19 +224,66 @@ function _rankImpls(repo: string, cands: { cls: string; file: string }[]): { cls
 // concrete impls — _rankImpls) so the footprint crosses into the real impl, and FLAG the impls NOT taken as a
 // blindspot carrying their `{symbol,file}` so the dev can `--grow-from` them. SEAM_IMPL_CAP bounds the fan (0 =
 // the old park-all behaviour). Deterministic ⇒ cacheable.
-async function _interfaceImplPass(s: DepScan): Promise<void> {
+function _implCap(): number {
   const capRaw = parseInt(process.env.SEAM_IMPL_CAP ?? "3", 10);
-  const cap = Number.isFinite(capRaw) ? Math.max(0, capRaw) : 3;
-  for (const dn of [...s.nodes]) {
-    const cands = await impls_of(s.repo, dn.symbol);
-    if (!cands.length) continue;
-    if (cands.length === 1) { await _addDep(s, cands[0].cls, cands[0].file, null, "interface-impl", "RESOLVED_PARTIAL"); continue; }
-    const ranked = _rankImpls(s.repo, cands);
-    const take = ranked.slice(0, cap), rest = ranked.slice(cap);
-    for (const c of take) await _addDep(s, c.cls, c.file, null, "interface-impl", "RESOLVED_PARTIAL");
-    if (rest.length) s.blindspots.push({ node: dn.symbol, mechanism: "interface-multiple-impls",
-      evidence: `${dn.symbol} has ${cands.length} implementations${take.length ? ` (followed ${take.length}, structurally-ranked)` : ""} — the runtime DI binding can't be picked statically; grow the rest explicitly`,
-      candidates: rest.map((c) => ({ symbol: c.cls, file: c.file })) });
+  return Number.isFinite(capRaw) ? Math.max(0, capRaw) : 3;
+}
+// Follow ONE interface to its impl(s): sole impl → the runtime binding (RESOLVED_PARTIAL interface-impl edge);
+// multiple → a DETERMINISTIC capped/ranked subset + a blindspot listing the rest. Shared by the @Inject field pass
+// (_interfaceImplPass) and the DI provider-factory pass (_providerFactoryPass). Returns true if any impl existed.
+async function _followInterface(s: DepScan, iface: string, cap: number, line: number | null = null): Promise<boolean> {
+  const cands = await impls_of(s.repo, iface);
+  if (!cands.length) return false;
+  if (cands.length === 1) { await _addDep(s, cands[0].cls, cands[0].file, line, "interface-impl", "RESOLVED_PARTIAL"); return true; }
+  const ranked = _rankImpls(s.repo, cands);
+  const take = ranked.slice(0, cap), rest = ranked.slice(cap);
+  for (const c of take) await _addDep(s, c.cls, c.file, line, "interface-impl", "RESOLVED_PARTIAL");
+  if (rest.length) s.blindspots.push({ node: iface, mechanism: "interface-multiple-impls",
+    evidence: `${iface} has ${cands.length} implementations${take.length ? ` (followed ${take.length}, structurally-ranked)` : ""} — the runtime DI binding can't be picked statically; grow the rest explicitly`,
+    candidates: rest.map((c) => ({ symbol: c.cls, file: c.file })) });
+  return true;
+}
+async function _interfaceImplPass(s: DepScan): Promise<void> {
+  const cap = _implCap();
+  for (const dn of [...s.nodes]) await _followInterface(s, dn.symbol, cap);
+}
+
+// DI PROVIDER-FACTORY pass (opt-in SEAM_PROVIDER_HOP=1) — follow a chained `session.groups().createGroup()` /
+// `session.getProvider(X.class).create()` PAST the runtime factory to the interface's impls, so a DI-hidden
+// persistence (Keycloak `session.groups()`→JpaRealmProvider→em.persist(GroupEntity)) is reached instead of leaving
+// the spine stranded at the REST entry. GROUNDED, never a name guess: (a) the accessor form seeds ONLY on a method
+// whose DECLARED return type is an in-repo interface WITH impls (provider_accessors); (b) the service-locator form
+// seeds ONLY when the `X.class` argument IS such an interface. Reuses _followInterface, so the impl fan is the same
+// capped/ranked/blindspotted set the @Inject pass produces. Runs per build (the wave expands each hop's node, so a
+// multi-hop chain — RealmModel→RealmAdapter→session.groups()→GroupProvider — resolves as the walk descends).
+async function _providerFactoryPass(s: DepScan): Promise<void> {
+  if (process.env.SEAM_PROVIDER_HOP !== "1" || !s.actx) return;
+  const anchor = s.aunits.find((u) => u[0] === s.symbol);
+  if (!anchor) return;
+  const [, , alo, ahi] = anchor;
+  const cap = _implCap();
+  const seeded = new Set<string>();
+  const follow = async (iface: string) => { if (!seeded.has(iface)) { seeded.add(iface); await _followInterface(s, iface, cap); } };
+  // Method names INVOKED in the anchor span (qualified `x.m()` or bare `m()`), collected once.
+  const called = new Set<string>();
+  for (const c of s.actx.collect(s.actx.root, (k: string) => /invocation|call_expression/.test(k))) {
+    const [cl] = s.actx.span(c);
+    if (cl < alo || cl > ahi) continue;
+    const nm = (c as any).childForFieldName?.("name");
+    if (nm) called.add(s.actx.text(nm));
+    else { const id = s.actx.children(c).find((x: any) => x.type.includes("identifier")); if (id) called.add(s.actx.text(id)); }
+  }
+  // (a) ACCESSOR form — the anchor body calls a grounded provider accessor (`session.groups()`).
+  const accessors = await provider_accessors(s.repo);
+  for (const [m, ifaces] of accessors) if (called.has(m)) for (const i of ifaces) await follow(i);
+  // (b) SERVICE-LOCATOR form — getProvider(X.class)/getInstance(X.class)/getBean(X.class) where X is a provider interface.
+  const rd = _read(s.repo, s.anchorFile);
+  if (rd) {
+    const body = rd[0].split("\n").slice(Math.max(0, alo - 1), ahi).join("\n");
+    const RE = /\b(?:getProvider|getInstance|getBean)\s*\(\s*([A-Za-z_$][\w$]*)\s*\.class\b/g;
+    const xs = new Set<string>(); let mm: RegExpExecArray | null;
+    while ((mm = RE.exec(body))) xs.add(mm[1]);
+    for (const x of xs) if (!seeded.has(x) && await is_provider_interface(s.repo, x)) await follow(x);
   }
 }
 
@@ -323,6 +370,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); }
     else { await _samePackagePass(s); _intraFileCalleePass(s); _de("samePackage+intraCallee", _t); }
     _t = _dt();
+    await _providerFactoryPass(s); _de("providerFactory", _t); _t = _dt();   // DI factory hop (opt-in SEAM_PROVIDER_HOP=1), before the @Inject pass
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
     _externalLibsBlindspot(s);
     await _stringDispatchPass(s, arange[0], arange[1]); _de("stringDispatch", _t); _t = _dt();
