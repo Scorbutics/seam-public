@@ -265,7 +265,7 @@ async function _interfaceImplPass(s: DepScan): Promise<void> {
 // capped/ranked/blindspotted set the @Inject pass produces. Runs per build (the wave expands each hop's node, so a
 // multi-hop chain — RealmModel→RealmAdapter→session.groups()→GroupProvider — resolves as the walk descends).
 async function _providerFactoryPass(s: DepScan): Promise<void> {
-  if (process.env.SEAM_PROVIDER_HOP !== "1" || !s.actx) return;
+  if (process.env.SEAM_PROVIDER_HOP !== "1" || !s.actx) return;   // OPT-IN (crown-relevance among mega-class entities not yet default-ready)
   const anchor = s.aunits.find((u) => u[0] === s.symbol);
   if (!anchor) return;
   const [, , alo, ahi] = anchor;
