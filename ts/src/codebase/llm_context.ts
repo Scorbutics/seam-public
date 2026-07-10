@@ -833,7 +833,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // provider-factory hop) persists THROUGH the bound impl — so the impl's write is the handler's effective write.
     // Without this, a handler whose whole persistence is behind `session.groups()`→JpaRealmProvider→GroupEntity has
     // no directSink and the spine stays inferred though the grounded write IS one hop past the binding.
-    const _DELEGATE = new Set([..._CALL, "interface-impl"]);
+    const _DELEGATE = new Set([..._CALL, "interface-impl", "provider-impl"]);
     if (!directIds.size) {
       const callees = new Set<string>();
       for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
@@ -847,10 +847,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // `team`) has ZERO candidates and the spine falls to the off-subject tier band. directSink also bypasses the
     // store/down gate (a write IS an outcome) and the dist-distance sort term (default it to 1, an anchor-adjacent hop).
     const _dist = (id: string) => (dist.has(id) ? dist.get(id)! : 1);
+    // PROVIDER-WRITE — a store written by a node bound through the DI PROVIDER-FACTORY hop (a `provider-impl` edge:
+    // JpaRealmProvider, the GroupProvider impl `session.groups()` returns) is the CREATE path's persist. An entity
+    // written by a co-bound ENTITY ADAPTER (GroupAdapter, a GroupModel `@Inject` binding) is a post-create mutation
+    // (role-mappings/attributes). When both persist and tie as directSinks, the provider write is the outcome — the
+    // structural signal that the embedding misses (it rates the compound `GroupRoleMappingEntity` over `GroupEntity`).
+    const _providerTargets = new Set<string>();
+    for (const e of edges) if (e.kind === "provider-impl") _providerTargets.add(String(e.to));
+    const providerWrite = (s: Seam): boolean => (s.hunks ?? []).some((h: any) =>
+      edges.some((e) => _PRODUCE.has(e.kind) && String(e.to) === String(h.id) && _providerTargets.has(String(e.from))));
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
         && (dist.has(s.id) || directSink(s))
         && (isStoreSink(s) || directSink(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {

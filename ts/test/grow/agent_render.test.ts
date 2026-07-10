@@ -332,6 +332,35 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).not.toContain("## Spine (inferred");        // …and the spine is GROUNDED, not inferred
   });
 
+  // PROVIDER-WRITE crown — when a create flow persists through BOTH the DI PROVIDER (a `provider-impl` binding:
+  // JpaRealmProvider, the impl of the interface `session.groups()` returns) AND a co-bound entity ADAPTER (an
+  // `interface-impl` @Inject binding: GroupAdapter → role-mapping writes), the crown must land on the PROVIDER's
+  // persist (the create) — even when the adapter's compound entity scores HIGHER on intent relevance (the embedding
+  // rates `GroupRoleMappingEntity` over `GroupEntity`). The `provider-impl` edge is the structural tiebreak.
+  test("the DI provider's persist is crowned over a co-bound entity adapter's higher-relevance write", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",
+      clusters: [{ id: "g1", intent: "how is a group created and persisted", seams: [
+        { id: "aseam", label: "addTopLevelGroup", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "api/GroupsResource.java", line: 1, symbol: "addTopLevelGroup" }, hunks: [{ id: "ah", file: "api/GroupsResource.java", start: 1, role: "core", label: "addTopLevelGroup", kind: "method" }] },
+        { id: "provS", label: "JpaRealmProvider", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/JpaRealmProvider.java", line: 1, symbol: "JpaRealmProvider" }, hunks: [{ id: "prov", file: "jpa/JpaRealmProvider.java", start: 1, role: "link", label: "JpaRealmProvider", kind: "class" }] },
+        { id: "adapS", label: "GroupAdapter", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/GroupAdapter.java", line: 1, symbol: "GroupAdapter" }, hunks: [{ id: "adap", file: "jpa/GroupAdapter.java", start: 1, role: "link", label: "GroupAdapter", kind: "class" }] },
+        { id: "primS", label: "GroupEntity", tier: "supporting", relevance: 0.10, region: { shell: 2, direction: "down" }, primary: { file: "jpa/GroupEntity.java", line: 1, symbol: "GroupEntity" }, hunks: [{ id: "prim", file: "jpa/GroupEntity.java", start: 1, role: "environment", label: "GroupEntity", kind: "db-table" }] },
+        { id: "secS", label: "GroupRoleMappingEntity", tier: "supporting", relevance: 0.90, region: { shell: 2, direction: "down" }, primary: { file: "jpa/GroupRoleMappingEntity.java", line: 1, symbol: "GroupRoleMappingEntity" }, hunks: [{ id: "sec", file: "jpa/GroupRoleMappingEntity.java", start: 1, role: "environment", label: "GroupRoleMappingEntity", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "ah", to: "prov", kind: "provider-impl" },   // the DI provider-factory binding (the create path)
+        { from: "prov", to: "prim", kind: "db-write" },       // …persists GroupEntity
+        { from: "ah", to: "adap", kind: "interface-impl" },   // a co-bound entity ADAPTER (@Inject GroupModel)
+        { from: "adap", to: "sec", kind: "db-write" },        // …persists GroupRoleMappingEntity (HIGHER relevance)
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a group created and persisted" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("GroupEntity");                  // the provider's persist is crowned…
+    expect(spine).not.toContain("GroupRoleMappingEntity");   // …not the adapter's higher-relevance write
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {

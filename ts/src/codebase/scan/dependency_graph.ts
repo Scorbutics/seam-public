@@ -231,16 +231,17 @@ function _implCap(): number {
 // Follow ONE interface to its impl(s): sole impl → the runtime binding (RESOLVED_PARTIAL interface-impl edge);
 // multiple → a DETERMINISTIC capped/ranked subset + a blindspot listing the rest. Shared by the @Inject field pass
 // (_interfaceImplPass) and the DI provider-factory pass (_providerFactoryPass). Returns true if any impl existed.
-async function _followInterface(s: DepScan, iface: string, cap: number, method: string | null = null, line: number | null = null): Promise<boolean> {
+async function _followInterface(s: DepScan, iface: string, cap: number, method: string | null = null, line: number | null = null, edgeKind = "interface-impl"): Promise<boolean> {
   const cands = await impls_of(s.repo, iface);
   if (!cands.length) return false;
   // Bind ONE impl. With a chained method (`groups().createGroup()`), add the impl's SPECIFIC method
   // (JpaRealmProvider.createGroup) so the crown lands on THAT method's persist (GroupEntity), not a sibling's in a
   // multi-interface mega-class (RoleEntity). Fall back to the class when the method isn't defined in this impl
-  // (inherited/abstract) or none was chained (an @Inject field).
+  // (inherited/abstract) or none was chained (an @Inject field). `edgeKind` tags a provider-factory binding distinctly
+  // (provider-impl) so the crown can prefer the PROVIDER's persist over a co-bound entity ADAPTER's secondary writes.
   const bind = async (c: { cls: string; file: string }) => {
-    if (method) { const n = s.nodes.length; await _addDep(s, method, c.file, line, "interface-impl", "RESOLVED_PARTIAL"); if (s.nodes.length > n) return; }
-    await _addDep(s, c.cls, c.file, line, "interface-impl", "RESOLVED_PARTIAL");
+    if (method) { const n = s.nodes.length; await _addDep(s, method, c.file, line, edgeKind, "RESOLVED_PARTIAL"); if (s.nodes.length > n) return; }
+    await _addDep(s, c.cls, c.file, line, edgeKind, "RESOLVED_PARTIAL");
   };
   if (cands.length === 1) { await bind(cands[0]); return true; }
   const ranked = _rankImpls(s.repo, cands);
@@ -302,7 +303,7 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   const seeded = new Set<string>();
   const seed = async (iface: string, method: string | null) => {
     const key = `${iface}#${method ?? ""}`; if (seeded.has(key)) return; seeded.add(key);
-    await _followInterface(s, iface, cap, method);
+    await _followInterface(s, iface, cap, method, null, "provider-impl");   // tag DI provider-factory bindings distinctly
   };
   // METHOD-PRECISE first (a chained call), then the CLASS-level fallback for a bare accessor/locator with no chain.
   for (const [i, ms] of chained) for (const m of ms) await seed(i, m);
