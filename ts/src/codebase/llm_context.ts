@@ -835,10 +835,23 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
     }
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
-    const cands = seams.filter((s) => isBoundarySeam(s) && dist.has(s.id) && s.id !== anchorSeam
-        && (isStoreSink(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (rel(b) - rel(a)) || (dist.get(b.id)! - dist.get(a.id)!) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
-    const pathTo = (toId: string): string[] => { const p: string[] = []; for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { p.unshift(cur); if (cur === anchorSeam) break; } return p; };
+    // A grounded ANCHOR WRITE (directSink) is a candidate EVEN when the BFS didn't reach it: in `fwd` (consumers-lead)
+    // footprints the anchor's own `db-write` edge (n1→table) is stored/traversed as table→n1, so the table it persists
+    // is unreachable DOWNSTREAM and `dist` misses it — yet the anchor demonstrably writes it (a direction-agnostic
+    // grounded fact). Without this, an anchor that writes its subject IN ITS OWN FILE (cal.com createTeamsHandler →
+    // `team`) has ZERO candidates and the spine falls to the off-subject tier band. directSink also bypasses the
+    // store/down gate (a write IS an outcome) and the dist-distance sort term (default it to 1, an anchor-adjacent hop).
+    const _dist = (id: string) => (dist.has(id) ? dist.get(id)! : 1);
+    const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
+        && (dist.has(s.id) || directSink(s))
+        && (isStoreSink(s) || directSink(s) || ((s as any).region?.direction ?? "down") === "down"))
+      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+    // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
+    // `prev` chain → render it as the direct 1-hop `anchor → sink`.
+    const pathTo = (toId: string): string[] => {
+      if (toId !== anchorSeam && !prev.has(toId)) return [anchorSeam, toId];
+      const p: string[] = []; for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { p.unshift(cur); if (cur === anchorSeam) break; } return p;
+    };
     if (!cands.length) {
       // FRONTIER-⟂ TERMINAL — no grounded sink, but the flow provably continues DOWNSTREAM into an OPAQUE node the
       // grow COULD NOT follow (a runtime-DI multi-impl, an unresolved import, a string dispatch). Terminate the

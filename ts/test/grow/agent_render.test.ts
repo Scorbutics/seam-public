@@ -263,6 +263,28 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("payments");   // …the blob sibling's boundary is NOT, despite higher relevance
   });
 
+  // DIRECT-WRITE CANDIDATE — a table the ANCHOR writes is the outcome even when the BFS can't reach it. In a
+  // `forward` (consumers-lead) footprint the anchor's own db-write edge (anchor→table) is traversed as table→anchor,
+  // so the table is unreachable DOWNSTREAM and the distance BFS misses it — yet the anchor demonstrably writes it. An
+  // anchor that persists its subject IN ITS OWN FILE (cal.com createTeamsHandler → `team`) must still get a GROUNDED
+  // spine crowning that write, not fall to the off-subject tier band.
+  test("a grounded anchor write is crowned even when the fwd-BFS reversed its edge (no dist)", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",
+      clusters: [{ id: "g1", intent: "how is a team created", seams: [
+        { id: "aseam", label: "createTeamsHandler", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "svc/teams.ts", line: 1, symbol: "createTeamsHandler" }, hunks: [{ id: "ah", file: "svc/teams.ts", start: 1, role: "core", label: "createTeamsHandler", kind: "function" }] },
+        { id: "tblS", label: "team", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "db/team.ts", line: 1, symbol: "team" }, hunks: [{ id: "tbl", file: "db/team.ts", start: 1, role: "environment", label: "team", kind: "db-table" }] },
+      ] }],
+      // the anchor WRITES team; in fwd mode the BFS reverses this to team→anchor, so team is not in `dist`.
+      edges: [{ from: "ah", to: "tbl", kind: "db-write" }],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a team created" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("team");                                   // the anchor's own write is crowned…
+    expect(out).not.toContain("## Spine (inferred");                   // …and the spine is GROUNDED, not inferred
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
