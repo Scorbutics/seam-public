@@ -146,7 +146,12 @@ Classify each as exactly one of:
              \`loan.getAmount()\`): those are an in-code object whose data the call graph already follows — \`none\`.
   event    — an event / message bus (emit/publish/subscribe/listen)
   none     — none of the above: logging, test mocks/assertions, stdlib, local collections, request/response/url
-             objects, a DOMAIN MODEL / entity with getters/setters, UI framework scopes, generic utilities
+             objects, a DOMAIN MODEL / entity with getters/setters, UI framework scopes, generic utilities.
+             ALSO none: a QUERY-BUILDER / query OBJECT — a local you build then execute (\`query\`, \`typedQuery\`,
+             \`criteriaQuery\`, \`ldapQuery\`, \`q\`) with \`getResultList\`/\`getSingleResult\`/\`getResultStream\`/
+             \`setParameter\`/\`setMaxResults\`/\`addWhereCondition\`. The DB layer is the EntityManager/repository that
+             CREATED it (\`em.createQuery(...)\`), NOT the query handle — that handle carries no table identity, so
+             classifying it \`database\` fabricates a phantom table named after the variable.
 
 Judge by MEANING — the test is "is this an EXTERNAL layer the call graph CANNOT follow (a blindspot), or an
 in-code object it can?". \`axios.create\`/\`axios.delete\` are HTTP (a client + an HTTP DELETE), NOT database;
