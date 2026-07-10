@@ -22,6 +22,15 @@ describe("JPA @Entity db-table adapter", () => {
     expect(w(h)).toContain("GroupEntity");           // remove(var) → var's type
   });
 
+  test("persist(var) resolves to the NEAREST-preceding declaration — a local shadows a same-named field", () => {
+    // ClientAdapter shape: a field `ClientEntity entity` at the class top, and a LOCAL `ProtocolMapperEntity entity`
+    // just above `em.persist(entity)`. The write must be attributed to the LOCAL (ProtocolMapperEntity), not the
+    // adapter's subject field (ClientEntity) — else the crown mislabels the persisted table.
+    const h = JPA_ENTITY.scan("ClientAdapter.java", `class ClientAdapter {\n  ClientEntity entity;\n  void addProtocolMapper() {\n    ProtocolMapperEntity entity = new ProtocolMapperEntity();\n    em.persist(entity);\n  }\n}`);
+    expect(w(h)).toContain("ProtocolMapperEntity");        // the nearest-preceding local
+    expect(w(h)).not.toContain("ClientEntity");            // NOT the field at the class top
+  });
+
   test("find(X.class) is a READ; JPQL `from X` in a string is a READ", () => {
     const h = JPA_ENTITY.scan("Provider.java", `UserEntity u = em.find(UserEntity.class, id);\nem.createQuery("select c from ClientEntity c where c.enabled = true");`);
     expect(r(h)).toContain("UserEntity");    // find(.class)

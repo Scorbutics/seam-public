@@ -38,17 +38,28 @@ function scan(file: string, text0: string): KeyHit[] {
     if (tbl && tbl !== cls) add(tbl, line, false);
   }
 
-  // same-file declared types: `name → Type` — used only to attribute a `persist/merge/remove(var)` (the verb
-  // guarantees `var` is an entity), so a non-entity `Type var` can never surface (it's never a persist arg).
-  const varType = new Map<string, string>();
+  // same-file declared types: (name, Type, line) — used only to attribute a `persist/merge/remove(var)` (the verb
+  // guarantees `var` is an entity). SCOPE-AWARE: a persist(var) resolves to the NEAREST PRECEDING declaration of
+  // that name, so a local (`ProtocolMapperEntity entity = …` just above `em.persist(entity)`) beats a field of the
+  // same name at the class top (`ClientEntity entity;`) — else the write mislabels as the adapter's subject entity.
+  const decls: { name: string; type: string; line: number }[] = [];
   const vd = /\b([A-Z]\w*)\s+([a-z_]\w*)\s*[;=,)]/g;
-  while ((m = vd.exec(text))) if (!varType.has(m[2])) varType.set(m[2], m[1]);
+  while ((m = vd.exec(text))) decls.push({ name: m[2], type: m[1], line: lineOf(text, m.index) });
+  const resolveVar = (name: string, atLine: number): string | undefined => {
+    let preceding: { type: string; line: number } | undefined, any: { type: string; line: number } | undefined;
+    for (const d of decls) if (d.name === name) {
+      if (!any || d.line < any.line) any = d;   // earliest declaration — a fallback when none precedes the use
+      if (d.line <= atLine && (!preceding || d.line > preceding.line)) preceding = d;   // NEAREST preceding wins (shadowing)
+    }
+    return (preceding ?? any)?.type;
+  };
 
   // 2) EntityManager writes — persist/merge/remove name (or type-resolve) their entity arg.
   const emWrite = /\.(?:persist|merge|remove)\s*\(\s*(?:new\s+([A-Z]\w*)|([A-Z]\w*)\.class|([a-z_]\w*))/g;
   while ((m = emWrite.exec(text))) {
-    const e = m[1] || m[2] || (m[3] ? varType.get(m[3]) : undefined);
-    if (e) add(e, lineOf(text, m.index), true);
+    const ln = lineOf(text, m.index);
+    const e = m[1] || m[2] || (m[3] ? resolveVar(m[3], ln) : undefined);
+    if (e) add(e, ln, true);
   }
   // 3) reads — find/getReference on an `X.class`.
   const emRead = /\.(?:find|getReference)\s*\(\s*([A-Z]\w*)\.class/g;
