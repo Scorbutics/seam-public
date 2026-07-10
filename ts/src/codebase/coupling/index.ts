@@ -13,9 +13,8 @@
 // consumes surfaces its producers (a writer reaches the UI that reads it, a reader reaches the backend
 // that wrote it). Edges are RESOLVED_PARTIAL crossings — pruned by the relevance pass, never a hard call.
 import { readFileSync } from "node:fs";
-import { basename, join } from "node:path";
-import { spawnSync } from "node:child_process";
-import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
+import { join } from "node:path";
+import { available } from "../atoms.js";
 import { SKIP_DIRS, hasCarrierEngine, isHandlerFileByLanguage } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
@@ -23,6 +22,8 @@ import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
 import { routeSegs, routeMatchSpecificity, routeSuffixMatch } from "./adapters/http_route.js";
 export { routeMatchSpecificity, routeSuffixMatch };
+import { complement_unit, grepFiles, couplingOtherSides, type CouplingOtherSide } from "./bridge.js";
+export { grepFiles, couplingOtherSides, type CouplingOtherSide };
 import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
@@ -50,7 +51,6 @@ export const isProduceEdge = (edgeKind: string): boolean => KEY_PRODUCE_EDGE_KIN
 export const isDomainSubject = (nodeKind: string): boolean => DOMAIN_SUBJECT_KINDS.has(nodeKind);
 
 const READER_CAP = COUPLING.readerCap;                          // materialise at most this many complement nodes per key
-const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 const keyId = (kind: string, value: string) => `${kind} ${value}`;   // the kind+value identity of a shared key
 
 // NOTE: the LLM key pass is no longer a per-anchor call here — it's the repo-wide, batched, cached
@@ -247,139 +247,10 @@ export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: Engin
   return ctx.floorBase.get(repo)!;
 }
 
-// The declared NAME of a def — the tree-sitter `name` FIELD first (NOT a leading return type: a Java/C++
-// `SubList paginate(...)` writes the type before the name, so a positional scan grabbed `SubList`), then the
-// C/C++ declarator-field chain, then a positional fallback. Mirrors scan/ast_units._name_of — duplicated here
-// because coupling can't import scan (scan→coupling already exists; importing back would cycle).
-function _name_of(ctx: Ctx, node: any): string | null {
-  const nf = node.childForFieldName?.("name");
-  if (nf) return ctx.text(nf);
-  let x: any = node.childForFieldName?.("declarator");
-  for (let g = 0; x && g < 16; g++) {
-    if (_NAME_LEAVES.has(x.type)) return ctx.text(x);
-    x = x.childForFieldName?.("declarator") ?? null;
-  }
-  for (const c of ctx.children(node)) if (_NAME_KINDS.has(c.type)) return ctx.text(c);
-  return null;
-}
-
-// The named function/method/class enclosing `line` in a complement file (smallest wins), or a module
-// stub for a top-level access (e.g. a Next.js `export const GET = …` route). Lazy — only ≤CAP parsed.
-export async function complement_unit(repo: string, file: string, line: number): Promise<{ symbol: string; kind: string; start: number; end: number }> {
-  const fallback = { symbol: stem(file), kind: "module", start: line, end: line };
-  const lang = lang_for(file);
-  if (!lang || !available()) return fallback;
-  let ctx: Ctx | null;
-  try { ctx = await makeCtx(readFileSync(join(repo, file), "utf-8"), lang); } catch { return fallback; }
-  if (!ctx) return fallback;
-  let best: { symbol: string; kind: string; start: number; end: number } | null = null;
-  for (const n of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k))) {
-    const [s, e] = ctx.span(n);
-    if (s > line || line > e) continue;
-    const nm = _name_of(ctx, n);
-    if (!nm) continue;
-    if (!best || (e - s) < (best.end - best.start)) {
-      best = { symbol: nm, kind: _CLASS_KINDS.has(n.type) ? "class" : _METHOD_KINDS.has(n.type) ? "method" : "function", start: s, end: e };
-    }
-  }
-  return best ?? fallback;
-}
-
-// ════════════════════════════════════════════════════════════════════════════════════════════════════
-// TARGETED COUPLING (for the BRIDGE / review-impact). resolveCoupling builds a FULL-repo key index (scan
-// EVERY file) to ground ANY anchor's keys — right for a multi-node grow that amortises it, WRONG for a
-// one-shot review where we already know the anchor's keys. Here we INVERT it (Brice's "grow from the diff"):
-// compute the anchor's keys LOCALLY, then for each value GREP the repo for that exact string → only the
-// files that could share it, scan THOSE for the complementary key, ground. O(files that mention the key),
-// not O(repo) — fast even cold, no full floor index, no `.seam` warm-up. An anchor with NO key returns []
-// instantly (the common perf/bugfix case), so the bridge pays ~nothing for a change that touches no boundary.
-// ════════════════════════════════════════════════════════════════════════════════════════════════════
-
-export interface CouplingOtherSide { kind: string; value: string; file: string; symbol: string; edgeKind: string; provenance: string }
-
-// Files containing `value` literally — ripgrep (gitignore-aware, instant) with a walk+substring fallback. The
-// value is a plausible key (identifier/path), matched as a FIXED string, so there's no regex/shell hazard.
-export function grepFiles(repo: string, value: string): string[] {
-  try {
-    const r = spawnSync("rg", ["-l", "-F", "--no-messages", "--", value, "."], { cwd: repo, encoding: "utf-8", maxBuffer: 1 << 27 });
-    if (r.status === 0 && r.stdout) return r.stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, ""));
-    if (r.status === 1) return [];   // ripgrep ran, no matches
-  } catch { /* rg absent → fallback */ }
-  const out: string[] = [];          // fallback: read+includes (no masking/adapters → far cheaper than the floor scan)
-  for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) if (text.includes(value)) out.push(rel);
-  return out;
-}
-
-const _TARGETED_CAND_CAP = 200;   // bound the candidate scan for a hot value (a common table name); the relevance floor dampens the rest
-
-// The OTHER SIDE of each coupling the anchor SYMBOL touches — resolved by targeted value-grep, not a full
-// index. `available()`-gated (needs tree-sitter for the span + complement unit). Degrades to [] on any miss.
-export async function couplingOtherSides(
-  repo: string, anchorFile: string, symbol: string,
-  opts: { llm?: boolean; model?: string; claudeBin?: string | null } = {}, ctx: EngineCtx = new EngineCtx(),
-): Promise<CouplingOtherSide[]> {
-  if (!available()) return [];
-  let anchorText: string;
-  try { anchorText = readFileSync(join(repo, anchorFile), "utf-8"); } catch { return []; }
-
-  // the symbol's span (lo..hi) — scope the anchor keys to the changed symbol, not the whole file.
-  let lo = 0, hi = Number.MAX_SAFE_INTEGER;
-  const lang = lang_for(anchorFile);
-  if (lang) {
-    const actx = await makeCtx(anchorText, lang);
-    if (actx) for (const n of actx.collect(actx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k))) {
-      if (_name_of(actx, n) === symbol) { [lo, hi] = actx.span(n); break; }
-    }
-  }
-  const inSpan = (line: number) => line >= lo && line <= hi;
-
-  // 1. ANCHOR KEYS — local only (floor + learned matchers + LLM-proposed), span-filtered + deduped.
-  const matchers = listMatchers(repo).map((x) => x.matcher);
-  // The file's full key scan (floor + matchers) is the same for every symbol IN that file — cache it on the
-  // ctx so a multi-symbol bridge run scans each file ONCE, not once per changed symbol (the measured redundancy).
-  let fileKeys = ctx.fileKeyScan.get(anchorFile);
-  if (!fileKeys) {
-    fileKeys = scan_file_keys(anchorFile, anchorText).slice();
-    for (const m of matchers) for (const h of await runMatcher(m, anchorFile, anchorText)) fileKeys.push(h);
-    ctx.fileKeyScan.set(anchorFile, fileKeys);
-  }
-  const anchorKeys = new Map<string, { kind: string; value: string; produces: boolean }>();
-  const addKey = (h: KeyHit) => { if (inSpan(h.line) && plausibleKeyValue(h.value)) anchorKeys.set(`${h.kind} ${h.value} ${h.produces}`, { kind: h.kind, value: h.value, produces: h.produces }); };
-  for (const h of fileKeys) addKey(h);
-  if (opts.llm) { const lk = await import("./llm_key_index.js"); for (const h of await lk.anchorProposedKeys(repo, anchorFile, anchorText, { llm: true, model: opts.model, claudeBin: opts.claudeBin }, ctx)) addKey({ ...h, line: lo }); }
-  if (!anchorKeys.size) return [];   // no boundary in the anchor → nothing to resolve, instantly
-
-  // 2-4. per key: GREP for the value → candidate files → scan for the COMPLEMENTARY key → ground.
-  const anchorNorm = normpath(anchorFile);
-  const out: CouplingOtherSide[] = [];
-  const seen = new Set<string>();
-  for (const key of anchorKeys.values()) {
-    // EXCLUDE test files from the coupling crossing candidates — a `.integration-test`/`.e2e-spec`/seed file that
-    // writes the subject table (`booking`) is NOT a real co-writer/reader of the flow, it's a fixture. The grow
-    // excludes tests everywhere else by default; this path (grep → candidate scan) was the last one that didn't, so
-    // an intent's subject write-set got flooded by integration-test writers (cal.com `booking`) and the real
-    // producers were crowded out. Structural (path shape), matches the engine-wide default test exclusion.
-    const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f) && !isTestFile(f)).slice(0, _TARGETED_CAND_CAP);
-    let materialised = 0;
-    for (const cand of candidates) {
-      if (materialised >= READER_CAP) break;
-      let text: string; try { text = readFileSync(join(repo, cand), "utf-8"); } catch { continue; }
-      const candKeys: KeyHit[] = scan_file_keys(cand, text);
-      for (const m of matchers) for (const h of await runMatcher(m, cand, text)) candKeys.push(h);
-      const match = candKeys.find((h) => h.kind === key.kind && h.value === key.value && h.produces !== key.produces);   // the COMPLEMENTARY role on the same key
-      if (!match) continue;
-      const unit = await complement_unit(repo, cand, match.line);
-      const dedup = `${cand}#${unit.symbol}#${key.kind} ${key.value}`;
-      if (seen.has(dedup)) continue;
-      seen.add(dedup);
-      materialised++;
-      const adapter = kindOf(key.kind);
-      out.push({ kind: key.kind, value: key.value, file: cand, symbol: unit.symbol,
-        edgeKind: match.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });
-    }
-  }
-  return out;
-}
+// complement_unit/grepFiles/couplingOtherSides (the TARGETED/bridge pipeline — review-impact's per-anchor
+// grep-based coupling resolution, as opposed to this file's full-repo GROUND/DRAW/WIRE walk) moved to
+// bridge.ts, imported above and re-exported for the existing dynamic-import call sites (cli/review_impact.ts,
+// llm_key_index.ts).
 
 const CHAIN_DEPTH = COUPLING.chainDepth;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
 
