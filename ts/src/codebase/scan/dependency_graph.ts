@@ -271,27 +271,34 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   const [, , alo, ahi] = anchor;
   const cap = _implCap();
   const accessors = await provider_accessors(s.repo);
-  const _LOCATOR = new Set(["getProvider", "getInstance", "getBean"]);
   const isInv = (k: string) => /invocation|call_expression/.test(k);
   const nameOf = (n: any): string => { const f = n?.childForFieldName?.("name"); return f ? s.actx!.text(f) : ""; };
-  const classArg = (inv: any): string | null => {   // X from `getProvider(X.class)` — the first argument's `Y.class`
+  // The interface named by a `<Iface>.class` argument (Java class-literal). This is the GROUNDING for the service-
+  // locator form — NOT the method name: any call passing a provider interface's class literal (`getProvider(X.class)`,
+  // `getInstance(X.class)`, `getComponent(X.class)`, …) is a DI lookup. Grounding on the ARG TYPE, not a hardcoded
+  // `getProvider|getBean|…` list, keeps this framework-agnostic (the impl set comes from the interface registry).
+  const classArg = (inv: any): string | null => {
     const args = inv?.childForFieldName?.("arguments"); if (!args) return null;
     const m = s.actx!.text(args).match(/([A-Za-z_$][\w$]*)\s*\.\s*class/); return m ? m[1] : null;
   };
   // CHAINED provider calls in the anchor span: `x.groups().createGroup(...)` / `getProvider(X.class).create(...)` →
-  // (interface, chained method). This is what lets the hop bind the impl's SPECIFIC method, not the whole class.
+  // (interface, chained method). This is what lets the hop bind the impl's SPECIFIC method, not the whole class. The
+  // interface is grounded structurally — a provider ACCESSOR's declared return type, or a `.class` ARG that IS a
+  // provider interface — never a method-name guess.
   const chained = new Map<string, Set<string>>();   // interface → chained method names
   const addChain = (i: string, m: string) => { if (m) (chained.get(i) ?? chained.set(i, new Set()).get(i)!).add(m); };
-  const called = new Set<string>();                 // provider accessor NAMES called (chained or bare)
-  const locators = new Set<string>();               // interfaces from a getProvider(X.class) (chained or bare)
+  const called = new Set<string>();                 // provider ACCESSOR names called (chained or bare)
+  const classCands: { x: string; method: string | null }[] = [];   // (`X.class` interface candidate, chained method | null)
   for (const outer of s.actx.collect(s.actx.root, isInv)) {
     const [cl] = s.actx.span(outer); if (cl < alo || cl > ahi) continue;
     const obj = (outer as any).childForFieldName?.("object");   // the receiver (Java method_invocation)
-    const objName = obj && isInv(obj.type) ? nameOf(obj) : "";
-    if (objName && accessors.has(objName)) { called.add(objName); for (const i of accessors.get(objName)!) addChain(i, nameOf(outer)); }
-    else if (objName && _LOCATOR.has(objName)) { const x = classArg(obj); if (x) { locators.add(x); addChain(x, nameOf(outer)); } }
-    else { const on = nameOf(outer); if (accessors.has(on)) called.add(on); if (_LOCATOR.has(on)) { const x = classArg(outer); if (x) locators.add(x); } }
+    if (obj && isInv(obj.type) && accessors.has(nameOf(obj))) { const on = nameOf(obj); called.add(on); for (const i of accessors.get(on)!) addChain(i, nameOf(outer)); }
+    else if (obj && isInv(obj.type)) { const x = classArg(obj); if (x) classCands.push({ x, method: nameOf(outer) }); }   // `m(X.class).chained()`
+    else { const on = nameOf(outer); if (accessors.has(on)) called.add(on); else { const x = classArg(outer); if (x) classCands.push({ x, method: null }); } }
   }
+  // Keep only `.class` candidates that ARE provider interfaces (grounded on the arg type — the framework-agnostic gate).
+  const locators = new Set<string>();
+  for (const { x, method } of classCands) { if (!(await is_provider_interface(s.repo, x))) continue; if (method) addChain(x, method); else locators.add(x); }
   const seeded = new Set<string>();
   const seed = async (iface: string, method: string | null) => {
     const key = `${iface}#${method ?? ""}`; if (seeded.has(key)) return; seeded.add(key);
