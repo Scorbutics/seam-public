@@ -24,10 +24,10 @@ import { routeSegs, routeMatchSpecificity, routeSuffixMatch } from "./adapters/h
 export { routeMatchSpecificity, routeSuffixMatch };
 import { complement_unit, grepFiles, couplingOtherSides, type CouplingOtherSide } from "./bridge.js";
 export { grepFiles, couplingOtherSides, type CouplingOtherSide };
-import { type KeyMatcher, matcherKey, runMatcher, plausibleKeyValue } from "./key_ir.js";
+import { type KeyMatcher, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
 import { getOrSet } from "../engine_ctx.js";
-import { listMatchers } from "./key_store.js";
+import { listMatchers, loadMatchers } from "./key_store.js";
 import { routeAnnotationNames } from "./frameworks/route_annotations.js";
 import { httpClientCallRegex } from "./frameworks/http_clients.js";
 import { ormVocab } from "./frameworks/orm_methods.js";
@@ -395,19 +395,12 @@ async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText
   return false;
 }
 
-// P3 CACHE (load) — the LEARNED adapter rules from the `.seam` store (persisted by LEARN, replayed warm = 0
-// LLM — the capitalisation). Deduped; empty under a stable-floor probe (learned rules are the accumulating part).
-function _loadAdapters(repo: string, ctx: EngineCtx): KeyMatcher[] {
-  if (ctx.stableFloor) return [];
-  const seen = new Set<string>();
-  return listMatchers(repo).map((x) => x.matcher).filter((m) => { const k = matcherKey(m); return seen.has(k) ? false : (seen.add(k), true); });
-}
-
 // Effect inference (DETERMINISTIC, no LLM) — the SET of custom http-client receiver tokens deduced transitively
 // from grounded fetch/axios sinks, cached per repo on the ctx. Footprint-scoped when a pre-grow set
 // ctx.footprintFiles (cheap); else a bounded repo walk (reusing the floor's scannable-file set). Empty under
-// stableFloor so the pre-grow footprint stays pure-floor (mirrors _loadAdapters). Drives BOTH the literal-call
-// channel matchers (_effectMatchers) and the indirected-call resolver (resolveHttpCallSites in runPipeline).
+// stableFloor so the pre-grow footprint stays pure-floor (mirrors the P3 cache load below).
+// Drives BOTH the literal-call channel matchers (_effectMatchers) and the indirected-call resolver
+// (resolveHttpCallSites in runPipeline).
 async function _effectClients(repo: string, ctx: EngineCtx): Promise<Set<string>> {
   if (ctx.stableFloor) return new Set();
   return getOrSet(ctx.httpClients, repo, async () => {
@@ -469,8 +462,12 @@ export async function resolveCoupling(
   // CACHE (load) → APPLY — materialise the anchor's cross-boundary bridges from the grounded index + adapters,
   // PLUS the deterministic effect-inference matchers (custom http-client receivers deduced transitively from a
   // grounded fetch/axios sink — so `MyFramework.http.get('/route')` grounds like a built-in fetch caller).
+  // The P3 CACHE load — the LEARNED adapter rules from the `.seam` store (persisted by LEARN, replayed warm =
+  // 0 LLM). loadMatchers already dedupes by matcher identity and records the usage ledger (was reimplemented
+  // here as _loadAdapters, deduping the same way but WITHOUT the ledger record — this now gets it for free).
+  // Empty under a stable-floor probe (learned rules are the accumulating part, not the probe's job).
   const httpClients = await _effectClients(repo, ctx);
-  const matchers = [..._loadAdapters(repo, ctx), ...httpClientMatchers(httpClients)];
+  const matchers = [...(ctx.stableFloor ? [] : loadMatchers(repo)), ...httpClientMatchers(httpClients)];
   _stage(`CACHE: ${matchers.length} cached adapter(s) loaded`, _t); _t = performance.now();
   const stats: DcStats = { nodes: 0, parses: 0, parseMs: 0, ranks: 0, rankMs: 0 };
   const p: PipelineCtx = { graph, repo, index, paramIndex, ctx, stats, matchers, httpClients };
