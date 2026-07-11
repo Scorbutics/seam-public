@@ -48,6 +48,37 @@ export function enclosingClass(index: MethodIndex, file: string, row: number, fa
   return best;
 }
 
+// ── The generic ANCESTOR-CHAIN WALK every language's lookup reduces to ──────────────────────────────────
+// own methods (this container) → NEXT HOPS (caller-defined), recursively, first hit wins (RESOLVED_FULL).
+// Cycle-safe (a `seen` set, capped) and depth-unbounded otherwise. Ruby's mixin-MRO + Java/TS's flat
+// parent list both reduce to this once "what counts as OWN" and "where to look next" are supplied:
+//  - `ownMatch(info, method, state)` — the def satisfying this call at `state`'s container (Java/TS: any
+//    method by that name; Ruby: also require the right instance/class `kind`).
+//  - `nextStates(info, state)` — the states to recurse into (Java/TS: `info.parents`, unchanged kind;
+//    Ruby: mixins forced to instance-kind + the kind-preserving superclass + the implicit-Object fallback).
+//  - `keyOf(state)` — the index key a state resolves to (both `seen` and `index.get` key off this alone,
+//    matching each language's original dedup granularity — Ruby dedups by FQN only, not FQN+kind).
+export function ancestorLookup<TInfo extends IndexedClass, TState>(
+  index: Map<string, TInfo>, state: TState, method: string,
+  keyOf: (state: TState) => string,
+  ownMatch: (info: TInfo, method: string, state: TState) => MethodDef | null,
+  nextStates: (info: TInfo, state: TState) => TState[],
+  seen = new Set<string>(),
+): MethodCandidate | null {
+  const key = keyOf(state);
+  if (seen.has(key) || seen.size > 64) return null;
+  seen.add(key);
+  const info = index.get(key);
+  if (!info) return null;
+  const own = ownMatch(info, method, state);
+  if (own) return { className: key, method, file: own.file, line: own.line, kind: own.kind, tier: "RESOLVED_FULL" };
+  for (const next of nextStates(info, state)) {
+    const h = ancestorLookup(index, next, method, keyOf, ownMatch, nextStates, seen);
+    if (h) return h;
+  }
+  return null;
+}
+
 // ── The simple-name dispatch shared by Java + TypeScript ──────────────────────────────────────────────
 export const MODULE = "";   // synthetic key for top-level (module-scope) functions
 
@@ -56,16 +87,13 @@ export const MODULE = "";   // synthetic key for top-level (module-scope) functi
 export interface ClassNode extends IndexedClass { name: string; line: number; parents: string[] }
 export type DispatchIndex = Map<string, ClassNode>;
 
+const _simpleOwnMatch = (info: ClassNode, method: string): MethodDef | null => info.methods.get(method) ?? null;
+const _simpleNextStates = (info: ClassNode): string[] => info.parents;
+const _identity = (key: string): string => key;
+
 // Ancestor-chain lookup: own methods → parents (superclass + interfaces), recursively. First hit, RESOLVED_FULL.
 export function lookupMethod(index: DispatchIndex, key: string, method: string, seen = new Set<string>()): MethodCandidate | null {
-  if (seen.has(key) || seen.size > 64) return null;
-  seen.add(key);
-  const info = index.get(key);
-  if (!info) return null;
-  const own = info.methods.get(method);
-  if (own) return { className: key, method, file: own.file, line: own.line, kind: own.kind, tier: "RESOLVED_FULL" };
-  for (const p of info.parents) { const h = lookupMethod(index, p, method, seen); if (h) return h; }
-  return null;
+  return ancestorLookup(index, key, method, _identity, _simpleOwnMatch, _simpleNextStates, seen);
 }
 
 // All defs of `method` repo-wide — the over-approximation when the receiver type is unknown.

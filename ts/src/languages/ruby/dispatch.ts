@@ -13,7 +13,7 @@
 import { field, getParser } from "../../core/treesitter.js";
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/base.js";
-import type { MethodCandidate, MethodKind } from "../../core/dispatch.js";
+import { ancestorLookup, type MethodCandidate, type MethodKind } from "../../core/dispatch.js";
 import type { Provenance } from "../../core/resolution.js";
 
 export type { MethodCandidate, MethodKind } from "../../core/dispatch.js";
@@ -151,31 +151,34 @@ function _resolveConst(index: RubyIndex, name: string, nesting: string[]): strin
   return index.has(name) ? name : null;
 }
 
-// Ancestor-chain lookup: own methods → includes/prepends (instance) / extends (class) → superclass, recursively.
-// Approximate MRO (no exact prepend precedence — we union for the sink-reaching goal). Returns the first hit.
-function _lookup(index: RubyIndex, fqn: string, method: string, kind: MethodKind, seen: Set<string>): MethodCandidate | null {
-  if (seen.has(fqn) || seen.size > 64) return null;
-  seen.add(fqn);
-  const info = index.get(fqn);
-  if (!info) return null;
+// Ancestor-chain lookup: own methods → includes/prepends (instance) / extends (class) → superclass →
+// implicit Object, recursively. Approximate MRO (no exact prepend precedence — we union for the
+// sink-reaching goal). A thin binding of core/dispatch.ts's generic ancestorLookup: Ruby's extra shape
+// (kind-filtered own-match; mixins/superclass/fallback as three ordered next-hop phases, mixins always
+// recursing as instance) is supplied as the `ownMatch`/`nextStates` callbacks, not a duplicated walker.
+type RubyState = { fqn: string; kind: MethodKind };
+const _rubyKeyOf = (s: RubyState): string => s.fqn;   // dedup by FQN only (matches the original `seen` granularity)
+function _rubyOwnMatch(info: ClassInfo, method: string, state: RubyState): MethodDef | null {
   const own = info.methods.get(method);
-  if (own && own.kind === kind) return { className: fqn, method, file: own.file, line: own.line, kind, tier: "RESOLVED_FULL" };
-  const mixinModes = kind === "instance" ? ["include", "prepend"] : ["extend"];
+  return own && own.kind === state.kind ? own : null;
+}
+function _rubyNextStates(index: RubyIndex, info: ClassInfo, state: RubyState): RubyState[] {
+  const out: RubyState[] = [];
+  // a mixed-in module's methods are INSTANCE methods of the module; look them up as instance regardless
+  const mixinModes = state.kind === "instance" ? ["include", "prepend"] : ["extend"];
   for (const mx of info.mixins) {
     if (!mixinModes.includes(mx.mode)) continue;
     const mfqn = _resolveConst(index, mx.name, info.nesting);
-    // a mixed-in module's methods are INSTANCE methods of the module; look them up as instance regardless
-    const hit = mfqn ? _lookup(index, mfqn, method, "instance", seen) : null;
-    if (hit) return { ...hit, tier: "RESOLVED_FULL" };
+    if (mfqn) out.push({ fqn: mfqn, kind: "instance" });
   }
-  if (info.superclass) { const sfqn = _resolveConst(index, info.superclass, info.nesting); const hit = sfqn ? _lookup(index, sfqn, method, kind, seen) : null; if (hit) return hit; }
+  if (info.superclass) { const sfqn = _resolveConst(index, info.superclass, info.nesting); if (sfqn) out.push({ fqn: sfqn, kind: state.kind }); }
   // implicit Object: every class without an explicit superclass inherits Object, whose (private) instance
   // methods are the repo's TOP-LEVEL `def`s — so a top-level helper called from inside a class resolves.
-  if (kind === "instance" && !info.superclass && fqn !== _TOPLEVEL && fqn !== "BasicObject") {
-    const hit = _lookup(index, _TOPLEVEL, method, "instance", seen);
-    if (hit) return hit;
-  }
-  return null;
+  if (state.kind === "instance" && !info.superclass && state.fqn !== _TOPLEVEL && state.fqn !== "BasicObject") out.push({ fqn: _TOPLEVEL, kind: "instance" });
+  return out;
+}
+function _lookup(index: RubyIndex, fqn: string, method: string, kind: MethodKind, seen: Set<string>): MethodCandidate | null {
+  return ancestorLookup(index, { fqn, kind }, method, _rubyKeyOf, _rubyOwnMatch, (info, state) => _rubyNextStates(index, info, state), seen);
 }
 
 // A receiver-less (self) call inside `className`'s body → its instance-method def via the ancestor chain.
