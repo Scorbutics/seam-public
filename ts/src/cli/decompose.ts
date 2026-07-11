@@ -62,6 +62,13 @@ const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
 };
 
+// The shared field set both decompose() call sites (runCodebase's codebase-graph path, main()'s diff-mode
+// path) build — only useLlm/skeleton differ per caller, everything else is a byte-identical repeat of `a`.
+const decomposeOpts = (a: Args, useLlm: boolean, skeleton?: boolean) => ({
+  repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin,
+  promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton,
+});
+
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
@@ -357,7 +364,7 @@ async function runCodebase(a: Args): Promise<number> {
       // deterministic annotateForEmit (embeddings, below) supplies the spine/supporting/off tiers instead — LLM stays
       // reserved for the flywheel. Opt back in with --no-skeleton. (Concern already forced skeleton at line 558.)
       const _tRender = Date.now();
-      const model2: any = await decompose(g2, { repo: a.repo, useLlm: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton ?? true });
+      const model2: any = await decompose(g2, decomposeOpts(a, true, a.skeleton ?? true));
       addStage("render", Date.now() - _tRender);
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
@@ -472,7 +479,7 @@ async function runCodebase(a: Args): Promise<number> {
   if (a.emitPrompts) set_host_bus(new HostBus());
   else if (a.injectLlm) set_host_bus(new HostBus(JSON.parse(readFileSync(a.injectLlm, "utf-8")).answers ?? {}));
   let model: any, recorded: HostBus["recorded"] | undefined;
-  try { model = await decompose(g, { repo: a.repo, useLlm, intent: a.intent, model: a.model, claudeBin: a.claudeBin, promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton: a.skeleton }); }
+  try { model = await decompose(g, decomposeOpts(a, useLlm, a.skeleton)); }
   finally { if (a.emitPrompts || a.injectLlm) { recorded = get_host_bus()?.recorded; set_host_bus(null); } }
   // Deferred no-flow: print the auto-anchor's "no traceable spine" hint ONLY if the decompose genuinely
   // found no culmination — otherwise the guess was wrong (conservative on controllers) and a [no-flow]
