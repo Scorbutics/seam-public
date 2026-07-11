@@ -182,27 +182,6 @@ export function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges:
 
 const _MOVE_CAP = GROW.moveCap;   // a single move adding more than this is "too broad" (a widely-used class) → skipped
 
-// DETERMINISTIC grow (no LLM). Follow the resolved CROSSINGS (data-coupling boundaries, string-dispatch,
-// suggested edges) outward to the footprint's terminals directly: each step re-anchor on the most promising
-// unexpanded frontier node — a crossing-reached one first (that's the chain toward the terminals), else the
-// largest consumer — letting the transitive data-coupling chain extend reach. Bounded by steps + a per-move
-// flood cap + a node budget. Reproducible, offline. The intent TIER pass then prunes which terminals matter:
-// Pick the next frontier node to expand. P2 discovers for CONNECTIVITY (docs/grow-architecture.md): a CROSSING
-// (a data-flow edge toward the terminals) is followed FIRST, so the spine is always traced and a high-intent
-// terminal sitting behind a LOW-intent transit is never starved out of the budget — the pathfinding failure
-// intent-first caused. Intent is a SECONDARY guide: it orders among equally-connected candidates but can NEVER
-// prune a crossing (so a transit is safe). The off-intent HUB fan that briefly justified intent-first is now
-// capped in P3 (the coupling overlay), not refereed here; AUTHORITATIVE intent ranking is P4 (decompose tiers
-// spine/supporting/off). No relevance signal (offline / no --intent → iscore≡0) → crossings-then-complexity.
-export function _nextFrontier<T extends { id: string; complexity?: number }>(
-  cand: T[], crossings: Set<string>, iscore: (n: T) => number, typeRefOnly: Set<string> = new Set()): T | undefined {
-  return [...cand].sort((a, b) =>
-    (Number(crossings.has(b.id)) - Number(crossings.has(a.id)))     // (1) CONNECTIVITY — crossings toward terminals
-    || (Number(!typeRefOnly.has(b.id)) - Number(!typeRefOnly.has(a.id)))  // (2) DELEGATION (calls) before payload type-refs
-    || (iscore(b) - iscore(a))                                      // (3) intent — a guide/tiebreak, never prunes a crossing
-    || ((b.complexity ?? 0) - (a.complexity ?? 0)))[0];             // (4) complexity (final tiebreak)
-}
-
 // BIDIRECTIONAL move selection — pick the next (node, direction) to expand. The one-directional walk tagged each
 // node with a single direction (a dependency only ever descended), so a SHARED backend node never climbed back
 // UP to its other consumers and the sibling entry points (e.g. a second UI behind a second route) were starved.
@@ -350,7 +329,7 @@ const _gtag = (ctx?: EngineCtx): string => (ctx?.stableFloor ? "grow·probe" : "
 
 // ── P2 STRUCTURAL EXPANSION (docs/grow-architecture.md) ──────────────────────────────────────────────────
 // Reach the flow's terminals via consumer/dependency edges, bounded by budget. The frontier is INTENT-GUIDED
-// (`_nextFrontier` orders by relevance, then crossing, then complexity) and the excluded set is dropped here.
+// (`_orderMoves` orders each wave by crossing, then intent band, then closeness/complexity) and the excluded set is dropped here.
 // NOTE: per the contract this should be intent-GUIDED, not intent-PRUNED; today the ranking + exclusion still
 // live in the loop (the discover-vs-prune split is the Step-2 change). Structural builds only — never couples.
 

@@ -4,37 +4,7 @@
 // never prune a crossing; complexity is the final tiebreak. The off-intent hub fan is capped in P3, not here.
 // Pure → injected scores.
 import { describe, expect, test } from "bun:test";
-import { _nextFrontier, _orderMoves, type Move } from "../../src/codebase/grow/orchestrate.js";
-
-type N = { id: string; complexity?: number };
-const pick = (cand: N[], crossings: string[], score: Record<string, number>, typeRefOnly: string[] = []) =>
-  _nextFrontier(cand, new Set(crossings), (n) => score[n.id] ?? 0, new Set(typeRefOnly))?.id;
-
-describe("_nextFrontier — connectivity (crossings) first, then intent, then complexity", () => {
-  const A = { id: "A", complexity: 1 }, B = { id: "B", complexity: 9 }, C = { id: "C", complexity: 5 };
-  test("a CROSSING is followed even if a non-crossing is more intent-relevant (no transit starvation)", () => {
-    expect(pick([A, B, C], ["A"], { A: 0.1, B: 0.9, C: 0.5 })).toBe("A");   // A is the only crossing → A wins despite low intent
-  });
-  test("among same crossing-status, the most INTENT-RELEVANT wins (the secondary guide)", () => {
-    expect(pick([A, B, C], [], { A: 0.9, B: 0.1, C: 0.2 })).toBe("A");      // A least complex but most on-intent
-    expect(pick([A, B, C], ["A", "B", "C"], { A: 0.2, B: 0.8, C: 0.5 })).toBe("B");   // all crossings → intent decides
-  });
-  test("no intent scores (all 0) → crossings-first, then largest complexity", () => {
-    expect(pick([A, B, C], [], {})).toBe("B");           // no crossing, no intent → most complex
-    expect(pick([A, B, C], ["C"], {})).toBe("C");        // the crossing wins when there's no intent signal
-  });
-  test("empty frontier → undefined", () => {
-    expect(_nextFrontier([], new Set(), () => 0)).toBeUndefined();
-  });
-  test("a DELEGATION node is followed before a payload type-ref node (B), but a crossing still wins", () => {
-    // B is a payload type-ref; A is a normal (call/import) node. Same crossing-status & intent → A (delegation) first.
-    expect(pick([A, B, C], [], { A: 0.5, B: 0.5, C: 0.5 }, ["B"])).not.toBe("B");
-    // a type-ref node that IS a crossing still wins (demotion never prunes a crossing)
-    expect(pick([A, B, C], ["B"], { A: 0.9, B: 0.1, C: 0.2 }, ["B"])).toBe("B");
-    // among two payload type-refs, intent still decides
-    expect(pick([A, B], [], { A: 0.1, B: 0.9 }, ["A", "B"])).toBe("B");
-  });
-});
+import { _orderMoves, type Move } from "../../src/codebase/grow/orchestrate.js";
 
 // _orderMoves — the BIDIRECTIONAL frontier: intent BAND outranks CLOSENESS so a clearly-relevant FAR node beats a
 // near generic (the acme failure: a far data-hub consumer starved while near generics ate the budget),
