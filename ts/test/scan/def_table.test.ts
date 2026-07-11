@@ -65,6 +65,56 @@ export class Role {
   });
 });
 
+// DESCRIPTOR-MAP entries — a config-driven client / route table lists its OPERATIONS as object KEYS whose value
+// is a descriptor (`createBooking: { endpoint, method }`), not as functions. Those keys must be anchor
+// candidates. Recognition is purely STRUCTURAL (key → object value, inside a value-position object literal) —
+// NO endpoint/method vocabulary — so it survives `{uri, httpMethod}`, other-language keys, and multi-line
+// entries; the embedder ranks which entries are real operations. A class/interface field with a nested-object
+// TYPE is NOT an operation and must be excluded.
+describe("def_table descriptor-map entries (vocabulary-free, structural)", () => {
+  test("single-line and multi-line descriptor keys in a named object literal are anchorable defs", () => {
+    const SRC = `
+export const bookingApi = {
+  createBooking: { endpoint: baseUrl, method: 'post' },
+  updateBooking: {
+    endpoint: baseUrl + '/{id}',
+    verb: 'put'
+  },
+};
+`;
+    const defs = defs_in_file("web/bookingApi.ts", SRC);
+    const by = (n: string) => defs.find((d) => d.name === n);
+    expect(by("createBooking")?.kind).toBe("function");        // single-line descriptor
+    expect(by("updateBooking")?.kind).toBe("function");        // MULTI-line descriptor (was invisible to the same-line regex)
+    expect(by("createBooking")?.enclosing).toBe("bookingApi"); // the map name is the domain signal
+    // the body window carries the descriptor's route/verb — the seed the embedder ranks on (no vocabulary in the extractor)
+    expect(embedString(by("createBooking")!)).toContain("endpoint");
+    expect(embedString(by("updateBooking")!)).toContain("verb");   // an alternate vocabulary a keyword list would miss
+  });
+
+  test("a NON-route descriptor map still anchors (proves no domain vocabulary is required)", () => {
+    // `{uri, httpMethod}` — an alternate convention the old endpoint/method keyword list would have skipped.
+    const defs = defs_in_file("web/client.ts", `const api = {\n  fetchUser: { uri: '/u', httpMethod: 'GET' },\n};\n`);
+    expect(defs.find((d) => d.name === "fetchUser")?.kind).toBe("function");
+  });
+
+  test("a nested-object TYPE field in a class/interface is NOT mistaken for an operation (type noise excluded)", () => {
+    const SRC = `
+export interface ApiConfig {
+  createBooking: { endpoint: string; method: string };
+}
+export class Settings {
+  layout: { rows: number } = { rows: 3 };
+}
+`;
+    const names = defs_in_file("web/types.ts", SRC).map((d) => d.name);
+    expect(names).not.toContain("createBooking");   // interface field, not a value-position operation
+    expect(names).not.toContain("layout");          // class field type annotation
+    expect(names).toContain("ApiConfig");
+    expect(names).toContain("Settings");
+  });
+});
+
 // enumerate_defs `files` filter — the footprint-scoped embedding lever (#3). annotateIntentRelevance only
 // needs the seams' OWN files, so we embed just those, not a whole-repo tree-sitter walk. The emitted
 // Def.file stays the canonical rel (we FILTER candidate_source_files), so cache keys match the unscoped pass.

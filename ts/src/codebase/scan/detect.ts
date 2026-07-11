@@ -13,6 +13,7 @@ import { EXTENSIONS as _TS_EXT } from "../../languages/typescript/dispatch.js";
 
 const stemOf = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
+// TODO this constant should be into a JS/TS specific scan module
 const _DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
 // `import()` is a JS/TS-only construct, so this scan is genuinely TS-only (unlike the generic repo walks
 // elsewhere in this file) — sourced from the TS provider's own extension list rather than a hand-kept copy,
@@ -25,6 +26,8 @@ const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.end
 // Layer 2: consumers that load the anchor via a STRING-PATH dynamic import — a text scan (no
 // tree-sitter), surfaced as a SUGGESTED blind spot (never a resolved edge).
 //
+// TODO: this dynamic import scan is specifically for JS/TS (the only languages that have a string-path `import()` construct)
+// It should probably be moved into a language-specific scan module
 // A string-literal `import("./x")` resolves like a static import (languages/typescript/resolve.ts's
 // `_DYNIMPORT_RE`/`imports()` already does this for the `const {a} = await import("literal")` shape,
 // the one this text scan itself matches via `_DYNAMIC_IMPORT_RE`'s required quotes) — so a file that

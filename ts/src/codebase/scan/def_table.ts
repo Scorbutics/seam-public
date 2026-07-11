@@ -69,22 +69,31 @@ const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") 
 // A declaration on a single line: a class/interface/enum, a function, a const-arrow, or a class METHOD
 // (`name(...) {` / `async name(...) {`). Capture groups pick the name; the whole trimmed line is the
 // signature. Conservative — misses multi-line signatures (fine; the name+path still embed).
+// TODO too specific to languages. Move to the corresponding supported languages folders.
 const _CLASS_RE = /^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:abstract[ \t]+)?(class|interface|enum|namespace)[ \t]+([A-Za-z_$][\w$]*)/;
 const _FN_RE = /^[ \t]*(?:export[ \t]+)?(?:default[ \t]+)?(?:async[ \t]+)?function[ \t]*\*?[ \t]*([A-Za-z_$][\w$]*)/;
 const _ARROW_RE = /^[ \t]*(?:export[ \t]+)?(?:const|let)[ \t]+([A-Za-z_$][\w$]*)[ \t]*(?::[^=\n]+)?=[ \t]*(?:async[ \t]+)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)[ \t]*(?::[^\n]+?)?=>/;
 const _METHOD_RE = /^[ \t]+(?:public|private|protected|static|async|readonly|get|set|\*|[ \t])*([A-Za-z_$][\w$]*)[ \t]*\([^)]*\)[ \t]*(?::[^={\n]+)?[ \t]*\{/;
 const _METHOD_SKIP = new Set(["if", "for", "while", "switch", "catch", "return", "function", "constructor"]);
-// DECLARATIVE ENDPOINT-MAP entry — `"createBooking": { endpoint: baseUrl, method: 'post' }`. A config-driven
-// API client lists its OPERATIONS as object KEYS whose value is a route descriptor, not as functions — so the
-// fn/method patterns miss them and the screen is invisible to anchor recall. The value carrying BOTH a route
-// key (endpoint/url/path/route) AND a verb key (method/verb) is the structural signature of an operation.
-const _ENDPOINT_MAP_RE = /^[ \t]*["']?([A-Za-z_$][\w$]*)["']?[ \t]*:[ \t]*\{[^}]*\b(?:endpoint|url|path|route)\b[^}]*\b(?:method|verb)\b/i;
+// DESCRIPTOR-MAP entry — a key whose value OPENS a nested object, inside a named object-literal map:
+// `createBooking: { endpoint: baseUrl, method: 'post' }` (a config-driven API client), a route table, an
+// action registry. A map lists its OPERATIONS as object KEYS with descriptor values, not as functions — so the
+// fn/method patterns miss them and the operation is invisible to anchor recall. The signature is purely
+// STRUCTURAL (a key → object value, i.e. a table-of-descriptors) — NO domain vocabulary (no endpoint/method
+// keyword list, which died on `{uri, httpMethod}`, other-language keys, and multi-line entries). Selectivity
+// comes from the enclosing scope: this only fires inside a VALUE-position object literal (the `obj` stack flag,
+// set by `_OBJ_OPEN_RE`), never a class/interface/enum body — so nested-object TYPE fields aren't mistaken for
+// operations. The embedder does the semantic ranking (structure enumerates, the embedder ranks): the body
+// window carries `endpoint: baseUrl, method: 'post'`, so an intent about routes ranks the real operations up.
+// Multi-line too (the value need only OPEN a brace), unlike the old same-line `[^}]*` vocabulary match.
+const _DESCRIPTOR_KEY_RE = /^[ \t]*["']?([A-Za-z_$][\w$]*)["']?[ \t]*:[ \t]*\{/;
 // OBJECT-LITERAL ASSIGNMENT that opens a block — `Vue.prototype.bookingService = {`, `module.exports = {`,
 // `const svc = {`. Its shorthand methods (`async createBooking(vm, …) {`) are real defs, but they only get
 // extracted when an enclosing scope is on the stack — a class does that, a plain object literal did NOT, so a
 // service object's methods were invisible. Treating the assignment as an enclosing scope fixes it (its name is
-// the last identifier before `= {`; brace-depth pops it like a class). The config-key map (handled above) is
-// also `= {` but its entries are `key: {…}`, not `name(…) {`, so the method pattern still won't false-fire.
+// the last identifier before `= {`; brace-depth pops it like a class). A scope opened here is flagged `obj:true`
+// (a value-position object literal) — that flag also gates `_DESCRIPTOR_KEY_RE` so its `key: {…}` entries only
+// count as operations inside a real object literal, never inside a class/interface (where they'd be type noise).
 const _OBJ_OPEN_RE = /(?:^|[ \t.])([A-Za-z_$][\w$]*)[ \t]*=[ \t]*\{[ \t]*$/;
 
 // A best-effort enclosing-class tracker by brace depth: a `class X {` owns everything until its brace
@@ -112,7 +121,7 @@ export function _body_window(lines: string[], from: number): string {
 
 export function defs_in_file(file: string, text: string): Def[] {
   const out: Def[] = [];
-  const stack: { name: string; depth: number }[] = [];
+  const stack: { name: string; depth: number; obj: boolean }[] = [];
   let depth = 0, pendingDoc = "";
   const take = () => { const d = pendingDoc.trim().slice(0, _DOC_CAP); pendingDoc = ""; return d; };
   const lines = text.split("\n");
@@ -122,23 +131,26 @@ export function defs_in_file(file: string, text: string): Def[] {
     const trimmed = line.trim();
     if (_isComment(trimmed)) { if (pendingDoc.length < _DOC_CAP) pendingDoc += " " + _stripComment(trimmed); continue; }
     const enclosing = stack.length ? stack[stack.length - 1].name : "";
+    const inObj = stack.length > 0 && stack[stack.length - 1].obj;   // inside a value-position object literal
     const sig = trimmed.replace(/[ \t]*\{[ \t]*$/, "");
     let m: RegExpMatchArray | null;
     if ((m = _CLASS_RE.exec(line))) {
       out.push({ name: m[2], kind: m[1], file, signature: sig, enclosing, doc: take() });
-      if (/\{/.test(line)) stack.push({ name: m[2], depth });
+      if (/\{/.test(line)) stack.push({ name: m[2], depth, obj: false });
     } else if ((m = _FN_RE.exec(line))) {
       out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if ((m = _ARROW_RE.exec(line))) {
       out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if (enclosing && (m = _METHOD_RE.exec(line)) && !_METHOD_SKIP.has(m[1])) {
       out.push({ name: m[1], kind: "method", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
-    } else if ((m = _ENDPOINT_MAP_RE.exec(line))) {
-      // a declarative API operation (object key → { endpoint, method }) — anchorable like a function.
+    } else if (inObj && (m = _DESCRIPTOR_KEY_RE.exec(line))) {
+      // a descriptor entry in a named object-literal map — `createBooking: { endpoint, method }`. Anchorable like
+      // a function; the embedder ranks which entries are real operations from the body window (structural seed).
       out.push({ name: m[1], kind: "function", file, signature: sig, enclosing, doc: take(), body: _body_window(lines, li) });
     } else if ((m = _OBJ_OPEN_RE.exec(line))) {
-      // an object literal assigned to a name → an enclosing scope, so its shorthand methods are extracted.
-      if (/\{/.test(line)) stack.push({ name: m[1], depth });
+      // an object literal assigned to a name → an enclosing scope (flagged obj), so its shorthand methods AND its
+      // `key: {…}` descriptor entries are extracted.
+      if (/\{/.test(line)) stack.push({ name: m[1], depth, obj: true });
     } else if (trimmed) { pendingDoc = ""; }   // a non-comment, non-decl code line breaks the doc run
     for (const ch of line) { if (ch === "{") depth++; else if (ch === "}") { depth--; if (stack.length && depth <= stack[stack.length - 1].depth) stack.pop(); } }
   }
@@ -193,7 +205,7 @@ async function _scan_defs_file(rel: string, text: string): Promise<{ defs: Def[]
 }
 // Bump on any change to the per-file def EXTRACTION (defs_in_file / defs_in_file_treesitter / module_def)
 // so the on-disk cache is invalidated rather than serving stale-shaped defs.
-const _DEF_TABLE_SALT = "def-v1";
+const _DEF_TABLE_SALT = "def-v2";
 
 // WHOLE-REPO def table — assemble the candidate defs (disk-cached per file, so warm re-runs re-parse only the
 // CHANGED files). Returns up to `limit` in candidate order.

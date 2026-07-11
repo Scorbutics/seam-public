@@ -1,4 +1,4 @@
-// Port of src/codebase/atoms.py — the tree-sitter substrate for intra-anchor decomposition.
+// The tree-sitter substrate for intra-anchor decomposition.
 // web-tree-sitter is async, so _Ctx is built via an async factory and the extractors are async.
 // Node accessors are PROPERTIES here (n.type/startIndex/childCount/child(i)) vs the Python binding's
 // callables. Offsets are UTF-16 code units; line/col are counted in the string (matches per the
@@ -147,6 +147,9 @@ export async function makeCtx(content: string, grammar: string): Promise<Ctx | n
   return ctx;
 }
 
+// Snaps a raw line number (e.g. a diff hunk's start line) to its enclosing function node: picks the
+// function-like node whose span starts closest to startLine, tie-broken toward the larger span, and
+// rejects the match if it's more than 3 lines off (the line isn't actually inside a function).
 function _anchor_func(ctx: Ctx, startLine: number): any | null {
   const funcs = ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k));
   if (!funcs.length) return null;
@@ -155,11 +158,14 @@ function _anchor_func(ctx: Ctx, startLine: number): any | null {
   return Math.abs(ctx.span(af)[0] - startLine) <= 3 ? af : null;
 }
 
+// Returns the function's body block, or the function node itself if no body child is found.
 function _body_of(ctx: Ctx, func: any): any {
   for (const c of ctx.children(func)) if (_BODY.has(c.type)) return c;
   return func;
 }
 
+// BFS over the function's children to find its parameter-list node. Stops descending into a nested
+// body or a nested function so a nested closure's own param list is never mistaken for the anchor's.
 function _param_list(ctx: Ctx, func: any): any | null {
   const queue = ctx.children(func);
   while (queue.length) {
@@ -172,6 +178,9 @@ function _param_list(ctx: Ctx, func: any): any | null {
   return null;
 }
 
+// Extracts the bound name(s) from a single parameter node: destructured fields (`{ a, b }`) if
+// present, else the LAST identifier child (handles typed params like `x: Foo`, where `identifier`
+// also matches the type reference — the last one is the parameter's own name).
 function _param_names(ctx: Ctx, paramNode: any): string[] {
   const fields = ctx.collect(paramNode, (k) => k.includes("shorthand_property_identifier_pattern"));
   if (fields.length) return fields.map((f) => ctx.text(f));
@@ -179,6 +188,8 @@ function _param_names(ctx: Ctx, paramNode: any): string[] {
   return ids.length ? [ctx.text(ids[ids.length - 1])] : [];
 }
 
+// Collapses a set of line numbers into sorted, merged contiguous [start, end] ranges (for compact
+// occurrence reporting instead of a flat line list).
 function _merge_lines(lines: number[]): number[][] {
   const out: number[][] = [];
   for (const l of [...new Set(lines)].sort((a, b) => a - b)) {
@@ -188,6 +199,9 @@ function _merge_lines(lines: number[]): number[][] {
   return out;
 }
 
+// Anchors to the function enclosing startLine, then collects its nested function-like nodes
+// ("atoms") that fall entirely inside [startLine, endLine], each tagged with the identifier names
+// it references. Used to decompose a changed region into its nested-function-sized sub-units.
 export async function extract_atoms(content: string, lang: string, startLine: number, endLine: number): Promise<Atom[]> {
   if (!isAvailable()) return [];
   const ctx = await makeCtx(content, lang);
@@ -208,6 +222,11 @@ export async function extract_atoms(content: string, lang: string, startLine: nu
   return atoms;
 }
 
+// Anchors to the function enclosing startLine and derives its "contract": the external names the
+// function's boundary depends on — plain params, destructured signature fields, and fields pulled
+// out of a param via a body-level destructure (`const { a, b } = paramName`), where the source param
+// is dropped once it's just a pass-through. Each contract member records where it's used (merged
+// line ranges) and whether it's ever invoked as a call.
 export async function extract_contract(content: string, lang: string, startLine: number, endLine: number): Promise<ContractMember[]> {
   if (!isAvailable()) return [];
   const ctx = await makeCtx(content, lang);
