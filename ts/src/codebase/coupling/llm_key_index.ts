@@ -40,6 +40,11 @@ import type { GroundingIndex, KeyHit } from "./types.js";
 
 export interface KeyIndexOpts { llm?: boolean; augment?: boolean; model?: string; claudeBin?: string | null; scope?: string; scopeFiles?: Set<string> }
 
+// A LEARN-phase teacher: compiles a matcher rule from LLM/structural evidence, persisted to `.seam/` so
+// every later run replays it deterministically. Each teacher only APPENDS to the shared matcher store, so
+// the registered set runs concurrently (see the Promise.all below).
+interface Teacher { name: string; learn(): Promise<unknown> }
+
 const SNIPPET_CAP = COUPLING.snippetCap;
 const PER_FILE = COUPLING.perFile;
 // the repo-wide LLM-key index (ctx.llmKey) + the run budget (ctx.keyBudget) now live on the EngineCtx —
@@ -321,11 +326,16 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // (the matcher synth+retry) instead of their SUM — the sequential `synth(43) + recv(21) + annot(13)` the
   // globex run showed. (The host-bus/MCP path serves serially, so it stays correct, just doesn't overlap.)
   const { classifyAndPersistRepositories, classifyAndPersistAnnotations } = await import("./receiver_class.js");
-  await Promise.all([
-    blindCandidates.length ? learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx) : Promise.resolve([]),
-    classifyAndPersistRepositories(repo, opts, ctx),   // `repository` matchers for database-classified receivers (custom 2-part data layers)
-    classifyAndPersistAnnotations(repo, opts, ctx),    // `annotation` matchers for custom route/queue/event annotations a hardcoded set misses
-  ]);
+  // TEACHERS — each independently LEARNS one matcher kind (below) and only APPENDS to the shared matcher
+  // store, so they run concurrently. A registered list (not a bare positional Promise.all) so a future
+  // teacher (e.g. the carrier engine, currently gated separately in index.ts) is one more array entry, not
+  // an edit to this call site.
+  const teachers: Teacher[] = [
+    { name: "matcher-synth", learn: () => blindCandidates.length ? learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx) : Promise.resolve([]) },
+    { name: "repository-classifier", learn: () => classifyAndPersistRepositories(repo, opts, ctx) },   // `repository` matchers for database-classified receivers (custom 2-part data layers)
+    { name: "annotation-classifier", learn: () => classifyAndPersistAnnotations(repo, opts, ctx) },     // `annotation` matchers for custom route/queue/event annotations a hardcoded set misses
+  ];
+  await Promise.all(teachers.map((t) => t.learn()));
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
 
