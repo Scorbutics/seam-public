@@ -629,7 +629,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 // `BookingsBean` every interaction delegates through. Its consumers (each walked up to its entry point) are the
 // INTERACTIONS, ranked by intent tier. Pure projection of an already-grown model (no re-grow) — validates whether
 // the star FRAMING reads better than the flow map on a concern; the full plan re-anchors the grow on the center.
-export function renderConcern(model: any, opts: { intent?: string; tokenBudget?: number; centers?: { file: string; symbol: string }[] } = {}): string {
+// NOTE: unlike renderAgent, this view crops by 3 independent env-tunable caps (SEAM_CONCERN_CAP/_VIAS/_OPS)
+// rather than a token budget — there is no `opts.tokenBudget` here (a prior version declared but never read
+// one; if real token-budget cropping is wanted for this view, it needs its own degrade loop, not a bare flag).
+export function renderConcern(model: any, opts: { intent?: string; centers?: { file: string; symbol: string }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";

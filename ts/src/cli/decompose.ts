@@ -379,7 +379,7 @@ async function runCodebase(a: Args): Promise<number> {
         process.stdout.write(renderScenarios(stamped) + "\n");
       } else if (a.format === "concern") {            // CENTER-first star — plural "how is X managed?" questions
         const { renderConcern } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderConcern(stamped, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters }) + "\n");
+        process.stdout.write(renderConcern(stamped, { intent: a.intent, centers: concernCenters }) + "\n");
       } else {                                        // DEFAULT + fallback: the token-budgeted agent surface (spine · region · hubs · frontier · gaps)
         const { renderAgent } = await import("../codebase/llm_context.js");
         process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
