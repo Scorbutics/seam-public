@@ -443,6 +443,20 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
 // NOT _key's file#line#kind — so a coupling-re-added node isn't re-expanded. The DETERMINISTIC tier/hub/coupling
 // containment (default ON) bounds the flood; maxNodes is only a runaway safety backstop.
 const _envFlag = (v: string | undefined): boolean | undefined => (v === undefined || v === "") ? undefined : (v === "1" || v === "true");
+// Read once at module load (process.env doesn't change mid-process) — was `_envFlag(process.env.SEAM_X) ?? default`
+// re-evaluated inline at 3 call sites for SEAM_PROBE_INCLUSIVE and 2 for SEAM_PROJECT.
+const _PROBE_INCLUSIVE = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;   // opt back to the old fully-inclusive floor probe
+const _PROJECT_ON = _envFlag(process.env.SEAM_PROJECT) ?? false;                // map/projection prototype (see PROJECTION section)
+
+// Say the intent-field state out loud — whether embeddings SHAPE this grow (keyed per-intent) or the grow
+// is intent-independent (structural / no embeddings; intent only crops at render, cache reuses across
+// intents). grow_to_terminals and _growCentersMergedImpl (whose callers bypass grow_to_terminals' own entry)
+// both need to say this, so it was hand-duplicated at each call site; one helper instead.
+function _logIntentFieldState(intent: string | undefined, emb: boolean, structuralGrow: boolean | undefined): void {
+  if (!intent) return;
+  const shapesGrow = emb && !structuralGrow;
+  process.stderr.write(`[grow] intent field: ${shapesGrow ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`);
+}
 
 // REGION REACH — the resolved relation(s) that REACHED a candidate from a node ALREADY IN the region (the flood
 // parent). Used to describe HOW a parked decision-point node was reached (the tier-3 frontier), phrasing from the
@@ -564,7 +578,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // consumers) is off-spine sibling code, NOT coupling-relevant — and the hub gate's I4 invariant NEVER drops a
   // crossing-bearing node — so gating it shrinks the probe from a whole-repo flood (8.7s on Acme) to ~the answer's
   // size without losing any coupling file. Opt back to the old fully-inclusive probe with SEAM_PROBE_INCLUSIVE=1.
-  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !(stableFloor && (_envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false));
+  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !(stableFloor && _PROBE_INCLUSIVE);
   const hubGate = (opts.hubGate ?? false) || hubCollapse;   // opts.hubGate only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
   const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
   const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
@@ -697,9 +711,6 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // seam is covered); DOWN of a core node is kept (the mechanism chain handler→service→repo→DB).
     const moves: Move[] = [];
     for (const n of data.nodes as any[]) {
-      // isFlowSubject markers (route/table/queue boundary nodes) are excluded in the LIVE grow — expanding a marker
-      // would flood via build_footprint. In PROJECTION mode (coStruct.neighbors = the map) expanding it just reads the
-      // map's already-discovered edges, which is how a coupling-reached dep (a route's handler → requireAdmin) enters.
       // isFlowSubject markers (route/table/queue boundary nodes) are excluded in the LIVE grow — expanding a marker
       // would flood via build_footprint. In PROJECTION mode (coStruct.neighbors = the map) expanding it just reads the
       // map's already-discovered edges, which is how a coupling-reached dep (a route's handler → requireAdmin) enters.
@@ -934,7 +945,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // Whether the intent SHAPES this grow (embeddings ON and NOT structural → intent-dependent, keyed per-intent)
   // or NOT (embeddings off OR structural → the grown set is intent-independent; intent only crops → cache reuses).
   const intentShapesGrow = emb && !structuralGrow;
-  if (opts.intent) process.stderr.write(`[grow] intent field: ${intentShapesGrow ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`);
+  _logIntentFieldState(opts.intent, emb, structuralGrow);
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }
@@ -1133,7 +1144,7 @@ export async function projectOrGrow(repo: string, centers: { file: string; symbo
 async function _growCentersMergedImpl(repo: string, centers: { file: string; symbol: string }[], opts: GrowToTerminalsOpts): Promise<[any, any[]]> {
   // Say the intent-field state out loud (as grow_to_terminals does) — the caller bypasses that entry, so
   // without this a structural cluster re-grow would print no diagnostic.
-  if (opts.intent) { const emb = await transformersAvailable(); const shapes = emb && !opts.structuralGrow; process.stderr.write(`[grow] intent field: ${shapes ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${opts.structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`); }
+  if (opts.intent) _logIntentFieldState(opts.intent, await transformersAvailable(), opts.structuralGrow);
   const ctx = opts.ctx ?? new EngineCtx();   // ONE shared ctx: the coupling indices/flywheel build once across centers
   let data: any = null; let idx: GrowIndex | null = null;
   const history: any[] = [];
@@ -1218,7 +1229,7 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
     // the already-discovered graph, ~ms) with cheap lazy-fill for its frontier; only fall through to GROW when the map
     // doesn't cover the concern. Scoped to the deterministic (floor) path — the map stores structural + floor-coupling
     // edges. The grow below MERGES its footprint into the map, so the next related concern projects.
-    if ((_envFlag(process.env.SEAM_PROJECT) ?? false) && !opts.dataCouplingLlm) {
+    if (_PROJECT_ON && !opts.dataCouplingLlm) {
       const proj = await projectOrGrow(repo, centers, { ...opts, structuralGrow: true }).catch((e) => { dbg(`[project] failed: ${(e as Error).message}`); return null; });
       if (proj) return [proj];
     }
@@ -1246,10 +1257,9 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
             // complements are matched against the REPO-WIDE floor index, so a same-stack structural flood (the old
             // inclusive stableFloor probe, 8-19s on Acme) buys nothing but cost. Grow each center bordered + coupling-off
             // (≈ the answer's structural pass). SEAM_PROBE_INCLUSIVE=1 restores the fully-inclusive floor probe.
-            const _inclusive = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;
             const floors = await Promise.all(centers.map((c) => {
-              const fc = ctx.fork(); fc.footprintFiles = undefined; if (_inclusive) fc.stableFloor = true;
-              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _inclusive ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
+              const fc = ctx.fork(); fc.footprintFiles = undefined; if (_PROBE_INCLUSIVE) fc.stableFloor = true;
+              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _PROBE_INCLUSIVE ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
             }));
             const union = new Set<string>();
             for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
@@ -1262,7 +1272,7 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
       })
       .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
     // feed the DISCOVERY into the persistent map so the next related concern can PROJECT instead of re-grow.
-    if ((_envFlag(process.env.SEAM_PROJECT) ?? false) && res) { try { mergeGrowIntoMap(repo, res[0]); } catch (e) { dbg(`[project] map merge failed: ${(e as Error).message}`); } }
+    if (_PROJECT_ON && res) { try { mergeGrowIntoMap(repo, res[0]); } catch (e) { dbg(`[project] map merge failed: ${(e as Error).message}`); } }
     return [res];
   }
 
@@ -1275,10 +1285,9 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
   }
   // (1) UNION floor pre-grow (parallel; stableFloor forks write nothing and carry their own budgets).
   emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
-  const _inclusive = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;   // BORDERED probe default (see merged branch)
   const floors = await Promise.all(centers.map((c) => {
-    const fc = ctx.fork(); fc.footprintFiles = undefined; if (_inclusive) fc.stableFloor = true;
-    return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _inclusive ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
+    const fc = ctx.fork(); fc.footprintFiles = undefined; if (_PROBE_INCLUSIVE) fc.stableFloor = true;
+    return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _PROBE_INCLUSIVE ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
   }));
   const union = new Set<string>();
   for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
