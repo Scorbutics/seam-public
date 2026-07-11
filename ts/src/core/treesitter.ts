@@ -6,13 +6,19 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-// file extension -> tree-sitter grammar name (matches src/core/treesitter.py)
+// file extension -> tree-sitter grammar name (matches src/core/treesitter.py). NOT derived
+// programmatically from the LanguageProvider registry (core/resolve/languages/index.ts): a provider's
+// extensions can split across MULTIPLE grammars (TS's `.ts`/`.mts`/`.cts` are the "typescript" grammar but
+// its `.tsx` is a separate "tsx" grammar; `.h` is ambiguously "cpp" here even though C owns `.c`), so the
+// mapping is genuinely per-extension, not per-provider. Every extension the registry's SOURCE_EXTS lists IS
+// expected to have an entry here (enforced by test/core/treesitter_lang_coverage.test.ts) — go/cs/rs are
+// grammar-only extras with no registered LanguageProvider yet, kept only for tree-sitter's own reach.
 const _LANG_BY_EXT: Record<string, string> = {
-  ".py": "python", ".ts": "typescript", ".tsx": "tsx", ".js": "javascript",
-  ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+  ".py": "python", ".pyi": "python", ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
+  ".tsx": "tsx", ".js": "javascript", ".jsx": "javascript", ".mjs": "javascript", ".cjs": "javascript",
   ".c": "c", ".h": "cpp", ".hpp": "cpp", ".hh": "cpp", ".hxx": "cpp",
   ".cc": "cpp", ".cpp": "cpp", ".cxx": "cpp", ".kt": "kotlin", ".kts": "kotlin",
-  ".go": "go", ".rb": "ruby", ".java": "java", ".cs": "csharp", ".rs": "rust",
+  ".go": "go", ".rb": "ruby", ".rake": "ruby", ".java": "java", ".cs": "csharp", ".rs": "rust",
 };
 // grammar name -> tree-sitter-wasms file stem (only csharp differs).
 const _WASM_NAME: Record<string, string> = { csharp: "c_sharp" };
