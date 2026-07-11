@@ -2,7 +2,7 @@
 // they order and link the seams (dimmed-in-place region, flood-order waves, per-scenario Mermaid sequences).
 // Pure projections of the emitted model — no engine logic, no LLM.
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, CROSS_SOURCE as _CROSS_SOURCE, CROSS_KINDS as _CROSS_KINDS, WAVE_RANK as _WAVE_RANK } from "./medium_registry.js";
-import { type Seam, type Ranked, rolesOf, where, facts, lineageOf, memberLines, _container, _shellOf } from "./vocab.js";
+import { type Seam, type Ranked, rolesOf, where, facts, lineageOf, memberLines, _container, _shellOf, buildNodeIndex } from "./vocab.js";
 
 export function renderLlmContext(model: any): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
@@ -148,9 +148,9 @@ export function renderLlmContext(model: any): string {
 // containment). A node-level `edges` link resolves to a seam-to-seam wave link. Shared by the wave view and the
 // per-scenario sequence view (the parent links ARE the sequence edges).
 function _floodParents(model: any, seams: Seam[]): Map<string, { seam: Seam; kind: string; via: string }> {
-  const seamOfNode = new Map<string, Seam>();
-  const nodeLabel = new Map<string, string>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) { seamOfNode.set(String(id), s); nodeLabel.set(String(id), h.label ?? s.label); } }
+  const _nodeIndex = buildNodeIndex(seams);
+  const seamOfNode = new Map<string, Seam>([..._nodeIndex].map(([k, v]) => [k, v.seam]));
+  const nodeLabel = new Map<string, string>([..._nodeIndex].map(([k, v]) => [k, v.label]));
   const parentOf = new Map<string, { seam: Seam; kind: string; via: string }>();
   for (const e of (model.edges ?? []) as any[]) {
     const a = seamOfNode.get(String(e.from)), b = seamOfNode.get(String(e.to));
@@ -224,8 +224,7 @@ export function renderScenarios(model: any): string {
 
   // NODE INDEX. Each hunk is a node; the model's `edges` are node-level.
   type Info = { seam: Seam; label: string; file?: string };
-  const node = new Map<string, Info>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) { const id = (h as any).id; if (id != null) node.set(String(id), { seam: s, label: h.label ?? s.label, file: h.file }); }
+  const node = new Map<string, Info>([...buildNodeIndex(seams)].map(([k, v]) => [k, { seam: v.seam, label: v.label, file: v.hunk.file }]));
 
   // CROSSING BOUNDARY = the synthetic KEY node standing BETWEEN two layers — incident to BOTH a PRODUCE and a
   // CONSUME edge of the SAME medium (a route reached + served, a table written + read, a topic published +

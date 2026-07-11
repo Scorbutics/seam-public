@@ -9,7 +9,7 @@
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, WAVE_RANK as _WAVE_RANK, CROSS_SOURCE as _CROSS_SOURCE, CROSS_SINK as _CROSS_SINK, CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./render/medium_registry.js";
-import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf } from "./render/vocab.js";
+import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf, buildNodeIndex } from "./render/vocab.js";
 export type { Hunk, Seam, Ranked };
 
 // The 8 structural-shape renderers (consumers/deps/refactor/impact/compare/neighborhood/contract/reach)
@@ -637,9 +637,9 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
-  const hunkById = new Map<string, any>();
-  const seamOf = new Map<string, Seam>();
-  for (const s of seams) for (const h of (s.hunks ?? [])) if ((h as any).id != null) { hunkById.set(String((h as any).id), h); seamOf.set(String((h as any).id), s); }
+  const _nodeIndex = buildNodeIndex(seams);
+  const hunkById = new Map<string, any>([..._nodeIndex].map(([k, v]) => [k, v.hunk]));
+  const seamOf = new Map<string, Seam>([..._nodeIndex].map(([k, v]) => [k, v.seam]));
   const edges = (model.edges ?? []) as any[];
   // fan-in (consumers) ignoring containment. `callIn` = only CALL/reference/import in-edges (NOT crossings) — the
   // entry walk climbs those, so a data-READ edge (boundary → reader) is never mistaken for a caller (which would

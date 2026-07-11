@@ -47,3 +47,19 @@ export const memberLines = (s: Seam): string[] => {
 // A seam's WAVE SHELL — hops from the anchor (the flood's own bookkeeping). Shared by the region/wave/
 // scenario views and the agent spine (which needs it for its own shell ordering).
 export const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
+
+// The per-NODE (hunk-id) index every render view rebuilds by hand: id -> its owning seam, its raw hunk, and
+// its display label (the hunk's own label, falling back to the seam's when a hunk carries none — a seam-level
+// synthetic node). renderAgent/renderConcern/region_views's _floodParents/renderScenarios each used to walk
+// `for (const s of seams) for (const h of s.hunks ?? [])` independently to build their own shape of this same
+// index; this is the one shared traversal, callers derive whatever narrower shape (hunkById/seamOfId/label
+// maps, …) they want from it.
+export interface NodeInfo { seam: Seam; hunk: Hunk; label: string }
+export function buildNodeIndex(seams: Seam[]): Map<string, NodeInfo> {
+  const index = new Map<string, NodeInfo>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) {
+    const id = (h as any).id;
+    if (id != null) index.set(String(id), { seam: s, hunk: h, label: h.label ?? s.label });
+  }
+  return index;
+}
