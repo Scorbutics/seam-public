@@ -7,6 +7,7 @@ import { field } from "../../core/treesitter.js";
 import { buildRubyIndex, constName, inferAssignments, isDynamicDispatch, resolveMethodCall, resolveSelfCall, type RubyAssign, type RubyIndex } from "./dispatch.js";
 import { makeCarrierProvider, type CarrierLang, type Receiver, type SinkResult } from "../../codebase/coupling/carrier/lang.js";
 import type { Sink } from "../../codebase/coupling/carrier/trace.js";
+import { EXTENSIONS } from "./resolve.js";
 
 // KNOWN terminal I/O sinks — CONSTANT-receiver class methods, `Receiver.method`. Closed stdlib set.
 const _SINKS: Record<string, Sink> = {
@@ -56,7 +57,7 @@ function _keyPattern(n: any): { value: string; partial: boolean } | null {
 
 const RUBY: CarrierLang<RubyIndex, RubyEnv> = {
   name: "Ruby",
-  extensions: [".rb", ".rake"],
+  extensions: EXTENSIONS,
   callKind: "call",
   selfFallback: "Object",                       // Ruby top-level methods are private instance methods of Object
   grammar: () => "ruby",
