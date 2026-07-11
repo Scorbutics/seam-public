@@ -49,6 +49,24 @@ describe("inferHttpClients — transitive http-client detection", () => {
     expect(clients.has("apiClient")).toBe(true);
     expect(clients.has("Vue.prototype.$http")).toBe(true);
   });
+
+  // Regression: the sink detector used to hand-maintain its own client-name list, separate from — and
+  // diverging from — frameworks/http_clients.ts's HTTP_CLIENTS registry (missing $http/$fetch/useFetch/
+  // request entirely). A wrapper built on any of the registry's clients must be recognised as an http sink.
+  test("a wrapper built on a registered client ($http, $fetch, useFetch, request) is recognised as an http sink", async () => {
+    if (!available()) return;
+    const files = [
+      { rel: "a.js", text: `const svc1 = { get( u ){ return $http.get( u ); } };\n` },
+      { rel: "b.js", text: `const svc2 = { get( u ){ return $fetch( u ); } };\n` },
+      { rel: "c.js", text: `const svc3 = { get( u ){ return useFetch( u ); } };\n` },
+      { rel: "d.js", text: `const svc4 = { get( u ){ return request( u ); } };\n` },
+    ];
+    const clients = await inferHttpClients(files);
+    expect(clients.has("svc1")).toBe(true);
+    expect(clients.has("svc2")).toBe(true);
+    expect(clients.has("svc3")).toBe(true);
+    expect(clients.has("svc4")).toBe(true);
+  });
 });
 
 describe("inferHttpClientMatchers — a custom client's literal-route call emits an http-route key", () => {

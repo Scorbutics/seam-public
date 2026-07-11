@@ -10,7 +10,7 @@ export interface HttpClient {
 }
 
 // Built-in catalogue: the browser `fetch`, Nuxt `$fetch`/`useFetch`, AngularJS/Vue-resource `$http`/`$resource`,
-// a bare `request`, and the verb-form clients axios/ky. (A CUSTOM axios/ky INSTANCE — `const api =
+// a bare `request`, and the verb-form clients axios/ky/got. (A CUSTOM axios/ky INSTANCE — `const api =
 // axios.create(); api.get()` — has an arbitrary receiver name and is the LLM/effect-inference tier's job.)
 export const HTTP_CLIENTS: HttpClient[] = [
   { name: "fetch",     framework: "web" },
@@ -21,19 +21,24 @@ export const HTTP_CLIENTS: HttpClient[] = [
   { name: "request",   framework: "generic" },
   { name: "axios",     verbForms: true, framework: "axios" },
   { name: "ky",        verbForms: true, framework: "ky" },
+  { name: "got",       verbForms: true, framework: "got" },
 ];
 
 let _extra: HttpClient[] = [];
 export function registerHttpClients(cs: HttpClient[]): void { _extra = _extra.concat(cs.filter((c) => c && typeof c.name === "string")); _re = null; }
 export function _resetHttpClients(): void { _extra = []; _re = null; }
 
-const _esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+export const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The canonical set of registered client NAMES (built-in ∪ registered extras) — the single source every
+// consumer (this file's call-extraction regex, effect_inference's bare-sink detector) derives its own
+// matcher from, so a name added here reaches every consumer instead of one hand-kept copy drifting.
+export const httpClientNames = (): string[] => [...HTTP_CLIENTS, ..._extra].map((c) => c.name);
 let _re: RegExp | null = null;
 // The FETCH-CALL matcher, built from the registry: `(?<![\w$])(?:<clients>)\s*\(\s*["'`]<captured path>`. A
 // verb-form client also matches `<name>.<verb>`. Cached; rebuilt when the registry changes. The `g` flag means
 // callers reset `.lastIndex` before use (single-threaded per scan, as the old module-const regex was used).
 function _build(): RegExp {
-  const alt = [...HTTP_CLIENTS, ..._extra].map((c) => _esc(c.name) + (c.verbForms ? "(?:\\.\\w+)?" : "")).join("|");
+  const alt = [...HTTP_CLIENTS, ..._extra].map((c) => escapeRegex(c.name) + (c.verbForms ? "(?:\\.\\w+)?" : "")).join("|");
   return new RegExp("(?<![\\w$])(?:" + alt + ")\\s*\\(\\s*[`'\"]([^`'\"]*)", "g");
 }
 export function httpClientCallRegex(): RegExp { return (_re ??= _build()); }

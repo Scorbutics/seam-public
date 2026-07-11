@@ -13,15 +13,20 @@ import { makeMaskCtx, lineOf } from "./adapters/util.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
 import { HTTP_ROUTE_META, normPath } from "./adapters/http_route.js";
 import { CONST_RE_SRC, ENDPOINT_RE_SRC, resolveExpr } from "./adapters/endpoint_map.js";
+import { httpClientNames, escapeRegex } from "./frameworks/http_clients.js";
 import type { KeyHit } from "./types.js";
 
 // The HTTP-method verbs a client is called with — `client.get('/route')`. So an inferred client's literal-route
 // call sites emit an http-route CONSUME key (the route grounds to the backend handler, like any fetch caller).
 const _HTTP_VERBS = ["get", "post", "put", "delete", "patch", "head", "options", "request"];
 
-// Grounded HTTP I/O sinks — concrete browser/runtime primitives + the ubiquitous client libs. A closed set of
-// REAL boundaries, not a verb heuristic. (Extend per kind when the slice generalises to store/file/db.)
-const _HTTP_SINK_RE = /(?<![\w$.])(?:fetch|axios|XMLHttpRequest|ky|got)(?![\w$])/;
+// Grounded HTTP I/O sinks — the registered client names (frameworks/http_clients.ts — the SAME registry
+// httpClientCallRegex() builds from, so a client added there is recognised here too, including at runtime
+// via registerHttpClients — hence built fresh per call, not cached) plus `XMLHttpRequest`, the one raw
+// browser primitive that doesn't fit the HttpClient call-shape (`new XMLHttpRequest()`, not a
+// name(...)/name.verb(...) call) and so stays a local addition. A closed set of REAL boundaries, not a verb
+// heuristic. (Extend per kind when the slice generalises to store/file/db.)
+const _httpSinkRe = (): RegExp => new RegExp(`(?<![\\w$.])(?:${[...httpClientNames(), "XMLHttpRequest"].map(escapeRegex).join("|")})(?![\\w$])`);
 const _lineSet = (text: string, re: RegExp): Set<number> => {
   const out = new Set<number>(); const g = new RegExp(re.source, "g"); let m: RegExpExecArray | null;
   while ((m = g.exec(text)) !== null) out.add(text.slice(0, m.index).split("\n").length - 1);
@@ -71,7 +76,7 @@ export async function inferHttpClients(files: { rel: string; text: string }[]): 
     const lang = lang_for(rel);
     if (!lang) continue;
     const code = makeMaskCtx(text).comments;            // sink/alias scan on comment-masked code
-    const sinkLines = _lineSet(code, _HTTP_SINK_RE);
+    const sinkLines = _lineSet(code, _httpSinkRe());
     if (sinkLines.size) {
       const ctx = await makeCtx(code, lang);
       if (ctx) for (const b of _bindings(ctx)) if ([...sinkLines].some((l) => l >= b.s && l <= b.e)) httpEffect.add(b.name);
