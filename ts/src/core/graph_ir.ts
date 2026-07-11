@@ -2,6 +2,16 @@
 
 // Where an edge came from — the only axis the completeness promise reads. RESOLVED_* are
 // verifiable; the rest are interpretive overlays. Ordered most→least authoritative.
+//   RESOLVED_FULL    — both ends proven: the importing module's path resolves to the exact target file
+//                       AND the reference is a real call/use (e.g. `X.symbol(` with `X` importing that file).
+//   RESOLVED_PARTIAL — structurally real but a weaker guarantee: a bare reference without call syntax
+//                       (`X.symbol` with no `(`), or a name-only match with no full-path proof (e.g. a
+//                       shared-key data-coupling crossing, always emitted here — never FULL — since a
+//                       matching key name alone is evidence, not a resolved call).
+//   SUGGESTED        — an unverified LEAD: the resolver found a plausible candidate (e.g. an import matched
+//                       by filename guess, not exact path) but can't prove it — a hint to verify, not a fact.
+//   HEUR / LLM       — reserved for a heuristic-only or LLM-judged edge; not currently assigned anywhere in
+//                       this TypeScript port (kept for parity with the Python original / future use).
 export const Provenance = {
   RESOLVED_FULL: "RESOLVED_FULL",
   RESOLVED_PARTIAL: "RESOLVED_PARTIAL",
@@ -14,8 +24,14 @@ export const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p
 
 export interface Node {
   id: string; label: string; file: string; start: number; end: number; kind: string;
-  enclosing: string; complexity: number; role: string; role_confidence: number; relevant: boolean;
-  group: string; intent: string; seam: string; seam_label: string;
+  enclosing: string; complexity: number;
+  role: string;              // anchor-relative BFS classification: "core" | "link" | "environment" | "test"
+  role_confidence: number;
+  relevant: boolean;
+  group: string;              // connected-component cluster id ("g1", "g2", …) from assign_clusters
+  intent: string;             // the cluster's assigned intent label (set per-component in assign_clusters)
+  seam: string; seam_label: string;   // reserved: not currently assigned anywhere — seam assembly builds a
+                                        // separate `Seam` object (codebase.ts) rather than annotating the node
   subcores: any[]; contract: any[];
   direction?: "forward" | "backward";   // bidirectional footprint: reached as a CONSUMER (forward) or a DEPENDENCY (backward)
   entry?: boolean;                       // a framework/external ENTRY (annotation-wired / external-interface callback) — a ROOT, not "isolated"
@@ -36,6 +52,11 @@ export function mkNode(p: Partial<Node> & { id: string }): Node {
   };
 }
 
+// One directed relation between two nodes: `src` calls/imports/references `dst` (or, for a data-coupling
+// crossing, `src`/`dst` are the two sides of a shared key — see Provenance above for how proven it is, and
+// `kind` for what KIND of relation it is: "call" | "import" | "reference" | "interface-impl" | "contains" |
+// "type-ref" | "data-coupling" | a specific coupling-medium pair (e.g. "db-write"/"db-read") — the closed
+// set lives in the data-coupling module's adapter registry, not here (this file stays framework-agnostic).
 export interface Edge { src: string; dst: string; kind: string; provenance: Provenance; line: number; }
 export interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: Edge[]; }
 // A tier-3 decision point: a node whose fan the convergence grow declined (off-intent pivot / collapsed hub /
@@ -77,6 +98,11 @@ export class Graph {
   }
 }
 
+// Disjoint-Set Union (a.k.a. union-find) — groups node ids into connected components in near-O(1) per
+// operation. `find(x)` returns x's component's representative id (with path compression: every node
+// visited gets re-pointed straight at the root, flattening the tree for future lookups). `union(a, b)`
+// merges a's and b's components by pointing one root at the other. Used below to partition the graph into
+// clusters by connectivity — the standard algorithm for "which nodes are transitively linked".
 class DSU {
   parent: Map<string, string>;
   constructor(ids: string[]) {
