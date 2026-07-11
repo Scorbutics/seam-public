@@ -5,7 +5,7 @@
 import { basename, join } from "node:path";
 import { statSync } from "node:fs";
 import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
-import { parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
+import { parse_imports, SKIP_DIRS, provider_for } from "../../core/resolve/languages/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { resolveFileRef } from "../../core/resolve/file_ref.js";
 import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
@@ -296,13 +296,16 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   const accessors = await provider_accessors(s.repo);
   const isInv = (k: string) => /invocation|call_expression/.test(k);
   const nameOf = (n: any): string => { const f = n?.childForFieldName?.("name"); return f ? s.actx!.text(f) : ""; };
-  // The interface named by a `<Iface>.class` argument (Java class-literal). This is the GROUNDING for the service-
-  // locator form — NOT the method name: any call passing a provider interface's class literal (`getProvider(X.class)`,
-  // `getInstance(X.class)`, `getComponent(X.class)`, …) is a DI lookup. Grounding on the ARG TYPE, not a hardcoded
-  // `getProvider|getBean|…` list, keeps this framework-agnostic (the impl set comes from the interface registry).
+  // The interface named by a `<Iface>.class` argument (Java class-literal, from the file's LanguageProvider —
+  // languages/java/resolve.ts). This is the GROUNDING for the service-locator form — NOT the method name: any
+  // call passing a provider interface's class literal (`getProvider(X.class)`, `getInstance(X.class)`,
+  // `getComponent(X.class)`, …) is a DI lookup. Grounding on the ARG TYPE, not a hardcoded `getProvider|getBean|…`
+  // list, keeps this framework-agnostic (the impl set comes from the interface registry). undefined on a
+  // language with no class-literal form (TS/Ruby/Python) ⇒ never matches, same as before.
+  const classLiteralArg = provider_for(s.anchorFile)?.classLiteralArg;
   const classArg = (inv: any): string | null => {
-    const args = inv?.childForFieldName?.("arguments"); if (!args) return null;
-    const m = s.actx!.text(args).match(/([A-Za-z_$][\w$]*)\s*\.\s*class/); return m ? m[1] : null;
+    const args = inv?.childForFieldName?.("arguments"); if (!args || !classLiteralArg) return null;
+    return classLiteralArg(s.actx!.text(args));
   };
   // CHAINED provider calls in the anchor span: `x.groups().createGroup(...)` / `getProvider(X.class).create(...)` →
   // (interface, chained method). This is what lets the hop bind the impl's SPECIFIC method, not the whole class. The

@@ -93,6 +93,10 @@ export interface LanguageProvider {
   // parsing, the language module owns the tree-walk). Currently TS/JS (JSX) only; other languages have no
   // such attribute-binding form. undefined ⇒ no feeds for this language.
   consumerFeeds?: (ctx: any, anchorName: string) => Record<string, any[]>;
+  // the interface named by a class-LITERAL argument in a call's arg-list text (Java `X.class`, the
+  // grounding for a service-locator DI lookup — `getProvider(X.class)`). null ⇒ no class literal in the
+  // text. undefined ⇒ this language has no such reflection-literal form (TS/Ruby/Python).
+  classLiteralArg?: (argsText: string) => string | null;
 }
 
 // Locate a binary on PATH (the sync `shutil.which` equivalent). Returns the absolute path or null.
