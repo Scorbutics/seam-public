@@ -1,6 +1,25 @@
 // Port of src/diff/engine.py — the per-pass classifier orchestrator. Full matrix ported:
 //   cluster ∈ {det, llm, hybrid} · roles ∈ {det, llm, hybrid} · wiring ∈ {det, llm, hybrid}
 // plus the optimized all-LLM path. Passes run in dependency order: roles → wiring → cluster.
+//
+// WHAT EACH SETTING DOES, per pass (not a strategy swap — "hybrid" runs det AND llm together, see below):
+//   roles=llm     llm.assign_roles only.
+//   roles=det     det.assign_roles only.
+//   roles=hybrid  det.assign_roles, THEN llm.reconcile_roles_llm re-judges only the uncertain ones.
+//   wiring=llm    llm.assign_wiring only ("Pass C", authoritative — no det grounding pass follows).
+//   wiring=det    det.assign_wiring + det.reconcile_wiring; merge plan = {kind:"det"} (merge by file+component).
+//   wiring=hybrid det.assign_wiring (candidates) + a coincidence-drop pass, THEN async hybridWiring():
+//                 llm.reconcile_llm draws the wire, det grounds/prunes it; merge plan = {kind:"hybrid",...}.
+//   cluster=llm   llm.assign_clusters (ASYNC) — runs concurrently with the wiring pass if that's also async.
+//   cluster=det   det.assign_clusters only.
+//   cluster=hybrid det.assign_clusters, THEN llm.label_clusters_llm adds LLM prose labels over the det groups.
+//
+// Three worked configs (roles, wiring, cluster in that dependency order):
+//   {det, det, det}       — fully offline, no LLM calls anywhere. Fastest, least semantic.
+//   DEFAULTS = {det, hybrid, llm} — the default: det roles, hybrid wiring (det draws candidates, LLM
+//                 reconciles + grounds), llm clusters (runs concurrently with the wiring reconcile).
+//   {llm, llm, llm}       — takes the SEPARATE all-LLM fast path at the top of classify() below
+//                 (classify_all_llm does cluster+role-voting+wire in one shot), not the per-pass branches.
 import * as det from "./classifier_det.js";
 import * as llm from "./classifier_llm.js";
 import { RegexFactsProvider, type FactsProvider, type HunkFacts } from "./facts.js";
