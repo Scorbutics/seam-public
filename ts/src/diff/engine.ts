@@ -20,6 +20,11 @@
 //                 reconciles + grounds), llm clusters (runs concurrently with the wiring reconcile).
 //   {llm, llm, llm}       — takes the SEPARATE all-LLM fast path at the top of classify() below
 //                 (classify_all_llm does cluster+role-voting+wire in one shot), not the per-pass branches.
+// NOT a strategy pair: `det`/`llm` are namespace imports, and both modules export same-named functions
+// (assign_roles, assign_wiring, assign_clusters) — but there is no shared interface enforcing parity, and
+// the signatures genuinely differ (det.assign_roles(work, facts) vs llm.assign_roles(hunks, opts); det's
+// passes are sync, llm.assign_clusters is async). Don't assume the two are interchangeable at a call site —
+// each is only ever called from the specific branch below that matches its actual signature.
 import * as det from "./classifier_det.js";
 import * as llm from "./classifier_llm.js";
 import { RegexFactsProvider, type FactsProvider, type HunkFacts } from "./facts.js";
