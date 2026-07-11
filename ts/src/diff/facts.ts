@@ -1,6 +1,6 @@
 // Port of src/diff/facts.py — the universal HunkFacts IR + the regex producer & provider strategy.
 import type { Hunk } from "./parser.js";
-import { _added, _CALL_ROOT, _defs_refs, _IDENT, _JSX_TAG } from "./lang.js";
+import { _added, _CALL_ROOT, _defs_refs, _IDENT, _JSX_TAG, _LOGIC, _IMPORT_LINE, _TYPE_DECL, _CODE_DEF, _TEST_PATH, _TEST_MARKER, _IMPLEMENTS, _DIRECTIVE } from "./lang.js";
 import { findAll, findGroup1, sorted } from "../core/sets.js";
 
 export const FACTS_SCHEMA_VERSION = 1;
@@ -14,16 +14,6 @@ function _markerOf(line: string): string {
 function _stripMarker(line: string): string {
   return "+- ".includes(line.slice(0, 1)) ? line.slice(1) : line;
 }
-
-// --- language surface patterns ----------------------------------------------
-const _LOGIC = /\b(if|else|for|while|switch|case|return|throw|try|catch|await|yield)\b|&&|\|\||[!=<>]=|\?\./;
-const _IMPORT_LINE = /^\s*(import\b|export\b.*\bfrom\b|from\b.+\bimport\b|export\s*\{)/;
-const _TYPE_DECL = /\b(interface|type|enum)\s+[A-Za-z_]/;
-const _CODE_DEF = /\b(function|class|def|fun)\b|=>/;
-const _TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|[._/](test|spec)\.[a-z0-9]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py|ts|js)$|_spec\.rb$|test[a-z0-9_]*\.(kt|java)$/i;
-const _TEST_MARKER = /\b(describe|it|expect|test)\s*\(|@Test\b|\bself\.assert|\bunittest\b|\bpytest\b/;
-const _IMPLEMENTS = /\bimplements\s+([A-Z]\w*)/g;
-const _DIRECTIVE = /^\s*["'](?:use [a-z]+)["'];?\s*$/;
 
 function _is_ambient_line(stripped: string): boolean {
   const s = stripped.trim();

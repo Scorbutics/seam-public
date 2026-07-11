@@ -102,3 +102,16 @@ export function _salient_symbols(lines: string[]): Set<string> {
 
 // Re-exported regex atoms used by facts.ts (the call/JSX subjects on a line).
 export { _CALL_ROOT, _JSX_TAG };
+
+// --- language surface patterns (used by facts.ts's ambient-line / decision / test / SQL detection) -------
+// Moved here from facts.ts, which used to keep its own independent copy despite this file's header claiming
+// to be the one place language-specific knowledge lives — a real inconsistency a language-separation audit
+// flagged. Byte-identical regexes, just consolidated.
+export const _LOGIC = /\b(if|else|for|while|switch|case|return|throw|try|catch|await|yield)\b|&&|\|\||[!=<>]=|\?\./;
+export const _IMPORT_LINE = /^\s*(import\b|export\b.*\bfrom\b|from\b.+\bimport\b|export\s*\{)/;
+export const _TYPE_DECL = /\b(interface|type|enum)\s+[A-Za-z_]/;
+export const _CODE_DEF = /\b(function|class|def|fun)\b|=>/;
+export const _TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|[._/](test|spec)\.[a-z0-9]+$|(^|\/)test_[^/]+\.py$|_test\.(go|py|ts|js)$|_spec\.rb$|test[a-z0-9_]*\.(kt|java)$/i;
+export const _TEST_MARKER = /\b(describe|it|expect|test)\s*\(|@Test\b|\bself\.assert|\bunittest\b|\bpytest\b/;
+export const _IMPLEMENTS = /\bimplements\s+([A-Z]\w*)/g;
+export const _DIRECTIVE = /^\s*["'](?:use [a-z]+)["'];?\s*$/;
