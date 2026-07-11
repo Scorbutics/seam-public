@@ -42,6 +42,26 @@ import { type Args, parseArgs, parseCenters, resolveEngines } from "./args.js";
 import { err, stamp } from "./util.js";
 import { runAsk, runConsumerSet, runDependencySet, runRefactorFacts, runImpact, runCompare, runNeighborhood, runContract, runReaches } from "./queries.js";
 
+// The llm_context view-renderer table — the one map both the codebase-mode format switch (runCodebase) and
+// the --from-seams switch look up into, instead of each hand-writing its own `if (a.format === "…") { const
+// {renderX} = await import(...); ... }` branch (the two had partially drifted copies of the same llm-context/
+// agent cases). --from-seams still only ALLOWS a subset of keys (it has no `concernCenters`, no live graph for
+// waves/scenarios to reconsider) — that restriction stays at its own call site, not in this table.
+const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { file: string; symbol: string }[]) => Promise<string>> = {
+  "llm-context": async (m) => { const { renderLlmContext } = await import("../codebase/llm_context.js"); return renderLlmContext(m); },
+  waves: async (m) => { const { renderWaves } = await import("../codebase/llm_context.js"); return renderWaves(m); },
+  scenarios: async (m) => { const { renderScenarios } = await import("../codebase/llm_context.js"); return renderScenarios(m); },
+  concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
+  agent: async (m, a) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent }); },
+};
+
+// The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
+// consumers/dependencies additionally need the `scan` module (a footprint build), the rest just `a`.
+const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/scan/index.js")) => Promise<number>> = {
+  consumers: runConsumerSet, dependencies: runDependencySet, impact: runImpact, refactor: runRefactorFacts,
+  reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
+};
+
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
@@ -89,14 +109,7 @@ async function runCodebase(a: Args): Promise<number> {
   // flow, and forcing it through the spine machinery over-structures it. Offline/deterministic; reuses the
   // consumers footprint build_consumers_graph already produces. See codebase/grow/project_set.ts.
   if (a.ask) return runAsk(a);
-  if (a.query === "consumers") return runConsumerSet(a, scan);
-  if (a.query === "dependencies") return runDependencySet(a, scan);
-  if (a.query === "impact") return runImpact(a);
-  if (a.query === "refactor") return runRefactorFacts(a);
-  if (a.query === "reaches") return runReaches(a);
-  if (a.query === "contract") return runContract(a);
-  if (a.query === "neighborhood") return runNeighborhood(a);
-  if (a.query === "compare") return runCompare(a);
+  if (a.query && QUERY_HANDLERS[a.query]) return QUERY_HANDLERS[a.query](a, scan);
 
 
   const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";
@@ -368,21 +381,9 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "json") {               // EXPLICIT raw model to stdout (the machine escape — `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → JSON on stdout.\n`);
         process.stdout.write(payload + "\n");
-      } else if (a.format === "llm-context") {        // the FULL region view (no crop) — heavier, for when you want everything
-        const { renderLlmContext } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderLlmContext(stamped) + "\n");
-      } else if (a.format === "waves") {              // the same region read as FLOOD ORDER (wave-by-wave + parent links)
-        const { renderWaves } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderWaves(stamped) + "\n");
-      } else if (a.format === "scenarios") {          // the region's end-to-end flows as Mermaid sequence diagrams
-        const { renderScenarios } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderScenarios(stamped) + "\n");
-      } else if (a.format === "concern") {            // CENTER-first star — plural "how is X managed?" questions
-        const { renderConcern } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderConcern(stamped, { intent: a.intent, centers: concernCenters }) + "\n");
-      } else {                                        // DEFAULT + fallback: the token-budgeted agent surface (spine · region · hubs · frontier · gaps)
-        const { renderAgent } = await import("../codebase/llm_context.js");
-        process.stdout.write(renderAgent(stamped, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n");
+      } else {                                        // llm-context/waves/scenarios/concern, or the DEFAULT+fallback agent surface
+        const render = VIEW_RENDERERS[a.format] ?? VIEW_RENDERERS.agent;
+        process.stdout.write(await render(stamped, a, concernCenters) + "\n");
       }
       return 0;
     }
@@ -561,9 +562,10 @@ async function main(argv: string[]): Promise<number> {
   // `llm-context` format is a token-economical, no-collapse, confidence-ranked view for a downstream agent.
   if (a.fromSeams) {
     const m = JSON.parse(readFileSync(a.fromSeams, "utf-8"));
-    if (a.format === "llm-context") { const { renderLlmContext } = await import("../codebase/llm_context.js"); process.stdout.write(renderLlmContext(m) + "\n"); return 0; }
-    if (a.format === "agent") { const { renderAgent } = await import("../codebase/llm_context.js"); process.stdout.write(renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent }) + "\n"); return 0; }
-    err("--from-seams supports --format llm-context | agent");
+    // Only these two — --from-seams has no live graph to re-derive waves/scenarios/concern's centers from.
+    if (a.format !== "llm-context" && a.format !== "agent") err("--from-seams supports --format llm-context | agent");
+    process.stdout.write(await VIEW_RENDERERS[a.format](m, a) + "\n");
+    return 0;
   }
   if (a.scan || a.graph || a.expandGraph || a.growFrom) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph / --grow-from
   reset_usage();
