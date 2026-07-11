@@ -224,6 +224,10 @@ async function runCodebase(a: Args): Promise<number> {
       // (grow_to_terminals; env vars still override, set =0 to opt out) — every caller gets them, so no per-CLI
       // wiring is needed. maxNodes stays the runaway backstop — convergence terminates the flood first.
       const gOpts: any = { bidirectional: a.bidirectional, flagTruncation: true, intent: a.intent, model: a.model, claudeBin: a.claudeBin, dataCoupling: a.dataCoupling, excludeDirs: a.excludeDirs, includeTests: a.includeTests, maxSteps: growSteps, maxNodes: growNodes, onWave };
+      // Every grow call below re-spreads gOpts with its own {ctx, dataCoupling*, structuralGrow} overrides —
+      // one helper instead of `{ ...gOpts, ctx, ... }` repeated at each call site (and a forgotten field there
+      // being a silent per-site drift instead of a one-place fix).
+      const gOptsFor = (ctx: any, overrides: Record<string, any> = {}) => ({ ...gOpts, ctx, ...overrides });
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
       const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
@@ -234,8 +238,8 @@ async function runCodebase(a: Args): Promise<number> {
       const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
-        if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, { ...gOpts, ctx, structuralGrow: structural || undefined });
-        return orch.grow_to_terminals(a.repo, af, sym, { ...gOpts, dataCoupling: dc, dataCouplingLlm: false, ctx, structuralGrow: structural || undefined });
+        if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, gOptsFor(ctx, { structuralGrow: structural || undefined }));
+        return orch.grow_to_terminals(a.repo, af, sym, gOptsFor(ctx, { dataCoupling: dc, dataCouplingLlm: false, structuralGrow: structural || undefined }));
       };
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
       let hist: any[] = [];
@@ -264,7 +268,7 @@ async function runCodebase(a: Args): Promise<number> {
           // center-first (centerPicked): the mechanisms are CONFIRMED → grow them STRUCTURALLY (intent-free →
           // the answer cache reuses across intent rewordings that pick the same centers). A plain multi-anchor
           // covering set (non-concern) keeps the env-driven default.
-          const results = await orch.grow_centers_scoped(a.repo, centers, { ...gOpts, ctx, dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined });
+          const results = await orch.grow_centers_scoped(a.repo, centers, gOptsFor(ctx, { dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined }));
           for (let i = 0; i < results.length; i++) {
             if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)\n`); break; }
             mergeOne(results[i], centers[i].name);
@@ -334,7 +338,7 @@ async function runCodebase(a: Args): Promise<number> {
             // The cluster was CONFIRMED by intent-weighted detection above; grow it STRUCTURALLY (intent-free →
             // the re-grow reuses the cache when a reworded intent detects the same cluster).
             const results = clusterCenters.length > 1
-              ? await orch.grow_centers_scoped(a.repo, clusterCenters, { ...gOpts, ctx: cctx, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCoupling && dcLlm, structuralGrow: true })
+              ? await orch.grow_centers_scoped(a.repo, clusterCenters, gOptsFor(cctx, { dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCoupling && dcLlm, structuralGrow: true }))
               : [await growAnchorFootprint(clusterCenters[0].file, clusterCenters[0].symbol, cctx, a.dataCoupling, true)];
             for (const r of results) {
               if (!r) continue;
