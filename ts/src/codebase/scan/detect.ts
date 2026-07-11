@@ -38,9 +38,7 @@ export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
   const stem = anchorFile ? stemOf(anchorFile) : "";
   if (!stem) return;
   const anchorAbs = np(join(repo, anchorFile));
-  const resolvedFiles = new Set(
-    g.resolved_edges().filter((e) => e.dst === g.anchor).map((e) => g.nodes.get(e.src)?.file).filter(Boolean),
-  );
+  const resolvedFiles = new Set(g.edgesQuery({ dst: g.anchor }).map((e) => g.nodes.get(e.src)?.file).filter(Boolean));
   const candidates: Edge[] = [];
   outer: for (const [dir, files] of repoWalk(repo, _CB_SKIP)) {
     for (const fn of files) {
@@ -129,7 +127,7 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
   const byName = new Map<string, any>(node.contract.map((c: any) => [c.name, c]));
   if (!byName.size) return;
   const anchorName = node.label;
-  const consumers = new Set(g.edges.filter((e) => e.dst === g.anchor).map((e) => e.src));
+  const consumers = new Set(g.edgesQuery({ dst: g.anchor }).map((e) => e.src));
   const seen = new Set<string>();
   for (const cid of consumers) {
     const cn = g.nodes.get(cid);

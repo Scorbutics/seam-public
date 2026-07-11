@@ -96,6 +96,17 @@ export class Graph {
     this._adjLen = this.edges.length;
     return (this._adjCache = undirected_adjacency(this.resolved_edges()));
   }
+  // THE one query surface for "is there already an edge here" — every src/dst/kind lookup should go
+  // through this instead of hand-rolling `this.edges.filter(...)`, so the resolved-vs-raw choice is a
+  // single explicit parameter instead of a per-call-site judgment call that's easy to get backwards
+  // (a raw `this.edges` read silently admits SUGGESTED/unresolved leads as if they were proven facts —
+  // that exact mistake once let an unverified lead be treated as a real consumer). Defaults to
+  // resolved-only, the safe reading; pass `resolved: false` only when a caller genuinely wants leads too.
+  edgesQuery(opts: { src?: string; dst?: string; kind?: string; resolved?: boolean } = {}): Edge[] {
+    const { src, dst, kind, resolved = true } = opts;
+    const pool = resolved ? this.resolved_edges() : this.edges;
+    return pool.filter((e) => (src === undefined || e.src === src) && (dst === undefined || e.dst === dst) && (kind === undefined || e.kind === kind));
+  }
 }
 
 // Disjoint-Set Union (a.k.a. union-find) — groups node ids into connected components in near-O(1) per
