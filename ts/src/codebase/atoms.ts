@@ -4,6 +4,7 @@
 // callables. Offsets are UTF-16 code units; line/col are counted in the string (matches per the
 // tree-sitter facts reasoning — line counts are unit-agnostic).
 import { available as isAvailable, getParser, langForExt } from "../core/treesitter.js";
+import { provider_for } from "../core/resolve/languages/index.js";
 const langForExtAtoms = langForExt;
 
 // --- per-grammar node-kind registry (concepts, never literal TSX kinds) ----------------------
@@ -254,32 +255,18 @@ export async function extract_contract(content: string, lang: string, startLine:
   return members;
 }
 
-export async function extract_consumer_feeds(content: string, lang: string, anchorName: string): Promise<Record<string, any[]>> {
+// What a CALLER binds into an anchor tag/attribute form — JSX (`<Anchor prop={value} />`) for TS/JS today.
+// Dispatches to the file's LanguageProvider.consumerFeeds (undefined ⇒ that language has no such attribute-
+// binding concept, e.g. Java/Ruby/Python ⇒ {}). Kept OUT of this generic file's own logic — see
+// languages/typescript/jsx.ts for the actual tree-walk (a language-separation audit flagged the raw
+// jsx_opening_element/jsx_attribute node kinds as a leak into this cross-language module).
+export async function extract_consumer_feeds(content: string, file: string, anchorName: string): Promise<Record<string, any[]>> {
+  const feedsFor = provider_for(file)?.consumerFeeds;
+  if (!feedsFor) return {};
   if (!isAvailable()) return {};
+  const lang = lang_for(file);
+  if (!lang) return {};
   const ctx = await makeCtx(content, lang);
   if (!ctx) return {};
-  const feeds: Record<string, any[]> = {};
-  const elements = ctx.collect(ctx.root, (k) => k === "jsx_opening_element" || k === "jsx_self_closing_element");
-  for (const el of elements) {
-    const tag = ctx.children(el).find((c) => ["identifier", "member_expression", "nested_identifier"].includes(c.type));
-    if (!tag || ctx.text(tag) !== anchorName) continue;
-    for (const attr of ctx.children(el).filter((c) => c.type === "jsx_attribute")) {
-      const ch = ctx.children(attr);
-      const pnameNode = ch.find((c) => c.type.includes("property_identifier") || c.type === "identifier");
-      if (!pnameNode) continue;
-      const pname = ctx.text(pnameNode);
-      const valnode = ch.find((c) => c.type === "jsx_expression" || c.type === "string");
-      let vnode: any = null, value: string;
-      if (!valnode) value = "true";
-      else if (valnode.type === "jsx_expression") {
-        const inner = ctx.children(valnode).filter((c) => c.isNamed);
-        vnode = inner.length ? inner[0] : valnode;
-        value = ctx.text(vnode);
-      } else { vnode = valnode; value = ctx.text(valnode); }
-      const feed: any = { value: value.trim(), line: ctx.span(attr)[0] };
-      if (vnode) { feed.valLine = ctx.span(vnode)[0]; feed.valCol = ctx.col(vnode.startIndex); }
-      (feeds[pname] ??= []).push(feed);
-    }
-  }
-  return feeds;
+  return feedsFor(ctx, anchorName);
 }

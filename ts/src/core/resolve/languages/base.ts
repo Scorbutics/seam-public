@@ -88,6 +88,11 @@ export interface LanguageProvider {
   // true ⇒ the regex def-extractor (defs_in_file) is the VALIDATED path for this language; other
   // languages fall back to the language-agnostic tree-sitter extractor. Currently TS/JS only.
   regexDefsValidated?: boolean;
+  // consumer FEEDS a caller binds into a JSX-style tag matching the anchor (`<Anchor prop={value} />` ->
+  // {prop: [{value, line}]}), from a pre-built parse ctx (duck-typed, like `entrypoint` above — atoms owns
+  // parsing, the language module owns the tree-walk). Currently TS/JS (JSX) only; other languages have no
+  // such attribute-binding form. undefined ⇒ no feeds for this language.
+  consumerFeeds?: (ctx: any, anchorName: string) => Record<string, any[]>;
 }
 
 // Locate a binary on PATH (the sync `shutil.which` equivalent). Returns the absolute path or null.

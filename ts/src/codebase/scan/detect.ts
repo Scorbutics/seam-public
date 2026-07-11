@@ -127,7 +127,7 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
     if (!lang) continue;
     const content = readRepoFile(repo, cn.file);
     if (content === null) continue;
-    const fed = await atoms.extract_consumer_feeds(content, lang, anchorName);
+    const fed = await atoms.extract_consumer_feeds(content, cn.file, anchorName);
     for (const [pname, binds] of Object.entries(fed)) {
       const member = byName.get(pname);
       if (!member) continue;
