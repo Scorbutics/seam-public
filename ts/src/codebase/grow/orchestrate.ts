@@ -5,6 +5,27 @@
 // deterministic frontier walk + wave/tier/hub machinery reproduce its result offline in a fraction
 // of the time. The wave grow is now fully DETERMINISTIC — the former opt-in per-wave LLM intent border
 // was removed; the tier/hub/coupling containment carries the grow offline.
+//
+// INVARIANTS (cited inline below as I1/I3/I4/I5/I7 — shorthand for the design rules the border/hub/tier
+// machinery must never violate; reconstructed here from their usages, since no earlier doc defines them):
+//   I1 — ABSENCE IS INERT: a mechanism with no data to run on (no ubiquity index, a flag left off) has
+//        NO effect — it never actively changes the grow, it just doesn't fire.
+//   I2 — a mechanism's OUTPUT (e.g. a hub marker) is present only when its OWN governing flag is on —
+//        never surfaced as a side effect of a different flag/mechanism.
+//   I3 — NEVER SILENTLY DROP: when a node is gated/capped/off-intent/budget-cut, CROP it visibly (collapse
+//        it to a `hub:` marker, park it as a decision point, keep it dimmed) rather than deleting it with
+//        no trace — the reader can always see why the region stops where it does.
+//   I4 — NEVER GATE A GROUNDED CROSSING: a node that bears a REAL data-coupling boundary (a route/table/
+//        queue crossing, a flow-subject, a 1:1 terminal) is exempt from every hub/ubiquity/fan heuristic —
+//        those heuristics only ever prune off-spine sibling noise, never the flow's own mechanism.
+//   I5 — GRACEFUL FIELD DEGRADATION: when the intent/embedding field is unavailable, fall back to the
+//        legacy structural (distance/hub) gate — never worse than a full flood, never park the whole
+//        frontier for lack of a field.
+//   I7 — ONE MECHANISM PER CONCERN: don't stand up a second parallel path for something already covered
+//        (the region-centroid field reuses the SAME soft-border walker rather than a second one; the wave
+//        stream and diagnostics stay on separate, single channels — stdout vs stderr — never mixed).
+// (I6 is not referenced anywhere in this file; I2 above is inferred from its one occurrence — treat it as
+// directional, not authoritative.)
 import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
