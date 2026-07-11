@@ -24,18 +24,31 @@ const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.end
 
 // Layer 2: consumers that load the anchor via a STRING-PATH dynamic import — a text scan (no
 // tree-sitter), surfaced as a SUGGESTED blind spot (never a resolved edge).
+//
+// A string-literal `import("./x")` resolves like a static import (languages/typescript/resolve.ts's
+// `_DYNIMPORT_RE`/`imports()` already does this for the `const {a} = await import("literal")` shape,
+// the one this text scan itself matches via `_DYNAMIC_IMPORT_RE`'s required quotes) — so a file that
+// dynamic-imports the anchor is frequently ALREADY a resolved consumer in `g.edges`. Reporting it
+// again here as an unresolved "can't see this" blindspot would contradict the graph's own resolved
+// edge. Deduce from the grounded fact instead of re-guessing: skip any candidate file that already
+// has a RESOLVED edge into the anchor; only the genuinely-unresolved residue is a real blindspot.
 export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
   if (!g.anchor || !g.nodes.has(g.anchor) || !repo) return;
   const anchorFile = g.nodes.get(g.anchor)!.file;
   const stem = anchorFile ? stemOf(anchorFile) : "";
   if (!stem) return;
   const anchorAbs = np(join(repo, anchorFile));
+  const resolvedFiles = new Set(
+    g.resolved_edges().filter((e) => e.dst === g.anchor).map((e) => g.nodes.get(e.src)?.file).filter(Boolean),
+  );
   const candidates: Edge[] = [];
   outer: for (const [dir, files] of repoWalk(repo, _CB_SKIP)) {
     for (const fn of files) {
       if (!_SCAN_EXT.some((e) => fn.endsWith(e))) continue;
       const fpath = join(dir, fn);
       if (np(fpath) === anchorAbs) continue;
+      const rel = np(fpath).startsWith(np(repo) + "/") ? np(fpath).slice(np(repo).length + 1) : np(fpath);
+      if (resolvedFiles.has(rel)) continue;
       let text: string;
       try { text = readFileSync(fpath, "utf-8"); } catch { continue; }
       if (!text.includes("import(") || !text.includes(stem)) continue;
@@ -43,7 +56,6 @@ export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
         if (!line.includes("import(")) return;
         for (const m of line.matchAll(_DYNAMIC_IMPORT_RE)) {
           if (stemOf(m[1]) === stem) {
-            const rel = np(fpath).startsWith(np(repo) + "/") ? np(fpath).slice(np(repo).length + 1) : np(fpath);
             candidates.push({ src: g.anchor, dst: `${rel}:${idx + 1}`, kind: "dynamic-import", provenance: "SUGGESTED", line: 0 });
           }
         }

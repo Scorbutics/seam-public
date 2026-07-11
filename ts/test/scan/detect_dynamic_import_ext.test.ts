@@ -29,3 +29,19 @@ describe("detect_dynamic_import_blindspots — .mts/.cts coverage", () => {
     expect(g.blindspots[0].candidates[0].dst).toContain("src/loader.mts");
   });
 });
+
+describe("detect_dynamic_import_blindspots — dedup against an already-resolved edge", () => {
+  // A `const {x} = await import("./service")` is exactly the shape languages/typescript/resolve.ts's
+  // own `_DYNIMPORT_RE` already resolves into a real "reference" edge (consumer -> anchor). If the
+  // graph already carries that resolved edge, re-reporting the SAME call site as an unresolvable
+  // "can't see this" blindspot would contradict the graph's own resolved fact.
+  test("a consumer file with a RESOLVED edge into the anchor is not also reported as a blindspot", () => {
+    const g = new Graph();
+    g.anchor = "n1";
+    g.nodes.set("n1", mkNode({ id: "n1", label: "service", file: "src/service.ts" }));
+    g.nodes.set("n2", mkNode({ id: "n2", label: "loader", file: "src/loader.mts" }));
+    g.edges.push({ src: "n2", dst: "n1", kind: "reference", provenance: "RESOLVED_FULL", line: 0 });
+    detect_dynamic_import_blindspots(g, repo);
+    expect(g.blindspots.length).toBe(0);
+  });
+});
