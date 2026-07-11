@@ -8,7 +8,7 @@ import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS, provider_for } from "../../core/resolve/languages/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { resolveFileRef } from "../../core/resolve/file_ref.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD } from "../atoms.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
@@ -265,10 +265,10 @@ function _anchorCalledMethods(s: DepScan): Set<string> {
   const u = s.aunits.find((x) => x[0] === s.symbol);
   if (!s.actx || !u || (u[1] !== "method" && u[1] !== "function")) return called;   // class anchor → keep class-level binding
   const [, , alo, ahi] = u;
-  for (const c of s.actx.collect(s.actx.root, (k: string) => /invocation|call_expression/.test(k))) {
+  for (const c of s.actx.collect(s.actx.root, (k: string) => _CALL.has(k))) {
     const [cl] = s.actx.span(c);
     if (cl < alo || cl > ahi) continue;
-    const nm = (c as any).childForFieldName?.("name");
+    const nm = _CALL_NAME_FIELD.map((f) => (c as any).childForFieldName?.(f)).find(Boolean);
     if (nm) called.add(s.actx.text(nm));
   }
   return called;
@@ -294,8 +294,8 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   const [, , alo, ahi] = anchor;
   const cap = _implCap();
   const accessors = await provider_accessors(s.repo);
-  const isInv = (k: string) => /invocation|call_expression/.test(k);
-  const nameOf = (n: any): string => { const f = n?.childForFieldName?.("name"); return f ? s.actx!.text(f) : ""; };
+  const isInv = (k: string) => _CALL.has(k);
+  const nameOf = (n: any): string => { const f = _CALL_NAME_FIELD.map((fn) => n?.childForFieldName?.(fn)).find(Boolean); return f ? s.actx!.text(f) : ""; };
   // The interface named by a `<Iface>.class` argument (Java class-literal, from the file's LanguageProvider —
   // languages/java/resolve.ts). This is the GROUNDING for the service-locator form — NOT the method name: any
   // call passing a provider interface's class literal (`getProvider(X.class)`, `getInstance(X.class)`,
@@ -317,7 +317,7 @@ async function _providerFactoryPass(s: DepScan): Promise<void> {
   const classCands: { x: string; method: string | null }[] = [];   // (`X.class` interface candidate, chained method | null)
   for (const outer of s.actx.collect(s.actx.root, isInv)) {
     const [cl] = s.actx.span(outer); if (cl < alo || cl > ahi) continue;
-    const obj = (outer as any).childForFieldName?.("object");   // the receiver (Java method_invocation)
+    const obj = _CALL_RECV_FIELD.map((f) => (outer as any).childForFieldName?.(f)).find(Boolean);   // the receiver (Java "object" / Ruby "receiver")
     if (obj && isInv(obj.type) && accessors.has(nameOf(obj))) { const on = nameOf(obj); called.add(on); for (const i of accessors.get(on)!) addChain(i, nameOf(outer)); }
     else if (obj && isInv(obj.type)) { const x = classArg(obj); if (x) classCands.push({ x, method: nameOf(outer) }); }   // `m(X.class).chained()`
     else { const on = nameOf(outer); if (accessors.has(on)) called.add(on); else { const x = classArg(outer); if (x) classCands.push({ x, method: null }); } }
