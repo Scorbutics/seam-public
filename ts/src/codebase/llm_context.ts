@@ -454,6 +454,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     }
     return out;
   };
+  // CAPPED-LIST + overflow line — the shape every "also X" / cross-stack / pipeline / frontier section repeats:
+  // render the first `cap` items, then one rolled-up "+N more <noun> — <suffix>" line if there's a remainder
+  // (`extraRest` folds in an out-of-band count, e.g. frontier's server-side-truncated tally). One helper instead
+  // of the same slice/forEach/overflow-line triplet hand-written per section (with the wording drifting between
+  // copies — "more sink(s)" vs "more producer(s)" vs …).
+  const renderCapped = <T,>(items: T[], cap: number, renderLine: (item: T, i: number) => string, noun: string,
+      extraRest = 0, suffix = "raise --token-budget"): string[] => {
+    const shown = items.slice(0, cap);
+    const out = shown.map((item, i) => renderLine(item, i));
+    const rest = (items.length - shown.length) + extraRest;
+    if (rest > 0) out.push(`  (+${rest} more ${noun} — ${suffix})`);
+    return out;
+  };
   // ALSO REACHES — the OTHER grounded downstream sinks the intent didn't crown as primary. Shown right under the
   // spine so a wrong primary pick is one glance from correction (repoint --intent), and no real terminal is hidden.
   const alsoReachesSection = (): string[] => {
@@ -462,10 +475,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // in the region, demoted.
     const alts = spineAlternates.filter((s) => !offSubject(s) && !_isTest(s.primary?.file) && !readerSet.has(s.id));
     if (!alts.length) return [];
-    const out = ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)"];
-    alts.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
-    if (alts.length > EXEMPT_N) out.push(`  (+${alts.length - EXEMPT_N} more sink(s) — raise --token-budget)`);
-    return out;
+    return ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)",
+      ...renderCapped(alts, EXEMPT_N, (s) => seamLine(s), "sink(s)")];
   };
   // ALSO WRITES — the OTHER producers of a store boundary this flow writes: the table's alternate ENTRY POINTS
   // (a grep for the write can find these files, but not that they share THIS flow's table). Exempt from the region
@@ -475,10 +486,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!coProducers.length) return [];
     const seen = new Set<string>();
     const uniq = [...coProducers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
-    const out = ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)"];
-    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
-    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more producer(s) — raise --token-budget)`);
-    return out;
+    return ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)",
+      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "producer(s)")];
   };
   // ALSO READ — the OTHER files that read the subject table (the display/consume side): admin lists, the member
   // invoice page. Exempt from the region crop so the "…and where is it displayed" half isn't lost to a hub label.
@@ -486,23 +495,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!readers.length) return [];
     const seen = new Set<string>();
     const uniq = [...readers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
-    const out = ["", "## Also read (where this flow's data is consumed — the display/read side)"];
-    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
-    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more consumer(s) — raise --token-budget)`);
-    return out;
+    return ["", "## Also read (where this flow's data is consumed — the display/read side)",
+      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "consumer(s)")];
   };
   // PIPELINE — the anchor's sequential downstream steps in call order (the mechanism a thin direct-writer spine
   // buries). Numbered = flow order; each carries its call site in the anchor (anchorFile:line ──▶ step).
   const _anchorFileBase = (fileOfId.get(String(model.anchor)) ?? "").split("/").pop();
   const pipelineSection = (): string[] => {
     if (!showPipeline) return [];
-    const out = ["", "## Pipeline (the anchor's sequential steps, in call order)"];
-    pipeline.slice(0, EXEMPT_N).forEach((p, i) => {
-      const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
-      out.push(`  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`);
-    });
-    if (pipeline.length > EXEMPT_N) out.push(`  (+${pipeline.length - EXEMPT_N} more step(s) — raise --token-budget)`);
-    return out;
+    return ["", "## Pipeline (the anchor's sequential steps, in call order)",
+      ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
+        const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
+        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
+      }, "step(s)")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
   // after the spine (not in the region) so the shared-key link a grep can't follow is PROMINENT, per the ask.
@@ -510,10 +515,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!crossStack.length) return [];
     const seen = new Set<string>();
     const uniq = [...crossStack].sort(byRel).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
-    const out = ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)"];
-    uniq.slice(0, EXEMPT_N).forEach((s) => out.push(seamLine(s)));
-    if (uniq.length > EXEMPT_N) out.push(`  (+${uniq.length - EXEMPT_N} more cross-stack node(s) — raise --token-budget)`);
-    return out;
+    return ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)",
+      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "cross-stack node(s)")];
   };
   // INTENT CROP AT RENDER — the grown footprint may be the FULL structural closure (structural grow: the wave is
   // intent-free so the cache reuses across intents) or already intent-shaped (guided grow). Either way the render
@@ -560,13 +563,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const EXEMPT_N = Math.max(6, Math.floor(budget / 500));   // ~8 at the 4000-token default; grows with the budget
   const frontierSection = (): string[] => {
     if (!frontier.length) return [];
-    const out = ["", "## Frontier (decision points — deepen the ones that matter)",
-      `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`];
-    const shown = frontier.slice(0, EXEMPT_N);
-    for (const f of shown) out.push(`  ${f.symbol} (${f.file}) — ${f.reachedVia} [${f.cutBy}]`);
-    const rest = (frontier.length - shown.length) + (model.frontierCut ?? 0);
-    if (rest > 0) out.push(`  (+${rest} more decision point(s) — raise --token-budget / SEAM_FRONTIER_CAP)`);
-    return out;
+    return ["", "## Frontier (decision points — deepen the ones that matter)",
+      `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`,
+      ...renderCapped(frontier, EXEMPT_N, (f) => `  ${f.symbol} (${f.file}) — ${f.reachedVia} [${f.cutBy}]`,
+        "decision point(s)", model.frontierCut ?? 0, "raise --token-budget / SEAM_FRONTIER_CAP")];
   };
   const gapsSection = (): string[] => {
     const out: string[] = [];
@@ -594,13 +594,11 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       const BLINDSPOT_N = Math.max(5, Math.floor(budget / 800));   // ~5 at the default; grows with --token-budget
       const nCands = (b: any) => new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean)).size;
       const rankedLeads = [...leads].sort((a, b) => (nCands(a) - nCands(b)) || (String(a.mechanism) < String(b.mechanism) ? -1 : 1));
-      const shownLeads = rankedLeads.slice(0, BLINDSPOT_N);
-      if (shownLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
-      for (const b of shownLeads) {
+      if (rankedLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
+      out.push(...renderCapped(rankedLeads, BLINDSPOT_N, (b) => {
         const cands = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))].slice(0, 6);
-        out.push(`  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`);
-      }
-      if (leads.length > shownLeads.length) out.push(`  (+${leads.length - shownLeads.length} more resolvable lead(s) — raise --token-budget)`);
+        return `  ${b.node}: ${b.mechanism} — ${b.evidence}${cands.length ? `; candidates: ${cands.join(", ")} (SUGGESTED)` : ""}`;
+      }, "resolvable lead(s)"));
       for (const [mech, nodes] of ambient) out.push(`  ${mech} — ${nodes.length} node(s)${nodes.length <= 4 ? `: ${nodes.join(", ")}` : ""}`);
       if (fanout.length) {
         const keyOf = (b: any) => (b.candidates ?? [])[0]?.symbol ?? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1]) ?? b.node;
