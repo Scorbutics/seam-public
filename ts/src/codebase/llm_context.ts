@@ -618,7 +618,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
     [...header(), ...spineSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
-  let out = assemble(...steps[0]);
+  let out: string[] = [];
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
   return out.join("\n");
 }
