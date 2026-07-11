@@ -19,7 +19,7 @@ import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
 import type { GroundingIndex } from "./types.js";
-import { type KeyMatcher, validateMatcher, runMatcher, matcherKey, matcherLiteral } from "./key_ir.js";
+import { type KeyMatcher, validateMatcher, runMatcher, matcherKey, matcherPassesPrefilter } from "./key_ir.js";
 import { persistMatchers, loadMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
 import { createHash } from "node:crypto";
 
@@ -206,8 +206,7 @@ export async function applyMatchers(repo: string, matchers: KeyMatcher[], skipDi
   for (const { rel, text } of walkFiles(repo, skipDirs, scannableForKeys)) {
     let floor: Set<string> | null = null;   // floor reconcile is itself a scan — defer it until a matcher actually hits
     for (const m of matchers) {
-      const lit = matcherLiteral(m);
-      if (lit && !text.includes(lit)) continue;                      // file can't contain this rule → skip the (tree-sitter) parse
+      if (!matcherPassesPrefilter(m, text)) continue;                 // file can't contain this rule → skip the (tree-sitter) parse
       const hits = await runMatcher(m, rel, text);
       if (!hits.length) continue;
       floor ??= new Set(scan_file_keys(rel, text).map((h) => `${h.kind} ${h.value}`));
