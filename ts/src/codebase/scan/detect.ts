@@ -9,11 +9,15 @@ import { type Edge, type Graph, connected_components } from "../../core/graph_ir
 import { walk as repoWalk } from "../../core/resolve/walk.js";
 import * as atoms from "../atoms.js";
 import { RENDER } from "../config.js";
+import { EXTENSIONS as _TS_EXT } from "../../languages/typescript/dispatch.js";
 
 const stemOf = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
 const _DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
-const _SCAN_EXT = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"];
+// `import()` is a JS/TS-only construct, so this scan is genuinely TS-only (unlike the generic repo walks
+// elsewhere in this file) — sourced from the TS provider's own extension list rather than a hand-kept copy,
+// so it can't silently drift the way this list once did (it was missing .mts/.cts until this fix).
+const _SCAN_EXT = _TS_EXT;
 const _CB_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "out", ".turbo", "coverage", ".cache", "vendor"]);
 const _BLINDSPOT_CAP = RENDER.blindspotCap;
 const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n; };
