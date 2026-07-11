@@ -12,10 +12,11 @@ import { lineOf, maskComments } from "./adapters/util.js";
 import { makeCtx, lang_for, available } from "../atoms.js";
 import { field } from "../../core/treesitter.js";
 
-// LLM free-text kind vocab → registered adapter kinds (mirrors llm_key_index._KIND_ALIASES so a learned
-// matcher's kind lands on the SAME boundary node + edge kinds as the deterministic floor).
-const _KIND_ALIASES: Record<string, string> = { route: "http-route", endpoint: "http-route", http: "http-route", url: "http-route", path: "http-route" };
-const _canonKind = (k: string): string => { const t = k.toLowerCase().trim(); return _KIND_ALIASES[t] ?? (t || "key"); };
+// LLM free-text kind vocab → registered adapter kinds. Exported so llm_key_index.ts's per-file key
+// extraction canonicalizes through the SAME map — a learned matcher's kind and a per-file LLM key both
+// land on the SAME boundary node + edge kinds as the deterministic floor (was two hand-kept copies).
+export const _KIND_ALIASES: Record<string, string> = { route: "http-route", endpoint: "http-route", http: "http-route", url: "http-route", path: "http-route" };
+export const _canonKind = (k: string): string => { const t = k.toLowerCase().trim(); return _KIND_ALIASES[t] ?? (t || "key"); };
 
 export type MatcherRole = "produces" | "consumes";
 

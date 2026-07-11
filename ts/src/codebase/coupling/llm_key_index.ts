@@ -32,7 +32,7 @@ import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
 import { hasMatcherCache, loadMatchers } from "./key_store.js";
 import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
-import { plausibleKeyValue, runMatcher } from "./key_ir.js";
+import { plausibleKeyValue, runMatcher, _canonKind } from "./key_ir.js";
 import { clusterBlindFiles } from "./key_cluster.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -50,9 +50,9 @@ const PER_FILE = COUPLING.perFile;
 // the repo-wide LLM-key index (ctx.llmKey) + the run budget (ctx.keyBudget) now live on the EngineCtx —
 // resetLlmKeyBudget() is gone; a fresh ctx is a clean slate.
 
-// LLM free-text kind vocab → registered adapter kinds (same map discover_keys uses).
-const _KIND_ALIASES: Record<string, string> = { route: "http-route", endpoint: "http-route", http: "http-route", url: "http-route", path: "http-route" };
-const _canon = (k: string): string => _KIND_ALIASES[k.toLowerCase()] ?? k;
+// LLM free-text kind vocab → registered adapter kinds — the same map key_ir.ts's matcher IR canonicalizes
+// through (was two hand-kept copies; see key_ir.ts's _KIND_ALIASES for the rationale).
+const _canon = _canonKind;
 
 function _batchPrompt(files: { file: string; snippet: string }[]): string {
   const blocks = files.map((f) => `=== FILE: ${f.file} ===\n${f.snippet}`).join("\n\n");
