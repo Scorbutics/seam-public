@@ -245,7 +245,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // pattern — LLM ONLY a representative per cluster; the rest ground via the learned rule (applyMatchers,
   // repo-wide, deterministic). Cuts the LLM INPUT (vs the cache, which only avoids re-paying it). Degrades to
   // one-cluster-per-file when tree-sitter is unavailable. The non-rep members are reported, not silently dropped.
-  const clusters = await clusterBlindFiles(blindCandidates);
+  const clusters = await clusterBlindFiles(blindCandidates, repo);
   const collapsed = blindCandidates.length - clusters.length;
   if (collapsed > 0) emit(`Clustered ${blindCandidates.length} floor-blind file(s) → ${clusters.length} pattern representative(s) (−${collapsed} covered by shared shape)…`);
   // SETTLING CENSUS (SEAM_FP_DEBUG): on a truly WARM run this MUST read `new=0` (every floor-blind file already
@@ -408,7 +408,7 @@ async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opt
   // discover the counterparts (cluster → per-file LLM → learn rules), caching the whole cluster as before
   const candList = [...cands.values()];
   const toSynth: typeof candList = [];
-  for (const c of await clusterBlindFiles(candList)) {
+  for (const c of await clusterBlindFiles(candList, repo)) {
     if (!c.shaped) { for (const m of c.members) persistFileKeys(repo, m.ck, { name: "no-boundary-shape", description: "no data-access shape — no edge to learn", keys: [] }); continue; }   // no suspected edge → skip the LLM
     if (ctx.keyBudget <= 0) break;
     ctx.keyBudget -= 1; toSynth.push(c.rep);

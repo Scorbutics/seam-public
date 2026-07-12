@@ -14,7 +14,21 @@
 // CLAUDE.md split: the GROUPING is structural (a closed set of access SHAPES read from the atoms node-kind
 // registry — never a regex over meaning); naming/role of the resulting rule stays the LLM's job, on the rep.
 // Degrades to one-cluster-per-file (no collapse → current behaviour) when tree-sitter is unavailable.
+import { createHash } from "node:crypto";
 import { available, lang_for, makeCtx, Ctx, _CALL, _MEMBER, _MEMBER_NAME, _NAME_KINDS, _STRING_KINDS } from "../atoms.js";
+import { loadShard, saveShard } from "../../core/resolve/index_cache.js";
+
+// PURELY STRUCTURAL, content-hash-keyed cache for the per-file tree-sitter shape scan (`_shapeScan`) — the
+// tree-sitter parse this module runs on every floor-blind file was being REPEATED on every warm CLI run (a
+// separate process each time), because the only persisted cache for these files (key_store.ts's per-file
+// key-adapters entries) is written by the CALLER only when the LLM/matcher pass actually ran — in
+// `--data-coupling floor` mode it never does, so those files stay "uncached" there forever and re-cluster
+// from scratch. This cache is deliberately a SEPARATE, narrower fact: "this file's structural shape tokens
+// are X" is always true regardless of whether an LLM/matcher rule was ever learned from them, so it's safe
+// to persist unconditionally — unlike a `cluster-covered` marker, it never claims a rule grounds the file.
+type ShapeScan = { tokens: string[]; weak: string[]; hasSignal: boolean };
+const _SHAPE_CACHE = "shape-scan-v1";
+const _contentKey = (file: string, text: string): string => `${file} ${createHash("sha1").update(text).digest("hex")}`;
 
 // Cross-language self-reference keywords (a closed LINGUISTIC set, not a framework list): a member chain
 // rooted at `this`/`self` is too common to be a distinctive cluster signature (it would over-merge unrelated
@@ -131,7 +145,7 @@ export interface BlindCluster<T> { signature: string; shaped: boolean; rep: T; m
 // (LLM the representative, the rest ground via the learned rule). Shapeless files stay singletons but are marked
 // `shaped:false` so the caller drops them. Tree-sitter unavailable → one cluster per file, all `shaped:true` (we
 // can't read the shape, so keep the old behaviour). Opt out of the shape gate with SEAM_COUPLING_SHAPE_GATE=0.
-export async function clusterBlindFiles<T extends { file: string; text: string }>(files: T[]): Promise<BlindCluster<T>[]> {
+export async function clusterBlindFiles<T extends { file: string; text: string }>(files: T[], repo?: string): Promise<BlindCluster<T>[]> {
   // DEFAULT-ON: discard a floor-blind file that carries NO coupling signal at all — no member-access call, no
   // string-literal key (a pure DTO/interface/enum, or bare-local-call logic). It PROVABLY can't share a cross-file
   // key, so the flywheel wastes LLM on it. This is LENIENT (keeps any 2-level `Payment.where` ORM call), which
@@ -141,8 +155,15 @@ export async function clusterBlindFiles<T extends { file: string; text: string }
   const groups = new Map<string, { sig: string; richness: number; member: T; shaped: boolean }[]>();
   for (const f of files) {
     const lang = lang_for(f.file);
-    const ctx = lang ? await makeCtx(f.text, lang) : null;
-    const scan = ctx ? await _shapeScan(ctx) : null;   // null = unsupported lang → can't read → keep (shaped)
+    const ck = repo ? _contentKey(f.file, f.text) : "";
+    const cached = repo ? loadShard<ShapeScan>(repo, _SHAPE_CACHE, ck) : undefined;
+    let scan: ShapeScan | null;
+    if (cached) scan = cached;
+    else {
+      const ctx = lang ? await makeCtx(f.text, lang) : null;
+      scan = ctx ? await _shapeScan(ctx) : null;   // null = unsupported lang → can't read → keep (shaped)
+      if (repo && scan) saveShard(repo, _SHAPE_CACHE, ck, scan);
+    }
     // signature = the STRICT coupling shape if any, else the WEAK 2-level receiver (so shapeless-but-has-calls files
     // cluster by their repo/model receiver instead of each becoming its own LLM rep). Both dominant-most.
     const sig = scan ? (scan.tokens.length ? _dominant(scan.tokens) : _dominant(scan.weak)) : "";
