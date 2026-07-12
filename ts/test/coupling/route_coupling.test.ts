@@ -9,9 +9,9 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scan_file_keys } from "../../src/codebase/coupling/index.js";
-import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_class_graph } from "../../src/codebase/scan/up/class_graph.js";
 import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
-import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/up/consumers_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const keys = (file: string, text: string) => scan_file_keys(file, text);

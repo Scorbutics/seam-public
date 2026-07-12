@@ -3,12 +3,12 @@
 // every proposal is GROUNDED to a real repo path or dropped. SUGGESTED candidates only, never edges.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { basename, join, relative } from "node:path";
-import { run_pass, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
+import { run_pass, registerPass, ClassifierError as LLMError } from "../../../core/llm.js";
 import { module_entry_index } from "./string_coupling.js";
 
 const PASS = registerPass({ tag: "discover", tier: "cheap", note: "discover cross-file string-coupling edges (SUGGESTED)" });
-import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
-import { walk } from "../../core/resolve/walk.js";
+import { SKIP_DIRS, endsWithSourceExt } from "../../../core/resolve/languages/index.js";
+import { walk } from "../../../core/resolve/walk.js";
 
 function buildPrompt(file: string, snippet: string, resolved: string): string {
   return `You are analysing ONE function to find COUPLINGS to OTHER parts of this codebase that a static

@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { carrierChannelIndex, anchorCarrierAccs } from "../../src/codebase/coupling/carrier/engine.js";
-import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/up/consumers_graph.js";
 
 const REPO = join(tmpdir(), "seam-carrier-channel-" + process.pid);
 const write = (rel: string, text: string) => { mkdirSync(dirname(join(REPO, rel)), { recursive: true }); writeFileSync(join(REPO, rel), text); };

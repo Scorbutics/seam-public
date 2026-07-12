@@ -7,7 +7,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const repo = join(tmpdir(), "seam-dep-edge-" + process.pid);

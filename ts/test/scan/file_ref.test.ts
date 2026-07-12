@@ -8,8 +8,8 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { isPathLiteral, resolveFileRef, fileReferencers, resetFileRefIndex } from "../../src/core/resolve/file_ref.js";
-import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
-import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/up/consumers_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("isPathLiteral — cheap pre-filter", () => {

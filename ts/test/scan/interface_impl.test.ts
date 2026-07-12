@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
 
 const SOLE = join(tmpdir(), "seam-impl-sole-" + process.pid);
 const MULTI = join(tmpdir(), "seam-impl-multi-" + process.pid);

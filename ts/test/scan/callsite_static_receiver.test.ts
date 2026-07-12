@@ -13,7 +13,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../../src/codebase/scan/footprint.js";
 import { available } from "../../src/codebase/atoms.js";
-import { resetCallIndex } from "../../src/codebase/scan/class_graph.js";
+import { resetCallIndex } from "../../src/codebase/scan/up/class_graph.js";
 
 let REPO: string;
 const w = (rel: string, text: string) => { mkdirSync(join(REPO, dirname(rel)), { recursive: true }); writeFileSync(join(REPO, rel), text); };

@@ -11,7 +11,7 @@ import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { available } from "../../src/codebase/atoms.js";
-import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_class_graph } from "../../src/codebase/scan/up/class_graph.js";
 
 const TS_DIR = join(import.meta.dir, "..", "..");
 const repo = join(tmpdir(), "seam-sib-" + process.pid);

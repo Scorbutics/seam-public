@@ -9,10 +9,10 @@
 // nodes are code positions (comments/strings are other node kinds, excluded for free). The imprecision
 // is real but bounded — a same-named symbol elsewhere can match — so these are RECALLED (unverified),
 // kept SEPARATE from the verified members, never promoted to the resolved floor.
-import { available, makeCtx } from "../atoms.js";
-import { walkFiles, normpath } from "../../core/resolve/walk.js";
-import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
-import { expanduser, stem, _read, _named_units, _enclosing, _call_lines } from "./ast_units.js";
+import { available, makeCtx } from "../../atoms.js";
+import { walkFiles, normpath } from "../../../core/resolve/walk.js";
+import { SKIP_DIRS, endsWithSourceExt } from "../../../core/resolve/languages/index.js";
+import { expanduser, stem, _read, _named_units, _enclosing, _call_lines } from "../ast_units.js";
 
 // A name-grounded consumer: a unit (function/method/module) that USES the symbol name in a code
 // position. `call` = the name appears in a call/instantiation position (stronger), else a bare reference.

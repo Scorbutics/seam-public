@@ -3,7 +3,7 @@
 // hit a comment mention. The AST scan must recover the real `Thing.new` caller and EXCLUDE the comment.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { scan_name_consumers } from "../../src/codebase/scan/name_consumers.js";
+import { scan_name_consumers } from "../../src/codebase/scan/up/name_consumers.js";
 import { attachRecalled, projectConsumerSet } from "../../src/codebase/grow/project_set.js";
 import { makeGraph } from "../../src/codebase/scan/graph.js";
 

@@ -9,7 +9,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { build_class_graph } from "../../src/codebase/scan/class_graph.js";
+import { build_class_graph } from "../../src/codebase/scan/up/class_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const repo = join(tmpdir(), "seam-encl-" + process.pid);

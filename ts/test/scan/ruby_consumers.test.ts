@@ -11,7 +11,7 @@
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build_consumers_graph } from "../../src/codebase/scan/consumers_graph.js";
+import { build_consumers_graph } from "../../src/codebase/scan/up/consumers_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "ruby-consumers");

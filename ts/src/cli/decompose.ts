@@ -555,7 +555,7 @@ async function main(argv: string[]): Promise<number> {
     await Promise.all([
       import("../diff/engine.js"), import("../codebase/anchor/index.js"), import("../codebase/grow/index.js"),
       import("../codebase/coupling/llm_key_index.js"), import("../codebase/coupling/carrier/synth.js"),
-      import("../codebase/scan/llm_discovery.js"),
+      import("../codebase/scan/down/llm_discovery.js"),
     ]);
     const { allPasses } = await import("../core/llm.js");
     const passes = allPasses();

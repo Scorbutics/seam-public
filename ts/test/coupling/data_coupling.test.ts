@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
 import { scan_file_keys } from "../../src/codebase/coupling/index.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { _is_crossing } from "../../src/codebase/codebase.js";

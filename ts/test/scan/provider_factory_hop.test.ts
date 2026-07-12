@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../../src/codebase/scan/index.js";
-import { _resetImplIndexMem } from "../../src/codebase/scan/interface_index.js";
+import { _resetImplIndexMem } from "../../src/codebase/scan/down/interface_index.js";
 import { available } from "../../src/codebase/atoms.js";
 
 let REPO: string;

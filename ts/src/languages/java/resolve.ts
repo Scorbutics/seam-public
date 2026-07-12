@@ -112,7 +112,7 @@ export function floor_resolve(repo: string, importingFile: string, source: strin
 
 // The interface named by a `<Iface>.class` argument — Java's reflection class-literal, the grounding for
 // a service-locator DI lookup (`getProvider(X.class)`, `getInstance(X.class)`, …). See
-// codebase/scan/dependency_graph.ts's provider-factory pass, which grounds on the arg TYPE (this), never a
+// codebase/scan/down/dependency_graph.ts's provider-factory pass, which grounds on the arg TYPE (this), never a
 // hardcoded method-name list like `getProvider|getBean|…` — framework-agnostic.
 function classLiteralArg(argsText: string): string | null {
   const m = argsText.match(/([A-Za-z_$][\w$]*)\s*\.\s*class/);

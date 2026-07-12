@@ -5,22 +5,22 @@
 // INTERNAL to the phase (white-box tested) — the public entry is footprint.build_footprint.
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
-import { endsWithSourceExt, SKIP_DIRS } from "../../core/resolve/languages/index.js";
-import { incrementalScanAsync } from "../../core/resolve/index_cache.js";
-import { normpath, walk } from "../../core/resolve/walk.js";
-import { makeCtx, available, lang_for, sameLangFamily, _CLASS_KINDS, _INTERFACE } from "../atoms.js";
-import { dbg } from "../../core/progress.js";
-import type { EngineCtx } from "../engine_ctx.js";
+import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
+import { endsWithSourceExt, SKIP_DIRS } from "../../../core/resolve/languages/index.js";
+import { incrementalScanAsync } from "../../../core/resolve/index_cache.js";
+import { normpath, walk } from "../../../core/resolve/walk.js";
+import { makeCtx, available, lang_for, sameLangFamily, _CLASS_KINDS, _INTERFACE } from "../../atoms.js";
+import { dbg } from "../../../core/progress.js";
+import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Unit, type ResolvedGraph, makeGraph,
-} from "./graph.js";
-import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "./ast_units.js";
+} from "../graph.js";
+import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "../ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
   _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names,
-} from "./ast_class.js";
-import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
+} from "../ast_class.js";
+import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
 
 const _CLASS_CONSUMER_PARSE_CAP = 120;   // parse at most this many consumers for method attribution (rest = module nodes); bounds a hub class's per-run parse cost
 
@@ -376,7 +376,7 @@ export async function build_class_graph(repo: string, anchorFile: string, classN
   // invoked (no static caller), so its only link to the rest of the app is the ROUTE it serves. Run the
   // same data-coupling pass the symbol path uses, scanning the class span (incl. its route annotation).
   if (opts.dataCoupling !== false) {
-    const dc = await import("../coupling/index.js");
+    const dc = await import("../../coupling/index.js");
     const keyLo = _annotationLo(ar[0], crange[0]);
     const dcDelta = await dc.resolveCoupling(repo, className, anchorFile, ar[0], keyLo, crange[1], counter, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, opts.ctx);
     nodes.push(...dcDelta.nodes); edges.push(...dcDelta.edges); blindspots.push(...dcDelta.blindspots); counter = dcDelta.counter;

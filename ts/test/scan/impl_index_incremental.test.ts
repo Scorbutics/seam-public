@@ -10,7 +10,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { impls_of, _resetImplIndexMem } from "../../src/codebase/scan/interface_index.js";
+import { impls_of, _resetImplIndexMem } from "../../src/codebase/scan/down/interface_index.js";
 import { impl_markers } from "../../src/core/resolve/languages/index.js";
 import { available } from "../../src/codebase/atoms.js";
 

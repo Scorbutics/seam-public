@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { build_dependency_graph } from "../../src/codebase/scan/dependency_graph.js";
+import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "intrafile-callees");

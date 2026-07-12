@@ -4,9 +4,9 @@
 // an entry, where the entrypoint is) live in the language providers.
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
-import { type Ctx, makeCtx, available, lang_for, _CALL } from "../atoms.js";
-import { entrypoint_line, is_module_entry } from "../../core/resolve/languages/index.js";
-import { walk } from "../../core/resolve/walk.js";
+import { type Ctx, makeCtx, available, lang_for, _CALL } from "../../atoms.js";
+import { entrypoint_line, is_module_entry } from "../../../core/resolve/languages/index.js";
+import { walk } from "../../../core/resolve/walk.js";
 
 const _NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{2,}$/;
 const _MULTISEGMENT = /[-_]/;

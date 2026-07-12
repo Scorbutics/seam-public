@@ -69,7 +69,7 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   // is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers still use the
   // exact symbol name; this recovers them deterministically. See codebase/scan/name_consumers.ts.
   if (a.recall === "name") {
-    const { scan_name_consumers } = await import("../codebase/scan/name_consumers.js");
+    const { scan_name_consumers } = await import("../codebase/scan/up/name_consumers.js");
     const { attachRecalled } = await import("../codebase/grow/project_set.js");
     try { attachRecalled(set, await scan_name_consumers(a.repo, a.anchorFile!, a.symbol!)); }
     catch (e) { process.stderr.write(`name recall skipped: ${(e as Error).message}\n`); }

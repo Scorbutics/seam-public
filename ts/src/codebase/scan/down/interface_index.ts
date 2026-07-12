@@ -3,14 +3,14 @@
 // (@Inject/@Autowired/CDI), and whether a symbol is a declaratively-wired framework callback. Cross-
 // language via ../atoms node SETS. Cached per repo (a full-repo parse, built once).
 import { join, relative } from "node:path";
-import { endsWithSourceExt, SKIP_DIRS, impl_markers } from "../../core/resolve/languages/index.js";
-import { walk } from "../../core/resolve/walk.js";
+import { endsWithSourceExt, SKIP_DIRS, impl_markers } from "../../../core/resolve/languages/index.js";
+import { walk } from "../../../core/resolve/walk.js";
 import {
   makeCtx, available, lang_for,
   _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _ANNOTATION,
-} from "../atoms.js";
-import { _name_of, _read } from "./ast_units.js";
-import { incrementalScanAsync, indexCacheEnabled } from "../coupling/index_cache.js";
+} from "../../atoms.js";
+import { _name_of, _read } from "../ast_units.js";
+import { incrementalScanAsync, indexCacheEnabled } from "../../coupling/index_cache.js";
 
 // {interface name → the concrete in-repo CLASSES that `implement` it} + the set of names declared as
 // interfaces. Cross-language via _IMPLEMENTS (Java super_interfaces / TS implements_clause). Cached per

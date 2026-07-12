@@ -4,20 +4,20 @@
 // the public entry is footprint.build_footprint. Port of build_dependency_graph.
 import { basename, join } from "node:path";
 import { statSync } from "node:fs";
-import { _resolve_import, _resolve } from "../../core/resolve/consumers.js";
-import { parse_imports, SKIP_DIRS, provider_for } from "../../core/resolve/languages/index.js";
-import { normpath } from "../../core/resolve/walk.js";
-import { resolveFileRef } from "../../core/resolve/file_ref.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD } from "../atoms.js";
-import type { EngineCtx } from "../engine_ctx.js";
+import { _resolve_import, _resolve } from "../../../core/resolve/consumers.js";
+import { parse_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
+import { normpath } from "../../../core/resolve/walk.js";
+import { resolveFileRef } from "../../../core/resolve/file_ref.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD } from "../../atoms.js";
+import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
-} from "./graph.js";
-import { expanduser, _read, _name_of, _named_units, _usage_lines, _call_lines } from "./ast_units.js";
-import { _type_methods, _class_method_usage, _called_types } from "./ast_class.js";
+} from "../graph.js";
+import { expanduser, _read, _name_of, _named_units, _usage_lines, _call_lines } from "../ast_units.js";
+import { _type_methods, _class_method_usage, _called_types } from "../ast_class.js";
 import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";
-import { _annotationLo, _chain_route_consumers } from "./attach.js";
-import { timingOn } from "../../core/progress.js";
+import { _annotationLo, _chain_route_consumers } from "../attach.js";
+import { timingOn } from "../../../core/progress.js";
 
 type BuildOpts = {
   anchorLine?: number | null; useLlm?: boolean; model?: string; claudeBin?: string | null;
@@ -385,7 +385,7 @@ async function _llmDiscoveryPass(s: DepScan, anchorSrc: string, lo: number, hi: 
 // come from the CACHED key index — _carrier_extra → anchorKeys — not a per-anchor LLM call.)
 async function _dataCouplingPass(s: DepScan, anchorSrc: string, arange: number[], opts: BuildOpts): Promise<void> {
   const keyLo = _annotationLo(anchorSrc, arange[0]);   // include a route/entry annotation above the def
-  const dc = await import("../coupling/index.js");
+  const dc = await import("../../coupling/index.js");
   const dcDelta = await dc.resolveCoupling(s.repo, "n1", s.anchorFile, anchorSrc, keyLo, arange[1], s.counter, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, opts.ctx);
   s.nodes.push(...dcDelta.nodes); s.edges.push(...dcDelta.edges); s.blindspots.push(...dcDelta.blindspots); s.counter = dcDelta.counter;
   s.counter = await _chain_route_consumers(s.repo, s.nodes, s.edges, s.counter);

@@ -104,7 +104,7 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
 describe("ctx threading through build_class_graph (floor built once)", () => {
   test("build_class_graph populates the PASSED ctx's floor caches (didn't spin up its own)", async () => {
     if (!available()) return;   // tree-sitter required
-    const { build_class_graph } = await import("../../src/codebase/scan/class_graph.js");
+    const { build_class_graph } = await import("../../src/codebase/scan/up/class_graph.js");
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const ctx = new EngineCtx();
     // Anchor on a COUPLING-BEARING class (Provider.addParameter — a param/const boundary). The repo-wide floor
@@ -118,7 +118,7 @@ describe("ctx threading through build_class_graph (floor built once)", () => {
 
   test("LOCAL GATE — a coupling-free anchor SKIPS the repo-wide floor scan (grow from the diff, not scan-all)", async () => {
     if (!available()) return;
-    const { build_class_graph } = await import("../../src/codebase/scan/class_graph.js");
+    const { build_class_graph } = await import("../../src/codebase/scan/up/class_graph.js");
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const __dir = new URL(".", import.meta.url).pathname;
     const repoDir = join(__dir, "..", "fixtures", "class-repo");

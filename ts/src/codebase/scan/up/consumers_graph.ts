@@ -5,22 +5,22 @@
 import {
   type Ctx, makeCtx, available, lang_for,
   _INTERFACE, _CLASS_KINDS,
-} from "../atoms.js";
-import { scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
-import { timingOn } from "../../core/progress.js";
-import type { EngineCtx } from "../engine_ctx.js";
+} from "../../atoms.js";
+import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
+import { timingOn } from "../../../core/progress.js";
+import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Provenance, type ResolvedGraph,
   type Unit, makeGraph,
-} from "./graph.js";
+} from "../graph.js";
 import {
   expanduser, stem, _read, _name_of, _named_units, _enclosing, _usage_lines, _call_lines, _ref_lines,
-} from "./ast_units.js";
-import { _class_methods } from "./ast_class.js";
-import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "./attach.js";
-import { fileReferencers } from "../../core/resolve/file_ref.js";
-import { normpath } from "../../core/resolve/walk.js";
-import { endsWithSourceExt } from "../../core/resolve/languages/index.js";
+} from "../ast_units.js";
+import { _class_methods } from "../ast_class.js";
+import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
+import { fileReferencers } from "../../../core/resolve/file_ref.js";
+import { normpath } from "../../../core/resolve/walk.js";
+import { endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import {
   build_class_graph, build_callsite_graph, _callsite_new_consumers_only, _reconcile_class_attribution,
 } from "./class_graph.js";
@@ -146,7 +146,7 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
   // writers) as crossings the grow can follow. The deterministic adapter floor runs by default; the
   // LLM key front-end (--data-coupling llm) adds cross-framework proposals into the same machinery.
   if (opts.dataCoupling !== false && ar) {
-    const dc = await import("../coupling/index.js");
+    const dc = await import("../../coupling/index.js");
     // When the symbol resolved to a def range, scan it (widened over a leading route/entry annotation).
     // When it did NOT (arange stays [0,0] — e.g. the "symbol" is an AngularJS controller-NAME string, not
     // a real def), fall back to the WHOLE FILE so a `$http.get("/…")` inside an anonymous callback still
@@ -189,7 +189,7 @@ export async function build_consumers_graph(repo: string, anchorFile: string, sy
       // blind spot — then reconcile the two blind spots against what the pass recovered.
       const isClass = !isInterface && !isMethod && ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k)).some((c) => _name_of(ctx, c) === symbol);
       if (!opts.skipCallsite && (isInterface || isMethod || isClass)) {
-        const { merge_resolved } = await import("./expand.js");
+        const { merge_resolved } = await import("../expand.js");
         let callsite = await build_callsite_graph(repo, anchorFile, symbol,
           { anchorLine: opts.anchorLine, methodNames: isMethod ? new Set([symbol]) : undefined, ownerClass: isClass ? symbol : undefined });
         if (isClass) callsite = _callsite_new_consumers_only(base, callsite, symbol);   // additive: keep only the consumers build_class_graph could NOT attribute
