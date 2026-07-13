@@ -14,7 +14,7 @@ import {
   type Unit, makeGraph,
 } from "../graph.js";
 import {
-  expanduser, stem, _read, _name_of, _named_units, _enclosing, _usage_lines, _call_lines, _ref_lines,
+  expanduser, stem, _read, _name_of, _named_units, _wrappedDefSpan, _enclosing, _usage_lines, _call_lines, _ref_lines,
 } from "../ast_units.js";
 import { _class_methods } from "../ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
@@ -49,6 +49,7 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       aunits = _named_units(actx);
       const defu = aunits.find((u) => u[0] === symbol);
       if (defu) { akind = defu[1]; arange = [defu[2], defu[3]]; }
+      else { const w = _wrappedDefSpan(actx, symbol, aunits); if (w) { akind = "function"; arange = w; } }   // `const X = withReporting(realFn)` → the real impl span (not :0)
     }
   }
   if (opts.anchorLine != null) arange = [opts.anchorLine, Math.max(opts.anchorLine, arange[1])];

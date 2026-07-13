@@ -13,7 +13,7 @@ import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "../graph.js";
-import { expanduser, _read, _name_of, _named_units, _usage_lines, _call_lines } from "../ast_units.js";
+import { expanduser, _read, _name_of, _named_units, _wrappedDefSpan, _usage_lines, _call_lines } from "../ast_units.js";
 import { _type_methods, _class_method_usage, _called_types } from "../ast_class.js";
 import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "../attach.js";
@@ -45,7 +45,12 @@ async function _anchorNode(anchorFile: string, symbol: string, ar: [string, stri
   let arange = [0, 0], akind = "symbol";
   if (ar && available()) {
     const ctx = await makeCtx(ar[0], ar[1]);
-    if (ctx) { const defu = _named_units(ctx).find((u) => u[0] === symbol); if (defu) { akind = defu[1]; arange = [defu[2], defu[3]]; } }
+    if (ctx) {
+      const units = _named_units(ctx);
+      const defu = units.find((u) => u[0] === symbol);
+      if (defu) { akind = defu[1]; arange = [defu[2], defu[3]]; }
+      else { const w = _wrappedDefSpan(ctx, symbol, units); if (w) { akind = "function"; arange = w; } }   // `const X = withReporting(realFn)` → the real impl span (not :0)
+    }
   }
   if (anchorLine != null) arange = [anchorLine, Math.max(anchorLine, arange[1])];
   const node: GraphNode = { id: "n1", symbol, kind: akind, file: anchorFile, range: arange, enclosing: "", complexity: Math.max(1, arange[1] - arange[0] + 1) };

@@ -78,6 +78,32 @@ export function _named_units(ctx: Ctx): Unit[] {
   return units;
 }
 
+// A `const NAME = wrapper(realFn, …)` HOC / reporting wrapper (React memo/forwardRef, a sentry `withReporting`
+// wrapper, …): the const's VALUE is a CALL, not a funclike, so `_named_units` doesn't see NAME as a def and a
+// `--center #NAME` anchor binds to :0 with NO body (the real logic is the WRAPPED function). The impl is the
+// call's FUNCTION argument — an inline arrow/function, or an identifier naming a same-file function. Resolve NAME
+// to THAT span so the anchor gets the real body (cal.com `scheduleWorkflowReminders = withReporting(_scheduleWorkflowReminders)`
+// → the `_scheduleWorkflowReminders` impl). Anchor-scoped (not folded into `_named_units`) → zero repo-wide ripple.
+// Returns [start,end] of the impl, or the declarator span for an external wrapped fn (a real span beats :0), else null.
+export function _wrappedDefSpan(ctx: Ctx, symbol: string, units: Unit[]): [number, number] | null {
+  for (const d of ctx.collect(ctx.root, (k) => _VAR_DECLARATOR.has(k))) {
+    const ch = ctx.children(d);
+    if (!ch.length || !_NAME_KINDS.has(ch[0].type) || ctx.text(ch[0]) !== symbol) continue;
+    const call = ch.find((c) => _CALL.has(c.type));
+    if (!call) continue;   // `const X = <non-call>` (a value/config) — not a wrapped def
+    const argsNode = (call as any).childForFieldName?.("arguments") ?? ctx.children(call).find((c: any) => /arguments|argument_list/.test(c.type));
+    const args: any[] = argsNode ? ctx.children(argsNode) : ctx.children(call).slice(1);
+    const inlineFn = args.find((a) => _FUNCLIKE.has(a.type));
+    if (inlineFn) return ctx.span(inlineFn);                                   // `memo(() => {…})` — the arrow IS the body
+    for (const a of args) if (a.type.includes("identifier")) {                 // `withReporting(_impl, "name")` — the impl is the named fn
+      const u = units.find((x) => x[0] === ctx.text(a) && (x[1] === "function" || x[1] === "method"));
+      if (u) return [u[2], u[3]];
+    }
+    return ctx.span(d);                                                        // wrapped external fn → the declarator span (a real span, not :0)
+  }
+  return null;
+}
+
 // The smallest unit that encloses `line` (the tightest def around a usage), or null.
 export function _enclosing(units: Unit[], line: number): Unit | null {
   const cands = units.filter((u) => u[2] <= line && line <= u[3]);
