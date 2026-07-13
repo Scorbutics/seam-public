@@ -83,11 +83,18 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   // Phase 4: memoize this overlay across runs under FLOOR (deterministic replay). It's a pure function of the
   // anchor span + the learned state (the coupling epoch), independent of the settled footprint's shape (it reads
   // only the anchor + a node count for id numbering, which merge_resolved re-ids anyway). LLM stays live (learns).
-  return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, async () => {
+  const doCompute = async () => {
     const delta = await resolveCoupling(repo, anchorId, anchorFile, ar[0], keyLo, keyHi, (data.nodes ?? []).length, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
     delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);   // route → its consumers (2nd hop), as before
     return delta;
-  });
+  };
+  // The stableFloor PROBE (grow_footprint_scoped phase 1) resolves coupling FLOOR-ONLY (learned matchers off, index.ts:470)
+  // → an empty/floor delta. It shares the SAME (file, anchorKey, coupling-epoch) cache slot as the real LLM grow (phase 2),
+  // and the delta cache doesn't distinguish the two, so caching the probe POISONS phase 2 (it HITs the empty floor delta and
+  // never re-resolves with the learned matchers — a `service`/`handle` boundary never surfaces). The probe is cheap + transient
+  // scoping, so bypass the cache for it entirely: never read the real grow's slot, never write the floor-only result into it.
+  if (ctx.stableFloor) return doCompute();
+  return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, doCompute);
 }
 
 // Couple ONE reached node's whole file, attaching the bridge to that node. The anchor coupling above is span-
@@ -138,7 +145,7 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
     return delta;
   };
   let out: { nodes: any[]; edges: any[]; blindspots: any[]; counter: number };
-  if (!cacheOn) out = await compute(anchorId, counter);
+  if (!cacheOn || ctx.stableFloor) out = await compute(anchorId, counter);   // stableFloor probe: floor-only, transient — never read/write the shared delta cache (else it poisons the real LLM grow), see _anchorCouplingDelta
   else {
     // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
     const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0));

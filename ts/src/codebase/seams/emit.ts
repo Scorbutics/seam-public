@@ -6,24 +6,14 @@ import { RENDER } from "../config.js";
 import { git_lineage } from "../lineage.js";
 import { type Seam } from "./clusters.js";
 import { _spine_order, _structural_spine } from "./spine.js";
+import { BOUND_KINDS as _BOUND_KINDS } from "../render/medium_registry.js";
 
 // BOUNDARY (shared-key medium) node kinds — the crossing sites, NOT code. The seam hunk carries `kind` only for
-// these (a route labelled by its op, a table, a queue…) so the concern render can name an op-labelled route;
-// code hunks (method/function/class/module) omit `kind`, keeping the call-graph oracle fixtures byte-stable.
-const _BOUNDARY_KINDS = new Set([
-  "route",
-  "http-route",
-  "db-table",
-  "table",
-  "queue",
-  "event",
-  "cache",
-  "key",
-  "binding",
-  "annotation",
-  "topic",
-  "file"
-]);
+// these (a route labelled by its op, a table, a queue, a service handle…) so the render can name/ground the
+// boundary; code hunks (method/function/class/module) omit `kind`, keeping the call-graph oracle fixtures stable.
+// Sourced from the registry BOUND_KINDS (the source of truth) so a new medium (e.g. `service`) is included with
+// no parallel list to keep in sync — CLAUDE.md: structural sets come from the registry, never a hardcoded copy.
+const _BOUNDARY_KINDS = _BOUND_KINDS;
 const _FAN_CAP = RENDER.fanCap;   // a seam with more than this many inline call-sites is a guard/policy fan → cap + summarize
 // Decision-point frontier cap (Phase 2.2): the ranked list is capped so the render stays scannable; the OVERFLOW
 // count is reported (`frontierCut`) — no silent truncation (I3). Env-overridable, mirrors the other grow toggles.

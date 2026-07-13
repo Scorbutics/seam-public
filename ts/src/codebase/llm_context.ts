@@ -172,7 +172,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // the token-rich but PERIPHERAL `UserVerifiableCredentialEntity` (0.346) over the plain, CENTRAL `UserEntity`
     // (0.158) that addUser's own `em.persist` writes — the direct-write prior corrects it. CLAUDE.md in motion:
     // STRUCTURE names the fact (the anchor writes this table), embeddings only order the REST (the also-reaches).
-    const _PRODUCE = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
+    const _PRODUCE = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert"]);
     const _CALL = new Set(["call", "invokes", "dispatch"]);   // control-flow delegation edges
     const edges = (model.edges ?? []) as any[];
     const directIds = new Set<string>();
@@ -299,7 +299,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // coupling's same-side rung surfaced them as `peer ──produce──▶ boundary` nodes; without this they sink into the
   // cropped region tail (low intent relevance). Lift them into their own EXEMPT section — "how is X processed"
   // wants every writer. Structural: a produce edge INTO a boundary the spine also produces into.
-  const _PRODUCE_KINDS = new Set(["db-write", "produce", "write", "save", "persist", "insert"]);
+  const _PRODUCE_KINDS = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert"]);
   const spineMemberIds = new Set<string>();
   for (const s of spineSeams) for (const h of (s.hunks ?? [])) spineMemberIds.add(String((h as any).id));
   // Match by the boundary's TABLE LABEL, not its node id: the grow draws a separate `payments` boundary node per
@@ -335,7 +335,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // one seam labelled by the hub, and pure readers get cropped from the region — so surface them by their db-READ
   // edge to the subject boundary, in a dedicated exempt section. Excludes the anchor's own module (its reads are
   // the mechanism, not consumers) and tests.
-  const _READ_KINDS = new Set(["db-read", "consume", "read", "select", "find", "route-fetch"]);
+  const _READ_KINDS = new Set(["db-read", "service-read", "consume", "read", "select", "find", "route-fetch"]);
   const readsFrom = (s: Seam): boolean => (s.hunks ?? []).some((h: any) => { const hid = String((h as any).id); return (model.edges ?? []).some((e: any) => _READ_KINDS.has(e.kind) && (String(e.from) === hid || String(e.to) === hid) && (writtenTables.has(label.get(String(e.from)) ?? "") || writtenTables.has(label.get(String(e.to)) ?? ""))); });
   // NOTE: NOT excluded by altSet — a file that both READS the subject AND reached a hub boundary as a sink (private-app
   // admin/payments/[id]: reads `payments`, joins `members`) belongs in "## Also read" on its SUBJECT read, not
