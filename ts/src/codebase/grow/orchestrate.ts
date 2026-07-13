@@ -846,6 +846,21 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the IR as `data.frontier` and capped/filtered at emit. Each entry carries its `id` (node identity → the caller
   // unions deepened regions by it) + provenance (`reachedVia`) + `cutBy`. Ranked by intent score desc (the move
   // ordering's signal), then decision-before-budget, then symbol — deterministic. Present only under tierGrow (I3).
+  // RESOLVED-BUT-UNFOLLOWED call leads → deepen handles. A node reached by a RESOLVED_PARTIAL `call` edge (a
+  // qualified cross-file callee whose exact overload binding isn't proven, so the wave correctly did NOT auto-follow
+  // it — the "don't follow a PARTIAL" contract) with NO outgoing edges of its own has an UNMAPPED body (the Keycloak
+  // createUser → createCredentials → the credential store, one hop past the resolved call): a real DEEPEN HANDLE, not
+  // a terminal. Park it as a decision point so the frontier ADVERTISES it — else it folds silently into the anchor
+  // blob and the reader can't tell the credential write is one `--grow-from` away. Skip a trivial (≤2-line) callee (a
+  // throw/return with no downstream to map). Feeds the SAME frontier machinery below (reachedVia / score / cap).
+  {
+    const _outSrc = new Set<string>((data.edges as any[]).map((e: any) => e.from));
+    const _cx = new Map<string, number>((data.nodes as any[]).map((n) => [n.id, n.complexity ?? 0]));
+    for (const e of data.edges as any[])
+      if (e.kind === "call" && e.provenance === "RESOLVED_PARTIAL" && e.to !== "n1"
+          && !_outSrc.has(e.to) && !parked.has(e.to) && (_cx.get(e.to) ?? 0) >= 3)
+        parked.set(e.to, "decision");
+  }
   if ((tierGrow || upHopCap) && parked.size) {
     const byId = new Map<string, any>((data.nodes as any[]).map((n) => [n.id, n]));
     const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
