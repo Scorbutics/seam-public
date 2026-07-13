@@ -11,6 +11,7 @@ export const MEDIA: { medium: string; produce: string; consume: string; pull?: b
   { medium: "event", produce: "event-emit", consume: "event-on", wave: "via an event with" },
   { medium: "cache", produce: "cache-write", consume: "cache-read", wave: "sharing a cache with" },
   { medium: "file", produce: "file-write", consume: "file-read", wave: "sharing a file with" },
+  { medium: "service", produce: "service-write", consume: "service-read", wave: "sharing service state with" },   // stateful external SDK handle (auth/session/…): mutate ⇄ read the same singleton
 ];
 
 // edge-kind → medium; and the SOURCE edges (point code→boundary: the consumer's fetch for a pull medium, the
@@ -32,5 +33,5 @@ export const WAVE_RANK = (k: string): number =>
 
 // STORE kinds — the persistent-boundary subset of media (a table/queue/event/cache/topic/file/key/binding, as
 // opposed to a route which is a RELAY, not a store). BOUND kinds = STORE plus the relay/annotation boundaries.
-export const STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
+export const STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding", "service"]);
 export const BOUND_KINDS = new Set([...(STORE_KINDS as Set<string>), "route", "http-route", "annotation"]);

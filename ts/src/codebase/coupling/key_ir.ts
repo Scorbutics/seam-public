@@ -68,7 +68,14 @@ export type KeyMatcher =
   // the method-scoped `call` shape) so a classified `bus`/`store` is matched, NOT every generic `.get('x')` —
   // that scoping is the precision the cheap `call` shape lacked. Synthesised by the receiver-CLASSIFIER for an
   // event/store-classified receiver; role fixed per rule (emit/set → produces, on/get → consumes).
-  | { via: "channel"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
+  | { via: "channel"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string }
+  // handle — `<token>.<verb>(…)` where `token` is a stateful EXTERNAL SDK HANDLE (a dotted receiver path,
+  // `client.auth`) and the KEY is the HANDLE IDENTITY itself, NOT a call arg (a session has no per-call literal —
+  // the coupling is the singleton). verbs split produce (mutate: signIn/signOut) vs consume (read: getSession);
+  // the producer + consumer rules of the same handle carry the same token → the same key → they ground. Synthesised
+  // by the receiver-CLASSIFIER for a `service`-classified external handle (the counterpart of `repository` for a
+  // stateful service instead of a table). role fixed per rule.
+  | { via: "handle"; token: string; verbs: string[]; kind: string; role: MatcherRole; name?: string; description?: string };
 
 // One-line human summary of a rule's executable SHAPE (for `seam-adapters`): how it detects the key.
 export function matcherShape(m: KeyMatcher): string {
@@ -79,6 +86,7 @@ export function matcherShape(m: KeyMatcher): string {
   if (m.via === "member") return `${m.token}.<member>.{${m.verbs.join("|")}}()`;
   if (m.via === "repository") return `${m.token}.{${m.verbs.join("|")}}() → table ${m.token}`;
   if (m.via === "channel") return `${m.token}.{${m.verbs.join("|")}}('<key>')`;
+  if (m.via === "handle") return `${m.token}.{${m.verbs.join("|")}}() → handle ${m.token}`;
   return `${m.directive}<name> (key from ${m.keyFrom})`;
 }
 
@@ -92,6 +100,7 @@ export function matcherKey(m: KeyMatcher): string {
   if (m.via === "member") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   if (m.via === "repository") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   if (m.via === "channel") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
+  if (m.via === "handle") return `${base}:${m.token}:${m.verbs.slice().sort().join(",")}`;
   return `${base}:${m.directive}:${m.keyFrom}`;
 }
 
@@ -102,6 +111,7 @@ export function matcherKey(m: KeyMatcher): string {
 // if the rule matches, the literal is present by construction.
 export function matcherLiteral(m: KeyMatcher): string | null {
   if (m.via === "call" || m.via === "assign" || m.via === "member" || m.via === "repository" || m.via === "channel") return m.token;
+  if (m.via === "handle") return m.token.split(".")[0];   // the receiver ROOT — always present when the dotted handle is used (a safe prefilter; never false-misses)
   if (m.via === "attr") return m.directive;
   if (m.via === "annotation") return m.annotation;
   return null;   // method
@@ -203,6 +213,13 @@ export function validateMatcher(obj: any): KeyMatcher | null {
     if (!verbs.length) return null;                                          // need ≥1 verb (else it'd match any call on the receiver)
     return { via: "channel", token, verbs, kind, role, name: nm(`${_slug(token)}-channel-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}('<key>')`) };
   }
+  if (via === "handle") {
+    const token = String(obj.token ?? "").trim();
+    if (!_RECEIVER_OK.test(token)) return null;                              // a bare identifier or dotted receiver path (client.auth); dots escaped in runHandle → injection-safe
+    const verbs = [...new Set<string>((Array.isArray(obj.verbs) ? obj.verbs : []).map((v: any) => String(v).trim()).filter((v: string) => _TOKEN_OK.test(v)))];
+    if (!verbs.length) return null;                                          // need ≥1 verb (else it'd match any call on the handle)
+    return { via: "handle", token, verbs, kind, role, name: nm(`${_slug(token)}-handle-${kind}`), description: dsc(`${role} ${kind} via ${token}.{${verbs.join("|")}}() (receiver = handle)`) };
+  }
   return null;                                                               // unknown shape → not executable
 }
 
@@ -265,7 +282,27 @@ export async function runMatcher(m: KeyMatcher, file: string, text: string): Pro
   if (m.via === "member") return runMember(m, text);
   if (m.via === "repository") return runRepository(m, text);
   if (m.via === "channel") return runChannel(m, text);
+  if (m.via === "handle") return runHandle(m, text);
   return runAttr(m, file, text);
+}
+
+// `<token>.<verb>(` where `token` is a stateful external HANDLE (a dotted receiver path, `client.auth`) and the
+// key is the HANDLE IDENTITY (the slug of `token`) — a fixed value SHARED by this handle's producer + consumer
+// rules, so `client.auth.signInWithPassword` (produce) and `client.auth.getSession` (consume) ground on the SAME
+// key though neither carries a literal. Pure regex (offline); the receiver path is rebuilt segment-wise (`\s*.\s*`
+// between parts) and every part is identifier-validated, so the only embedded data is injection-safe.
+function runHandle(m: Extract<KeyMatcher, { via: "handle" }>, text: string): KeyHit[] {
+  const masked = maskComments(text);
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const recv = m.token.split(".").map(esc).join("\\s*\\.\\s*");
+  const verbs = m.verbs.map(esc).join("|");
+  const re = new RegExp(`(?<![\\w$])${recv}\\s*\\.\\s*(?:${verbs})\\s*\\(`, "g");
+  const value = _slug(m.token);   // the handle identity — IDENTICAL for the producer + consumer rules of this handle
+  if (!plausibleKeyValue(value)) return _NO_HITS;
+  const out: KeyHit[] = [];
+  let mt: RegExpExecArray | null;
+  while ((mt = re.exec(masked)) !== null) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+  return out;
 }
 
 // `<token>.<verb>(` — the 2-part repository shape: the RECEIVER `token` IS the table/entity, verb ∈ m.verbs.

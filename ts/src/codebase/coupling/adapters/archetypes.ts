@@ -28,6 +28,12 @@ export const ARCHETYPES: Record<string, Archetype> = {
   binding: { kind: "binding", nodeKind: "binding", produceEdge: "binding-define", consumeEdge: "binding-call" },    // component method ⇄ template call (was ng_scope) — symmetric UI wiring, no downstream handler
   queue:   { kind: "queue",   nodeKind: "queue",   produceEdge: "queue-publish",  consumeEdge: "queue-subscribe", handlerEdge: "queue-subscribe" }, // publish ⇄ subscriber (the handler)
   cache:   { kind: "cache",   nodeKind: "cache",   produceEdge: "cache-write",    consumeEdge: "cache-read" },      // shared cache key
+  // SERVICE — a stateful EXTERNAL SDK handle (an auth/session client, a feature-flag/remote-config client): its
+  // methods MUTATE (produce) vs READ (consume) a shared SINGLETON state that lives outside the call graph. The key
+  // is the HANDLE IDENTITY (not a per-call literal): `client.auth.signInWithPassword` (produce) ⇄ `client.auth.getSession`
+  // (consume) couple because they operate the SAME external service. Learned via the receiver classifier's `service`
+  // type → a `handle` matcher; grounds a session flow a call-trace can't (the flow exits into a 3rd-party service).
+  service: { kind: "service", nodeKind: "service", produceEdge: "service-write", consumeEdge: "service-read" },
 };
 
 // Every archetype meta (for deriving the engine-wide edge/node-kind sets), deduped by kind.

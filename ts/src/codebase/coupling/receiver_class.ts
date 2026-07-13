@@ -96,6 +96,15 @@ function _inventory(repo: string, skipDirs: Set<string>): Inventory {
       if (root.length < 2) continue;
       let e = inv.get(root); if (!e) { e = { files: new Set(), verbs: new Map() }; inv.set(root, e); }
       e.files.add(rel); e.verbs.set(verb, (e.verbs.get(verb) ?? 0) + 1);
+      // NESTED SUB-HANDLE — a 3+ part chain (`client.auth.signInWithPassword`) also profiles its full receiver PATH
+      // (`client.auth`), so a stateful sub-handle a `service` classification needs is a candidate. The root profile
+      // (`client`) alone mixes the sub-handles (auth + db + storage) and loses the `.auth.` scope. Bounded by MIN_FILES
+      // + the external gate + MAX_CANDIDATES like any receiver; the member_access floor still owns the 3-part db layer.
+      if (p.length >= 3) {
+        const handle = p.slice(0, -1).join(".");
+        let eh = inv.get(handle); if (!eh) { eh = { files: new Set(), verbs: new Map() }; inv.set(handle, eh); }
+        eh.files.add(rel); eh.verbs.set(verb, (eh.verbs.get(verb) ?? 0) + 1);
+      }
     }
     _LOCAL_DECL_RE.lastIndex = 0; while ((m = _LOCAL_DECL_RE.exec(code)) !== null) localDef.add(m[1]);
     _IMPORT_RE.lastIndex = 0; while ((m = _IMPORT_RE.exec(code)) !== null) for (const n of _clauseNames(m[1])) (_isBare(m[2]) ? bareImport : localDef).add(n);
@@ -114,14 +123,19 @@ function _inventory(repo: string, skipDirs: Set<string>): Inventory {
   // its type isn't an in-repo class, so the ORM stays the SINGLE boundary instead of one matcher per repository.)
   const externalBacked = (r: string) => { const s = declRHS.get(r); return !!s && [...s].some((id) => bareImport.has(id)); };
   const inRepoTyped = (r: string) => { const s = typedAs.get(r); return !!s && [...s].some((t) => localDef.has(t)); };
-  const isExternal = (r: string) => bareImport.has(r) || externalBacked(r) || (!localDef.has(r) && !inRepoTyped(r));
+  // externality is decided by the ROOT of a (possibly dotted) receiver path: `client.auth` is external iff `client`
+  // is a node_modules import — the sub-handle inherits its root's provenance.
+  const isExternal = (rPath: string) => { const r = rPath.split(".")[0]; return bareImport.has(r) || externalBacked(r) || (!localDef.has(r) && !inRepoTyped(r)); };
   return { profiles, isExternal };
 }
 
 // a CANDIDATE both PRODUCES and CONSUMES (a data layer / channel that's written AND read) — the broad net the
 // LLM then confirms + types — AND is an EXTERNAL layer (the blindspot gate: drop in-repo local data flow).
 function _candidates(inv: Inventory): Profile[] {
-  return inv.profiles.filter((p) => { const vs = [...p.verbs.keys()]; return inv.isExternal(p.receiver) && vs.some(_isProd) && vs.some(_isCons); })
+  // a READ verb + a NON-READ verb: the conventional both-sided data layer (create+find) AND a stateful SERVICE
+  // handle whose mutation verbs don't follow write conventions (signIn/signOut alongside getSession) — the latter
+  // has a read but no `_isProd`, so require only "a read + something that isn't a read" (the LLM types which it is).
+  return inv.profiles.filter((p) => { const vs = [...p.verbs.keys()]; return inv.isExternal(p.receiver) && vs.some(_isCons) && vs.some((v) => !_isCons(v)); })
     .sort((a, b) => b.files - a.files).slice(0, MAX_CANDIDATES);
 }
 
@@ -145,6 +159,12 @@ Classify each as exactly one of:
              opaque boundary. NOT a DOMAIN MODEL with field accessors (\`savings.get('rate')\`, \`account.set(…)\`,
              \`loan.getAmount()\`): those are an in-code object whose data the call graph already follows — \`none\`.
   event    — an event / message bus (emit/publish/subscribe/listen)
+  service  — a stateful EXTERNAL SDK HANDLE whose methods MUTATE vs READ a shared SINGLETON state living OUTSIDE
+             this code, with NO per-call string key — the HANDLE ITSELF is the shared resource: an auth/session
+             client (\`auth.signInWithPassword(...)\` then \`auth.getSession()\`/\`auth.getUser()\`), a feature-flag /
+             remote-config client (\`flags.identify(...)\` then \`flags.isEnabled('x')\`). Distinguish from: \`database\`
+             (reads/writes table ENTITIES), \`http\` (a route PATH arg), \`store\`/\`event\` (a string KEY arg). Here
+             there is no table, no route, no string key — just verbs on a singleton handle.
   none     — none of the above: logging, test mocks/assertions, stdlib, local collections, request/response/url
              objects, a DOMAIN MODEL / entity with getters/setters, UI framework scopes, generic utilities.
              ALSO none: a QUERY-BUILDER / query OBJECT — a local you build then execute (\`query\`, \`typedQuery\`,
@@ -216,6 +236,17 @@ export async function classifyAndPersistRepositories(
       // (any client name). A RESPONSE receiver (res/json/status — no client verbs) yields no rule here.
       const httpVerbs = vs.filter((v) => _HTTP_CLIENT.has(_lc(v)));
       if (httpVerbs.length) push(validateMatcher({ via: "channel", token: p.receiver, verbs: httpVerbs, kind: "http-route", role: "consumes" }));
+    } else if (t === "service") {
+      // stateful external handle: the READ verbs CONSUME the singleton state; everything else MUTATES (PRODUCES) it.
+      // produce = non-read (a session handle's mutations — signIn/signOut/invite — don't follow write-verb
+      // conventions, so "not a read" is the framework-agnostic split). Both rules carry the SAME handle token → the
+      // same key → they ground. Emit only when BOTH sides exist (a lone producer/consumer grounds nothing).
+      const cons = _reads(vs);
+      const prod = vs.filter((v) => !cons.includes(v));
+      if (prod.length && cons.length) {
+        push(validateMatcher({ via: "handle", token: p.receiver, verbs: prod, kind: "service", role: "produces" }));
+        push(validateMatcher({ via: "handle", token: p.receiver, verbs: cons, kind: "service", role: "consumes" }));
+      }
     }
   }
   if (verbose()) { const by = (t: string) => cands.filter((c) => types.get(c.receiver) === t).map((c) => c.receiver); process.stderr.write(`[receiver-class] ${cands.length} candidate(s) → db: ${by("database").join(", ")} | event: ${by("event").join(", ")} | store: ${by("store").join(", ")}\n`); }
