@@ -205,6 +205,78 @@ function _intraFileCalleePass(s: DepScan): void {
   }
 }
 
+// 2d) QUALIFIED CROSS-FILE CALLEE pass (a FUNCTION/METHOD anchor) — a call `Recv.method(...)` whose RECEIVER is a
+// resolved in-repo CLASS: a STATIC / class-qualified call like `RepresentationToModel.createGroups(...)`. The import
+// / same-package pass already resolved `Recv` to its FILE (a type-ref/import node), but the SPECIFIC method is never
+// followed — so the class reads as "covered" while the invoked method + its body (and the DB writes IT does) vanish
+// with NO blindspot (the confirmed Keycloak createUser gap: createGroups/createCredentials/createFederatedIdentities
+// silently missing). GROUNDED, not a guess (the four-invariant rule): the receiver is ALREADY resolved to a file and
+// the method is a REAL unit in that file. Two halves, shipped together:
+//   • RESOLVE — method found in the receiver class → a `call` edge to the concrete method node, RESOLVED_PARTIAL
+//     (the class PATH is proven, but the exact overload binding is a name-match WITHIN the class — the same reason
+//     interface-impl is PARTIAL). The wave then expands THAT method, reaching its own boundary writes.
+//   • ANNOUNCE — receiver is a resolved in-repo class but the method is NOT found in it (inherited / framework-
+//     generated / a parse gap) → ONE `unfollowed-call` blindspot, instead of the silent false-coverage.
+// A non-identifier receiver (`session.getProvider(x).create()`) is the DI provider/interface passes' job, not this
+// one. Registry-driven (the receiver/name call-fields), so it covers whatever languages expose them on the call node
+// (Java/Ruby today) and no-ops elsewhere — no hardcoded language list. Opt out: SEAM_QUALIFIED_CALLS=0.
+async function _qualifiedCalleePass(s: DepScan): Promise<void> {
+  if (process.env.SEAM_QUALIFIED_CALLS === "0" || !s.actx) return;
+  const anchor = s.aunits.find((u) => u[0] === s.symbol);
+  if (!anchor || (anchor[1] !== "method" && anchor[1] !== "function")) return;   // a type anchor uses _typeMethodsPass
+  const [, , alo, ahi] = anchor;
+  // Resolve a bare-identifier RECEIVER to the FILE of the class it names — GROUNDED via the type resolver (an
+  // already-resolved import/same-package class node, else `_resolve`, the Java-sibling floor; null in TS/Py). Cached
+  // per name. Then require the receiver to REALLY BE a class/interface DEF in that file: this is the grounding that a
+  // static/class-qualified call (`Helper.doWork`) is meant, and it drops a local VARIABLE that merely shares a name
+  // with some class (`user.getId` where `user` is a `UserModel` local — never fabricate a class edge for it).
+  const preresolved = new Map<string, string>();
+  for (const n of s.nodes) if (n.id !== "n1" && n.file && n.symbol && (n.kind === "class" || n.kind === "interface") && !preresolved.has(n.symbol)) preresolved.set(n.symbol, n.file);
+  const recvFileMemo = new Map<string, string | null>();
+  const unitsOf = async (file: string): Promise<Unit[]> => {
+    if (!s.depUnits.has(file)) { const rd = _read(s.repo, file); const dctx = rd ? await makeCtx(rd[0], rd[1]) : null; s.depUnits.set(file, dctx ? _named_units(dctx) : []); }
+    return s.depUnits.get(file)!;
+  };
+  const receiverClassFile = async (recv: string): Promise<string | null> => {
+    if (recvFileMemo.has(recv)) return recvFileMemo.get(recv)!;
+    let file: string | null = preresolved.get(recv) ?? (await _resolve(s.repo, s.anchorFile, recv)) ?? null;
+    if (file && normpath(file) !== normpath(s.anchorFile)) {   // not the anchor's own file (that's _intraFileCalleePass)
+      const units = await unitsOf(file);
+      if (!units.some((u) => (u[1] === "class" || u[1] === "interface") && u[0] === recv)) file = null;   // recv isn't the class in that file → a local var, drop
+    } else file = null;
+    recvFileMemo.set(recv, file);
+    return file;
+  };
+  const unfollowed: { recv: string; method: string; file: string }[] = [];
+  const seenUnfollowed = new Set<string>();
+  for (const c of s.actx.collect(s.actx.root, (k: string) => _CALL.has(k))) {
+    const [cl] = s.actx.span(c);
+    if (cl < alo || cl > ahi) continue;
+    const recvNode = _CALL_RECV_FIELD.map((f) => (c as any).childForFieldName?.(f)).find(Boolean);
+    const nameNode = _CALL_NAME_FIELD.map((f) => (c as any).childForFieldName?.(f)).find(Boolean);
+    if (!recvNode || !nameNode || !recvNode.type.includes("identifier")) continue;   // bare call / chained-expr receiver → other passes
+    const recv = s.actx.text(recvNode);
+    const file = await receiverClassFile(recv);
+    if (!file) continue;                                                             // receiver not a grounded in-repo class → out of scope
+    const method = s.actx.text(nameNode);
+    if (s.seen.has(`${method} ${file}`)) continue;                                   // already a node (another pass resolved it)
+    const defu = (await unitsOf(file)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
+    if (defu) {
+      s.seen.add(`${method} ${file}`);
+      s.counter += 1;
+      const did = `d${s.counter}`;
+      s.nodes.push({ id: did, symbol: method, kind: defu[1], file, range: [defu[2], defu[3]], enclosing: recv, complexity: Math.max(1, defu[3] - defu[2] + 1) });
+      s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_PARTIAL", line: cl });
+    } else {
+      const key = `${recv}.${method}`;
+      if (!seenUnfollowed.has(key)) { seenUnfollowed.add(key); unfollowed.push({ recv, method, file }); }
+    }
+  }
+  if (unfollowed.length) s.blindspots.push({ node: "n1", mechanism: "unfollowed-call",
+    evidence: `${unfollowed.length} in-repo call${unfollowed.length === 1 ? "" : "s"} to a resolved class whose method could not be located (inherited / framework-generated / parse gap): ${unfollowed.slice(0, 8).map((u) => `${u.recv}.${u.method}`).join(", ")}${unfollowed.length > 8 ? " …" : ""}`,
+    candidates: unfollowed.slice(0, 16).map((u) => ({ file: u.file, symbol: `${u.recv}.${u.method}`, provenance: "SUGGESTED" })) });
+}
+
 // DETERMINISTIC rank of a multi-impl candidate set — NO intent/embeddings (the grow stays cacheable per file;
 // the "which one for THIS question" is the render's job). Prefer CONCRETE, NON-TEST impls, structurally HEAVIEST
 // first (file size = a cheap grounded proxy for a real mechanism vs a no-op/stub/map backend); path as a stable
@@ -417,7 +489,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
     await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
     if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); }
-    else { await _samePackagePass(s); _intraFileCalleePass(s); _de("samePackage+intraCallee", _t); }
+    else { await _samePackagePass(s); _intraFileCalleePass(s); await _qualifiedCalleePass(s); _de("samePackage+intraCallee+qualified", _t); }
     _t = _dt();
     await _providerFactoryPass(s); _de("providerFactory", _t); _t = _dt();   // DI factory hop (default-on, opt out =0), before the @Inject pass
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();
