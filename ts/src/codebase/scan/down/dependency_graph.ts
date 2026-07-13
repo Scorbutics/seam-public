@@ -8,7 +8,7 @@ import { _resolve_import, _resolve } from "../../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
 import { normpath } from "../../../core/resolve/walk.js";
 import { resolveFileRef } from "../../../core/resolve/file_ref.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD } from "../../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME } from "../../atoms.js";
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
@@ -220,6 +220,26 @@ function _intraFileCalleePass(s: DepScan): void {
 // A non-identifier receiver (`session.getProvider(x).create()`) is the DI provider/interface passes' job, not this
 // one. Registry-driven (the receiver/name call-fields), so it covers whatever languages expose them on the call node
 // (Java/Ruby today) and no-ops elsewhere — no hardcoded language list. Opt out: SEAM_QUALIFIED_CALLS=0.
+// The (RECEIVER identifier, METHOD name) of a QUALIFIED call, cross-grammar — returns null for a bare call
+// (`f()`) or a chained-expression receiver (`a().b()`). Two shapes, from the registry sets (no per-language code):
+//   • Java / Ruby   — the call node itself carries `object`/`receiver` + `name`/`method` fields.
+//   • TS / JS / Py / C++ — the callee sits under the `function` field (or is the first child) as a member/attribute
+//     expression (`_MEMBER`): its `object` is the receiver, its `property`/`attribute` (`_MEMBER_NAME`) is the method.
+function _qualCallParts(ctx: Ctx, c: any): { recv: string; method: string } | null {
+  let recvNode = _CALL_RECV_FIELD.map((f) => c.childForFieldName?.(f)).find(Boolean);
+  let nameNode = _CALL_NAME_FIELD.map((f) => c.childForFieldName?.(f)).find(Boolean);
+  if (!recvNode || !nameNode) {
+    const callee = c.childForFieldName?.("function") ?? ctx.children(c).find((x: any) => _MEMBER.has(x.type));
+    if (callee && _MEMBER.has(callee.type)) {
+      recvNode = callee.childForFieldName?.("object") ?? ctx.children(callee)[0];
+      nameNode = callee.childForFieldName?.("property") ?? callee.childForFieldName?.("attribute")
+        ?? ctx.children(callee).find((x: any) => _MEMBER_NAME.has(x.type));
+    }
+  }
+  if (!recvNode || !nameNode || !recvNode.type.includes("identifier")) return null;   // chained/`this`/computed receiver → not ours
+  return { recv: ctx.text(recvNode), method: ctx.text(nameNode) };
+}
+
 async function _qualifiedCalleePass(s: DepScan): Promise<void> {
   if (process.env.SEAM_QUALIFIED_CALLS === "0" || !s.actx) return;
   const anchor = s.aunits.find((u) => u[0] === s.symbol);
@@ -252,13 +272,11 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
   for (const c of s.actx.collect(s.actx.root, (k: string) => _CALL.has(k))) {
     const [cl] = s.actx.span(c);
     if (cl < alo || cl > ahi) continue;
-    const recvNode = _CALL_RECV_FIELD.map((f) => (c as any).childForFieldName?.(f)).find(Boolean);
-    const nameNode = _CALL_NAME_FIELD.map((f) => (c as any).childForFieldName?.(f)).find(Boolean);
-    if (!recvNode || !nameNode || !recvNode.type.includes("identifier")) continue;   // bare call / chained-expr receiver → other passes
-    const recv = s.actx.text(recvNode);
+    const parts = _qualCallParts(s.actx, c);
+    if (!parts) continue;                                                            // bare call / chained-expr / `this` receiver → other passes
+    const { recv, method } = parts;
     const file = await receiverClassFile(recv);
     if (!file) continue;                                                             // receiver not a grounded in-repo class → out of scope
-    const method = s.actx.text(nameNode);
     if (s.seen.has(`${method} ${file}`)) continue;                                   // already a node (another pass resolved it)
     const defu = (await unitsOf(file)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
     if (defu) {
