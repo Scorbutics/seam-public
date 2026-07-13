@@ -7,7 +7,7 @@ import { endsWithSourceExt, SKIP_DIRS, impl_markers } from "../../../core/resolv
 import { walk } from "../../../core/resolve/walk.js";
 import {
   makeCtx, available, lang_for,
-  _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _ANNOTATION,
+  _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _HERITAGE, _ANNOTATION,
 } from "../../atoms.js";
 import { _name_of, _read } from "../ast_units.js";
 import { incrementalScanAsync, indexCacheEnabled } from "../../coupling/index_cache.js";
@@ -38,14 +38,26 @@ async function _scanImplFile(rel: string, text: string): Promise<ImplContributio
   // Java/TS skip unless the keyword is textually present. Sound: the node kinds require the keyword. Cuts the
   // COLD first-run parse set (the persisted index then makes re-runs O(changed) regardless).
   const markers = impl_markers(rel);
-  if (markers !== undefined && !markers.some((m) => text.includes(m))) return { interfaces: [], edges: [] };
+  if (markers !== undefined && !markers.some((m) => text.includes(m))) return { interfaces: [], edges: [], accessors: [] };
   const grammar = lang_for(rel);
-  if (!grammar) return { interfaces: [], edges: [] };
+  if (!grammar) return { interfaces: [], edges: [], accessors: [] };
   const ctx = await makeCtx(text, grammar);
-  if (!ctx) return { interfaces: [], edges: [] };
+  if (!ctx) return { interfaces: [], edges: [], accessors: [] };
   const interfaces: string[] = [];
-  for (const itf of ctx.collect(ctx.root, (k) => _INTERFACE.has(k))) { const nm = _name_of(ctx, itf); if (nm) interfaces.push(nm); }
   const edges: [string, string][] = [];
+  for (const itf of ctx.collect(ctx.root, (k) => _INTERFACE.has(k))) {
+    const nm = _name_of(ctx, itf);
+    if (!nm) continue;
+    interfaces.push(nm);
+    // INTERFACE-EXTENDS-INTERFACE — a sub-interface's impls ARE impls of its super-interface (Java `UserModel extends
+    // RoleMapperModel` → a UserModel impl like UserAdapter also implements RoleMapperModel). Record [super, sub] (same
+    // shape as [interface, class]) so the closure in _impl_index propagates concrete classes UP the interface chain.
+    // Without it, a call on a SUPER-interface (`roleMapper.grantRole` on RoleMapperModel) resolves to NO impl and the
+    // DI hop is lost — the flow then latches onto an unrelated coupling write. _HERITAGE covers Java `extends_interfaces`
+    // + TS interface `extends_clause`; _BASE_NAME reads the super names (same extraction as the class-implements edge).
+    for (const h of ctx.children(itf)) if (_HERITAGE.has(h.type))
+      for (const sn of ctx.collect(h, (k) => _BASE_NAME.has(k)).map((n) => ctx.text(n))) if (sn && sn !== nm) edges.push([sn, nm]);
+  }
   for (const cls of ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k))) {
     const cn = _name_of(ctx, cls);
     if (!cn) continue;
@@ -92,7 +104,7 @@ async function _impl_index(repo: string): Promise<ImplIndex> {
   // The full-repo PARSE (the cold large-repo cost). incrementalScanAsync persists each file's contribution to
   // `.seam/impl-index.json` keyed by (mtime,size) → a re-run re-parses only CHANGED files, not all 4000+.
   if (indexCacheEnabled()) {
-    for (const { rel, data } of await incrementalScanAsync(repo, SKIP_DIRS, endsWithSourceExt, "impl-v2", _scanImplFile, "impl-index")) {
+    for (const { rel, data } of await incrementalScanAsync(repo, SKIP_DIRS, endsWithSourceExt, "impl-v3", _scanImplFile, "impl-index")) {
       for (const itf of data.interfaces) interfaces.add(itf);
       for (const [sup, cls] of data.edges) addEdge(sup, cls, rel);
       for (const a of data.accessors ?? []) rawAccessors.push(a);
@@ -109,6 +121,26 @@ async function _impl_index(repo: string): Promise<ImplIndex> {
       for (const a of data.accessors) rawAccessors.push(a);
     }
   }
+  // TRANSITIVE CLOSURE over interface-extends — an impl entry whose `cls` is itself an INTERFACE (a [super, sub]
+  // interface-extends edge) is expanded to that sub-interface's CONCRETE impls, so resolving a SUPER-interface
+  // (RoleMapperModel) reaches the concrete class (UserAdapter) that implements it via a sub-interface (UserModel).
+  // Direct concrete impls are kept as-is; cycles are guarded by `seen`. Computed once at build (cached with the index).
+  const resolveConcrete = (name: string, seen: Set<string>): { cls: string; file: string }[] => {
+    const out: { cls: string; file: string }[] = [];
+    for (const e of impls.get(name) ?? []) {
+      if (interfaces.has(e.cls)) { if (!seen.has(e.cls)) { seen.add(e.cls); out.push(...resolveConcrete(e.cls, seen)); } }
+      else out.push(e);   // a concrete class implementing `name` (directly or via a sub-interface)
+    }
+    return out;
+  };
+  const closed = new Map<string, { cls: string; file: string }[]>();
+  for (const name of impls.keys()) {
+    const uniq: { cls: string; file: string }[] = [];
+    for (const e of resolveConcrete(name, new Set([name]))) if (!uniq.some((x) => x.cls === e.cls && x.file === e.file)) uniq.push(e);
+    closed.set(name, uniq);
+  }
+  impls.clear();
+  for (const [k, v] of closed) if (v.length) impls.set(k, v);
   // KEEP an accessor only when its return type is a real interface WITH impls — a grounded factory hop, never a
   // name guess. `methodName → the interface(s) it returns` (usually one; a Set handles a rare same-name collision).
   const accessors = new Map<string, Set<string>>();

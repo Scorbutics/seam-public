@@ -101,8 +101,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // an on-path boundary even where its identifiers embed weakly (a low-tier db-table is still the outcome). Falls
   // back to the tier band ONLY when the flow reaches NO downstream boundary (a same-language call chain / policy
   // fan) — the honest "reaches no boundary" case then renders as region-by-shell (no fabricated spine).
-  const _terminalSpine = (): { path: Seam[]; alternates: Seam[]; grounded: boolean; terminal: "grounded" | "frontier" | "none"; breakInfo?: any } => {
-    const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false, terminal: "none" as "grounded" | "frontier" | "none" };
+  const _terminalSpine = (): { path: Seam[]; alternates: Seam[]; grounded: boolean; terminal: "grounded" | "frontier" | "none"; breakInfo?: any; reachSet: Set<string> } => {
+    const empty = { path: [] as Seam[], alternates: [] as Seam[], grounded: false, terminal: "none" as "grounded" | "frontier" | "none", reachSet: new Set<string>() };
     const anchorSeam = seamOfId.get(String(model.anchor));
     if (!anchorSeam) return empty;
     const anchorNode = String(model.anchor);   // the anchor NODE, not its (often god-class / merged-blob) seam
@@ -121,6 +121,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const _storeTerminal = process.env.SEAM_SPINE_STORE_TERMINAL !== "0";
     const storeSeamIds = new Set<string>();   // seams holding a data-store boundary hunk — TERMINAL in the spine
     if (_storeTerminal) for (const s of seams) if ((s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""))) storeSeamIds.add(s.id);
+    const _trustGate = process.env.SEAM_SPINE_TRUST_GATE !== "0";
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
       const srcN = fwd ? String(e.to) : String(e.from);   // the DOWNSTREAM-source node (fwd = consumers-lead → flow runs to→from)
@@ -175,7 +176,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const _CALL = new Set(["call", "invokes", "dispatch"]);   // control-flow delegation edges
     const edges = (model.edges ?? []) as any[];
     const directIds = new Set<string>();
-    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) directIds.add(String(e.to));
+    const ownIds = new Set<string>();   // the anchor's OWN in-body writes — a hard structural fact, trusted unconditionally
+    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) { directIds.add(String(e.to)); ownIds.add(String(e.to)); }
     // PURE-DELEGATE one-hop: a controller that writes NOTHING itself persists THROUGH its delegate — so its
     // effective write is the delegate's. When the anchor has no own writes, borrow the direct writes of the nodes
     // it CALLS (one hop only, so an orchestrator's deep subtree doesn't flood back in and re-introduce the noise
@@ -192,6 +194,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
     }
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
+    const ownSink = (s: Seam) => (s.hunks ?? []).some((h: any) => ownIds.has(String(h.id)));
     // A grounded ANCHOR WRITE (directSink) is a candidate EVEN when the BFS didn't reach it: in `fwd` (consumers-lead)
     // footprints the anchor's own `db-write` edge (n1→table) is stored/traversed as table→n1, so the table it persists
     // is unreachable DOWNSTREAM and `dist` misses it — yet the anchor demonstrably writes it (a direction-agnostic
@@ -208,9 +211,30 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     for (const e of edges) if (e.kind === "provider-impl") _providerTargets.add(String(e.to));
     const providerWrite = (s: Seam): boolean => (s.hunks ?? []).some((h: any) =>
       edges.some((e) => _PRODUCE.has(e.kind) && String(e.to) === String(h.id) && _providerTargets.has(String(e.from))));
+    // TRUST GATE — reject a directSink that is a COUPLING OVER-ATTRIBUTION, not a real persist. A GETTER whose
+    // node-range bled over a sibling's writes (keycloak isValid → `getUsername`, credited with db-writes to FOUR
+    // user tables it never persists — UserAttribute/UserGroupMembership/UserRequiredAction/UserRoleMapping) crowns a
+    // confident-wrong terminal (the same `UserRoleMappingEntity` is right for "roles" yet wrong for "credentials" —
+    // intent-blind coupling). The signature is a SINGLE non-provider writer credited with ≥K distinct store writes —
+    // a real method persists a FOCUSED aggregate; a class-wide bleed writes many unrelated tables. So a borrowed
+    // write is TRUSTED when it's the anchor's OWN write, a DI PROVIDER write, or written by a FOCUSED writer
+    // (< K stores) — the legit delegate borrow (a handler → interface-impl/call → an impl that persists ONE entity)
+    // survives; only the many-table bleed is demoted (it stays in "Also writes"). (Tune: SEAM_SPINE_OVERATTRIB_K.)
+    const _overAttribK = Math.max(2, parseInt(process.env.SEAM_SPINE_OVERATTRIB_K ?? "3", 10) || 3);
+    const writesOf = new Map<string, Set<string>>();   // writer node → the distinct store tables it is credited writing
+    for (const e of edges) if (_PRODUCE.has(e.kind)) {   // PRODUCE targets ARE store boundaries — count distinct table labels
+      const tbl = label.get(String(e.to)) ?? String(e.to);
+      (writesOf.get(String(e.from)) ?? writesOf.set(String(e.from), new Set()).get(String(e.from))!).add(tbl);
+    }
+    // a store hunk is written by a FOCUSED (non-bleed) writer that isn't a DI provider (providers legitimately front
+    // many tables — they're gated by `providerWrite` instead)
+    const focusedWriter = (s: Seam): boolean => (s.hunks ?? []).some((h: any) => edges.some((e) =>
+      _PRODUCE.has(e.kind) && String(e.to) === String(h.id) && !_providerTargets.has(String(e.from))
+      && (writesOf.get(String(e.from))?.size ?? 0) < _overAttribK));
+    const trustedDirect = (s: Seam) => directSink(s) && (!_trustGate || ownSink(s) || providerWrite(s) || focusedWriter(s));
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
-        && (dist.has(s.id) || directSink(s))
-        && (isStoreSink(s) || directSink(s) || ((s as any).region?.direction ?? "down") === "down"))
+        && (dist.has(s.id) || trustedDirect(s))
+        && (isStoreSink(s) || trustedDirect(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
@@ -232,10 +256,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         if (stops.length) {
           const ids = pathTo(stops[0].id);
           const bs = (stops[0].hunks ?? []).map((h: any) => bsByNode.get(String(h.id))).find(Boolean);
-          return { path: ids.map((id) => byId.get(id)!).filter(Boolean), alternates: [], grounded: false, terminal: "frontier", breakInfo: bs };
+          return { path: ids.map((id) => byId.get(id)!).filter(Boolean), alternates: [], grounded: false, terminal: "frontier", breakInfo: bs, reachSet: new Set(dist.keys()) };
         }
       }
-      return empty;
+      return { ...empty, reachSet: new Set(dist.keys()) };
     }
     const pathIds = pathTo(cands[0].id);
     const path = pathIds.map((id) => byId.get(id)!).filter(Boolean);
@@ -243,13 +267,22 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // primary pick is then one glance from correction (repoint --intent), never a silently-buried terminal.
     const onPath = new Set(pathIds); const seen = new Set<string>(); const alternates: Seam[] = [];
     for (const s of cands.slice(1)) { if (onPath.has(s.id)) continue; const k = `${s.primary?.file}#${s.primary?.symbol}`; if (seen.has(k)) continue; seen.add(k); alternates.push(s); }
-    return { path, alternates, grounded: true, terminal: "grounded" };
+    return { path, alternates, grounded: true, terminal: "grounded", reachSet: new Set(dist.keys()) };
   };
   const _spine = _terminalSpine();
   const spineGrounded = _spine.grounded;
   const spineTerminal = _spine.terminal;
   const spineBreak = _spine.breakInfo;
-  const spineSeams = _spine.path.length ? _spine.path : seams.filter((s) => tierOf(s) === "spine");
+  // TIER-BAND FALLBACK (no grounded/frontier terminal) — the emit's `tier==="spine"` band is a RELEVANCE ranking,
+  // not a flow, so it drifts to embedding-adjacent seams that are NOT on the anchor's resolved path (private-app signIn →
+  // `signUp`, a file-adjacent sibling it never calls; cal's :0-bound anchor → PayPal). When the anchor seam RESOLVED
+  // (reachSet non-empty), keep only band seams STRUCTURALLY reachable from it — the anchor's real downstream flow —
+  // dropping the drift. When the anchor didn't resolve to a seam (reachSet empty — a hand-built model whose anchor id
+  // isn't a hunk, or a fully-opaque center) we can't compute flow, so trust the emit's band as-is. (SEAM_SPINE_TRUST_GATE=0 opts out.)
+  const spineSeams = _spine.path.length ? _spine.path
+    : (process.env.SEAM_SPINE_TRUST_GATE !== "0" && _spine.reachSet.size
+        ? seams.filter((s) => tierOf(s) === "spine" && _spine.reachSet.has(s.id))
+        : seams.filter((s) => tierOf(s) === "spine"));
   const spineSet = new Set(spineSeams.map((s) => s.id));
   const spineAlternates = _spine.alternates;
   const altSet = new Set(spineAlternates.map((s) => s.id));

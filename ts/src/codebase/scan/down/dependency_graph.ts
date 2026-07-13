@@ -8,7 +8,7 @@ import { _resolve_import, _resolve } from "../../../core/resolve/consumers.js";
 import { parse_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
 import { normpath } from "../../../core/resolve/walk.js";
 import { resolveFileRef } from "../../../core/resolve/file_ref.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME } from "../../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME, _INSTANCE_BINDER, _TYPED_DECL } from "../../atoms.js";
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
@@ -267,6 +267,25 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
     recvFileMemo.set(recv, file);
     return file;
   };
+  // INTERFACE-TYPED FIELD RECEIVER — a call `roleMapper.grantRole()` whose receiver is a class-level FIELD (or ctor
+  // param / local) declared as an INTERFACE (`private final RoleMapperModel roleMapper`). The interface type is
+  // declared at CLASS scope, so it's NOT a dep of the METHOD anchor and _interfaceImplPass never follows it — yet the
+  // call IS a DI interface hop the type grounds (keycloak addRealmRoleMappings → roleMapper.grantRole → UserAdapter →
+  // UserRoleMappingEntity). Map each declared identifier → its declared type name; a receiver in this map with impls is
+  // followed method-precisely below (same _followInterface as the @Inject field / getProvider passes). GROUNDED — the
+  // field's declared type is a real resolved interface, its impls real; not a name guess. (Opt out: SEAM_QUALIFIED_CALLS=0.)
+  const _declBase = (t: string): string => (t.replace(/<[\s\S]*$/, "").trim().split(".").pop() ?? "").trim();
+  const declType = new Map<string, string>();
+  for (const d of s.actx.collect(s.actx.root, (k: string) => _TYPED_DECL.has(k))) {
+    const tn = (d as any).childForFieldName?.("type");
+    if (!tn) continue;
+    const tName = _declBase(s.actx.text(tn));
+    if (!tName) continue;
+    const names: string[] = [];
+    const own = _name_of(s.actx, d); if (own) names.push(own);   // TS binders carry their own name
+    for (const vd of s.actx.collect(d, (k: string) => _INSTANCE_BINDER.has(k))) { const vn = _name_of(s.actx, vd); if (vn) names.push(vn); }   // Java: name in the declarator child
+    for (const nm of names) if (nm && !declType.has(nm)) declType.set(nm, tName);
+  }
   const unfollowed: { recv: string; method: string; file: string }[] = [];
   const seenUnfollowed = new Set<string>();
   for (const c of s.actx.collect(s.actx.root, (k: string) => _CALL.has(k))) {
@@ -276,7 +295,14 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
     if (!parts) continue;                                                            // bare call / chained-expr / `this` receiver → other passes
     const { recv, method } = parts;
     const file = await receiverClassFile(recv);
-    if (!file) continue;                                                             // receiver not a grounded in-repo class → out of scope
+    if (!file) {
+      // receiver isn't a class, but may be an INTERFACE-TYPED field/param → follow the interface (method-precise)
+      const iface = declType.get(recv);
+      if (iface && !s.seen.has(`ifield:${recv}.${method}`)) {
+        if (await _followInterface(s, iface, _implCap(), method, cl, "interface-impl")) s.seen.add(`ifield:${recv}.${method}`);
+      }
+      continue;                                                                      // otherwise out of scope (a local of a concrete class, etc.)
+    }
     if (s.seen.has(`${method} ${file}`)) continue;                                   // already a node (another pass resolved it)
     const defu = (await unitsOf(file)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
     if (defu) {

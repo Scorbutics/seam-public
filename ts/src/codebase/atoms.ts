@@ -48,6 +48,12 @@ export const _NEW = new Set(["new_expression", "object_creation_expression"]);
 export const _TYPE_REF = new Set(["type_identifier"]);
 export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",
   "public_field_definition", "field_definition", "property_signature"]);
+// Typed DECLARATION nodes that carry a `type` field + a bound NAME — a field / ctor-param / local whose declared
+// type we read to resolve a method call on that receiver (`RoleMapperModel roleMapper` → follow the interface).
+// Java field_declaration/formal_parameter/local_variable_declaration wrap the name in a variable_declarator child;
+// the TS binders carry their own name. Registry-sourced (concepts, cross-language), not a per-framework list.
+export const _TYPED_DECL = new Set(["field_declaration", "formal_parameter", "local_variable_declaration",
+  "public_field_definition", "field_definition", "property_signature", "required_parameter", "optional_parameter"]);
 export const _VAR_DECL = new Set(["lexical_declaration", "variable_declaration"]);
 export const _INTERFACE = new Set(["interface_declaration"]);
 export const _INTERFACE_MEMBER = new Set(["method_signature", "property_signature", "abstract_method_signature"]);

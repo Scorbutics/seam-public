@@ -361,6 +361,63 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("GroupRoleMappingEntity");   // …not the adapter's higher-relevance write
   });
 
+  // TRUST GATE — coupling OVER-ATTRIBUTION must not crown a spine terminal. A GETTER whose node-range bled over a
+  // sibling's writes gets credited (via shared-key coupling) with db-writes to MANY unrelated tables it never
+  // persists (keycloak `isValid` → `getUsername`, credited with writing 3 user tables). The signature is a single
+  // NON-provider writer with ≥K distinct store writes — a real persist is FOCUSED (one aggregate). Contract: a
+  // focused single-table delegate write IS crowned; the many-table bleed is REJECTED (demoted, never the crown) —
+  // so the same store is right for one intent and wrong for another, exactly as intent-blind coupling demands.
+  test("a getter credited (over-attribution) with writing MANY tables is NOT crowned; a focused delegate write is", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",
+      clusters: [{ id: "g1", intent: "how are credentials validated", seams: [
+        { id: "aseam", label: "isValid", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "cred/PasswordCredentialProvider.java", line: 1, symbol: "isValid" }, hunks: [{ id: "ah", file: "cred/PasswordCredentialProvider.java", start: 1, role: "core", label: "isValid", kind: "method" }] },
+        { id: "guS", label: "getUsername", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/UserAdapter.java", line: 1, symbol: "getUsername" }, hunks: [{ id: "gu", file: "jpa/UserAdapter.java", start: 1, role: "link", label: "getUsername", kind: "method" }] },
+        { id: "svcS", label: "publishMetric", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "cred/Metrics.java", line: 1, symbol: "publishMetric" }, hunks: [{ id: "svc", file: "cred/Metrics.java", start: 1, role: "link", label: "publishMetric", kind: "method" }] },
+        { id: "t1S", label: "UserAttributeEntity", tier: "supporting", relevance: 0.30, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserAttributeEntity.java", line: 1, symbol: "UserAttributeEntity" }, hunks: [{ id: "t1", file: "jpa/UserAttributeEntity.java", start: 1, role: "environment", label: "UserAttributeEntity", kind: "db-table" }] },
+        { id: "t2S", label: "UserGroupMembershipEntity", tier: "supporting", relevance: 0.30, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserGroupMembershipEntity.java", line: 1, symbol: "UserGroupMembershipEntity" }, hunks: [{ id: "t2", file: "jpa/UserGroupMembershipEntity.java", start: 1, role: "environment", label: "UserGroupMembershipEntity", kind: "db-table" }] },
+        { id: "t3S", label: "UserRoleMappingEntity", tier: "supporting", relevance: 0.90, region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserRoleMappingEntity.java", line: 1, symbol: "UserRoleMappingEntity" }, hunks: [{ id: "t3", file: "jpa/UserRoleMappingEntity.java", start: 1, role: "environment", label: "UserRoleMappingEntity", kind: "db-table" }] },
+        { id: "auS", label: "AuditEntity", tier: "supporting", relevance: 0.20, region: { shell: 2, direction: "down" }, primary: { file: "jpa/AuditEntity.java", line: 1, symbol: "AuditEntity" }, hunks: [{ id: "au", file: "jpa/AuditEntity.java", start: 1, role: "environment", label: "AuditEntity", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "ah", to: "gu", kind: "call" }, { from: "ah", to: "svc", kind: "call" },
+        { from: "gu", to: "t1", kind: "db-write" }, { from: "gu", to: "t2", kind: "db-write" }, { from: "gu", to: "t3", kind: "db-write" },  // the class-wide BLEED (3 tables, one getter)
+        { from: "svc", to: "au", kind: "db-write" },   // a FOCUSED delegate write (one table)
+      ],
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are credentials validated" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("AuditEntity");                     // the FOCUSED single-table delegate write is crowned…
+    expect(spine).not.toContain("UserRoleMappingEntity");       // …not the highest-relevance over-attributed bleed
+    expect(spine).not.toContain("UserAttributeEntity");
+  });
+
+  // TIER-BAND DRIFT — with no grounded/frontier terminal the emit's `tier==="spine"` band is a RELEVANCE ranking,
+  // not a flow: it drifts to embedding-adjacent seams NOT on the anchor's resolved path (private-app `signIn` → `signUp`, a
+  // file-adjacent sibling it never calls). When the anchor seam RESOLVED, the inferred band keeps only seams
+  // structurally reachable from it, dropping the drift. (SEAM_SPINE_TRUST_GATE=0 restores the raw band.)
+  test("inferred spine drops a tier-spine seam that is NOT on the anchor's resolved flow (drift)", () => {
+    const model = {
+      mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",
+      clusters: [{ id: "g1", intent: "how does a user sign in", seams: [
+        { id: "aseam", label: "signIn", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "auth/auth.ts", line: 1, symbol: "signIn" }, hunks: [{ id: "ah", file: "auth/auth.ts", start: 1, role: "core", label: "signIn", kind: "function" }] },
+        { id: "suSeam", label: "signUp", tier: "spine", region: { shell: 3, direction: "down" }, primary: { file: "auth/auth.ts", line: 90, symbol: "signUp" }, hunks: [{ id: "su", file: "auth/auth.ts", start: 90, role: "core", label: "signUp", kind: "function" }] },   // a file-adjacent sibling, NOT reached from signIn
+      ] }],
+      edges: [],   // no grounded boundary, and no edge signIn→signUp → signUp is off the anchor's resolved flow
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does a user sign in" });
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("signIn");         // the resolved anchor stays
+    expect(spine).not.toContain("signUp");     // the unreachable drift sibling is dropped
+    // without the gate the raw relevance band restores the drift (proving it's the reach filter doing the work)
+    process.env.SEAM_SPINE_TRUST_GATE = "0";
+    const raw = renderAgent(model as any, { tokenBudget: 8000, intent: "how does a user sign in" });
+    delete process.env.SEAM_SPINE_TRUST_GATE;
+    expect(raw.slice(raw.indexOf("## Spine"), raw.indexOf("## ", raw.indexOf("## Spine") + 5))).toContain("signUp");
+  });
+
   // CALL SITES — each spine hop prints the exact resolved edge (caller file:line ──kind──▶ callee), the
   // verify-by-glance line an agent trusts instead of re-grepping. edge.from is the caller, edge.line its call site.
   test("spine hops show the real call site (caller file:line ──kind──▶ callee)", () => {
