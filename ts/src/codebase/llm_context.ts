@@ -156,12 +156,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // "up" boundary is an inbound CALLER route — the entry, never the outcome. Requiring "down" stops an upstream
     // caller-route (reachable through a crossing whose edge direction doesn't track the call direction) from being
     // crowned the sink. Default "down" so models that omit direction aren't excluded (the hand-built render tests).
-    // INTENT picks the PRIMARY among the sinks — the ONE semantic judgement, here at render (CLAUDE.md: structure
-    // enumerates the candidates, the model/embeddings judge which one the intent MEANS): rank by the emitted
-    // `relevance` (deterministic embeddings vs the intent) so "persist a USER" crowns db-table UserEntity, not the
-    // deepest arbitrary entity — then depth / weight / stable id. With no relevance (offline / no intent) it is
-    // ≡ -1 and DEPTH leads = the pure-structural default. The rest are ALTERNATES (also-reaches), never hidden.
-    const rel = (s: Seam) => (typeof (s as any).relevance === "number" ? (s as any).relevance : -1);
+    // STRUCTURE picks the PRIMARY among the sinks — the agent-facing basis is EMBEDDING-FREE and LLM-FREE (the
+    // consuming agent does the semantic "which one does the intent mean" itself; a fuzzy cosine here just gets it
+    // WRONG — it rated cal `bookingSeat` 0.354 > `booking` 0.318, crowning the child detail table for "a booking
+    // is created"). So rank by GROUNDED STRUCTURE only: directSink → providerWrite → depth → WRITE-ORDER within
+    // the same file → weight → stable id. WRITE-ORDER is the create-genesis prior: an FK child (bookingSeat) can
+    // only be persisted AFTER its parent row (booking) exists, so among same-file same-tier own-writes the EARLIER
+    // line is the root entity the flow is named for. (Cross-file this term is inert — line numbers aren't
+    // comparable across files.) The non-crowned sinks are ALTERNATES (also-reaches), one glance away, never hidden.
+    const _line = (s: Seam) => (typeof (s as any).primary?.line === "number" ? (s as any).primary.line : 1e9);
+    const _sameFile = (a: Seam, b: Seam) => !!a.primary?.file && a.primary?.file === b.primary?.file;
+    const writeOrder = (a: Seam, b: Seam) => (_sameFile(a, b) ? (_line(a) - _line(b)) : 0);
     // A DATA-STORE boundary (db-table / queue / cache / topic / file) is inherently TERMINAL — you don't "call
     // downstream" into a table, you SHARE it, so a shared-key coupling to it is a sink whatever its region
     // direction. A RELAY boundary (route) can be an upstream CALLER or a downstream handler, so it must be
@@ -285,10 +290,27 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // never the crown, unless nothing nearer grounds. This is the "deepen ADMISSION, preserve PRECEDENCE" split.
     const chainSink = (s: Seam) => (s.hunks ?? []).some((h: any) => chainIds.has(String(h.id)));
     const trustedChain = (s: Seam) => chainSink(s) && (!_trustGate || providerWrite(s) || focusedWriter(s));
+    // SUBJECT-CONTINUITY (structural, no embedding) — the flow's SUBJECT tables are those the anchor's OWN MODULE
+    // (its directory) touches. A grounded sink whose table is OFF the subject (a side-effect that lives in another
+    // module — `bug_reports` on a payments flow) must NOT out-crown an on-subject sink just because it sorts earlier
+    // by stable id. This is the structural signal that REPLACES the embedding's old "keep the crown on-subject" role.
+    // Module-based (NOT anchor-own-writes — the anchor may also write a side table), gated by SEAM_SUBJECT_DIM.
+    const _tblOf = (s: Seam) => String((primaryHunk(s) as any)?.label ?? "");
+    const _anchorDir = (fileOfId.get(anchorNode) ?? "").replace(/\/[^/]*$/, "");
+    const _moduleTbls = new Set<string>();
+    for (const s of seams) { const f = s.primary?.file; if (f && _anchorDir && f.startsWith(_anchorDir + "/") && isBoundarySeam(s)) { const t = _tblOf(s); if (t) _moduleTbls.add(t); } }
+    const _onSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM === "0" || !_tblOf(s) || _moduleTbls.has(_tblOf(s));
+    // SINK RANK — a real DATA-STORE persistence (db-table/queue/cache/topic/file: a PERSISTED row) is the culmination
+    // (rank 2); a shared SERVICE-STATE handle (kind `service` — keycloak `session`, runtime state passed between
+    // beans, NOT a persisted row, but still in STORE_KINDS) is plumbing (rank 1) and must never out-crown a real
+    // persistence; a non-store boundary is rank 0. Ranked FIRST, so `UserRoleMappingEntity` (db-table) beats a
+    // `session` service-state crossing even when the session sorts earlier by id. Then the own-write/provider/
+    // subject/depth/write-order tiers break ties AMONG equal-rank sinks.
+    const _sinkRank = (s: Seam) => { const k = String((primaryHunk(s) as any)?.kind ?? ""); return (_STORE_KINDS.has(k) && k !== "service") ? 2 : k === "service" ? 1 : 0; };
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
         && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+      .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {

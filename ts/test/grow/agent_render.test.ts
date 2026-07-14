@@ -586,6 +586,59 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("GroupRoleMapping");   // …the in-body one-hop sibling no longer out-ranks it on the directSink prior
   });
 
+  // WRITE-ORDER (structure-only crown) — the anchor writes TWO tables IN-BODY (both own-writes / same tier):
+  // `booking` (line 10) and `bookingSeat` (line 20, an FK child). The agent-facing crown is EMBEDDING-FREE, so
+  // even though the (deliberately misleading) embedding rates the child HIGHER (0.9 vs 0.1), the crown must break
+  // the tie STRUCTURALLY toward the EARLIER same-file write — the create-genesis prior (an FK child row can only
+  // be persisted after its parent exists). cal `RegularBookingService` → `booking`, not `bookingSeat`.
+  test("write-order breaks a same-tier own-write tie toward the earlier (parent) create — no embedding", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a new booking created and persisted", seams: [
+        { id: "a", label: "createBooking", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/book.ts", line: 1, symbol: "createBooking" }, hunks: [{ id: "cb", file: "svc/book.ts", start: 1, role: "core", label: "createBooking" }] },
+        // parent entity: EARLIER line, deliberately LOWER embedding relevance
+        { id: "bk", label: "booking", tier: "off", relevance: 0.1, region: { shell: 1, direction: "down" }, primary: { file: "svc/book.ts", line: 10, symbol: "booking" }, hunks: [{ id: "bkh", file: "svc/book.ts", start: 10, role: "environment", label: "booking", kind: "db-table" }] },
+        // FK child: LATER line, deliberately HIGHER embedding relevance (the cosine trap the basis must ignore)
+        { id: "sd", label: "bookingSeat", tier: "off", relevance: 0.9, region: { shell: 1, direction: "down" }, primary: { file: "svc/book.ts", line: 20, symbol: "bookingSeat" }, hunks: [{ id: "sdh", file: "svc/book.ts", start: 20, role: "environment", label: "bookingSeat", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "cb", to: "bkh", kind: "db-write", line: 10 }, { from: "cb", to: "sdh", kind: "db-write", line: 20 },   // anchor writes BOTH in-body (same tier)
+      ],
+      blindspots: [],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a new booking created and persisted" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("──▶ booking");        // the earlier (parent) create is crowned — structure, not cosine…
+    expect(spine).not.toContain("bookingSeat");    // …not the later FK child, despite its higher embedding relevance
+  });
+
+  // STORE over SERVICE-STATE — a real db-store persistence (`UserRoleMapping`) is the culmination; a shared
+  // service-state crossing (`session`) is plumbing and must never out-crown a store, even when it sorts earlier.
+  test("store persistence out-crowns a service-state crossing (keycloak session vs UserRoleMapping)", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how does assigning a realm role to a user persist the mapping", seams: [
+        { id: "a", label: "addRealmRoleMappings", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/RoleMapperResource.java", line: 1, symbol: "addRealmRoleMappings" }, hunks: [{ id: "cb", file: "svc/RoleMapperResource.java", start: 1, role: "core", label: "addRealmRoleMappings" }] },
+        // a shared SERVICE-STATE crossing (sorts earlier by id) — must NOT be crowned
+        { id: "ah_se", label: "session", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "storage/DefaultExportImportManager.java", line: 1, symbol: "session" }, hunks: [{ id: "seh", file: "storage/DefaultExportImportManager.java", start: 1, role: "environment", label: "session", kind: "service" }] },
+        // the real db-store persistence — the culmination
+        { id: "zz_ur", label: "UserRoleMapping", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "jpa/UserAdapter.java", line: 1, symbol: "UserRoleMapping" }, hunks: [{ id: "urh", file: "jpa/UserAdapter.java", start: 1, role: "environment", label: "UserRoleMapping", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "cb", to: "seh", kind: "service-write", line: 5 }, { from: "cb", to: "urh", kind: "db-write", line: 8 },
+      ],
+      blindspots: [],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does assigning a realm role to a user persist the mapping" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("──▶ UserRoleMapping");   // the real db-store persistence is crowned…
+    expect(spine).not.toContain("──▶ session");       // …not the service-state crossing, despite its earlier id
+  });
+
   // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
   // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
   // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the
@@ -815,9 +868,11 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
         blindspots: [],
       };
       const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how are payments processed" });
-      const reach = out.slice(out.indexOf("## Also reaches"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
-      expect(reach).toContain("svc/admin/x.ts");     // members sink (on-subject) kept
-      expect(reach).not.toContain("bug_reports");    // bug_reports sink (off-subject) dropped
+      // Structure-only crown (no embedding) picks one of the two co-equal on-subject stores; both stay VISIBLE on
+      // the spine/also-reaches, while the OFF-subject `bug_reports` side-write is dropped. Assert over that region.
+      const head = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(head).toContain("svc/admin/x.ts");      // members sink (on-subject) surfaced (crown or also-reaches)
+      expect(head).not.toContain("bug_reports");     // bug_reports sink (off-subject) dropped
     } finally { if (prev === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = prev; }
   });
 
