@@ -727,7 +727,10 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(mech).toMatch(/payCharge.*──▶ payment/);                              // a step annotated with the sink it persists
     expect(mech).toContain("persistRem");                                        // a 2-hop-deep step (transitive reach)
     expect(mech).not.toContain("1. state");                                      // a sink node is not itself a mechanism step
-    expect(mech.indexOf("eventCreate")).toBeLessThan(mech.indexOf("persistRem")); // depth order: depth-1 ops before depth-2
+    // FLOW ORDER: steps read in execution order (depth, then call-site line) — eventCreate (line 10) before
+    // payCharge (line 20), and the depth-2 persistRem after the depth-1 ops.
+    expect(mech.indexOf("eventCreate")).toBeLessThan(mech.indexOf("payCharge"));
+    expect(mech.indexOf("payCharge")).toBeLessThan(mech.indexOf("persistRem"));
   });
 
   // ALSO READ (gated SEAM_SUBJECT_READERS) — the symmetric of "## Also writes": an external file that READS the

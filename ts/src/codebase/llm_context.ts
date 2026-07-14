@@ -426,13 +426,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       for (const e of edges) if (_PRODUCE_MECH.has(e.kind) && String(e.from) === id) { const t = label.get(String(e.to)); if (t) return t; }
       return undefined;
     };
-    const steps = [...dep.keys()].filter((id) => id !== anchorNode
-      && !_STORE_KINDS.has(kindOfId.get(id) ?? ""));         // a sink node itself → shown in spine/also-reaches, not
-      // NB: exclude by NODE, not by seam — the anchor's seam is often a merged BLOB holding its own delegations
-      // (private-app runPhaseEnrich's seam also contains provisionOrUpdateMember/applyMemberSubscription); a seam-level
-      // spine exclusion would drop the very operations that ARE the mechanism.
-    steps.sort((a, b) => (dep.get(a)! - dep.get(b)!) || (callLine.get(a)! - callLine.get(b)!) || (a < b ? -1 : 1));
-    pipeline.push(...steps.map((id) => ({ id, line: callLine.get(id) ?? 0, depth: dep.get(id)!, sink: sinkOf(id) })));
+    const entries = [...dep.keys()].filter((id) => id !== anchorNode
+        && !_STORE_KINDS.has(kindOfId.get(id) ?? ""))          // a sink node itself → shown in spine/also-reaches, not
+        // NB: exclude by NODE, not by seam — the anchor's seam is often a merged BLOB holding its own delegations
+        // (private-app runPhaseEnrich's seam also contains provisionOrUpdateMember/applyMemberSubscription); a seam-level
+        // spine exclusion would drop the very operations that ARE the mechanism.
+      .map((id) => ({ id, line: callLine.get(id) ?? 0, depth: dep.get(id)!, sink: sinkOf(id) }));
+    // FLOW ORDER — the anchor's operations in EXECUTION order (depth, then call-site line): the sequence a reader
+    // reconstructs the flow from (validated by the eval — every BETTER verdict praised the call-order). NB: an
+    // outcome-first sort was tried and REVERTED — it hoisted grounded-sink ops but pushed the key delegation
+    // (private-app provisionOrUpdateMember, no DIRECT sink) below the budget cap, and cal's late side-effects stay hidden
+    // regardless because they are UNGROUNDED (a grounding/attribution gap, not an ordering one).
+    entries.sort((a, b) => (a.depth - b.depth) || (a.line - b.line) || (a.id < b.id ? -1 : 1));
+    pipeline.push(...entries);
   }
   const showPipeline = pipeline.length >= 2;   // a genuine multi-step mechanism, not a lone delegate the spine shows
 
