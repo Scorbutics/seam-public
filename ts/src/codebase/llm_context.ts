@@ -186,6 +186,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // refs and the sideways store-fan are NOT) and is bounded (SEAM_SPINE_CLOSURE_DEPTH, default 5) so an
     // orchestrator's subtree can't flood back in. Purely STRUCTURAL (resolved edges) — intent-free, per CLAUDE.md.
     const _closureMax = Math.max(1, parseInt(process.env.SEAM_SPINE_CLOSURE_DEPTH ?? "5", 10) || 5);
+    const _delegateMax = Math.max(1, parseInt(process.env.SEAM_SPINE_DELEGATE_HOPS ?? "3", 10) || 3);   // pure-delegate borrow: hops to follow through pass-throughs to the first writer
     const callDepth = new Map<string, number>([[anchorNode, 0]]);
     for (const q = [anchorNode]; q.length; ) {
       const c = q.shift()!; const d = callDepth.get(c)!;
@@ -207,10 +208,30 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const ownIds = new Set<string>();
     for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) ownIds.add(String(e.to));
     const directIds = new Set<string>(ownIds);
-    if (!ownIds.size) {   // PURE-DELEGATE one-hop borrow: no own write → the sole delegate's write is the effective sink
-      const callees = new Set<string>();
-      for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
-      if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
+    if (!ownIds.size) {
+      // PURE-DELEGATE borrow: no own write → follow the anchor's delegate calls, SKIPPING pure pass-through hops (a
+      // callee that writes NOTHING itself) until the FIRST WRITER on each branch, and borrow that write. A handler
+      // that persists THROUGH `roleMapper.grantRole` → (impl) → `grantRoleImpl` → em.persist reaches the write TWO
+      // hops down; the old one-hop borrow missed it, so a polymorphic SIBLING that writes IN-BODY
+      // (GroupAdapter.grantRole → GroupRoleMappingEntity, one hop) out-ranked it on the directSink prior even though
+      // the intent (a USER role mapping) prefers the user side. Halting at the FIRST writer keeps this from flooding a
+      // subtree — a delegate that DOES write (svc → UserEntity) stops the walk, so its own deeper audit call is NOT
+      // borrowed (the delegating-anchor prior is preserved). Both sibling outcomes become directSinks → RELEVANCE
+      // then picks the intended impl (structure enumerates the candidates, the embedding judges which the intent means).
+      const producer = new Set<string>();
+      for (const e of edges) if (_PRODUCE.has(e.kind)) producer.add(String(e.from));
+      const seen = new Set<string>([anchorNode]);
+      let frontier = new Set<string>();
+      for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) frontier.add(String(e.to));
+      for (let hop = 0; hop < _delegateMax && frontier.size; hop++) {
+        const next = new Set<string>();
+        for (const c of frontier) {
+          if (seen.has(c)) continue; seen.add(c);
+          if (producer.has(c)) { for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === c) directIds.add(String(e.to)); }   // a WRITER → borrow + halt this branch
+          else for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === c) next.add(String(e.to));   // pure pass-through → follow one more hop
+        }
+        frontier = next;
+      }
     }
     // chainIds = grounded writes DEEPER on the call closure, PAST the one-hop prior (private-app `members`, written by
     // provisionOrUpdateMember→…→findMemberId, 2+ hops from runPhaseEnrich; the real tier culmination). ADMITTED as

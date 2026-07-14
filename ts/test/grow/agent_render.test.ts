@@ -552,6 +552,40 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(alsoIdx)).toContain("members");   // the 2-hop deep culmination is ADMITTED as an alternate (not lost)
   });
 
+  // POLYMORPHIC-SIBLING CROWN — an anchor call binds MULTIPLE interface impls (keycloak `roleMapper.grantRole` →
+  // UserAdapter + GroupAdapter). One sibling writes IN-BODY (GroupAdapter.grantRole → GroupRoleMapping, ONE hop), the
+  // other DELEGATES (UserAdapter.grantRole → grantRoleImpl → UserRoleMapping, TWO hops). The old one-hop borrow made
+  // only the in-body sibling a directSink, so it out-ranked the delegated one on the directSink prior even though the
+  // intent (a USER mapping) rates it higher. Following pure-delegate hops to the first writer makes BOTH directSinks →
+  // relevance crowns the intended (user) sibling. Guards the pure-delegate-to-first-writer borrow.
+  test("polymorphic siblings: the higher-relevance impl wins even when its write is one hop deeper", () => {
+    const model = {
+      mode: "codebase", anchor: "am", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "assign a realm role to a user", seams: [
+        { id: "a", label: "addMappings", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "api/RoleMapperResource.java", line: 1, symbol: "addMappings" }, hunks: [{ id: "am", file: "api/RoleMapperResource.java", start: 1, role: "core", label: "addMappings" }] },
+        // GROUP sibling — writes its mapping IN-BODY (one hop from the anchor)
+        { id: "gg", label: "grantRole", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/GroupAdapter.java", line: 1, symbol: "grantRole" }, hunks: [{ id: "ggh", file: "jpa/GroupAdapter.java", start: 1, role: "link", label: "grantRole" }] },
+        { id: "grm", label: "GroupRoleMapping", tier: "off", relevance: 0.35, region: { shell: 2, direction: "down" }, primary: { file: "jpa/GroupRoleMapping.java", line: 1, symbol: "GroupRoleMapping" }, hunks: [{ id: "grmh", file: "jpa/GroupRoleMapping.java", start: 1, role: "environment", label: "GroupRoleMapping", kind: "db-table" }] },
+        // USER sibling — a pure pass-through that DELEGATES to grantRoleImpl, which writes (two hops from the anchor)
+        { id: "ug", label: "grantRole", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "jpa/UserAdapter.java", line: 1, symbol: "grantRole" }, hunks: [{ id: "ugh", file: "jpa/UserAdapter.java", start: 1, role: "link", label: "grantRole" }] },
+        { id: "gi", label: "grantRoleImpl", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "jpa/UserAdapter.java", line: 20, symbol: "grantRoleImpl" }, hunks: [{ id: "gih", file: "jpa/UserAdapter.java", start: 20, role: "link", label: "grantRoleImpl" }] },
+        { id: "urm", label: "UserRoleMapping", tier: "off", relevance: 0.40, region: { shell: 3, direction: "down" }, primary: { file: "jpa/UserRoleMapping.java", line: 1, symbol: "UserRoleMapping" }, hunks: [{ id: "urmh", file: "jpa/UserRoleMapping.java", start: 1, role: "environment", label: "UserRoleMapping", kind: "db-table" }] },
+      ] }],
+      edges: [
+        { from: "am", to: "ggh", kind: "interface-impl", line: 10 }, { from: "am", to: "ugh", kind: "interface-impl", line: 10 },   // one polymorphic call → two impls
+        { from: "ggh", to: "grmh", kind: "db-write", line: 3 },                                     // group writes in-body (1 hop)
+        { from: "ugh", to: "gih", kind: "call", line: 5 }, { from: "gih", to: "urmh", kind: "db-write", line: 22 },   // user delegates then writes (2 hops)
+      ],
+      blindspots: [],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "assign a realm role to a user" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("UserRoleMapping");        // the higher-relevance sibling wins the crown…
+    expect(spine).not.toContain("GroupRoleMapping");   // …the in-body one-hop sibling no longer out-ranks it on the directSink prior
+  });
+
   // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
   // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
   // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the

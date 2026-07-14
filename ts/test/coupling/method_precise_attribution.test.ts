@@ -49,10 +49,10 @@ describe("method-precise fan attribution: a delegate's write, not a sibling's, r
   // table its method never touches. NB: `attributes` still appears as a READ boundary (reports.ts reads it), so we
   // assert on the WRITE side from svc.ts, not mere table presence.
   const svcWrites = (data: any): Set<string> => {
-    const svc = new Set(data.nodes.filter((n: any) => String(n.file).endsWith("svc.ts")).map((n: any) => n.id));
-    const label = new Map(data.nodes.map((n: any) => [n.id, String(n.symbol)]));
+    const svc = new Set<string>(data.nodes.filter((n: any) => String(n.file).endsWith("svc.ts")).map((n: any) => String(n.id)));
+    const label = new Map<string, string>(data.nodes.map((n: any) => [String(n.id), String(n.symbol)]));
     const out = new Set<string>();
-    for (const e of data.edges) if (e.kind === "db-write" && svc.has(e.from)) out.add(label.get(e.to) ?? "");
+    for (const e of data.edges) if (e.kind === "db-write" && svc.has(String(e.from))) out.add(label.get(String(e.to)) ?? "");
     return out;
   };
 
