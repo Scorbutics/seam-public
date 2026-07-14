@@ -586,64 +586,6 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("GroupRoleMapping");   // …the in-body one-hop sibling no longer out-ranks it on the directSink prior
   });
 
-  // CENTRALITY near-tie crown — an anchor writes TWO tables IN-BODY (both own-writes / same tier): `booking` (the
-  // real persist, accessed by MANY nodes = the domain entity) and `seatDetail` (a niche child table, few accessors)
-  // that the embedding rates a HAIR higher (within REL_EPS). The near-tie must break toward the CENTRAL table, not
-  // the embedding's marginally-higher peripheral one (cal `RegularBookingService` → `booking` not `bookingSeat`).
-  test("centrality breaks a near-tie among own-writes: the central table wins over a hair-higher peripheral one", () => {
-    const model = {
-      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
-      clusters: [{ id: "g1", intent: "how is a booking created and persisted", seams: [
-        { id: "a", label: "createBooking", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/book.ts", line: 1, symbol: "createBooking" }, hunks: [{ id: "cb", file: "svc/book.ts", start: 1, role: "core", label: "createBooking" }] },
-        { id: "bk", label: "booking", tier: "off", relevance: 0.318, region: { shell: 1, direction: "down" }, primary: { file: "db/booking.ts", line: 1, symbol: "booking" }, hunks: [{ id: "bkh", file: "db/booking.ts", start: 1, role: "environment", label: "booking", kind: "db-table" }] },
-        { id: "sd", label: "seatDetail", tier: "off", relevance: 0.354, region: { shell: 1, direction: "down" }, primary: { file: "db/seat.ts", line: 1, symbol: "seatDetail" }, hunks: [{ id: "sdh", file: "db/seat.ts", start: 1, role: "environment", label: "seatDetail", kind: "db-table" }] },
-        // extra nodes that read/write `booking` → it is the CENTRAL entity (many accessors); `seatDetail` has only the anchor
-        { id: "r1", label: "listBookings", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/list.ts", line: 1, symbol: "listBookings" }, hunks: [{ id: "r1h", file: "svc/list.ts", start: 1, role: "link", label: "listBookings" }] },
-        { id: "r2", label: "getBooking", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/get.ts", line: 1, symbol: "getBooking" }, hunks: [{ id: "r2h", file: "svc/get.ts", start: 1, role: "link", label: "getBooking" }] },
-        { id: "w2", label: "updateBooking", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/upd.ts", line: 1, symbol: "updateBooking" }, hunks: [{ id: "w2h", file: "svc/upd.ts", start: 1, role: "link", label: "updateBooking" }] },
-      ] }],
-      edges: [
-        { from: "cb", to: "bkh", kind: "db-write", line: 10 }, { from: "cb", to: "sdh", kind: "db-write", line: 20 },   // anchor writes BOTH in-body
-        { from: "r1h", to: "bkh", kind: "db-read" }, { from: "r2h", to: "bkh", kind: "db-read" }, { from: "w2h", to: "bkh", kind: "db-write" },   // booking has many accessors
-      ],
-      blindspots: [],
-    };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
-    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a booking created and persisted" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
-    expect(spine).toContain("──▶ booking");        // the central domain entity is crowned…
-    expect(spine).not.toContain("seatDetail");     // …not the hair-higher-relevance peripheral child table
-  });
-
-  // CREATE-over-MUTATION crown — the anchor's OWN write to `booking` is an UPDATE (op=update, an iCalUID patch), while
-  // the real persist is a CREATE (op=create) via a delegate `saveBooking`. The row's persist is its create, not a
-  // later patch — so the spine must crown the create site (via saveBooking) even though the update is the anchor's
-  // own directSink and the create is a deeper delegate write. Gated on the flywheel-supplied op-class on the edge.
-  test("create-over-mutation: the spine crowns the CREATE persist over the anchor's own same-table UPDATE", () => {
-    const model = {
-      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
-      clusters: [{ id: "g1", intent: "how is a booking created and persisted", seams: [
-        { id: "a", label: "createBooking", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/book.ts", line: 1, symbol: "createBooking" }, hunks: [{ id: "cb", file: "svc/book.ts", start: 1, role: "core", label: "createBooking" }] },
-        // the anchor's OWN write is an UPDATE (a later patch), same table `booking`
-        { id: "u", label: "booking", tier: "off", relevance: 0.32, region: { shell: 1, direction: "down" }, primary: { file: "svc/book.ts", line: 20, symbol: "booking" }, hunks: [{ id: "bkU", file: "svc/book.ts", start: 20, role: "environment", label: "booking", kind: "db-table" }] },
-        // a delegate `saveBooking` performs the CREATE — the real persist
-        { id: "sv", label: "saveBooking", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/save.ts", line: 1, symbol: "saveBooking" }, hunks: [{ id: "svh", file: "svc/save.ts", start: 1, role: "link", label: "saveBooking" }] },
-        { id: "c", label: "booking", tier: "off", relevance: 0.32, region: { shell: 2, direction: "down" }, primary: { file: "svc/save.ts", line: 5, symbol: "booking" }, hunks: [{ id: "bkC", file: "svc/save.ts", start: 5, role: "environment", label: "booking", kind: "db-table" }] },
-      ] }],
-      edges: [
-        { from: "cb", to: "bkU", kind: "db-write", op: "update", line: 20 },           // anchor's own UPDATE
-        { from: "cb", to: "svh", kind: "call", line: 3 }, { from: "svh", to: "bkC", kind: "db-write", op: "create", line: 5 },   // delegate CREATE
-      ],
-      blindspots: [],
-    };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
-    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a booking created and persisted" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
-    expect(spine).toContain("saveBooking");   // the CREATE persist (via the delegate) is on the spine, not just the anchor's own UPDATE
-  });
-
   // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
   // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
   // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the

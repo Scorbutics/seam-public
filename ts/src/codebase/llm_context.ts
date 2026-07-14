@@ -206,8 +206,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // must WIN the crown over a DEEPER peripheral write even when the embedding rates the peripheral one higher
     // (addUser→UserEntity beats a deeper audit→AuditEntity; the direct-write prior corrects the misleading embedding).
     const ownIds = new Set<string>();
-    let ownHasCreate = false;
-    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) { ownIds.add(String(e.to)); if ((e as any).op === "create") ownHasCreate = true; }
+    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) ownIds.add(String(e.to));
     const directIds = new Set<string>(ownIds);
     if (!ownIds.size) {
       // PURE-DELEGATE borrow: no own write → follow the anchor's delegate calls, SKIPPING pure pass-through hops (a
@@ -239,13 +238,6 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // candidate sinks so the culmination SURFACES (as an alternate under the spine) — the old one-hop scoping never
     // admitted it, so it fell into the blindspots. NOT a directSink: the crown prior above still wins, so a deep
     // PERIPHERAL write (audit) can't hijack the spine from the anchor's own outcome — it just becomes an alternate.
-    // GENESIS PROMOTION — when the anchor's OWN writes are all MUTATIONS (no op=create), the row's genesis is a
-    // CREATE performed by a DELEGATE (cal: the class writes `booking.update` (iCalUID) in-body, while the real
-    // persist `booking.create` is in `saveBooking`, a delegate). A mutation isn't the persist culmination, so promote
-    // any CREATE write by a node on the anchor's call closure to a directSink candidate — otherwise it stays a deep
-    // chainSink the crown never reaches. Gated on the flywheel op-class (only op=create) and the closure, so it can't
-    // pull in an unrelated create. The create-over-mutation re-pick below then crowns it over the own update.
-    if (!ownHasCreate) for (const e of edges) if (_PRODUCE.has(e.kind) && (e as any).op === "create" && callDepth.has(String(e.from))) directIds.add(String(e.to));
     const chainIds = new Set<string>();
     for (const e of edges) if (_PRODUCE.has(e.kind) && callDepth.has(String(e.from)) && !directIds.has(String(e.to))) chainIds.add(String(e.to));
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
@@ -293,55 +285,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // never the crown, unless nothing nearer grounds. This is the "deepen ADMISSION, preserve PRECEDENCE" split.
     const chainSink = (s: Seam) => (s.hunks ?? []).some((h: any) => chainIds.has(String(h.id)));
     const trustedChain = (s: Seam) => chainSink(s) && (!_trustGate || providerWrite(s) || focusedWriter(s));
-    // CENTRALITY of a store boundary = how many DISTINCT footprint nodes access (write or read) its TABLE. The
-    // central DOMAIN ENTITY the flow revolves around has many accessors (cal `booking`); a peripheral CHILD/detail
-    // table has few (`bookingSeat`, a seated-event join). Used only to break a near-tie among same-tier own-writes
-    // (see the crown re-pick below) — a structural prior for "which table is the subject", not an intent guess.
-    const _ACCESS = new Set([..._PRODUCE, "db-read", "service-read", "consume", "read", "select", "find", "route-fetch"]);
-    const tableAccessors = new Map<string, Set<string>>();
-    for (const e of edges) if (_ACCESS.has(e.kind)) { const t = label.get(String(e.to)); if (t) (tableAccessors.get(t) ?? tableAccessors.set(t, new Set()).get(t)!).add(String(e.from)); }
-    const centrality = (s: Seam) => { const t = (primaryHunk(s) as any)?.label; return t ? (tableAccessors.get(t)?.size ?? 0) : 0; };
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
         && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
-    // CROWN RE-PICK — within the TOP structural tier (same directSink+providerWrite as the leader), the embedding can
-    // mis-rank a NEAR-TIE: cal `RegularBookingService` writes BOTH `booking` (the real persist) and `bookingSeat` (a
-    // niche seated-event detail) IN-BODY, so both are anchor OWN writes (same tier) and the embedding rates the detail
-    // table higher by a hair (0.354 vs 0.318). Break that near-tie STRUCTURALLY: among the relevance-leaders within
-    // SEAM_SPINE_REL_EPS of the best, prefer the more CENTRAL table. Fires ONLY inside the top tier AND a small
-    // relevance band, so a clearly-higher-relevance or higher-tier sink still wins outright (no override of a
-    // confident embedding). CLAUDE.md: structure supplies the prior (centrality), the embedding still leads.
-    const _relEps = Math.max(0, parseFloat(process.env.SEAM_SPINE_REL_EPS ?? "0.05") || 0.05);
-    if (cands.length > 1) {
-      const tierKey = (s: Seam) => `${Number(directSink(s))}|${Number(providerWrite(s))}`;
-      const top = tierKey(cands[0]);
-      const tier0 = cands.filter((c) => tierKey(c) === top);
-      const maxRel = Math.max(...tier0.map(rel));
-      const band = tier0.filter((c) => maxRel - rel(c) <= _relEps);
-      if (band.length > 1) {
-        const crown = [...band].sort((a, b) => (centrality(b) - centrality(a)) || (rel(b) - rel(a)) || (_dist(a.id) - _dist(b.id)) || (a.id < b.id ? -1 : 1))[0];
-        if (crown && crown.id !== cands[0].id) { const i = cands.indexOf(crown); if (i > 0) { cands.splice(i, 1); cands.unshift(crown); } }
-      }
-    }
-    // CREATE-over-MUTATION — the crowned write to the table T is a later MUTATION (op=update/delete) but a CREATE
-    // (op=create — the row's genesis, the real persist) to the SAME table exists among the candidates. Prefer the
-    // create as the culmination: a booking IS persisted by `booking.create`, not by a subsequent iCalUID
-    // `booking.update` (cal). SAME-table only (never crosses tables), and gated on the flywheel-supplied op-class
-    // (create/update/delete on the produce edge — the genesis-vs-mutation fact) — absent op ⇒ no re-pick.
-    const sinkOp = (s: Seam): string | undefined => { for (const h of (s.hunks ?? [])) for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.to) === String((h as any).id) && (e as any).op) return String((e as any).op); return undefined; };
-    const _tableOfSeam = (s: Seam) => (primaryHunk(s) as any)?.label as string | undefined;
-    if (cands.length) {
-      const co = sinkOp(cands[0]); const t = _tableOfSeam(cands[0]);
-      if (t && (co === "update" || co === "delete")) {
-        // the crowned TABLE is right, but the crowned write-SITE is a mutation. Find the CREATE write-site of the SAME
-        // table anywhere in the footprint (it may be a delegate the anchor's own-mutation blocked from candidacy —
-        // cal `saveBooking`→`booking.create`) and crown THAT site: a row is persisted by its create, not a later patch.
-        const create = cands.find((c) => _tableOfSeam(c) === t && sinkOp(c) === "create")
-          ?? seams.find((c) => isBoundarySeam(c) && c.id !== anchorSeam && _tableOfSeam(c) === t && sinkOp(c) === "create");
-        if (create) { const i = cands.indexOf(create); if (i >= 0) { cands.splice(i, 1); } cands.unshift(create); }
-      }
-    }
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {
