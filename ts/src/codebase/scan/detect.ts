@@ -71,6 +71,64 @@ export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
   }
 }
 
+// DOWNSTREAM dynamic-dispatch blindspot (the twin of the UP dynamic-import scan above): a footprint node whose
+// body DISPATCHES OUT through a mechanism static resolution can't thread — so the flow continues into an impl (and
+// its data sink) chosen at runtime, and the node renders as a dead-ending call step with no `──▶ sink`. Two shapes,
+// both TS/JS-only and both purely SYNTACTIC (a code shape, not a name/meaning guess):
+//   A. a DYNAMIC IMPORT of a non-literal: `await import(x)` where x is NOT a quoted string (a string literal is
+//      statically resolvable and already followed) — the app-store `await paymentAppImportFn` pattern.
+//   B. an IMPORTED REGISTRY indexed by a runtime key: `REG[key]` where REG is a module import and the key is not a
+//      string literal — cal.com `PaymentServiceMap[key]` (a generated `*.services.generated` map). A local array
+//      `arr[i]` is NOT imported, so it's excluded; a literal key `M["x"]` IS resolvable, so it's excluded.
+// Emitted as `dynamic-dispatch` (the render's frontier-⟂/Blindspots already consumes that mechanism), naming the
+// node + the dispatch so a reader knows the flow provably continues THERE — instead of silently dropping the sink.
+const _DYN_IMPORT_NONLITERAL = /\bimport\(\s*[^'"\s)]/;
+export function detect_dynamic_dispatch_blindspots(g: Graph, repo: string): void {
+  if (!repo) return;
+  const _BOUNDARY = new Set(["table", "db-table", "route", "queue", "topic", "event", "service", "cache", "file"]);
+  const textCache = new Map<string, { lines: string[]; imports: Set<string> } | null>();
+  const load = (rel: string) => {
+    if (textCache.has(rel)) return textCache.get(rel)!;
+    let text: string;
+    try { text = readFileSync(join(repo, rel), "utf-8"); } catch { textCache.set(rel, null); return null; }
+    const imports = new Set<string>();
+    for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from/g)) for (const p of m[1].split(",")) { const nm = p.trim().split(/\s+as\s+/).pop()!.trim(); if (/^\w+$/.test(nm)) imports.add(nm); }
+    for (const m of text.matchAll(/import\s+(\w+)\s*(?:,|from)/g)) imports.add(m[1]);
+    const rec = { lines: text.split("\n"), imports }; textCache.set(rel, rec); return rec;
+  };
+  let emitted = 0;
+  const seen = new Set<string>();
+  for (const n of g.nodes.values()) {
+    if (emitted >= _BLINDSPOT_CAP) break;
+    if (!n.file || (n as any).coupling || _BOUNDARY.has(n.kind) || !_SCAN_EXT.some((e) => n.file.endsWith(e))) continue;
+    if (!(n.end > n.start)) continue;   // needs a real body span
+    const key = `${n.file}#${n.start}`; if (seen.has(key)) continue; seen.add(key);
+    const rec = load(n.file); if (!rec) continue;
+    const body = rec.lines.slice(n.start, n.end + 1).join("\n");
+    let evidence: string | null = null;
+    if (_DYN_IMPORT_NONLITERAL.test(body)) evidence = "dynamic-imports a non-literal module path";
+    else for (const ident of rec.imports) {
+      // an imported registry subscripted by a runtime (non-literal) key whose RESULT is ACTIVATED as code — awaited,
+      // called, constructed, or dynamically imported (directly, or via a `const X = REG[key]` binding then `await X`
+      // / `X(` / `new X` / `import(X)`). The activation check is what separates a real service/module dispatch
+      // (PaymentServiceMap[key] → await → .create) from a scalar ENUM/const lookup (`ErrorCode[key]`, a string) —
+      // the latter has an identical subscript SHAPE but never resolves to an impl with a data sink, so it's not a
+      // blindspot. Purely syntactic: `await`/`new`/`(`/`import(` on the subscript or its bound variable.
+      const sub = `${ident}\\[\\s*[^\\]'"\\s][^\\]]*\\]`;   // REG[<non-literal key>]
+      const direct = new RegExp(`(?:await\\s+|new\\s+|import\\(\\s*)${sub}|${sub}\\s*\\(`);
+      const bind = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*${sub}`, "g");
+      let hit = direct.test(body);
+      if (!hit) for (const m of body.matchAll(bind)) { const v = m[1]; if (new RegExp(`(?:await\\s+${v}\\b|\\b${v}\\s*\\(|new\\s+${v}\\b|import\\(\\s*${v}\\b)`).test(body)) { hit = true; break; } }
+      if (hit) { evidence = `dispatches through the imported registry \`${ident}[…]\``; break; }
+    }
+    if (!evidence) continue;
+    g.blindspots.push({ node: n.id, mechanism: "dynamic-dispatch",
+      evidence: `${n.label} ${evidence} — the concrete impl (and its data sink) is chosen at runtime; static resolution stops here`,
+      candidates: [] });
+    emitted++;
+  }
+}
+
 const _isClassAnchor = (g: Graph): boolean => {
   const sym = g.nodes.get(g.anchor)!.label;
   return [...g.nodes.values()].some((n) => n.id !== g.anchor && n.enclosing === sym);

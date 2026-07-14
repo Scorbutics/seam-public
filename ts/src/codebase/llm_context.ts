@@ -628,12 +628,21 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // buries: EventManager.create / handlePayment / scheduleWorkflows). Numbered = flow order; each carries its call
   // site in the anchor and the grounded sink it reaches (` ──▶ table`) when it persists/reads one.
   const _anchorFileBase = (fileOfId.get(String(model.anchor)) ?? "").split("/").pop();
+  // a Mechanism step whose body DISPATCHES through a runtime mechanism (dynamic-dispatch/dynamic-import blindspot):
+  // annotate it with ⟂ so the reader knows the flow provably CONTINUES there into a runtime-chosen impl (and its
+  // data sink) — instead of reading the sink-less step as a dead end (cal `handlePayment` → PaymentServiceMap[…]).
+  const _dynDispatch = new Map<string, string>();
+  for (const b of (model.blindspots ?? []) as any[]) if (b.mechanism === "dynamic-dispatch" || b.mechanism === "dynamic-import") {
+    const reg = String(b.evidence ?? "").match(/`([^`]+)`/)?.[1];
+    _dynDispatch.set(String(b.node), reg ? `runtime dispatch (${reg})` : "runtime dispatch");
+  }
   const pipelineSection = (): string[] => {
     if (!showPipeline) return [];
-    return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads)",
+    return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
       ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
         const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
-        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
+        const dyn = _dynDispatch.get(p.id);
+        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
       }, "step(s)")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
@@ -727,12 +736,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       // the directive) without the flood. Non-fanout blindspots (real per-node leads) stay one-per-line — but
       // CAPPED too (a big CDI repo's @Inject fan is dozens of them), top BS_N + an honest rolled-up count.
       const FANOUT = new Set(["shared-key-fanout", "llm-proposed-key"]);
+      // ON-FLOW opaque mechanisms (a candidate-less DYNAMIC DISPATCH / dynamic import ON the traced flow) carry
+      // their answer in the EVIDENCE (which registry, that the sink is runtime-chosen) — route them to the
+      // evidence-showing `leads` list, not the name-only ambient bucket, so "handlePayment dispatches through
+      // PaymentServiceMap[…]" is visible, not collapsed to a bare node name.
+      const _ONFLOW = new Set(["dynamic-dispatch", "dynamic-import"]);
       const fanout = bs.filter((b) => FANOUT.has(b.mechanism));
       const ambient = new Map<string, string[]>();
       const leads: any[] = [];
       for (const b of bs) {
         if (FANOUT.has(b.mechanism)) continue;
-        if (!(b.candidates ?? []).length) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
+        if (!(b.candidates ?? []).length && !_ONFLOW.has(b.mechanism)) { (ambient.get(b.mechanism) ?? ambient.set(b.mechanism, []).get(b.mechanism)!).push(b.node); continue; }
         leads.push(b);
       }
       // SEVERITY TRIAGE — 133 blindspots is overwhelming; the actionable ones are the RESOLVABLE leads (a node
@@ -741,7 +755,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       // tightest "it's one of these" lead) and show the top BLINDSPOT_N; the rest roll up.
       const BLINDSPOT_N = Math.max(5, Math.floor(budget / 800));   // ~5 at the default; grows with --token-budget
       const nCands = (b: any) => new Set((b.candidates ?? []).map((c: any) => c.symbol).filter(Boolean)).size;
-      const rankedLeads = [...leads].sort((a, b) => (nCands(a) - nCands(b)) || (String(a.mechanism) < String(b.mechanism) ? -1 : 1));
+      const rankedLeads = [...leads].sort((a, b) => (Number(nCands(a) === 0) - Number(nCands(b) === 0))   // candidate-bearing (a resolvable set) first; opaque on-flow dispatch last
+      || (nCands(a) - nCands(b)) || (String(a.mechanism) < String(b.mechanism) ? -1 : 1));
       if (rankedLeads.length) out.push(`  actionable (resolves to a known candidate set — verify these first):`);
       out.push(...renderCapped(rankedLeads, BLINDSPOT_N, (b) => {
         const cands = [...new Set((b.candidates ?? []).map((c: any) => c.file ? `${c.file}#${c.symbol}` : c.symbol).filter(Boolean))].slice(0, 6);
