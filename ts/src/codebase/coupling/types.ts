@@ -85,6 +85,7 @@ export interface Crossing {
   kind: string;                // adapter.produceEdge / consumeEdge ("db-write" / "db-read", …)
   provenance: "RESOLVED_PARTIAL";
   line?: number;
+  op?: string;                 // a WRITE's op-class (create/update/delete) — genesis-vs-mutation, for the spine crown
 }
 // A coupling the engine SEES but won't draw as a resolved edge: an ungrounded LLM proposal
 // ("llm-proposed-key") or the over-cap tail of a fanout ("shared-key-fanout"). Surfaced for review.

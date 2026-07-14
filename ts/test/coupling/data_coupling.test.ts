@@ -20,7 +20,7 @@ const freshCopy = (name: string) => { const d = mkdtempSync(join(tmpdir(), "dc-"
 
 describe("shared-key (data-flow) coupling", () => {
   test("scan_file_keys classifies db-table read vs write across a multiline builder chain", () => {
-    expect(scan_file_keys("a.ts", `client\n  .from('payments')\n  .insert({a:1});`)).toEqual([{ kind: "db-table", value: "payments", line: 1, produces: true }]);
+    expect(scan_file_keys("a.ts", `client\n  .from('payments')\n  .insert({a:1});`)).toEqual([{ kind: "db-table", value: "payments", line: 1, produces: true, op: "create" }]);   // insert → CREATE op (genesis)
     expect(scan_file_keys("a.ts", `x.from('payments').select('*').eq('id', id)`)).toEqual([{ kind: "db-table", value: "payments", line: 0, produces: false }]);
     expect(scan_file_keys("a.ts", "const x = 1;")).toEqual([]);
   });
@@ -30,7 +30,7 @@ describe("shared-key (data-flow) coupling", () => {
     const tbl = g.nodes.find((n: any) => n.kind === "table" && n.symbol === "payments");
     expect(tbl).toBeDefined();
     expect(tbl.file).toBe("src/backend/persist.ts");
-    expect(g.edges).toContainEqual({ from: "n1", to: tbl.id, kind: "db-write", provenance: "RESOLVED_PARTIAL", line: tbl.range[0] });
+    expect(g.edges).toContainEqual({ from: "n1", to: tbl.id, kind: "db-write", provenance: "RESOLVED_PARTIAL", line: tbl.range[0], op: "create" });   // the produce edge now carries the write op-class
     const readerSyms = g.edges.filter((e: any) => e.from === tbl.id && e.kind === "db-read")
       .map((e: any) => g.nodes.find((n: any) => n.id === e.to).symbol).sort();
     expect(readerSyms).toEqual(["paymentHistory", "showInvoice"]);

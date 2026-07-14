@@ -57,7 +57,7 @@ export function mkNode(p: Partial<Node> & { id: string }): Node {
 // `kind` for what KIND of relation it is: "call" | "import" | "reference" | "interface-impl" | "contains" |
 // "type-ref" | "data-coupling" | a specific coupling-medium pair (e.g. "db-write"/"db-read") — the closed
 // set lives in the data-coupling module's adapter registry, not here (this file stays framework-agnostic).
-export interface Edge { src: string; dst: string; kind: string; provenance: Provenance; line: number; }
+export interface Edge { src: string; dst: string; kind: string; provenance: Provenance; line: number; op?: string; }   // op = a data-WRITE's op-class (create/update/delete), when the coupling classified it — for the spine crown
 export interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: Edge[]; }
 // A tier-3 decision point: a node whose fan the convergence grow declined (off-intent pivot / collapsed hub /
 // node budget). Kept in the region + surfaced as a ranked handle the caller deepens from (I3 — never silently cut).
@@ -175,7 +175,7 @@ export function from_resolved_graph(data: any): Graph {
     const src = ed.from, dst = ed.to;
     if (!present.has(src) || !present.has(dst)) continue;
     const prov: Provenance = ed.provenance ? ed.provenance : defaultProv;
-    g.edges.push({ src, dst, kind: ed.kind ?? "call", provenance: prov, line: Number(ed.line ?? 0) || 0 });
+    g.edges.push({ src, dst, kind: ed.kind ?? "call", provenance: prov, line: Number(ed.line ?? 0) || 0, ...(ed.op ? { op: String(ed.op) } : {}) });
   }
 
   if (Array.isArray(data.frontier)) g.frontier = data.frontier as FrontierPoint[];   // decision-point frontier (tier-grow) — threaded verbatim, filtered/capped at emit

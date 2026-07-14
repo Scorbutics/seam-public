@@ -7,16 +7,20 @@
 // couple through one boundary. The kind metadata lives in DB_TABLE_META; each adapter spreads it.
 import { table_access } from "../../../core/resolve/languages/index.js";
 import type { KeyHit, KeyKind } from "../types.js";
+import { writeOp } from "../verb_class.js";
 
 export const DB_TABLE_META = { kind: "db-table", nodeKind: "table", produceEdge: "db-write", consumeEdge: "db-read" } as const;
 
+// The query-builder verb set (`.from(t).<verb>`): a small, closed API shape the LANGUAGE provider extracts. `op`
+// (CREATE/UPDATE/DELETE) is classified by the shared convention (`insert`→create, `update`→update, `delete`→delete;
+// `upsert`→null, the flywheel decides) — the genesis-vs-mutation distinction the spine crown uses.
 const WRITE_VERBS = new Set(["insert", "update", "upsert", "delete"]);
 const READ_VERBS = new Set(["select"]);
 
 function scan(file: string, text: string): KeyHit[] {
   const out: KeyHit[] = [];
   for (const a of table_access(file, text)) {
-    if (WRITE_VERBS.has(a.verb)) out.push({ kind: "db-table", value: a.table, line: a.line, produces: true });
+    if (WRITE_VERBS.has(a.verb)) { const op = writeOp(a.verb); out.push({ kind: "db-table", value: a.table, line: a.line, produces: true, ...(op ? { op } : {}) }); }
     else if (READ_VERBS.has(a.verb)) out.push({ kind: "db-table", value: a.table, line: a.line, produces: false });
   }
   return out;

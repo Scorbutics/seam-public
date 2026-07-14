@@ -9,6 +9,7 @@
 // to be hand-written framework adapters (ng_scope, event_binding) — no per-framework code in the engine.
 import type { KeyHit } from "./types.js";
 import { lineOf, maskComments } from "./adapters/util.js";
+import { writeOp } from "./verb_class.js";
 import { makeCtx, lang_for, available } from "../atoms.js";
 import { field } from "../../core/treesitter.js";
 
@@ -312,7 +313,7 @@ function runRepository(m: Extract<KeyMatcher, { via: "repository" }>, text: stri
   const masked = maskComments(text);
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const verbs = m.verbs.map(esc).join("|");
-  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*(?:${verbs})\\s*[(<]`, "g");
+  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*(${verbs})\\s*[(<]`, "g");   // capture the VERB (mt[1]) for its op-class
   const out: KeyHit[] = [];
   let mt: RegExpExecArray | null;
   while ((mt = re.exec(masked)) !== null) {
@@ -323,7 +324,8 @@ function runRepository(m: Extract<KeyMatcher, { via: "repository" }>, text: stri
     // frontend admin-client call.
     const pre = /([A-Za-z_$][\w$]*)\s*\.\s*$/.exec(masked.slice(Math.max(0, mt.index - 48), mt.index));
     if (pre && pre[1] !== "this" && pre[1] !== "self" && pre[1] !== "super") continue;
-    if (plausibleKeyValue(m.token)) out.push({ kind: m.kind, value: m.token, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+    const op = m.role === "produces" ? writeOp(mt[1]) : undefined;   // the write op-class from the matched verb
+    if (plausibleKeyValue(m.token)) out.push({ kind: m.kind, value: m.token, line: lineOf(masked, mt.index), produces: m.role === "produces", ...(op ? { op } : {}) });
   }
   return out;
 }
@@ -351,12 +353,15 @@ function runMember(m: Extract<KeyMatcher, { via: "member" }>, text: string): Key
   const masked = maskComments(text);
   const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const verbs = m.verbs.map(esc).join("|");
-  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*(?:${verbs})\\s*[(<]`, "g");
+  const re = new RegExp(`(?<![\\w$])${esc(m.token)}\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*(${verbs})\\s*[(<]`, "g");   // capture the VERB (mt[2]) for its op-class
   const out: KeyHit[] = [];
   let mt: RegExpExecArray | null;
   while ((mt = re.exec(masked)) !== null) {
     const value = mt[1];
-    if (plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces" });
+    // the WRITE op-class (create/update/delete) from the matched verb — the genesis-vs-mutation fact the crown uses.
+    // Sourced from the shared convention, so a flywheel-learned matcher grounds the op exactly like the floor does.
+    const op = m.role === "produces" ? writeOp(mt[2]) : undefined;
+    if (plausibleKeyValue(value)) out.push({ kind: m.kind, value, line: lineOf(masked, mt.index), produces: m.role === "produces", ...(op ? { op } : {}) });
   }
   return out;
 }

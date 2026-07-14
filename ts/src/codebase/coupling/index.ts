@@ -509,16 +509,19 @@ function collectAnchorKeys(
   // POST + `getBookings` GET → the bare base) are DISTINCT boundaries — collapsing on (kind,value) alone dropped
   // the second op from the map. An unlabelled key (a raw table/route) has "" and behaves exactly as before.
   const accessId = (k: KeyHit) => `${k.kind} ${k.value} ${k.produces} ${k.label ?? ""}`;
-  // 1+2: the located FLOOR (scan + carrier) — span-filtered, earliest line wins EXCEPT a create beats a delete:
-  // a destructive write (op:"delete", e.g. `em.remove`) never wins over a create/persist as a table's representative
-  // producer, so the spine's write site is the create, not a delete that happens to sit at an earlier line.
-  const _isDel = (k: { op?: string }) => k.op === "delete";
+  // 1+2: the located FLOOR (scan + carrier) — one key per (kind,value,produces,label); the REPRESENTATIVE producer
+  // is chosen by op-class then line: a CREATE (the row's genesis) beats an UPDATE beats a DELETE, and within the
+  // same op-class the earliest line wins. So a table's representative write site is the CREATE — the spine crowns
+  // `booking.create`, not a `booking.update` iCalUID patch or an `em.remove` that happens to sit at an earlier line.
+  // Ambiguous/unclassified writes (op absent — `save`/`upsert` before the flywheel classifies them) rank as UPDATE
+  // (neither promoted nor demoted), so a grounded create still wins and a grounded delete still loses.
+  const _opRank = (k: { op?: string }) => k.op === "create" ? 0 : k.op === "delete" ? 2 : 1;   // create < update/ambiguous < delete
   const addFloor = (hit: KeyHit, source: KeySource) => {
     if (hit.line < spanLo || hit.line > spanHi) return;
     if (hit.kind === "db-table" && hit.recv && httpRecv.has(hit.recv)) return;   // an HTTP-client receiver → member_access phantom, drop
     const id = accessId(hit);
     const cur = anchorKeys.get(id);
-    const better = !cur || (_isDel(cur) && !_isDel(hit)) || (_isDel(cur) === _isDel(hit) && hit.line < cur.line);
+    const better = !cur || (_opRank(hit) < _opRank(cur)) || (_opRank(hit) === _opRank(cur) && hit.line < cur.line);
     if (better)
       anchorKeys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source, ...(hit.label ? { label: hit.label } : {}), ...(hit.op ? { op: hit.op } : {}) });
   };
@@ -650,7 +653,9 @@ function drawBoundary(s: NodeScope, boundaryByKey: Map<string, string>, key: Anc
 // STEP 5 (near) — WIRE the current node to its boundary with the produce/consume crossing.
 function wireNear(s: NodeScope, fromId: string, boundaryId: string, key: AnchorKey): void {
   const adapter = kindOf(key.kind);
-  s.graph.addEdge({ from: fromId, to: boundaryId, kind: key.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL", line: key.line });
+  // carry the write OP-CLASS (create/update/delete) onto the produce edge — the genesis-vs-mutation fact the spine
+  // crown uses to prefer a `booking.create` culmination over a later `booking.update`. Absent when unclassified.
+  s.graph.addEdge({ from: fromId, to: boundaryId, kind: key.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL", line: key.line, ...(key.op ? { op: key.op } : {}) });
 }
 
 // An LLM-proposed key the deterministic index couldn't ground → a blindspot, not a materialised node. A

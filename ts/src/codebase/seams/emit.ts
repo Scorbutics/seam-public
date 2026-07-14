@@ -235,7 +235,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     ...(opts.shape ? { shape: opts.shape } : {}), ...(opts.lead ? { lead: opts.lead } : {}),
     resolutionQuality: g.resolution_quality, language: g.language, complete: g.complete,
     seamEdges: [],
-    edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line })),
+    edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line, ...((e as any).op ? { op: (e as any).op } : {}) })),
     seamContracts: _seam_contracts(g, seams),
     blindspots: g.blindspots.map((b) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence,
       candidates: b.candidates.map((c) => ({ symbol: c.dst, provenance: c.provenance })) })),

@@ -206,7 +206,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // must WIN the crown over a DEEPER peripheral write even when the embedding rates the peripheral one higher
     // (addUser→UserEntity beats a deeper audit→AuditEntity; the direct-write prior corrects the misleading embedding).
     const ownIds = new Set<string>();
-    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) ownIds.add(String(e.to));
+    let ownHasCreate = false;
+    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) { ownIds.add(String(e.to)); if ((e as any).op === "create") ownHasCreate = true; }
     const directIds = new Set<string>(ownIds);
     if (!ownIds.size) {
       // PURE-DELEGATE borrow: no own write → follow the anchor's delegate calls, SKIPPING pure pass-through hops (a
@@ -238,6 +239,13 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // candidate sinks so the culmination SURFACES (as an alternate under the spine) — the old one-hop scoping never
     // admitted it, so it fell into the blindspots. NOT a directSink: the crown prior above still wins, so a deep
     // PERIPHERAL write (audit) can't hijack the spine from the anchor's own outcome — it just becomes an alternate.
+    // GENESIS PROMOTION — when the anchor's OWN writes are all MUTATIONS (no op=create), the row's genesis is a
+    // CREATE performed by a DELEGATE (cal: the class writes `booking.update` (iCalUID) in-body, while the real
+    // persist `booking.create` is in `saveBooking`, a delegate). A mutation isn't the persist culmination, so promote
+    // any CREATE write by a node on the anchor's call closure to a directSink candidate — otherwise it stays a deep
+    // chainSink the crown never reaches. Gated on the flywheel op-class (only op=create) and the closure, so it can't
+    // pull in an unrelated create. The create-over-mutation re-pick below then crowns it over the own update.
+    if (!ownHasCreate) for (const e of edges) if (_PRODUCE.has(e.kind) && (e as any).op === "create" && callDepth.has(String(e.from))) directIds.add(String(e.to));
     const chainIds = new Set<string>();
     for (const e of edges) if (_PRODUCE.has(e.kind) && callDepth.has(String(e.from)) && !directIds.has(String(e.to))) chainIds.add(String(e.to));
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
@@ -314,6 +322,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       if (band.length > 1) {
         const crown = [...band].sort((a, b) => (centrality(b) - centrality(a)) || (rel(b) - rel(a)) || (_dist(a.id) - _dist(b.id)) || (a.id < b.id ? -1 : 1))[0];
         if (crown && crown.id !== cands[0].id) { const i = cands.indexOf(crown); if (i > 0) { cands.splice(i, 1); cands.unshift(crown); } }
+      }
+    }
+    // CREATE-over-MUTATION — the crowned write to the table T is a later MUTATION (op=update/delete) but a CREATE
+    // (op=create — the row's genesis, the real persist) to the SAME table exists among the candidates. Prefer the
+    // create as the culmination: a booking IS persisted by `booking.create`, not by a subsequent iCalUID
+    // `booking.update` (cal). SAME-table only (never crosses tables), and gated on the flywheel-supplied op-class
+    // (create/update/delete on the produce edge — the genesis-vs-mutation fact) — absent op ⇒ no re-pick.
+    const sinkOp = (s: Seam): string | undefined => { for (const h of (s.hunks ?? [])) for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.to) === String((h as any).id) && (e as any).op) return String((e as any).op); return undefined; };
+    const _tableOfSeam = (s: Seam) => (primaryHunk(s) as any)?.label as string | undefined;
+    if (cands.length) {
+      const co = sinkOp(cands[0]); const t = _tableOfSeam(cands[0]);
+      if (t && (co === "update" || co === "delete")) {
+        // the crowned TABLE is right, but the crowned write-SITE is a mutation. Find the CREATE write-site of the SAME
+        // table anywhere in the footprint (it may be a delegate the anchor's own-mutation blocked from candidacy —
+        // cal `saveBooking`→`booking.create`) and crown THAT site: a row is persisted by its create, not a later patch.
+        const create = cands.find((c) => _tableOfSeam(c) === t && sinkOp(c) === "create")
+          ?? seams.find((c) => isBoundarySeam(c) && c.id !== anchorSeam && _tableOfSeam(c) === t && sinkOp(c) === "create");
+        if (create) { const i = cands.indexOf(create); if (i >= 0) { cands.splice(i, 1); } cands.unshift(create); }
       }
     }
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no

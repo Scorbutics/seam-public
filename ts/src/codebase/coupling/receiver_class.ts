@@ -18,7 +18,7 @@ import { run_pass_async, registerPass, ClassifierError as LLMError } from "../..
 import { emit, verbose } from "../../core/progress.js";
 import { makeMaskCtx } from "./adapters/util.js";
 import { scannableForKeys } from "./adapters/index.js";
-import { ORM_READ_VERBS, ORM_WRITE_VERBS } from "./adapters/member_access.js";
+import { dataRole } from "./verb_class.js";
 import { DB_TABLE_META } from "./adapters/db_table.js";
 import { validateMatcher, type KeyMatcher } from "./key_ir.js";
 import { persistMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
@@ -32,14 +32,15 @@ const SELF = new Set(["this", "self", "super"]);
 const CHAIN = /(?<![\w$.])((?:[A-Za-z_$][\w$]*\s*\.\s*)+[A-Za-z_$][\w$]*)\s*\(/g;
 const MIN_FILES = 4;          // a receiver must recur across files to be a shared abstraction (not a local)
 const MAX_CANDIDATES = 80;    // bound the LLM prompt to the most-recurring candidates
-const _ORM_R = new Set<string>(ORM_READ_VERBS), _ORM_W = new Set<string>(ORM_WRITE_VERBS);
 
 // read/write by NAMING CONVENTION (camelCase method prefix) — robust for custom verbs (deleteByEmail → write,
-// checkIfEnabled → read). Structural, not a meaning-guess; an ambiguous verb just doesn't split.
+// checkIfEnabled → read). Structural, not a meaning-guess; an ambiguous verb just doesn't split. This is BROAD
+// (candidacy recall: which receivers to send to the LLM), so it keeps the generic get/set/add/list the precise
+// floor (`dataRole`) drops — layered ON TOP of `dataRole` (the distinctive data verbs) via the || below.
 const _READ_PRE = ["get", "find", "fetch", "load", "list", "read", "query", "count", "exists", "check", "is", "has", "select", "retrieve", "search", "lookup"];
 const _WRITE_PRE = ["set", "create", "insert", "add", "save", "update", "delete", "remove", "destroy", "upsert", "put", "patch", "write", "store", "persist"];
-const _reads = (vs: string[]) => vs.filter((v) => _ORM_R.has(v) || _READ_PRE.some((p) => v.toLowerCase().startsWith(p)));
-const _writes = (vs: string[]) => vs.filter((v) => _ORM_W.has(v) || _WRITE_PRE.some((p) => v.toLowerCase().startsWith(p)));
+const _reads = (vs: string[]) => vs.filter((v) => dataRole(v) === "read" || _READ_PRE.some((p) => v.toLowerCase().startsWith(p)));
+const _writes = (vs: string[]) => vs.filter((v) => dataRole(v) === "write" || _WRITE_PRE.some((p) => v.toLowerCase().startsWith(p)));
 // EVENT verbs are matched EXACTLY (not by prefix — `on`/`handle` as prefixes would catch onClick/handler):
 // producer side (emit) vs consumer side (listen). `store` reuses the read/write conventions (get/set).
 const _EVENT_P = new Set(["emit", "publish", "dispatch", "fire", "trigger", "broadcast", "next", "send"]);

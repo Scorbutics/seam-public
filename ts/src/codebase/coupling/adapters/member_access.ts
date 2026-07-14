@@ -21,18 +21,15 @@ import type { KeyHit, KeyKind } from "../types.js";
 import { DB_TABLE_META } from "./db_table.js";
 import { lineOf, makeMaskCtx } from "./util.js";
 import type { MaskCtx } from "../types.js";
-
-// The CLOSED, framework-agnostic ORM verb vocabulary — the source of truth for this adapter. Read verbs →
-// consumes, write verbs → produces. Generic verbs are deliberately absent (see guard 2 above).
-export const ORM_READ_VERBS = ["findUnique", "findFirst", "findMany", "findOne", "count", "aggregate", "groupBy", "query"] as const;
-export const ORM_WRITE_VERBS = ["create", "createMany", "insert", "update", "updateMany", "upsert", "delete", "deleteMany", "remove", "destroy", "save"] as const;
+import { dataRole, writeOp } from "../verb_class.js";
 
 const SELF = new Set(["this", "self", "super"]);   // receiver is the access PATH, not a data object → skip
-const _WRITE = new Set<string>(ORM_WRITE_VERBS);
-const _VERBS = [...ORM_READ_VERBS, ...ORM_WRITE_VERBS].join("|");
-// `<recv>.<member>.<verb>(` (or `<verb><` for a generic call). recv/member are bare identifiers; the lookbehind
-// lets the chain start mid-path (`this.db.user.findMany` matches `db.user.findMany` → member `user`).
-const _RE = new RegExp(`(?<![\\w$])([A-Za-z_$][\\w$]*)\\s*\\.\\s*([A-Za-z_$][\\w$]*)\\s*\\.\\s*(${_VERBS})\\s*[(<]`, "g");
+// `<recv>.<member>.<verb>(` (or `<verb><` for a generic call). recv/member/verb are bare identifiers; the
+// lookbehind lets the chain start mid-path (`this.db.user.findMany` matches `db.user.findMany` → member `user`).
+// The verb is captured RAW and classified by `dataRole` (a naming CONVENTION), not matched against a hardcoded
+// framework list — so a custom `deleteByEmail`/`createManyAndReturn` grounds too, while a generic verb
+// (`.map`/`.then`/`getName`) is dropped by `dataRole` returning null (the precision guard, now convention-based).
+const _RE = /(?<![\w$])([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\s*\.\s*([A-Za-z_$][\w$]*)\s*[(<]/g;
 
 function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   const code = (masked ?? makeMaskCtx(text)).comments;   // comment-masked (offset-preserving) → never match in a comment
@@ -41,9 +38,12 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
   _RE.lastIndex = 0;
   while ((m = _RE.exec(code)) !== null) {
     if (SELF.has(m[1])) continue;
+    const role = dataRole(m[3]);
+    if (!role) continue;   // a generic/opaque verb → not a distinctive data access (floor precision)
+    const op = role === "write" ? writeOp(m[3]) : undefined;   // CREATE/UPDATE/DELETE genesis-vs-mutation (null when ambiguous)
     // carry the RECEIVER (`adminClient`) so the coupling can drop this db-table when the flywheel has judged that
     // receiver an HTTP client — `adminClient.users.create` is a REST call, not a `users` write (same shape as an ORM).
-    out.push({ kind: "db-table", value: m[2], line: lineOf(code, m.index), produces: _WRITE.has(m[3]), recv: m[1] });
+    out.push({ kind: "db-table", value: m[2], line: lineOf(code, m.index), produces: role === "write", recv: m[1], ...(op ? { op } : {}) });
   }
   return out;
 }
