@@ -114,7 +114,8 @@ export function _sweep_leftovers(g: Graph, seams: Seam[], adj: Map<string, Set<s
   return seams;
 }
 
-// HUB-AWARE carrier clustering (opt-in: SEAM_SPLIT=1). The plain connected-components floor collapses a
+// HUB-AWARE carrier clustering (DEFAULT; opt-out: SEAM_SPLIT=0 reverts to the plain co-occurrence floor
+// below). The plain connected-components floor collapses a
 // tangled closure into ONE seam because a few HUB cores (ambient infra used across the whole footprint —
 // Dubbo's `URL`/`ExtensionLoader`) co-occur with everything and bridge every specific core together. Fix:
 //   1. a core used by > HUB_FRAC of consumers is a HUB → its OWN seam, EXCLUDED from the merge graph
@@ -201,7 +202,7 @@ export function assign_intent_seams(g: Graph): Seam[] {
   const anchor0Sym = g.nodes.get(anchor0)!.label;
   let seams: Seam[] = [];
   const anyUses = [...uses.values()].some((u) => u.size);
-  if (carriers.length > 1 && anyUses && process.env.SEAM_SPLIT === "1") {
+  if (carriers.length > 1 && anyUses && process.env.SEAM_SPLIT !== "0") {
     seams = _split_seams(g, anchors, cset, uses, consumers);
   } else if (carriers.length > 1 && anyUses) {
     const cut = Math.max(2, Math.floor(carriers.length / 2));

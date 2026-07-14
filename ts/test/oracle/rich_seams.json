@@ -42,13 +42,14 @@
               "enclosing": "PaymentService"
             },
             {
-              "id": "AdminPanel",
+              "id": "call:AdminPanel:charge",
               "file": "src/modules/admin/panel.ts",
-              "start": 1,
-              "end": 80,
+              "start": 20,
+              "end": 20,
               "role": "link",
               "confidence": 0.9,
               "label": "AdminPanel",
+              "caller": true,
               "provenance": "RESOLVED_FULL",
               "relevant": true,
               "external": [],
@@ -78,35 +79,6 @@
               "confidence": 0.9,
               "label": "paymentTest",
               "caller": true,
-              "provenance": "RESOLVED_FULL",
-              "relevant": true,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null
-            },
-            {
-              "id": "refund",
-              "file": "src/payment/service.ts",
-              "start": 30,
-              "end": 42,
-              "role": "core",
-              "confidence": 1,
-              "label": "refund",
-              "provenance": "RESOLVED_FULL",
-              "relevant": true,
-              "external": [],
-              "externalRefs": [],
-              "rewire": null,
-              "enclosing": "PaymentService"
-            },
-            {
-              "id": "RefundPage",
-              "file": "src/modules/refunds/page.ts",
-              "start": 1,
-              "end": 35,
-              "role": "link",
-              "confidence": 0.9,
-              "label": "RefundPage",
               "provenance": "RESOLVED_FULL",
               "relevant": true,
               "external": [],
@@ -167,6 +139,80 @@
             "file": "src/gateway/stripe.ts",
             "line": 5,
             "symbol": "processGateway"
+          }
+        },
+        {
+          "id": "refund",
+          "label": "refund",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "PaymentService",
+              "file": "src/payment/service.ts",
+              "start": 10,
+              "end": 60,
+              "role": "core",
+              "confidence": 1,
+              "label": "PaymentService",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "refund",
+              "file": "src/payment/service.ts",
+              "start": 30,
+              "end": 42,
+              "role": "core",
+              "confidence": 1,
+              "label": "refund",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null,
+              "enclosing": "PaymentService"
+            },
+            {
+              "id": "AdminPanel",
+              "file": "src/modules/admin/panel.ts",
+              "start": 1,
+              "end": 80,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "AdminPanel",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "RefundPage",
+              "file": "src/modules/refunds/page.ts",
+              "start": 1,
+              "end": 35,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "RefundPage",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            }
+          ],
+          "proposedBy": "floor",
+          "selected": false,
+          "suggested": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 10,
+            "symbol": "PaymentService"
           }
         }
       ]
@@ -255,6 +301,20 @@
     }
   ],
   "seamContracts": [
+    {
+      "seamA": "charge",
+      "seamB": "refund",
+      "links": [
+        {
+          "from": "AdminPanel",
+          "to": "charge",
+          "kind": "call",
+          "provenance": "RESOLVED_FULL",
+          "line": 20
+        }
+      ],
+      "blurry": false
+    },
     {
       "seamA": "charge",
       "seamB": "sug-processGateway",

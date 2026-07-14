@@ -82,6 +82,52 @@
               "external": [],
               "externalRefs": [],
               "rewire": null
+            }
+          ],
+          "proposedBy": "floor",
+          "selected": false,
+          "suggested": false,
+          "primary": {
+            "file": "src/payment/service.ts",
+            "line": 0,
+            "symbol": "PaymentService"
+          }
+        },
+        {
+          "id": "PaymentService.refund",
+          "label": "refund",
+          "linkOnly": false,
+          "uncertain": false,
+          "warnings": [],
+          "hunks": [
+            {
+              "id": "PaymentService",
+              "file": "src/payment/service.ts",
+              "start": 0,
+              "end": 5,
+              "role": "core",
+              "confidence": 1,
+              "label": "PaymentService",
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
+            },
+            {
+              "id": "call:x6:PaymentService",
+              "file": "src/untraced.ts",
+              "start": 1,
+              "end": 1,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "make",
+              "caller": true,
+              "provenance": "RESOLVED_PARTIAL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
             },
             {
               "id": "PaymentService.refund",
@@ -97,6 +143,21 @@
               "externalRefs": [],
               "rewire": null,
               "enclosing": "PaymentService"
+            },
+            {
+              "id": "call:c1:PaymentService.refund",
+              "file": "src/admin.ts",
+              "start": 3,
+              "end": 3,
+              "role": "link",
+              "confidence": 0.9,
+              "label": "admin",
+              "caller": true,
+              "provenance": "RESOLVED_FULL",
+              "relevant": true,
+              "external": [],
+              "externalRefs": [],
+              "rewire": null
             }
           ],
           "proposedBy": "floor",
@@ -164,7 +225,29 @@
       "line": 0
     }
   ],
-  "seamContracts": [],
+  "seamContracts": [
+    {
+      "seamA": "PaymentService.charge",
+      "seamB": "PaymentService.refund",
+      "links": [
+        {
+          "from": "c1",
+          "to": "PaymentService.refund",
+          "kind": "reference",
+          "provenance": "RESOLVED_FULL",
+          "line": 3
+        },
+        {
+          "from": "x6",
+          "to": "PaymentService",
+          "kind": "call",
+          "provenance": "RESOLVED_PARTIAL",
+          "line": 0
+        }
+      ],
+      "blurry": true
+    }
+  ],
   "blindspots": [
     {
       "node": "PaymentService",

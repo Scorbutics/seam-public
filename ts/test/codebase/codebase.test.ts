@@ -449,9 +449,9 @@ describe("codebase LLM refine (host-bus inject) vs Python", () => {
   });
 });
 
-// SEAM_SPLIT (opt-in hub-aware clustering): a HUB carrier (ambient infra used by every consumer) must NOT
-// bridge unrelated specific carriers into one blob. Default = connected-components collapses to 1 seam;
-// SEAM_SPLIT=1 excludes the hub from the merge graph so the two specific concerns separate. Deterministic.
+// Hub-aware clustering (DEFAULT): a HUB carrier (ambient infra used by every consumer) must NOT bridge
+// unrelated specific carriers into one blob. The hub is excluded from the merge graph so the two specific
+// concerns separate. SEAM_SPLIT=0 reverts to the plain connected-components floor (collapses to 1 seam).
 describe("SEAM_SPLIT hub-aware clustering", () => {
   // App(anchor) owns 3 core methods: hub (used by ALL consumers) + specA + specB (distinct consumers).
   const mk = (id: string, enclosing = "", complexity = 1) => ({ id, symbol: id, kind: enclosing ? "method" : "class", file: `${id}.ts`, range: [0, 0], enclosing, complexity });
@@ -468,16 +468,32 @@ describe("SEAM_SPLIT hub-aware clustering", () => {
       { from: "cB2", to: "specB", kind: "call", provenance: "RESOLVED_FULL" },
     ], blindspots: [], unresolved: [],
   };
+  // split=true → default (hub-aware); split=false → SEAM_SPLIT=0 opt-out (plain co-occurrence floor).
   const seamCount = async (split: boolean): Promise<number> => {
     const prev = process.env.SEAM_SPLIT;
-    if (split) process.env.SEAM_SPLIT = "1"; else delete process.env.SEAM_SPLIT;
+    if (split) delete process.env.SEAM_SPLIT; else process.env.SEAM_SPLIT = "0";
     try { const m = await decompose(from_resolved_graph(JSON.parse(JSON.stringify(graph)))); return (m.clusters ?? []).flatMap((c: any) => c.seams ?? []).length; }
     finally { if (prev === undefined) delete process.env.SEAM_SPLIT; else process.env.SEAM_SPLIT = prev; }
   };
-  test("default collapses the hub-bridged carriers into ONE seam", async () => {
+  test("SEAM_SPLIT=0 opt-out collapses the hub-bridged carriers into ONE seam", async () => {
     expect(await seamCount(false)).toBe(1);
   });
-  test("SEAM_SPLIT separates the two specific concerns (hub no longer bridges) → >1 seam", async () => {
+  test("default (hub-aware) separates the two specific concerns (hub no longer bridges) → >1 seam", async () => {
     expect(await seamCount(true)).toBeGreaterThan(1);
+  });
+  // Structural contract (the private-app blob-split regression): specA and specB must land in DIFFERENT seams —
+  // a shared hub (or a single incidental co-use below COOC_MERGE) must not chain unrelated concerns into
+  // one blob. Guards the flip of hub-aware clustering to default-on.
+  test("default puts specA and specB in DIFFERENT seams (not one blob)", async () => {
+    const prev = process.env.SEAM_SPLIT;
+    delete process.env.SEAM_SPLIT;
+    try {
+      const m = await decompose(from_resolved_graph(JSON.parse(JSON.stringify(graph))));
+      const seams = (m.clusters ?? []).flatMap((c: any) => c.seams ?? []);
+      const seamOf = (sym: string) => seams.find((s: any) => (s.hunks ?? []).some((h: any) => h.label === sym || h.id === sym));
+      const a = seamOf("specA"), b = seamOf("specB");
+      expect(a).toBeTruthy(); expect(b).toBeTruthy();
+      expect(a.id).not.toBe(b.id);
+    } finally { if (prev === undefined) delete process.env.SEAM_SPLIT; else process.env.SEAM_SPLIT = prev; }
   });
 });
