@@ -285,10 +285,37 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // never the crown, unless nothing nearer grounds. This is the "deepen ADMISSION, preserve PRECEDENCE" split.
     const chainSink = (s: Seam) => (s.hunks ?? []).some((h: any) => chainIds.has(String(h.id)));
     const trustedChain = (s: Seam) => chainSink(s) && (!_trustGate || providerWrite(s) || focusedWriter(s));
+    // CENTRALITY of a store boundary = how many DISTINCT footprint nodes access (write or read) its TABLE. The
+    // central DOMAIN ENTITY the flow revolves around has many accessors (cal `booking`); a peripheral CHILD/detail
+    // table has few (`bookingSeat`, a seated-event join). Used only to break a near-tie among same-tier own-writes
+    // (see the crown re-pick below) — a structural prior for "which table is the subject", not an intent guess.
+    const _ACCESS = new Set([..._PRODUCE, "db-read", "service-read", "consume", "read", "select", "find", "route-fetch"]);
+    const tableAccessors = new Map<string, Set<string>>();
+    for (const e of edges) if (_ACCESS.has(e.kind)) { const t = label.get(String(e.to)); if (t) (tableAccessors.get(t) ?? tableAccessors.set(t, new Set()).get(t)!).add(String(e.from)); }
+    const centrality = (s: Seam) => { const t = (primaryHunk(s) as any)?.label; return t ? (tableAccessors.get(t)?.size ?? 0) : 0; };
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
         && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+    // CROWN RE-PICK — within the TOP structural tier (same directSink+providerWrite as the leader), the embedding can
+    // mis-rank a NEAR-TIE: cal `RegularBookingService` writes BOTH `booking` (the real persist) and `bookingSeat` (a
+    // niche seated-event detail) IN-BODY, so both are anchor OWN writes (same tier) and the embedding rates the detail
+    // table higher by a hair (0.354 vs 0.318). Break that near-tie STRUCTURALLY: among the relevance-leaders within
+    // SEAM_SPINE_REL_EPS of the best, prefer the more CENTRAL table. Fires ONLY inside the top tier AND a small
+    // relevance band, so a clearly-higher-relevance or higher-tier sink still wins outright (no override of a
+    // confident embedding). CLAUDE.md: structure supplies the prior (centrality), the embedding still leads.
+    const _relEps = Math.max(0, parseFloat(process.env.SEAM_SPINE_REL_EPS ?? "0.05") || 0.05);
+    if (cands.length > 1) {
+      const tierKey = (s: Seam) => `${Number(directSink(s))}|${Number(providerWrite(s))}`;
+      const top = tierKey(cands[0]);
+      const tier0 = cands.filter((c) => tierKey(c) === top);
+      const maxRel = Math.max(...tier0.map(rel));
+      const band = tier0.filter((c) => maxRel - rel(c) <= _relEps);
+      if (band.length > 1) {
+        const crown = [...band].sort((a, b) => (centrality(b) - centrality(a)) || (rel(b) - rel(a)) || (_dist(a.id) - _dist(b.id)) || (a.id < b.id ? -1 : 1))[0];
+        if (crown && crown.id !== cands[0].id) { const i = cands.indexOf(crown); if (i > 0) { cands.splice(i, 1); cands.unshift(crown); } }
+      }
+    }
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {

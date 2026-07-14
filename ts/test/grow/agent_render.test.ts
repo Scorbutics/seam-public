@@ -586,6 +586,36 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("GroupRoleMapping");   // …the in-body one-hop sibling no longer out-ranks it on the directSink prior
   });
 
+  // CENTRALITY near-tie crown — an anchor writes TWO tables IN-BODY (both own-writes / same tier): `booking` (the
+  // real persist, accessed by MANY nodes = the domain entity) and `seatDetail` (a niche child table, few accessors)
+  // that the embedding rates a HAIR higher (within REL_EPS). The near-tie must break toward the CENTRAL table, not
+  // the embedding's marginally-higher peripheral one (cal `RegularBookingService` → `booking` not `bookingSeat`).
+  test("centrality breaks a near-tie among own-writes: the central table wins over a hair-higher peripheral one", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a booking created and persisted", seams: [
+        { id: "a", label: "createBooking", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/book.ts", line: 1, symbol: "createBooking" }, hunks: [{ id: "cb", file: "svc/book.ts", start: 1, role: "core", label: "createBooking" }] },
+        { id: "bk", label: "booking", tier: "off", relevance: 0.318, region: { shell: 1, direction: "down" }, primary: { file: "db/booking.ts", line: 1, symbol: "booking" }, hunks: [{ id: "bkh", file: "db/booking.ts", start: 1, role: "environment", label: "booking", kind: "db-table" }] },
+        { id: "sd", label: "seatDetail", tier: "off", relevance: 0.354, region: { shell: 1, direction: "down" }, primary: { file: "db/seat.ts", line: 1, symbol: "seatDetail" }, hunks: [{ id: "sdh", file: "db/seat.ts", start: 1, role: "environment", label: "seatDetail", kind: "db-table" }] },
+        // extra nodes that read/write `booking` → it is the CENTRAL entity (many accessors); `seatDetail` has only the anchor
+        { id: "r1", label: "listBookings", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/list.ts", line: 1, symbol: "listBookings" }, hunks: [{ id: "r1h", file: "svc/list.ts", start: 1, role: "link", label: "listBookings" }] },
+        { id: "r2", label: "getBooking", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/get.ts", line: 1, symbol: "getBooking" }, hunks: [{ id: "r2h", file: "svc/get.ts", start: 1, role: "link", label: "getBooking" }] },
+        { id: "w2", label: "updateBooking", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "svc/upd.ts", line: 1, symbol: "updateBooking" }, hunks: [{ id: "w2h", file: "svc/upd.ts", start: 1, role: "link", label: "updateBooking" }] },
+      ] }],
+      edges: [
+        { from: "cb", to: "bkh", kind: "db-write", line: 10 }, { from: "cb", to: "sdh", kind: "db-write", line: 20 },   // anchor writes BOTH in-body
+        { from: "r1h", to: "bkh", kind: "db-read" }, { from: "r2h", to: "bkh", kind: "db-read" }, { from: "w2h", to: "bkh", kind: "db-write" },   // booking has many accessors
+      ],
+      blindspots: [],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a booking created and persisted" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("──▶ booking");        // the central domain entity is crowned…
+    expect(spine).not.toContain("seatDetail");     // …not the hair-higher-relevance peripheral child table
+  });
+
   // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
   // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
   // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the
