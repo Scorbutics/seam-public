@@ -57,7 +57,9 @@ import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
-import { _read } from "../scan/ast_units.js";
+import { _read, _named_units, _enclosing, _call_lines } from "../scan/ast_units.js";
+import { makeCtx, available, type Ctx } from "../atoms.js";
+import type { Unit } from "../scan/graph.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -127,7 +129,89 @@ function _rehydrateFanDelta(delta: { nodes: any[]; edges: any[]; blindspots: any
   const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: rid(b.node) }));
   return { nodes, edges, blindspots, counter };
 }
-async function _fileCouplingDelta(repo: string, file: string, anchorId: string, counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+
+// METHOD-PRECISE fan attribution (default; opt-out SEAM_METHOD_PRECISE=0). The whole-file fan wires EVERY write in
+// a file to the ONE reached node (the first grounded node the grow hit there), so a class's SIBLING methods bleed
+// onto it: keycloak `grantRole` (536-541) credited with the UserAttribute/RequiredAction/GroupMembership writes it
+// never touches, and a whole-CLASS node (`JpaRealmProvider` 95-1572) absorbing the ENTIRE file (→ a garbage
+// `RealmLocalizationTextsEntity` crown). Re-attribute each NEAR crossing to the method ENCLOSING its write LINE,
+// restricted to the reached method's same-file call CLOSURE (the reached method + what it transitively calls, via
+// unqualified `grantRoleImpl(...)`-style call sites). Mint a node per closure method + a `call` edge srcId→method so
+// the spine can reach it; DROP a crossing whose method is OUTSIDE the closure (a sibling not on the flow). A
+// whole-CLASS reached node pins NO method (its enclosing unit is the class, which calls nothing) → empty closure →
+// its file-wide bleed drops entirely. STRUCTURAL: tree-sitter units + same-file resolved call sites, no name guess.
+function _rehydrateFanDeltaMethodPrecise(
+  delta: { nodes: any[]; edges: any[]; blindspots: any[] }, srcId: string, srcRange: [number, number] | undefined,
+  fileNodes: { id: string; range: [number, number] }[],
+  file: string, ctx: Ctx, units: Unit[], counter: number,
+): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
+  const isMethod = (u: Unit | null): u is Unit => !!u && (u[1] === "method" || u[1] === "function");
+  // the reached node's OWN method (its writes stay on it) — from its range DIRECTLY, so a coupling-complement
+  // reached node (persistPayment, a synthetic writer node excluded from fileNodes) still resolves its method.
+  const reached = srcRange ? _enclosing(units, srcRange[0]) : null;
+  // an EXISTING footprint code node that is the METHOD enclosing a write line — the write belongs to it (already in
+  // the graph, connected). Covers a crossing in the reached node's CALLER (OrdersPage's `$http.get` reached via its
+  // callee `render`) or any other already-grown method. Gated to a node CONTAINED IN the tightest enclosing method
+  // unit: a whole-CLASS footprint node (JpaRealmProvider 95-1572) encloses EVERY line, so a plain "tightest node
+  // containing L" would re-credit the class with every method's write (the very bleed we're removing) — requiring
+  // the node to sit INSIDE the enclosing method excludes the class, so a class-body write with no grown method drops.
+  const encFootprint = (L: number): string | null => {
+    const m = _enclosing(units, L);
+    if (!m) return null;
+    let best: { id: string; range: [number, number] } | null = null;
+    for (const fn of fileNodes) if (fn.range && fn.range[0] <= L && L <= fn.range[1] && fn.range[0] >= m[2] && fn.range[1] <= m[3]
+        && (!best || (fn.range[1] - fn.range[0] < best.range[1] - best.range[0]))) best = fn;
+    return best ? best.id : null;
+  };
+  // same-file caller→callee adjacency from UNQUALIFIED call sites (`_call_lines` matches a bare-identifier callee,
+  // i.e. a private-delegate call like `grantRoleImpl(role)`); bucket each call site by its enclosing method.
+  const methodNames = new Map<string, Unit[]>();
+  for (const u of units) if (isMethod(u)) (methodNames.get(u[0]) ?? methodNames.set(u[0], []).get(u[0])!).push(u);
+  const adj = new Map<Unit, Set<Unit>>();
+  for (const [name, defs] of methodNames) for (const L of _call_lines(ctx, name)) {
+    const caller = _enclosing(units, L);
+    if (isMethod(caller)) { const set = adj.get(caller) ?? adj.set(caller, new Set()).get(caller)!; for (const d of defs) if (d !== caller) set.add(d); }
+  }
+  const closure = new Set<Unit>();
+  if (isMethod(reached)) { const st: Unit[] = [reached]; closure.add(reached); while (st.length) { const A = st.pop()!; for (const B of adj.get(A) ?? []) if (!closure.has(B)) { closure.add(B); st.push(B); } } }
+  // renumber boundary/complement nodes into the `fc` namespace (as _rehydrateFanDelta does)
+  const idmap = new Map<string, string>();
+  let ctr = counter;
+  const outNodes = delta.nodes.map((n) => { const nid = `fc${ctr++}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
+  const mintEdges: any[] = [];
+  const minted = new Map<Unit, string>();
+  const methodNodeFor = (u: Unit): string => {
+    if (u === reached) return srcId;                                  // the reached method IS srcId — attribute directly
+    const ex = minted.get(u); if (ex) return ex;
+    const id = `fc${ctr++}`;
+    outNodes.push({ id, symbol: u[0], kind: u[1], file, range: [u[2], u[3]], enclosing: "", complexity: Math.max(1, u[3] - u[2] + 1), coupling: true });
+    mintEdges.push({ from: srcId, to: id, kind: "call", provenance: "RESOLVED_PARTIAL", line: u[2] });
+    minted.set(u, id); return id;
+  };
+  const map = (x: string) => x === _FAN_SRC ? srcId : (idmap.get(x) ?? x);
+  const outEdges: any[] = [];
+  for (const e of delta.edges) {
+    if (e.from === _FAN_SRC) {                                        // a NEAR crossing (reached node → boundary)
+      const L = Number(e.line);
+      const foot = Number.isFinite(L) ? encFootprint(L) : null;
+      const m = Number.isFinite(L) ? _enclosing(units, L) : null;
+      if (foot) outEdges.push({ ...e, from: foot, to: map(e.to) });                 // an existing footprint method owns the write
+      else if (isMethod(m) && closure.has(m)) outEdges.push({ ...e, from: methodNodeFor(m), to: map(e.to) });   // a same-file delegate not yet grown → mint + wire
+      else if (!isMethod(m)) outEdges.push({ ...e, from: srcId, to: map(e.to) });   // top-level / class-body write with no enclosing method → keep on the reached node
+      // else: a sibling method that is neither grown nor in the closure → DROP (the bleed)
+    } else {
+      outEdges.push({ ...e, from: map(e.from), to: map(e.to) });
+    }
+  }
+  outEdges.push(...mintEdges);
+  // drop a boundary/complement node orphaned by the re-attribution (its only near crossing was dropped)
+  const referenced = new Set<string>();
+  for (const e of outEdges) { referenced.add(e.from); referenced.add(e.to); }
+  const nodes = outNodes.filter((n) => referenced.has(n.id) || !n.coupling);
+  const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: map(b.node) }));
+  return { nodes, edges: outEdges, blindspots, counter: ctr };
+}
+async function _fileCouplingDelta(repo: string, file: string, anchorId: string, srcRange: [number, number] | undefined, fileNodes: { id: string; range: [number, number] }[], counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
   const empty = { nodes: [], edges: [], blindspots: [], counter };
   const ar = _read(repo, file);
   if (!ar) return empty;
@@ -149,7 +233,14 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
   else {
     // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
     const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0));
-    out = _rehydrateFanDelta(cached, anchorId, counter);
+    // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the ENCLOSING method within the
+    // reached node's same-file call closure (drops the sibling/class-wide bleed). Needs a parse — degrade to the flat
+    // rehydrate offline (no tree-sitter) or when opted out.
+    const mp = process.env.SEAM_METHOD_PRECISE !== "0" && available();
+    const parsed = mp ? await makeCtx(ar[0], ar[1]) : null;
+    out = parsed
+      ? _rehydrateFanDeltaMethodPrecise(cached, anchorId, srcRange, fileNodes, file, parsed, _named_units(parsed), counter)
+      : _rehydrateFanDelta(cached, anchorId, counter);
   }
   if (_repeat) { _fcRepeats++; if (_t0) { _fcRepeatMs += Date.now() - _t0; if (timingOn()) process.stderr.write(`[time] ${cacheOn ? "RE-COUPLE(cached)" : "RE-COUPLE"} ${normpath(file)}: ${Date.now() - _t0}ms\n`); } }
   return out;
@@ -320,7 +411,10 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
     const f = n.file ? normpath(n.file) : "";
     if (!f || coupled.has(f)) continue;
     coupled.add(f);
-    const d = await _fileCouplingDelta(repo, n.file, n.id, counter, opts, ctx);
+    // the file's REAL code nodes (not coupling/boundary nodes) — so a whole-file crossing is re-attributed to the
+    // grown method whose span encloses its write line (method-precise), not blanket-credited to the reached node.
+    const fileNodes = (data.nodes ?? []).filter((m: any) => !m.coupling && m.file && normpath(m.file) === f && Array.isArray(m.range)).map((m: any) => ({ id: m.id, range: m.range as [number, number] }));
+    const d = await _fileCouplingDelta(repo, n.file, n.id, n.range, fileNodes, counter, opts, ctx);
     if (!d.nodes.length) continue;
     counter = d.counter;
     overlay = { nodes: [...overlay.nodes, ...d.nodes], edges: [...overlay.edges, ...d.edges], blindspots: [...overlay.blindspots, ...d.blindspots] };

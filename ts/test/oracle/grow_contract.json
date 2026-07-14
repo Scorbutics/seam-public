@@ -43,7 +43,6 @@
       "OrdersPage->formatOrders:import",
       "OrdersPage->formatOrders:reference",
       "OrdersPage->render:call",
-      "render->/api/orders:route-fetch",
       "render->formatOrders:import"
     ]
   },
