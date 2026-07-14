@@ -227,6 +227,21 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
   const clusters = [{ id: "g1", intent: anchorSym || g.anchor, colorIndex: 0, seams: outSeams,
     ...(culminationRanked.length ? { culminationRanked } : {}) }];
   const tests = [...g.nodes.values()].filter((n) => n.role === "test").map((n) => _seam_hunk(n, "RESOLVED_FULL"));
+  // DEDUP shared-key-fanout blindspots BY TABLE — a hub table (`user`) is written/read by dozens of nodes, and each
+  // recorded its OWN fanout blindspot ("`user` is a hub, fanned"), so `user` appeared 32×, `membership` 18×… inflating
+  // the blindspot count to hundreds of redundant duplicates. The render already summarises them into ONE line per
+  // table, so collapse the MODEL to one per table too — keep the WIDEST-fan representative (most candidates), drop the
+  // rest. Non-fanout blindspots (real per-node leads) are untouched. Halves-plus the count with zero signal loss.
+  const _fanTable = (b: any): string | null => b.mechanism === "shared-key-fanout" ? (String(b.evidence ?? "").match(/'([^']+)'/)?.[1] ?? String(b.node)) : null;
+  const _bsIdx = new Map<string, number>();
+  const _blindspots: typeof g.blindspots = [];
+  for (const b of g.blindspots) {
+    const t = _fanTable(b);
+    if (t === null) { _blindspots.push(b); continue; }
+    const prev = _bsIdx.get(t);
+    if (prev === undefined) { _bsIdx.set(t, _blindspots.length); _blindspots.push(b); }
+    else if ((b.candidates?.length ?? 0) > (_blindspots[prev].candidates?.length ?? 0)) _blindspots[prev] = b;   // keep the widest fan for this table
+  }
   // policy-vs-flow `shape` + the `lead` slice — only on a BIDIRECTIONAL footprint (decompose passes them);
   // single-direction footprints (the oracle fixtures) emit neither, so byte-identical parity is preserved.
   return {
@@ -237,7 +252,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     seamEdges: [],
     edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line, ...((e as any).op ? { op: (e as any).op } : {}) })),
     seamContracts: _seam_contracts(g, seams),
-    blindspots: g.blindspots.map((b) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence,
+    blindspots: _blindspots.map((b) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence,
       candidates: b.candidates.map((c) => ({ symbol: c.dst, provenance: c.provenance })) })),
     unresolved: g.unresolved,
     ...(_frontier.length ? { frontier: _frontier, frontierCut: _frontierAll.length - _frontier.length } : {}),

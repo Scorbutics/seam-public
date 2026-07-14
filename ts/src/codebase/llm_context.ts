@@ -549,8 +549,16 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // enclosing symbol (the class) when the anchor is a member of a class-primaried seam.
     const h = [`anchor: ${label.get(String(model.anchor)) ?? cl.intent ?? model.anchor ?? "?"}`];
     if (opts.intent) h.push(`intent: ${opts.intent}`);
-    h.push(`resolution: ${model.resolutionQuality ?? "?"}`, `seams: ${seams.length}`,
-      `unresolved: ${(model.unresolved ?? []).length}`, `blindspots: ${(model.blindspots ?? []).length}`);
+    // HONEST counts — most of a coupling-heavy footprint is the shared-key FAN (crossing seams + hub-fanout
+    // blindspots), which the render folds. Split them out so "seams: 330 / blindspots: 215" doesn't read as chaos
+    // when the body is ~90 lines: N GROUNDED seams + the coupling crossings; the ACTIONABLE blindspots + folded hubs.
+    const _crossSeams = seams.filter((s) => (s as any).proposedBy === "crossing").length;
+    const _bsAll = (model.blindspots ?? []) as any[];
+    const _fanoutBs = _bsAll.filter((b) => b.mechanism === "shared-key-fanout").length;
+    h.push(`resolution: ${model.resolutionQuality ?? "?"}`,
+      `seams: ${seams.length - _crossSeams} grounded${_crossSeams ? ` + ${_crossSeams} shared-key crossing(s)` : ""}`,
+      `unresolved: ${(model.unresolved ?? []).length}`,
+      `blindspots: ${_bsAll.length - _fanoutBs} actionable${_fanoutBs ? ` (+ ${_fanoutBs} folded hub table(s))` : ""}`);
     const out = ["# Agent map — the region to read instead of a grep loop", h.join(" | ")];
     const im = model.intentMatch;
     if (im?.offIntent) out.push(`⚠ low intent match (top ${im.max} < ${im.floor}) — this anchor's flow may not answer the intent`);
