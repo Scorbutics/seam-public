@@ -130,6 +130,33 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect((out.match(/BookingsBean \(cdi\/BookingsBean\.java:3\)/g) ?? []).length).toBe(1);   // 4 seams → ONE region line
   });
 
+  // HUB-TABLE COLLAPSE — a shared-key HUB table (`user`/`workflowStep`, touched by dozens of files) surfaces as one
+  // region seam PER file, flooding the region (cal.com: `user`×24). Those crossings are already rolled up in the
+  // shared-key Blindspot, so a label carried by ≥K DISTINCT region seams folds to ONE + a single pointer line.
+  test("region HUB-TABLE collapse — a table shared by ≥K region seams folds to one line + a rollup", () => {
+    const model = makeModel({ offN: 0 });
+    for (let i = 0; i < 7; i++) model.clusters[0].seams.push({
+      id: `hub${i}`, label: "user", tier: "supporting", relevance: 0.3, region: { shell: 2, direction: "down" },
+      primary: { file: `svc/f${i}.ts`, line: 1, symbol: "user" },   // SAME hub label `user`, DISTINCT files (so dedup keeps them)
+      hunks: [{ id: `hh${i}`, file: `svc/f${i}.ts`, start: 1, role: "link", label: "user" }],
+    } as any);
+    const out = renderAgent(model, { tokenBudget: 8000, intent: "how are users handled" });
+    expect((out.match(/user \(svc\/f\d\.ts:1\)/g) ?? []).length).toBe(1);                    // 7 `user` hub seams → ONE visible line
+    expect(out).toMatch(/\+6 more file\(s\) folded as shared-key hub crossings over:.*user/);   // …the other 6 rolled up, honestly, pointing to Blindspots
+  });
+
+  test("hub-table collapse opts out under SEAM_REGION_HUB_COLLAPSE=0 (all N lines return)", () => {
+    const model = makeModel({ offN: 0 });
+    for (let i = 0; i < 7; i++) model.clusters[0].seams.push({
+      id: `hub${i}`, label: "acct", tier: "supporting", relevance: 0.3, region: { shell: 2, direction: "down" },
+      primary: { file: `svc/g${i}.ts`, line: 1, symbol: "acct" }, hunks: [{ id: `gh${i}`, file: `svc/g${i}.ts`, start: 1, role: "link", label: "acct" }],
+    } as any);
+    process.env.SEAM_REGION_HUB_COLLAPSE = "0";
+    const out = renderAgent(model, { tokenBudget: 20000, intent: "how are accounts handled" });
+    delete process.env.SEAM_REGION_HUB_COLLAPSE;
+    expect((out.match(/acct \(svc\/g\d\.ts:1\)/g) ?? []).length).toBe(7);   // opted out → the raw fan (deterministic escape hatch)
+  });
+
   test("CROSS-STACK promotion — a JS node reached via a crossing from the Java spine is lifted into its own section (not off-path); a same-language crossing is NOT", () => {
     const model = {
       mode: "codebase", anchor: "n1", resolutionQuality: "FULL",

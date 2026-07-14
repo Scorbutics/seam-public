@@ -568,12 +568,33 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // hub collapse) otherwise renders the SAME `where()` line N times (Acme: BookingsBean 4× in supporting), pure
     // noise. Keep the highest-relevance occurrence (the list is pre-sorted by relevance). Then crop.
     const dedup = (list: Seam[]): Seam[] => { const seen = new Set<string>(); return list.filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; }); };
+    // HUB-TABLE COLLAPSE — a shared-key HUB (a table like `user`/`workflowStep` touched by dozens of files) surfaces
+    // as one region seam PER file, flooding the region and burying the on-intent code (cal.com: `user`×24, `team`×20).
+    // Those crossings are ALREADY rolled up in the shared-key-fanout Blindspot, so keep ONE occurrence per hub label
+    // and fold the rest into a single pointer line. Gated on a label carried by ≥K region seams — real code almost
+    // never repeats a label that many times across distinct files, so it's the hub fan (opt out: SEAM_REGION_HUB_COLLAPSE=0).
+    const _HUB_K = Math.max(3, parseInt(process.env.SEAM_REGION_HUB_K ?? "6", 10) || 6);
+    const _hubCollapse = process.env.SEAM_REGION_HUB_COLLAPSE !== "0";
+    const collapseHubs = (list: Seam[]): { kept: Seam[]; hubs: Map<string, number> } => {
+      if (!_hubCollapse) return { kept: list, hubs: new Map() };
+      const cnt = new Map<string, number>();
+      for (const s of list) { const l = s.label ?? ""; if (l) cnt.set(l, (cnt.get(l) ?? 0) + 1); }
+      const kept: Seam[] = [], hubs = new Map<string, number>(), seen = new Set<string>();
+      for (const s of list) {
+        const l = s.label ?? "";
+        if (l && (cnt.get(l) ?? 0) >= _HUB_K) { if (seen.has(l)) { hubs.set(l, (hubs.get(l) ?? 0) + 1); continue; } seen.add(l); }   // keep the 1st (top-relevance), roll up the rest
+        kept.push(s);
+      }
+      return { kept, hubs };
+    };
     const rankedRegion = (list: Seam[], label: string, drop: boolean, headN: number): void => {
       if (!list.length) return;
-      const sorted = dedup([...list].sort(byRel));
-      if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); return; }
+      const { kept: sorted, hubs } = collapseHubs(dedup([...list].sort(byRel)));
+      const rollup = (): void => { if (!hubs.size) return; const tot = [...hubs.values()].reduce((a, b) => a + b, 0);
+        out.push(`  (+${tot} more file(s) folded as shared-key hub crossings over: ${[...hubs.keys()].slice(0, 12).join(", ")}${hubs.size > 12 ? ", …" : ""} — see Blindspots)`); };
+      if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); rollup(); return; }
       out.push(`${label} (top ${headN} of ${sorted.length} by intent relevance — raise --token-budget for the rest):`);
-      sorted.slice(0, headN).forEach((s) => out.push(seamLine(s)));
+      sorted.slice(0, headN).forEach((s) => out.push(seamLine(s))); rollup();
     };
     rankedRegion(supporting, "supporting", dropSupporting, 10);
     rankedRegion(offSeams, "off-path", dropOff, 4);
