@@ -520,6 +520,38 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");   // which is surfaced as an alternate
   });
 
+  // DEEP-CLOSURE ADMISSION — an orchestrator whose OWN write is bookkeeping (private-app runPhaseEnrich → `payments`
+  // state), while the real DOMAIN culmination is written 2+ call-hops deep (runPhaseEnrich → provisionOrUpdateMember
+  // → findMemberId → `members` tier). The old one-hop delegate scoping never ADMITTED the deep write, so it fell
+  // into the blindspots and the reader never saw the tier update. The call closure now admits it as an ALTERNATE
+  // (Also reaches) — but the anchor's own write still WINS the crown (deepen ADMISSION, preserve PRECEDENCE).
+  test("deep-closure sink: a 2-hop domain write surfaces as an alternate while the anchor's own write stays crowned", () => {
+    const model = {
+      mode: "codebase", anchor: "orch", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is the member tier updated", seams: [
+        { id: "o", label: "runPhaseEnrich", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "fn/phase-enrich.ts", line: 1, symbol: "runPhaseEnrich" }, hunks: [{ id: "orch", file: "fn/phase-enrich.ts", start: 1, role: "core", label: "runPhaseEnrich" }] },
+        // the anchor's OWN write — bookkeeping state, the crown
+        { id: "p", label: "payments", tier: "off", relevance: 0.30, region: { shell: 1, direction: "down" }, primary: { file: "fn/phase-enrich.ts", line: 2, symbol: "payments" }, hunks: [{ id: "ph", file: "fn/phase-enrich.ts", start: 2, role: "environment", label: "payments", kind: "db-table" }] },
+        // two intermediate call hops → the deep domain writer
+        { id: "m", label: "provisionOrUpdateMember", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "fn/provisioning.ts", line: 1, symbol: "provisionOrUpdateMember" }, hunks: [{ id: "mid", file: "fn/provisioning.ts", start: 1, role: "link", label: "provisionOrUpdateMember" }] },
+        { id: "f", label: "findMemberId", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "fn/provisioning.ts", line: 9, symbol: "findMemberId" }, hunks: [{ id: "deep", file: "fn/provisioning.ts", start: 9, role: "link", label: "findMemberId" }] },
+        // the DEEP domain write (2 call-hops from the anchor) — the real tier culmination, LOWER relevance than payments
+        { id: "mem", label: "members", tier: "off", relevance: 0.25, region: { shell: 3, direction: "down" }, primary: { file: "fn/members.ts", line: 1, symbol: "members" }, hunks: [{ id: "memh", file: "fn/members.ts", start: 1, role: "environment", label: "members", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "orch", to: "ph", kind: "db-write", line: 88 }, { from: "orch", to: "mid", kind: "call", line: 82 },
+        { from: "mid", to: "deep", kind: "call", line: 15 }, { from: "deep", to: "memh", kind: "db-write", line: 20 }],
+      blindspots: [],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";   // pin subject-dim off (both tables on-flow)
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is the member tier updated" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const alsoIdx = out.indexOf("## Also reaches");
+    const spine = out.slice(out.indexOf("## Spine"), alsoIdx > -1 ? alsoIdx : out.indexOf("## Region"));
+    expect(spine).toContain("payments");            // the anchor's OWN write stays crowned (precedence preserved)
+    expect(alsoIdx).toBeGreaterThan(-1);
+    expect(out.slice(alsoIdx)).toContain("members");   // the 2-hop deep culmination is ADMITTED as an alternate (not lost)
+  });
+
   // DELEGATING ANCHOR — the anchor writes NOTHING itself (a pure pass-through controller); its persistence is its
   // delegate's. Borrow the direct writes of the nodes it CALLS (one hop) so the delegate's write beats a DEEPER,
   // higher-relevance peripheral sink. `ctrl` delegates to `svc` (writes UserEntity); `audit` deeper writes the

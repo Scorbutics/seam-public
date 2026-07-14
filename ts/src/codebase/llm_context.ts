@@ -174,25 +174,51 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // STRUCTURE names the fact (the anchor writes this table), embeddings only order the REST (the also-reaches).
     const _PRODUCE = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert"]);
     const _CALL = new Set(["call", "invokes", "dispatch"]);   // control-flow delegation edges
+    const _DELEGATE = new Set([..._CALL, "interface-impl", "provider-impl", "reference"]);
+    const _TYPEREF = new Set(["interface", "type", "enum", "type-alias", "type-ref", "file-ref"]);   // not execution steps
     const edges = (model.edges ?? []) as any[];
-    const directIds = new Set<string>();
-    const ownIds = new Set<string>();   // the anchor's OWN in-body writes — a hard structural fact, trusted unconditionally
-    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) { directIds.add(String(e.to)); ownIds.add(String(e.to)); }
-    // PURE-DELEGATE one-hop: a controller that writes NOTHING itself persists THROUGH its delegate — so its
-    // effective write is the delegate's. When the anchor has no own writes, borrow the direct writes of the nodes
-    // it CALLS (one hop only, so an orchestrator's deep subtree doesn't flood back in and re-introduce the noise
-    // the anchor-node scoping removed). A pass-through to a sole writer resolves to that one table; a fan of
-    // sibling writers stays multiple (relevance then orders them — no worse than before, the rest are also-reaches).
-    // A DI BINDING is a delegation too: a REST handler that binds an interface (`interface-impl`, incl. the DI
-    // provider-factory hop) persists THROUGH the bound impl — so the impl's write is the handler's effective write.
-    // Without this, a handler whose whole persistence is behind `session.groups()`→JpaRealmProvider→GroupEntity has
-    // no directSink and the spine stays inferred though the grounded write IS one hop past the binding.
-    const _DELEGATE = new Set([..._CALL, "interface-impl", "provider-impl"]);
-    if (!directIds.size) {
+    // DOWNSTREAM CALL CLOSURE — the anchor's transitive delegation reach over CALL/DELEGATE edges (bounded depth),
+    // so a culmination written 2+ hops deep becomes a candidate: keycloak `createUser→profile.create→addUser→
+    // UserEntity` and private-app `runPhaseEnrich→provisionOrUpdateMember→applyMemberSubscription→…→members` are BOTH the
+    // real outcome yet TWO+ hops past the anchor — the old one-hop delegate borrow missed them, so the spine fell to
+    // an embedding-nearest FRINGE write (UserVerifiableCredentialEntity) or the anchor's own bookkeeping write
+    // (payments state). The closure follows CALLS ONLY (a resolved `import` carrying a use-line is a call; TYPE/FILE
+    // refs and the sideways store-fan are NOT) and is bounded (SEAM_SPINE_CLOSURE_DEPTH, default 5) so an
+    // orchestrator's subtree can't flood back in. Purely STRUCTURAL (resolved edges) — intent-free, per CLAUDE.md.
+    const _closureMax = Math.max(1, parseInt(process.env.SEAM_SPINE_CLOSURE_DEPTH ?? "5", 10) || 5);
+    const callDepth = new Map<string, number>([[anchorNode, 0]]);
+    for (const q = [anchorNode]; q.length; ) {
+      const c = q.shift()!; const d = callDepth.get(c)!;
+      if (d >= _closureMax) continue;
+      for (const e of edges) {
+        if (String(e.from) !== c) continue;
+        const isCall = _DELEGATE.has(e.kind) || (e.kind === "import" && Number(e.line) > 0);
+        if (!isCall) continue;
+        const to = String(e.to);
+        if (!label.has(to) || _TYPEREF.has(kindOfId.get(to) ?? "") || callDepth.has(to)) continue;   // resolved, non-type, unseen
+        callDepth.set(to, d + 1); q.push(to);
+      }
+    }
+    // ownIds = the anchor's OWN in-body writes (depth 0), trusted unconditionally. directIds = the crown PRIOR: the
+    // anchor's own write, or — for a pure pass-through that writes nothing itself — the ONE-HOP delegate's write (a
+    // controller persists THROUGH its sole delegate). This precedence is load-bearing: the anchor's own/near write
+    // must WIN the crown over a DEEPER peripheral write even when the embedding rates the peripheral one higher
+    // (addUser→UserEntity beats a deeper audit→AuditEntity; the direct-write prior corrects the misleading embedding).
+    const ownIds = new Set<string>();
+    for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === anchorNode) ownIds.add(String(e.to));
+    const directIds = new Set<string>(ownIds);
+    if (!ownIds.size) {   // PURE-DELEGATE one-hop borrow: no own write → the sole delegate's write is the effective sink
       const callees = new Set<string>();
       for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) callees.add(String(e.to));
       if (callees.size) for (const e of edges) if (_PRODUCE.has(e.kind) && callees.has(String(e.from))) directIds.add(String(e.to));
     }
+    // chainIds = grounded writes DEEPER on the call closure, PAST the one-hop prior (private-app `members`, written by
+    // provisionOrUpdateMember→…→findMemberId, 2+ hops from runPhaseEnrich; the real tier culmination). ADMITTED as
+    // candidate sinks so the culmination SURFACES (as an alternate under the spine) — the old one-hop scoping never
+    // admitted it, so it fell into the blindspots. NOT a directSink: the crown prior above still wins, so a deep
+    // PERIPHERAL write (audit) can't hijack the spine from the anchor's own outcome — it just becomes an alternate.
+    const chainIds = new Set<string>();
+    for (const e of edges) if (_PRODUCE.has(e.kind) && callDepth.has(String(e.from)) && !directIds.has(String(e.to))) chainIds.add(String(e.to));
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
     const ownSink = (s: Seam) => (s.hunks ?? []).some((h: any) => ownIds.has(String(h.id)));
     // A grounded ANCHOR WRITE (directSink) is a candidate EVEN when the BFS didn't reach it: in `fwd` (consumers-lead)
@@ -232,9 +258,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       _PRODUCE.has(e.kind) && String(e.to) === String(h.id) && !_providerTargets.has(String(e.from))
       && (writesOf.get(String(e.from))?.size ?? 0) < _overAttribK));
     const trustedDirect = (s: Seam) => directSink(s) && (!_trustGate || ownSink(s) || providerWrite(s) || focusedWriter(s));
+    // A DEEP-closure write (chainIds) is ADMITTED as a candidate sink (so the real culmination surfaces as an
+    // alternate) under the SAME trust gate as a borrowed direct write (a provider or a focused writer — never a
+    // class-wide bleed). It is NOT a directSink, so the crown prior above still wins: the deep write is an alternate,
+    // never the crown, unless nothing nearer grounds. This is the "deepen ADMISSION, preserve PRECEDENCE" split.
+    const chainSink = (s: Seam) => (s.hunks ?? []).some((h: any) => chainIds.has(String(h.id)));
+    const trustedChain = (s: Seam) => chainSink(s) && (!_trustGate || providerWrite(s) || focusedWriter(s));
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
-        && (dist.has(s.id) || trustedDirect(s))
-        && (isStoreSink(s) || trustedDirect(s) || ((s as any).region?.direction ?? "down") === "down"))
+        && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
+        && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (rel(b) - rel(a)) || (_dist(b.id) - _dist(a.id)) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
@@ -508,8 +540,14 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // in the region, demoted.
     const alts = spineAlternates.filter((s) => !offSubject(s) && !_isTest(s.primary?.file) && !readerSet.has(s.id));
     if (!alts.length) return [];
+    // A DISTINCT-table sink is a genuinely OTHER outcome (private-app `members` — the tier culmination); an alternate that
+    // shares the CROWNED spine's table (`payments` again, reached from another file) is the same sink seen elsewhere,
+    // not a new answer. Float the distinct-table sinks first so the real second outcome is prominent, not buried
+    // under N same-table repeats. Stable within each group by the cands order (directSink → rel).
+    const _sameAsCrown = (s: Seam) => writtenTables.has(_tableOf(s));
+    const sorted = [...alts].sort((a, b) => (Number(_sameAsCrown(a)) - Number(_sameAsCrown(b))));
     return ["", "## Also reaches (other grounded sinks on this flow — repoint --intent to make one the spine)",
-      ...renderCapped(alts, EXEMPT_N, (s) => seamLine(s), "sink(s)")];
+      ...renderCapped(sorted, EXEMPT_N, (s) => seamLine(s), "sink(s)")];
   };
   // ALSO WRITES — the OTHER producers of a store boundary this flow writes: the table's alternate ENTRY POINTS
   // (a grep for the write can find these files, but not that they share THIS flow's table). Exempt from the region
