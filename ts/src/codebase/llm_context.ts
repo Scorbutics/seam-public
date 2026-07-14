@@ -391,22 +391,50 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // real line (>0) so top-level file-refs (line 0) and pure type-refs drop out; order by line = execution order.
   const _CALL_KINDS = new Set(["call", "import", "invokes", "dispatch"]);
   const _TYPE_KINDS = new Set(["interface", "type", "enum", "type-alias"]);   // pure type-refs — not execution steps
-  const pipeline: { id: string; line: number }[] = [];
-  if (process.env.SEAM_PIPELINE === "1") {
+  // MECHANISM (default-ON; opt-out SEAM_MECHANISM=0; SEAM_PIPELINE=1 kept as a back-compat alias). The anchor's
+  // downstream CALL fan — the operations it drives — flow-ordered (depth, then call-site line = execution order),
+  // each annotated with the grounded sink it reaches (if any). The SINK deepening surfaces the DATA outcomes (spine
+  // + also-reaches); this surfaces the CALL operations that ARE the mechanism yet write NO db-table themselves: cal
+  // booking's `EventManager.create` / `handlePayment` / `scheduleWorkflows` fan, which a thin anchor→one-sink spine
+  // buries. TRANSITIVE (bounded depth) over call edges carrying a real use-line, so a CLASS anchor's method-body
+  // calls are reached too; TYPE/FILE refs (line 0), boundary/sink nodes (shown as sinks elsewhere), and nodes
+  // already ON the crowned spine path drop out. Purely structural — the anchor's resolved calls, intent-free.
+  const _mechOn = process.env.SEAM_MECHANISM !== "0" || process.env.SEAM_PIPELINE === "1";
+  const _mechDepth = Math.max(1, parseInt(process.env.SEAM_MECHANISM_DEPTH ?? "3", 10) || 3);
+  const _PRODUCE_MECH = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert", "db-read", "service-read", "consume", "read"]);
+  const pipeline: { id: string; line: number; depth: number; sink?: string }[] = [];
+  if (_mechOn) {
     const anchorNode = String(model.anchor);
-    const seen = new Set<string>([anchorNode]);
-    const cands: { id: string; line: number }[] = [];
-    for (const e of (model.edges ?? []) as any[]) {
-      if (!_CALL_KINDS.has(e.kind) || String(e.from) !== anchorNode || !(Number(e.line) > 0)) continue;
-      const to = String(e.to);
-      if (seen.has(to) || !label.has(to) || _TYPE_KINDS.has(kindOfId.get(to) ?? "")) continue;   // resolved, non-TYPE callee
-      seen.add(to);
-      cands.push({ id: to, line: Number(e.line) });
+    const edges = (model.edges ?? []) as any[];
+    const dep = new Map<string, number>([[anchorNode, 0]]);
+    const callLine = new Map<string, number>();   // the call-site line of the FIRST edge that reached each step
+    for (const q = [anchorNode]; q.length; ) {
+      const c = q.shift()!; const d = dep.get(c)!;
+      if (d >= _mechDepth) continue;
+      for (const e of edges) {
+        if (String(e.from) !== c || !_CALL_KINDS.has(e.kind)) continue;
+        // a `call`/`invokes`/`dispatch` IS an execution step even without a call-site line (the dep-graph tags a
+        // line on a USED import but not always on a resolved call — private-app runPhaseEnrich→provisionOrUpdateMember);
+        // an `import` needs a real use-line to count (a bare/line-0 import is the statement, not a call).
+        if (e.kind === "import" && !(Number(e.line) > 0)) continue;
+        const to = String(e.to);
+        if (dep.has(to) || !label.has(to) || _TYPE_KINDS.has(kindOfId.get(to) ?? "")) continue;   // resolved, non-TYPE, unseen
+        dep.set(to, d + 1); callLine.set(to, Number(e.line) > 0 ? Number(e.line) : 0); q.push(to);
+      }
     }
-    cands.sort((a, b) => a.line - b.line);   // FLOW ORDER: the anchor's calls in source (execution) order
-    pipeline.push(...cands);
+    const sinkOf = (id: string): string | undefined => {
+      for (const e of edges) if (_PRODUCE_MECH.has(e.kind) && String(e.from) === id) { const t = label.get(String(e.to)); if (t) return t; }
+      return undefined;
+    };
+    const steps = [...dep.keys()].filter((id) => id !== anchorNode
+      && !_STORE_KINDS.has(kindOfId.get(id) ?? ""));         // a sink node itself → shown in spine/also-reaches, not
+      // NB: exclude by NODE, not by seam — the anchor's seam is often a merged BLOB holding its own delegations
+      // (private-app runPhaseEnrich's seam also contains provisionOrUpdateMember/applyMemberSubscription); a seam-level
+      // spine exclusion would drop the very operations that ARE the mechanism.
+    steps.sort((a, b) => (dep.get(a)! - dep.get(b)!) || (callLine.get(a)! - callLine.get(b)!) || (a < b ? -1 : 1));
+    pipeline.push(...steps.map((id) => ({ id, line: callLine.get(id) ?? 0, depth: dep.get(id)!, sink: sinkOf(id) })));
   }
-  const showPipeline = pipeline.length >= 2;   // a genuine sequence, not a lone delegate the spine already shows
+  const showPipeline = pipeline.length >= 2;   // a genuine multi-step mechanism, not a lone delegate the spine shows
 
   // SUBJECT-CONTINUITY (default-ON; opt-OUT SEAM_SUBJECT_DIM=0) — the anchor's module writes HUB tables (private-app: `members`), so its
   // members-coupling drags in UNRELATED modules that merely share that hub (support-ticket→`bug_reports`,
@@ -569,15 +597,16 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return ["", "## Also read (where this flow's data is consumed — the display/read side)",
       ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "consumer(s)")];
   };
-  // PIPELINE — the anchor's sequential downstream steps in call order (the mechanism a thin direct-writer spine
-  // buries). Numbered = flow order; each carries its call site in the anchor (anchorFile:line ──▶ step).
+  // MECHANISM — the anchor's downstream operations in call/execution order (the CALL fan a thin one-sink spine
+  // buries: EventManager.create / handlePayment / scheduleWorkflows). Numbered = flow order; each carries its call
+  // site in the anchor and the grounded sink it reaches (` ──▶ table`) when it persists/reads one.
   const _anchorFileBase = (fileOfId.get(String(model.anchor)) ?? "").split("/").pop();
   const pipelineSection = (): string[] => {
     if (!showPipeline) return [];
-    return ["", "## Pipeline (the anchor's sequential steps, in call order)",
+    return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads)",
       ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
         const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
-        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
+        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
       }, "step(s)")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right

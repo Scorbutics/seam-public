@@ -198,7 +198,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       blindspots: [],
     };
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(out).toContain("## Spine");
     expect(spine).toContain("UserEntity");                              // the db-table sink IS the outcome (rescued from tier=off)
     expect(spine).toContain("UserService");                            // the intermediate mechanism is on the path
@@ -459,7 +459,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       blindspots: [],
     };
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("api/UserController.java:41 ──call──▶ persist");    // the caller call-site line, not a label
     expect(spine).toContain("svc/UserService.java:23 ──db-write──▶ UserEntity"); // the write site + the table it hits
   });
@@ -485,7 +485,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
     if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches"));
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserEntity");                    // the intent-relevant sink is the spine outcome…
     expect(spine).not.toContain("AuditEntity");               // …NOT the deeper, off-intent audit sink
     expect(out).toContain("## Also reaches");
@@ -514,7 +514,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       blindspots: [],
     };
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches") > -1 ? out.indexOf("## Also reaches") : out.indexOf("## Region"));
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserEntity");        // the anchor's DIRECT write is the outcome…
     expect(spine).not.toContain("AuditEntity");   // …not the higher-relevance peripheral sink
     expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");   // which is surfaced as an alternate
@@ -546,7 +546,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is the member tier updated" });
     if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
     const alsoIdx = out.indexOf("## Also reaches");
-    const spine = out.slice(out.indexOf("## Spine"), alsoIdx > -1 ? alsoIdx : out.indexOf("## Region"));
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("payments");            // the anchor's OWN write stays crowned (precedence preserved)
     expect(alsoIdx).toBeGreaterThan(-1);
     expect(out.slice(alsoIdx)).toContain("members");   // the 2-hop deep culmination is ADMITTED as an alternate (not lost)
@@ -576,7 +576,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
     if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
-    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Also reaches") > -1 ? out.indexOf("## Also reaches") : out.indexOf("## Region"));
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserEntity");        // svc (the anchor's sole delegate) writes it → borrowed as the direct sink
     expect(spine).not.toContain("AuditEntity");   // written by audit, TWO hops from ctrl (not a direct callee) → not borrowed; stays an alternate
     expect(out.slice(out.indexOf("## Also reaches"))).toContain("AuditEntity");
@@ -665,9 +665,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).not.toContain("## Also writes");
   });
 
-  // PIPELINE (gated SEAM_PIPELINE) — a direct-writer orchestrator's spine collapses to anchor→sink and buries the
-  // mechanism; surface the anchor's own sequential delegation calls, flow-ordered by call-site line, types excluded.
-  test("pipeline: the anchor's sequential delegations, in call order, types dropped (gated)", () => {
+  // MECHANISM (default-ON) — a direct-writer orchestrator's spine collapses to anchor→sink and buries the
+  // mechanism; surface the anchor's downstream call fan, flow-ordered by call-site line, types excluded.
+  test("mechanism: the anchor's sequential delegations, in call order, types dropped", () => {
     const prev = process.env.SEAM_PIPELINE; process.env.SEAM_PIPELINE = "1";
     try {
       const model = {
@@ -686,14 +686,48 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
         blindspots: [],
       };
       const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is it processed" });
-      const pipe = out.slice(out.indexOf("## Pipeline"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
-      expect(out).toContain("## Pipeline");
+      const pipe = out.slice(out.indexOf("## Mechanism"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+      expect(out).toContain("## Mechanism");
       expect(pipe).not.toContain("MyType");   // a pure type-ref is not an execution step
       expect(pipe.indexOf("runPhase1")).toBeGreaterThan(-1);
       expect(pipe.indexOf("runPhase1")).toBeLessThan(pipe.indexOf("runPhase2"));   // flow order by call-site line…
       expect(pipe.indexOf("runPhase2")).toBeLessThan(pipe.indexOf("runPhase3"));   // …not edge-list order
       expect(pipe).toContain("called at orch.ts:140");   // the call site in the anchor
     } finally { if (prev === undefined) delete process.env.SEAM_PIPELINE; else process.env.SEAM_PIPELINE = prev; }
+  });
+
+  // MECHANISM default-on + sink annotation + TRANSITIVE reach — the anchor writes a bookkeeping table (crowned
+  // spine), while the real work is a downstream CALL fan (cal booking: EventManager.create / handlePayment /
+  // scheduleWorkflows). The Mechanism section surfaces those operations by DEFAULT (no env), annotates the sink each
+  // reaches (` ──▶ payment`), and reaches a 2-hop-deep step (persistRem) a one-hop scan would miss.
+  test("mechanism (default-on): downstream call fan with per-step sinks, transitive, spine-path excluded", () => {
+    const model = {
+      mode: "codebase", anchor: "h", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a booking created and its side effects run", seams: [
+        { id: "hs", label: "handler", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/handler.ts", line: 1, symbol: "handler" }, hunks: [{ id: "h", file: "svc/handler.ts", start: 1, role: "core", label: "handler" }] },
+        { id: "ss", label: "state", tier: "off", relevance: 0.4, region: { shell: 1, direction: "down" }, primary: { file: "svc/handler.ts", line: 88, symbol: "state" }, hunks: [{ id: "st", file: "svc/handler.ts", start: 88, role: "environment", label: "state", kind: "db-table" }] },
+        { id: "es", label: "eventCreate", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/events.ts", line: 3, symbol: "eventCreate" }, hunks: [{ id: "ev", file: "svc/events.ts", start: 3, role: "core", label: "eventCreate" }] },
+        { id: "ps", label: "payCharge", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/pay.ts", line: 5, symbol: "payCharge" }, hunks: [{ id: "pc", file: "svc/pay.ts", start: 5, role: "core", label: "payCharge" }] },
+        { id: "pay", label: "payment", tier: "off", region: { shell: 2, direction: "down" }, primary: { file: "db/pay.ts", line: 1, symbol: "payment" }, hunks: [{ id: "payh", file: "db/pay.ts", start: 1, role: "environment", label: "payment", kind: "db-table" }] },
+        { id: "scs", label: "schedule", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/wf.ts", line: 9, symbol: "schedule" }, hunks: [{ id: "sc", file: "svc/wf.ts", start: 9, role: "core", label: "schedule" }] },
+        { id: "prs", label: "persistRem", tier: "supporting", region: { shell: 2, direction: "down" }, primary: { file: "svc/wf.ts", line: 40, symbol: "persistRem" }, hunks: [{ id: "pr", file: "svc/wf.ts", start: 40, role: "link", label: "persistRem" }] },
+        { id: "rs", label: "reminder", tier: "off", region: { shell: 3, direction: "down" }, primary: { file: "db/rem.ts", line: 1, symbol: "reminder" }, hunks: [{ id: "remh", file: "db/rem.ts", start: 1, role: "environment", label: "reminder", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "h", to: "st", kind: "db-write", line: 88 },              // anchor's OWN bookkeeping write → crowned spine
+        { from: "h", to: "ev", kind: "call", line: 10 },                        // a pure call op (no sink)
+        { from: "h", to: "pc", kind: "call", line: 20 }, { from: "pc", to: "payh", kind: "db-write", line: 6 },   // op → payment
+        { from: "h", to: "sc", kind: "call", line: 30 }, { from: "sc", to: "pr", kind: "call", line: 12 }, { from: "pr", to: "remh", kind: "db-write", line: 41 }],  // 2-hop → reminder
+      blindspots: [],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a booking created and its side effects run" });
+    const mi = out.indexOf("## Mechanism");
+    expect(mi).toBeGreaterThan(-1);                                              // DEFAULT-ON, no env
+    const mech = out.slice(mi, out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
+    expect(mech).toContain("eventCreate");                                       // the call fan the one-sink spine buried
+    expect(mech).toMatch(/payCharge.*──▶ payment/);                              // a step annotated with the sink it persists
+    expect(mech).toContain("persistRem");                                        // a 2-hop-deep step (transitive reach)
+    expect(mech).not.toContain("1. state");                                      // a sink node is not itself a mechanism step
+    expect(mech.indexOf("eventCreate")).toBeLessThan(mech.indexOf("persistRem")); // depth order: depth-1 ops before depth-2
   });
 
   // ALSO READ (gated SEAM_SUBJECT_READERS) — the symmetric of "## Also writes": an external file that READS the
