@@ -614,6 +614,28 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("bookingSeat");    // …not the later FK child, despite its higher embedding relevance
   });
 
+  // HUB-CROSSING EXCLUSION — a shared-key CROSSING to a HUB table (`clients`, flagged by a shared-key-fanout
+  // blindspot) must NOT crown the spine: it's a coincidental common key, not the flow's culmination. With no real
+  // resolved write present, the spine goes honestly inferred rather than confidently crowning the `clients` hub.
+  test("a hub-crossing (shared-key fanout) is never crowned — spine stays honest, not a coincidental hub bleed", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how does assigning a realm role to a user persist the mapping", seams: [
+        { id: "a", label: "addRealmRoleMappings", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/RoleMapperResource.java", line: 1, symbol: "addRealmRoleMappings" }, hunks: [{ id: "cb", file: "svc/RoleMapperResource.java", start: 1, role: "core", label: "addRealmRoleMappings" }] },
+        // a shared-key CROSSING to the `clients` hub table — coincidental, must not crown
+        { id: "cl", label: "clients", tier: "supporting", proposedBy: "crossing", region: { shell: 2, direction: "down" }, primary: { file: "storage/DefaultExportImportManager.java", line: 1076, symbol: "clients" }, hunks: [{ id: "clh", file: "storage/DefaultExportImportManager.java", start: 1076, role: "environment", label: "clients", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "cb", to: "clh", kind: "db-write", line: 1076 }],
+      blindspots: [{ node: "clh", mechanism: "shared-key-fanout", evidence: "'clients' (db-table) is read in 26 files (showing 1 — infra)", candidates: [] }],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does assigning a realm role to a user persist the mapping" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).not.toContain("──▶ clients");   // the coincidental `clients` hub crossing is NOT crowned…
+    expect(spine).toMatch(/inferred|no grounded boundary|partial/);   // …the spine stays honest instead
+  });
+
   // DEFER-TO-DI-WALL — the only grounded sink reached is a SERVICE-STATE crossing (`session`, plumbing), and the
   // real persist is behind a DI wall (an interface-multiple-impls blindspot whose impls PERSIST). The spine must NOT
   // crown the misleading `session`; it terminates at the wall and names the persisting candidate (keycloak createUser

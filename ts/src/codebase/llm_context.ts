@@ -307,7 +307,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // `session` service-state crossing even when the session sorts earlier by id. Then the own-write/provider/
     // subject/depth/write-order tiers break ties AMONG equal-rank sinks.
     const _sinkRank = (s: Seam) => { const k = String((primaryHunk(s) as any)?.kind ?? ""); return (_STORE_KINDS.has(k) && k !== "service") ? 2 : k === "service" ? 1 : 0; };
-    const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam
+    // HUB-CROSSING EXCLUSION — a shared-key CROSSING (proposedBy "crossing") to a HUB table (a coincidental common
+    // key the footprint merely touches — keycloak `clients` read in 26 files, `session` in 750, flagged by a
+    // `shared-key-fanout` blindspot) is NOT the flow's culmination. It out-ranked the real call-graph-resolved
+    // `UserRoleMappingEntity` write and, when that write dropped from the (non-deterministic) footprint, confidently
+    // crowned `clients` — an unrelated import/export path. NEVER crown a hub crossing: the spine then crowns a REAL
+    // write if one exists, else falls to an honest inferred/frontier terminus (a coincidental hub bleed is worse than
+    // "no grounded boundary"). A NON-hub crossing (a specific shared key — the co-producer / data-flow rung) is kept.
+    const _hubTables = new Set<string>();
+    for (const b of (model.blindspots ?? []) as any[]) if (b.mechanism === "shared-key-fanout") { const t = String(b.evidence ?? "").match(/'([^']+)'/)?.[1]; if (t) _hubTables.add(t); }
+    const _isHubCrossing = (s: Seam) => (s as any).proposedBy === "crossing" && _hubTables.has(_tblOf(s));
+    const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam && !_isHubCrossing(s)
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
         && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
       .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
