@@ -289,6 +289,38 @@ async function _fieldTypeIn(repo: string, file: string, field: string): Promise<
   return { type: typeName, file: tfile };
 }
 
+// kc_3 (tree-sitter, NO LSP / node_modules): resolve an UNTYPED base var to its type by following a PROVIDER-HOOK
+// binding — `const { base } = useHook()`. The base is a field of the hook's return, and by the provider-hook
+// convention the field's TYPE is declared in the hook's OWN module (keycloak: `useAdminClient` and
+// `AdminClientProps.adminClient: KeycloakAdminClient` co-located in admin-client.tsx). So: find the binding, resolve
+// the hook to its module (the anchor's own import), and read the field's explicit annotation there. GROUNDED — the
+// discriminating info (`createNamedContext<AdminClientProps>` + the `adminClient: KeycloakAdminClient` field) is
+// EXPLICIT and IN-REPO, so tree-sitter reads it deterministically without inferring through React's `Context<T>`.
+async function _resolveHookBaseType(s: DepScan, base: string): Promise<{ type: string; file: string | null } | null> {
+  if (!s.actx) return null;
+  const ctx = s.actx;
+  const rd = _read(s.repo, s.anchorFile); if (!rd) return null;
+  for (const vd of ctx.collect(ctx.root, (k: string) => k === "variable_declarator")) {
+    // does this declarator bind `base`? `const base = …` (identifier name) or `const { base } = …` (object pattern)
+    const nameN = (vd as any).childForFieldName?.("name");
+    if (!nameN) continue;
+    const binds = (nameN.type.includes("identifier") && ctx.text(nameN) === base)
+      || ctx.collect(nameN, (k: string) => k.includes("shorthand_property_identifier") || k === "property_identifier").some((p: any) => ctx.text(p) === base);
+    if (!binds) continue;
+    const value = (vd as any).childForFieldName?.("value");
+    if (!value || !_CALL.has(value.type)) continue;                                   // initialised by a CALL (the hook)
+    const callee = value.childForFieldName?.("function") ?? ctx.children(value).find((x: any) => x.type.includes("identifier"));
+    const hook = callee && callee.type.includes("identifier") ? ctx.text(callee) : null;
+    if (!hook) continue;
+    let hookFile: string | null = null;                                              // resolve the hook via the anchor's imports
+    for (const ref of parse_imports(s.anchorFile, rd[0])) if (ref.name === hook) { const t = await _resolve_import(s.repo, s.anchorFile, ref); if (t && t[0]) { hookFile = t[0]; break; } }
+    if (!hookFile) continue;
+    const ft = await _fieldTypeIn(s.repo, hookFile, base);                            // the field's type in the hook's module
+    if (ft?.type) return ft;
+  }
+  return null;
+}
+
 async function _qualifiedCalleePass(s: DepScan): Promise<void> {
   if (process.env.SEAM_QUALIFIED_CALLS === "0" || !s.actx) return;
   const anchor = s.aunits.find((u) => u[0] === s.symbol);
@@ -351,6 +383,10 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
         const method = chain[chain.length - 1], recvChain = chain.slice(0, -1);
         let curType: string | null = declType.get(recvChain[0]) ?? (preresolved.has(recvChain[0]) ? recvChain[0] : null);
         let curFile: string | null = curType ? (await receiverClassFile(curType) ?? preresolved.get(curType) ?? null) : null;
+        if (!curType) {   // UNTYPED base (e.g. destructured from a provider hook) — resolve it via the hook's module
+          const hb = await _resolveHookBaseType(s, recvChain[0]);
+          if (hb?.type && hb.file) { curType = hb.type; curFile = hb.file; }
+        }
         for (let i = 1; i < recvChain.length && curType && curFile; i++) {
           const ft = await _fieldTypeIn(s.repo, curFile, recvChain[i]);
           curType = ft?.type ?? null; curFile = ft ? (ft.file ?? preresolved.get(ft.type) ?? null) : null;

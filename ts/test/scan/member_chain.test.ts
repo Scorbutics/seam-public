@@ -22,6 +22,10 @@ beforeAll(() => {
   // an UNTYPED base (destructured from a hook, no annotation) — the chain BLOCKS at the base (the known limit)
   w("src/useClient.ts", "import { KeycloakAdminClient } from './Client';\nexport const useClient = () => ({ adminClient: new KeycloakAdminClient() });\n");
   w("src/Hooked.ts", "import { useClient } from './useClient';\nexport function save() {\n  const { adminClient } = useClient();\n  return adminClient.users.create();\n}\n");
+  // a PROVIDER-HOOK base whose module declares the field's TYPE (the kc_3 shape: useAdminClient + AdminClientProps.
+  // adminClient: KeycloakAdminClient) — the chain resolves via the hook's module, deps-free (relative imports only).
+  w("src/adminClient.tsx", "import { KeycloakAdminClient } from './Client';\nexport type AdminClientProps = { adminClient: KeycloakAdminClient };\nexport const useAdminClient = () => getCtx();\n");
+  w("src/Provider.ts", "import { useAdminClient } from './adminClient';\nexport function save() {\n  const { adminClient } = useAdminClient();\n  return adminClient.users.create();\n}\n");
 });
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
@@ -42,5 +46,14 @@ describe("chained member-call resolution (a.b.method)", () => {
     // not a guess). This is the exact wall kc_3 hits; resolving it needs the hook-return type (LSP / a
     // React-context walk), which this structural pass deliberately does not fabricate.
     expect(g.nodes.some((n: any) => n.symbol === "create" && (n.file || "").endsWith("Users.ts"))).toBe(false);
+  });
+
+  test("a PROVIDER-HOOK base resolves via the hook's module (typed props field), deps-free — kc_3 shape", async () => {
+    if (!available()) return;
+    const g = await build_dependency_graph(REPO, "src/Provider.ts", "save");
+    // `const { adminClient } = useAdminClient()` → the hook's module declares `AdminClientProps.adminClient:
+    // KeycloakAdminClient` → the chain resolves through it to Users.create — no LSP, no node_modules, all in-repo
+    // relative imports. (The remaining kc_3 gap on the real repo is the WORKSPACE-package import, not this.)
+    expect(g.nodes.some((n: any) => n.symbol === "create" && (n.file || "").endsWith("Users.ts"))).toBe(true);
   });
 });
