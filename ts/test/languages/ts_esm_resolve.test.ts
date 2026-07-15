@@ -18,6 +18,11 @@ beforeAll(() => {
   w("src/c.ts", "export const c = 2;\n");
   w("src/d.ts", "export const d = 3;\n");
   w("src/real.js", "export const real = 4;\n");   // a genuine .js file (must NOT be shadowed)
+  // a WORKSPACE PACKAGE whose package.json entry points at BUILT output (lib/) absent in a source checkout —
+  // must resolve to the SOURCE mirror (src/index.ts).
+  w("libs/admin-client/package.json", JSON.stringify({ name: "@scope/admin-client", main: "lib/index.js", types: "lib/index.d.ts" }));
+  w("libs/admin-client/src/index.ts", "export class Client {}\n");
+  w("app/consumer.ts", "import Client from \"@scope/admin-client\";\n");
 });
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
@@ -27,6 +32,10 @@ describe("NodeNext .js-style ESM resolution", () => {
   });
   test("extensionless import still resolves (unchanged)", () => {
     expect(norm(floor_resolve(REPO, "src/a.ts", "./b"))).toBe("src/b.ts");
+  });
+
+  test("a workspace package whose entry points at built output resolves to its SOURCE (lib/index -> src/index)", () => {
+    expect(norm(floor_resolve(REPO, "app/consumer.ts", "@scope/admin-client"))).toBe("libs/admin-client/src/index.ts");
   });
   test("a genuine `.js` file is NOT shadowed by the strip", () => {
     expect(norm(floor_resolve(REPO, "src/a.ts", "./real.js"))).toBe("src/real.js");
