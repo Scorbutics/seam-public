@@ -5,7 +5,7 @@
 import { basename, join } from "node:path";
 import { statSync } from "node:fs";
 import { _resolve_import, _resolve } from "../../../core/resolve/consumers.js";
-import { parse_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
+import { parse_imports, default_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
 import { normpath } from "../../../core/resolve/walk.js";
 import { resolveFileRef } from "../../../core/resolve/file_ref.js";
 import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME, _INSTANCE_BINDER, _TYPED_DECL } from "../../atoms.js";
@@ -267,6 +267,51 @@ function _qualCallMemberChain(ctx: Ctx, c: any): string[] | null {
   return parts.length >= 3 ? parts : null;   // need base + ≥1 field + method to be a CHAIN (2-part is the plain-qualified case)
 }
 
+// Resolve a type/symbol NAME to the file that DEFINES it (a class/interface), following the resolution graph:
+// same-file def → a NAMED import/re-export → a DEFAULT import (→ the module's default export) → a barrel re-export.
+// Deps-free (tree-sitter + the deterministic import resolver + the source's own `export`s). Depth-capped against
+// import cycles. Closes kc_3's last hops: `KeycloakAdminClient` is a DEFAULT import (`import X from "@pkg"`) and the
+// package entry is a BARREL (`export default KeycloakAdminClient` re-exporting the class from `./client`).
+async function _resolveTypeDefFile(repo: string, fromFile: string, typeName: string, depth = 0): Promise<string | null> {
+  if (depth > 6) return null;
+  const rd = _read(repo, fromFile); if (!rd) return null;
+  const ctx = await makeCtx(rd[0], rd[1]); if (!ctx) return null;
+  if (_named_units(ctx).some((u) => u[0] === typeName && (u[1] === "class" || u[1] === "interface"))) return fromFile;   // defined here
+  for (const ref of parse_imports(fromFile, rd[0])) if (ref.local === typeName || ref.name === typeName) {   // named import / re-export
+    const t = await _resolve_import(repo, fromFile, ref);
+    if (t && t[0]) { const d = await _resolveTypeDefFile(repo, t[0], ref.name, depth + 1); if (d) return d; }
+  }
+  for (const di of default_imports(fromFile, rd[0])) if (di.local === typeName) {   // `import typeName from "m"` → m's DEFAULT export
+    const t = await _resolve_import(repo, fromFile, { name: di.local, local: di.local, source: di.source, line: di.line ?? 0, col: 0 });
+    if (t && t[0]) { const d = await _resolveDefaultExportDef(repo, t[0], depth + 1); if (d) return d; }
+  }
+  return null;
+}
+// The file that DEFINES a module's DEFAULT export: `export default class X {}` (here) / `export default X` /
+// `export { X as default }` (→ resolve the NAME X, which may itself be a named import from `./client`).
+async function _resolveDefaultExportDef(repo: string, moduleFile: string, depth: number): Promise<string | null> {
+  if (depth > 6) return null;
+  const rd = _read(repo, moduleFile); if (!rd) return null;
+  const text = rd[0];
+  if (/export\s+default\s+(?:async\s+)?(?:function|class)\s+[A-Za-z_$][\w$]*/.test(text)) return moduleFile;   // default def is HERE
+  const m = text.match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/) ?? text.match(/export\s*\{[^}]*\b([A-Za-z_$][\w$]*)\s+as\s+default\b/);
+  return m ? _resolveTypeDefFile(repo, moduleFile, m[1], depth + 1) : null;
+}
+
+// A class MEMBER (method OR an arrow/function-VALUED field) named `member` in `file` → its [lo, hi] span. The
+// chain's final hop needs this because SDK builders declare their operations as FIELDS (`public create =
+// this.makeRequest({method:"POST",…})`), which `_named_units` (method declarations only) doesn't capture — so
+// `users.create` would resolve the type but never place the callable. Scoped to the chain (a fallback only when the
+// unit lookup already missed), so it can't perturb the core unit stream / footprints. Grounded (a real member node).
+async function _classMemberLine(repo: string, file: string, member: string): Promise<[number, number] | null> {
+  const rd = _read(repo, file); if (!rd) return null;
+  const ctx = await makeCtx(rd[0], rd[1]); if (!ctx) return null;
+  for (const n of ctx.collect(ctx.root, (k: string) => k === "method_definition" || k.endsWith("field_definition") || k === "property_signature")) {
+    if (_name_of(ctx, n) === member) { const sp = ctx.span(n); return [sp[0], sp[1]]; }
+  }
+  return null;
+}
+
 // SPIKE (kc_3): a FIELD's declared type inside a class file — `public users: Users` (typed member) — returning the
 // bare type NAME and the FILE that type resolves to (same-file def, else an import in this file). Grounded (an
 // explicit annotation + the deterministic import resolver), no inference. The `new Type()` construction path
@@ -282,11 +327,8 @@ async function _fieldTypeIn(repo: string, file: string, field: string): Promise<
     if (tn) { const t = declBase(ctx.text(tn)); if (t) { typeName = t; break; } }
   }
   if (!typeName) return null;
-  // resolve the type NAME to its file — same-file class def, else an `import { Type } from …` in this file
-  let tfile: string | null = null;
-  if (_named_units(ctx).some((u) => u[0] === typeName && (u[1] === "class" || u[1] === "interface"))) tfile = file;
-  else for (const ref of parse_imports(file, rd[0])) if (ref.name === typeName) { const t = await _resolve_import(repo, file, ref); if (t && t[0]) { tfile = t[0]; break; } }
-  return { type: typeName, file: tfile };
+  // resolve the type NAME to the file that DEFINES it — same-file, named/default import, or barrel re-export
+  return { type: typeName, file: await _resolveTypeDefFile(repo, file, typeName) };
 }
 
 // kc_3 (tree-sitter, NO LSP / node_modules): resolve an UNTYPED base var to its type by following a PROVIDER-HOOK
@@ -393,9 +435,10 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
         }
         if (curType && curFile && !s.seen.has(`${method} ${curFile}`)) {
           const defu = (await unitsOf(curFile)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
-          if (defu) {
+          const rng = defu ? [defu[2], defu[3]] : (await _classMemberLine(s.repo, curFile, method));   // method decl, else an arrow-valued FIELD
+          if (rng) {
             s.seen.add(`${method} ${curFile}`); s.counter += 1; const did = `d${s.counter}`;
-            s.nodes.push({ id: did, symbol: method, kind: defu[1], file: curFile, range: [defu[2], defu[3]], enclosing: recvChain.join("."), complexity: Math.max(1, defu[3] - defu[2] + 1) });
+            s.nodes.push({ id: did, symbol: method, kind: defu?.[1] ?? "method", file: curFile, range: [rng[0], rng[1]], enclosing: recvChain.join("."), complexity: Math.max(1, rng[1] - rng[0] + 1) });
             s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_PARTIAL", line: cl });
           }
         }

@@ -26,6 +26,12 @@ beforeAll(() => {
   // adminClient: KeycloakAdminClient) — the chain resolves via the hook's module, deps-free (relative imports only).
   w("src/adminClient.tsx", "import { KeycloakAdminClient } from './Client';\nexport type AdminClientProps = { adminClient: KeycloakAdminClient };\nexport const useAdminClient = () => getCtx();\n");
   w("src/Provider.ts", "import { useAdminClient } from './adminClient';\nexport function save() {\n  const { adminClient } = useAdminClient();\n  return adminClient.users.create();\n}\n");
+  // the FULL kc_3 shape: base type is DEFAULT-imported THROUGH A BARREL, and the final op is an arrow-VALUED FIELD.
+  w("d/Users.ts", "export class Users {\n  create = () => fetch('/admin/users', { method: 'POST' });\n}\n");
+  w("d/Api.ts", "import { Users } from './Users';\nexport class ApiClient {\n  public users: Users = new Users();\n}\n");
+  w("d/index.ts", "import { ApiClient } from './Api';\nexport default ApiClient;\n");   // barrel: default-exports the class
+  w("d/hook.tsx", "import ApiClient from './index';\nexport type Props = { adminClient: ApiClient };\nexport const useApi = () => getCtx();\n");
+  w("d/Consumer.ts", "import { useApi } from './hook';\nexport function save() {\n  const { adminClient } = useApi();\n  return adminClient.users.create();\n}\n");
 });
 afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
@@ -55,5 +61,14 @@ describe("chained member-call resolution (a.b.method)", () => {
     // KeycloakAdminClient` → the chain resolves through it to Users.create — no LSP, no node_modules, all in-repo
     // relative imports. (The remaining kc_3 gap on the real repo is the WORKSPACE-package import, not this.)
     expect(g.nodes.some((n: any) => n.symbol === "create" && (n.file || "").endsWith("Users.ts"))).toBe(true);
+  });
+
+  test("the FULL kc_3 chain resolves deps-free: hook base -> default-import -> barrel -> typed field -> arrow-valued method", async () => {
+    if (!available()) return;
+    const g = await build_dependency_graph(REPO, "d/Consumer.ts", "save");
+    // `const { adminClient } = useApi()` → hook props `adminClient: ApiClient` (a DEFAULT export re-exported by the
+    // barrel `d/index.ts` from `d/Api.ts`) → `.users: Users` → `.create` (an arrow-VALUED field, not a method decl).
+    // Every hop is explicit in-repo source: no LSP, no node_modules. This is exactly what kc_3 needs on the real repo.
+    expect(g.nodes.some((n: any) => n.symbol === "create" && (n.file || "").endsWith("d/Users.ts"))).toBe(true);
   });
 });
