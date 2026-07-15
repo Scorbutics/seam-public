@@ -19,7 +19,7 @@ const model = () => ({
     seam("fetch", "supporting", "lib/services/payments.ts", "fetchPayments"),
     seam("proc", "supporting", "backend/process-payment/index.ts", "processPayment"),
     seam("sess", "supporting", "lib/services/sessions.ts", "listSessions"),
-    seam("mem", "off", "lib/services/members.ts", "fetchMembers"),
+    seam("mem", "off", "lib/services/directory.ts", "loadDirectory"),
     seam("scor", "off", "lib/services/scoring.ts", "triggerScoring"),
   ] }],
   edges: [], frontier: [], blindspots: [], unresolved: [],
@@ -31,9 +31,9 @@ describe("subject fold — off-subject region seams collapse to a count", () => 
     expect(out).toContain("fetchPayments");                       // on-subject (payments.ts) — kept
     expect(out).toContain("processPayment");                      // on-subject (process-payment) — kept
     expect(out).not.toContain("listSessions");                    // off-subject (sessions) — folded away
-    expect(out).not.toContain("fetchMembers");                    // off-subject (members) — folded away
+    expect(out).not.toContain("loadDirectory");                   // off-subject (directory) — folded away
     expect(out).toMatch(/off-subject region seam\(s\) folded over/);
-    expect(out).toMatch(/sessions|members|scoring/);              // the fold names the folded subjects
+    expect(out).toMatch(/sessions|directory|scoring/);            // the fold names the folded subjects
   });
 
   test("opts out under SEAM_SUBJECT_FOLD=0 — the raw region returns (deterministic escape hatch)", () => {

@@ -534,7 +534,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // expanded. No embeddings in the fold decision; recall-safe (a count + the subjects, never a drop). Opt out:
   // SEAM_SUBJECT_FOLD=0. This extends the existing hub-key roll-up (which folds by REPEATED label) to the far more
   // common case: DISTINCT off-subject routes that each appear once but share nothing with the anchor's domain.
-  const _SUBJ_GEN = new Set(["api", "admin", "functions", "function", "dashboard", "app", "apps", "src", "lib", "libs", "services", "service", "components", "component", "pages", "page", "index", "route", "routes", "resources", "resource", "rest", "public", "internal", "common", "util", "utils", "http", "www", "get", "post", "put", "patch", "delete", "handler", "controller", "backend", "supabase", "shared", "server", "client", "core", "main", "java", "org", "keycloak", "tsx", "ts", "js", "jsx", "phase", "v1", "v2", "v3"]);
+  // ONLY syntax + framework-STRUCTURE words (dirs every web app has, HTTP verbs, file extensions) — NOT domain or
+  // action words. Repo-specific infra (`realms`, `org.keycloak`) is dropped STRUCTURALLY below (deepest-route +
+  // ubiquity), never by curating a list — so this stays language- and convention-agnostic.
+  const _SUBJ_GEN = new Set(["api", "admin", "functions", "function", "dashboard", "app", "apps", "src", "lib", "libs", "services", "service", "components", "component", "pages", "page", "index", "route", "routes", "resources", "resource", "rest", "public", "internal", "common", "util", "utils", "http", "www", "get", "post", "put", "patch", "delete", "head", "options", "handler", "controller", "backend", "supabase", "shared", "tsx", "ts", "js", "jsx", "java", "mjs", "cjs", "cts", "mts", "v1", "v2", "v3"]);
   const _subjToks = (raw: string): string[] => (raw || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[/._\-\s{}()*]+/).map((x) => x.trim()).filter((x) => x.length >= 3 && !_SUBJ_GEN.has(x) && !/^\d+$/.test(x));   // split camelCase too (bookingService → booking, service) so a symbol-only subject still matches
   const _subjMatch = (a: string, b: string): boolean => a === b || (a.length >= 4 && b.startsWith(a)) || (b.length >= 4 && a.startsWith(b));   // users~user, payments~payment
   const _lastTok = (raw: string): string | null => { const t = _subjToks(raw); return t.length ? t[t.length - 1] : null; };   // the DEEPEST/most-specific segment (…/realms/*/users → users, not the `realms` container)
@@ -546,34 +549,59 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const k = label.get(String(e.from)); if (!k) continue;
     (_crossKeyRaw.get(String(e.to)) ?? _crossKeyRaw.set(String(e.to), []).get(String(e.to))!).push(String(k));
   }
-  // a seam's FULL token set (generous — matches if the seam TOUCHES the subject anywhere: a `/users/*/role-mappings` sub-route still counts as `users`).
+  // FILE → module tokens: its immediate PARENT DIR + basename (drops the src/apps/admin container prefix; keeps
+  // process-payment/index.ts → payment, payments.ts → payments, user/CreateUser.tsx → user/create).
+  const _fileToks = (f?: string): string[] => { const p = (f || "").split("/"); const base = p.pop() ?? ""; return [..._subjToks(p.pop() ?? ""), ..._subjToks(base)]; };
+  // a seam's FULL token set (GENEROUS — matches if the seam TOUCHES the topic anywhere: a `/users/*/role-mappings`
+  // sub-route still counts as `users`). Used for the KEEP decision.
   const _seamSubj = (s: Seam): string[] => {
     const toks = new Set<string>();
     for (const w of ((s as any).writes ?? [])) for (const t of _subjToks(String(w))) toks.add(t);
     for (const t of _subjToks(_tableOf(s))) toks.add(t);
     for (const t of _subjToks(s.primary?.symbol ?? "")) toks.add(t);
-    for (const t of _subjToks(s.primary?.file ?? "")) toks.add(t);   // the seam's MODULE is its subject (payments.ts → payments), the symbol alone drops the file prefix
+    for (const t of _fileToks(s.primary?.file)) toks.add(t);
     for (const id of seamIds(s)) for (const k of (_crossKeyRaw.get(String(id)) ?? [])) for (const t of _subjToks(k)) toks.add(t);
     return [...toks];
   };
-  // a seam's PRIMARY (most-specific) subject — the DEEPEST route segment / table name. Used to seed the anchor's
-  // subject so a non-discriminating container segment (`realms`, `admin`) can't become the anchor subject and keep
-  // everything.
+  // a seam's PRIMARY (most-specific) subject — the DEEPEST route segment / table name (the resource, not the
+  // `realms` container). The fold LABEL.
   const _seamPrimary = (s: Seam): string | null => {
     for (const id of seamIds(s)) for (const k of (_crossKeyRaw.get(String(id)) ?? [])) { const t = _lastTok(k); if (t) return t; }
-    return _lastTok(_tableOf(s)) ?? _lastTok(s.primary?.file ?? "") ?? _lastTok(s.primary?.symbol ?? "");
+    return _lastTok(_tableOf(s)) ?? (_fileToks(s.primary?.file).at(-1) ?? null) ?? _lastTok(s.primary?.symbol ?? "");
   };
-  // the anchor's subjects — its module resource (…/user/, …/payments/) + the DEEPEST subject its own + spine seams touch.
-  const _anchorSubj = new Set<string>();
-  for (const t of subjectTables) { const tok = _lastTok(String(t)); if (tok) _anchorSubj.add(tok); }
-  { const tok = _lastTok(anchorDir); if (tok) _anchorSubj.add(tok); }
-  for (const s of seams) if (spineSet.has(s.id) || (s.primary?.file && anchorDir && s.primary.file.startsWith(anchorDir + "/"))) { const p = _seamPrimary(s); if (p) _anchorSubj.add(p); }
+  // MAIN-TOPIC by FREQUENCY CLUSTER (no keyword list → reliable across i18n / non-REST paths; ranking wrongness is
+  // the reading LLM's job). Each seam's TOPIC tokens: a ROUTE contributes only its DEEPEST segment (the resource — a
+  // container like `realms`/`admin` is never a leaf, so it's never the topic — a universal URL fact); symbols /
+  // tables / file contribute all tokens. The main topic = the anchor's own topic tokens (ALWAYS protected) ∪ the
+  // tokens SHARED by a meaningful fraction of the footprint, minus UBIQUITOUS infra (dropped by frequency, not a
+  // list). We NEVER fold a seam that touches the main topic — worst case it under-folds (keeps a little noise), it
+  // never hides the domain the map is about.
+  const _topicToks = (s: Seam): string[] => {
+    const toks = new Set<string>();
+    for (const id of seamIds(s)) for (const k of (_crossKeyRaw.get(String(id)) ?? [])) { const t = _lastTok(k); if (t) toks.add(t); }
+    for (const t of _subjToks(_tableOf(s))) toks.add(t);
+    for (const t of _subjToks(s.primary?.symbol ?? "")) toks.add(t);
+    for (const t of _fileToks(s.primary?.file)) toks.add(t);
+    for (const w of ((s as any).writes ?? [])) for (const t of _subjToks(String(w))) toks.add(t);
+    return [...toks];
+  };
+  const _N = Math.max(1, seams.length);
+  const _freq = new Map<string, number>();
+  for (const s of seams) for (const t of new Set(_topicToks(s))) _freq.set(t, (_freq.get(t) ?? 0) + 1);
+  const _isContainer = (t: string) => (_freq.get(t) ?? 0) > 0.6 * _N;   // in most seams → ubiquitous infra, dropped structurally
+  const _anchorSeamId2 = seamOfId.get(String(model.anchor));
+  const _mainTopic = new Set<string>();
+  for (const s of seams) if (s.id === _anchorSeamId2 || spineSet.has(s.id) || (s.primary?.file && anchorDir && s.primary.file.startsWith(anchorDir + "/")))
+    for (const t of _topicToks(s)) if (!_isContainer(t)) _mainTopic.add(t);   // the anchor's OWN topic — always protected
+  for (const w of subjectTables) for (const t of _subjToks(String(w))) if (!_isContainer(t)) _mainTopic.add(t);
+  const _MAIN_MIN = Math.max(2, Math.floor(0.08 * _N));                         // shared by ≥8% of the footprint = a real topic
+  for (const [t, n] of _freq) if (n >= _MAIN_MIN && !_isContainer(t)) _mainTopic.add(t);
   const _foldSubject = process.env.SEAM_SUBJECT_FOLD !== "0";
   const _offSubjTok = (s: Seam): string | null => {   // the subject to FOLD this seam under, or null to KEEP it
-    if (!_foldSubject || !_anchorSubj.size || spineSet.has(s.id)) return null;                       // never fold the spine
-    const toks = _seamSubj(s); if (!toks.length) return null;                                        // no subject to judge → keep
-    if (toks.some((t) => [..._anchorSubj].some((a) => _subjMatch(t, a)))) return null;               // shares the anchor's subject → keep
-    return _seamPrimary(s) ?? toks[0];                                                               // disjoint → fold under its most-specific subject (the resource/table, not the verb)
+    if (!_foldSubject || !_mainTopic.size || spineSet.has(s.id)) return null;                          // never fold the spine
+    const toks = _seamSubj(s); if (!toks.length) return null;                                          // no subject to judge → keep
+    if (toks.some((t) => [..._mainTopic].some((m) => _subjMatch(t, m)))) return null;                  // touches the MAIN TOPIC → keep (never fold the main topic)
+    return _seamPrimary(s) ?? toks[0];                                                                 // outside the topic → fold under its most-specific subject
   };
   const _foldLine = (folded: Seam[], noun: string): string => {
     const byS = new Map<string, number>();
