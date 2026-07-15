@@ -26,6 +26,7 @@ import { complement_unit, grepFiles, couplingOtherSides, type CouplingOtherSide 
 export { grepFiles, couplingOtherSides, type CouplingOtherSide };
 import { type KeyMatcher, runMatcher, plausibleKeyValue } from "./key_ir.js";
 import { inferHttpClients, httpClientMatchers, resolveHttpCallSites } from "./effect_inference.js";
+import { resolveResourceRoutes } from "./resource_routes.js";
 import { getOrSet } from "../engine_ctx.js";
 import { listMatchers, loadMatchers } from "./key_store.js";
 import { routeAnnotationNames } from "./frameworks/route_annotations.js";
@@ -395,6 +396,7 @@ async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText
   const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);                 // 3 — getParameter(CONST)/addParameter(CONST) sites
   if (sites.some((s) => inSpan(s.line))) return true;
   if (!ctx.stableFloor && resolveHttpCallSites(anchorFile, anchorText, await _effectClients(repo, ctx)).some((h) => inSpan(h.line))) return true;   // 2 — http I/O
+  if (resolveResourceRoutes(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;   // 2b — an SDK resource method inheriting its class base route (deterministic; the create@N route lives here, not the span floor)
   if (_handlerShaped(anchorFile)) return true;                                                  // 5 — route/handler file (the implicit-key recall net)
   if (!ctx.stableFloor) for (const { matcher } of listMatchers(repo)) {   // 4 — learned matchers (not in a stable-floor probe)
     if ((await runMatcher(matcher, anchorFile, anchorText)).some((h) => inSpan(h.line))) return true;
@@ -801,6 +803,15 @@ async function runPipeline(
   // ref instead of a literal (`MyFramework.http[method](endpoints.createBooking)`) — resolved against the in-file
   // endpoint-map config (deterministic), surfaced at the call line so THIS method node owns the route crossing.
   for (const hit of resolveHttpCallSites(node.file, node.text, p.httpClients)) {
+    if (hit.line < node.lo || hit.line > node.hi) continue;
+    const id = `${hit.kind} ${hit.value} ${hit.produces}`;
+    if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: "scan" });
+  }
+  // STEP 1e — CLASS-BASE-ROUTE inheritance: an SDK resource class declares its route base path once (in the
+  // constructor `super({path})`), and a request METHOD (`create = this.makeRequest({method})`) inherits it. The
+  // literal sits outside the method span, so without this the method node carries no route key and its cross-stack
+  // crossing never materialises (the kc_3 admin-ui → backend miss). Stamp the composed route at the METHOD line.
+  for (const hit of resolveResourceRoutes(node.file, node.text)) {
     if (hit.line < node.lo || hit.line > node.hi) continue;
     const id = `${hit.kind} ${hit.value} ${hit.produces}`;
     if (!keys.has(id) || hit.line < keys.get(id)!.line) keys.set(id, { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: "scan" });

@@ -57,6 +57,7 @@ import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
+import { resolveResourceRoutes } from "../coupling/resource_routes.js";
 import { _read, _named_units, _enclosing, _call_lines } from "../scan/ast_units.js";
 import { makeCtx, available, type Ctx } from "../atoms.js";
 import type { Unit } from "../scan/graph.js";
@@ -405,9 +406,21 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
   for (const e of (data.edges ?? [])) {
     if (e.provenance === "RESOLVED_FULL" || (e.provenance === "RESOLVED_PARTIAL" && e.kind !== "call")) { grounded.add(e.from); grounded.add(e.to); }
   }
+  // A node whose span holds a resolved SDK-resource route (a class-base-path request method, resolveResourceRoutes)
+  // touches a REAL http boundary — grounded by the route LITERAL, not the call that reached it. So it's eligible to
+  // fan coupling even when its incoming edge is a RESOLVED_PARTIAL `call` (a typed member-chain like
+  // `adminClient.users.create` — a proven binding the grounded-reach gate otherwise excludes with bare-name matches).
+  // This is what lets the admin-ui → backend crossing materialise (kc_3): the `create` method carries the base route.
+  const _rrCache = new Map<string, ReturnType<typeof resolveResourceRoutes>>();
+  const _routeBoundary = (n: any): boolean => {
+    if (!n.file || !Array.isArray(n.range)) return false;
+    let hits = _rrCache.get(n.file);
+    if (hits === undefined) { const rd = _read(repo, n.file); hits = rd ? resolveResourceRoutes(n.file, rd[0]) : []; _rrCache.set(n.file, hits); }
+    return hits.some((h) => h.line >= n.range[0] && h.line <= n.range[1]);
+  };
   for (const n of (data.nodes ?? [])) {
     if (n.coupling && !producer.has(n.id)) continue;   // skip pure-consumer coupling nodes; couple producer/resource ones
-    if (!producer.has(n.id) && !grounded.has(n.id)) continue;   // don't fan a boundary from a bare-name call match
+    if (!producer.has(n.id) && !grounded.has(n.id) && !_routeBoundary(n)) continue;   // don't fan a boundary from a bare-name call match — unless the node's span holds a grounded resource route
     const f = n.file ? normpath(n.file) : "";
     if (!f || coupled.has(f)) continue;
     coupled.add(f);
