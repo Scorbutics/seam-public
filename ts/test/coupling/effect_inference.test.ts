@@ -112,4 +112,22 @@ describe("resolveHttpCallSites — indirected route resolution on a proven edge 
     const hits = resolveHttpCallSites("web/svc.js", text, clients);
     expect(hits.map((h) => h.value)).toEqual(["/acme/rest/x"]);
   });
+
+  test("a LOCAL-VAR endpoint traces back to its descriptor — each declarative method gets its OWN route", () => {
+    if (!available()) return;
+    // the acme bookingService shape: the endpoint is a LOCAL VAR assigned from the config map (often
+    // `.replace('{id}', id)`-chained), NOT inline at the call. Without the trace every method collapsed to the base
+    // route (rendered "via install"), so the backend showed ONE HTTP path for create/update/cancel/…
+    const text = [
+      `const baseUrl = '/acme/rest/member/booking/v1';`,
+      `const bookingEndpoints = { createBooking: { endpoint: baseUrl, method: 'post' }, cancelBooking: { endpoint: baseUrl + '/{id}/cancel', method: 'del' } };`,
+      `function createBooking( b ) { const endpoint = bookingEndpoints.createBooking.endpoint; return MyFramework.http.post( endpoint, b ); }`,
+      `function cancelBooking( id ) { const endpoint = bookingEndpoints.cancelBooking.endpoint.replace( '{id}', id ); return MyFramework.http.del( endpoint ); }`,
+    ].join("\n");
+    const hits = resolveHttpCallSites("web/bookingService.js", text, clients);
+    const byLine = new Map(hits.map((h) => [h.line, h.value]));
+    // createBooking's call (line 3, 0-indexed 2) → the base; cancelBooking's (line 4) → the DISTINCT cancel route.
+    expect(byLine.get(2)).toBe("/acme/rest/member/booking/v1");
+    expect(byLine.get(3)).toBe("/acme/rest/member/booking/v1/*/cancel");
+  });
 });

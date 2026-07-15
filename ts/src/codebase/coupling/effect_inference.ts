@@ -158,6 +158,18 @@ export function resolveHttpCallSites(file: string, text: string, clients: Set<st
   if (!clients.size || !lang_for(file)) return [];
   const src = makeMaskCtx(text).comments;
   const cfg = _endpointMapIndex(src);
+  // Resolve an EXPRESSION to a route: a string literal, or a descriptor ref (`map.key` / `map.key.endpoint`,
+  // possibly chained with `.replace(...)`) against the in-file endpoint map. The leading dotted path is taken and
+  // cut at `.endpoint`, so `bookingEndpoints.cancelBooking.endpoint.replace('{id}', id)` → `bookingEndpoints.cancelBooking`.
+  const _descRoute = (expr: string): string | null => {
+    const lit = expr.match(_STR_LIT_RE);
+    if (lit) return lit[1].startsWith("/") ? normPath(lit[1]) : null;
+    const dotted = expr.match(/^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*/);
+    if (!dotted) return null;
+    let p = dotted[0]; const ei = p.indexOf(".endpoint");
+    if (ei >= 0) p = p.slice(0, ei);
+    return cfg.get(p) ?? null;
+  };
   const out: KeyHit[] = [];
   const seen = new Set<string>();
   for (const client of clients) {
@@ -167,10 +179,16 @@ export function resolveHttpCallSites(file: string, text: string, clients: Set<st
     let m: RegExpExecArray | null;
     while ((m = re.exec(src)) !== null) {
       const arg = m[1].trim();
-      const lit = arg.match(_STR_LIT_RE);
-      const route = lit
-        ? (lit[1].startsWith("/") ? normPath(lit[1]) : null)
-        : (cfg.get(arg.replace(/\.endpoint$/, "")) ?? null);   // a descriptor ref or its .endpoint
+      let route = _descRoute(arg);
+      // ARG is a BARE LOCAL VAR (the declarative pattern: `const endpoint = bookingEndpoints.cancelBooking.endpoint
+      // .replace('{id}', id); http[method](endpoint)`) — trace it to its NEAREST PRECEDING assignment and resolve
+      // THAT descriptor, so each method's specific route (not just the base) is attributed to its own call site.
+      if (!route && /^[A-Za-z_$][\w$]*$/.test(arg)) {
+        const asnRe = new RegExp(`(?:const|let|var)[ \\t]+${arg}[ \\t]*=[ \\t]*(.+)`, "g");
+        const before = src.slice(0, m.index); let a: RegExpExecArray | null, rhs: string | null = null;
+        while ((a = asnRe.exec(before)) !== null) rhs = a[1];   // last assignment before the call = the in-scope one
+        if (rhs) route = _descRoute(rhs.trim());
+      }
       if (!route || route === "/") continue;
       const line = lineOf(src, m.index);
       const id = `${route}@${line}`;
