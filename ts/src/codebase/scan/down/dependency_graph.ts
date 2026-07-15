@@ -245,6 +245,50 @@ function _qualCallParts(ctx: Ctx, c: any): { recv: string; method: string } | nu
   return { recv: ctx.text(recvNode), method: ctx.text(nameNode) };
 }
 
+// SPIKE (kc_3): flatten a CHAINED member call `a.b.c()` into its identifier chain `["a","b","c"]` (base var,
+// intermediate FIELDS, final METHOD). Returns null for anything but a pure identifier-rooted member chain (a
+// `this.`, computed `a[x]`, or call-in-the-middle `a().b()` receiver is out of scope). The type resolver below
+// walks it: base type → field type → … → the class whose method to follow. GROUNDED — each field hop is an
+// explicit `field: Type` decl or a `new Type()` binding in the receiver class, not a name/type guess.
+function _qualCallMemberChain(ctx: Ctx, c: any): string[] | null {
+  const callee = c.childForFieldName?.("function") ?? ctx.children(c).find((x: any) => _MEMBER.has(x.type));
+  if (!callee || !_MEMBER.has(callee.type)) return null;
+  const parts: string[] = [];
+  let cur: any = callee;
+  while (cur && _MEMBER.has(cur.type)) {
+    const prop = cur.childForFieldName?.("property") ?? cur.childForFieldName?.("attribute")
+      ?? ctx.children(cur).find((x: any) => _MEMBER_NAME.has(x.type));
+    if (!prop) return null;
+    parts.unshift(ctx.text(prop));
+    cur = cur.childForFieldName?.("object") ?? ctx.children(cur)[0];
+  }
+  if (!cur || !cur.type.includes("identifier")) return null;   // base must be a plain identifier (not this/computed/call)
+  parts.unshift(ctx.text(cur));
+  return parts.length >= 3 ? parts : null;   // need base + ≥1 field + method to be a CHAIN (2-part is the plain-qualified case)
+}
+
+// SPIKE (kc_3): a FIELD's declared type inside a class file — `public users: Users` (typed member) — returning the
+// bare type NAME and the FILE that type resolves to (same-file def, else an import in this file). Grounded (an
+// explicit annotation + the deterministic import resolver), no inference. The `new Type()` construction path
+// (`this.users = new Users()`) is a TODO fallback; the explicitly-typed field covers the keycloak-admin-client SDK.
+async function _fieldTypeIn(repo: string, file: string, field: string): Promise<{ type: string; file: string | null } | null> {
+  const rd = _read(repo, file); if (!rd) return null;
+  const ctx = await makeCtx(rd[0], rd[1]); if (!ctx) return null;
+  const declBase = (t: string): string => (t.replace(/^\s*:\s*/, "").replace(/<[\s\S]*$/, "").trim().split(".").pop() ?? "").trim();
+  let typeName: string | null = null;
+  for (const d of ctx.collect(ctx.root, (k: string) => _TYPED_DECL.has(k))) {
+    if (_name_of(ctx, d) !== field) continue;
+    const tn = (d as any).childForFieldName?.("type");
+    if (tn) { const t = declBase(ctx.text(tn)); if (t) { typeName = t; break; } }
+  }
+  if (!typeName) return null;
+  // resolve the type NAME to its file — same-file class def, else an `import { Type } from …` in this file
+  let tfile: string | null = null;
+  if (_named_units(ctx).some((u) => u[0] === typeName && (u[1] === "class" || u[1] === "interface"))) tfile = file;
+  else for (const ref of parse_imports(file, rd[0])) if (ref.name === typeName) { const t = await _resolve_import(repo, file, ref); if (t && t[0]) { tfile = t[0]; break; } }
+  return { type: typeName, file: tfile };
+}
+
 async function _qualifiedCalleePass(s: DepScan): Promise<void> {
   if (process.env.SEAM_QUALIFIED_CALLS === "0" || !s.actx) return;
   const anchor = s.aunits.find((u) => u[0] === s.symbol);
@@ -279,7 +323,7 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
   // UserRoleMappingEntity). Map each declared identifier → its declared type name; a receiver in this map with impls is
   // followed method-precisely below (same _followInterface as the @Inject field / getProvider passes). GROUNDED — the
   // field's declared type is a real resolved interface, its impls real; not a name guess. (Opt out: SEAM_QUALIFIED_CALLS=0.)
-  const _declBase = (t: string): string => (t.replace(/<[\s\S]*$/, "").trim().split(".").pop() ?? "").trim();
+  const _declBase = (t: string): string => (t.replace(/^\s*:\s*/, "").replace(/<[\s\S]*$/, "").trim().split(".").pop() ?? "").trim();
   const declType = new Map<string, string>();
   for (const d of s.actx.collect(s.actx.root, (k: string) => _TYPED_DECL.has(k))) {
     const tn = (d as any).childForFieldName?.("type");
@@ -297,7 +341,31 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
     const [cl] = s.actx.span(c);
     if (cl < alo || cl > ahi) continue;
     const parts = _qualCallParts(s.actx, c);
-    if (!parts) continue;                                                            // bare call / chained-expr / `this` receiver → other passes
+    if (!parts) {
+      // SPIKE — CHAINED member call `a.b.method()` (kc_3 `adminClient.users.create`): resolve the receiver chain's
+      // TYPE by walking base-type → field-type → … then follow the method in the final class. Each hop is a grounded
+      // `field: Type` annotation. Base type from a typed decl OR the base identifier IS a class; else it BLOCKS (the
+      // untyped base — e.g. a var destructured from a hook — is the known limit this spike is measuring).
+      const chain = _qualCallMemberChain(s.actx, c);
+      if (chain) {
+        const method = chain[chain.length - 1], recvChain = chain.slice(0, -1);
+        let curType: string | null = declType.get(recvChain[0]) ?? (preresolved.has(recvChain[0]) ? recvChain[0] : null);
+        let curFile: string | null = curType ? (await receiverClassFile(curType) ?? preresolved.get(curType) ?? null) : null;
+        for (let i = 1; i < recvChain.length && curType && curFile; i++) {
+          const ft = await _fieldTypeIn(s.repo, curFile, recvChain[i]);
+          curType = ft?.type ?? null; curFile = ft ? (ft.file ?? preresolved.get(ft.type) ?? null) : null;
+        }
+        if (curType && curFile && !s.seen.has(`${method} ${curFile}`)) {
+          const defu = (await unitsOf(curFile)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
+          if (defu) {
+            s.seen.add(`${method} ${curFile}`); s.counter += 1; const did = `d${s.counter}`;
+            s.nodes.push({ id: did, symbol: method, kind: defu[1], file: curFile, range: [defu[2], defu[3]], enclosing: recvChain.join("."), complexity: Math.max(1, defu[3] - defu[2] + 1) });
+            s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_PARTIAL", line: cl });
+          }
+        }
+      }
+      continue;                                                                      // bare call / chained-expr / `this` receiver → other passes
+    }
     const { recv, method } = parts;
     const file = await receiverClassFile(recv);
     if (!file) {
