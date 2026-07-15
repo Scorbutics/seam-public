@@ -338,8 +338,15 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   await Promise.all(teachers.map((t) => t.learn()));
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
   const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
+  // pass 4b — COMPOSED sub-resource routes (the `mount-chain` axis): a route handler whose class carries no
+  // class-level route annotation is mounted by a cross-file locator chain the in-file floor can't compose.
+  // The route-composer teacher learns each such handler's full path (LLM once → cached) so a front-end fetch
+  // grounds to the backend handler it actually hits (kc_3). Repo-wide (backend handlers sit outside a UI
+  // footprint scope) + memoised per repo + self-gating to zero on a det run with no `.seam/`.
+  const { composeRoutes } = await import("./route_composer.js");
+  const composedIdx: GroundingIndex = await composeRoutes(repo, opts, ctx);
 
-  for (const sub of [filesIdx, matchersIdx]) for (const [k, v] of sub) {   // union both axes into the result
+  for (const sub of [filesIdx, matchersIdx, composedIdx]) for (const [k, v] of sub) {   // union all axes into the result
     if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });
     idx.get(k)!.producers.push(...v.producers); idx.get(k)!.consumers.push(...v.consumers);
   }

@@ -46,6 +46,7 @@ export class EngineCtx {
   annotMatchers = new Map<string, unknown>();   // annotation→type classification → route/queue/event `annotation` matchers
   effectMatchers = new Map<string, unknown>();  // effect_inference: custom http-client receivers → http-route channel matchers (deterministic)
   httpClients = new Map<string, Set<string>>(); // effect_inference: repo → inferred custom http-client receiver tokens (the indirected-call resolver reads this)
+  composedRoutes = new Map<string, GroundingIndex>();   // route_composer: repo → composed sub-resource route grounding (LLM-learned mount chain → cached; built once/run)
 
   // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
   // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory
@@ -76,6 +77,7 @@ export class EngineCtx {
     c.llmKey = this.llmKey; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs;
     c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
     c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
+    c.composedRoutes = this.composedRoutes;   // share the repo-wide composed-route grounding (built once, read-concurrent-safe)
     c.rankKeys = this.rankKeys;
     c.footprintFiles = this.footprintFiles;   // share the union scope → the fork's discovery hits the warmed cacheKey
     return c;   // fresh budgets + stableFloor=false from the field initializers
