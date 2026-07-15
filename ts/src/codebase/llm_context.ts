@@ -527,6 +527,61 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
   const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM !== "0" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
 
+  // SUBJECT FOLD (render-side, recall-safe) — the grow is intent-free, so a broad anchor grounds to MANY off-subject
+  // crossings (private-app' payments page ↔ every admin route via the shared auth key; keycloak create-user ↔ every
+  // sub-resource). A key's SUBJECT (the resource segments of its route / its table name) is a STRUCTURAL fact, so
+  // fold the seams whose subject is DISJOINT from the anchor's into a per-subject COUNT, keeping the on-subject ones
+  // expanded. No embeddings in the fold decision; recall-safe (a count + the subjects, never a drop). Opt out:
+  // SEAM_SUBJECT_FOLD=0. This extends the existing hub-key roll-up (which folds by REPEATED label) to the far more
+  // common case: DISTINCT off-subject routes that each appear once but share nothing with the anchor's domain.
+  const _SUBJ_GEN = new Set(["api", "admin", "functions", "function", "dashboard", "app", "apps", "src", "lib", "libs", "services", "service", "components", "component", "pages", "page", "index", "route", "routes", "resources", "resource", "rest", "public", "internal", "common", "util", "utils", "http", "www", "get", "post", "put", "patch", "delete", "handler", "controller", "backend", "supabase", "shared", "server", "client", "core", "main", "java", "org", "keycloak", "tsx", "ts", "js", "jsx", "phase", "v1", "v2", "v3"]);
+  const _subjToks = (raw: string): string[] => (raw || "").replace(/([a-z0-9])([A-Z])/g, "$1 $2").toLowerCase().split(/[/._\-\s{}()*]+/).map((x) => x.trim()).filter((x) => x.length >= 3 && !_SUBJ_GEN.has(x) && !/^\d+$/.test(x));   // split camelCase too (bookingService → booking, service) so a symbol-only subject still matches
+  const _subjMatch = (a: string, b: string): boolean => a === b || (a.length >= 4 && b.startsWith(a)) || (b.length >= 4 && a.startsWith(b));   // users~user, payments~payment
+  const _lastTok = (raw: string): string | null => { const t = _subjToks(raw); return t.length ? t[t.length - 1] : null; };   // the DEEPEST/most-specific segment (…/realms/*/users → users, not the `realms` container)
+  // per-node RAW crossing keys (the route/table on the OTHER side of a cross-stack edge) — the subject for a CODE
+  // crossing whose own symbol carries no route (private-app `enrichFromExternalPayment` grounds on `/api/admin/payments`).
+  const _crossKeyRaw = new Map<string, string[]>();
+  for (const e of (model.edges ?? []) as any[]) {
+    if (!_CROSS_KINDS.has(e.kind)) continue;
+    const k = label.get(String(e.from)); if (!k) continue;
+    (_crossKeyRaw.get(String(e.to)) ?? _crossKeyRaw.set(String(e.to), []).get(String(e.to))!).push(String(k));
+  }
+  // a seam's FULL token set (generous — matches if the seam TOUCHES the subject anywhere: a `/users/*/role-mappings` sub-route still counts as `users`).
+  const _seamSubj = (s: Seam): string[] => {
+    const toks = new Set<string>();
+    for (const w of ((s as any).writes ?? [])) for (const t of _subjToks(String(w))) toks.add(t);
+    for (const t of _subjToks(_tableOf(s))) toks.add(t);
+    for (const t of _subjToks(s.primary?.symbol ?? "")) toks.add(t);
+    for (const t of _subjToks(s.primary?.file ?? "")) toks.add(t);   // the seam's MODULE is its subject (payments.ts → payments), the symbol alone drops the file prefix
+    for (const id of seamIds(s)) for (const k of (_crossKeyRaw.get(String(id)) ?? [])) for (const t of _subjToks(k)) toks.add(t);
+    return [...toks];
+  };
+  // a seam's PRIMARY (most-specific) subject — the DEEPEST route segment / table name. Used to seed the anchor's
+  // subject so a non-discriminating container segment (`realms`, `admin`) can't become the anchor subject and keep
+  // everything.
+  const _seamPrimary = (s: Seam): string | null => {
+    for (const id of seamIds(s)) for (const k of (_crossKeyRaw.get(String(id)) ?? [])) { const t = _lastTok(k); if (t) return t; }
+    return _lastTok(_tableOf(s)) ?? _lastTok(s.primary?.file ?? "") ?? _lastTok(s.primary?.symbol ?? "");
+  };
+  // the anchor's subjects — its module resource (…/user/, …/payments/) + the DEEPEST subject its own + spine seams touch.
+  const _anchorSubj = new Set<string>();
+  for (const t of subjectTables) { const tok = _lastTok(String(t)); if (tok) _anchorSubj.add(tok); }
+  { const tok = _lastTok(anchorDir); if (tok) _anchorSubj.add(tok); }
+  for (const s of seams) if (spineSet.has(s.id) || (s.primary?.file && anchorDir && s.primary.file.startsWith(anchorDir + "/"))) { const p = _seamPrimary(s); if (p) _anchorSubj.add(p); }
+  const _foldSubject = process.env.SEAM_SUBJECT_FOLD !== "0";
+  const _offSubjTok = (s: Seam): string | null => {   // the subject to FOLD this seam under, or null to KEEP it
+    if (!_foldSubject || !_anchorSubj.size || spineSet.has(s.id)) return null;                       // never fold the spine
+    const toks = _seamSubj(s); if (!toks.length) return null;                                        // no subject to judge → keep
+    if (toks.some((t) => [..._anchorSubj].some((a) => _subjMatch(t, a)))) return null;               // shares the anchor's subject → keep
+    return _seamPrimary(s) ?? toks[0];                                                               // disjoint → fold under its most-specific subject (the resource/table, not the verb)
+  };
+  const _foldLine = (folded: Seam[], noun: string): string => {
+    const byS = new Map<string, number>();
+    for (const s of folded) { const t = _offSubjTok(s) ?? "?"; byS.set(t, (byS.get(t) ?? 0) + 1); }
+    const parts = [...byS.entries()].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([t, n]) => `${t} ×${n}`);
+    return `  (+${folded.length} off-subject ${noun} folded over: ${parts.join(", ")}${byS.size > 12 ? ", …" : ""} — name a subject as the intent to expand)`;
+  };
+
   const supporting = seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !readerSet.has(s.id) && tierOf(s) !== "off" && !crossSet.has(s));
   const offSeams = seams.filter((s) => tierOf(s) === "off" && !spineSet.has(s.id) && !altSet.has(s.id) && !coProdSet.has(s.id) && !readerSet.has(s.id) && !crossSet.has(s));
   // collapsed hubs — the hub-marked hunks across the region (Phase 1); one line per hub node.
@@ -713,8 +768,11 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!crossStack.length) return [];
     const seen = new Set<string>();
     const uniq = [...crossStack].sort(byRel).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
-    return ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)",
-      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "cross-stack node(s)")];
+    const onSub = uniq.filter((s) => !_offSubjTok(s)), offSub = uniq.filter((s) => _offSubjTok(s));
+    const lines = ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)",
+      ...renderCapped(onSub, EXEMPT_N, (s) => seamLine(s), "cross-stack node(s)")];
+    if (offSub.length) lines.push(_foldLine(offSub, "crossing(s)"));
+    return lines;
   };
   // INTENT CROP AT RENDER — the grown footprint may be the FULL structural closure (structural grow: the wave is
   // intent-free so the cache reuses across intents) or already intent-shaped (guided grow). Either way the render
@@ -754,12 +812,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     };
     const rankedRegion = (list: Seam[], label: string, drop: boolean, headN: number): void => {
       if (!list.length) return;
-      const { kept: sorted, hubs } = collapseHubs(dedup([...list].sort(byRel)));
+      const deduped = dedup([...list].sort(byRel));
+      // SUBJECT FOLD FIRST — pull the off-subject seams out before the hub-collapse + head cap, so the on-subject
+      // region isn't crowded out of the head by unrelated-domain crossings that merely share the anchor's auth hub.
+      const offSub = deduped.filter((s) => _offSubjTok(s));
+      const { kept: sorted, hubs } = collapseHubs(deduped.filter((s) => !_offSubjTok(s)));
       const rollup = (): void => { if (!hubs.size) return; const tot = [...hubs.values()].reduce((a, b) => a + b, 0);
         out.push(`  (+${tot} more file(s) folded as shared-key hub crossings over: ${[...hubs.keys()].slice(0, 12).join(", ")}${hubs.size > 12 ? ", …" : ""} — see Blindspots)`); };
-      if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); rollup(); return; }
+      const tail = (): void => { rollup(); if (offSub.length) out.push(_foldLine(offSub, "region seam(s)")); };
+      if (!drop || sorted.length <= headN) { out.push(`${label}:`); sorted.forEach((s) => out.push(seamLine(s))); tail(); return; }
       out.push(`${label} (top ${headN} of ${sorted.length} by intent relevance — raise --token-budget for the rest):`);
-      sorted.slice(0, headN).forEach((s) => out.push(seamLine(s))); rollup();
+      sorted.slice(0, headN).forEach((s) => out.push(seamLine(s))); tail();
     };
     rankedRegion(supporting, "supporting", dropSupporting, 10);
     rankedRegion(offSeams, "off-path", dropOff, 4);

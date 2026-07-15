@@ -3,7 +3,7 @@
 // tree-sitter / embeddings guards needed. Three contracts: (1) the sections are present + ordered; (2) under a
 // tight budget the OFF/supporting region lines crop (with a note) while the exempt sections — spine, hubs,
 // frontier, blindspots — stay INTACT (I3); (3) with no spine tier it falls back to shell ordering.
-import { describe, expect, test } from "bun:test";
+import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 
 // a rich model: a spine seam, several supporting + many off seams (so the full render is large), a collapsed hub,
@@ -33,6 +33,12 @@ const makeModel = (opts: { spine?: boolean; offN?: number } = {}) => {
 };
 
 describe("renderAgent — sections, ordering, budget cropping, fallback", () => {
+  // These assert render MECHANICS (hub-collapse, budget-crop, dedup) on minimal fixtures that carry no anchor
+  // module/route subject — so the subject-fold (a separate feature, tested in agent_subject_fold.test.ts) would
+  // fold their region seams. Disable it here to test each mechanism in isolation.
+  const _fold = process.env.SEAM_SUBJECT_FOLD;
+  beforeAll(() => { process.env.SEAM_SUBJECT_FOLD = "0"; });
+  afterAll(() => { if (_fold === undefined) delete process.env.SEAM_SUBJECT_FOLD; else process.env.SEAM_SUBJECT_FOLD = _fold; });
   test("full render: header · spine · region · hubs · frontier · blindspots, in order", () => {
     const out = renderAgent(makeModel(), { tokenBudget: 4000, intent: "how are bookings created" });
     for (const h of ["# Agent map", "## Spine", "## Region", "## Collapsed hubs", "## Frontier", "## Blindspots"])
