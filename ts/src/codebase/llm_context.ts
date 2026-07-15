@@ -811,14 +811,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     || (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)) || (_shellOf(a) - _shellOf(b));
   const regionSection = (dropOff: boolean, dropSupporting: boolean): string[] => {
     const out: string[] = ["", hasSpine ? "## Region (remaining, by intent relevance)" : "## Region (by shell — nearest the anchor first)"];
-    if (!hasSpine) {   // no-intent / skeleton fallback: order every seam by shell (hops from the anchor)
-      [...seams].sort((a, b) => (_shellOf(a) - _shellOf(b))).forEach((s) => out.push(seamLine(s)));
-      return out;
-    }
     // DEDUP by symbol identity — a hub the grow reached by N paths (or a bean wired into N seams that escaped the
     // hub collapse) otherwise renders the SAME `where()` line N times (Acme: BookingsBean 4× in supporting), pure
-    // noise. Keep the highest-relevance occurrence (the list is pre-sorted by relevance). Then crop.
+    // noise. Keep the first (highest-relevance / nearest-shell) occurrence. Applies to BOTH the intent region and
+    // the no-spine shell fallback (the fallback used to skip it → duplicate BookingsService/BookingsBean lines).
     const dedup = (list: Seam[]): Seam[] => { const seen = new Set<string>(); return list.filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; }); };
+    if (!hasSpine) {   // no-intent / skeleton fallback: order every seam by shell (hops from the anchor)
+      dedup([...seams].sort((a, b) => (_shellOf(a) - _shellOf(b)))).forEach((s) => out.push(seamLine(s)));
+      return out;
+    }
     // HUB-TABLE COLLAPSE — a shared-key HUB (a table like `user`/`workflowStep` touched by dozens of files) surfaces
     // as one region seam PER file, flooding the region and burying the on-intent code (cal.com: `user`×24, `team`×20).
     // Those crossings are ALREADY rolled up in the shared-key-fanout Blindspot, so keep ONE occurrence per hub label
