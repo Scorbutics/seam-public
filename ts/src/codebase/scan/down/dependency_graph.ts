@@ -331,11 +331,15 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
 // first (file size = a cheap grounded proxy for a real mechanism vs a no-op/stub/map backend); path as a stable
 // tiebreak. The heaviest concrete impls are the ones that actually cross a boundary (persist/HTTP/queue), which
 // the downstream grounded coupling detection then confirms.
-function _rankImpls(repo: string, cands: { cls: string; file: string }[]): { cls: string; file: string }[] {
+function _rankImpls(repo: string, cands: { cls: string; file: string }[], persist?: (file: string) => number): { cls: string; file: string }[] {
   const isTest = (f: string) => /(^|\/)(test|tests|__tests__|src[/\\]test)([/\\]|$)/i.test(f);
   const size = (f: string) => { try { return statSync(join(repo, f)).size; } catch { return 0; } };
-  return [...cands].map((c) => ({ c, test: isTest(c.file) ? 1 : 0, sz: size(c.file) }))
-    .sort((a, b) => (a.test - b.test) || (b.sz - a.sz) || (a.c.file < b.c.file ? -1 : 1))
+  // Prefer the PERSISTENCE impl — the one that GROUNDS on a real db-store write (JpaUserProvider → em.persist(
+  // UserEntity)) — over a cache/delegate wrapper or the merely-biggest file. Grounded seed (floor db-table writes),
+  // deterministic. Ties (a non-persistence interface: all 0) fall back to the old test-last / heaviest-file order.
+  const wr = (f: string) => (persist ? persist(f) : 0);
+  return [...cands].map((c) => ({ c, test: isTest(c.file) ? 1 : 0, wr: wr(c.file), sz: size(c.file) }))
+    .sort((a, b) => (a.test - b.test) || (b.wr - a.wr) || (b.sz - a.sz) || (a.c.file < b.c.file ? -1 : 1))
     .map((x) => x.c);
 }
 
@@ -371,7 +375,12 @@ async function _followInterface(s: DepScan, iface: string, cap: number, methods:
     await _addDep(s, c.cls, c.file, line, edgeKind, "RESOLVED_PARTIAL");
   };
   if (cands.length === 1) { await bind(cands[0]); return true; }
-  const ranked = _rankImpls(s.repo, cands);
+  // GROUNDED impl ranking — prefer the impl that PERSISTS (grounds a db-store write) so the followed subset crosses
+  // into the real persistence (JpaUserProvider.addUser → em.persist(UserEntity)), not just the heaviest cache wrapper.
+  const { fileStoreWriteCount } = await import("../../coupling/index.js");
+  const _persistOf = new Map<string, number>();
+  for (const c of cands) if (!_persistOf.has(c.file)) _persistOf.set(c.file, fileStoreWriteCount(s.repo, c.file));
+  const ranked = _rankImpls(s.repo, cands, (f) => _persistOf.get(f) ?? 0);
   const take = ranked.slice(0, cap), rest = ranked.slice(cap);
   for (const c of take) await bind(c);
   if (rest.length) s.blindspots.push({ node: iface, mechanism: "interface-multiple-impls",

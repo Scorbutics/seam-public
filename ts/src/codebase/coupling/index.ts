@@ -179,6 +179,15 @@ function scanFloorFile(rel: string, text: string): FloorContribution {
   }
   return { keys, constDecls, sites };
 }
+// GROUNDED "does this impl PERSIST?" — the count of db-table WRITES the deterministic floor grounds in ONE file.
+// The scan's interface→impl ranking uses it to prefer the PERSISTENCE impl (JpaUserProvider → em.persist(UserEntity),
+// 16 grounded writes) over a cache/delegate wrapper (0) when the DI binding can't be picked statically — a GROUNDED
+// seed (the impl that actually touches the store boundary), not file size. Single-file scan (cheap, per candidate),
+// no repo-wide floor build. Language-general: any adapter that grounds a db-table produce (jpa_entity, member_access…).
+export function fileStoreWriteCount(repo: string, rel: string): number {
+  try { return scanFloorFile(rel, readFileSync(join(repo, rel), "utf8")).keys.filter((k) => k.produces && k.kind === "db-table").length; }
+  catch { return 0; }
+}
 // The REDUCE half: merge per-file contributions into the shared-key index + the const-resolved param index.
 // Const resolution is done HERE (once, in-memory) against the merged const map — that's what makes the
 // per-file cache safe across the cross-file `getParameter(CONST)` dependency. Order-stable (walk order).
