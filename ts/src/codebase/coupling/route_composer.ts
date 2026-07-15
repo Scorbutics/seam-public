@@ -214,12 +214,12 @@ export async function composeRoutes(repo: string, opts: ComposeOpts, ctx: Engine
   const memo = ctx.composedRoutes.get(memoKey);
   if (memo) return memo;
   const idx: GroundingIndex = new Map();
-  // OPT-IN (default OFF), zero-cost when off (no walk). The composer's COMPOSITION + GROUNDING are verified
-  // correct (a server sub-resource's `/admin/realms/*/users` composes and grounds against the front-end fetch),
-  // but two integration edges are still being hardened before default-on: (1) LLM reliability when many classes
-  // compose concurrently, (2) surfacing the grounded crossing through the coupling overlay's complement/render.
-  // Enable with SEAM_COMPOSE_ROUTES=1. See test/coupling/route_composer.test.ts for the structural contract.
-  if (process.env.SEAM_COMPOSE_ROUTES !== "1") { ctx.composedRoutes.set(memoKey, idx); return idx; }
+  // DEFAULT ON under `--data-coupling llm` (opt out with SEAM_COMPOSE_ROUTES=0); zero-cost when a det run has no
+  // `.seam/` cache (the guard below). Composition + grounding are verified (a server sub-resource's
+  // `/admin/realms/*/users` composes and grounds against the front-end fetch), reliability is bounded (pool of 3
+  // + one retry + empties not cached → self-heal), and the DEMAND GATE keeps it lazy (only footprint-consumed
+  // sub-resources). See test/coupling/route_composer.test.ts + test/grow/resource_route_crossing.test.ts.
+  if (process.env.SEAM_COMPOSE_ROUTES === "0") { ctx.composedRoutes.set(memoKey, idx); return idx; }
   if (!opts.llm && !hasKeyCache(repo)) { ctx.composedRoutes.set(memoKey, idx); return idx; }
   const learn = opts.llm;   // synthesise new compositions (else replay the cache only)
   const add = (h: KeyHit, file: string) => {

@@ -47,6 +47,7 @@ export class EngineCtx {
   effectMatchers = new Map<string, unknown>();  // effect_inference: custom http-client receivers → http-route channel matchers (deterministic)
   httpClients = new Map<string, Set<string>>(); // effect_inference: repo → inferred custom http-client receiver tokens (the indirected-call resolver reads this)
   composedRoutes = new Map<string, GroundingIndex>();   // route_composer: repo → composed sub-resource route grounding (LLM-learned mount chain → cached; built once/run)
+  footprintNodeRanges = new Map<string, [number, number][]>();   // per-file line ranges of the FOOTPRINT's reached method nodes — lets the per-node key cap PRIORITISE the keys the grow actually reached (a resource file with 79 routes keeps `create`'s over 78 unreached siblings)
 
   // FOOTPRINT-SCOPED LLM discovery: the files a cheap FLOOR pre-grow reached (cross-module). When set, the
   // LLM key index scopes its per-file synthesis to THESE (the flow), not the anchor's whole module directory
@@ -78,6 +79,7 @@ export class EngineCtx {
     c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
     c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
     c.composedRoutes = this.composedRoutes;   // share the repo-wide composed-route grounding (built once, read-concurrent-safe)
+    c.footprintNodeRanges = this.footprintNodeRanges;   // share the per-file footprint method ranges (the key-cap prioritisation signal)
     c.rankKeys = this.rankKeys;
     c.footprintFiles = this.footprintFiles;   // share the union scope → the fork's discovery hits the warmed cacheKey
     return c;   // fresh budgets + stableFloor=false from the field initializers

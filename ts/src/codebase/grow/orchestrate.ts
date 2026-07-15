@@ -224,6 +224,14 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
   // "resolveCoupling per file every run" repetition on the LLM path (Acme): the fan couples hundreds of beans, most
   // `GATE: no boundary → skipped`, and each was re-parsed every grow.
   const cacheOn = (_envFlag(process.env.SEAM_COUPLING_FILE_CACHE) ?? true);
+  // FOOTPRINT-MEMBERSHIP prioritisation: expose the reached method ranges in THIS file so the per-node key cap
+  // (which scans the WHOLE file and would otherwise demote a reached method's key among dozens of unreached
+  // siblings — a resource file with 79 routes) keeps the ones the grow actually landed on. The reached node's own
+  // range is always in-footprint. NB: this biases the cached "fan|whole" delta toward the footprint that first
+  // computes it — correct on the (cache-bypassing) stableFloor path; a benign recall bias on the shared cache.
+  const fpRanges: [number, number][] = fileNodes.map((fn) => fn.range);
+  if (srcRange) fpRanges.push(srcRange);
+  ctx.footprintNodeRanges.set(normpath(file), fpRanges);
   const compute = async (srcId: string, ctr: number) => {
     const delta = await resolveCoupling(repo, srcId, file, ar[0], 0, hi, ctr, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
     delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);

@@ -134,6 +134,20 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
   return out;
 }
 
+// A key's FOOTPRINT rank for the per-node cap: 0 if its line sits in a REACHED method's span, else 1. A coupling
+// node's span is the WHOLE file, so this is what keeps the routes the grow LANDED on ahead of unreached siblings
+// when the cap trims (a resource file with dozens of endpoints). Exported with `_orderKeysByFootprint` for tests.
+export function _footprintRank(fpRanges: [number, number][], line: number): 0 | 1 {
+  return fpRanges.some((r) => line >= r[0] && line <= r[1]) ? 0 : 1;
+}
+// Deterministic per-node key order (the cap's non-intent path): reached-method keys FIRST, then most SPECIFIC
+// (lowest cross-file fanout), then value. The cap slices its budget off the front of this order.
+export function _orderKeysByFootprint<T extends { line: number; value: string; fanout: number }>(keys: T[], fpRanges: [number, number][]): T[] {
+  return [...keys].sort((a, b) =>
+    (_footprintRank(fpRanges, a.line) - _footprintRank(fpRanges, b.line)) ||
+    (a.fanout - b.fanout) || (a.value < b.value ? -1 : a.value > b.value ? 1 : 0));
+}
+
 // Combine grounding indexes (the scan floor + the carrier-channel data-file keys + the LLM key index) into
 // ONE fresh index — concatenating producers/consumers on shared keys. Non-mutating (fresh arrays, so the
 // cached inputs stay clean) and skips undefined parts. The single merge for the whole axis.
@@ -849,7 +863,13 @@ async function runPipeline(
   //   • else DETERMINISTIC fallback: most SPECIFIC first (lowest cross-file fanout = real 1-to-1 couplings),
   //     demoting the high-fanout hub keys (generic events shared by dozens). Both recall-safe (blindspot).
   const cap = Number(process.env.SEAM_NODE_KEY_CAP ?? COUPLING.nodeKeyCap);   // runtime-tunable (per-run)
+  // FOOTPRINT-MEMBERSHIP is the PRIMARY cap signal (see _footprintRank): this node's span is the WHOLE file, but
+  // only a few of its methods are on the grow's path. A key in a reached method MUST outrank one from an unreached
+  // sibling — else a resource file's 79 routes bury the `create` the flow landed on.
+  const fpRanges = s.ctx.footprintNodeRanges.get(anchorPath) ?? [];
+  const inFootprint = (ln: number): number => _footprintRank(fpRanges, ln);
   const byFanout = (a: typeof grounded[number], b: typeof grounded[number]) =>
+    (inFootprint(a.key.line) - inFootprint(b.key.line)) ||
     (a.complementFiles.size - b.complementFiles.size) || (a.key.value < b.key.value ? -1 : a.key.value > b.key.value ? 1 : 0);
   if (grounded.length > cap && s.ctx.rankKeys) {
     // intent-rank from the key VALUE, its OTHER SIDE (complement file paths — known without materializing),
@@ -861,7 +881,7 @@ async function runPipeline(
     const rel = await s.ctx.rankKeys(items).catch(() => new Map<string, number>());
     const _rdt = performance.now() - _rt0; s.stats.ranks++; s.stats.rankMs += _rdt;
     if (timingOn()) process.stderr.write(`[dc-timing] key-rank ${node.file}:${node.lo} ${items.length} keys ${Math.round(_rdt)}ms\n`);
-    if (rel.size) grounded.sort((a, b) => ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // most intent-relevant first
+    if (rel.size) grounded.sort((a, b) => (inFootprint(a.key.line) - inFootprint(b.key.line)) || ((rel.get(b.key.value) ?? 0) - (rel.get(a.key.value) ?? 0)) || byFanout(a, b));   // reached methods first, then most intent-relevant
     else grounded.sort(byFanout);
   } else {
     grounded.sort(byFanout);
