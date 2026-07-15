@@ -57,11 +57,9 @@ There are two product modes, sharing the same host-served-LLM mechanics:
   repo; if run elsewhere, use `seam.toolPath` or ask.
 - **`ENGINE`** = how to invoke the engine. Resolve once, in this order:
   1. `$SEAM_BIN` if it points at an executable file (explicit override);
-  2. **`bun "$SEAM/ts/src/cli/decompose.ts"`** if `bun` is available — **prefer this inside a
-     checkout**: it always runs current source. (`bun` is on PATH here; `node`/`npm` are not.)
-  3. `bun "$SEAM/ts/dist/seam.cjs"` **with `SEAM_WASM_DIR="$SEAM/ts/dist/wasm"`** (the esbuilt bundle,
-     `cd "$SEAM/ts" && bun run build`) as a fallback — faster startup than source, but can lag if not
-     rebuilt after an engine change.
+  2. **`bun "$SEAM/ts/src/cli/decompose.ts"`** — the ONLY supported CLI path: it always runs current
+     source. (`bun` is on PATH here; `node`/`npm` are not.) There is no compiled `seam` binary — the CLI
+     is bun-only, so nothing to keep rebuilt or in sync.
   - There is **no single self-contained binary**: `bun build --compile` drops web-tree-sitter's core
     wasm and aborts on the first parse, so the build produces the `.cjs` bundle + a grammar pack instead.
 - **No `claude` binary is required.** No binary discovery happens while a host bus is active.
@@ -441,7 +439,7 @@ that marker from the captured stderr and report `deltaMs` per phase + `totalMs`.
 
 ```bash
 SEAM=/home/scorbutics/dev/code-review-sort
-ENGINE="bun $SEAM/ts/src/cli/decompose.ts"          # or: bun $SEAM/ts/dist/seam.cjs (with SEAM_WASM_DIR=$SEAM/ts/dist/wasm) if built
+ENGINE="bun $SEAM/ts/src/cli/decompose.ts"          # the CLI is bun-only (no compiled binary)
 OUT=$(mktemp -d)
 
 # ── Diff review (§A) ──────────────────────────────────────────────────────────
