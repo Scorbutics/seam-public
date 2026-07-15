@@ -74,6 +74,13 @@ const decomposeOpts = (a: Args, useLlm: boolean, skeleton?: boolean) => ({
 async function runCodebase(a: Args): Promise<number> {
   reset_usage();
   resetStages();   // stage-summary buckets (SEAM_TIMING) — detection/probe/structural/coupling/render, printed at the end
+  // IMPLY --auto for a MAP request. A codebase map (`--format agent/concern/…`, or any `--intent` grow) is a GROWN
+  // footprint — it needs the auto-grow. Users reasonably write `--scan --center <file> --intent "…" --format agent`
+  // WITHOUT `--auto`; without this it silently falls through to the diff-style decompose (the confusing
+  // `Decomposed anchor 'mod'` line) instead of the map. The legacy `--scan --anchor-file --symbol` plain-footprint
+  // path (no --center, no --intent, no map format) is untouched.
+  const _MAP_FMT = new Set(["agent", "concern", "llm-context", "waves", "scenarios", "json"]);
+  if (a.scan && !a.auto && !a.growFrom && (a.intent || _MAP_FMT.has(a.format))) a.auto = true;
   // STRUCTURAL GROW is default-ON for the ANCHORED flow-grow (CLI/MCP): the wave is intent-INDEPENDENT (up-hop
   // K=2 + hub + ubiquity contain it, the intent field is not built), so the answer cache REUSES across intents —
   // change the intent by a word and the settled footprint is served warm (the <4s responsive path). Intent then
@@ -202,8 +209,10 @@ async function runCodebase(a: Args): Promise<number> {
       return 0;
     }
     if (a.auto) {
-      // AUTO-GROW — deterministically follow the resolved crossings to the terminals, then decompose.
-      if (!(a.symbol && a.intent)) err("--auto requires --symbol and --intent");
+      // AUTO-GROW — deterministically follow the resolved crossings to the terminals, then decompose. A BARE-FILE
+      // --center (no #symbol) is a valid MODULE anchor — the concern path set `anchorSet` (kind "module") and the
+      // grow below handles the empty symbol (build_module_graph) — so require an anchor, not specifically a symbol.
+      if (!a.intent || (!a.symbol && !anchorSet && !fileAnchor)) err("--auto requires --intent and an anchor: --center <file>[#symbol]");
       const orch = await import("../codebase/grow/index.js");
       // Grow is deterministic (the intent is used downstream by the tier pass, not to pick moves). The
       // former LLM move-picker (`--grow llm`) was removed — the deterministic frontier walk reproduces it.
