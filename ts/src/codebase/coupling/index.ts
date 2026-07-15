@@ -20,7 +20,7 @@ import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
-import { routeSegs, routeMatchSpecificity, routeSuffixMatch } from "./adapters/http_route.js";
+import { routeSegs, routeMatchSpecificity, routeSuffixMatch, isBareWildcardRoute } from "./adapters/http_route.js";
 export { routeMatchSpecificity, routeSuffixMatch };
 import { complement_unit, grepFiles, couplingOtherSides, type CouplingOtherSide } from "./bridge.js";
 export { grepFiles, couplingOtherSides, type CouplingOtherSide };
@@ -92,6 +92,10 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
   // is where the flow's counterpart set is drawn, so it's the right place to match the engine-wide test exclusion.
   const out: Access[] = ((produces ? exact?.consumers : exact?.producers) ?? []).filter((a) => !isTestFile(a.file));
   if (kind !== _HTTP_ROUTE) return out;
+  // A BARE-WILDCARD route (`/*`, `/*/*`) has no literal to discriminate on — its exact-key match is every handler
+  // that shares the wildcard (a grab-bag). Never a real counterpart: drop it (the SPECIFIC sibling routes a file
+  // also emits, e.g. `/admin/realms/*/users`, still couple normally). This is the extreme of generic-route fanout.
+  if (isBareWildcardRoute(value)) return [];
   const prefix = `${_HTTP_ROUTE} `;
   // Score every fuzzy route match by SPECIFICITY (shared literal segments). ALWAYS keep the SPECIFIC matches
   // (≥2 shared literals — a real cross-stack reach), and keep a GENERIC 1-literal fragment (a bare

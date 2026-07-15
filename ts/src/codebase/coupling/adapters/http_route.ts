@@ -64,6 +64,14 @@ export function routeMatchSpecificity(a: string, b: string): number {
   return best;
 }
 export function routeSuffixMatch(a: string, b: string): boolean { return routeMatchSpecificity(a, b) >= 1; }
+// A route with NO literal segments (all `*`/params — `/*`, `/`, `/*/*`) is NON-DISCRIMINATING: it matches every
+// path, so an EXACT-key crossing on it couples a caller to every handler that happens to share the bare wildcard
+// (keycloak `users.ts` yields both `/admin/realms/*/users` AND a bare `/*` from its `/{id}` methods; the `/*`
+// dragged in AdminRoot/Organizations/… — a grab-bag). Such a route can't ground a real cross-stack counterpart.
+export function isBareWildcardRoute(value: string): boolean {
+  const segs = routeSegs(value);
+  return segs.length === 0 || segs.every((s) => s === "*");
+}
 
 // The URL a route-handler FILE serves, from its location (file-based routing). null if not a handler file.
 function handler_path(file: string): string | null {

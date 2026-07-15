@@ -141,6 +141,18 @@ describe("otherSide — generic route fanout suppression (the /summarize false-m
     expect(otherSide(index, "http-route", "/document/123", false).map((a) => a.file)).toContain("api/DocServlet.java");
   });
 
+  test("a BARE-wildcard `/*` route is non-discriminating — its exact-key grab-bag is dropped, specific siblings kept", () => {
+    // keycloak `users.ts` emits BOTH `/admin/realms/*/users` (the create base path) AND a bare `/*` (from `/{id}`
+    // methods); the `/*` exact key would drag in every handler sharing it (AdminRoot/Organizations/…).
+    const index = idx([
+      ["http-route /*", ["services/AdminRoot.java", "services/OrganizationsResource.java", "libs/users.ts"]],
+      ["http-route /admin/realms/*/users", ["services/UsersResource.java", "libs/users.ts"]],
+    ]);
+    expect(otherSide(index, "http-route", "/*", false).map((a) => a.file)).toEqual([]);   // bare wildcard grounds NOTHING
+    // …the SPECIFIC sibling route the same file also emits still couples (users.ts ⇄ UsersResource) — kc_3's real link
+    expect(otherSide(index, "http-route", "/admin/realms/*/users", false).map((a) => a.file)).toContain("services/UsersResource.java");
+  });
+
   test("a generic /summarize bucket grounding ONLY to unrelated services (no filename match) drops ALL", () => {
     // The real acme shape: BookingsService's method key is `/summarize/*/*` (own bucket, specific-matched
     // via its combined path); CompanyAdviser/Analytics use `/summarize/*` — a SEPARATE bucket that contains NONE of
