@@ -317,22 +317,44 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       if (toId !== anchorSeam && !prev.has(toId)) return [anchorSeam, toId];
       const p: string[] = []; for (let cur: string | undefined = toId; cur; cur = prev.get(cur)) { p.unshift(cur); if (cur === anchorSeam) break; } return p;
     };
-    if (!cands.length) {
-      // FRONTIER-⟂ TERMINAL — no grounded sink, but the flow provably continues DOWNSTREAM into an OPAQUE node the
-      // grow COULD NOT follow (a runtime-DI multi-impl, an unresolved import, a string dispatch). Terminate the
-      // spine THERE, honestly — naming the break + the candidate set — instead of falling to an inferred guess.
-      // An honest broken path that says WHERE it lost the thread beats a smooth wrong one (the trust rule).
+    // (b) DEFER A WEAK CROWN TO AN HONEST DI WALL — when the best grounded candidate is only a SERVICE-STATE crossing
+    // or a non-store (sink-rank < 2, NOT a real persistence) AND the flow's real persist is behind a DI wall (an
+    // interface-multiple-impls blindspot whose impls DO persist — `persists`), crowning the plumbing is MISLEADING
+    // (keycloak createUser reaches `session` service-state; the em.persist(UserEntity) is behind the UserProvider DI
+    // binding, two facades deep). Terminate at the wall and demote the weak sinks to "Also reaches". A real db-store
+    // crown (rank 2) is NEVER deferred; and it only fires when such a persisting wall actually exists in the footprint.
+    const _bestRank = cands.length ? _sinkRank(cands[0]) : -1;
+    const _persistWall = ((model.blindspots ?? []) as any[]).find((b) => b.mechanism === "interface-multiple-impls" && b.persists);
+    const _deferWeak = cands.length > 0 && _bestRank < 2 && !!_persistWall;
+    if (!cands.length || _deferWeak) {
+      // FRONTIER-⟂ TERMINAL — no (crownable) grounded sink, but the flow provably continues DOWNSTREAM into an OPAQUE
+      // node the grow COULD NOT follow (a runtime-DI multi-impl, an unresolved import, a string dispatch). Terminate
+      // the spine THERE, honestly — naming the break + the candidate set — instead of a smooth wrong crown (trust rule).
       const OPAQUE = new Set(["interface-multiple-impls", "unresolved-import", "string-dispatch", "dynamic-dispatch", "dynamic-import"]);
       const bsByNode = new Map<string, any>();
       for (const b of (model.blindspots ?? []) as any[]) if (OPAQUE.has(b.mechanism)) bsByNode.set(String(b.node), b);
+      // weak grounded sinks (session) are still REACHED — demote them to alternates so they surface in "Also reaches".
+      const _alts: Seam[] = []; { const seen = new Set<string>(); for (const s of cands) { const k = `${s.primary?.file}#${s.primary?.symbol}`; if (seen.has(k)) continue; seen.add(k); _alts.push(s); } }
+      // prefer the PERSISTING DI wall as the break target (the real persist is behind it), whether we had no grounded
+      // sink at all or only a weak service-state one; else the deepest reachable opaque stop (dynamic import, etc.).
+      const wallNode = _persistWall ? String(_persistWall.node) : null;
+      // a reachable seam that IS the wall — matched by its hunk id OR (a DI interface node) its symbol/label
+      const isWallSeam = (s: Seam) => (s.hunks ?? []).some((h: any) => bsByNode.has(String(h.id)))
+        || (!!wallNode && (s.primary?.symbol === wallNode || (s.hunks ?? []).some((h: any) => h.label === wallNode)));
       if (bsByNode.size) {
-        const stops = seams.filter((s) => dist.has(s.id) && s.id !== anchorSeam && (s.hunks ?? []).some((h: any) => bsByNode.has(String(h.id))))
+        const stops = seams.filter((s) => dist.has(s.id) && s.id !== anchorSeam && isWallSeam(s))
           .sort((a, b) => (dist.get(b.id)! - dist.get(a.id)!) || (a.id < b.id ? -1 : 1));
         if (stops.length) {
           const ids = pathTo(stops[0].id);
-          const bs = (stops[0].hunks ?? []).map((h: any) => bsByNode.get(String(h.id))).find(Boolean);
-          return { path: ids.map((id) => byId.get(id)!).filter(Boolean), alternates: [], grounded: false, terminal: "frontier", breakInfo: bs, reachSet: new Set(dist.keys()) };
+          const bs = _persistWall ?? ((stops[0].hunks ?? []).map((h: any) => bsByNode.get(String(h.id))).find(Boolean));
+          return { path: ids.map((id) => byId.get(id)!).filter(Boolean), alternates: _deferWeak ? _alts : [], grounded: false, terminal: "frontier", breakInfo: bs, reachSet: new Set(dist.keys()) };
         }
+      }
+      // no reachable wall SEAM (the interface node itself isn't in the footprint), but we KNOW the persisting wall —
+      // terminate at the anchor and disclose it, rather than crowning the plumbing sink (or saying "no boundary").
+      if (_persistWall) {
+        const aSeam = byId.get(anchorSeam);
+        return { path: aSeam ? [aSeam] : [], alternates: _alts, grounded: false, terminal: "frontier", breakInfo: _persistWall, reachSet: new Set(dist.keys()) };
       }
       return { ...empty, reachSet: new Set(dist.keys()) };
     }

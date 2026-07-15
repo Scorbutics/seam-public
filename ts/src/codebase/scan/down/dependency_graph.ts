@@ -383,9 +383,18 @@ async function _followInterface(s: DepScan, iface: string, cap: number, methods:
   const ranked = _rankImpls(s.repo, cands, (f) => _persistOf.get(f) ?? 0);
   const take = ranked.slice(0, cap), rest = ranked.slice(cap);
   for (const c of take) await bind(c);
+  // `persists` = an impl of this interface GROUNDS a db-store write (its real binding is a persistence). The crown
+  // uses it to defer a weak service-state culmination to this DI wall — "the persist is behind the DI binding" —
+  // rather than crowning plumbing (keycloak createUser: the UserProvider wall hides JpaUserProvider.addUser).
+  const persistImpls = ranked.filter((c) => (_persistOf.get(c.file) ?? 0) > 0);
+  const persists = persistImpls.length > 0;
+  // LEAD with the PERSISTING impl(s) in the disclosure — for a persisting wall the dev wants to `--grow-from` the
+  // impl that actually does the em.persist (JpaUserProvider), NOT just the unfollowed cache wrapper. They may be in
+  // the FOLLOWED set (bound to the shallow read the anchor calls, e.g. getUsersCount, so the deep write is unreached).
+  const _candList = [...persistImpls, ...rest.filter((r) => !persistImpls.some((p) => p.file === r.file))];
   if (rest.length) s.blindspots.push({ node: iface, mechanism: "interface-multiple-impls",
     evidence: `${iface} has ${cands.length} implementations${take.length ? ` (followed ${take.length}, structurally-ranked)` : ""} — the runtime DI binding can't be picked statically; grow the rest explicitly`,
-    candidates: rest.map((c) => ({ symbol: c.cls, file: c.file })) });
+    candidates: _candList.map((c) => ({ symbol: c.cls, file: c.file })), ...(persists ? { persists: true } : {}) });
   return true;
 }
 // Method names the anchor INVOKES in its own span (qualified `x.m()` or bare `m()`), for a METHOD/FUNCTION anchor —

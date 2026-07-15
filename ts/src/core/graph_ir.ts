@@ -58,7 +58,7 @@ export function mkNode(p: Partial<Node> & { id: string }): Node {
 // "type-ref" | "data-coupling" | a specific coupling-medium pair (e.g. "db-write"/"db-read") — the closed
 // set lives in the data-coupling module's adapter registry, not here (this file stays framework-agnostic).
 export interface Edge { src: string; dst: string; kind: string; provenance: Provenance; line: number; op?: string; }   // op = a data-WRITE's op-class (create/update/delete), when the coupling classified it — for the spine crown
-export interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: Edge[]; }
+export interface BlindSpot { node: string; mechanism: string; evidence: string; candidates: Array<Edge & { file?: string }>; persists?: boolean; }
 // A tier-3 decision point: a node whose fan the convergence grow declined (off-intent pivot / collapsed hub /
 // node budget). Kept in the region + surfaced as a ranked handle the caller deepens from (I3 — never silently cut).
 export interface FrontierPoint { id: string; symbol: string; file: string; kind: string; reachedVia: string; score: number; cutBy: "decision" | "hub" | "border" | "budget"; }
@@ -196,9 +196,11 @@ export function from_resolved_graph(data: any): Graph {
     const key = `${bs.node} ${bs.mechanism ?? ""}`;
     if (seenBs.has(key)) continue;
     seenBs.add(key);
-    const candidates: Edge[] = (bs.candidates ?? []).map((c: any) =>
-      ({ src: bs.node, dst: c.symbol ?? "", kind: "blindspot", provenance: "SUGGESTED" as Provenance, line: 0 }));
-    g.blindspots.push({ node: bs.node, mechanism: bs.mechanism ?? "", evidence: bs.evidence ?? "", candidates });
+    const candidates: Array<Edge & { file?: string }> = (bs.candidates ?? []).map((c: any) =>
+      ({ src: bs.node, dst: c.symbol ?? c.dst ?? "", kind: "blindspot", provenance: "SUGGESTED" as Provenance, line: 0, ...(c.file ? { file: c.file } : {}) }));
+    // preserve `persists` (a DI wall hiding a real persistence) so the crown can defer a weak service-state culmination
+    // to it — the reconstruction previously kept only node/mechanism/evidence/candidates and dropped it.
+    g.blindspots.push({ node: bs.node, mechanism: bs.mechanism ?? "", evidence: bs.evidence ?? "", candidates, ...(bs.persists ? { persists: true } : {}) });
   }
   g.unresolved = [...(data.unresolved ?? [])];
   return g;

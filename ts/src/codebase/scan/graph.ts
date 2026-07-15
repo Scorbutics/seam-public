@@ -43,6 +43,7 @@ export interface Blindspot {
   mechanism: string;
   evidence: string;
   candidates: any[];       // shape varies by mechanism (string[] of class names, {file,symbol,provenance}, …)
+  persists?: boolean;      // (interface-multiple-impls) an impl grounds a db-store write → a DI wall hiding a persist
 }
 
 // A query the engine couldn't resolve statically — a lead for the LSP/extension layer to follow.

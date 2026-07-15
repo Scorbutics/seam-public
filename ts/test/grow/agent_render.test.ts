@@ -614,6 +614,31 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).not.toContain("bookingSeat");    // …not the later FK child, despite its higher embedding relevance
   });
 
+  // DEFER-TO-DI-WALL — the only grounded sink reached is a SERVICE-STATE crossing (`session`, plumbing), and the
+  // real persist is behind a DI wall (an interface-multiple-impls blindspot whose impls PERSIST). The spine must NOT
+  // crown the misleading `session`; it terminates at the wall and names the persisting candidate (keycloak createUser
+  // → the em.persist(UserEntity) is behind UserProvider's runtime binding, JpaUserProvider).
+  test("weak service-state crown is deferred to the persisting DI wall (frontier ⟂), not crowned", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how does creating a user persist it to the database", seams: [
+        { id: "a", label: "createUser", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "admin/UsersResource.java", line: 1, symbol: "createUser" }, hunks: [{ id: "cb", file: "admin/UsersResource.java", start: 1, role: "core", label: "createUser" }] },
+        { id: "se", label: "session", tier: "off", region: { shell: 1, direction: "down" }, primary: { file: "utils/RepresentationToModel.java", line: 1, symbol: "session" }, hunks: [{ id: "seh", file: "utils/RepresentationToModel.java", start: 1, role: "environment", label: "session", kind: "service" }] },
+      ] }],
+      edges: [{ from: "cb", to: "seh", kind: "service-write", line: 5 }],
+      blindspots: [{ node: "UserProvider", mechanism: "interface-multiple-impls",
+        evidence: "UserProvider has 4 implementations (followed 3, structurally-ranked) — the runtime DI binding can't be picked statically",
+        candidates: [{ symbol: "JpaUserProvider", file: "jpa/JpaUserProvider.java" }], persists: true }],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does creating a user persist it to the database" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("interface-multiple-impls");   // the DI wall is disclosed as the honest terminus…
+    expect(spine).toContain("JpaUserProvider");            // …naming the persisting candidate to --grow-from…
+    expect(spine).not.toContain("──▶ session");            // …and `session` (plumbing) is NOT crowned as the outcome
+  });
+
   // STORE over SERVICE-STATE — a real db-store persistence (`UserRoleMapping`) is the culmination; a shared
   // service-state crossing (`session`) is plumbing and must never out-crown a store, even when it sorts earlier.
   test("store persistence out-crowns a service-state crossing (keycloak session vs UserRoleMapping)", () => {
