@@ -81,6 +81,31 @@ async function runCodebase(a: Args): Promise<number> {
   // path (no --center, no --intent, no map format) is untouched.
   const _MAP_FMT = new Set(["agent", "concern", "llm-context", "waves", "scenarios", "json"]);
   if (a.scan && !a.auto && !a.growFrom && (a.intent || _MAP_FMT.has(a.format))) a.auto = true;
+  // SINGLE-DEF FILE CENTER → pin that def (structural), don't fall into CONCERN. A bare `--center <file>`
+  // leaves a.symbol unset, which routes an intent grow into concern/center-first mode — SEMANTIC, and the
+  // region + Cross-stack are ranked by intent RELEVANCE, which can crown an off-subject shared-key cluster
+  // (e.g. a high-fan `/member/v1/survey` route out-scoring the actual `/member/booking/v1` routes) over the
+  // structurally-nearer flow. But when the file holds exactly ONE top-level definition — the single-class
+  // Java file / single exported component, the common case — the user means "anchor THAT symbol", identical
+  // to `--center <file>#<Sym>`. Resolve it STRUCTURALLY (the file's top-level defs from the registry — no
+  // names, no embeddings) and pin the symbol, so it takes the intent-free structural path (by-shell region
+  // ordering) instead. A file with 0 or ≥2 top-level defs is genuinely plural → stays a module/concern
+  // anchor. Skipped when the caller forced --concern, passed a multi-center list, or already pinned a symbol.
+  if (a.scan && a.auto && a.intent && !a.symbol && !a.growFrom && !a.concern && a.center && a.anchorFile) {
+    const centers = parseCenters(a.center);
+    if (centers.length === 1 && !centers[0].symbol) {
+      try {
+        const { enumerate_defs } = await import("../codebase/scan/index.js");
+        const defs = await enumerate_defs(a.repo, 4000, new Set([a.anchorFile]));
+        const primary = defs.filter((d) => d.enclosing === "" && d.kind !== "method");
+        if (primary.length === 1) {
+          a.symbol = primary[0].name;
+          a.center = `${centers[0].file}#${primary[0].name}`;   // rewrite the center too: the direct-vs-concern gate (below) reads parseCenters(a.center), so a bare file must become file#sym to take the direct trace
+          process.stderr.write(`[center] ${a.anchorFile} has a single top-level definition '${a.symbol}' — anchoring it structurally (add #<sym> to pin another, or --concern for the semantic map)\n`);
+        }
+      } catch { /* best-effort structural resolution — fall through to the module/concern anchor on any failure */ }
+    }
+  }
   // STRUCTURAL GROW is default-ON for the ANCHORED flow-grow (CLI/MCP): the wave is intent-INDEPENDENT (up-hop
   // K=2 + hub + ubiquity contain it, the intent field is not built), so the answer cache REUSES across intents —
   // change the intent by a word and the settled footprint is served warm (the <4s responsive path). Intent then
