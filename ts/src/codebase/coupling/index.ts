@@ -85,13 +85,27 @@ const _GENERIC_ROUTE_FANOUT_CAP = 1;
 // Exact-key matches, plus (for http-route) suffix-aliased route keys, so a full-URL caller grounds to a
 // sub-path/wildcard handler and vice-versa. Dedup is handled downstream (complementFiles).
 export function otherSide(index: GroundingIndex, kind: string, value: string, produces: boolean): Access[] {
+  return otherSideScored(index, kind, value, produces).map((s) => s.access);
+}
+// The SCORED counterpart lookup — every counterpart access tagged with the SPECIFICITY of the route it matched
+// on (an exact key = its full literal count; a fuzzy suffix = its shared-literal count; non-route = 0). `otherSide`
+// drops the score; `collectComplementFiles` KEEPS it so, for a resource file that emits many sibling routes, a
+// key resolves to the access on its MOST-SPECIFIC route (the `/…/v1/*/cancel` handler at its own line) instead of
+// the earliest-line PREFIX match (the base `/…/v1` getBookings) — otherwise every sub-route collapses onto one
+// handler node. Exact-match accesses carry the value's own literal count, which is ≥ any fuzzy match, so exact
+// always wins its file.
+function otherSideScored(index: GroundingIndex, kind: string, value: string, produces: boolean): { access: Access; spec: number }[] {
   const exact = index.get(keyId(kind, value));
+  // exact match is maximally specific: score it by the key's OWN literal-segment count (≥ any fuzzy sub/suffix
+  // match, which can share at most that many literals). Non-route keys score 0 uniformly (spec plays no role).
+  const exactSpec = kind === _HTTP_ROUTE ? routeSegs(value).filter((s) => s !== "*").length : 0;
   // Drop TEST/fixture accesses — a `.integration-test`/`.e2e-spec`/seed file that reads or writes the key is not a
   // real coupling counterpart of the flow (an intent's subject `booking` was flooded by integration-test writers on
   // cal.com, crowding out the real producers). The shared-key INDEX keeps them (it's content-cached + also feeds
   // hub-fan stats); this OTHER-SIDE lookup — the single choke point that turns an index entry into a crossing node —
   // is where the flow's counterpart set is drawn, so it's the right place to match the engine-wide test exclusion.
-  const out: Access[] = ((produces ? exact?.consumers : exact?.producers) ?? []).filter((a) => !isTestFile(a.file));
+  const out: { access: Access; spec: number }[] = ((produces ? exact?.consumers : exact?.producers) ?? [])
+    .filter((a) => !isTestFile(a.file)).map((access) => ({ access, spec: exactSpec }));
   if (kind !== _HTTP_ROUTE) return out;
   // A BARE-WILDCARD route (`/*`, `/*/*`) has no literal to discriminate on — its exact-key match is every handler
   // that shares the wildcard (a grab-bag). Never a real counterpart: drop it (the SPECIFIC sibling routes a file
@@ -113,7 +127,7 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
     if (spec >= 1) scored.push({ spec, accesses: (produces ? v.consumers : v.producers).filter((a) => !isTestFile(a.file)) });
   }
   const hasSpecific = scored.some((s) => s.spec >= 2);
-  for (const s of scored) if (s.spec >= 2) out.push(...s.accesses);   // a SPECIFIC (≥2-literal) match is always kept
+  for (const s of scored) if (s.spec >= 2) out.push(...s.accesses.map((access) => ({ access, spec: s.spec })));   // a SPECIFIC (≥2-literal) match is always kept
   if (!hasSpecific) {
     // GENERIC fallback — a single shared literal (a bare `/summarize/*` method-@Path with no combinable class
     // base). A SOLE mount (`/document/*` servlet → one file) is a real coupling: keep it. But when the segment
@@ -124,11 +138,11 @@ export function otherSide(index: GroundingIndex, kind: string, value: string, pr
     // un-discriminable many-file generic is coincidental, not a coupling. (Every disambiguable real coupling is
     // already preserved above — the ≥2-literal SPECIFIC match and the sole-mount generic.) This stops the booking
     // flow dragging in every `summarize` service (CompanyAdviser/Analytics/…) via the bare `/summarize/*` key.
-    const generics = scored.filter((s) => s.spec < 2).flatMap((s) => s.accesses);
-    const files = new Set(generics.map((a) => a.file));
+    const generics = scored.filter((s) => s.spec < 2).flatMap((s) => s.accesses.map((access) => ({ access, spec: s.spec })));
+    const files = new Set(generics.map((g) => g.access.file));
     if (files.size <= _GENERIC_ROUTE_FANOUT_CAP) { out.push(...generics); return out; }
     const segs = routeSegs(value).filter((x) => x !== "*" && x.length >= 4);
-    const disc = generics.filter((a) => segs.some((seg) => a.file.toLowerCase().includes(seg.toLowerCase())));
+    const disc = generics.filter((g) => segs.some((seg) => g.access.file.toLowerCase().includes(seg.toLowerCase())));
     out.push(...disc);   // many-file generic, no discriminating filename → coincidental common word → drop all
   }
   return out;
@@ -602,14 +616,21 @@ function orderComplementsByRelevance(
 }
 
 // The NEAR-side lookup for one key: its complement files — the OTHER side from the index (exact + route
-// suffix aliases), the anchor's own file dropped, deduped to file → earliest line (one complement node per
-// file, located at its first access).
+// suffix aliases), the anchor's own file dropped, ONE complement node per file located at the access on the
+// MOST-SPECIFIC matching route (tie → earliest line). Specificity — not earliest line — is what keeps a
+// sub-route key (`/…/v1/*/cancel`) landing on ITS OWN handler (`cancelBooking`) rather than collapsing onto
+// the earlier-line base handler (`getBookings`) that the fuzzy prefix match also returns: a JAX-RS resource
+// with N sibling routes then surfaces N distinct handler nodes, not one class-line node. (Non-route keys all
+// score 0, so this degrades to the old earliest-line behaviour.)
 function collectComplementFiles(index: GroundingIndex, key: AnchorKey, anchorPath: string): Map<string, number> {
-  const complementFiles = new Map<string, number>();
-  for (const access of otherSide(index, key.kind, key.value, key.produces)) {
+  const best = new Map<string, { line: number; spec: number }>();
+  for (const { access, spec } of otherSideScored(index, key.kind, key.value, key.produces)) {
     if (normpath(access.file) === anchorPath) continue;
-    if (!complementFiles.has(access.file) || access.line < complementFiles.get(access.file)!) complementFiles.set(access.file, access.line);
+    const cur = best.get(access.file);
+    if (!cur || spec > cur.spec || (spec === cur.spec && access.line < cur.line)) best.set(access.file, { line: access.line, spec });
   }
+  const complementFiles = new Map<string, number>();
+  for (const [file, v] of best) complementFiles.set(file, v.line);
   return complementFiles;
 }
 
