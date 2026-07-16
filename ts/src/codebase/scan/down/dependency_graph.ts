@@ -448,12 +448,38 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
     const { recv, method } = parts;
     const file = await receiverClassFile(recv);
     if (!file) {
-      // receiver isn't a class, but may be an INTERFACE-TYPED field/param → follow the interface (method-precise)
-      const iface = declType.get(recv);
-      if (iface && !s.seen.has(`ifield:${recv}.${method}`)) {
-        if (await _followInterface(s, iface, _implCap(), method, cl, "interface-impl")) s.seen.add(`ifield:${recv}.${method}`);
+      // receiver isn't a class TOKEN — resolve it via its DECLARED TYPE (declType: a field / ctor-param / local
+      // annotation, `RecordRepo repo` / `RoleMapperModel roleMapper`). Two grounded shapes:
+      //   • CONCRETE in-repo class (`repo.save()`, repo: RecordRepo) → follow the method in THAT class,
+      //     method-precisely — the plain field-receiver call that IS the data-layer descent (bean → repo → the DB
+      //     write it does). Without this the call vanished and the leaf read as unreachable (the BookingsBean gap).
+      //   • INTERFACE type (`roleMapper.grantRole()`) → follow its impls (the existing DI hop).
+      // GROUNDED (the four-invariant rule): the declared type is a real resolved class/interface and the method a
+      // real unit in it — never a name guess. The concrete-class edge is RESOLVED_FULL: the impls-empty gate below
+      // means NO subclass/impl override exists, so the method unambiguously IS in that exact class (no overload
+      // ambiguity) — and FULL lets the grow flood THROUGH it to the next hop (a RESOLVED_PARTIAL `call` is treated
+      // as a bare-name match by the grounded-reach gate and would stop the descent one hop short).
+      const declared = declType.get(recv);
+      if (declared) {
+        // INTERFACE vs CONCRETE class — grounded on the impl index, NOT the unit kind (`_named_units` labels an
+        // interface "class" too, so a kind check misroutes). A type WITH impls is an interface/base → follow the DI
+        // impl (the existing `roleMapper.grantRole()` hop). NO impls → a concrete class → follow the method in it
+        // directly (the `repo.save()` data-layer descent this fix adds).
+        const hasImpls = (await impls_of(s.repo, declared)).length > 0;
+        if (hasImpls) {
+          if (!s.seen.has(`ifield:${recv}.${method}`) && await _followInterface(s, declared, _implCap(), method, cl, "interface-impl")) s.seen.add(`ifield:${recv}.${method}`);
+        } else {
+          const tfile = await receiverClassFile(declared);                           // the concrete class's own file (null if unresolved)
+          const defu = tfile && !s.seen.has(`${method} ${tfile}`)
+            ? (await unitsOf(tfile)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function")) : undefined;
+          if (tfile && defu) {
+            s.seen.add(`${method} ${tfile}`); s.counter += 1; const did = `d${s.counter}`;
+            s.nodes.push({ id: did, symbol: method, kind: defu[1], file: tfile, range: [defu[2], defu[3]], enclosing: recv, complexity: Math.max(1, defu[3] - defu[2] + 1) });
+            s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_FULL", line: cl });
+          }
+        }
       }
-      continue;                                                                      // otherwise out of scope (a local of a concrete class, etc.)
+      continue;
     }
     if (s.seen.has(`${method} ${file}`)) continue;                                   // already a node (another pass resolved it)
     const defu = (await unitsOf(file)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));

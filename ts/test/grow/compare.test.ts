@@ -7,20 +7,24 @@ import { projectCompare } from "../../src/codebase/grow/compare.js";
 const repo = join("test", "fixtures", "class-repo");
 
 describe("projectCompare", () => {
-  test("overlap: checkout and admin both depend on PaymentService → 100% similar", async () => {
+  test("overlap: checkout and admin share PaymentService; admin's typed-receiver methods resolve too", async () => {
     const c = await projectCompare(repo, "src/checkout.ts", "checkout", "src/admin.ts", "admin");
     expect(c.shape).toBe("comparison");
     expect(c.shared.map((d) => d.symbol)).toEqual(["PaymentService"]);
     expect(c.aOnly).toHaveLength(0);
-    expect(c.bOnly).toHaveLength(0);
-    expect(c.similarity).toBe(1);
+    // admin(s: PaymentService) calls s.charge()/s.refund() → the typed-receiver call fix resolves those methods
+    // (concrete-class field/param receiver → method-precise call edge). checkout's svc.charge() is NOT resolved —
+    // svc is an UNTYPED `new PaymentService()` local (the separate untyped-local limitation), so the two methods
+    // read as admin-only. Partial overlap now, not the old binary 100%.
+    expect(c.bOnly.map((d) => d.symbol).sort()).toEqual(["charge", "refund"]);
+    expect(c.similarity).toBeCloseTo(1 / 3, 5);
   });
 
-  test("divergence: Page (→checkout) vs admin (→PaymentService) are disjoint", async () => {
+  test("divergence: Page (→checkout) vs admin (→PaymentService.charge/refund) are disjoint", async () => {
     const c = await projectCompare(repo, "src/page.ts", "Page", "src/admin.ts", "admin");
     expect(c.shared).toHaveLength(0);
     expect(c.aOnly.map((d) => d.symbol)).toEqual(["checkout"]);
-    expect(c.bOnly.map((d) => d.symbol)).toEqual(["PaymentService"]);
+    expect(c.bOnly.map((d) => d.symbol).sort()).toEqual(["PaymentService", "charge", "refund"]);
     expect(c.similarity).toBe(0);
   });
 
