@@ -15,7 +15,8 @@
 //   • CALLER-FILES CASES stay live (a class/interface DOWN footprint varies by the files that reached it).
 // Gated by SEAM_GRAPH_CACHE (graphCacheEnabled). Off → build_footprint runs live, byte-identical to today.
 import { statSync, readFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
+import { join, relative, dirname } from "node:path";
 import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/index_cache.js";
 import { walk } from "../../core/resolve/walk.js";
 import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
@@ -26,9 +27,40 @@ const CACHE = "footprint-v1";
 // ENGINE EPOCH — folded into every cache key so a seam UPDATE auto-invalidates stale answers. The graph cache
 // keys on repo SOURCE + learned matchers, NOT the engine version, so without this a warm `.seam` replays the
 // PREVIOUS binary's cached grow/footprint even after the resolution logic changed (the "I updated seam but see
-// the old result, --no-cache made no difference" trap). BUMP this whenever a change alters cached output
-// (resolution/grow/coupling/render-of-cached-graph); any bump makes every stored entry miss → recompute once.
-const ENGINE_EPOCH = "5";   // 5: concrete-class field/param receiver call → method-precise call edge (the data-layer descent). 4: JPA @Entity/@Table → db-table adapter (JPA persist/find/JPQL grounds the DB boundary)
+// the old result, --no-cache made no difference" trap).
+//
+// AUTO-DERIVED (no manual bump): a content hash of the engine's OWN footprint-shaping source (codebase/ core/
+// languages/), computed ONCE per process. ANY edit to how a footprint is built changes the hash → every stored
+// entry misses → recompute once, on BOTH a dev checkout (an uncommitted edit bumps it — no stale hits while
+// iterating) and a deployed pull. This retires the manual counter that silently masked the field-receiver-call
+// fix on warm repos (it changed footprint output but wasn't bumped). 139 files / ~1.4MB, read once, memoised.
+// FALLBACK: a constant used only when the source tree isn't walkable (a bundled .cjs — import.meta/the dir layout
+// is gone); there the RELEASE is the version boundary, so bump the constant per release.
+const _ENGINE_EPOCH_FALLBACK = "5";
+let _engineEpoch: string | null = null;
+// Content hash of a source tree's `*.ts` under codebase/ core/ languages/ (the footprint-shaping surface). PURE
+// (no memo, srcRoot is a param) so it's testable against a fixture tree. "" when nothing hashable (not walkable).
+export function _hashEngineSource(srcRoot: string): string {
+  const parts: string[] = [];
+  for (const sub of ["codebase", "core", "languages"]) {
+    for (const [dir, files] of walk(join(srcRoot, sub), SKIP_DIRS)) for (const fn of files) {
+      if (!fn.endsWith(".ts")) continue;
+      const abs = join(dir, fn);
+      try { parts.push(`${relative(srcRoot, abs).replace(/\\/g, "/")}:${_hash(readFileSync(abs, "utf-8"))}`); } catch { /* unreadable → skip */ }
+    }
+  }
+  return parts.length ? _hash(parts.sort().join("\n")) : "";
+}
+function engineEpoch(): string {
+  if (_engineEpoch != null) return _engineEpoch;
+  _engineEpoch = _ENGINE_EPOCH_FALLBACK;
+  try {
+    const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");   // ts/src (this file is ts/src/codebase/scan/footprint_cache.ts)
+    const h = _hashEngineSource(srcRoot);
+    if (h) _engineEpoch = h;
+  } catch { /* source tree not walkable (bundled) → keep the fallback constant */ }
+  return _engineEpoch;
+}
 type Entry = { e: string; g: ResolvedGraph };   // e = repo content epoch under which g was computed
 type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified|coupling" → entry
 
@@ -84,7 +116,7 @@ export function epochOf(repo: string): string {
     parts.push(`${rel}:${e.h}`);
   }
   if (useDisk) for (const k of Object.keys(memo)) if (!seen.has(k)) { delete memo[k]; dirty = true; }   // prune deleted files
-  const e = parts.length ? _hash(ENGINE_EPOCH + "\n" + parts.sort().join("\n")) : "";   // engine epoch → a seam update invalidates
+  const e = parts.length ? _hash(engineEpoch() + "\n" + parts.sort().join("\n")) : "";   // engine epoch (auto-derived) → a seam update invalidates
   if (useDisk && dirty) saveShard(repo, CONTENT_MEMO, "index", memo);
   _epoch.set(repo, e);
   return e;
