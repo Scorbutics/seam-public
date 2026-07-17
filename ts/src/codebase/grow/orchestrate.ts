@@ -173,8 +173,22 @@ function _rehydrateFanDeltaMethodPrecise(
     const caller = _enclosing(units, L);
     if (isMethod(caller)) { const set = adj.get(caller) ?? adj.set(caller, new Set()).get(caller)!; for (const d of defs) if (d !== caller) set.add(d); }
   }
+  // Seed the same-file call closure from the reached node's method AND EVERY grown footprint method in this file —
+  // not just `reached`. The fan couples a boundary file ONCE (post-seed, before the wave has expanded the deep
+  // delegates), and the triggering node is often the CLASS node (grounded via the file's `import` edge) or a
+  // shallow method, so a `reached`-only closure is empty (a class has no in-body calls) or stops short — dropping a
+  // db-write that sits several delegate hops down (BookingsBean.updateBooking → step1 → … →
+  // updateAndSaveMemberBookingEntity → em.merge) as "bleed", though that method IS on the grown flow (the shallow
+  // acme write in updateBooking survived only because its method was already a footprint node; the deep write
+  // vanished — the reproduced Acme "no grounded boundary" case). The adjacency above is the FILE's REAL
+  // call graph (independent of what the wave has grown yet), so seeding from any grown method reaches the deep write
+  // regardless of coupling timing. A write reachable from a grown method is on a grown flow (not bleed); a truly
+  // unrelated sibling that no grown method calls stays out of the closure and is still dropped.
   const closure = new Set<Unit>();
-  if (isMethod(reached)) { const st: Unit[] = [reached]; closure.add(reached); while (st.length) { const A = st.pop()!; for (const B of adj.get(A) ?? []) if (!closure.has(B)) { closure.add(B); st.push(B); } } }
+  const seedMethods: Unit[] = [];
+  if (isMethod(reached)) seedMethods.push(reached);
+  for (const fn of fileNodes) { const mu = _enclosing(units, fn.range[0]); if (isMethod(mu)) seedMethods.push(mu); }
+  for (const seed of seedMethods) if (!closure.has(seed)) { const st: Unit[] = [seed]; closure.add(seed); while (st.length) { const A = st.pop()!; for (const B of adj.get(A) ?? []) if (!closure.has(B)) { closure.add(B); st.push(B); } } }
   // renumber boundary/complement nodes into the `fc` namespace (as _rehydrateFanDelta does)
   const idmap = new Map<string, string>();
   let ctr = counter;
