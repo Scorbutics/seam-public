@@ -69,6 +69,16 @@ function scan(file: string, text0: string): KeyHit[] {
   // 4) Spring-Data / Hibernate save of a freshly-constructed entity.
   const save = /\.(?:save|saveAndFlush|saveOrUpdate|persistAndFlush)\s*\(\s*new\s+([A-Z]\w*)/g;
   while ((m = save.exec(text))) add(m[1], lineOf(text, m.index), true);
+  // 4b) `new X()` CONSTRUCTION of an entity → a db-WRITE of X. A JPA entity is constructed to be persisted (the
+  //     read path uses find/JPQL, not `new`), so the construction is the write signal that SURVIVES a custom
+  //     persistence layer: when the actual persist is behind a custom EntityManager wrapper (`mJpaEm.stopAndStart`)
+  //     or a chain of save-helpers — a verb this adapter can't match, and where the entity TYPE is erased to
+  //     `Object` at the wrapper boundary — the typed `new MemberBooking()` up in the bean is the only grounded
+  //     link left (the acme case). NOT gated to a verb here; the CO-OCCURRENCE grounding keeps a `new X()` write
+  //     ONLY where an `@Entity X` / SQL table of the same name exists on the other side, so `new ArrayList()` and
+  //     any non-entity construction are dropped and never fabricate a table.
+  const ctor = /\bnew\s+([A-Z]\w*)\s*\(/g;
+  while ((m = ctor.exec(text))) add(m[1], lineOf(text, m.index), true);
   // 5) JPQL `from X` inside a query/named-query string. The keyword is case-INSENSITIVE (`from`/`FROM`), but the
   //    ENTITY must be PascalCase — a JPA entity always starts uppercase. Guard on the first char: the `i` flag would
   //    otherwise let `([A-Z]\w*)` match a lowercase word (`from where`, `from stream`, `select … from query`),
