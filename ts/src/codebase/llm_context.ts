@@ -386,10 +386,50 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // (reachSet non-empty), keep only band seams STRUCTURALLY reachable from it — the anchor's real downstream flow —
   // dropping the drift. When the anchor didn't resolve to a seam (reachSet empty — a hand-built model whose anchor id
   // isn't a hunk, or a fully-opaque center) we can't compute flow, so trust the emit's band as-is. (SEAM_SPINE_TRUST_GATE=0 opts out.)
-  const spineSeams = _spine.path.length ? _spine.path
+  const _downSpine = _spine.path.length ? _spine.path
     : (process.env.SEAM_SPINE_TRUST_GATE !== "0" && _spine.reachSet.size
         ? seams.filter((s) => tierOf(s) === "spine" && _spine.reachSet.has(s.id))
         : seams.filter((s) => tierOf(s) === "spine"));
+  // ENTRY-ROOTED SPINE (SEAM_SPINE_ENTRY, default-off) — the core spine is DOWNSTREAM-only (anchor → sink), so a
+  // MID-flow anchor leaves the flow's ENTRY (the member's UI action / REST endpoint) in the region, not the spine.
+  // Trace UP over CALLER edges (the `reachSeam` convention: caller = e.from, callee = e.to — NO fwd flip; that's how
+  // the render derives "called by X"), hopping the cross-stack ROUTE crossing to the front-end, then PREPEND `entry →
+  // … → anchor`. NOTE seamOfId maps a node → the seam's ID STRING; byId maps that back to the Seam. A STORE seam is a
+  // SINK, never a caller (excluded, else the anchor's own db-write back-edge reads as an upstream caller). Entry =
+  // deepest reached CODE seam (has source files, not boundary/store), preferring one across a crossing (the UI).
+  // ADDITIVE: the tuned down-only core is untouched; only prepends, only when a grounded downstream spine exists.
+  const _entryChain = (): Seam[] => {
+    if (process.env.SEAM_SPINE_ENTRY !== "1" || !_downSpine.length) return [];
+    const anchorSid = seamOfId.get(String(model.anchor));
+    if (!anchorSid) return [];
+    const byId = new Map(seams.map((s) => [s.id, s]));
+    const isStore = (sid: string) => { const s = byId.get(sid); return !!s && _STORE_KINDS.has((primaryHunk(s) as any)?.kind ?? ""); };
+    const isCode = (sid: string) => { const s = byId.get(sid); return !!s && sid !== anchorSid && filesOf(s).length > 0 && !isBoundarySeam(s) && !isStore(sid); };
+    const up = new Map<string, { sid: string; cross: boolean }[]>();   // callee seam → its caller seams (caller = e.from)
+    const addUp = (callee: string, caller: string, cross: boolean) => { if (callee !== caller && !isStore(caller)) (up.get(callee) ?? up.set(callee, []).get(callee)!).push({ sid: caller, cross }); };
+    for (const e of (model.edges ?? []) as any[]) {
+      if (e.kind === "contains") continue;
+      const fromSid = seamOfId.get(String(e.from)), toSid = seamOfId.get(String(e.to));
+      if (!fromSid || !toSid) continue;
+      // A CALL edge is directional: caller = e.from. A CROSS-STACK crossing (HTTP route) is a PEER relationship —
+      // the UI and the REST handler both attach to the route boundary — so walk it BOTH ways to reach the front-end.
+      if (_CROSS_KINDS.has(e.kind)) { addUp(fromSid, toSid, true); addUp(toSid, fromSid, true); }
+      else addUp(toSid, fromSid, false);
+    }
+    const dist = new Map<string, number>([[anchorSid, 0]]); const prev = new Map<string, string>(); const crossHop = new Set<string>();
+    for (const q = [anchorSid]; q.length; ) {
+      const c = q.shift()!; const d = dist.get(c)!;
+      for (const { sid, cross } of up.get(c) ?? []) if (!dist.has(sid)) { dist.set(sid, d + 1); prev.set(sid, c); q.push(sid); if (cross) crossHop.add(sid); }
+    }
+    const cand = [...dist].filter(([sid]) => isCode(sid)).map(([sid, d]) => ({ sid, d, cross: crossHop.has(sid) }));
+    if (!cand.length) return [];
+    cand.sort((a, b) => (Number(b.cross) - Number(a.cross)) || (b.d - a.d));   // prefer the cross-stack (UI) entry, else the deepest code caller
+    const path: Seam[] = []; const seen = new Set<string>();
+    for (let sid: string | undefined = cand[0].sid; sid && sid !== anchorSid; sid = prev.get(sid)) { const s = byId.get(sid); if (s && isCode(sid) && !seen.has(sid)) { seen.add(sid); path.push(s); } }
+    return path;   // entry → … → caller-of-anchor
+  };
+  const _entry = _entryChain(); const _dset = new Set(_downSpine.map((s) => s.id));
+  const spineSeams = [..._entry.filter((s) => !_dset.has(s.id)), ..._downSpine];
   const spineSet = new Set(spineSeams.map((s) => s.id));
   const spineAlternates = _spine.alternates;
   const altSet = new Set(spineAlternates.map((s) => s.id));
