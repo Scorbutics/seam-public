@@ -30,10 +30,17 @@ function scan(file: string, text0: string): KeyHit[] {
 
   // 1) `@Entity` declaration → the table boundary. Key on the class name (JPA callers name the class) AND the
   //    @Table name (raw SQL names the table) so a caller and a SQL reader both couple to this one boundary.
-  const ent = /@Entity\b[\s\S]{0,400}?\bclass\s+([A-Z]\w*)/g;
+  //    `@Entity` binds to the class DIRECTLY BELOW it — bind to the FIRST `class` after it, NOT a fixed char
+  //    distance: a big javadoc or `@NamedQueries` block between `@Entity` and `class` used to push the class past
+  //    a 400-char cap → the entity boundary was missed and its writers found no other side (acme MemberBooking).
+  //    Comments are masked and JPQL strings don't contain `class X`, so the first `class` after `@Entity` is it.
+  const ent = /@Entity\b/g;
   while ((m = ent.exec(text))) {
-    const cls = m[1], line = lineOf(text, m.index);
-    const tbl = /@Table\s*\(\s*name\s*=\s*"([^"]+)"/.exec(text.slice(m.index, m.index + 400))?.[1];
+    const rest = text.slice(m.index);
+    const cm = /\bclass\s+([A-Z]\w*)/.exec(rest);
+    if (!cm) continue;
+    const cls = cm[1], line = lineOf(text, m.index);
+    const tbl = /@Table\s*\(\s*name\s*=\s*"([^"]+)"/.exec(rest.slice(0, cm.index))?.[1];   // @Table sits between @Entity and the class
     add(cls, line, false);
     if (tbl && tbl !== cls) add(tbl, line, false);
   }
