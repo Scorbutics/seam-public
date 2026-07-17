@@ -774,7 +774,10 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // OTHER method nodes DO carry (a grounded, parser-set fact) and apply it, so EVERY fanned method reads `Class.method`.
   const fileClass = new Map<string, string>();
   for (const id of nodes) { const h = hunkById.get(id); if (h?.file && h.enclosing && !fileClass.has(h.file)) fileClass.set(h.file, h.enclosing); }
-  const enclOf = (h: any): string => h?.enclosing || (h?.file ? fileClass.get(h.file) ?? "" : "");
+  // enclosing class for display. Prefer the node's own `enclosing`, BUT a resolved qualified call can record the
+  // RECEIVER VARIABLE (`mBookingsBean`) as the enclosing instead of the class — a class name is PascalCase, so an
+  // enclosing that starts lowercase is a variable; fall back to the file's learned class then (BookingsBean).
+  const enclOf = (h: any): string => { const e = h?.enclosing; if (e && /^[A-Z]/.test(e)) return e; const fc = h?.file ? fileClass.get(h.file) : ""; return fc || e || ""; };
   const qual = (h: any): string => { const e = enclOf(h); return (e && e !== h?.label) ? `${e}.${h.label}` : (h?.label ?? "?"); };
   // a BOUNDARY node (a route/table/queue/… crossing site) is the medium, never an interaction ENTRY — it renders
   // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
@@ -971,6 +974,73 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     }
     return best ? { feId: best.feId, bid: best.bid } : null;
   };
+  // ALL cross-stack front-ends reaching a backend node — every distinct UI (not one), each with its most-specific
+  // route. A REST handler with no in-repo caller is entered ONLY via its route(s), so a mechanism that is itself a
+  // route handler (the concern centered on the REST layer) has its ways-in HERE, not in the call graph — this is
+  // what makes the front-end a first-class way in rather than a footnote in "## In". Deduped per UI (a UI hitting
+  // two routes shows once, on its most-specific — fewest-backend-server — route).
+  const frontEndsOf = (backendId: string): { feId: string; bid: string }[] => {
+    const beExt = _spineIdx.ext(hunkById.get(backendId)?.file);
+    const sameStack = (n: string): boolean => { const x = _spineIdx.ext(hunkById.get(n)?.file); return !isBoundaryNode(n) && hunkById.has(n) && x === beExt; };
+    const isCrossFE = (fe: string): boolean => { const x = _spineIdx.ext(hunkById.get(fe)?.file); return !isBoundaryNode(fe) && hunkById.has(fe) && !!x && x !== beExt; };
+    // group the backend's route boundaries by SERVER COUNT, keep only the MOST-SPECIFIC (fewest backend servers):
+    // a method's own leaf route (/create — served by one method + its class) uniquely names its UI, while a shared
+    // class base (/csbooking — served by every sibling method) would pull in sibling UIs that never trigger THIS
+    // handler (csSaveBooking appearing as a false way in to csCreateBooking). Then take ALL UIs on those routes.
+    const routes: { bid: string; uis: string[]; servers: number }[] = [];
+    for (const bid of (crossAdj.get(backendId) ?? [])) {
+      if (!isBoundaryNode(bid)) continue;
+      const nbrs = [...(crossAdj.get(bid) ?? [])];
+      const uis = nbrs.filter(isCrossFE);
+      if (uis.length) routes.push({ bid, uis, servers: nbrs.filter(sameStack).length });
+    }
+    if (!routes.length) return [];
+    const minServers = Math.min(...routes.map((r) => r.servers));
+    const seen = new Set<string>(); const out: { feId: string; bid: string }[] = [];
+    for (const r of routes.filter((r) => r.servers === minServers)) for (const ui of [...r.uis].sort()) { if (seen.has(ui)) continue; seen.add(ui); out.push({ feId: ui, bid: r.bid }); }
+    return out;
+  };
+  // DELEGATION CHAIN from a mechanism to the code that actually WRITES the boundary — the intermediate beans the
+  // culmination must show. `computeSpine` compresses its down-path to a 1-hop `anchor → sink` when the write is a
+  // delegate's directSink (the BFS can't traverse the fwd-reversed call chain), so a REST method that persists
+  // THROUGH a bean (BookingsResource.updateBooking → BookingsBean.updateBooking → … → em.merge) rendered as
+  // `● BookingsResource.updateBooking → db` with the bean missing (the reported gap). Trace the FORWARD invocation
+  // edges from the mechanism to the nearest node that produces into a store boundary, so the bean is on the line.
+  const _PRODUCE_KINDS_C = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert"]);
+  const invokeFwd = new Map<string, Set<string>>();
+  for (const e of edges) { if (!_INVOKE_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
+    (invokeFwd.get(f) ?? invokeFwd.set(f, new Set()).get(f)!).add(t); }
+  const isStoreBid = (id: string): boolean => _STORE_KINDS.has(hunkById.get(id)?.kind ?? "");
+  const writersTo = (bid: string): string[] => edges.filter((e) => (_PRODUCE_KINDS_C.has(e.kind) || _CROSS_SOURCE.has(e.kind)) && String(e.to) === bid).map((e) => String(e.from));
+  const callPath = (from: string, to: string): string[] | null => {
+    if (from === to) return [from];
+    const parent = new Map<string, string>(); const vis = new Set([from]); const q = [from];
+    while (q.length) { const n = q.shift()!; for (const nb of invokeFwd.get(n) ?? []) { if (vis.has(nb)) continue; vis.add(nb); parent.set(nb, n); if (nb === to) { const p: string[] = []; for (let c: string | undefined = to; c !== undefined; c = parent.get(c)) p.unshift(c); return p; } q.push(nb); } }
+    return null;
+  };
+  // the mechanism → … → writer path for the boundary `bid` (shortest reachable writer); null if the mechanism
+  // itself is the writer or no writer is call-reachable (then the compressed computeSpine path stands).
+  const _nf = (f?: string): string => (f ? String(f).replace(/^\.\//, "") : "");
+  const delegationChain = (cid: string, bid: string): string[] | null => {
+    if (!isStoreBid(bid)) return null;
+    const writers = writersTo(bid);
+    let best: string[] | null = null;
+    // skip `cid` itself as a write target (a coupling often attributes the delegate's write UP to the caller too),
+    // but keep looking for a DEEPER writer the mechanism reaches through calls — that's the real bean to surface.
+    for (const w of writers) { if (w === cid) continue; const p = callPath(cid, w); if (p && p.length > 1 && (!best || p.length < best.length)) best = p; }
+    if (best) return best;
+    // FALLBACK — no traced writer is call-reachable (the coupling keeps ONE representative write site per table, so
+    // a sibling method's own write carries no edge). Trace to the nearest node in a WRITER'S FILE — the bean the
+    // mechanism delegates to (whose sibling holds the representative write) — so the delegate still shows instead
+    // of a bare `mechanism → db`.
+    const wFiles = new Set(writers.map((w) => _nf(hunkById.get(w)?.file)).filter(Boolean));
+    if (!wFiles.size) return null;
+    const parent = new Map<string, string>(); const vis = new Set([cid]); const q = [cid];
+    while (q.length) { const n = q.shift()!; for (const nb of invokeFwd.get(n) ?? []) { if (vis.has(nb)) continue; vis.add(nb); parent.set(nb, n);
+      if (wFiles.has(_nf(hunkById.get(nb)?.file))) { const p: string[] = []; for (let c: string | undefined = nb; c !== undefined; c = parent.get(c)) p.unshift(c); return p.length > 1 ? p : null; }
+      q.push(nb); } }
+    return null;
+  };
   const spineLines: string[] = [];
   if (mechCount > 1) {   // a single-mechanism concern already has the full agent spine one `--format agent` away
     const _spineCenters = centerIds.slice(0, _spineCap);
@@ -989,36 +1059,59 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // mechanism here — without it, every fanned method whose blob's primary is that sibling renders the SAME
       // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
       // into identical, indistinguishable lines.
-      const codeNames = downSteps.map((s, i) => (i === 0 ? qual(hunkById.get(cid)) : qual(_spineIdx.primaryHunk(s))));
       // CULMINATION line — the mechanism → … → boundary (the shared DOWNSTREAM outcome, same for every way in).
       let culm: string;
       if (sp.terminal === "grounded") {
-        const lastHunk = _spineIdx.primaryHunk(sp.downSpine[sp.downSpine.length - 1]);
-        const bid = String((lastHunk as any)?.id ?? "");
+        const termSeam = sp.downSpine[sp.downSpine.length - 1];
+        // the STORE boundary hunk in the terminal seam — NOT always its primary: a db-table node is often merged
+        // into the same seam as the @Entity CLASS it shares a label with, and the class wins `primary` (so a
+        // primary-only bid isn't a store, and the delegation trace to its writer bailed → the bean was skipped for
+        // the shallow write too). Prefer a store hunk anywhere in the seam; else the primary.
+        const _storeHunk = (termSeam.hunks ?? []).find((h: any) => _STORE_KINDS.has(h.kind ?? "")) ?? _spineIdx.primaryHunk(termSeam);
+        const bid = String((_storeHunk as any)?.id ?? "");
         const oc = outCross.find((o) => o.bid === bid && o.mech === cid) ?? outCross.find((o) => o.bid === bid);
-        culm = `  ● ${codeNames.join(" → ")}${oc ? ` ──${oc.verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`;
+        // prefer the DELEGATION call-chain (mechanism → bean → … → writer) so an intermediate bean isn't skipped;
+        // fall back to computeSpine's compressed down-path when no call-reachable writer (the mechanism writes directly).
+        const dele = delegationChain(cid, bid);
+        let chainIds = dele ?? [cid, ...downSteps.slice(1).map((s) => String((_spineIdx.primaryHunk(s) as any)?.id ?? ""))];
+        const _cap = Math.max(3, parseInt(process.env.SEAM_CONCERN_CULM_STEPS ?? "6", 10) || 6);
+        if (chainIds.length > _cap) chainIds = [...chainIds.slice(0, _cap - 2), `…(+${chainIds.length - _cap})`, chainIds[chainIds.length - 1]];
+        const chainNames = chainIds.map((id) => (id.startsWith("…") ? id : qual(hunkById.get(id))));
+        const verb = oc?.verb ?? (edges.find((e) => _CROSS_SOURCE.has(e.kind) && String(e.to) === bid) ? "writes" : null);
+        culm = `  ● ${chainNames.join(" → ")}${verb ? ` ──${verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`;
       } else {   // frontier
-        culm = `  ● ${codeNames.join(" → ")} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`;
+        const chainNames = [qual(hunkById.get(cid)), ...downSteps.slice(1).map((s) => qual(_spineIdx.primaryHunk(s)))];
+        culm = `  ● ${chainNames.join(" → ")} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`;
       }
       spineLines.push(culm);
-      // ENTRY FAN (default ON; opt out with SEAM_SPINE_ENTRY=0) — EVERY distinct way in to this mechanism, each a
-      // `entry → … → ●` row (the UI prepended across the HTTP route when the top backend node has one). The engine
-      // does NOT pick which flow matters — it lists them all (deterministic, capped), and the agent picks which to
-      // dig into. Cross-stack rows (a real screen) sort first. (Default differs from the single-anchor agent spine's
-      // `_entryChain`, render/spine.ts, default OFF: that walk is seam-granular and leaks a merged-blob sibling's
-      // caller; this fan is node-scoped per mechanism. =0 turns both off; =1 both on; unset = concern-on/agent-off.)
+      // WAY-IN FAN (default ON; opt out with SEAM_SPINE_ENTRY=0) — EVERY distinct way in to this mechanism, each a
+      // `← entry → ●` row. Two kinds, both enumerated (the engine never picks which flow matters — it lists them
+      // all, deterministic + capped, and the agent chooses): (1) in-repo caller chains (entryFlowsOf), the UI
+      // prepended across the route when the chain's ROOT is a route handler; (2) when the mechanism is ITSELF a
+      // route handler (no in-repo caller — the concern centered on the REST layer), its cross-stack front-end(s)
+      // ARE the way in (frontEndsOf on the mechanism). This is what links the front-end into the flow instead of
+      // leaving it stranded in "## In". (Default differs from the single-anchor agent spine — see render/spine.ts.)
       if (process.env.SEAM_SPINE_ENTRY !== "0") {
-        const flows = entryFlowsOf(cid);                                   // each: [root … direct caller of the mechanism]
-        const _entryCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_ENTRIES ?? "6", 10) || 6);
-        const shown = flows.slice(0, _entryCap);
-        for (const flow of shown) {
-          const names = flow.map((id) => qual(hunkById.get(id)));          // root → … → nearest caller (entry → mechanism)
-          const fe = frontEndEntryOf(flow[0]);                             // a UI behind the entry root, across its route
-          const lhs = fe ? `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶ ${names.join(" → ")}` : names.join(" → ");
-          spineLines.push(`      ← ${lhs} → ●`);
+        const flows = entryFlowsOf(cid);
+        // each way in = an entry ROOT + the backend chain from it down to the mechanism ([] when the mechanism is
+        // its own root). front-ends attach to the ROOT (or to the mechanism itself when it has no in-repo caller).
+        const legs = flows.length ? flows.map((f) => ({ root: f[0], chain: f })) : [{ root: cid, chain: [] as string[] }];
+        const rows: string[] = [];
+        for (const { root, chain } of legs) {
+          const chainNames = chain.map((id) => qual(hunkById.get(id)));
+          const fes = frontEndsOf(root);
+          if (fes.length) for (const fe of fes) {
+            // UI ──HTTP route──▶ [backend chain →] ●  — when the chain is empty (the mechanism IS the route handler)
+            // the UI crosses straight to ●, no trailing ` → `.
+            const ui = `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶`;
+            rows.push(chainNames.length ? `      ← ${ui} ${chainNames.join(" → ")} → ●` : `      ← ${ui} ●`);
+          } else if (chainNames.length) rows.push(`      ← ${chainNames.join(" → ")} → ●`);
         }
-        if (flows.length > shown.length) spineLines.push(`      ← (+${flows.length - shown.length} more way(s) in — raise SEAM_CONCERN_ENTRIES)`);
-        if (!flows.length) spineLines.push(`      ← (no in-repo caller — a framework/DI-mounted or top-level entry)`);
+        const _entryCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_ENTRIES ?? "6", 10) || 6);
+        const shown = [...new Set(rows)].slice(0, _entryCap);
+        spineLines.push(...shown);
+        if (rows.length > shown.length) spineLines.push(`      ← (+${rows.length - shown.length} more way(s) in — raise SEAM_CONCERN_ENTRIES)`);
+        if (!rows.length) spineLines.push(`      ← (no in-repo caller and no cross-stack entry — a framework/DI-mounted or top-level entry)`);
       }
     }
     // The rolled-up "+K more" line is only meaningful once at least one mechanism actually SHOWED a spine — a

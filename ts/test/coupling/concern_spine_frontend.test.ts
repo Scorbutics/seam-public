@@ -35,17 +35,18 @@ afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
 // Center on the BARE bean class → the concern/star view. The entry-rooted Spines (screen → REST → bean → DB) are
 // ON BY DEFAULT for the concern view — deliberately NOT setting SEAM_SPINE_ENTRY here pins that default.
-function concernSpines(): string {
-  return execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
-    "--center", "ejb/src/main/java/com/acme/bookings/CsBookingsBean.java",
+function concernSpines(center: string): string {
+  return execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto", "--center", center,
     "--intent", "how are bookings managed by a member", "--data-coupling", "floor", "--format", "concern"],
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_SPINE_ENTRY: undefined }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
 }
+const BEAN = "ejb/src/main/java/com/acme/bookings/CsBookingsBean.java";
+const REST = "web-manage/src/main/java/com/acme/rest/CsBookingsService.java";
 
 describe("concern Flows — each mechanism resolves the full front-end → REST → bean → DB path", () => {
   test("each CRUD mechanism culminates at the db-table and fans its OWN front-end way-in, matched by route", () => {
     if (!available()) return;   // needs tree-sitter (Java + JS parse + route + JPA grounding)
-    const out = concernSpines();
+    const out = concernSpines(BEAN);
     const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In") >= 0 ? out.indexOf("## In") : undefined);
     // each mechanism's culmination reaches its db-table
     expect(seg).toMatch(/● [^\n]*csUpdateBooking[^\n]*──writes──▶ db "CsBooking"/);
@@ -57,5 +58,21 @@ describe("concern Flows — each mechanism resolves the full front-end → REST 
     // the per-mechanism route match must not cross the wires: the update UI never pairs with the create REST method, nor vice-versa
     expect(seg).not.toMatch(/csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking/);
     expect(seg).not.toMatch(/csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking/);
+  }, 30000);
+
+  // Centered on the REST layer (like the Acme AcmeCheckBookingsService case): the mechanisms are the
+  // REST methods. Two things the report flagged must hold: (1) the delegate BEAN is ON the culmination line (the
+  // REST method → bean method → db), not skipped; (2) the front-end is a WAY IN (← ui ──HTTP──▶ ●), since a REST
+  // handler has no in-repo caller — its way in is the UI across the route — instead of being stranded in "## In".
+  test("centered on the REST layer: the delegate bean shows on the culmination, and the UI is the way in", () => {
+    if (!available()) return;
+    const out = concernSpines(REST);
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In") >= 0 ? out.indexOf("## In") : undefined);
+    // the bean is ON the culmination line (REST method → bean method → db), not skipped
+    expect(seg).toMatch(/● CsBookingsService\.csUpdateBooking → CsBookingsBean\.csUpdateBooking ──writes──▶ db "CsBooking"/);
+    // the mechanism is a route handler (no in-repo caller) → the UI is the way in, straight across the route to ●
+    expect(seg).toMatch(/← csSaveBooking ──HTTP [^\n]*──▶ ●/);
+    // the bean is not orphaned only in "## In": it must appear inside the Flows culmination itself
+    expect(seg).toContain("CsBookingsBean.csUpdateBooking");
   }, 30000);
 });
