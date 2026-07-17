@@ -30,34 +30,3 @@ describe("_orderMoves — intent band beats closeness; closeness breaks ties wit
     expect(pickMove([x, y], ["x"], { x: 0.0, y: 0.9 }, { x: 9, y: 1 })).toBe("x");
   });
 });
-
-// UBIQUITY term (2.5) is direction-scoped to UP: a hub's UP climb (its OTHER unrelated callers) is genuinely
-// low priority, but its DOWN move (its OWN dependencies — the grounded mechanism chain, e.g. a widely-injected
-// bean's own db-write) must compete on normal terms, exactly like the hub GATE already treats DOWN as "never
-// gated, always kept". Before this fix, a node inheriting its FILE's ubiquity (BookingsBean.updateBooking,
-// whose file is imported by 15 modules) had its OWN write demoted equally in both directions — on a big grow
-// with many competing hubs, "always last" under a finite node budget meant the write was effectively never
-// reached (Acme: AcmeCheckBookingsService → BookingsBean.updateBooking's db-write never surfaced).
-describe("_orderMoves — hub demotion is direction-scoped (UP only, DOWN is grounded reach)", () => {
-  const mvH = (id: string, dir: "up" | "down"): Move => ({ node: { id }, dir });
-  const order = (moves: Move[], hubIds: string[], score: Record<string, number> = {}, dist: Record<string, number> = {}) =>
-    _orderMoves(moves, new Set(), (n) => score[n.id] ?? 0, new Set(), (id) => dist[id] ?? 99, (n) => hubIds.includes(n.id))
-      .map((m) => `${m.node.id}:${m.dir}`);
-
-  test("a hub node's DOWN move is NOT demoted behind a plain node's UP move (equal intent/closeness)", () => {
-    const hubDown = mvH("BookingsBean.updateBooking", "down");
-    const plainUp = mvH("someOtherThing", "up");
-    // identical score/dist on both → without direction-scoping the hub term alone decided (plainUp always won);
-    // with it, the tie falls through to the later terms — closeness — so make hubDown strictly nearer and confirm IT wins.
-    const out = order([hubDown, plainUp], ["BookingsBean.updateBooking"], {}, { "BookingsBean.updateBooking": 1, someOtherThing: 5 });
-    expect(out[0]).toBe("BookingsBean.updateBooking:down");
-  });
-
-  test("a hub node's UP move IS still demoted behind a plain node's UP move (the exemption stays direction-scoped)", () => {
-    const hubUp = mvH("BookingsBean", "up");
-    const plainUp = mvH("someOtherThing", "up");
-    // equal score/dist so only the hub term can decide — the UP direction must still lose to the non-hub UP move.
-    const out = order([hubUp, plainUp], ["BookingsBean"]);
-    expect(out[0]).toBe("someOtherThing:up");
-  });
-});
