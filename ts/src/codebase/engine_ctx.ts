@@ -20,6 +20,7 @@ export class EngineCtx {
   paramKeys = new Map<string, GroundingIndex>();        // param_key_index: repo → const-resolved param grounding
   floorBase = new Map<string, GroundingIndex>();        // floor_base_index: repo → MERGED shared⊕param (cached so the per-call merge runs once, not per grow step)
   floorContribs = new Map<string, unknown>();           // floorContributions: repo → per-file floor scan (computed ONCE/run, shared by the floor build AND the llm-key floorOf — no duplicate scan)
+  jpaManagers = new Map<string, { managers: Set<string>; entities: Set<string> }>();   // jpa_wrapper: repo → persistence-manager class names ⊕ @Entity names (extends-closure over the EntityManager platform type)
 
   // --- intent-aware key ranking (set by the grow from --intent; read by the coupling per-node fan cap) ---
   // An OPAQUE callback so the coupling DAG-leaf needs no scan/embedding import: given each key's value, its
@@ -75,7 +76,7 @@ export class EngineCtx {
   fork(): EngineCtx {
     const c = new EngineCtx();
     c.sharedKey = this.sharedKey; c.carrierChannel = this.carrierChannel; c.langIndex = this.langIndex;
-    c.llmKey = this.llmKey; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs;
+    c.llmKey = this.llmKey; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs; c.jpaManagers = this.jpaManagers;
     c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
     c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
     c.composedRoutes = this.composedRoutes;   // share the repo-wide composed-route grounding (built once, read-concurrent-safe)

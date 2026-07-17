@@ -34,6 +34,7 @@ import { httpClientCallRegex } from "./frameworks/http_clients.js";
 import { ormVocab } from "./frameworks/orm_methods.js";
 import { scanConstDecls, scanParamSites, resolveParamSites, paramKeysForSpan, type ParamSite } from "./const_keys.js";
 import { makeMaskCtx } from "./adapters/util.js";
+import { jpaManagerIndex, jpaWrapperKeys } from "./jpa_wrapper.js";
 import { indexCacheEnabled, incrementalScan } from "./index_cache.js";
 import { COUPLING } from "./config.js";
 import { emit, verbose, timingOn, dbg } from "../../core/progress.js";
@@ -263,9 +264,24 @@ export function floorContributions(repo: string, skipDirs: Set<string>, ctx: Eng
   return contribs;
 }
 
+// JPA persistence-WRAPPER contributions (jpa_wrapper.ts) — repo-wide, so NOT part of the per-file floor cache: a
+// `mgr.customSave(entity)` grounds because `mgr` resolves to a persistence-manager type (deduced repo-wide via the
+// EntityManager extends-closure), which a single file can't know. Cheap no-op on a repo with no managers/entities.
+function jpaWrapperContributions(repo: string, skipDirs: Set<string>, ctx: EngineCtx): { rel: string; data: FloorContribution }[] {
+  if (process.env.SEAM_JPA_WRAPPER === "0") return [];
+  const idx = jpaManagerIndex(repo, skipDirs, ctx);
+  if (!idx.managers.size || !idx.entities.size) return [];
+  const out: { rel: string; data: FloorContribution }[] = [];
+  for (const { rel, text } of walkFiles(repo, skipDirs, (f) => f.endsWith(".java"), { maxBytes: COUPLING.maxScanBytes })) {
+    const keys = jpaWrapperKeys(text, idx);
+    if (keys.length) out.push({ rel, data: { keys, constDecls: [], sites: [] } });
+  }
+  return out;
+}
+
 function build_floor_indices(repo: string, skipDirs: Set<string>, ctx: EngineCtx): void {
   if (ctx.sharedKey.has(repo) && ctx.paramKeys.has(repo)) return;
-  const { shared, param } = mergeFloor(floorContributions(repo, skipDirs, ctx));
+  const { shared, param } = mergeFloor([...floorContributions(repo, skipDirs, ctx), ...jpaWrapperContributions(repo, skipDirs, ctx)]);
   ctx.sharedKey.set(repo, shared);
   ctx.paramKeys.set(repo, param);
   ctx.floorBase.set(repo, mergeGrounding(shared, param));   // merge ONCE here, not per resolveCoupling call
@@ -421,6 +437,10 @@ async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText
   if (footprint && process.env.SEAM_ANCHOR_KEYS === "1") return true;
   const inSpan = (line: number) => line >= lo && line <= hi;
   if (scan_file_keys(anchorFile, anchorText).some((h) => inSpan(h.line))) return true;          // 1 — floor keys
+  if (process.env.SEAM_JPA_WRAPPER !== "0" && anchorFile.endsWith(".java")) {                   // 1b — JPA persistence-wrapper write in the span (mgr.customSave(entity))
+    const jm = jpaManagerIndex(repo, SKIP_DIRS, ctx);
+    if (jm.managers.size && jm.entities.size && jpaWrapperKeys(anchorText, jm).some((h) => inSpan(h.line))) return true;
+  }
   const sites: ParamSite[] = []; scanParamSites(anchorText, anchorFile, sites);                 // 3 — getParameter(CONST)/addParameter(CONST) sites
   if (sites.some((s) => inSpan(s.line))) return true;
   if (!ctx.stableFloor && resolveHttpCallSites(anchorFile, anchorText, await _effectClients(repo, ctx)).some((h) => inSpan(h.line))) return true;   // 2 — http I/O
