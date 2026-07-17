@@ -12,8 +12,9 @@
 // The reusable piece is `shared_key_index`. A key the anchor produces surfaces its consumers; one it
 // consumes surfaces its producers (a writer reaches the UI that reads it, a reader reaches the backend
 // that wrote it). Edges are RESOLVED_PARTIAL crossings — pruned by the relevance pass, never a hard call.
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync, readdirSync } from "node:fs";
+import { join, dirname, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 import { available } from "../atoms.js";
 import { SKIP_DIRS, hasCarrierEngine, isHandlerFileByLanguage } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
@@ -186,15 +187,31 @@ export function mergeGrounding(...parts: (GroundingIndex | undefined)[]): Ground
 // honours the size cap (skips minified/generated bundles) and SEAM_NO_ADAPTERS (empty floor).
 // What changes the floor OUTPUT for the same files — folded into the disk-cache key so a config change can't
 // serve a stale index. (Adapter SET is sourced from the registry, not hardcoded.)
-// `alogic` = adapter-LOGIC version: the salt already keys on the adapter SET (kinds), but not on a kind's
-// extraction LOGIC. Bump this when an adapter's scan changes (e.g. endpoint_map multi-line descriptors) so a
-// cached floor re-scans instead of serving pre-fix keys — otherwise a logic fix is invisible on a warm repo.
-const _ADAPTER_LOGIC_VERSION = "3";   // 3: added the JPA @Entity/@Table db-table adapter (its `db-table` kind is already in the kind-list, so bump here to invalidate the warm coupling floor)
+// `alogic` = adapter-LOGIC version: the salt keys on the adapter SET (kinds) but not on a kind's extraction
+// LOGIC — so an adapter scan change (a new regex, jpa_entity save(var), the jpa_wrapper deduction) would serve
+// pre-fix keys from a warm floor cache. AUTO-DERIVED from a content hash of the coupling source (this dir), so a
+// logic change ALWAYS invalidates without a manual bump (the footgun this used to be). Once/process; falls back
+// to a constant when the tree isn't walkable (a bundled .cjs — bump per release there).
+const _ADAPTER_LOGIC_FALLBACK = "4";
+let _adapterLogic: string | null = null;
+function _fnv(s: string): string { let h = 0x811c9dc5; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); }
+function adapterLogicVersion(): string {
+  if (_adapterLogic != null) return _adapterLogic;
+  _adapterLogic = _ADAPTER_LOGIC_FALLBACK;
+  try {
+    const root = dirname(fileURLToPath(import.meta.url));   // codebase/coupling
+    const parts: string[] = [];
+    const walkDir = (d: string) => { for (const e of readdirSync(d, { withFileTypes: true })) { const p = join(d, e.name); if (e.isDirectory()) walkDir(p); else if (e.name.endsWith(".ts")) { try { parts.push(`${relative(root, p).replace(/\\/g, "/")}:${_fnv(readFileSync(p, "utf8"))}`); } catch { /* skip */ } } } };
+    walkDir(root);
+    if (parts.length) _adapterLogic = _fnv(parts.sort().join("\n"));
+  } catch { /* not walkable (bundled) → fallback constant */ }
+  return _adapterLogic;
+}
 function floorConfigSalt(): string {
   // Fold the framework VOCAB (route annotations / http clients / ORM methods) in too: a manifest that adds a
   // route annotation or ORM method changes the floor output, so a warm repo must re-scan, not serve stale keys.
   const vocab = `|rann=${[...routeAnnotationNames()].sort().join(",")}|hclients=${httpClientCallRegex().source}|orm=${ormVocab()}`;
-  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${_ADAPTER_LOGIC_VERSION}|adapters=${allAdapters().map((a) => a.kind).join(",")}|plugins=${ADAPTERS_VERSION}${vocab}`;
+  return `cap=${COUPLING.maxScanBytes}|noadapt=${process.env.SEAM_NO_ADAPTERS ?? ""}|alogic=${adapterLogicVersion()}|adapters=${allAdapters().map((a) => a.kind).join(",")}|plugins=${ADAPTERS_VERSION}${vocab}`;
 }
 
 // One file's RAW floor contribution — the per-file MAP half of the floor build, kept raw (param sites
