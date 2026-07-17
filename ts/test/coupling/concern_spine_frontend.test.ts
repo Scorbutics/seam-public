@@ -52,9 +52,9 @@ describe("concern Flows — each mechanism resolves the full front-end → REST 
     expect(seg).toMatch(/● [^\n]*csUpdateBooking[^\n]*──writes──▶ db "CsBooking"/);
     expect(seg).toMatch(/● [^\n]*csCreateBooking[^\n]*──writes──▶ db "CsBooking"/);
     // the update mechanism's way-in: its OWN UI (csSaveBooking) across the /update route → the update REST method → ●
-    expect(seg).toMatch(/← csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking → ●/);
+    expect(seg).toMatch(/← csSaveBooking [^\n]*──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking → ●/);
     // the create mechanism's way-in: its OWN UI (csNewBooking) → the create REST method → ● (wires not crossed)
-    expect(seg).toMatch(/← csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking → ●/);
+    expect(seg).toMatch(/← csNewBooking [^\n]*──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking → ●/);
     // the per-mechanism route match must not cross the wires: the update UI never pairs with the create REST method, nor vice-versa
     expect(seg).not.toMatch(/csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking/);
     expect(seg).not.toMatch(/csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking/);
@@ -71,7 +71,9 @@ describe("concern Flows — each mechanism resolves the full front-end → REST 
     // the bean is ON the culmination line (REST method → bean method → db), not skipped
     expect(seg).toMatch(/● CsBookingsService\.csUpdateBooking → CsBookingsBean\.csUpdateBooking ──writes──▶ db "CsBooking"/);
     // the mechanism is a route handler (no in-repo caller) → the UI is the way in, straight across the route to ●
-    expect(seg).toMatch(/← csSaveBooking ──HTTP [^\n]*──▶ ●/);
+    expect(seg).toMatch(/← csSaveBooking [^\n]*──HTTP [^\n]*──▶ ●/);
+    // the UI carries its FILE — a bare front-end function name (`install`, `csSaveBooking`) is meaningless without it
+    expect(seg).toMatch(/← csSaveBooking \(csBookingUi\.js\) ──HTTP/);
     // the bean is not orphaned only in "## In": it must appear inside the Flows culmination itself
     expect(seg).toContain("CsBookingsBean.csUpdateBooking");
   }, 30000);

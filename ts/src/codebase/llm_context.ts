@@ -1102,8 +1102,12 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
           const fes = frontEndsOf(root);
           if (fes.length) for (const fe of fes) {
             // UI ──HTTP route──▶ [backend chain →] ●  — when the chain is empty (the mechanism IS the route handler)
-            // the UI crosses straight to ●, no trailing ` → `.
-            const ui = `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶`;
+            // the UI crosses straight to ●, no trailing ` → `. QUALIFY the UI with its FILE: a front-end handler is a
+            // bare, generic function name (`install`, `mounted`) that carries no class — meaningless without the file
+            // (`install (bookingService.js)`) — so a reader/agent can open the right one.
+            const feh = hunkById.get(fe.feId); const feBase = feh?.file ? String(feh.file).split("/").pop() : "";
+            const uiName = feBase ? `${qual(feh)} (${feBase})` : qual(feh);
+            const ui = `${uiName} ──${crossingEdge(fe.bid)}──▶`;
             rows.push(chainNames.length ? `      ← ${ui} ${chainNames.join(" → ")} → ●` : `      ← ${ui} ●`);
           } else if (chainNames.length) rows.push(`      ← ${chainNames.join(" → ")} → ●`);
         }

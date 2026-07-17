@@ -55,8 +55,8 @@ describe("concern Flows — every distinct way in to a shared mechanism is enume
     // the shared culmination is stated once for the mechanism
     expect(seg).toMatch(/● [^\n]*meCreateBooking[^\n]*──writes──▶ db "MeBooking"/);
     // and EVERY way in is present — the two portals (cross-stack, with their own UI + route) and the internal login setup
-    expect(seg).toMatch(/← meAdviserBook ──HTTP [^\n]*──▶ [^\n]*meAdviserCreate → ●/);
-    expect(seg).toMatch(/← meMemberBook ──HTTP [^\n]*──▶ [^\n]*meMemberCreate → ●/);
+    expect(seg).toMatch(/← meAdviserBook [^\n]*──HTTP [^\n]*──▶ [^\n]*meAdviserCreate → ●/);
+    expect(seg).toMatch(/← meMemberBook [^\n]*──HTTP [^\n]*──▶ [^\n]*meMemberCreate → ●/);
     expect(seg).toMatch(/← [^\n]*meSetupBusiness → ●/);   // internal flow, no UI — still enumerated
     // three distinct ways in for the create mechanism (not collapsed to one)
     const createBlock = seg.slice(seg.indexOf("meCreateBooking"), seg.indexOf("meResyncBooking") >= 0 ? seg.indexOf("meResyncBooking") : undefined);
