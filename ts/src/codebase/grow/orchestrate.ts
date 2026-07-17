@@ -312,10 +312,22 @@ export type Move = { node: any; dir: "up" | "down" };
 export function _orderMoves(moves: Move[], crossings: Set<string>, iscore: (n: any) => number, typeRefOnly: Set<string>, dist: (id: string) => number, isHub: (n: any) => boolean = () => false): Move[] {
   const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
   const band = (n: any) => Math.round(iscore(n) * _INTENT_BANDS);                          // coarse intent bucket
+  // (2.5) is direction-scoped to UP only: a hub's UP climb is its OTHER, unrelated callers (sibling entry
+  // points) — genuinely low priority. Its DOWN move is its OWN dependencies, the grounded mechanism chain
+  // (handler → service → repo → DB) — the hub GATE already documents this as "never gated... always kept"
+  // (orchestrate.ts's wave loop, `d === "up" && tierUp`/legacy branches only), but this ordering term used
+  // to demote BOTH directions identically. A node inherits its FILE's ubiquity score (BookingsBean.java
+  // imported by 15 modules → BookingsBean.updateBooking counts as a hub too), so its down move — finding
+  // its OWN db-write — was ALWAYS last in the queue, competing against every other hub in the region; on a
+  // big multi-mechanism grow with a finite node budget that's effectively "never runs" (Acme:
+  // AcmeCheckBookingsService → BookingsBean.updateBooking's write never reached, though the edge to it
+  // resolved FULL — centering directly on BookingsBean.java "fixed" it only because an anchor is fully
+  // seeded, bypassing this queue entirely). Scoping the demotion to "up" closes that gap.
+  const hubDemote = (m: Move) => m.dir === "up" && isHub(m.node);
   return [...moves].sort((a, b) =>
     (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY — never prune the spine
     || (Number(!typeRefOnly.has(b.node.id)) - Number(!typeRefOnly.has(a.node.id)))        // (2) DELEGATION over type-ref
-    || (Number(isHub(a.node)) - Number(isHub(b.node)))                                    // (2.5) UBIQUITY — a non-crossing shared hub grows LAST (default no-op)
+    || (Number(hubDemote(a)) - Number(hubDemote(b)))                                      // (2.5) UBIQUITY — a hub's UP fan grows LAST (its DOWN continuation is grounded reach, never demoted)
     || (band(b.node) - band(a.node))                                                      // (3) INTENT band — a clearly-relevant node first (incl. a FAR one)
     || (dist(a.node.id) - dist(b.node.id))                                                // (4) CLOSENESS — nearest among similar-relevance (the bound)
     || (iscore(b.node) - iscore(a.node))                                                  // (5) fine intent
