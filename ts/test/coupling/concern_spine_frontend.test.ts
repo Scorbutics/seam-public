@@ -33,12 +33,13 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-// Center on the BARE bean class → the concern/star view; SEAM_SPINE_ENTRY=1 turns on the entry-rooted Spines.
+// Center on the BARE bean class → the concern/star view. The entry-rooted Spines (screen → REST → bean → DB) are
+// ON BY DEFAULT for the concern view — deliberately NOT setting SEAM_SPINE_ENTRY here pins that default.
 function concernSpines(): string {
   return execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto",
     "--center", "ejb/src/main/java/com/acme/bookings/CsBookingsBean.java",
     "--intent", "how are bookings managed by a member", "--data-coupling", "floor", "--format", "concern"],
-    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_SPINE_ENTRY: "1" }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_SPINE_ENTRY: undefined }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
 }
 
 describe("concern Spines — each mechanism resolves the full front-end → REST → bean → DB path", () => {

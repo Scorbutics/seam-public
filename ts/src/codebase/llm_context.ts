@@ -978,10 +978,15 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
       // into identical, indistinguishable lines.
       const codeNames = downSteps.map((s, i) => (i === 0 ? qual(hunkById.get(cid)) : qual(_spineIdx.primaryHunk(s))));
-      // ENTRY (SEAM_SPINE_ENTRY) — the backend call-graph climb, then the cross-stack hop to the UI that triggers it,
-      // so the line reads screen → REST → … → mechanism (the full "side to the other" a mechanism's flow crosses).
+      // ENTRY (default ON for the concern Spines; opt out with SEAM_SPINE_ENTRY=0) — the backend call-graph climb,
+      // then the cross-stack hop to the UI that triggers it, so the line reads screen → REST → … → mechanism (the
+      // full "side to the other" a flow crosses — the whole point of the "screen → … → database" section header).
+      // NOTE the default is intentionally different from the SINGLE-ANCHOR agent spine's `_entryChain` (render/
+      // spine.ts, default OFF, opt-in =1): that walk is SEAM-granular so defaulting it on leaks a merged-blob
+      // sibling's caller; THIS climb (entryChainOf) is node/call-scoped per mechanism, so it's safe on by default.
+      // =0 turns BOTH off; =1 turns both on; unset = concern-on / single-anchor-off.
       let chain: string;
-      if (process.env.SEAM_SPINE_ENTRY === "1") {
+      if (process.env.SEAM_SPINE_ENTRY !== "0") {
         const beChain = entryChainOf(cid);                                  // [nearest caller … farthest backend]
         const topBackend = beChain.length ? beChain[beChain.length - 1] : cid;
         const beNames = [...beChain].reverse().map((id) => qual(hunkById.get(id)));   // entry → mechanism order
