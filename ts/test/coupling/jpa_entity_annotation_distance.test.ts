@@ -11,7 +11,7 @@ import { JPA_ENTITY } from "../../src/codebase/coupling/adapters/jpa_entity.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 
-const scan = (src: string): string[] => [...new Set((JPA_ENTITY as any).scan("jpa/MemberBooking.java", src).map((k: any) => String(k.value)))];
+const scan = (src: string): string[] => [...new Set(((JPA_ENTITY as any).scan("jpa/MemberBooking.java", src) as any[]).map((k: any): string => String(k.value)))];
 
 describe("JPA @Entity boundary binds to its class across any javadoc / annotation distance", () => {
   test("a big javadoc block between @Entity and class does not hide the boundary", () => {
