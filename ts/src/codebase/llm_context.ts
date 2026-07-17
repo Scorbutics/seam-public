@@ -1045,7 +1045,14 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
   // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
   // for the --grow-from handle + center-matching. Disambiguates a bare `createBooking` across sibling beans.
-  const qual = (h: any): string => (h?.enclosing && h.enclosing !== h.label ? `${h.enclosing}.${h.label}` : (h?.label ?? "?"));
+  // FALLBACK: an UNCONSUMED method center's anchor node carries no `enclosing` (only the class_graph up-pass sets
+  // it, and that only fires for methods with a traced consumer), so a fanned class would render 3 of 4 methods as
+  // `Class.method` and the consumer-less one bare — inconsistent. Learn each file's class from the `enclosing` its
+  // OTHER method nodes DO carry (a grounded, parser-set fact) and apply it, so EVERY fanned method reads `Class.method`.
+  const fileClass = new Map<string, string>();
+  for (const id of nodes) { const h = hunkById.get(id); if (h?.file && h.enclosing && !fileClass.has(h.file)) fileClass.set(h.file, h.enclosing); }
+  const enclOf = (h: any): string => h?.enclosing || (h?.file ? fileClass.get(h.file) ?? "" : "");
+  const qual = (h: any): string => { const e = enclOf(h); return (e && e !== h?.label) ? `${e}.${h.label}` : (h?.label ?? "?"); };
   // a BOUNDARY node (a route/table/queue/… crossing site) is the medium, never an interaction ENTRY — it renders
   // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
   const isBoundaryNode = (id: string): boolean => _BOUND_KINDS.has(hunkById.get(id)?.kind ?? "");
@@ -1120,11 +1127,15 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // OUT crossings — the boundaries the MECHANISM itself produces to / consumes: the db table it writes, the queue it
   // publishes — the "what a booking DOES" half of the star. Direction from the crossing edge (_CROSS_SOURCE =
   // code→boundary = writes; _CROSS_SINK = boundary→code = reads). Rendered as `● ──writes──▶ db "Booking"`.
-  const outCross = new Map<string, string>();   // boundary id → verb (writes / reads)
+  // Attribute each boundary crossing to the MECHANISM node it fans out of (the class method), not just the
+  // boundary — so a per-method star renders `BookingsBean.createBooking ──writes──▶ db "MemberBooking"` (which
+  // method does what), and de-dup by (mechanism, verb, boundary): several write SITES of the same table under one
+  // method are one fact, so we don't repeat `● ──writes──▶ db "MemberBooking"` per call site.
+  const outCross: { mech: string; verb: string; bid: string }[] = [];
   for (const e of edges) {
     if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
-    if (mechNodes.has(f) && isBoundaryNode(t)) outCross.set(t, _CROSS_SOURCE.has(e.kind) ? "writes" : "reads");
-    else if (mechNodes.has(t) && isBoundaryNode(f)) outCross.set(f, _CROSS_SINK.has(e.kind) ? "reads" : "writes");
+    if (mechNodes.has(f) && isBoundaryNode(t)) outCross.push({ mech: f, verb: _CROSS_SOURCE.has(e.kind) ? "writes" : "reads", bid: t });
+    else if (mechNodes.has(t) && isBoundaryNode(f)) outCross.push({ mech: t, verb: _CROSS_SINK.has(e.kind) ? "reads" : "writes", bid: f });
   }
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
@@ -1211,9 +1222,17 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     out.push(`  ${where(eh)}${rel}${edge}${viaStr}${handle}`); }
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // OUT — what the mechanism itself does: the boundaries it writes/reads (db table, queue), threaded as edges off ●.
-  if (outCross.size) {
-    out.push("", `## Out — what ${dot} does  (● ──writes/reads──▶ boundary)`);
-    for (const [bid, verb] of outCross) out.push(`  ● ──${verb}──▶ ${crossingEdge(bid)}`);
+  if (outCross.length) {
+    // Name the mechanism side per row when the star has ≥2 mechanisms (a class fanned into its methods) — each
+    // method's boundary is its own flow; for a single mechanism keep the compact `●`. Dedup on the rendered fact.
+    const seenOut = new Set<string>();
+    const outLines: string[] = [];
+    for (const { mech, verb, bid } of outCross) {
+      const lhs = mechCount > 1 ? qual(hunkById.get(mech)) : "●";
+      const line = `  ${lhs} ──${verb}──▶ ${crossingEdge(bid)}`;
+      if (seenOut.has(line)) continue; seenOut.add(line); outLines.push(line);
+    }
+    out.push("", `## Out — what ${dot} does  (● ──writes/reads──▶ boundary)`, ...outLines.sort());
   }
   // blindspots (reuse the fanout collapse idea, kept short)
   const bs = (model.blindspots ?? []) as any[];

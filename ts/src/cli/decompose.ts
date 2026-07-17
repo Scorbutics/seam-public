@@ -81,16 +81,17 @@ async function runCodebase(a: Args): Promise<number> {
   // path (no --center, no --intent, no map format) is untouched.
   const _MAP_FMT = new Set(["agent", "concern", "llm-context", "waves", "scenarios", "json"]);
   if (a.scan && !a.auto && !a.growFrom && (a.intent || _MAP_FMT.has(a.format))) a.auto = true;
-  // SINGLE-DEF FILE CENTER → pin that def (structural), don't fall into CONCERN. A bare `--center <file>`
-  // leaves a.symbol unset, which routes an intent grow into concern/center-first mode — SEMANTIC, and the
-  // region + Cross-stack are ranked by intent RELEVANCE, which can crown an off-subject shared-key cluster
-  // (e.g. a high-fan `/member/v1/survey` route out-scoring the actual `/member/booking/v1` routes) over the
-  // structurally-nearer flow. But when the file holds exactly ONE top-level definition — the single-class
-  // Java file / single exported component, the common case — the user means "anchor THAT symbol", identical
-  // to `--center <file>#<Sym>`. Resolve it STRUCTURALLY (the file's top-level defs from the registry — no
-  // names, no embeddings) and pin the symbol, so it takes the intent-free structural path (by-shell region
-  // ordering) instead. A file with 0 or ≥2 top-level defs is genuinely plural → stays a module/concern
-  // anchor. Skipped when the caller forced --concern, passed a multi-center list, or already pinned a symbol.
+  // SINGLE-DEF FILE CENTER → resolve it STRUCTURALLY (don't fall into the SEMANTIC concern center-first, whose
+  // intent-relevance ranking can crown an off-subject shared-key cluster — the `/member/v1/survey` route out-
+  // scoring the real `/member/booking/v1`). A bare `--center <file>` leaves a.symbol unset. Resolve the file's
+  // top-level defs from the registry (no names, no embeddings). If it holds exactly ONE:
+  //   • a CLASS/interface with ≥2 methods → FAN into a per-method STAR (each method is its own flow — the "file
+  //     anchor transition to all methods"). This is an EXPLICIT multi-center (the methods), NOT semantic center
+  //     detection, so the off-subject-cluster bug does not return; the class-node collapse (one write shown, the
+  //     rest hidden behind `untraced-or-unused-methods`) does.
+  //   • otherwise (a value/DTO class, a single exported fn/component) → pin that symbol, the intent-free direct trace.
+  // A file with 0 or ≥2 top-level defs is genuinely plural → stays a module/concern anchor. Skipped when the
+  // caller forced --concern, passed a multi-center list, or already pinned a symbol.
   if (a.scan && a.auto && a.intent && !a.symbol && !a.growFrom && !a.concern && a.center && a.anchorFile) {
     const centers = parseCenters(a.center);
     if (centers.length === 1 && !centers[0].symbol) {
@@ -99,9 +100,26 @@ async function runCodebase(a: Args): Promise<number> {
         const defs = await enumerate_defs(a.repo, 4000, new Set([a.anchorFile]));
         const primary = defs.filter((d) => d.enclosing === "" && d.kind !== "method");
         if (primary.length === 1) {
-          a.symbol = primary[0].name;
-          a.center = `${centers[0].file}#${primary[0].name}`;   // rewrite the center too: the direct-vs-concern gate (below) reads parseCenters(a.center), so a bare file must become file#sym to take the direct trace
-          process.stderr.write(`[center] ${a.anchorFile} has a single top-level definition '${a.symbol}' — anchoring it structurally (add #<sym> to pin another, or --concern for the semantic map)\n`);
+          // The single top-level def is a CLASS/interface with its own METHODS → each method is its OWN flow
+          // (createBooking → write, cancelBooking → delete, …). Anchoring the CLASS collapses them all onto one
+          // class node — the down-writes hang off the class, so the render shows ONE write and hides the rest
+          // (the `untraced-or-unused-methods` blindspot). FAN the class into a MULTI-CENTER star of its methods
+          // (structural, no #symbol → the explicit multi-center concern path grows each method independently and
+          // attributes every method's boundary per-method). A class with <2 methods (a value/DTO class, a single
+          // exported fn/component) has no fan → keep the single structural pin. Cap so a fat bean stays scannable.
+          const owner = primary[0].name;
+          const _METHOD_FAN_CAP = Math.max(2, parseInt(process.env.SEAM_CLASS_FAN_CAP ?? "24", 10) || 24);
+          const methods = defs.filter((d) => d.kind === "method" && d.enclosing === owner).map((d) => d.name);
+          const uniq = [...new Set(methods)];
+          if (uniq.length >= 2) {
+            const chosen = uniq.slice(0, _METHOD_FAN_CAP);
+            a.center = chosen.map((m) => `${centers[0].file}#${m}`).join(",");   // multi-center → the explicit-star concern path (a.symbol left UNSET)
+            process.stderr.write(`[center] ${a.anchorFile} is a class '${owner}' with ${uniq.length} method(s) — fanning into a per-method star${uniq.length > chosen.length ? ` (first ${chosen.length}; raise SEAM_CLASS_FAN_CAP)` : ""} (add #<method> to trace one, or --concern for the semantic map)\n`);
+          } else {
+            a.symbol = owner;
+            a.center = `${centers[0].file}#${owner}`;   // rewrite the center too: the direct-vs-concern gate (below) reads parseCenters(a.center), so a bare file must become file#sym to take the direct trace
+            process.stderr.write(`[center] ${a.anchorFile} has a single top-level definition '${a.symbol}' — anchoring it structurally (add #<sym> to pin another, or --concern for the semantic map)\n`);
+          }
         }
       } catch { /* best-effort structural resolution — fall through to the module/concern anchor on any failure */ }
     }

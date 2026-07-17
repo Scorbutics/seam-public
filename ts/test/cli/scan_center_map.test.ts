@@ -21,6 +21,8 @@ describe("--scan --center --format agent WITHOUT --auto → the codebase map", (
     const r = run(["--center", "ejb/BookingsBean.java", "--intent", "how are bookings managed", "--format", "agent"]);
     expect(r.stdout).toContain("# Agent map");                    // the MAP (auto-grow was implied)
     expect(r.stdout).not.toMatch(/Decomposed anchor 'mod'/);      // NOT the diff-style fall-through
-    expect(r.stdout).toContain("anchor: BookingsBean");           // the bare file resolved to its class, not 'mod'
+    // the bare file resolved to its class STRUCTURALLY (its methods), never a bare 'mod'
+    expect(r.stdout).toMatch(/anchor: (getUpcomingBookings|persist)\b/);
+    expect(r.stdout).not.toMatch(/anchor: mod\b/);
   }, 60000);
 });
