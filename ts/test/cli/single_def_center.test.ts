@@ -32,9 +32,9 @@ describe("single-def file --center → structural resolution (fan a class, pin a
     expect(bare.stderr).toContain("pinned 2 center(s): getUpcomingBookings, persist");
     // …and did NOT run the SEMANTIC center detection (the off-subject-cluster path this fix avoids)
     expect(bare.stderr).not.toContain("Picking the concern's mechanism");
-    // the anchor is one of the class's own methods, never a bare `mod`
-    expect(bare.stdout).toMatch(/anchor: (getUpcomingBookings|persist)\b/);
-    expect(bare.stdout).not.toMatch(/anchor: mod\b/);
+    // a class STAR renders the per-method concern MAP (agent upgraded), listing every method — none missing
+    expect(bare.stdout).toContain("# Concern map");
+    for (const m of ["getUpcomingBookings", "persist"]) expect(bare.stdout).toContain(`BookingsBean.${m}`);
   }, 60000);
 
   test("bare-file center on a MULTI-def file stays module/concern (no structural fan)", () => {

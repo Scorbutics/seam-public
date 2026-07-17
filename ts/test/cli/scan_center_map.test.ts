@@ -19,10 +19,10 @@ describe("--scan --center --format agent WITHOUT --auto → the codebase map", (
   test("bare-file --center + --intent + --format agent (no --auto) renders the agent MAP, not diff-mode", () => {
     if (!available()) return;   // needs tree-sitter to grow
     const r = run(["--center", "ejb/BookingsBean.java", "--intent", "how are bookings managed", "--format", "agent"]);
-    expect(r.stdout).toContain("# Agent map");                    // the MAP (auto-grow was implied)
+    // a bare CLASS center is a STAR (its methods) → the per-method MAP (agent upgraded to the concern star view),
+    // never the diff-style fall-through and never a bare 'mod' anchor.
+    expect(r.stdout).toContain("# Concern map");                  // the MAP (auto-grow was implied; class fanned → star)
     expect(r.stdout).not.toMatch(/Decomposed anchor 'mod'/);      // NOT the diff-style fall-through
-    // the bare file resolved to its class STRUCTURALLY (its methods), never a bare 'mod'
-    expect(r.stdout).toMatch(/anchor: (getUpcomingBookings|persist)\b/);
-    expect(r.stdout).not.toMatch(/anchor: mod\b/);
+    for (const m of ["getUpcomingBookings", "persist"]) expect(r.stdout).toContain(`BookingsBean.${m}`);   // every method, structurally
   }, 60000);
 });

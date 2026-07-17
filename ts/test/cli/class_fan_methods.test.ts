@@ -43,6 +43,25 @@ describe("bare class --center fans into per-method flows", () => {
     for (const m of ["createBooking", "updateBooking", "updateProfile"]) expect(r.stdout).toContain(`BookingsBean.${m}`);
   }, 60000);
 
+  test("a bare class + --format agent UPGRADES to the concern STAR (so no method is missing); a pinned #method keeps the agent spine", () => {
+    if (!available()) return;
+    // bare class → the star view even though the caller asked for agent (a class is many mechanisms, not one line)
+    const cls = spawnSync("bun",
+      ["src/cli/decompose.ts", "--repo", REPO, "--scan", "--auto", "--data-coupling", "floor", "--verbose",
+        "--center", "cdi/BookingsBean.java", "--intent", "how bookings are managed", "--format", "agent"],
+      { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0" }, encoding: "utf-8" });
+    expect(cls.stderr).toContain("rendering the per-method STAR view");
+    expect(cls.stdout).toContain("# Concern map");
+    for (const m of ["createBooking", "updateBooking", "updateProfile"]) expect(cls.stdout).toContain(`BookingsBean.${m}`);
+    // a PINNED method stays the deep single-method agent spine (the LINE view)
+    const one = spawnSync("bun",
+      ["src/cli/decompose.ts", "--repo", REPO, "--scan", "--auto", "--data-coupling", "floor",
+        "--center", "cdi/BookingsBean.java#createBooking", "--intent", "how bookings are managed", "--format", "agent"],
+      { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0" }, encoding: "utf-8" });
+    expect(one.stdout).toContain("# Agent map");
+    expect(one.stdout).toMatch(/anchor: createBooking\b/);
+  }, 60000);
+
   test("the Out section attributes each write to the METHOD that makes it, deduped by table", () => {
     if (!available()) return;
     const out = run("concern").stdout;

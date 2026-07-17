@@ -114,7 +114,12 @@ async function runCodebase(a: Args): Promise<number> {
           if (uniq.length >= 2) {
             const chosen = uniq.slice(0, _METHOD_FAN_CAP);
             a.center = chosen.map((m) => `${centers[0].file}#${m}`).join(",");   // multi-center → the explicit-star concern path (a.symbol left UNSET)
-            process.stderr.write(`[center] ${a.anchorFile} is a class '${owner}' with ${uniq.length} method(s) — fanning into a per-method star${uniq.length > chosen.length ? ` (first ${chosen.length}; raise SEAM_CLASS_FAN_CAP)` : ""} (add #<method> to trace one, or --concern for the semantic map)\n`);
+            process.stderr.write(`[center] ${a.anchorFile} is a class '${owner}' with ${uniq.length} method(s) — fanning into a per-method star${uniq.length > chosen.length ? ` (first ${chosen.length}; raise SEAM_CLASS_FAN_CAP)` : ""} (add #<method> to trace one)\n`);
+            // A fanned class is a STAR (many mechanisms), whose agent-consumable view is `concern` — it lists EVERY
+            // method + what each writes (In/Out). The `agent` (LINE) format renders only the PRIMARY method's spine,
+            // so the sibling methods (updateBooking/cancelBooking) fall into the region and read as "missing". Upgrade
+            // agent→concern for the fan; a user who pins `#<method>` gets the deep single-method agent spine back.
+            if (a.format === "agent") { a.format = "concern"; process.stderr.write(`[center] rendering the per-method STAR view (--format concern); pin #<method> for the single-method agent spine\n`); }
           } else {
             a.symbol = owner;
             a.center = `${centers[0].file}#${owner}`;   // rewrite the center too: the direct-vs-concern gate (below) reads parseCenters(a.center), so a bare file must become file#sym to take the direct trace
