@@ -675,9 +675,18 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // climb a coupling interaction UP into the boundary node).
   const inEdges = new Map<string, Set<string>>();     // node → all its consumers (for center fan-in)
   const callIn = new Map<string, Set<string>>();      // node → its CALL-graph callers only (for the entry walk)
+  // invokeIn = callers via a real INVOCATION edge only (call/dispatch/interface-impl), NOT a weak reference/import.
+  // The resolver over-attributes siblings: a REST `updateBooking` that calls `bean.updateBooking()` also gets a
+  // spurious `reference` edge to the bean's `createBooking` (same receiver type), so `callIn[createBooking]` lists
+  // BOTH REST methods and the per-mechanism entry climb picks the wrong one (createBooking's Spine mislabelled with
+  // updateBooking's REST entry + its front-end). The entry attribution must follow who INVOKES a method, so it uses
+  // invokeIn and only falls back to callIn when a method has no resolved invoker (a framework/DI entry).
+  const _INVOKE_KINDS = new Set(["call", "invokes", "dispatch", "interface-impl", "provider-impl"]);
+  const invokeIn = new Map<string, Set<string>>();
   for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
     (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f);
-    if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f); }
+    if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f);
+    if (_INVOKE_KINDS.has(e.kind)) (invokeIn.get(t) ?? invokeIn.set(t, new Set()).get(t)!).add(f); }
   // CENTER CLUSTER — a broad concern's shared MECHANISMS (a cluster of beans, not one). Honour the caller's cluster
   // (opts.centers); else detect one intent-weighted center as a fallback. Interactions are the consumers of ANY
   // mechanism + their coupling counterparts, so the star spans the whole cluster.
@@ -725,14 +734,17 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // whichever sibling happens to have the deepest onward caller — the SAME wrong entry for every mechanism,
   // contradicting "## In" (which already attributes each mechanism to its own real trigger via `entryOf`).
   // Reusing that exact climb here means a Spines line can never disagree with the In section for the same method.
+  // callers of `id` via a real INVOCATION (invokeIn), falling back to the broader callIn only when nothing invokes
+  // it (a framework/DI-mounted entry has no in-repo invoker) — so the climb never rides a spurious sibling reference.
+  const invokersOf = (id: string): string[] => { const inv = [...(invokeIn.get(id) ?? [])]; return inv.length ? inv : [...(callIn.get(id) ?? [])]; };
   const entryChainOf = (cid: string): string[] => {
-    const direct = [...(callIn.get(cid) ?? [])].filter((c) => !mechNodes.has(c));
+    const direct = invokersOf(cid).filter((c) => !mechNodes.has(c));
     if (!direct.length) return [];
     let cur = direct.sort((a, b) => fanIn(a) - fanIn(b))[0];
     const path: string[] = [cur];
     const seen = new Set<string>([...mechNodes, cur]);
     for (let hop = 0; hop < 8; hop++) {
-      const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));
+      const callers = invokersOf(cur).filter((c) => !seen.has(c));
       if (!callers.length) break;
       cur = callers.sort((a, b) => fanIn(a) - fanIn(b))[0];
       seen.add(cur); path.push(cur);
@@ -915,6 +927,38 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // Condensed to ONE line per mechanism (a full per-method agent sub-block would just repeat `--format agent` on
   // that method — the "top N of a fanned class" cap keeps a big bean scannable).
   const _spineCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_SPINE_CAP ?? "5", 10) || 5);
+  // CROSS-STACK FRONT-END of a backend entry node — the "screen" end of "screen → … → database". The per-mechanism
+  // call-graph climb (entryChainOf) reaches the top BACKEND node (a REST method), but stops there — `callIn` is
+  // call-graph only, so it never crosses the HTTP boundary to the UI that actually triggers the flow. This adds the
+  // ONE grounded hop the single-anchor spine already makes: backend --route-serve--> /route --route-fetch--> UI,
+  // TWO hops over the crossing graph (crossAdj) through a route boundary to a counterpart on the OTHER stack (a
+  // different file extension). Matched by route SPECIFICITY: a boundary with the FEWEST cross-stack counterparts is
+  // the method's OWN leaf route (/booking/update → one UI), preferred over a shared class base (/booking → every
+  // sibling UI); the deeper route path breaks a tie. Returns the UI node + the boundary (for the ──HTTP /route──▶
+  // edge), or null for a pure-backend concern (no prefix — unchanged). GROUNDED: a real resolved route crossing.
+  const frontEndEntryOf = (backendId: string): { feId: string; bid: string } | null => {
+    const beExt = _spineIdx.ext(hunkById.get(backendId)?.file);
+    const sameStack = (n: string): boolean => { const x = _spineIdx.ext(hunkById.get(n)?.file); return !isBoundaryNode(n) && hunkById.has(n) && x === beExt; };
+    const isCrossFE = (fe: string): boolean => { const x = _spineIdx.ext(hunkById.get(fe)?.file); return !isBoundaryNode(fe) && hunkById.has(fe) && !!x && x !== beExt; };
+    // SPECIFICITY, primary discriminator: the number of SAME-STACK backend nodes serving a route. A method's own
+    // leaf route (@Path("/create")) is served by ONE method (+ its class), a shared class base (@Path("/booking"))
+    // by EVERY sibling method — so the route with the FEWEST backend servers is the one that uniquely names THIS
+    // mechanism's UI. Then fewer cross-stack counterparts, then the deeper route path, then a stable label tiebreak.
+    let best: { feId: string; bid: string; servers: number; fan: number; spec: number } | null = null;
+    for (const bid of (crossAdj.get(backendId) ?? [])) {
+      if (!isBoundaryNode(bid)) continue;
+      const nbrs = [...(crossAdj.get(bid) ?? [])];
+      const fes = nbrs.filter(isCrossFE).sort();   // sorted → deterministic
+      if (!fes.length) continue;
+      const servers = nbrs.filter(sameStack).length;
+      const spec = String(hunkById.get(bid)?.label ?? "").split("/").filter(Boolean).length;
+      const cand = { feId: fes[0], bid, servers, fan: fes.length, spec };
+      if (!best || cand.servers < best.servers
+          || (cand.servers === best.servers && (cand.fan < best.fan
+          || (cand.fan === best.fan && cand.spec > best.spec)))) best = cand;
+    }
+    return best ? { feId: best.feId, bid: best.bid } : null;
+  };
   const spineLines: string[] = [];
   if (mechCount > 1) {   // a single-mechanism concern already has the full agent spine one `--format agent` away
     const _spineCenters = centerIds.slice(0, _spineCap);
@@ -934,8 +978,19 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
       // into identical, indistinguishable lines.
       const codeNames = downSteps.map((s, i) => (i === 0 ? qual(hunkById.get(cid)) : qual(_spineIdx.primaryHunk(s))));
-      const entryNames = process.env.SEAM_SPINE_ENTRY === "1" ? entryChainOf(cid).reverse().map((id) => qual(hunkById.get(id))) : [];
-      const chain = [...entryNames, ...codeNames].join(" → ");
+      // ENTRY (SEAM_SPINE_ENTRY) — the backend call-graph climb, then the cross-stack hop to the UI that triggers it,
+      // so the line reads screen → REST → … → mechanism (the full "side to the other" a mechanism's flow crosses).
+      let chain: string;
+      if (process.env.SEAM_SPINE_ENTRY === "1") {
+        const beChain = entryChainOf(cid);                                  // [nearest caller … farthest backend]
+        const topBackend = beChain.length ? beChain[beChain.length - 1] : cid;
+        const beNames = [...beChain].reverse().map((id) => qual(hunkById.get(id)));   // entry → mechanism order
+        const backendAndCode = [...beNames, ...codeNames].join(" → ");
+        const fe = frontEndEntryOf(topBackend);                            // the UI across the route, if any
+        chain = fe ? `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶ ${backendAndCode}` : backendAndCode;
+      } else {
+        chain = codeNames.join(" → ");
+      }
       if (sp.terminal === "grounded") {
         // the terminal spine seam IS the boundary it wrote/read into — find its own crossing among the mechanism's
         // already-attributed `outCross` facts (mech===this center, bid===the terminal's own node) so the verb
