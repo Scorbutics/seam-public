@@ -54,10 +54,15 @@ function scan(file: string, text0: string): KeyHit[] {
     return (preceding ?? any)?.type;
   };
 
-  // 2) EntityManager writes — persist/merge/remove name (or type-resolve) their entity arg. `remove` is a DELETE:
-  //    still a write, but tagged op:"delete" so it never wins over a create/persist as the table's representative
-  //    write site (else `em.remove(x)` at an earlier line masquerades as the create for a "…is created" flow).
-  const emWrite = /\.(persist|merge|remove)\s*\(\s*(?:new\s+([A-Z]\w*)|([A-Z]\w*)\.class|([a-z_]\w*))/g;
+  // 2) EntityManager / repository WRITES — persist/merge/remove AND the save-family (Spring-Data / Hibernate, and a
+  //    CUSTOM `save(entity)` wrapper like acme's RequestScopedJpaEntityManager). Each NAMES or TYPE-RESOLVES its
+  //    entity arg: `new X()` / `X.class` / a same-file-declared `X var` — a local, FIELD, or PARAM. The param case
+  //    is the acme write: `updateAndSaveMemberBookingEntity(final MemberBooking memberBooking){ … ;
+  //    mJpaEntityManager.save(memberBooking); }` — the arg is a typed parameter, not an inline `new` (which the
+  //    old save-only-`new X()` rule required, so it was missed). `remove` is a DELETE (op-tagged so it never wins
+  //    over a create as a table's representative write site); the rest are writes. A typeless var (its type not
+  //    declared in the file) is an honest under-reach, not a guess.
+  const emWrite = /\.(persist|merge|remove|save|saveAndFlush|saveOrUpdate|persistAndFlush)\s*\(\s*(?:new\s+([A-Z]\w*)|([A-Z]\w*)\.class|([a-z_]\w*))/g;
   while ((m = emWrite.exec(text))) {
     const ln = lineOf(text, m.index);
     const e = m[2] || m[3] || (m[4] ? resolveVar(m[4], ln) : undefined);
@@ -66,19 +71,6 @@ function scan(file: string, text0: string): KeyHit[] {
   // 3) reads — find/getReference on an `X.class`.
   const emRead = /\.(?:find|getReference)\s*\(\s*([A-Z]\w*)\.class/g;
   while ((m = emRead.exec(text))) add(m[1], lineOf(text, m.index), false);
-  // 4) Spring-Data / Hibernate save of a freshly-constructed entity.
-  const save = /\.(?:save|saveAndFlush|saveOrUpdate|persistAndFlush)\s*\(\s*new\s+([A-Z]\w*)/g;
-  while ((m = save.exec(text))) add(m[1], lineOf(text, m.index), true);
-  // 4b) `new X()` CONSTRUCTION of an entity → a db-WRITE of X. A JPA entity is constructed to be persisted (the
-  //     read path uses find/JPQL, not `new`), so the construction is the write signal that SURVIVES a custom
-  //     persistence layer: when the actual persist is behind a custom EntityManager wrapper (`mJpaEm.stopAndStart`)
-  //     or a chain of save-helpers — a verb this adapter can't match, and where the entity TYPE is erased to
-  //     `Object` at the wrapper boundary — the typed `new MemberBooking()` up in the bean is the only grounded
-  //     link left (the acme case). NOT gated to a verb here; the CO-OCCURRENCE grounding keeps a `new X()` write
-  //     ONLY where an `@Entity X` / SQL table of the same name exists on the other side, so `new ArrayList()` and
-  //     any non-entity construction are dropped and never fabricate a table.
-  const ctor = /\bnew\s+([A-Z]\w*)\s*\(/g;
-  while ((m = ctor.exec(text))) add(m[1], lineOf(text, m.index), true);
   // 5) JPQL `from X` inside a query/named-query string. The keyword is case-INSENSITIVE (`from`/`FROM`), but the
   //    ENTITY must be PascalCase — a JPA entity always starts uppercase. Guard on the first char: the `i` flag would
   //    otherwise let `([A-Z]\w*)` match a lowercase word (`from where`, `from stream`, `select … from query`),
