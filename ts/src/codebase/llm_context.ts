@@ -737,19 +737,33 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // callers of `id` via a real INVOCATION (invokeIn), falling back to the broader callIn only when nothing invokes
   // it (a framework/DI-mounted entry has no in-repo invoker) — so the climb never rides a spurious sibling reference.
   const invokersOf = (id: string): string[] => { const inv = [...(invokeIn.get(id) ?? [])]; return inv.length ? inv : [...(callIn.get(id) ?? [])]; };
-  const entryChainOf = (cid: string): string[] => {
-    const direct = invokersOf(cid).filter((c) => !mechNodes.has(c));
-    if (!direct.length) return [];
-    let cur = direct.sort((a, b) => fanIn(a) - fanIn(b))[0];
-    const path: string[] = [cur];
-    const seen = new Set<string>([...mechNodes, cur]);
-    for (let hop = 0; hop < 8; hop++) {
-      const callers = invokersOf(cur).filter((c) => !seen.has(c));
-      if (!callers.length) break;
-      cur = callers.sort((a, b) => fanIn(a) - fanIn(b))[0];
-      seen.add(cur); path.push(cur);
+  // ALL distinct entry flows into a mechanism — NOT one. A shared bean is genuinely reached by MANY independent
+  // flows (Acme BookingsBean: the adviser portal, the member portal, the login-setup that creates a
+  // booking business, the XPlan sync — each a separate way in). Which one MATTERS is a semantic call that belongs
+  // to the consuming agent, not the engine (CLAUDE.md: structure ENUMERATES, the model JUDGES) — so picking "the
+  // least-shared caller" was a heuristic standing in for a judgment, and it dropped every other flow (and often
+  // picked an internal path over the real portals). Instead: reverse-walk the INVOCATION graph up from the
+  // mechanism, node-scoped, HALTING at another mechanism (a sibling bean method is its own entry in the star) and
+  // at a root (a node nothing in-repo invokes — a REST endpoint / a framework/DI mount). Each root is one entry
+  // flow; return the path root → … → (direct caller of the mechanism) for each. Deterministic, complete; the agent
+  // reads the fan and decides which to dig into.
+  const entryFlowsOf = (cid: string): string[][] => {
+    const parent = new Map<string, string>();   // node → the node it invokes toward the mechanism
+    const visited = new Set<string>([cid]);
+    const roots: string[] = [];
+    const q = [cid];
+    while (q.length) {
+      const n = q.shift()!;
+      const callers = invokersOf(n).filter((c) => !visited.has(c) && !mechNodes.has(c));   // don't cross into a sibling mechanism
+      if (n !== cid && !callers.length) { roots.push(n); continue; }                        // nothing invokes n → n is an entry root
+      for (const c of callers) { visited.add(c); parent.set(c, n); q.push(c); }
     }
-    return path;   // nearest caller … farthest reached — reverse() for display (entry → … → mechanism)
+    const flows: string[][] = [];
+    for (const r of roots) { const path: string[] = []; for (let cur: string | undefined = r; cur !== undefined && cur !== cid; cur = parent.get(cur)) path.push(cur); flows.push(path); }
+    // deterministic order: cross-stack (a real screen behind the root) first, then spine tier, then by entry label.
+    return flows.sort((a, b) => (Number(!!frontEndEntryOf(a[0])) - Number(!!frontEndEntryOf(b[0]))) * -1
+      || (tierRank(seamOf.get(a[a.length - 1])) - tierRank(seamOf.get(b[b.length - 1])))
+      || (String(hunkById.get(a[0])?.label) < String(hunkById.get(b[0])?.label) ? -1 : 1));
   };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
   // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
@@ -918,14 +932,12 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     [`concern: ${opts.intent ?? primary?.label ?? "?"}`, `mechanisms: ${mechCount}`, `resolution: ${model.resolutionQuality ?? "?"}`,
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
   out.push("", `## Mechanisms ● (the concern's shared beans — the star's center${mechCount > 1 ? " cluster" : ""})`, ...mechLines);
-  // SPINES — the star gives BREADTH (every fanned method), but each mechanism has its OWN depth: a full
-  // screen→…→database path, not just the "Out" one-liner. Reuse `computeSpine`'s DOWNSTREAM half only
-  // (render/spine.ts) — the SAME oracle-tuned anchor→sink walk `renderAgent` runs for its single anchor — per
-  // TOP-N mechanism (by fan-in; `centerIds` is already fan-sorted, and already reflects `opts.centers`' order
-  // when the caller pinned a set — see its assembly above). The UPSTREAM (entry) half is NOT taken from
-  // computeSpine (see entryChainOf's comment for why); it's spliced in from THIS mechanism's own climb instead.
-  // Condensed to ONE line per mechanism (a full per-method agent sub-block would just repeat `--format agent` on
-  // that method — the "top N of a fanned class" cap keeps a big bean scannable).
+  // FLOWS — per mechanism: its shared DOWNSTREAM culmination (mechanism → … → boundary, from `computeSpine`'s
+  // down-half, render/spine.ts — the SAME oracle-tuned anchor→sink walk `renderAgent` uses) stated ONCE, then a
+  // FAN of EVERY distinct way in (entryFlowsOf). A shared bean is reached by many independent flows (the adviser
+  // portal, the member portal, a login-setup, an XPlan sync); WHICH one matters is the agent's semantic call, so
+  // the engine ENUMERATES them all deterministically (capped) rather than picking one. Top-N mechanism by fan-in
+  // (`centerIds` is fan-sorted, and reflects `opts.centers`' order when the caller pinned a set).
   const _spineCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_SPINE_CAP ?? "5", 10) || 5);
   // CROSS-STACK FRONT-END of a backend entry node — the "screen" end of "screen → … → database". The per-mechanism
   // call-graph climb (entryChainOf) reaches the top BACKEND node (a REST method), but stops there — `callIn` is
@@ -978,44 +990,45 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
       // into identical, indistinguishable lines.
       const codeNames = downSteps.map((s, i) => (i === 0 ? qual(hunkById.get(cid)) : qual(_spineIdx.primaryHunk(s))));
-      // ENTRY (default ON for the concern Spines; opt out with SEAM_SPINE_ENTRY=0) — the backend call-graph climb,
-      // then the cross-stack hop to the UI that triggers it, so the line reads screen → REST → … → mechanism (the
-      // full "side to the other" a flow crosses — the whole point of the "screen → … → database" section header).
-      // NOTE the default is intentionally different from the SINGLE-ANCHOR agent spine's `_entryChain` (render/
-      // spine.ts, default OFF, opt-in =1): that walk is SEAM-granular so defaulting it on leaks a merged-blob
-      // sibling's caller; THIS climb (entryChainOf) is node/call-scoped per mechanism, so it's safe on by default.
-      // =0 turns BOTH off; =1 turns both on; unset = concern-on / single-anchor-off.
-      let chain: string;
-      if (process.env.SEAM_SPINE_ENTRY !== "0") {
-        const beChain = entryChainOf(cid);                                  // [nearest caller … farthest backend]
-        const topBackend = beChain.length ? beChain[beChain.length - 1] : cid;
-        const beNames = [...beChain].reverse().map((id) => qual(hunkById.get(id)));   // entry → mechanism order
-        const backendAndCode = [...beNames, ...codeNames].join(" → ");
-        const fe = frontEndEntryOf(topBackend);                            // the UI across the route, if any
-        chain = fe ? `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶ ${backendAndCode}` : backendAndCode;
-      } else {
-        chain = codeNames.join(" → ");
-      }
+      // CULMINATION line — the mechanism → … → boundary (the shared DOWNSTREAM outcome, same for every way in).
+      let culm: string;
       if (sp.terminal === "grounded") {
-        // the terminal spine seam IS the boundary it wrote/read into — find its own crossing among the mechanism's
-        // already-attributed `outCross` facts (mech===this center, bid===the terminal's own node) so the verb
-        // (writes/reads) matches "## Out" exactly, never re-derived.
         const lastHunk = _spineIdx.primaryHunk(sp.downSpine[sp.downSpine.length - 1]);
         const bid = String((lastHunk as any)?.id ?? "");
         const oc = outCross.find((o) => o.bid === bid && o.mech === cid) ?? outCross.find((o) => o.bid === bid);
-        spineLines.push(`  ${chain}${oc ? ` ──${oc.verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`);
-      } else if (sp.terminal === "frontier") {
-        spineLines.push(`  ${chain} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`);
+        culm = `  ● ${codeNames.join(" → ")}${oc ? ` ──${oc.verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`;
+      } else {   // frontier
+        culm = `  ● ${codeNames.join(" → ")} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`;
+      }
+      spineLines.push(culm);
+      // ENTRY FAN (default ON; opt out with SEAM_SPINE_ENTRY=0) — EVERY distinct way in to this mechanism, each a
+      // `entry → … → ●` row (the UI prepended across the HTTP route when the top backend node has one). The engine
+      // does NOT pick which flow matters — it lists them all (deterministic, capped), and the agent picks which to
+      // dig into. Cross-stack rows (a real screen) sort first. (Default differs from the single-anchor agent spine's
+      // `_entryChain`, render/spine.ts, default OFF: that walk is seam-granular and leaks a merged-blob sibling's
+      // caller; this fan is node-scoped per mechanism. =0 turns both off; =1 both on; unset = concern-on/agent-off.)
+      if (process.env.SEAM_SPINE_ENTRY !== "0") {
+        const flows = entryFlowsOf(cid);                                   // each: [root … direct caller of the mechanism]
+        const _entryCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_ENTRIES ?? "6", 10) || 6);
+        const shown = flows.slice(0, _entryCap);
+        for (const flow of shown) {
+          const names = flow.map((id) => qual(hunkById.get(id)));          // root → … → nearest caller (entry → mechanism)
+          const fe = frontEndEntryOf(flow[0]);                             // a UI behind the entry root, across its route
+          const lhs = fe ? `${qual(hunkById.get(fe.feId))} ──${crossingEdge(fe.bid)}──▶ ${names.join(" → ")}` : names.join(" → ");
+          spineLines.push(`      ← ${lhs} → ●`);
+        }
+        if (flows.length > shown.length) spineLines.push(`      ← (+${flows.length - shown.length} more way(s) in — raise SEAM_CONCERN_ENTRIES)`);
+        if (!flows.length) spineLines.push(`      ← (no in-repo caller — a framework/DI-mounted or top-level entry)`);
       }
     }
     // The rolled-up "+K more" line is only meaningful once at least one mechanism actually SHOWED a spine — a
     // section that's ALL "(+N more … raise the cap)" with no path above it would be a misleading empty promise.
     if (spineLines.length) {
       const _spineRest = centerIds.length - _spineCenters.length;
-      if (_spineRest > 0) spineLines.push(`  (+${_spineRest} more mechanism(s) without a shown spine — raise SEAM_CONCERN_SPINE_CAP)`);
+      if (_spineRest > 0) spineLines.push(`  (+${_spineRest} more mechanism(s) not shown — raise SEAM_CONCERN_SPINE_CAP)`);
     }
   }
-  if (spineLines.length) out.push("", "## Spines — each mechanism's own path, screen → ... → database (top N by fan-in)", ...spineLines);
+  if (spineLines.length) out.push("", "## Flows — every distinct way in to each mechanism (● = the mechanism; ← = a way in; the agent picks which to trace)", ...spineLines);
   // IN — who triggers the mechanism, each interaction THREADED through the boundary crossing it traverses
   // (entry ──HTTP /route──▶ ●), so the coupling edge is part of the flow, not a footnote. Deepen recipe stated ONCE.
   out.push("", `## In — what triggers ${dot}  (entry ──crossing──▶ ●)`);

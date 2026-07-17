@@ -42,19 +42,20 @@ function concernSpines(): string {
     { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_SPINE_ENTRY: undefined }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
 }
 
-describe("concern Spines — each mechanism resolves the full front-end → REST → bean → DB path", () => {
-  test("each CRUD mechanism's Spine reaches its OWN front-end, matched by route, ending at the db-table", () => {
+describe("concern Flows — each mechanism resolves the full front-end → REST → bean → DB path", () => {
+  test("each CRUD mechanism culminates at the db-table and fans its OWN front-end way-in, matched by route", () => {
     if (!available()) return;   // needs tree-sitter (Java + JS parse + route + JPA grounding)
     const out = concernSpines();
-    const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In") >= 0 ? out.indexOf("## In") : undefined);
-    // the update flow: its OWN UI (csSaveBooking) across the /update route → its REST method → its bean method → the table.
-    expect(seg).toMatch(/csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking → [^\n]*csUpdateBooking[^\n]*──writes──▶ db "CsBooking"/);
-    // the create flow: its OWN UI (csNewBooking), NOT the update UI — the per-mechanism route match must not cross the wires.
-    expect(seg).toMatch(/csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking → [^\n]*csCreateBooking[^\n]*──writes──▶ db "CsBooking"/);
-    // and the wires are not crossed: the update line must not carry the create UI, nor vice-versa.
-    const updateLine = seg.split("\n").find((l) => l.includes("csUpdateBooking") && l.includes("──writes──▶")) ?? "";
-    const createLine = seg.split("\n").find((l) => l.includes("csCreateBooking") && l.includes("──writes──▶")) ?? "";
-    expect(updateLine).not.toContain("csNewBooking");
-    expect(createLine).not.toContain("csSaveBooking");
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In") >= 0 ? out.indexOf("## In") : undefined);
+    // each mechanism's culmination reaches its db-table
+    expect(seg).toMatch(/● [^\n]*csUpdateBooking[^\n]*──writes──▶ db "CsBooking"/);
+    expect(seg).toMatch(/● [^\n]*csCreateBooking[^\n]*──writes──▶ db "CsBooking"/);
+    // the update mechanism's way-in: its OWN UI (csSaveBooking) across the /update route → the update REST method → ●
+    expect(seg).toMatch(/← csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking → ●/);
+    // the create mechanism's way-in: its OWN UI (csNewBooking) → the create REST method → ● (wires not crossed)
+    expect(seg).toMatch(/← csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking → ●/);
+    // the per-mechanism route match must not cross the wires: the update UI never pairs with the create REST method, nor vice-versa
+    expect(seg).not.toMatch(/csSaveBooking ──HTTP [^\n]*──▶ CsBookingsService\.csCreateBooking/);
+    expect(seg).not.toMatch(/csNewBooking ──HTTP [^\n]*──▶ CsBookingsService\.csUpdateBooking/);
   }, 30000);
 });

@@ -32,42 +32,50 @@ function makeFanModel() {
 }
 const centers = [{ file: "cdi/BookingsBean.ts", symbol: "createBooking" }, { file: "cdi/BookingsBean.ts", symbol: "updateProfile" }];
 
-describe("renderConcern — ## Spines (each mechanism's own condensed path to its boundary)", () => {
-  test("a condensed spine line per mechanism, terminating at its OWN db-table write", () => {
+describe("renderConcern — ## Flows (each mechanism's culmination + every way in)", () => {
+  test("a culmination line per mechanism, terminating at its OWN db-table write", () => {
     const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
-    expect(out).toContain("## Spines");
-    const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In"));
-    expect(seg).toMatch(/BookingsBean\.createBooking ──writes──▶ db "MemberBooking"/);
-    expect(seg).toMatch(/BookingsBean\.updateProfile ──writes──▶ db "MemberProfile"/);
-    // never printed twice (once as a chain step, once as the crossing target)
-    expect((seg.match(/MemberBooking/g) ?? []).length).toBe(1);
+    expect(out).toContain("## Flows");
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
+    expect(seg).toMatch(/● BookingsBean\.createBooking ──writes──▶ db "MemberBooking"/);
+    expect(seg).toMatch(/● BookingsBean\.updateProfile ──writes──▶ db "MemberProfile"/);
+    // the table is named ONCE per mechanism (the ── verb ──▶ edge target), not doubled as a bare chain step
+    expect((seg.match(/MemberBooking\b/g) ?? []).length).toBe(1);
   });
 
-  test("SEAM_SPINE_ENTRY=1 prepends the caller entry to each mechanism's own chain", () => {
-    const prev = process.env.SEAM_SPINE_ENTRY; process.env.SEAM_SPINE_ENTRY = "1";
+  test("each mechanism fans its own way-in entry (default on) as a `← entry → ●` row", () => {
+    const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
+    expect(seg).toMatch(/← bookNow → ●/);
+    expect(seg).toMatch(/← editProfile → ●/);
+  });
+
+  test("SEAM_SPINE_ENTRY=0 drops the way-in fan, leaving only the culmination", () => {
+    const prev = process.env.SEAM_SPINE_ENTRY; process.env.SEAM_SPINE_ENTRY = "0";
     try {
       const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
-      const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In"));
-      expect(seg).toMatch(/bookNow → BookingsBean\.createBooking ──writes──▶ db "MemberBooking"/);
-      expect(seg).toMatch(/editProfile → BookingsBean\.updateProfile ──writes──▶ db "MemberProfile"/);
+      const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
+      expect(seg).toMatch(/● BookingsBean\.createBooking ──writes──▶ db "MemberBooking"/);
+      // no way-in ROWS when opted out (the header legend still mentions `←`, so match the indented row form)
+      expect(seg).not.toMatch(/\n\s+← /);
     } finally { if (prev === undefined) delete process.env.SEAM_SPINE_ENTRY; else process.env.SEAM_SPINE_ENTRY = prev; }
   });
 
-  test("SEAM_CONCERN_SPINE_CAP caps the shown spines and rolls up the rest", () => {
+  test("SEAM_CONCERN_SPINE_CAP caps the shown mechanisms and rolls up the rest", () => {
     const prev = process.env.SEAM_CONCERN_SPINE_CAP; process.env.SEAM_CONCERN_SPINE_CAP = "1";
     try {
       const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
-      const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In"));
+      const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
       expect(seg).toContain("BookingsBean.createBooking");
-      expect(seg).not.toContain("BookingsBean.updateProfile ──writes");   // capped out of the shown spine
-      expect(seg).toContain("+1 more mechanism(s) without a shown spine — raise SEAM_CONCERN_SPINE_CAP");
+      expect(seg).not.toContain("BookingsBean.updateProfile ──writes");   // capped out
+      expect(seg).toContain("+1 more mechanism(s) not shown — raise SEAM_CONCERN_SPINE_CAP");
     } finally { if (prev === undefined) delete process.env.SEAM_CONCERN_SPINE_CAP; else process.env.SEAM_CONCERN_SPINE_CAP = prev; }
   });
 
-  test("a single-mechanism concern (mechCount 1) omits the Spines section — one --format agent away", () => {
+  test("a single-mechanism concern (mechCount 1) omits the Flows section — one --format agent away", () => {
     const model = makeFanModel();
     const out = renderConcern(model, { intent: "how are bookings managed", centers: [centers[0]] });
-    expect(out).not.toContain("## Spines");
+    expect(out).not.toContain("## Flows");
   });
 
   // Reproduces the real Acme bug report: BookingsBean's methods got merged into ONE seam alongside an
@@ -110,28 +118,26 @@ describe("renderConcern — ## Spines (each mechanism's own condensed path to it
   }
   const blobCenters = [{ file: "cdi/BookingsBean.ts", symbol: "createBooking" }, { file: "cdi/BookingsBean.ts", symbol: "updateBooking" }];
 
-  test("a merged-blob mechanism renders its OWN method name, not the blob's generic primary", () => {
+  test("a merged-blob mechanism renders its OWN method name in the culmination, not the blob's generic primary", () => {
     const out = renderConcern(makeBlobModel(), { intent: "how are bookings managed", centers: blobCenters });
-    const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In"));
-    expect(seg).toMatch(/BookingsBean\.createBooking ──writes──▶ db "MemberBooking1"/);
-    expect(seg).toMatch(/BookingsBean\.updateBooking ──writes──▶ db "MemberBooking2"/);
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
+    expect(seg).toMatch(/● BookingsBean\.createBooking ──writes──▶ db "MemberBooking1"/);
+    expect(seg).toMatch(/● BookingsBean\.updateBooking ──writes──▶ db "MemberBooking2"/);
     expect(seg).not.toContain("AcmeJsonSchemaBean");   // the blob's generic primary must never leak in
-    // two genuinely different CRUD operations must render as two genuinely different lines
+    // two genuinely different CRUD operations must render as two genuinely different culmination lines
     const lines = seg.split("\n").filter((l) => l.includes("──writes──▶"));
     expect(new Set(lines).size).toBe(lines.length);
   });
 
-  test("a merged-blob mechanism's entry prefix is its OWN caller, never a sibling's deeper decoy caller", () => {
-    const prev = process.env.SEAM_SPINE_ENTRY; process.env.SEAM_SPINE_ENTRY = "1";
-    try {
-      const out = renderConcern(makeBlobModel(), { intent: "how are bookings managed", centers: blobCenters });
-      const seg = out.slice(out.indexOf("## Spines"), out.indexOf("## In"));
-      expect(seg).toMatch(/book → BookingsBean\.createBooking ──writes──▶ db "MemberBooking1"/);
-      expect(seg).toMatch(/updateBookingCaller → BookingsBean\.updateBooking ──writes──▶ db "MemberBooking2"/);
-      // neither mechanism's line may borrow the decoy sibling's deeper caller chain
-      expect(seg).not.toContain("admin");
-      expect(seg).not.toContain("deleteBusinessCaller");
-    } finally { if (prev === undefined) delete process.env.SEAM_SPINE_ENTRY; else process.env.SEAM_SPINE_ENTRY = prev; }
+  test("a merged-blob mechanism's way-in is its OWN caller, never a sibling's deeper decoy caller", () => {
+    const out = renderConcern(makeBlobModel(), { intent: "how are bookings managed", centers: blobCenters });
+    const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
+    // each mechanism fans ITS caller as a way-in row
+    expect(seg).toMatch(/← book → ●/);
+    expect(seg).toMatch(/← updateBookingCaller → ●/);
+    // neither mechanism may borrow the decoy sibling's (deleteBusiness's) deeper caller chain
+    expect(seg).not.toContain("admin");
+    expect(seg).not.toContain("deleteBusinessCaller");
   });
 
   test("no mechanism reaching a boundary omits the whole section (no header, no rollup)", () => {
@@ -147,6 +153,6 @@ describe("renderConcern — ## Spines (each mechanism's own condensed path to it
       blindspots: [],
     };
     const out = renderConcern(model, { intent: "how are bookings managed", centers });
-    expect(out).not.toContain("## Spines");
+    expect(out).not.toContain("## Flows");
   });
 });
