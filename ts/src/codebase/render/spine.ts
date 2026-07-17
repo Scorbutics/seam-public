@@ -45,7 +45,15 @@ export function buildDerivedIndex(seams: Seam[]): DerivedIndex {
 }
 
 export type SpineResult = {
-  spineSeams: Seam[];
+  // downSpine: the anchor-DOWNSTREAM half only (anchor's own seam → … → grounded sink), always node-scoped to
+  // `anchorId` at index 0 when non-empty. entryChain: the UPSTREAM half (SEAM_SPINE_ENTRY), a GENERIC "deepest/
+  // cross-stack caller" walk — correct for a SINGLE anchor (renderAgent), but NOT mechanism-scoped: run per
+  // fanned method through a shared caller (a dispatcher/gateway), it converges on whichever sibling has the
+  // deepest onward caller, not on who actually calls THIS anchor. A multi-mechanism caller (renderConcern's
+  // "## Spines") must NOT trust this half — it already has a mechanism-specific, hub-safe entry climb (`entryOf`)
+  // and should splice that in instead; keep the two halves separate so it can.
+  downSpine: Seam[];
+  entryChain: Seam[];
   spineAlternates: Seam[];
   grounded: boolean;
   terminal: "grounded" | "frontier" | "none";
@@ -399,7 +407,6 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     return path;   // entry → … → caller-of-anchor
   };
   const _entry = _entryChain(); const _dset = new Set(_downSpine.map((s) => s.id));
-  const spineSeams = [..._entry.filter((s) => !_dset.has(s.id)), ..._downSpine];
   const spineAlternates = _spine.alternates;
-  return { spineSeams, spineAlternates, grounded: spineGrounded, terminal: spineTerminal, breakInfo: spineBreak };
+  return { downSpine: _downSpine, entryChain: _entry.filter((s) => !_dset.has(s.id)), spineAlternates, grounded: spineGrounded, terminal: spineTerminal, breakInfo: spineBreak };
 }

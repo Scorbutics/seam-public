@@ -94,7 +94,10 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // back to the tier band ONLY when the flow reaches NO downstream boundary (a same-language call chain / policy
   // fan) — the honest "reaches no boundary" case then renders as region-by-shell (no fabricated spine).
   const _sp = computeSpine(model, String(model.anchor), seams, _idx);
-  const spineSeams = _sp.spineSeams;
+  // Merge entry + down halves (computeSpine keeps them separate so a MULTI-mechanism caller — renderConcern's
+  // "## Spines" — can discard the generic entryChain and splice in its own mechanism-scoped one instead; the
+  // single-anchor case here has no such ambiguity, so just merge them exactly as computeSpine used to internally).
+  const spineSeams = [..._sp.entryChain, ..._sp.downSpine];
   const spineGrounded = _sp.grounded;
   const spineTerminal = _sp.terminal;
   const spineBreak = _sp.breakInfo;
@@ -713,6 +716,29 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     }
     return cur;
   };
+  // PER-MECHANISM ENTRY CHAIN (for "## Spines") — the SAME climb `entryOf` runs (least-shared caller, halting at
+  // a mechanism node or a no-caller node), but returning the FULL path instead of only the final id, and seeded
+  // from `cid`'s own DIRECT callers — so it can never wander into a sibling mechanism's territory. This is
+  // deliberately NOT `computeSpine`'s generic entry-chain (SEAM_SPINE_ENTRY): that walk explores upward over ALL
+  // edges and prefers the FARTHEST caller, so run once per fanned method through a SHARED dispatcher/gateway
+  // (Acme: AcmeJsonSchemaBean, called by many independent REST methods), it converges on
+  // whichever sibling happens to have the deepest onward caller — the SAME wrong entry for every mechanism,
+  // contradicting "## In" (which already attributes each mechanism to its own real trigger via `entryOf`).
+  // Reusing that exact climb here means a Spines line can never disagree with the In section for the same method.
+  const entryChainOf = (cid: string): string[] => {
+    const direct = [...(callIn.get(cid) ?? [])].filter((c) => !mechNodes.has(c));
+    if (!direct.length) return [];
+    let cur = direct.sort((a, b) => fanIn(a) - fanIn(b))[0];
+    const path: string[] = [cur];
+    const seen = new Set<string>([...mechNodes, cur]);
+    for (let hop = 0; hop < 8; hop++) {
+      const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));
+      if (!callers.length) break;
+      cur = callers.sort((a, b) => fanIn(a) - fanIn(b))[0];
+      seen.add(cur); path.push(cur);
+    }
+    return path;   // nearest caller … farthest reached — reverse() for display (entry → … → mechanism)
+  };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
   // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
   // for the --grow-from handle + center-matching. Disambiguates a bare `createBooking` across sibling beans.
@@ -881,29 +907,40 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       `interactions: ${rayList.length}`, `blindspots: ${(model.blindspots ?? []).length}`].join(" | "));
   out.push("", `## Mechanisms ● (the concern's shared beans — the star's center${mechCount > 1 ? " cluster" : ""})`, ...mechLines);
   // SPINES — the star gives BREADTH (every fanned method), but each mechanism has its OWN depth: a full
-  // screen→…→database path, not just the "Out" one-liner. Reuse `computeSpine` (render/spine.ts) — the SAME
-  // oracle-tuned entry-rooted walk `renderAgent` runs for its single anchor — per TOP-N mechanism (by fan-in;
-  // `centerIds` is already fan-sorted, and already reflects `opts.centers`' order when the caller pinned a set —
-  // see its assembly above). Condensed to ONE line per mechanism (a full per-method agent sub-block would just
-  // repeat `--format agent` on that method — the "top N of a fanned class" cap keeps a big bean scannable).
+  // screen→…→database path, not just the "Out" one-liner. Reuse `computeSpine`'s DOWNSTREAM half only
+  // (render/spine.ts) — the SAME oracle-tuned anchor→sink walk `renderAgent` runs for its single anchor — per
+  // TOP-N mechanism (by fan-in; `centerIds` is already fan-sorted, and already reflects `opts.centers`' order
+  // when the caller pinned a set — see its assembly above). The UPSTREAM (entry) half is NOT taken from
+  // computeSpine (see entryChainOf's comment for why); it's spliced in from THIS mechanism's own climb instead.
+  // Condensed to ONE line per mechanism (a full per-method agent sub-block would just repeat `--format agent` on
+  // that method — the "top N of a fanned class" cap keeps a big bean scannable).
   const _spineCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_SPINE_CAP ?? "5", 10) || 5);
   const spineLines: string[] = [];
   if (mechCount > 1) {   // a single-mechanism concern already has the full agent spine one `--format agent` away
     const _spineCenters = centerIds.slice(0, _spineCap);
     for (const cid of _spineCenters) {
       const sp = computeSpine(model, cid, seams, _spineIdx);
-      if (!sp.spineSeams.length || sp.terminal === "none") continue;   // no traceable path → stays the flat one-liner above
+      if (!sp.downSpine.length || sp.terminal === "none") continue;   // no traceable path → stays the flat one-liner above
       // A grounded spine's LAST seam IS the crowned boundary itself (computeSpine only crowns a boundary seam —
       // see `cands = seams.filter((s) => isBoundarySeam(s) ...)` in render/spine.ts) — drop it from the code chain
       // so the boundary is named ONCE, via the `──verb──▶ db "Table"` edge (not twice: once as a bare chain step,
       // once as the edge target).
-      const codeSteps = sp.terminal === "grounded" ? sp.spineSeams.slice(0, -1) : sp.spineSeams;
-      const chain = codeSteps.map((s) => qual(_spineIdx.primaryHunk(s))).join(" → ");
+      const downSteps = sp.terminal === "grounded" ? sp.downSpine.slice(0, -1) : sp.downSpine;
+      // NODE-SCOPE the first step to the mechanism's OWN hunk, not the seam's structural primary — computeSpine
+      // guarantees downSpine[0] is the anchor's own seam, but a seam is often a merged blob (the method fused
+      // with a shared dispatcher class), so its primaryHunk can be a BIGGER SIBLING (AcmeJsonSchemaBean)
+      // instead of this specific method. Same fix as renderAgent's `_anchorWhere` (line ~363), applied per
+      // mechanism here — without it, every fanned method whose blob's primary is that sibling renders the SAME
+      // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
+      // into identical, indistinguishable lines.
+      const codeNames = downSteps.map((s, i) => (i === 0 ? qual(hunkById.get(cid)) : qual(_spineIdx.primaryHunk(s))));
+      const entryNames = process.env.SEAM_SPINE_ENTRY === "1" ? entryChainOf(cid).reverse().map((id) => qual(hunkById.get(id))) : [];
+      const chain = [...entryNames, ...codeNames].join(" → ");
       if (sp.terminal === "grounded") {
         // the terminal spine seam IS the boundary it wrote/read into — find its own crossing among the mechanism's
         // already-attributed `outCross` facts (mech===this center, bid===the terminal's own node) so the verb
         // (writes/reads) matches "## Out" exactly, never re-derived.
-        const lastHunk = _spineIdx.primaryHunk(sp.spineSeams[sp.spineSeams.length - 1]);
+        const lastHunk = _spineIdx.primaryHunk(sp.downSpine[sp.downSpine.length - 1]);
         const bid = String((lastHunk as any)?.id ?? "");
         const oc = outCross.find((o) => o.bid === bid && o.mech === cid) ?? outCross.find((o) => o.bid === bid);
         spineLines.push(`  ${chain}${oc ? ` ──${oc.verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`);
