@@ -12,6 +12,7 @@ export const MEDIA: { medium: string; produce: string; consume: string; pull?: b
   { medium: "cache", produce: "cache-write", consume: "cache-read", wave: "sharing a cache with" },
   { medium: "file", produce: "file-write", consume: "file-read", wave: "sharing a file with" },
   { medium: "service", produce: "service-write", consume: "service-read", wave: "sharing service state with" },   // stateful external SDK handle (auth/session/…): mutate ⇄ read the same singleton
+  { medium: "egress", produce: "egress-call", consume: "egress-return", wave: "calls out to" },   // outbound call to an EXTERNAL system (HTTP host/broker) — terminal, produce-only (no in-repo consumer)
 ];
 
 // edge-kind → medium; and the SOURCE edges (point code→boundary: the consumer's fetch for a pull medium, the

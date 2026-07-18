@@ -132,9 +132,9 @@ describe("renderConcern — ## Flows (each mechanism's culmination + every way i
   test("a merged-blob mechanism's way-in is its OWN caller, never a sibling's deeper decoy caller", () => {
     const out = renderConcern(makeBlobModel(), { intent: "how are bookings managed", centers: blobCenters });
     const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
-    // each mechanism fans ITS caller as a way-in row
-    expect(seg).toMatch(/← book → ●/);
-    expect(seg).toMatch(/← updateBookingCaller → ●/);
+    // each mechanism fans ITS caller as a way-in row (class-qualified via the file's class)
+    expect(seg).toMatch(/← BookingsService\.book → ●/);
+    expect(seg).toMatch(/← BookingsService\.updateBookingCaller → ●/);
     // neither mechanism may borrow the decoy sibling's (deleteBusiness's) deeper caller chain
     expect(seg).not.toContain("admin");
     expect(seg).not.toContain("deleteBusinessCaller");

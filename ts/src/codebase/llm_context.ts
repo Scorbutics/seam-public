@@ -773,7 +773,12 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // `Class.method` and the consumer-less one bare — inconsistent. Learn each file's class from the `enclosing` its
   // OTHER method nodes DO carry (a grounded, parser-set fact) and apply it, so EVERY fanned method reads `Class.method`.
   const fileClass = new Map<string, string>();
-  for (const id of nodes) { const h = hunkById.get(id); if (h?.file && h.enclosing && !fileClass.has(h.file)) fileClass.set(h.file, h.enclosing); }
+  // learn each file's class from a PascalCase enclosing (a class name) — NOT a lowercase one (a receiver variable
+  // from a qualified call). Fallback: the file's BASENAME when it's PascalCase (the class-per-file convention:
+  // Java/C#/TS `MicrosoftBookingsBean.java` → `MicrosoftBookingsBean`), so a file whose only method carries a
+  // receiver-variable enclosing still qualifies to its real class.
+  for (const id of nodes) { const h = hunkById.get(id); if (h?.file && h.enclosing && /^[A-Z]/.test(h.enclosing) && !fileClass.has(h.file)) fileClass.set(h.file, h.enclosing); }
+  for (const id of nodes) { const h = hunkById.get(id); if (!h?.file || fileClass.has(h.file)) continue; const base = String(h.file).split("/").pop()?.replace(/\.\w+$/, "") ?? ""; if (/^[A-Z]\w*$/.test(base)) fileClass.set(h.file, base); }
   // enclosing class for display. Prefer the node's own `enclosing`, BUT a resolved qualified call can record the
   // RECEIVER VARIABLE (`mBookingsBean`) as the enclosing instead of the class — a class name is PascalCase, so an
   // enclosing that starts lowercase is a variable; fall back to the file's learned class then (BookingsBean).
@@ -788,8 +793,11 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // agent's ask: the crossing is a first-class edge in the flow, not prose.
   const _MEDIUM_LABEL: Record<string, string> = {
     route: "HTTP", "http-route": "HTTP", annotation: "HTTP", "db-table": "db", table: "db",
-    queue: "queue", topic: "topic", event: "event", cache: "cache", key: "key", binding: "binds", file: "file",
+    queue: "queue", topic: "topic", event: "event", cache: "cache", key: "key", binding: "binds", file: "file", egress: "external",
   };
+  // the produce VERB for an outcome, by boundary kind — publishes to a queue/topic/event, calls out to an egress,
+  // writes to a store (db/cache/file). Keeps the co-equal culmination fan reading naturally per medium.
+  const _outcomeVerb = (bid: string): string => { const k = hunkById.get(bid)?.kind ?? ""; return k === "egress" ? "calls out" : (k === "queue" || k === "event" || k === "topic") ? "publishes" : "writes"; };
   const crossingEdge = (bid: string): string => {
     const h = hunkById.get(bid); const med = _MEDIUM_LABEL[h?.kind ?? ""] ?? "crosses"; const key = h?.label ?? "?";
     return med === "db" ? `${med} "${key}"` : `${med} ${key}`;
@@ -1041,6 +1049,29 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       q.push(nb); } }
     return null;
   };
+  // ALL co-equal CULMINATIONS of a mechanism — every grounded boundary its flow produces into, not just the one
+  // the spine crowns. An orchestrator has MANY ends (a db write, a queue publish, an external HTTP egress); which
+  // matters is the agent's call, so the engine enumerates them all (the output-side mirror of the way-in fan).
+  // Each: the boundary + the delegation chain from the mechanism to the writer (so the delegate bean shows).
+  const _PRODUCE_CROSS = new Set<string>([..._CROSS_SOURCE]);   // code→boundary produce crossings (db-write/queue-publish/egress-call/…)
+  const culminationsOf = (cid: string): { bid: string; chain: string[] }[] => {
+    const reach = new Set<string>([cid]); const q = [cid];   // forward invocation closure from the mechanism
+    while (q.length) { const n = q.shift()!; for (const nb of invokeFwd.get(n) ?? []) if (!reach.has(nb)) { reach.add(nb); q.push(nb); } }
+    // a produce crossing is often attributed to the CLASS node (reached via import, not invocation) — e.g. the JMS
+    // queue-publish sits on `JmsQueueSender`, not the reached `send` method. So ALSO count a boundary produced by a
+    // CLASS node whose file is reached (delegationChain then traces to the real method within it). Restricted to a
+    // CLASS node — NOT a sibling METHOD in a reached file (a co-located `updateProfile` writing another table is a
+    // different mechanism's outcome, not this one's).
+    const reachFiles = new Set([...reach].map((n) => _nf(hunkById.get(n)?.file)).filter(Boolean));
+    const _isClassNode = (id: string): boolean => { const h = hunkById.get(id); if (!h?.file || !h.label) return false; const base = String(h.file).split("/").pop()?.replace(/\.\w+$/, "") ?? ""; return h.label === (fileClass.get(h.file) ?? base); };
+    const bids = new Map<string, string>();   // (kind|label) → one node id — dedup the duplicate boundary nodes (a db-table often has two: the @Entity class + the write site, same label)
+    for (const e of edges) { const f = String(e.from), t = String(e.to);
+      if (_PRODUCE_CROSS.has(e.kind) && isBoundaryNode(t) && (reach.has(f) || (_isClassNode(f) && reachFiles.has(_nf(hunkById.get(f)?.file))))) { const h = hunkById.get(t); const k = `${h?.kind}|${h?.label}`; if (!bids.has(k)) bids.set(k, t); } }
+    const out = [...bids.values()].map((bid) => ({ bid, chain: delegationChain(cid, bid) ?? [cid] }));
+    // deterministic order: stores (db/cache/file) first, then queue/event, then egress last; then by boundary label.
+    const _rank = (bid: string): number => { const k = hunkById.get(bid)?.kind ?? ""; return k === "egress" ? 2 : (k === "queue" || k === "event" || k === "topic") ? 1 : 0; };
+    return out.sort((a, b) => (_rank(a.bid) - _rank(b.bid)) || (String(hunkById.get(a.bid)?.label) < String(hunkById.get(b.bid)?.label) ? -1 : 1));
+  };
   const spineLines: string[] = [];
   if (mechCount > 1) {   // a single-mechanism concern already has the full agent spine one `--format agent` away
     const _spineCenters = centerIds.slice(0, _spineCap);
@@ -1059,31 +1090,27 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // mechanism here — without it, every fanned method whose blob's primary is that sibling renders the SAME
       // label, making genuinely different CRUD operations (createBooking/updateBooking/cancelBooking) collapse
       // into identical, indistinguishable lines.
-      // CULMINATION line — the mechanism → … → boundary (the shared DOWNSTREAM outcome, same for every way in).
-      let culm: string;
-      if (sp.terminal === "grounded") {
-        const termSeam = sp.downSpine[sp.downSpine.length - 1];
-        // the STORE boundary hunk in the terminal seam — NOT always its primary: a db-table node is often merged
-        // into the same seam as the @Entity CLASS it shares a label with, and the class wins `primary` (so a
-        // primary-only bid isn't a store, and the delegation trace to its writer bailed → the bean was skipped for
-        // the shallow write too). Prefer a store hunk anywhere in the seam; else the primary.
-        const _storeHunk = (termSeam.hunks ?? []).find((h: any) => _STORE_KINDS.has(h.kind ?? "")) ?? _spineIdx.primaryHunk(termSeam);
-        const bid = String((_storeHunk as any)?.id ?? "");
-        const oc = outCross.find((o) => o.bid === bid && o.mech === cid) ?? outCross.find((o) => o.bid === bid);
-        // prefer the DELEGATION call-chain (mechanism → bean → … → writer) so an intermediate bean isn't skipped;
-        // fall back to computeSpine's compressed down-path when no call-reachable writer (the mechanism writes directly).
-        const dele = delegationChain(cid, bid);
-        let chainIds = dele ?? [cid, ...downSteps.slice(1).map((s) => String((_spineIdx.primaryHunk(s) as any)?.id ?? ""))];
-        const _cap = Math.max(3, parseInt(process.env.SEAM_CONCERN_CULM_STEPS ?? "6", 10) || 6);
-        if (chainIds.length > _cap) chainIds = [...chainIds.slice(0, _cap - 2), `…(+${chainIds.length - _cap})`, chainIds[chainIds.length - 1]];
-        const chainNames = chainIds.map((id) => (id.startsWith("…") ? id : qual(hunkById.get(id))));
-        const verb = oc?.verb ?? (edges.find((e) => _CROSS_SOURCE.has(e.kind) && String(e.to) === bid) ? "writes" : null);
-        culm = `  ● ${chainNames.join(" → ")}${verb ? ` ──${verb}──▶ ${crossingEdge(bid)}` : ` → ${crossingEdge(bid)}`}`;
-      } else {   // frontier
+      // CULMINATION FAN — every CO-EQUAL end the mechanism's flow produces into (db + queue + external egress),
+      // not just the one computeSpine crowns. `● mechanism` heads the block; each `⇒ [delegate chain] ──verb──▶
+      // boundary` is one outcome. The delegate bean is on each chain (delegationChain), so an orchestrator reads
+      // its full fan-out. Single-outcome mechanisms stay compact (the ⇒ folds onto the ● line).
+      const _culmCap = Math.max(3, parseInt(process.env.SEAM_CONCERN_CULM_STEPS ?? "6", 10) || 6);
+      const _renderChain = (chain: string[]): string => {   // qualify + cap the delegate chain (drop the leading mechanism — it's the ●)
+        let ids = chain[0] === cid ? chain.slice(1) : chain;
+        if (ids.length > _culmCap) ids = [...ids.slice(0, _culmCap - 2), `…(+${ids.length - _culmCap})`, ids[ids.length - 1]];
+        return ids.map((id) => (id.startsWith("…") ? id : qual(hunkById.get(id)))).join(" → ");
+      };
+      const culms = sp.terminal === "grounded" ? culminationsOf(cid) : [];
+      if (culms.length > 1) {
+        spineLines.push(`  ● ${qual(hunkById.get(cid))}  (${culms.length} outcomes)`);
+        for (const c of culms) { const chain = _renderChain(c.chain); spineLines.push(`      ⇒ ${chain ? `${chain} ` : ""}──${_outcomeVerb(c.bid)}──▶ ${crossingEdge(c.bid)}`); }
+      } else if (culms.length === 1) {
+        const c = culms[0]; const chain = _renderChain(c.chain);
+        spineLines.push(`  ● ${qual(hunkById.get(cid))}${chain ? ` → ${chain}` : ""} ──${_outcomeVerb(c.bid)}──▶ ${crossingEdge(c.bid)}`);
+      } else if (sp.terminal === "frontier") {
         const chainNames = [qual(hunkById.get(cid)), ...downSteps.slice(1).map((s) => qual(_spineIdx.primaryHunk(s)))];
-        culm = `  ● ${chainNames.join(" → ")} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`;
-      }
-      spineLines.push(culm);
+        spineLines.push(`  ● ${chainNames.join(" → ")} ⟂ [${sp.breakInfo?.mechanism ?? "opaque boundary"}]`);
+      } else continue;   // no grounded culmination → stays the flat one-liner in ## Mechanisms
       // WAY-IN FAN (default ON; opt out with SEAM_SPINE_ENTRY=0) — EVERY distinct way in to this mechanism, each a
       // `← entry → ●` row. Two kinds, both enumerated (the engine never picks which flow matters — it lists them
       // all, deterministic + capped, and the agent chooses): (1) in-repo caller chains (entryFlowsOf), the UI
