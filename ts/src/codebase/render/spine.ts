@@ -223,6 +223,15 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // PERIPHERAL write (audit) can't hijack the spine from the anchor's own outcome — it just becomes an alternate.
     const chainIds = new Set<string>();
     for (const e of edges) if (_PRODUCE.has(e.kind) && callDepth.has(String(e.from)) && !directIds.has(String(e.to))) chainIds.add(String(e.to));
+    // FLOW-WRITE VOLUME — the table the flow's MECHANISM centers on: how many DISTINCT nodes ON THE ANCHOR'S CALL
+    // CLOSURE write it. A payment flow's `payments` is written by 4 phases (provision/enrich/invoice/notify); a
+    // side table like `member_referrals` by 1 — or ZERO on the closure when it's reached only via a coupling
+    // crossing from an UNRELATED route (the pilot's synthetic-referees admin route wrote `member_referrals` and,
+    // being dist-closer than the deep phase writes, hijacked the crown from `payments`). So a boundary written by
+    // MORE call-closure nodes is the real culmination; a coupling-ONLY boundary is a side channel. SCOPED to the
+    // call closure (never repo-wide), keyed by TABLE LABEL, so a hub table's global write count can't hijack it.
+    const _flowWritersByTbl = new Map<string, Set<string>>();
+    for (const e of edges) if (_PRODUCE.has(e.kind) && callDepth.has(String(e.from))) { const t = label.get(String(e.to)) ?? String(e.to); (_flowWritersByTbl.get(t) ?? _flowWritersByTbl.set(t, new Set()).get(t)!).add(String(e.from)); }
     const directSink = (s: Seam) => (s.hunks ?? []).some((h: any) => directIds.has(String(h.id)));
     const ownSink = (s: Seam) => (s.hunks ?? []).some((h: any) => ownIds.has(String(h.id)));
     // A grounded ANCHOR WRITE (directSink) is a candidate EVEN when the BFS didn't reach it: in `fwd` (consumers-lead)
@@ -278,6 +287,8 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     const _moduleTbls = new Set<string>();
     for (const s of seams) { const f = s.primary?.file; if (f && _anchorDir && f.startsWith(_anchorDir + "/") && isBoundarySeam(s)) { const t = _tblOf(s); if (t) _moduleTbls.add(t); } }
     const _onSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM === "0" || !_tblOf(s) || _moduleTbls.has(_tblOf(s));
+    // how many distinct call-closure nodes write this boundary's table (see _flowWritersByTbl) — the flow-subject signal.
+    const _flowWriters = (s: Seam) => _flowWritersByTbl.get(_tblOf(s))?.size ?? 0;
     // SINK RANK — a real DATA-STORE persistence (db-table/queue/cache/topic/file: a PERSISTED row) is the culmination
     // (rank 2); a shared SERVICE-STATE handle (kind `service` — keycloak `session`, runtime state passed between
     // beans, NOT a persisted row, but still in STORE_KINDS) is plumbing (rank 1) and must never out-crown a real
@@ -294,11 +305,17 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // "no grounded boundary"). A NON-hub crossing (a specific shared key — the co-producer / data-flow rung) is kept.
     const _hubTables = new Set<string>();
     for (const b of (model.blindspots ?? []) as any[]) if (b.mechanism === "shared-key-fanout") { const t = String(b.evidence ?? "").match(/'([^']+)'/)?.[1]; if (t) _hubTables.add(t); }
-    const _isHubCrossing = (s: Seam) => (s as any).proposedBy === "crossing" && _hubTables.has(_tblOf(s));
+    // …UNLESS the anchor's own CALL CLOSURE writes it MORE THAN ONCE. A table the flow's mechanism produces into
+    // across MULTIPLE steps (private-app `payments`, written by its runPhaseEnrich/Invoice/Notify phases — _flowWriters ≥ 2)
+    // is the SUBJECT even when it's globally a shared-key hub (written across 10 files → flagged shared-key-fanout);
+    // excluding it crowned a write-light side table (`member_referrals`) reached only via an unrelated admin route
+    // (the pilot bug). A single incidental write to a hub (keycloak addRealmRoleMappings' one `db-write` to the
+    // `clients` hub read in 26 files) is NOT the subject — stays excluded. So the override needs ≥2 closure writers.
+    const _isHubCrossing = (s: Seam) => (s as any).proposedBy === "crossing" && _hubTables.has(_tblOf(s)) && _flowWriters(s) < 2;
     const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam && !_isHubCrossing(s)
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
         && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+      .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (_flowWriters(b) - _flowWriters(a)) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {

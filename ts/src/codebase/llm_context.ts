@@ -350,10 +350,19 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const _crossSeams = seams.filter((s) => (s as any).proposedBy === "crossing").length;
     const _bsAll = (model.blindspots ?? []) as any[];
     const _fanoutBs = _bsAll.filter((b) => b.mechanism === "shared-key-fanout").length;
+    // #5 — the header count must reflect the TRULY ACTIONABLE blindspots (a deepen extends the answer): a resolvable
+    // lead (a candidate set to grow into) or an on-flow dynamic dispatch. NOT the ambient bulk (external-libraries,
+    // method-unattributed, flood-cap) — counting those as "actionable" (141 on the pilot's I1, all ambient) told the
+    // agent there were 141 things to verify when ZERO were deepen-able, so it ignored the whole list. Same split as
+    // the ## Blindspots section (leads vs ambient), surfaced honestly at the top so the agent trusts+uses it.
+    const _FANOUT_H = new Set(["shared-key-fanout", "llm-proposed-key"]);
+    const _ONFLOW_H = new Set(["dynamic-dispatch", "dynamic-import"]);
+    const _leadBs = _bsAll.filter((b) => !_FANOUT_H.has(b.mechanism) && ((b.candidates ?? []).length || _ONFLOW_H.has(b.mechanism))).length;
+    const _ambientBs = _bsAll.length - _fanoutBs - _leadBs;
     h.push(`resolution: ${model.resolutionQuality ?? "?"}`,
       `seams: ${seams.length - _crossSeams} grounded${_crossSeams ? ` + ${_crossSeams} shared-key crossing(s)` : ""}`,
       `unresolved: ${(model.unresolved ?? []).length}`,
-      `blindspots: ${_bsAll.length - _fanoutBs} actionable${_fanoutBs ? ` (+ ${_fanoutBs} folded hub table(s))` : ""}`);
+      `blindspots: ${_leadBs} actionable${_ambientBs ? ` (+${_ambientBs} ambient)` : ""}${_fanoutBs ? ` (+${_fanoutBs} hub table(s))` : ""}`);
     const out = ["# Agent map — the region to read instead of a grep loop", h.join(" | ")];
     const im = model.intentMatch;
     if (im?.offIntent) out.push(`⚠ low intent match (top ${im.max} < ${im.floor}) — this anchor's flow may not answer the intent`);
@@ -403,11 +412,26 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // path terminating at a real boundary (db/route/queue); (b) INFERRED — no boundary was reached, so the tier band
   // is shown but LABELLED as inferred, never presented as a proven flow; (c) NONE — under an intent, an anchor that
   // reaches no downstream boundary says so (a leaf / policy / wrong center), instead of banding a fake spine.
+  // #2 CULMINATIONS (intent-ranked, RENDER-time) — when the anchor's own call closure reached no CROWNABLE boundary
+  // (a COMPUTE anchor: private-app' scoring `Engine` computes; a separate layer persists), the FOOTPRINT still holds
+  // grounded store writes (`weekly_tasks`/`pair_weights`) that the pilot found buried in the region. Surface them,
+  // most-INTENT-RELEVANT first — intent lives HERE (not in the intent-free spine), so it ranks the flow's real
+  // subject to the top WITHOUT a structurally-picked wrong crown (which lands on a hub / a side-effect). Fires for
+  // both "none" and the tier-band "inferred" case (neither reached a grounded sink on the anchor's own spine).
+  const culmSection = (): string[] => {
+    const storeSeams = seams.filter((s) => _STORE_KINDS.has((primaryHunk(s) as any)?.kind ?? "") && (primaryHunk(s) as any)?.kind !== "service");
+    const seenT = new Set<string>(); const culm: Seam[] = [];
+    for (const s of [...storeSeams].sort((a, b) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)))) { const t = (primaryHunk(s) as any)?.label; if (!t || seenT.has(t)) continue; seenT.add(t); culm.push(s); }
+    if (!culm.length) return [];
+    return ["", "## Culminations (grounded writes in this footprint — intent-ranked; NOT on the anchor's own call spine, verify the link)",
+      ...culm.slice(0, 6).map((s) => `  ${where(s)} — ${reachSeam(s)}`), ...(culm.length > 6 ? [`  (+${culm.length - 6} more grounded store(s))`] : [])];
+  };
   const spineSection = (): string[] => {
     if (!hasSpine) {
       if (!opts.intent) return [];   // no intent → no flow question → stay silent (region-by-shell speaks for itself)
       return ["", "## Spine — none: this anchor reaches no grounded boundary (db-table / route / queue) downstream.",
-        "  The flow may not terminate here (a leaf / a policy or compute concern), or the center/intent is off — read the region below."];
+        "  The flow may not terminate here (a leaf / a policy or compute concern), or the center/intent is off — read the region below.",
+        ...culmSection()];
     }
     const header = spineTerminal === "grounded"
       ? "## Spine (the primary path, anchor → … → outcome)"
@@ -428,6 +452,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       out.push(`  ⟂ [${spineBreak.mechanism}: ${spineBreak.evidence}]${cands.length ? ` — candidates: ${cands.join(", ")}` : ""}`,
         `    static resolution stops here; deepen with seam --grow-from <candidate>${opts.intent ? ` --intent "${opts.intent}"` : ""}`);
     }
+    // INFERRED (tier-band) spine reached no grounded sink either — surface the footprint's grounded stores, intent-ranked.
+    if (spineTerminal === "none" && opts.intent) out.push(...culmSection());
     return out;
   };
   // CAPPED-LIST + overflow line — the shape every "also X" / cross-stack / pipeline / frontier section repeats:

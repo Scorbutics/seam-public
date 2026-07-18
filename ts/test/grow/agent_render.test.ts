@@ -642,6 +642,60 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).toMatch(/inferred|no grounded boundary|partial/);   // …the spine stays honest instead
   });
 
+  // #1 (private-app pilot) — the COMPLEMENT of the coincidental-hub case: a hub table the flow's mechanism writes across
+  // MULTIPLE closure steps IS the subject and MUST crown, even against a write-light side table. The pilot crowned
+  // `member_referrals` (1 write, via an unrelated admin route) over `payments` (written by 4 phases) because both
+  // are shared-key-fanout hubs and the side table was dist-closer. Flow-write-volume (≥2 closure writers) rescues it.
+  test("a hub table the flow writes across ≥2 closure steps crowns over a write-light side table", () => {
+    const model = {
+      mode: "codebase", anchor: "orch", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "how is a payment processed and recorded", seams: [
+        { id: "a", label: "processAll", tier: "supporting", region: { shell: 0, direction: "down" }, primary: { file: "svc/index.ts", line: 1, symbol: "processAll" }, hunks: [{ id: "orch", file: "svc/index.ts", start: 1, role: "core", label: "processAll" }] },
+        { id: "p1s", label: "phase1", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/phase1.ts", line: 1, symbol: "phase1" }, hunks: [{ id: "p1", file: "svc/phase1.ts", start: 1, role: "core", label: "phase1" }] },
+        { id: "p2s", label: "phase2", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/phase2.ts", line: 1, symbol: "phase2" }, hunks: [{ id: "p2", file: "svc/phase2.ts", start: 1, role: "core", label: "phase2" }] },
+        // `payments` — a shared-key-fanout hub, but written by BOTH phases (the flow's own mechanism): the subject.
+        { id: "pay", label: "payments", tier: "supporting", proposedBy: "crossing", region: { shell: 2, direction: "down" }, primary: { file: "svc/phase1.ts", line: 9, symbol: "payments" }, hunks: [{ id: "payh", file: "svc/phase1.ts", start: 9, role: "environment", label: "payments", kind: "db-table" }] },
+        // `member_referrals` — also a hub, but a SINGLE write via an UNRELATED admin route (not on the closure).
+        { id: "ref", label: "member_referrals", tier: "supporting", proposedBy: "crossing", region: { shell: 2, direction: "down" }, primary: { file: "app/admin/route.ts", line: 92, symbol: "member_referrals" }, hunks: [{ id: "refh", file: "app/admin/route.ts", start: 92, role: "environment", label: "member_referrals", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "orch", to: "p1", kind: "call" }, { from: "orch", to: "p2", kind: "call" },
+        { from: "p1", to: "payh", kind: "db-write", line: 9 }, { from: "p2", to: "payh", kind: "db-write", line: 12 },
+        { from: "route", to: "refh", kind: "db-write", line: 92 }],
+      blindspots: [
+        { node: "payh", mechanism: "shared-key-fanout", evidence: "'payments' (db-table) is written in 10 files", candidates: [] },
+        { node: "refh", mechanism: "shared-key-fanout", evidence: "'member_referrals' (db-table) is written in 3 files", candidates: [] }],
+    };
+    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a payment processed and recorded" });
+    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
+    expect(spine).toContain("──▶ payments");        // the flow-written hub IS crowned (2 closure writers)
+    expect(spine).not.toContain("member_referrals"); // the write-light side table is NOT
+  });
+
+  // #5 (private-app pilot) — the header "N actionable" must count only DEEPEN-ABLE blindspots (resolvable leads / on-flow
+  // dispatch), NOT the ambient bulk (external-libraries). The pilot's I1 said "141 actionable" when ALL 141 were
+  // ambient and ZERO were deepen-able, so the agent ignored the list. Ambient must show as "(+N ambient)".
+  test("the header counts only deepen-able blindspots as actionable; ambient noise is labelled separately", () => {
+    const model = {
+      mode: "codebase", anchor: "cb", resolutionQuality: "FULL",
+      clusters: [{ id: "g1", intent: "x", seams: [
+        { id: "a", label: "handler", tier: "spine", region: { shell: 0, direction: "down" }, primary: { file: "svc/h.ts", line: 1, symbol: "handler" }, hunks: [{ id: "cb", file: "svc/h.ts", start: 1, role: "core", label: "handler" }] },
+        { id: "t", label: "orders", tier: "supporting", region: { shell: 1, direction: "down" }, primary: { file: "svc/h.ts", line: 5, symbol: "orders" }, hunks: [{ id: "th", file: "svc/h.ts", start: 5, role: "environment", label: "orders", kind: "db-table" }] },
+      ] }],
+      edges: [{ from: "cb", to: "th", kind: "db-write", line: 5 }],
+      blindspots: [
+        { node: "x1", mechanism: "external-libraries", candidates: [] },
+        { node: "x2", mechanism: "external-libraries", candidates: [] },
+        { node: "x3", mechanism: "method-unattributed-consumers", candidates: [] },
+        { node: "di", mechanism: "interface-multiple-impls", persists: true, candidates: [{ file: "Impl.java", symbol: "Impl" }] }],
+    };
+    const out = renderAgent(model as any, { tokenBudget: 8000, intent: "x" });
+    const header = out.split("\n")[1];
+    expect(header).toContain("blindspots: 1 actionable");   // only the interface-multiple-impls lead (candidate-bearing)
+    expect(header).toContain("(+3 ambient)");               // the 2 external-libraries + 1 method-unattributed
+  });
+
   // DEFER-TO-DI-WALL — the only grounded sink reached is a SERVICE-STATE crossing (`session`, plumbing), and the
   // real persist is behind a DI wall (an interface-multiple-impls blindspot whose impls PERSIST). The spine must NOT
   // crown the misleading `session`; it terminates at the wall and names the persisting candidate (keycloak createUser
