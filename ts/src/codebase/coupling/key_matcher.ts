@@ -102,8 +102,14 @@ human PROSE — logging (log/info/warn), i18n (t/translate), formatting, excepti
 "the" and couples unrelated files by coincidence. The ONLY generic-API exception is the DISCRIMINATOR pair
 above (a setter literal paired with the equals/comparison of the SAME literal) — never an "equals" rule alone.
 
-Common fields on every object: via, kind (db-table|queue|event|route|cache|key|binding), role
+Common fields on every object: via, kind (db-table|queue|event|route|cache|key|binding|egress), role
 ("produces"|"consumes"), name (short slug), description (one line).
+
+EGRESS vs route: an outbound call to an EXTERNAL system the repo does NOT serve (a third-party HTTP API, an
+SMTP/broker/SDK the app calls OUT to) is kind "egress" — a TERMINAL boundary: the flow leaves the system, there
+is NO in-repo other side, so role is ALWAYS "produces" and you never pair it with a consumer. Use "egress" (NOT
+"route"/"http") whenever the target is an EXTERNAL host/service; "http-route" is only an IN-REPO client fetch ⇄
+server handler. Key an egress by the external HOST or the SDK/service identity.
 
 Return a JSON array (empty if none). Examples — note the PAIRS (producer + the consumer that grounds it):
 [{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces","name":"vue-emit","description":"emits a component event"},
@@ -117,7 +123,8 @@ Return a JSON array (empty if none). Examples — note the PAIRS (producer + the
  {"id":"r9","via":"call","token":"convertAndSend","argIndex":0,"kind":"queue","role":"produces","name":"jms-send","description":"publishes to a JMS queue/topic"},
  {"id":"r10","via":"annotation","annotation":"JmsListener","element":"destination","kind":"queue","role":"consumes","name":"jms-listener","description":"a method listening on a JMS queue/topic"},
  {"id":"r11","via":"call","token":"setType","argIndex":0,"kind":"event","role":"produces","name":"payload-discriminator-set","description":"sets the payload field that routes which handler processes it"},
- {"id":"r12","via":"call","token":"equals","argIndex":0,"kind":"event","role":"consumes","name":"payload-discriminator-branch","description":"branches on the payload field value (PAIRED with the setter of the same literal)"}]
+ {"id":"r12","via":"call","token":"equals","argIndex":0,"kind":"event","role":"consumes","name":"payload-discriminator-branch","description":"branches on the payload field value (PAIRED with the setter of the same literal)"},
+ {"id":"r13","via":"call","token":"exchange","argIndex":0,"kind":"egress","role":"produces","name":"resttemplate-egress","description":"outbound HTTP call to an external API (terminal — no in-repo other side)"}]
 ALWAYS pair a "method" producer with the "attr" (key from call) consumer — e.g. a class method
 \`refreshSection()\` AND the \`(click)="refreshSection()"\` that invokes it — so the binding grounds.
 `;

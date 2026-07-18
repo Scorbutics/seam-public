@@ -67,9 +67,10 @@ literally present. A wrong guess is worse than silence. The value MUST be a SPEC
 table/topic/event/route/cache name) — NEVER a common word, prose, a sentence fragment, or a generic token
 like "the"/"data"/"value": a key that is not a distinctive name couples unrelated files by coincidence.
   file  — the FILE header path it came from
-  kind  — db-table | queue | event | route | cache | key
-  value — the literal name (table/topic/event/route/cache-key string)
-  role  — "produces" if the file WRITES/EMITS/PUBLISHES it, "consumes" if it READS/SUBSCRIBES/HANDLES it
+  kind  — db-table | queue | event | route | cache | key | egress (an outbound call to an EXTERNAL system —
+          a 3rd-party HTTP API / broker the repo does NOT serve; TERMINAL, role always "produces", no consumer)
+  value — the literal name (table/topic/event/route/cache-key string; for egress, the external host/service)
+  role  — "produces" if the file WRITES/EMITS/PUBLISHES/CALLS-OUT it, "consumes" if it READS/SUBSCRIBES/HANDLES it
 
 Return a JSON array (empty if none):
 [{"id":"k1","file":"<path>","kind":"db-table","value":"payments","role":"produces"}]

@@ -8,9 +8,10 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
+import { scan_file_keys, TERMINAL_KINDS } from "../../src/codebase/coupling/adapters/index.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
+import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
 
 const egress = (src: string, file = "a.java"): string[] => scan_file_keys(file, src).filter((k) => k.kind === "egress").map((k) => k.value);
 
@@ -50,4 +51,24 @@ describe("http-egress adapter — a universal, cross-language, framework-agnosti
       expect(byId.get(call.from)?.symbol).toBe("egCreateMs");
     } finally { rmSync(repo, { recursive: true, force: true }); }
   }, 30000);
+});
+
+// FLYWHEEL VOCABULARY (increment 3) — the coupling flywheel clusters floor-blind hot points into ONE general
+// matcher rule (cached, low LLM), the way it already does for JMS queues. `egress` must be in its vocabulary so
+// it can LEARN a non-URL / SDK external-call pattern the URL-literal floor misses — as a TERMINAL rule (produces,
+// no consumer) that self-grounds. This pins the deterministic half: a learned egress matcher validates, extracts
+// its key, and its kind is terminal (grounds without a complement). The LLM synthesis itself is exercised online.
+describe("flywheel vocabulary — a learned egress matcher is valid, terminal, and extractable", () => {
+  test("a `call` egress rule validates (kind stays egress, not coerced to http-route) and extracts its key", async () => {
+    const m = validateMatcher({ via: "call", token: "exchange", argIndex: 0, kind: "egress", role: "produces", name: "rt-egress" });
+    expect(m).not.toBeNull();
+    expect(m!.kind).toBe("egress");        // NOT aliased to http-route (that alias is only for a bare http/url/route/path kind)
+    expect(m!.role).toBe("produces");      // terminal — always a producer
+    const hits = await runMatcher(m!, "C.java", 'restTemplate.exchange("https://api.xplan.com/v2", GET, req, R.class);');
+    expect(hits[0]?.kind).toBe("egress");
+    expect(hits[0]?.produces).toBe(true);
+  });
+  test("egress is a TERMINAL kind (registry-sourced) → grounds from the producer alone, no complement", () => {
+    expect(TERMINAL_KINDS.has("egress")).toBe(true);
+  });
 });
