@@ -38,6 +38,10 @@ export interface KeyKind {
   // (a handler's in-repo callers are usually just the framework → empty). DATA adapters (db-table, shared
   // key) leave it unset: their far side is a reader whose continuation is UPSTREAM, toward where it's shown.
   handlerEdge?: string;
+  // TERMINAL boundary — an EGRESS the flow leaves the system through (an external HTTP host, an external broker):
+  // it has NO in-repo other side, so it is SELF-GROUNDED by its own literal (a closed grounded fact — the external
+  // endpoint) and materialised from the PRODUCER alone, never requiring a complement to survive the grounding gate.
+  terminal?: boolean;
   name?: string;         // human-facing adapter name (the built-in catalogue surfaced in `seam-adapters`)
   blurb?: string;        // one-line description of what it couples
   extraExts?: string[];  // non-SOURCE_EXTS file extensions this adapter ALSO scans (e.g. .vue/.html templates) —

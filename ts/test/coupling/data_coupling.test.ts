@@ -154,11 +154,12 @@ describe("shared-key (data-flow) coupling", () => {
       .toEqual([{ kind: "http-route", value: "/api/users", line: 0, produces: false }]);
   });
 
-  test("http-route adapter: a route file with no exported method serves nothing; external URLs don't couple", () => {
+  test("http-route adapter: a route file with no exported method serves nothing; a relative fetch is a route, an absolute URL is an egress", () => {
     expect(scan_file_keys("app/api/x/route.ts", `const GET = 1; // not exported`)).toEqual([]);
-    expect(scan_file_keys("a.ts", `fetch("https://stripe.com/v1/charges")`)).toEqual([]);   // absolute origin → skip
+    // an absolute external URL is NOT a same-origin route — it's a terminal EGRESS boundary keyed by host (any language)
+    expect(scan_file_keys("a.ts", `fetch("https://stripe.com/v1/charges")`)).toEqual([{ kind: "egress", value: "stripe.com", line: 0, produces: true, label: "stripe.com" }]);
     expect(scan_file_keys("a.ts", `fetch(url)`)).toEqual([]);                                // non-literal → skip
-    expect(scan_file_keys("a.py", `fetch("/api/x")`)).toEqual([]);                            // gated to JS/TS
+    expect(scan_file_keys("a.py", `fetch("/api/x")`)).toEqual([]);                            // relative path, non-JS → no route AND no egress (no host)
   });
 
   test("a route HANDLER surfaces its fetch CALLERS as route-fetch crossings (the second UI boundary)", async () => {

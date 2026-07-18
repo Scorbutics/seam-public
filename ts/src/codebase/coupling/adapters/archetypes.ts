@@ -34,6 +34,12 @@ export const ARCHETYPES: Record<string, Archetype> = {
   // (consume) couple because they operate the SAME external service. Learned via the receiver classifier's `service`
   // type → a `handle` matcher; grounds a session flow a call-trace can't (the flow exits into a 3rd-party service).
   service: { kind: "service", nodeKind: "service", produceEdge: "service-write", consumeEdge: "service-read" },
+  // EGRESS — an outbound call to an EXTERNAL system (an HTTP API, an SMTP/queue broker the repo doesn't own): the
+  // flow LEAVES the system here, so it's a TERMINAL boundary with NO in-repo other side (unlike http-route, whose
+  // handler is in-repo). Produce-only: the code calls out; there is no consumer to grow into (consumeEdge is inert,
+  // never wired). The key is the external HOST/endpoint. This is the "hot point" — a call the resolver halts at
+  // because the callee left the repo — surfaced as a co-equal culmination alongside a db-write or a queue-publish.
+  egress:  { kind: "egress",  nodeKind: "egress",  produceEdge: "egress-call",    consumeEdge: "egress-return", terminal: true },
 };
 
 // Every archetype meta (for deriving the engine-wide edge/node-kind sets), deduped by kind.

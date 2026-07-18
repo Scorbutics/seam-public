@@ -20,7 +20,7 @@ import { SKIP_DIRS, hasCarrierEngine, isHandlerFileByLanguage } from "../../core
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS } from "./adapters/index.js";
+import { ADAPTERS, allAdapters, ADAPTERS_VERSION, kindOf, scan_file_keys, scannableForKeys, KEY_EDGE_KINDS, HANDLER_EDGE_KINDS, KEY_NODE_KINDS, KEY_PRODUCE_EDGE_KINDS, DOMAIN_SUBJECT_KINDS, TERMINAL_KINDS } from "./adapters/index.js";
 import { routeSegs, routeMatchSpecificity, routeSuffixMatch, isBareWildcardRoute } from "./adapters/http_route.js";
 export { routeMatchSpecificity, routeSuffixMatch };
 import { complement_unit, grepFiles, couplingOtherSides, type CouplingOtherSide } from "./bridge.js";
@@ -910,7 +910,9 @@ async function runPipeline(
   for (const key of keys.values()) {
     if (seenKeys.has(keyId(key.kind, key.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
     const complementFiles = collectComplementFiles(p.index, key, anchorPath);
-    if (!complementFiles.size) { reportUngroundedKey(s, node.id, key); continue; }
+    // a TERMINAL boundary (egress) is SELF-GROUNDED by its own literal (the external host) — it has no in-repo
+    // other side, so materialise it from the producer alone instead of dropping it as ungrounded.
+    if (!complementFiles.size && !TERMINAL_KINDS.has(key.kind)) { reportUngroundedKey(s, node.id, key); continue; }
     grounded.push({ key, complementFiles });
   }
   // PER-NODE FAN CAP — a HUB node (a big component emitting dozens of UI events: `input`/`click`/…) surfaces

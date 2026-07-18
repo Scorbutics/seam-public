@@ -15,6 +15,7 @@ import { ACTIVE_RECORD } from "./active_record.js";
 import { JOOQ } from "./jooq.js";
 import { JPA_ENTITY } from "./jpa_entity.js";
 import { HTTP_ROUTE } from "./http_route.js";
+import { HTTP_EGRESS } from "./http_egress.js";
 import { ENDPOINT_MAP } from "./endpoint_map.js";
 import { ANNOTATION_ROUTE_ADAPTER } from "./annotation_route.js";
 import { FILE_CHANNEL } from "./file_channel.js";
@@ -29,7 +30,7 @@ import { ARCHETYPES, ARCHETYPE_METAS } from "./archetypes.js";
 // `$`-discriminated shape stable across Vue 2/3, common enough that the LLM flywheel being off by default
 // (cold-grow stability) AND the local coupling gate skipping a `this.$x` anchor left it undetected. It's
 // deterministic floor (VUE_INJECT) so it works without the flywheel and the gate sees the boundary.
-export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, JPA_ENTITY, HTTP_ROUTE, ENDPOINT_MAP, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, VUE_INJECT, MEMBER_ACCESS];
+export const ADAPTERS: KeyKind[] = [SUPABASE, RAW_SQL, ACTIVE_RECORD, JOOQ, JPA_ENTITY, HTTP_ROUTE, HTTP_EGRESS, ENDPOINT_MAP, ANNOTATION_ROUTE_ADAPTER, FILE_CHANNEL, VUE_INJECT, MEMBER_ACCESS];
 
 // MARKUP/TEMPLATE file extensions that carry framework couplings (Vue SFC, HTML/AngularJS/Angular
 // templates). STRUCTURAL: which file types can hold a shared key is a fact about the file type, independent
@@ -98,6 +99,10 @@ export const HANDLER_EDGE_KINDS = new Set(ARCHETYPE_METAS.map((k) => (k as any).
 // Boundary NODE kinds the rung emits (table/route/event/binding/resource/…). A footprint that contains one
 // has a data SUBJECT → it's a FLOW (a pipeline), not a cross-cutting POLICY — see codebase._detect_shape.
 export const KEY_NODE_KINDS = new Set(_ALL_METAS.map((k) => k.nodeKind));
+// TERMINAL boundary kinds (egress) — a flow-LEAVES-the-system sink with no in-repo other side. Registry-sourced
+// (the archetype's `terminal` flag), never hardcoded: the grounding gate keeps these from the PRODUCER alone,
+// without requiring a complement (an external HTTP host is self-grounded by its literal).
+export const TERMINAL_KINDS = new Set(_ALL_METAS.filter((k) => (k as any).terminal).map((k) => k.kind));
 // PERSISTENT domain-entity subjects (db tables: payments, members, …) — the registry's db-table family,
 // as opposed to TRANSPORT (routes) or generic resources. Subject-continuity keys on the domain ENTITY, so
 // a payment seam touching its own `/api/payments` route isn't mistaken for a fork into another domain.
