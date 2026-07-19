@@ -32,7 +32,11 @@ const snap = (data: any) => ({
 const tmpRoot = mkdtempSync(join(tmpdir(), "seam-growcontract-"));
 const copyRepo = (rel: string, tag: string): string => {
   const dst = join(tmpRoot, `${tag}-${rel.replace(/[\\/]/g, "_")}`);
-  cpSync(fx(rel), dst, { recursive: true, filter: (src) => !src.split(/[\\/]/).includes(".seam") });
+  // NB: cpSync's `filter` option is a SILENT NO-OP under the `bun test` runner — dst is never created, so the
+  // grow saw an empty repo and pinned a bare `symbol` anchor with 0 edges (a bun bug, not the engine). Copy
+  // everything, then drop the fixture's committed `.seam` so no stale cache leaks into the private namespace.
+  cpSync(fx(rel), dst, { recursive: true });
+  rmSync(join(dst, ".seam"), { recursive: true, force: true });
   return dst;
 };
 afterAll(() => rmSync(tmpRoot, { recursive: true, force: true }));
