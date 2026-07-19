@@ -25,8 +25,8 @@ export const HTTP_CLIENTS: HttpClient[] = [
 ];
 
 let _extra: HttpClient[] = [];
-export function registerHttpClients(cs: HttpClient[]): void { _extra = _extra.concat(cs.filter((c) => c && typeof c.name === "string")); _re = null; }
-export function _resetHttpClients(): void { _extra = []; _re = null; }
+export function registerHttpClients(cs: HttpClient[]): void { _extra = _extra.concat(cs.filter((c) => c && typeof c.name === "string")); _re = null; _reVar = null; }
+export function _resetHttpClients(): void { _extra = []; _re = null; _reVar = null; }
 
 export const escapeRegex = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 // The canonical set of registered client NAMES (built-in ∪ registered extras) — the single source every
@@ -42,3 +42,14 @@ function _build(): RegExp {
   return new RegExp("(?<![\\w$])(?:" + alt + ")\\s*\\(\\s*[`'\"]([^`'\"]*)", "g");
 }
 export function httpClientCallRegex(): RegExp { return (_re ??= _build()); }
+
+// VARIABLE first arg — an HTTP-client call whose URL is a bare identifier / member expression (`fetch(subscriberUrl)`,
+// `fetch(webhook.url)`), NOT a string literal. `fetch`/axios/… ALWAYS does HTTP, so this IS an outbound call even
+// when the host isn't a literal at the site — the webhook-egress shape the literal regex above misses. Captures the
+// dotted arg expression (its LAST segment is the boundary key). Rebuilt with the registry, same clients as _build.
+let _reVar: RegExp | null = null;
+function _buildVar(): RegExp {
+  const alt = [...HTTP_CLIENTS, ..._extra].map((c) => escapeRegex(c.name) + (c.verbForms ? "(?:\\.\\w+)?" : "")).join("|");
+  return new RegExp("(?<![\\w$])(?:" + alt + ")\\s*\\(\\s*([A-Za-z_$][\\w$]*(?:\\.[A-Za-z_$][\\w$]*)*)\\s*[,)]", "g");
+}
+export function httpClientVarArgRegex(): RegExp { return (_reVar ??= _buildVar()); }

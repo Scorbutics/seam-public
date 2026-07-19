@@ -33,6 +33,18 @@ describe("http-egress adapter — a universal, cross-language, framework-agnosti
     expect(egress(`fetch("/api/booking/create")`, "a.ts")).toEqual([]);
   });
 
+  // The webhook shape: the URL is a VARIABLE, not a literal, so the absolute-URL floor can't see the host. It is
+  // still an egress because the CALLEE is a known HTTP primitive (fetch/axios — the http_clients registry, a closed
+  // runtime-primitive set), which ALWAYS does HTTP whatever the URL holds. Keyed by the arg expression's last
+  // segment as a descriptive boundary label. A non-HTTP callee with the same shape is NOT an egress (grounded on the
+  // registry, not on the shape) — this is the `fetch(subscriberUrl)` cal.com webhook the literal floor missed.
+  test("a known HTTP client called with a VARIABLE / member url is an egress (webhook shape); non-HTTP callee is not", () => {
+    expect(egress(`const response = await fetch(subscriberUrl, { method: "POST", body });`, "a.ts")).toEqual(["subscriberUrl"]);
+    expect(egress(`await axios.get(webhook.url);`, "a.ts")).toEqual(["url"]);
+    expect(egress(`process(localData);`, "a.ts")).toEqual([]);            // unknown callee — a variable arg alone is not an egress
+    expect(egress(`myHelper(subscriberUrl);`, "a.ts")).toEqual([]);       // not a registered HTTP client
+  });
+
   test("end-to-end: a producer-only egress survives grounding with no complement (self-grounded by host)", async () => {
     if (!available()) return;   // needs tree-sitter
     const repo = join(tmpdir(), "seam-egress-" + process.pid);

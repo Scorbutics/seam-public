@@ -13,6 +13,7 @@
 // obvious egresses (a URL literal); a config-injected base URL with no literal is left to the LLM flywheel.
 import type { KeyHit, KeyKind, MaskCtx } from "../types.js";
 import { lineOf, maskComments } from "./util.js";
+import { httpClientVarArgRegex } from "../frameworks/http_clients.js";
 
 export const HTTP_EGRESS_META = { kind: "egress", nodeKind: "egress", produceEdge: "egress-call", consumeEdge: "egress-return" } as const;
 
@@ -29,6 +30,21 @@ function scan(file: string, text: string, masked?: MaskCtx): KeyHit[] {
     const host = m[1].replace(/^https?:\/\//, "").toLowerCase();   // the external host — the boundary identity
     if (!host || !host.includes(".")) continue;                    // must be a real host (has a dot); a bare word is not
     out.push({ kind: "egress", value: host, line: lineOf(text, m.index), produces: true, label: host });
+  }
+  // VARIABLE-URL egress (the webhook shape the literal floor misses: `fetch(subscriberUrl)`, `axios.get(webhook.url)`).
+  // Here the URL isn't a literal at the site, so an ABSOLUTE-URL test can't fire — instead we ground on the OTHER
+  // closed primitive: the callee is a KNOWN HTTP client (fetch/axios/… from the http_clients REGISTRY, a runtime
+  // primitive that ALWAYS does HTTP), so `<client>(<expr>)` IS an outbound call regardless of what the URL variable
+  // holds. Keyed by the arg expression's last segment (`subscriberUrl`, `url`) as a descriptive boundary label —
+  // terminal/produce-only, so no cross-file consumer merge to worry about. This stays framework-agnostic in spirit:
+  // the seed is the registry client set, never a hand-matched URL name.
+  const varRe = httpClientVarArgRegex();
+  varRe.lastIndex = 0;
+  while ((m = varRe.exec(text)) !== null) {
+    const expr = m[1];
+    const seg = expr.slice(expr.lastIndexOf(".") + 1);             // last member segment — the URL variable's name
+    if (!seg) continue;
+    out.push({ kind: "egress", value: seg, line: lineOf(text, m.index), produces: true, label: seg });
   }
   return out;
 }

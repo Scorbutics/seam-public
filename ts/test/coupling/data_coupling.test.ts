@@ -158,7 +158,7 @@ describe("shared-key (data-flow) coupling", () => {
     expect(scan_file_keys("app/api/x/route.ts", `const GET = 1; // not exported`)).toEqual([]);
     // an absolute external URL is NOT a same-origin route — it's a terminal EGRESS boundary keyed by host (any language)
     expect(scan_file_keys("a.ts", `fetch("https://stripe.com/v1/charges")`)).toEqual([{ kind: "egress", value: "stripe.com", line: 0, produces: true, label: "stripe.com" }]);
-    expect(scan_file_keys("a.ts", `fetch(url)`)).toEqual([]);                                // non-literal → skip
+    expect(scan_file_keys("a.ts", `fetch(url)`)).toEqual([{ kind: "egress", value: "url", line: 0, produces: true, label: "url" }]);  // variable url → webhook egress (callee is a known HTTP primitive)
     expect(scan_file_keys("a.py", `fetch("/api/x")`)).toEqual([]);                            // relative path, non-JS → no route AND no egress (no host)
   });
 
