@@ -32,20 +32,42 @@ const _JPA_READ = new Set(["find", "getReference", "contains", "refresh", "detac
   "getFlushMode", "setFlushMode", "setProperty", "joinTransaction", "getTransaction", "getEntityManager",
   "createQuery", "createNamedQuery", "createNativeQuery", "createStoredProcedureQuery", "beginTransaction"]);
 
-type ManagerIndex = { managers: Set<string>; entities: Set<string> };
+// entityParents = the FK OWNERSHIP graph: child entity → the parent entity(ies) it holds a @ManyToOne/@OneToOne
+// (owning-side) reference to. GroupAttributeEntity ─@ManyToOne→ GroupEntity, UserRoleMappingEntity ─@ManyToOne→
+// UserEntity. This is the GROUNDED aggregate-root signal (a foreign key, not a name prefix): among two co-written
+// entity sinks, the one the OTHER points to is the aggregate ROOT, its child a DETAIL — so the render crowns/orders
+// the root first. Kept in the JPA-specific index (isolated), general across every entity, cached repo-wide.
+type ManagerIndex = { managers: Set<string>; entities: Set<string>; entityParents: Map<string, Set<string>> };
+
+// A field that owns an FK to another entity: `@ManyToOne … Type field;` / `@OneToOne … Type field;`. The owning
+// side declares the reference; the captured Type is the PARENT (validated ∈ entities by the caller). Lazy span
+// tolerates the intervening `@JoinColumn(name="…")` / fetch args between the annotation and the field.
+const _FK_FIELD = /@(?:ManyToOne|OneToOne)\b[\s\S]{0,240}?\b([A-Z]\w*)\s+[a-z_]\w*\s*[;=]/g;
 
 // Per-file facts (regex, comment-masked — consistent with the floor adapters): the file's classes + `extends`
-// parent, whether it uses an EntityManager, and its @Entity declarations.
-function _fileFacts(text0: string): { classes: { name: string; ext: string | null }[]; usesEm: boolean; entities: string[] } {
+// parent, whether it uses an EntityManager, its @Entity declarations, and each entity's FK-parent references.
+function _fileFacts(text0: string): { classes: { name: string; ext: string | null }[]; usesEm: boolean; entities: string[]; fkParents: { child: string; parent: string }[] } {
   const text = maskComments(text0);
   const classes: { name: string; ext: string | null }[] = [];
   const cre = /\b(?:class|interface)\s+([A-Z]\w*)(?:\s*<[^>]*>)?(?:\s+extends\s+([A-Z]\w*))?/g;
   let m: RegExpExecArray | null;
   while ((m = cre.exec(text))) classes.push({ name: m[1], ext: m[2] ?? null });
   const entities: string[] = [];
+  const entPos: { name: string; idx: number }[] = [];
   const ent = /@Entity\b[\s\S]{0,400}?\bclass\s+([A-Z]\w*)/g;
-  while ((m = ent.exec(text))) entities.push(m[1]);
-  return { classes, usesEm: _EM_USE.test(text), entities };
+  while ((m = ent.exec(text))) { entities.push(m[1]); entPos.push({ name: m[1], idx: m.index }); }
+  // Each FK field belongs to the entity whose @Entity declaration is the NEAREST PRECEDING one (one entity per file
+  // is the norm; this stays correct for a rare multi-entity file). parent === child is dropped (a self-reference,
+  // e.g. GroupEntity.parent — a tree, not a detail table).
+  const fkParents: { child: string; parent: string }[] = [];
+  _FK_FIELD.lastIndex = 0;
+  while ((m = _FK_FIELD.exec(text))) {
+    const parent = m[1];
+    let child = "";
+    for (const e of entPos) { if (e.idx <= m.index) child = e.name; else break; }
+    if (child && child !== parent) fkParents.push({ child, parent });
+  }
+  return { classes, usesEm: _EM_USE.test(text), entities, fkParents };
 }
 
 // Repo-wide manager + entity index, cached per epoch on ctx. A class is a PERSISTENCE MANAGER iff it (or an
@@ -57,10 +79,18 @@ export function jpaManagerIndex(repo: string, skipDirs: Set<string>, ctx: Engine
   const usesEm = new Set<string>();          // class → uses an EM directly
   const parent = new Map<string, string>();  // class → extends parent
   const entities = new Set<string>();
+  const entityParents = new Map<string, Set<string>>();   // child entity → FK parent(s) (owning @ManyToOne/@OneToOne)
   for (const { text } of walkFiles(repo, skipDirs, (f) => f.endsWith(".java"), { maxBytes: COUPLING.maxScanBytes })) {
     const f = _fileFacts(text);
     for (const e of f.entities) entities.add(e);
     for (const c of f.classes) { if (c.ext) parent.set(c.name, c.ext); if (f.usesEm) usesEm.add(c.name); }
+    for (const fk of f.fkParents) (entityParents.get(fk.child) ?? entityParents.set(fk.child, new Set()).get(fk.child)!).add(fk.parent);
+  }
+  // Keep only FK parents that are THEMSELVES @Entity classes — a @ManyToOne to a non-entity embeddable/value type is
+  // not an aggregate-root relation we crown by. (Deferred to here so the parent set is complete across all files.)
+  for (const [child, parents] of entityParents) {
+    for (const p of [...parents]) if (!entities.has(p)) parents.delete(p);
+    if (!parents.size) entityParents.delete(child);
   }
   // A class is a manager if it uses an EM, or an ancestor does (extends closure, cycle-guarded).
   const managers = new Set<string>(usesEm);
@@ -72,7 +102,7 @@ export function jpaManagerIndex(repo: string, skipDirs: Set<string>, ctx: Engine
     return false;
   };
   for (const c of parent.keys()) if (reaches(c)) managers.add(c);
-  const idx = { managers, entities };
+  const idx = { managers, entities, entityParents };
   ctx.jpaManagers.set(repo, idx);
   return idx;
 }

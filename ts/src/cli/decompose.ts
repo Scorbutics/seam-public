@@ -358,6 +358,7 @@ async function runCodebase(a: Args): Promise<number> {
       const symOf = (anc: { name: string; kind: string }) => (anc.kind === "module" ? "" : anc.name);
       let hist: any[] = [];
       let llmBorder = false;   // any anchor whose grow was shaped by the LLM border → skip the embedding re-rank
+      let _growCtx: any;       // the EngineCtx whose grow ran coupling — holds the cached JPA entity-ownership index (read AFTER the grow)
       try {
         // MULTI-ANCHOR: grow each entry point in the covering set through ONE shared ctx and MERGE — the model
         // already carries multiple anchor roots and P3 emits a path per crossing, so the merged footprint shows
@@ -365,6 +366,7 @@ async function runCodebase(a: Args): Promise<number> {
         // it: once the merge reaches maxNodes, stop adding anchors (no K× blow-up; coverage dedup does the rest).
         const anchors = anchorSet ?? [{ name: a.symbol!, file: a.anchorFile!, kind: fileAnchor ? "module" : "function" }];
         const ctx = new EngineCtx();
+        _growCtx = ctx;
         const maxNodes = growNodes;   // the per-anchor budget, reused as the GLOBAL merged budget (--max-nodes)
         // CONCERN detection-only first grow (auto-anchor legacy): coupling discarded on re-anchor → skip it.
         const dcForCenters = a.concern && !centerPicked ? false : a.dataCoupling;
@@ -444,7 +446,7 @@ async function runCodebase(a: Args): Promise<number> {
           // flow and grows the star around it — completeness first (the calling agent judges), still bounded by the
           // node budget. MERGE is content-keyed (merge_resolved), so the anchor's own re-grow dedups idempotently.
           try {
-            const cctx = new EngineCtx(); let merged: any = data;
+            const cctx = new EngineCtx(); _growCtx = cctx; let merged: any = data;
             const clusterCenters = fresh.map((c: any) => ({ file: c.file, symbol: c.symbol }));
             // >1 mechanism → discover coupling ONCE over the union + grow the cluster in PARALLEL
             // (grow_centers_scoped, same as the center-first path); a single mechanism keeps the direct
@@ -475,6 +477,21 @@ async function runCodebase(a: Args): Promise<number> {
       addStage("render", Date.now() - _tRender);
       model2.autoGrown = true;   // the GROWN footprint is the answer — render it ALL, don't isolate one seam
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
+      // ENTITY OWNERSHIP (aggregate-root crown signal) — carry the JPA child→FK-parent map into the emitted model so
+      // the render crowns/orders a co-written aggregate ROOT (GroupEntity) ahead of its FK-CHILD detail
+      // (GroupAttributeEntity). The map is built + ctx-cached by the coupling scan; but a WARM cache hit restores the
+      // footprint WITHOUT re-running coupling, so build it here when it's missing AND the footprint has Java entities
+      // (a cheap .java walk, ctx-cached, idempotent — so cold==warm). Skipped for non-Java footprints (no cost).
+      let _entParents = _growCtx?.jpaManagers.get(a.repo)?.entityParents as Map<string, Set<string>> | undefined;
+      const _hasJavaEntity = (model2.clusters ?? []).some((c: any) => (c.seams ?? []).some((s: any) => (s.hunks ?? []).some((h: any) => h.kind === "db-table" && String(h.file ?? "").endsWith(".java"))));
+      if (!_entParents?.size && _growCtx && _hasJavaEntity) {
+        try {
+          const { jpaManagerIndex } = await import("../codebase/coupling/jpa_wrapper.js");
+          const { SKIP_DIRS } = await import("../core/resolve/languages/index.js");
+          _entParents = jpaManagerIndex(a.repo, SKIP_DIRS, _growCtx).entityParents;
+        } catch { /* index build failed → skip the ordering, render unchanged */ }
+      }
+      if (_entParents?.size) model2.entityParents = Object.fromEntries([..._entParents].map(([c, ps]: [string, Set<string>]) => [c, [...ps]]));
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       const nSeams = (model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
       const usage = get_usage().as_dict();

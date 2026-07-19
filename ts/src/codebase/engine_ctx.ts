@@ -20,7 +20,7 @@ export class EngineCtx {
   paramKeys = new Map<string, GroundingIndex>();        // param_key_index: repo → const-resolved param grounding
   floorBase = new Map<string, GroundingIndex>();        // floor_base_index: repo → MERGED shared⊕param (cached so the per-call merge runs once, not per grow step)
   floorContribs = new Map<string, unknown>();           // floorContributions: repo → per-file floor scan (computed ONCE/run, shared by the floor build AND the llm-key floorOf — no duplicate scan)
-  jpaManagers = new Map<string, { managers: Set<string>; entities: Set<string> }>();   // jpa_wrapper: repo → persistence-manager class names ⊕ @Entity names (extends-closure over the EntityManager platform type)
+  jpaManagers = new Map<string, { managers: Set<string>; entities: Set<string>; entityParents: Map<string, Set<string>> }>();   // jpa_wrapper: repo → persistence-manager class names ⊕ @Entity names (extends-closure over the EntityManager platform type) ⊕ child→FK-parent entity ownership (aggregate-root crown signal)
 
   // --- intent-aware key ranking (set by the grow from --intent; read by the coupling per-node fan cap) ---
   // An OPAQUE callback so the coupling DAG-leaf needs no scan/embedding import: given each key's value, its

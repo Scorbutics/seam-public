@@ -312,10 +312,19 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // (the pilot bug). A single incidental write to a hub (keycloak addRealmRoleMappings' one `db-write` to the
     // `clients` hub read in 26 files) is NOT the subject — stays excluded. So the override needs ≥2 closure writers.
     const _isHubCrossing = (s: Seam) => (s as any).proposedBy === "crossing" && _hubTables.has(_tblOf(s)) && _flowWriters(s) < 2;
-    const cands = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam && !_isHubCrossing(s)
+    const _candArr = seams.filter((s) => isBoundarySeam(s) && s.id !== anchorSeam && !_isHubCrossing(s)
         && (dist.has(s.id) || trustedDirect(s) || trustedChain(s))
-        && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"))
-      .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (_flowWriters(b) - _flowWriters(a)) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
+        && (isStoreSink(s) || trustedDirect(s) || trustedChain(s) || ((s as any).region?.direction ?? "down") === "down"));
+    // AGGREGATE-ROOT over FK-CHILD (grounded, structural) — when the flow writes BOTH a parent entity and its
+    // FK-child detail (GroupEntity + GroupAttributeEntity, UserEntity + UserRoleMappingEntity), the child holds a
+    // @ManyToOne to the parent (model.entityParents, from the JPA index) → the parent is the aggregate ROOT and the
+    // real culmination; the child is a detail row. Demote a candidate that is an FK-child of ANOTHER co-candidate.
+    // Fires ONLY when both are present (never strands a child-only flow — setSingleAttribute still crowns its attr).
+    const _entParents: Record<string, string[]> = (model.entityParents ?? {});
+    const _candTbls = new Set(_candArr.map(_tblOf).filter(Boolean));
+    const _childOfCand = (s: Seam): boolean => (_entParents[_tblOf(s)] ?? []).some((p) => p !== _tblOf(s) && _candTbls.has(p));
+    const cands = _candArr
+      .sort((a, b) => (_sinkRank(b) - _sinkRank(a)) || (Number(directSink(b)) - Number(directSink(a))) || (Number(providerWrite(b)) - Number(providerWrite(a))) || (Number(!_childOfCand(b)) - Number(!_childOfCand(a))) || (_flowWriters(b) - _flowWriters(a)) || (Number(_onSubject(b)) - Number(_onSubject(a))) || (_dist(b.id) - _dist(a.id)) || writeOrder(a, b) || (((b as any).hunks?.length ?? 0) - ((a as any).hunks?.length ?? 0)) || (a.id < b.id ? -1 : 1));
     // Path from the anchor to a sink. A directSink the BFS never reached (its write edge was reversed by fwd) has no
     // `prev` chain → render it as the direct 1-hop `anchor → sink`.
     const pathTo = (toId: string): string[] => {

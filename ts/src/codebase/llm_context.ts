@@ -1094,9 +1094,14 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     for (const e of edges) { const f = String(e.from), t = String(e.to);
       if (_PRODUCE_CROSS.has(e.kind) && isBoundaryNode(t) && (reach.has(f) || (_isClassNode(f) && reachFiles.has(_nf(hunkById.get(f)?.file))))) { const h = hunkById.get(t); const k = `${h?.kind}|${h?.label}`; if (!bids.has(k)) bids.set(k, t); } }
     const out = [...bids.values()].map((bid) => ({ bid, chain: delegationChain(cid, bid) ?? [cid] }));
-    // deterministic order: stores (db/cache/file) first, then queue/event, then egress last; then by boundary label.
+    // deterministic order: stores (db/cache/file) first, then queue/event, then egress last; then AGGREGATE ROOT
+    // before its FK-CHILD detail (a co-present child entity holds a @ManyToOne to its parent — model.entityParents;
+    // GroupEntity before GroupAttributeEntity, UserEntity before UserRoleMappingEntity), then by boundary label.
     const _rank = (bid: string): number => { const k = hunkById.get(bid)?.kind ?? ""; return k === "egress" ? 2 : (k === "queue" || k === "event" || k === "topic") ? 1 : 0; };
-    return out.sort((a, b) => (_rank(a.bid) - _rank(b.bid)) || (String(hunkById.get(a.bid)?.label) < String(hunkById.get(b.bid)?.label) ? -1 : 1));
+    const _entParents: Record<string, string[]> = (model.entityParents ?? {});
+    const _fanLbls = new Set(out.map((o) => String(hunkById.get(o.bid)?.label)).filter(Boolean));
+    const _childInFan = (bid: string): number => { const l = String(hunkById.get(bid)?.label); return (_entParents[l] ?? []).some((p) => p !== l && _fanLbls.has(p)) ? 1 : 0; };
+    return out.sort((a, b) => (_rank(a.bid) - _rank(b.bid)) || (_childInFan(a.bid) - _childInFan(b.bid)) || (String(hunkById.get(a.bid)?.label) < String(hunkById.get(b.bid)?.label) ? -1 : 1));
   };
   const spineLines: string[] = [];
   if (mechCount > 1) {   // a single-mechanism concern already has the full agent spine one `--format agent` away
