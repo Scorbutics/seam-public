@@ -438,6 +438,8 @@ server.registerTool("grow_intent", {
     + "4+ iterative greps to stitch a flow by hand, and call it to MAP a flow before editing across it. "
     + "Do NOT use for naming a known symbol, find-usages, or a single-fact lookup — grep/LSP is faster. "
     + "Returns `noFlow` when the intent is computation/strategy with no traceable spine. "
+    + "If the intent is actually a BLAST-RADIUS / find-usages / reachability question (not a flow), it is "
+    + "auto-routed to the precise structural answer (impact / consumers / reaches) instead of a flow map. "
     + "COMPOSE across boundaries: when the grown footprint ends at a cross-stack blindspot (a shared "
     + "key/route whose other side isn't in this footprint — e.g. backend→frontend), call this tool AGAIN "
     + "anchored on the OTHER side (the key as `intent`) and stitch the two together, instead of grepping. "
@@ -462,7 +464,10 @@ server.registerTool("grow_intent", {
     // --skeleton: LLM consumer (see intent_footprint) — the deterministic grow runs, but the FINAL
     // seam-intent labeling pass is skipped; the consuming model tiers/labels.
     const base = ["--scan", "--auto", "--repo", repo, "--anchor-file", anchorFile,
-      "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton"];
+      "--symbol", symbol, "--intent", intent, "--max-steps", String(maxSteps), "--skeleton",
+      // If the intent is really a BLAST-RADIUS / find-usages / reaches question (not a flow), answer it as that
+      // structural shape instead of returning a noFlow region dump — the router decides, a flow intent is untouched.
+      "--auto-route"];
     base.push("--data-coupling", crossFramework ? "llm" : "floor");   // explicit: MCP is a programmatic API, so its floor/llm contract stays independent of the CLI default-on
     // grow is deterministic; the engine here is always hybrid/llm (final seam labeling) — and crossFramework
     // adds the coupling flywheel — so a bridge/backend is always needed.

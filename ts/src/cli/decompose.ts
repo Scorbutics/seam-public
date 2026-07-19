@@ -62,6 +62,50 @@ const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
 };
 
+// AUTO-ROUTE (#3, blast-radius routing) — an `--auto --intent` grow assumes the intent is a FLOW question. But
+// agents (via grow_intent) routinely pass a BLAST-RADIUS / find-usages intent ("what breaks if I change X",
+// "who calls X"): a flow grow on that yields a noFlow region dump, when the engine already answers it precisely
+// as a NON-flow SHAPE. WHICH shape a question wants is a SEMANTIC judgement (CLAUDE.md) → the LLM router
+// (route.ts) decides over the CLOSED SHAPES registry; a genuine flow intent stays 'flow' and falls through to
+// the grow untouched. Opt-in (--auto-route, set by the agent entry) so the deterministic CLI flow path is
+// unchanged; needs a backend (routing is semantic). Reuses the existing shape handlers, which emit the SAME
+// shape model the MCP + CLI already render — so this is pure routing, no new render path. Returns the handler's
+// exit code when it rerouted, or null to fall through to the flow grow.
+async function maybeAutoRoute(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number | null> {
+  const { available } = await import("../core/llm.js");
+  if (!available(a.claudeBin)) return null;                       // routing is semantic — offline stays a flow grow
+  const { routeQuestion, resolveName } = await import("../codebase/grow/route.js");
+  let d: Awaited<ReturnType<typeof routeQuestion>>;
+  try { d = await routeQuestion(a.repo, a.intent!, { model: a.model, claudeBin: a.claudeBin }); }
+  catch { return null; }                                          // router failure → fall through to the flow grow
+  if (!d) return null;
+  const shape = d.shape;
+  if (shape === "flow" || shape === "grep" || shape === "rag") return null;   // a flow (or a non-structural sink) → grow as before
+  const handler = QUERY_HANDLERS[shape];
+  if (!handler) return null;
+  // ANCHOR: prefer the caller's EXPLICIT anchor (--center/--symbol, or grow_intent's) — it is authoritative;
+  // else resolve the router's extracted target (the center-first case with no pinned symbol). `contract` is a
+  // MODULE shape (no symbol), so only anchorFile is required there.
+  if (!a.anchorFile || (!a.symbol && shape !== "contract")) {
+    if (!d.target) return null;
+    const r = await resolveName(a.repo, d.target);
+    if (!r) return null;
+    a.anchorFile ??= r.file;
+    if (!a.symbol && r.kind !== "module") a.symbol = r.symbol;
+  }
+  if (shape === "reaches" || shape === "compare") {               // these need the SECOND symbol — from the router (no --to-symbol on the grow path)
+    if (!d.target2) return null;
+    const r2 = await resolveName(a.repo, d.target2);
+    if (!r2) return null;
+    a.toSymbol ??= r2.symbol; a.toFile ??= r2.file;
+  }
+  // The rerouted answer is a STRUCTURED shape, not a flow map — render it as such (the MCP reads the emitted
+  // model by shape regardless; this only affects a direct CLI user's stdout).
+  if (a.format !== "llm-context") a.format = "llm-context";
+  process.stderr.write(`[auto-route] "${a.intent}" is a ${shape} question, not a flow → --query ${shape} (${d.reason})\n`);
+  return handler(a, scan);
+}
+
 // The shared field set both decompose() call sites (runCodebase's codebase-graph path, main()'s diff-mode
 // path) build — only useLlm/skeleton differ per caller, everything else is a byte-identical repeat of `a`.
 const decomposeOpts = (a: Args, useLlm: boolean, skeleton?: boolean) => ({
@@ -172,6 +216,12 @@ async function runCodebase(a: Args): Promise<number> {
   // consumers footprint build_consumers_graph already produces. See codebase/grow/project_set.ts.
   if (a.ask) return runAsk(a);
   if (a.query && QUERY_HANDLERS[a.query]) return QUERY_HANDLERS[a.query](a, scan);
+  // A blast-radius/find-usages intent handed to the FLOW grow → route it to its structural shape instead (opt-in;
+  // the agent entry sets --auto-route). A genuine flow intent (or no backend) falls through to the grow below.
+  if (a.autoRoute && a.scan && a.auto && a.intent && !a.query && !a.concern && !a.growFrom && !a.stream) {
+    const routed = await maybeAutoRoute(a, scan);
+    if (routed !== null) return routed;
+  }
 
 
   const useLlm0 = a.classifier === "llm" || a.classifier === "hybrid";

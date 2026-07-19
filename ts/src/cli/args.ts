@@ -22,6 +22,7 @@ export interface Args {
   trace?: boolean;   // --trace: --verbose + the per-node timing firehose (SEAM_TIMING)
   stream?: boolean;  // --stream: wave-mode NDJSON on stdout (one record per settled wave + a final {done,model})
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
+  autoRoute?: boolean;   // --auto-route: on an --auto --intent grow, first route the intent (route.ts) — if it's a NON-flow shape (blast-radius/find-usages/…), answer it as that --query shape instead of a noFlow flow grow. The agent entry (grow_intent) sets it.
   reviewImpact?: boolean; triage?: boolean;
 }
 
@@ -80,6 +81,7 @@ export function parseArgs(argv: string[]): Args {
       case "--anchor-select": a.anchorSelect = (next() ?? "pick").toLowerCase(); break;   // pick (default; 1 LLM pass, no probe sweep) | probe (probe→judge, kept)
       case "--grow-from": a.growFrom = next(); break;
       case "--concern": a.concern = true; break;
+      case "--auto-route": a.autoRoute = true; break;   // route a non-flow intent (blast-radius/find-usages) to its --query shape instead of a flow grow
       case "--center": a.center = next(); break;   // universal node address: file | file#symbol | comma-list; expanded to the anchor below, read as a list by the concern grow
       // --anchor-file / --symbol are the LEGACY node address, superseded by --center (kept for back-compat + internal use).
       case "--expand-graph": a.expandGraph = next(); break;
