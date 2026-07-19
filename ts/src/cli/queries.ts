@@ -167,7 +167,16 @@ export async function runImpact(a: Args): Promise<number> {
   let im: any;
   // The shared --depth defaults to 1 (a direct-consumer hop); impact is TRANSITIVE, so treat the default
   // as "use the impact default" and only honor an explicit deeper --depth. (depth 1 = find_consumers.)
-  try { im = await projectImpact(a.repo, a.anchorFile!, a.symbol!, { depth: a.depth > 1 ? a.depth : undefined, dataCoupling: a.dataCoupling }); }
+  // Blast radius = a STRUCTURAL closure (transitive resolved consumers) PLUS the anchor's cross-stack crossings.
+  // Traverse structure-only (dataCoupling:false → cached & fast; per-node coupling was ~pure waste and blocked the
+  // cache), then attach shared-key readers/writers as ONE anchor overlay (couplingOverlay). Coupling stays ON by
+  // default (the cross-stack half a call-graph misses) but is now O(1) coupling passes, not O(closure).
+  try { im = await projectImpact(a.repo, a.anchorFile!, a.symbol!, {
+    depth: a.depth > 1 ? a.depth : undefined,
+    dataCoupling: false,
+    couplingOverlay: a.dataCoupling,
+    dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin,
+  }); }
   catch (e) { err(`impact analysis failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...im };
 
@@ -270,7 +279,9 @@ export async function runReaches(a: Args): Promise<number> {
   const { renderReach } = await import("../codebase/llm_context.js");
   emit(`Searching for a path ${a.symbol} → ${a.toSymbol}…`);
   let res: any;
-  try { res = await findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, { toFile: a.toFile, maxHops: a.maxHops, dataCoupling: a.dataCoupling }); }
+  // Reachability is purely structural (a path of resolved edges). Coupling is irrelevant to it and only
+  // disables the footprint cache — traverse structure-only unless explicitly opted in.
+  try { res = await findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, { toFile: a.toFile, maxHops: a.maxHops, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false }); }
   catch (e) { err(`reachability search failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...res };
 

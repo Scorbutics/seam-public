@@ -104,6 +104,7 @@ export function renderImpact(model: any): string {
   const out: string[] = [];
   out.push(`# Impact of ${sym} (change blast radius)`,
     [`impacted: ${model.total}`, `files: ${model.fileCount}`, `surface: ${(model.surface ?? []).length}`,
+     ...((model.crossStack ?? []).length ? [`cross-stack: ${model.crossStack.length}`] : []),
      `gaps: ${(model.gaps ?? []).length}`, ...(model.truncated ? ["truncated: yes (impact ≥ shown)"] : [])].join(" | "), "");
   if (model.noStructure) {
     out.push("## Isolated", model.reason === "opaque"
@@ -123,6 +124,11 @@ export function renderImpact(model: any): string {
   if ((model.surface ?? []).length) {
     out.push("## Surface (outermost callers — where the change ripples to; re-verify here)");
     for (const m of model.surface) out.push(`- ${m.symbol} (${m.file}:${m.line})`);
+    out.push("");
+  }
+  if ((model.crossStack ?? []).length) {
+    out.push("## Cross-stack (shared-key readers/writers — grep can't link these; verify)");
+    for (const c of model.crossStack) out.push(`- ${c.symbol} (${c.file})  [${c.edgeKind} · ${c.via}]`);
     out.push("");
   }
   if ((model.gaps ?? []).length) {

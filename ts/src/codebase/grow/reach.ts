@@ -8,7 +8,7 @@
 //   no-out-edges : FROM resolves to nothing (a leaf / unresolved) → reachability is undefined here.
 //   unreachable  : the BFS drained the whole resolved dependency closure without hitting TO → a real "no".
 //   exhausted    : the hop budget ran out first → INCONCLUSIVE (a path may exist beyond the bound).
-import { build_footprint } from "../scan/index.js";
+import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 
 export interface ReachStep { symbol: string; file: string; line: number; edgeKind: string }
@@ -56,7 +56,7 @@ export async function findReach(
     const cur = queue.shift()!;
     hops++;
     let g;
-    try { g = await build_footprint(repo, cur.file, cur.symbol, { direction: "down", depth: 1, dataCoupling: opts.dataCoupling ?? false }); }
+    try { g = await build_footprint_cached(repo, cur.file, cur.symbol, { direction: "down", depth: 1, dataCoupling: opts.dataCoupling ?? false }); }
     catch { continue; }
     const aid = g.anchor.id;
     if (!startStep) startStep = { symbol: fromSymbol, file: fromFile, line: g.anchor.range?.[0] ?? 0, edgeKind: "anchor" };

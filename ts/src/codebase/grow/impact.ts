@@ -4,13 +4,16 @@
 // change SURFACES (the outermost callers — entry points / tests you'd re-verify) and, critically, where
 // the view has HOLES (opaque callers → the impact may be larger; grep there). Verified edges, so it
 // won't miss a cross-file/cross-language caller a grep would, nor chase a false positive.
-import { build_footprint } from "../scan/index.js";
+import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
-import type { EngineCtx } from "../engine_ctx.js";
+import { EngineCtx } from "../engine_ctx.js";
 
 export interface ImpactedSymbol { symbol: string; file: string; line: number; kind: string; hop: number }
 export interface ImpactFile { file: string; count: number }
 export interface ImpactGap { mechanism: string; evidence: string }
+// A cross-stack blast-radius entry: the OTHER side of a shared key (table/route/event) the ANCHOR touches —
+// a reader of what the change writes (or vice versa). Not a call-graph consumer; a data-coupling crossing.
+export interface CrossStackImpact { symbol: string; file: string; edgeKind: string; via: string }
 
 export interface Impact {
   shape: "impact";
@@ -18,6 +21,7 @@ export interface Impact {
   impacted: ImpactedSymbol[];   // the transitive consumer set, hop-sorted (hop 1 = direct callers)
   files: ImpactFile[];          // rollup: affected file → count, descending
   surface: ImpactedSymbol[];    // outermost impacted (no further resolved consumer) — where the change ripples TO
+  crossStack: CrossStackImpact[]; // shared-key readers/writers of the anchor's data boundary (one cached overlay)
   total: number;                // impacted symbols
   fileCount: number;            // distinct affected files
   gaps: ImpactGap[];            // opaque callers seen along the way — the impact set may be INCOMPLETE here
@@ -31,7 +35,7 @@ const key = (file: string, symbol: string) => `${normpath(file)}#${symbol}`;
 
 export async function projectImpact(
   repo: string, anchorFile: string, symbol: string,
-  opts: { depth?: number; maxExpansions?: number; dataCoupling?: boolean; ctx?: EngineCtx; skipCallsite?: boolean } = {},
+  opts: { depth?: number; maxExpansions?: number; dataCoupling?: boolean; couplingOverlay?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null; ctx?: EngineCtx; skipCallsite?: boolean } = {},
 ): Promise<Impact> {
   const depth = opts.depth ?? 6;
   const budget = opts.maxExpansions ?? 80;
@@ -52,7 +56,7 @@ export async function projectImpact(
       if (hops >= budget) { truncated = true; break; }
       hops++;
       let g;
-      try { g = await build_footprint(repo, node.file, node.symbol, { direction: "up", depth: 1, dataCoupling: dc, ctx: opts.ctx, skipCallsite: opts.skipCallsite }); }
+      try { g = await build_footprint_cached(repo, node.file, node.symbol, { direction: "up", depth: 1, dataCoupling: dc, ctx: opts.ctx, skipCallsite: opts.skipCallsite }); }
       catch { continue; }
       const aid = g.anchor.id;
       let any = false;
@@ -90,12 +94,38 @@ export async function projectImpact(
   // surface = impacted symbols that have no further resolved consumer (we expanded them and found none).
   const surface = members.filter((m) => noFurther.has(key(m.file, m.symbol)));
 
+  // ── Cross-stack overlay — ONE targeted coupling pass on the ANCHOR (the changed symbol's own data boundary).
+  // The closure above is call/import edges; a change also ripples across a SHARED KEY (a table/route/event the
+  // anchor writes that another file reads). couplingOtherSides resolves those for the anchor SYMBOL in one
+  // bounded, ctx-cached pass — NOT per impacted node. Per-node coupling was ~pure waste here (measured: it moved
+  // the count <0.1% at ~500s cost on a hub type) AND it disabled the per-file footprint cache. available()-gated
+  // → [] when tree-sitter is absent. Opt out with couplingOverlay:false (e.g. --no-data-coupling).
+  let crossStack: CrossStackImpact[] = [];
+  if (opts.couplingOverlay !== false) {
+    try {
+      const { couplingOtherSides } = await import("../coupling/index.js");
+      const cctx = opts.ctx ?? new EngineCtx();
+      const sides = await couplingOtherSides(repo, anchorFile, symbol,
+        { llm: !!opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, cctx);
+      const anchorK = key(anchorFile, symbol);
+      const seenCS = new Set<string>();
+      for (const s of sides) {
+        const k = key(s.file, s.symbol);
+        if (k === anchorK || visited.has(k) || seenCS.has(k)) continue;   // don't duplicate a structural consumer
+        seenCS.add(k);
+        crossStack.push({ symbol: s.symbol, file: s.file, edgeKind: s.edgeKind, via: `${s.kind} ${s.value}` });
+      }
+      crossStack.sort((a, b) => a.file.localeCompare(b.file) || a.symbol.localeCompare(b.symbol));
+    } catch { /* coupling unavailable → keep [] (structural impact is still complete) */ }
+  }
+
   const out: Impact = {
     shape: "impact",
     anchor: { symbol, file: anchorFile },
     impacted: members,
     files,
     surface,
+    crossStack,
     total: members.length,
     fileCount: files.length,
     gaps,
