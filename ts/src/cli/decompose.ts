@@ -235,8 +235,24 @@ async function runCodebase(a: Args): Promise<number> {
   let dcLlm = a.dataCouplingLlm;
   if (a.dataCoupling && a.dataCouplingAuto) {
     const { available } = await import("../core/llm.js");
-    dcLlm = process.env.SEAM_COUPLING !== "floor" && available(a.claudeBin);
-    process.stderr.write(`[data-coupling] auto → ${dcLlm ? "llm (backend available; learn-once, cached)" : "floor (no backend / disabled)"}\n`);
+    // REPO-SIZE FLOOR DEFAULT (SEAM_LLM_MAX_FILES, default 8000; 0 = off) — on a very large repo the per-flow LLM
+    // key-discovery batch grows too big and the backend can stall (Keycloak's ~330-file flow reproducibly hung),
+    // so auto-mode falls back to DETERMINISTIC floor coupling above the cap. Floor completes (Keycloak K1 ~157s)
+    // and is fully deterministic; the trade is fewer LLM-learned residual keys. A coarse source-file count via
+    // `git ls-files` (fast; 0 on a non-git repo → treated as small → LLM stays on). Override per run with
+    // SEAM_LLM_MAX_FILES=<n> / =0, or force floor globally with SEAM_COUPLING=floor.
+    const _llmMaxFiles = parseInt(process.env.SEAM_LLM_MAX_FILES ?? "8000", 10);
+    let _srcFiles = 0;
+    if (_llmMaxFiles > 0) {
+      try {
+        const { spawnSync } = await import("node:child_process");
+        const r = spawnSync("git", ["-C", a.repo, "ls-files"], { encoding: "utf-8", maxBuffer: 1 << 28 });
+        if (r.status === 0 && r.stdout) _srcFiles = r.stdout.split("\n").filter((f) => /\.(java|ts|tsx|js|jsx|mjs|cjs|rb|c|cc|cpp|h|hpp|py|go|cs|kt|kts|scala|php|rs|swift)$/.test(f)).length;
+      } catch { /* not git / unavailable → _srcFiles stays 0 → LLM stays on */ }
+    }
+    const _tooBig = _llmMaxFiles > 0 && _srcFiles > _llmMaxFiles;
+    dcLlm = process.env.SEAM_COUPLING !== "floor" && available(a.claudeBin) && !_tooBig;
+    process.stderr.write(`[data-coupling] auto → ${dcLlm ? "llm (backend available; learn-once, cached)" : _tooBig ? `floor (repo ${_srcFiles} source files > ${_llmMaxFiles} — LLM key-discovery batch too large; SEAM_LLM_MAX_FILES=0 to force llm)` : "floor (no backend / disabled)"}\n`);
   }
   let data: any;
   let noFlowHint = false;   // auto-anchor's "no traceable spine" guess — printed only if the decompose actually finds none
