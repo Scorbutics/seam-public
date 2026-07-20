@@ -16,7 +16,7 @@ export async function build_module_graph(repo: string, anchorFile: string,
   const ar = _read(repo, anchorFile);
   if (!ar || !available()) throw new Error(`cannot parse anchor module ${anchorFile}`);
   const ctx = (await makeCtx(ar[0], ar[1]))!;
-  const members = _exported_members(ctx);
+  const members = _exported_members(ctx, anchorFile);
   const mlen = (ar[0].match(/\n/g) ?? []).length;
   const blindspots: Blindspot[] = [];
   const nodes: GraphNode[] = [{ id: "mod", symbol: modName, kind: "module", file: anchorFile, range: [0, mlen], enclosing: "", complexity: Math.max(1, mlen) }];

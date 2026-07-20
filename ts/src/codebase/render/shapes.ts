@@ -114,16 +114,41 @@ export function renderImpact(model: any): string {
     return out.join("\n");
   }
   // Affected, grouped by file (most-affected first), with hop distance per symbol.
+  // HUB CAP — a ubiquitous anchor has a blast radius nobody can read: Keycloak's AccessToken enumerates 6489
+  // symbols across 2413 files, rendering ~147k tokens, which is more than the whole rest of a 30-intent run
+  // put together. The MODEL keeps everything (--emit-seams is unaffected); only this human/agent-facing render
+  // is bounded, and it says exactly what it elided so the reader is never misled into thinking the set is small.
+  // Nearest hops are kept — they're the sites a change actually has to touch. `SEAM_IMPACT_RENDER_CAP=0` = unbounded.
+  const capOf = (env: string, dflt: number) => { const v = parseInt(process.env[env] ?? "", 10); return Number.isFinite(v) ? v : dflt; };
+  const cap = capOf("SEAM_IMPACT_RENDER_CAP", 1);                      // 0 disables ALL the caps below
+  const FILES = cap ? capOf("SEAM_IMPACT_FILE_CAP", 60) : 0;
+  const PER_FILE = cap ? capOf("SEAM_IMPACT_SYMS_PER_FILE", 12) : 0;
+  const SURFACE = cap ? capOf("SEAM_IMPACT_SURFACE_CAP", 40) : 0;
+  const byHop = (a: any, b: any) => (a.hop ?? 0) - (b.hop ?? 0) || String(a.symbol).localeCompare(String(b.symbol));
+
+  const files: any[] = model.files ?? [];
+  const shownFiles = FILES ? files.slice(0, FILES) : files;
   out.push("## Affected (by file — update these)");
-  for (const f of model.files) {
+  for (const f of shownFiles) {
     out.push(`- ${f.file}  (${f.count})`);
-    for (const m of (model.impacted ?? []).filter((x: any) => x.file === f.file))
-      out.push(`    ${m.symbol} (:${m.line}) [${m.kind}, hop ${m.hop}]`);
+    const syms = (model.impacted ?? []).filter((x: any) => x.file === f.file).sort(byHop);
+    const shown = PER_FILE ? syms.slice(0, PER_FILE) : syms;
+    for (const m of shown) out.push(`    ${m.symbol} (:${m.line}) [${m.kind}, hop ${m.hop}]`);
+    if (syms.length > shown.length) out.push(`    … +${syms.length - shown.length} more in this file (nearest hops shown)`);
+  }
+  if (files.length > shownFiles.length) {
+    const rest = files.slice(shownFiles.length);
+    const restSyms = rest.reduce((n: number, f: any) => n + (f.count ?? 0), 0);
+    out.push(`- … +${rest.length} more file(s), ${restSyms} symbol(s) — elided from this render, not from the impact set`,
+      `  (counts above are complete; --emit-seams carries every entry, SEAM_IMPACT_RENDER_CAP=0 prints them all)`);
   }
   out.push("");
   if ((model.surface ?? []).length) {
     out.push("## Surface (outermost callers — where the change ripples to; re-verify here)");
-    for (const m of model.surface) out.push(`- ${m.symbol} (${m.file}:${m.line})`);
+    const surf: any[] = model.surface;
+    const shownSurf = SURFACE ? surf.slice(0, SURFACE) : surf;
+    for (const m of shownSurf) out.push(`- ${m.symbol} (${m.file}:${m.line})`);
+    if (surf.length > shownSurf.length) out.push(`- … +${surf.length - shownSurf.length} more outermost caller(s) — elided from this render`);
     out.push("");
   }
   if ((model.crossStack ?? []).length) {

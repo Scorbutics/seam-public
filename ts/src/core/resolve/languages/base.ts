@@ -97,6 +97,11 @@ export interface LanguageProvider {
   // grounding for a service-locator DI lookup — `getProvider(X.class)`). null ⇒ no class literal in the
   // text. undefined ⇒ this language has no such reflection-literal form (TS/Ruby/Python).
   classLiteralArg?: (argsText: string) => string | null;
+  // true ⇒ this language marks its module boundary with an EXPORT STATEMENT (TS/JS). Languages without one
+  // (Java/C/C++/Ruby/Python) express visibility with MODIFIERS instead, so their public surface is the file's
+  // top-level type declarations + members — asking them for `export_statement` nodes finds nothing and makes
+  // every module shape (contract) report "no exported members". undefined/false ⇒ exportless.
+  exportStatements?: boolean;
 }
 
 // Locate a binary on PATH (the sync `shutil.which` equivalent). Returns the absolute path or null.

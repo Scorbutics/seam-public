@@ -61,8 +61,14 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   emit(`Resolving consumers of ${a.symbol}…`);
   let graph: any;
   try {
-    graph = await scan.build_footprint(a.repo, a.anchorFile!, a.symbol!,
-      { direction: "up", depth: a.depth, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+    // STRUCTURAL + CACHED, exactly like impact/reaches. A consumer SET is the anchor's resolved callers —
+    // projectConsumerSet reads only the anchor's direct edges + blindspots, never the coupling overlay — so
+    // running per-node data-coupling here was pure cost AND it disabled build_footprint_cached (which only
+    // memoizes dataCoupling===false). That is why `consumers` was the one shape with NO warm benefit at all
+    // (cal.com getBooking 14.9→12.8s, Keycloak UserStorageProvider 11.8→10.6s, flat over four passes, while
+    // impact went 26s→0.7s). Coupling stays opt-in via an explicit --data-coupling.
+    graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
+      { direction: "up", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
   } catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
   const set = projectConsumerSet(graph);
   // Opt-in name-grounded recall — adds UNVERIFIED leads (kept separate from verified members). The floor
@@ -109,8 +115,10 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
   emit(`Resolving dependencies of ${a.symbol}…`);
   let graph: any;
   try {
-    graph = await scan.build_footprint(a.repo, a.anchorFile!, a.symbol!,
-      { direction: "down", depth: a.depth, dataCoupling: a.dataCoupling, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
+    // Same structural+cached treatment as consumers above — projectDependencySet reads the anchor's own
+    // resolved out-edges, not the coupling overlay.
+    graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
+      { direction: "down", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
   } catch (e) { err(`dependency scan failed: ${(e as Error).message}`); }
   const set = projectDependencySet(graph);
   const model: any = { mode: "codebase", ...set };

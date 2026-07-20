@@ -71,6 +71,12 @@ export const _IMPLEMENTS = new Set(["super_interfaces", "implements_clause"]);
 // signal (a method the framework invokes), NOT which annotation — so no per-framework list to keep in sync.
 export const _ANNOTATION = new Set(["annotation", "marker_annotation", "decorator"]);
 export const _EXPORT = new Set(["export_statement"]);
+// The RE-EXPORT / export-list forms: `export { a, b }` and `export { a } from "./x"`. The export_statement's
+// child is an export CLAUSE of specifiers, NOT a declaration — so a barrel (an index.* that only re-exports)
+// yielded ZERO members and every module shape reported "no exported members". The specifier's LAST name
+// identifier is the EXPORTED name (`export { a as b }` exports `b`).
+export const _EXPORT_CLAUSE = new Set(["export_clause"]);
+export const _EXPORT_SPECIFIER = new Set(["export_specifier"]);
 export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
 export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
 // --- field-level read/write vocabulary (the review-impact relevance floor's AST extraction) --------

@@ -6,7 +6,9 @@ import { basename, join } from "node:path";
 import {
   type Ctx, lang_for,
   _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _NAME_LEAVES, _CALL, _EXPORT, _VAR_DECL,
+  _EXPORT_CLAUSE, _EXPORT_SPECIFIER,
 } from "../atoms.js";
+import { provider_for } from "../../core/resolve/languages/index.js";
 import type { Unit } from "./graph.js";
 
 export const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
@@ -161,10 +163,22 @@ export function _usage_lines(ctx: Ctx, units: Unit[], local: string): number[] {
   return inside.length ? inside : refs.slice(1);
 }
 
-// The module's EXPORTED members (functions/classes/exported var declarations), deduped by name. Feeds the
-// module-anchor builder and the depth-2 ripple (only exported symbols ripple to their importers).
-export function _exported_members(ctx: Ctx): Unit[] {
+// The module's PUBLIC SURFACE, deduped by name. Feeds the module-anchor builder and the depth-2 ripple
+// (only exported symbols ripple to their importers).
+//
+// A module boundary is expressed TWO structurally different ways, and reading only the first made the whole
+// module shape (contract) return "no exported members" for most real files:
+//  - EXPORT-STATEMENT languages (TS/JS): the boundary is the `export` node. Its child is a DECLARATION
+//    (`export function f`) — or an export CLAUSE (`export { a } from "./x"`), the barrel/re-export form that
+//    was previously skipped entirely, so an index.* that only re-exports looked empty.
+//  - EXPORTLESS languages (Java/C/C++/Ruby/Python): there is no export node at all; visibility rides on
+//    MODIFIERS, so the boundary is the file's TOP-LEVEL type declarations and their members. Asking these
+//    files for `export_statement` found nothing, which is why EVERY Java/Ruby/C module reported no contract.
+// `file` selects the reading via the language registry (`exportStatements`); omitted ⇒ export-statement
+// reading only, preserving the original behaviour for callers that have no path.
+export function _exported_members(ctx: Ctx, file?: string): Unit[] {
   const out: Unit[] = [];
+  if (file && !provider_for(file)?.exportStatements) return _public_surface(ctx);
   for (const es of ctx.collect(ctx.root, (k) => _EXPORT.has(k))) {
     for (const ch of ctx.children(es)) {
       const k = ch.type;
@@ -181,8 +195,41 @@ export function _exported_members(ctx: Ctx): Unit[] {
           }
         }
       }
+      // RE-EXPORT / export-list: `export { a, b }` · `export { a as b } from "./x"`. The exported NAME is the
+      // specifier's last name identifier (`a as b` exports `b`); the local alias is irrelevant at the boundary.
+      else if (_EXPORT_CLAUSE.has(k)) {
+        for (const sp of ctx.children(ch)) {
+          if (!_EXPORT_SPECIFIER.has(sp.type)) continue;
+          const names = ctx.children(sp).filter((c) => _NAME_KINDS.has(c.type));
+          if (!names.length) continue;
+          const [s, e] = ctx.span(sp);
+          out.push([ctx.text(names[names.length - 1]), "reference", s, e]);
+        }
+      }
     }
   }
+  const seen = new Set<string>();
+  return out.filter((m) => (seen.has(m[0]) ? false : (seen.add(m[0]), true)));
+}
+
+// The public surface of an EXPORTLESS language: top-level type declarations (class/interface/enum/record/
+// struct) plus the members declared directly in their bodies, and top-level free functions (C/C++/Ruby).
+// Nested/local functions are NOT surface — descent stops at a function body, exactly as _named_units does.
+function _public_surface(ctx: Ctx): Unit[] {
+  const out: Unit[] = [];
+  const visit = (n: any, depth: number) => {
+    const k = n.type;
+    if (_CLASS_KINDS.has(k)) {
+      const nm = _name_of(ctx, n);
+      if (nm) { const [s, e] = ctx.span(n); out.push([nm, "class", s, e]); }
+    } else if (_FUNCLIKE.has(k) && !_ANON_FUNC.has(k)) {
+      const nm = _name_of(ctx, n);
+      if (nm) { const [s, e] = ctx.span(n); out.push([nm, _METHOD_KINDS.has(k) || depth > 0 ? "method" : "function", s, e]); }
+      return;                                     // a function body holds locals, not surface
+    }
+    for (const c of ctx.children(n)) visit(c, _CLASS_KINDS.has(k) ? depth + 1 : depth);
+  };
+  visit(ctx.root, 0);
   const seen = new Set<string>();
   return out.filter((m) => (seen.has(m[0]) ? false : (seen.add(m[0]), true)));
 }
