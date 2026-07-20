@@ -17,6 +17,9 @@ export class EngineCtx {
   carrierChannel = new Map<string, GroundingIndex>();   // carrierChannelIndex: `repo::llm|det` → index
   langIndex = new Map<string, unknown>();               // carrier engine: `repo::provider` → built lang index
   llmKey = new Map<string, GroundingIndex>();           // llmKeyIndex: cacheKey → index
+  // applyMatchers' repo-wide grounding index. Scope-INDEPENDENT (the rules ground across the whole repo), so it
+  // is shared by every module scope in a run; llmKeyIndex is memoized per scope and would otherwise redo it.
+  matcherIdx = new Map<string, GroundingIndex>();       // `${repo}::${hash(matcher ids)}` → repo-wide grounding index
   paramKeys = new Map<string, GroundingIndex>();        // param_key_index: repo → const-resolved param grounding
   floorBase = new Map<string, GroundingIndex>();        // floor_base_index: repo → MERGED shared⊕param (cached so the per-call merge runs once, not per grow step)
   floorContribs = new Map<string, unknown>();           // floorContributions: repo → per-file floor scan (computed ONCE/run, shared by the floor build AND the llm-key floorOf — no duplicate scan)
@@ -76,7 +79,7 @@ export class EngineCtx {
   fork(): EngineCtx {
     const c = new EngineCtx();
     c.sharedKey = this.sharedKey; c.carrierChannel = this.carrierChannel; c.langIndex = this.langIndex;
-    c.llmKey = this.llmKey; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs; c.jpaManagers = this.jpaManagers;
+    c.llmKey = this.llmKey; c.matcherIdx = this.matcherIdx; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs; c.jpaManagers = this.jpaManagers;
     c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
     c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
     c.composedRoutes = this.composedRoutes;   // share the repo-wide composed-route grounding (built once, read-concurrent-safe)

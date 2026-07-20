@@ -32,7 +32,7 @@ import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
 import { hasMatcherCache, loadMatchers } from "./key_store.js";
 import { learnKeyMatchers, applyMatchers } from "./key_matcher.js";
-import { plausibleKeyValue, runMatcher, _canonKind } from "./key_ir.js";
+import { plausibleKeyValue, runMatcher, _canonKind, matcherKey, type KeyMatcher } from "./key_ir.js";
 import { clusterBlindFiles } from "./key_cluster.js";
 import { COUPLING } from "./config.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -182,6 +182,13 @@ async function _batchSynthesize(repo: string, files: { file: string; text: strin
   await flush();
   return result;
 }
+
+// Memo key for the repo-wide matcher grounding index (see the call site below). Hashes matcher IDENTITY —
+// NOT `matchers.length`: the teachers persist newly-learned matchers mid-run, so two DIFFERENT matcher sets of
+// equal size must not collide (a stale grounding index is a wrong answer, not a slow one). Order-independent,
+// so the store's iteration order can't split the memo.
+export const matcherIdxKey = (repo: string, matchers: KeyMatcher[]): string =>
+  `${repo}::${createHash("sha1").update(matchers.map(matcherKey).sort().join("\n")).digest("hex")}`;
 
 export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx()): Promise<GroundingIndex> {
   const augment = !!opts.augment || process.env.SEAM_KEY_AUGMENT === "1";
@@ -338,7 +345,24 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   ];
   await Promise.all(teachers.map((t) => t.learn()));
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
-  const matchersIdx: GroundingIndex = matchers.length ? await applyMatchers(repo, matchers) : new Map();
+  // REPO-WIDE and SCOPE-INDEPENDENT: applying the learned matcher rules grounds keys across the WHOLE repo
+  // (deliberately — a coupling whose other side sits in an unscanned module still grounds via a rule), so the
+  // result does not depend on `scope`/`scopeFiles`. But llmKeyIndex is memoized PER SCOPE, so this ran again for
+  // every module the grow's fan re-anchored into: measured ~11s per module on keycloak (536 matchers × repo),
+  // ~17 modules ≈ 200s of a 312s cold center — while `floorContributions` right above it, the same shape of
+  // repo-wide derivation, was already ctx-cached and cost 2ms after its first build. Memoized per (repo, matcher
+  // set) on the run's EngineCtx, exactly like floorContributions/floorBase.
+  //
+  // The memo key hashes matcher IDENTITY, not cardinality: matchers GROW WITHIN A RUN (the teachers above
+  // persist, then `loadMatchers` re-reads), so a newly-discovered matcher MUST invalidate this index — a
+  // stale grounding index is a WRONG answer, not a slow one. Counting them would be sound only while the
+  // store is append-only (equal count ⇒ equal set); hashing `matcherKey` holds regardless of that invariant.
+  const _mKey = matcherIdxKey(repo, matchers);
+  let matchersIdx = ctx.matcherIdx.get(_mKey);
+  if (!matchersIdx) {
+    matchersIdx = matchers.length ? await applyMatchers(repo, matchers) : new Map<string, KeyHit[]>() as GroundingIndex;
+    ctx.matcherIdx.set(_mKey, matchersIdx);
+  }
   // pass 4b — COMPOSED sub-resource routes (the `mount-chain` axis): a route handler whose class carries no
   // class-level route annotation is mounted by a cross-file locator chain the in-file floor can't compose.
   // The route-composer teacher learns each such handler's full path (LLM once → cached) so a front-end fetch
