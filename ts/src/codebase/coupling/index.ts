@@ -906,7 +906,7 @@ async function runPipeline(
   const surfacedKeys = new Set(seenKeys);            // ancestor keys + the ones THIS node surfaces (fed to the chain)
 
   // STEP 3 (lookup) — gather each grounded key with its other-side files (ungrounded floor keys dropped here).
-  const grounded: { key: AnchorKey; complementFiles: Map<string, number> }[] = [];
+  let grounded: { key: AnchorKey; complementFiles: Map<string, number> }[] = [];
   for (const key of keys.values()) {
     if (seenKeys.has(keyId(key.kind, key.value))) continue;   // an ancestor already surfaced this boundary — don't loop back
     const complementFiles = collectComplementFiles(p.index, key, anchorPath);
@@ -945,6 +945,27 @@ async function runPipeline(
     else grounded.sort(byFanout);
   } else {
     grounded.sort(byFanout);
+  }
+  // AGGREGATE-DAO SCOPE (SEAM_UNREACHED_KEYS=1 to opt out) — a mega-DAO node (a JPA aggregate adapter: Keycloak's
+  // UserAdapter touches user_role_mapping / user_attribute / user_required_action / user_group_membership / … —
+  // the whole User aggregate) surfaces ALL its TABLE keys because its span is the WHOLE file, but the flow only
+  // landed on a FEW of its methods. Off-flow db-table siblings balloon the footprint (Keycloak token flow: mega-DAOs
+  // → ~37 tables → 222 files → the LLM key-discovery batch stalls). _footprintRank only re-ORDERED them (and the cap
+  // doesn't fire below `cap` keys). Make membership a FILTER for TABLE keys: when this node has reached ranges and a
+  // db-table key sits in an UNREACHED method, DROP it (recorded as the node-key-fanout blindspot, so grep can still
+  // reach it). SCOPE = db-table ONLY — sibling HTTP ROUTES on a resource ARE semantically related to the flow (the
+  // deliberate resource-route-fan: reaching one route surfaces the resource's other routes to their UIs), whereas an
+  // aggregate DAO's off-flow tables are NOT. Skip when fpRanges empty (anchor-seed / whole-file placeholder → keep all).
+  if (process.env.SEAM_UNREACHED_KEYS !== "1" && fpRanges.length && grounded.length > 1) {
+    const off = grounded.filter((g) => g.key.kind === "db-table" && inFootprint(g.key.line) !== 0);
+    if (off.length && off.length < grounded.length) {   // ≥1 surviving key AND ≥1 off-flow table key → prune the off-flow tables
+      const offSet = new Set(off);
+      for (const { key } of off) surfacedKeys.add(keyId(key.kind, key.value));   // don't let the chain re-surface them via a complement
+      s.graph.addBlindspot({ node: node.id, mechanism: "node-key-fanout",
+        evidence: `${node.file} touches ${grounded.length} shared keys but the flow reached ${grounded.length - off.length} — dropped ${off.length} off-flow aggregate table(s) (SEAM_UNREACHED_KEYS=1 keeps them)`,
+        candidates: off.map((g) => ({ file: node.file, symbol: g.key.value, provenance: "SUGGESTED" as const })) });
+      grounded = grounded.filter((g) => !offSet.has(g));
+    }
   }
   // mark the DEMOTED keys seen FIRST, so the chain (crossBoundary's recursion) doesn't re-surface them
   // through a complement — keeping the hub's fan genuinely bounded, not just deferred one hop.
