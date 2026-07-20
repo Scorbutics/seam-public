@@ -743,6 +743,10 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
+  // DATA-SINK HUB CONTAINMENT (SEAM_COUPLING_HUB_CONTAIN, default on) — a kill-switch for the I4 refinement below
+  // (contain a coupling-revealed db-table sink's up-fan). Inert unless coupling is on (the sink set is built from
+  // db-table crossing edges per wave; empty = a no-op, I1).
+  const _hubContain = process.env.SEAM_COUPLING_HUB_CONTAIN !== "0" && opts.dataCoupling !== false;
   let moveNo = 0;
   // STREAM: emit the SEED (P1 + P3-coupling nodes that exist BEFORE the flood) as the first record, so the union
   // of every record's `added` equals the final region (else the seed would be missing from the stream). wave 0.
@@ -764,6 +768,23 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // scored high (a widely-consumed DAO), yet it is on the flow's crossing, so it is neither demoted nor gated.
     const crossingBearers = new Set<string>();
     if (ubiquity) for (const e of data.edges as any[]) if (_is_crossing(e)) { crossingBearers.add(e.dst); crossingBearers.add(e.from); }
+    // DATA-SINK HUBS (I4 refinement) — a coupling-revealed node bearing a DB-TABLE crossing (db-write/db-read:
+    // every db-table adapter — JPA @Entity, ActiveRecord, raw SQL, jOOQ, member-access) is a data sink whose
+    // UP-consumer fan is the app's whole data layer, not this flow. A ROUTE/EVENT crossing's other side is the
+    // flow's handler (followed), so ONLY the db-table side is contained; and only data-MODEL nodes (class/module/
+    // table), never an accessor method on the spine. Fed to makeHubClassifier's `dataHub`. Empty = a no-op (I1).
+    const dataSinkNodes = new Set<string>();
+    if (_hubContain) {
+      const _kindById = new Map<string, string>((data.nodes as any[]).map((n) => [String(n.id), n.kind]));
+      for (const e of data.edges as any[]) {
+        if (e.kind !== "db-write" && e.kind !== "db-read") continue;
+        for (const id of [e.from, e.to, e.dst]) {
+          if (id == null) continue;
+          const k = _kindById.get(String(id));
+          if (k === "class" || k === "module" || k === "table") dataSinkNodes.add(String(id));
+        }
+      }
+    }
     // PAYLOAD TYPE-REFS — a node reached ONLY by `type-ref` edges is a data-model DTO the anchor never calls a
     // method on (not the delegation spine). Demote it in the frontier so the budget follows calls/crossings
     // first; it's still expanded if budget remains. A node with ANY non-type-ref edge (a call/import/crossing)
@@ -774,7 +795,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     for (const [id, kinds] of edgeKinds) if (kinds.length && kinds.every((k) => k === "type-ref")) typeRefOnly.add(id);
     // HUB CLASSIFICATION — see border_policies.ts. `sampleConsumers` is filled lazily (needs an async index
     // read) only when the node is actually collapsed. Ubiquity off / no index → null.
-    const hubInfo = makeHubClassifier({ ubiquity, crossingBearers, hubCollapse, hubUbiquity, ubiquityFan, typeRefOnly, hubTypeFan, ubiqScore });
+    const hubInfo = makeHubClassifier({ ubiquity, crossingBearers, hubCollapse, hubUbiquity, ubiquityFan, typeRefOnly, hubTypeFan, ubiqScore, dataHub: dataSinkNodes.size ? (n) => dataSinkNodes.has(n.id) : undefined });
     const isHub = (n: any): boolean => hubInfo(n) != null;
     // frontier = a real symbol (not a boundary node) we haven't re-anchored yet, not excluded. CORE nodes are
     // excluded on the FORWARD/consumer side (the central seam is already covered — re-growing it adds noise), but
@@ -1336,7 +1357,17 @@ export async function grow_footprint_scoped(repo: string, anchorFile: string, sy
   emit("Floor pre-grow to scope coupling discovery to the footprint…");
   ctx.stableFloor = true;
   const budget0 = { complementBudget: ctx.complementBudget, keyBudget: ctx.keyBudget, synthBudget: ctx.synthBudget };
-  const [floorData] = await grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: false, ctx });
+  // PROBE BUDGET (SEAM_PROBE_MAX_NODES, default 120; 0 = old unbounded) — this pre-grow's footprint is DISCARDED;
+  // it exists only to enumerate `footprintFiles` (below) to scope the real grow's LLM key-discovery, and the
+  // floor-coupling SEED already carries the cross-stack files. The full structural EXPANSION (its costliest phase —
+  // ~as expensive as the real grow, so the whole op ran the ~90s pipeline TWICE on a large repo) adds only
+  // diminishing consumer files to that scope. So cap the probe far below the real grow's maxNodes: when the seed
+  // already exceeds the cap the wave loop does 0 expansion, halving the operation. A narrower LLM-discovery scope
+  // is the accepted trade (fewer residual learned keys; the floor crossings are unaffected).
+  const _pc = process.env.SEAM_PROBE_MAX_NODES;
+  const _probeCap = _pc === "0" ? 0 : (parseInt(_pc ?? "120", 10) || 120);
+  const _probeOpts = _probeCap ? { ...opts, maxNodes: Math.min(opts.maxNodes ?? 80, _probeCap) } : opts;
+  const [floorData] = await grow_to_terminals(repo, anchorFile, symbol, { ..._probeOpts, dataCouplingLlm: false, ctx });
   ctx.stableFloor = false;
   ctx.complementBudget = budget0.complementBudget;   // RESTORE: the scoping probe must not starve the answer
   ctx.keyBudget = budget0.keyBudget;
