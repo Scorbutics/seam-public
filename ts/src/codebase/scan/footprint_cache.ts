@@ -224,6 +224,34 @@ export async function cachedCouplingDelta<T>(
   return _clone(d) as T;
 }
 
+// METHOD-PRECISE INDEX cache (Phase 3½) — the fan's method-precise rehydration parses EVERY boundary file with
+// tree-sitter (`makeCtx`) to re-attribute whole-file crossings to their enclosing method, EVEN on a coupling-delta
+// cache HIT (the parse is outside that cache). On a large footprint that is the O(footprint) warm cost (Keycloak
+// authenticate() fan-couples ~100–400 files, ~1s each, parse-dominated). The parse depends ONLY on the file BYTES,
+// so cache its serializable derivation (`methodPreciseIndex`: units + call-site map) per CONTENT-HASH — a warm grow
+// then skips the parse entirely. No epoch: bytes → derivation is pure; the version suffix guards a logic change.
+const MPIDX = "mp-index-v1";
+type MPEntry<T> = { h: string; d: T };
+const _mpmem = new Map<string, Map<string, Record<string, MPEntry<unknown>>>>();
+function mpShardOf(repo: string, file: string): Record<string, MPEntry<unknown>> {
+  const byFile = _mpmem.get(repo) ?? _mpmem.set(repo, new Map()).get(repo)!;
+  let s = byFile.get(file);
+  if (!s) { s = loadShard<Record<string, MPEntry<unknown>>>(repo, MPIDX, file) ?? {}; byFile.set(file, s); }
+  return s;
+}
+// `content` keys the cache by its hash; `compute` (the parse) runs ONLY on a miss. Returns null iff compute does
+// (unparseable / no tree-sitter). The value is shared by reference (rehydration reads it, never mutates).
+export async function cachedMPIndex<T>(repo: string, file: string, content: string, compute: () => Promise<T | null>): Promise<T | null> {
+  if (!graphCacheEnabled()) return compute();
+  const h = _hash(content);
+  const shard = mpShardOf(repo, file);
+  const hit = shard[h];
+  if (hit) return hit.d as T;
+  const d = await compute();
+  if (d != null) { shard[h] = { h, d }; saveShard(repo, MPIDX, file, shard); }
+  return d;
+}
+
 // ── Phase 5: the SETTLED-FOOTPRINT (answer) cache ──────────────────────────────────────────────────────────
 // Phases 3–4 cache the per-node build_footprint + the coupling overlay, but the wave ORCHESTRATION (frontier /
 // tier / hub / merge / prune over ~450 nodes) still runs each warm query. This memoizes the WHOLE settled grow

@@ -6,7 +6,7 @@
 // Discovery is split by direction: up/ finds a symbol's CONSUMERS (where it's used), down/ finds its
 // DEPENDENCIES (what it delegates to / how it works); direction-neutral substrate stays at the scan root.
 export { build_footprint } from "./footprint.js";
-export { build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot, epochOf } from "./footprint_cache.js";   // graph cache: P3 per-node · P4 anchor-coupling · P5 settled-grow memoization (docs/GRAPH_CACHE.md)
+export { build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot, epochOf } from "./footprint_cache.js";   // graph cache: P3 per-node · P3½ method-precise index · P4 anchor-coupling · P5 settled-grow memoization (docs/GRAPH_CACHE.md)
 export { class_call_candidates } from "./up/class_graph.js";
 export { implemented_interfaces, is_framework_entry } from "./down/interface_index.js";
 export { merge_resolved } from "./expand.js";

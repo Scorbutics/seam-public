@@ -31,7 +31,7 @@ import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
-import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { epochOf } from "../scan/footprint_cache.js";
 import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
 
@@ -58,7 +58,7 @@ import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
 import { resolveResourceRoutes } from "../coupling/resource_routes.js";
-import { _read, _named_units, _enclosing, _call_lines } from "../scan/ast_units.js";
+import { _read, _enclosing, methodPreciseIndex } from "../scan/ast_units.js";
 import { makeCtx, available, type Ctx } from "../atoms.js";
 import type { Unit } from "../scan/graph.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
@@ -144,7 +144,7 @@ function _rehydrateFanDelta(delta: { nodes: any[]; edges: any[]; blindspots: any
 function _rehydrateFanDeltaMethodPrecise(
   delta: { nodes: any[]; edges: any[]; blindspots: any[] }, srcId: string, srcRange: [number, number] | undefined,
   fileNodes: { id: string; range: [number, number] }[],
-  file: string, ctx: Ctx, units: Unit[], counter: number,
+  file: string, units: Unit[], calls: Record<string, number[]>, counter: number,
 ): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
   const isMethod = (u: Unit | null): u is Unit => !!u && (u[1] === "method" || u[1] === "function");
   // the reached node's OWN method (its writes stay on it) — from its range DIRECTLY, so a coupling-complement
@@ -169,7 +169,7 @@ function _rehydrateFanDeltaMethodPrecise(
   const methodNames = new Map<string, Unit[]>();
   for (const u of units) if (isMethod(u)) (methodNames.get(u[0]) ?? methodNames.set(u[0], []).get(u[0])!).push(u);
   const adj = new Map<Unit, Set<Unit>>();
-  for (const [name, defs] of methodNames) for (const L of _call_lines(ctx, name)) {
+  for (const [name, defs] of methodNames) for (const L of (Array.isArray(calls[name]) ? calls[name] : [])) {   // Array.isArray guard: a callee named `constructor`/`toString` would else hit Object.prototype (not own-key)
     const caller = _enclosing(units, L);
     if (isMethod(caller)) { const set = adj.get(caller) ?? adj.set(caller, new Set()).get(caller)!; for (const d of defs) if (d !== caller) set.add(d); }
   }
@@ -260,9 +260,11 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
     // reached node's same-file call closure (drops the sibling/class-wide bleed). Needs a parse — degrade to the flat
     // rehydrate offline (no tree-sitter) or when opted out.
     const mp = process.env.SEAM_METHOD_PRECISE !== "0" && available();
-    const parsed = mp ? await makeCtx(ar[0], ar[1]) : null;
-    out = parsed
-      ? _rehydrateFanDeltaMethodPrecise(cached, anchorId, srcRange, fileNodes, file, parsed, _named_units(parsed), counter)
+    // DISK-CACHED per content-hash → a warm grow skips the tree-sitter parse that otherwise re-ran for every
+    // boundary file every run (the O(footprint) warm coupling cost). Miss → parse once + derive; hit → JSON read.
+    const mpIdx = mp ? await cachedMPIndex(repo, file, ar[0], async () => { const p = await makeCtx(ar[0], ar[1]); return p ? methodPreciseIndex(p) : null; }) : null;
+    out = mpIdx
+      ? _rehydrateFanDeltaMethodPrecise(cached, anchorId, srcRange, fileNodes, file, mpIdx.units, mpIdx.calls, counter)
       : _rehydrateFanDelta(cached, anchorId, counter);
   }
   if (_repeat) { _fcRepeats++; if (_t0) { _fcRepeatMs += Date.now() - _t0; if (timingOn()) process.stderr.write(`[time] ${cacheOn ? "RE-COUPLE(cached)" : "RE-COUPLE"} ${normpath(file)}: ${Date.now() - _t0}ms\n`); } }
@@ -740,6 +742,16 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // opts.ubiquity only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
   const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
   const upHopCap = Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0)));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. STRUCTURAL grow defaults K=2 (it's the sole container). Hoisted above the wave loop so the post-loop frontier block sees it.
+  // COMPLEMENT UP-HOP BORDER (SEAM_COMPLEMENT_UP_HOP, default 1; 0 = off) — a coupling COMPLEMENT (the co-accessor
+  // OTHER side of a shared-key crossing: a sibling file that also reads/writes the key) is I4 crossing-ward, so the
+  // general upHopCap (off by default) never bounds its UP-climb — its whole consumer web is grown. On a large seed
+  // that EXPLODES (Keycloak authenticate(): 130-node seed → coupling materializes ~200 complements → 330 nodes →
+  // the wave expands every complement's consumers → >400s hang). Give complements a DEDICATED small up-hop cap
+  // (their depth resets to 0 at the crossing, like any crossing): the complement + its immediate consumers are kept,
+  // the deep climb is PARKED as a decision point. Distinct from upHopCap so PLAIN-call nodes are unaffected, and a
+  // ROUTE complement (a sibling-route UI reached across the route crossing) is still materialised (the node itself is
+  // depth 0, kept — only its further up-web is bounded).
+  const complementUpHop = Math.max(0, parseInt(process.env.SEAM_COMPLEMENT_UP_HOP ?? "1", 10) || 0);
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
@@ -822,7 +834,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     // grown — this contains the intra-backend plain-call up-flood (bean→bean→bean) while keeping the cross-stack
     // reach (route→UI→its callers). Structural: no intent needed. Recomputed each wave (edges grow); the CAP is hoisted.
     const upDepth = new Map<string, number>(anchorIds.map((a) => [a, 0]));
-    if (upHopCap) {
+    if (upHopCap || complementUpHop) {
       const consumers = new Map<string, { id: string; crossing: boolean }[]>();   // node → who consumes it (the climb targets)
       for (const e of data.edges as any[]) (consumers.get(String(e.to)) ?? consumers.set(String(e.to), []).get(String(e.to))!).push({ id: String(e.from), crossing: _is_crossing(e) });
       for (const uq = [...anchorIds]; uq.length; ) {
@@ -894,7 +906,11 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
         // has climbed too far into the consumer web — PARK its up-fan as a frontier decision point (deepenable),
         // don't grow it. Crossing-ward nodes (bear a route/table/coupling crossing) are exempt (spine-ward, and
         // a crossing already reset their depth). DOWN is never gated (the grounded mechanism chain).
-        if (d === "up" && upHopCap && !crossingWard && upDepthOf(n.id) >= upHopCap) { parked.set(n.id, "decision"); continue; }
+        // a pure COMPLEMENT (coupling co-accessor, not a boundary marker) gets the dedicated complementUpHop cap even
+        // though it's crossing-ward; a spine crossing-ward node keeps its I4 exemption (effUpHop 0); a plain node uses upHopCap.
+        const isComplement = !!n.coupling && !isFlowSubject(n.kind);
+        const effUpHop = isComplement ? complementUpHop : (crossingWard ? 0 : upHopCap);
+        if (d === "up" && effUpHop && upDepthOf(n.id) >= effUpHop) { parked.set(n.id, "decision"); continue; }
         if (d === "up" && tierUp) {
           // tier 3 — a ubiquitous/type hub, or an off-intent pivot: KEEP the node, PARK its fan as a decision point.
           if (hub) { parked.set(n.id, hubCollapse ? "hub" : "decision"); continue; }
@@ -1018,7 +1034,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
           && !_outSrc.has(e.to) && !parked.has(e.to) && (_cx.get(e.to) ?? 0) >= 3)
         parked.set(e.to, "decision");
   }
-  if ((tierGrow || upHopCap) && parked.size) {
+  if ((tierGrow || upHopCap || complementUpHop) && parked.size) {
     const byId = new Map<string, any>((data.nodes as any[]).map((n) => [n.id, n]));
     const nodeSym = new Map<string, string>((data.nodes as any[]).map((n) => [n.id, n.enclosing && n.enclosing !== n.symbol ? `${n.enclosing}.${n.symbol}` : n.symbol]));
     const present = new Set<string>(byId.keys());
@@ -1144,7 +1160,7 @@ async function _growToTerminalsImpl(repo: string, anchorFile: string, symbol: st
   };
   const _lap = (p: string, t0: number) => { const ms = _t() - t0; if (_tm) process.stderr.write(`[time] ${_gtag(co.ctx)} ${symbol} ${p}: ${ms}ms\n`); addStage(_stageOf(p), ms); };
   let _ts = _t();
-  let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);              // P1 + seed
+  let data = await _phaseSeed(repo, anchorFile, symbol, opts, coStruct, prune);
   const seedN = data.nodes.length, seedDeps = data.nodes.filter((n: any) => n.direction === "backward").length;
   dbg(`[${_gtag(co.ctx)}] P1 seed ${symbol}: ${seedN - 1} structural node(s)${seedDeps ? ` (incl. ${seedDeps} dep(s) — entry point)` : " (consumers only)"}`);
   _lap("P1 seed", _ts); _ts = _t();

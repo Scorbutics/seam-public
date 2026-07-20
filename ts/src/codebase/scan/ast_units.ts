@@ -128,6 +128,25 @@ export function _call_lines(ctx: Ctx, local: string): number[] {
   return lines;
 }
 
+// METHOD-PRECISE INDEX — the SERIALIZABLE derivations the fan's method-precise rehydration needs (the reached
+// method ranges + the file's bare-identifier call sites grouped by callee). Computed in ONE parse so the whole
+// artifact can be DISK-CACHED per content-hash (see cachedMPIndex): a warm grow then skips the tree-sitter parse
+// (`makeCtx`) that otherwise re-ran for every boundary file every run — the O(footprint) parse cost. `calls` is a
+// superset of `_call_lines` (all callee names, not one), keyed for O(1) lookup during rehydration.
+export type MPIndex = { units: Unit[]; calls: Record<string, number[]> };
+export function methodPreciseIndex(ctx: Ctx): MPIndex {
+  const units = _named_units(ctx);
+  // NULL-PROTOTYPE: a callee named `toString`/`constructor`/`valueOf` would else read a truthy Object.prototype
+  // member, so `??=` skips the array init and `.push` throws (real Java calls `toString()` everywhere). The read
+  // side (rehydration) guards with Array.isArray for the same reason (a warm JSON.parse re-adds the prototype).
+  const calls: Record<string, number[]> = Object.create(null);
+  for (const c of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
+    const ch = ctx.children(c);
+    if (ch.length && ch[0].type.includes("identifier")) (calls[ctx.text(ch[0])] ??= []).push(ctx.span(c)[0]);
+  }
+  return { units, calls };
+}
+
 export function _ref_lines(ctx: Ctx, local: string): number[] {
   return [...new Set(ctx.collect(ctx.root, (k) => k.includes("identifier")).filter((i) => ctx.text(i) === local).map((i) => ctx.span(i)[0]))].sort((a, b) => a - b);
 }
