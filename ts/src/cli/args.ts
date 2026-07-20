@@ -24,6 +24,7 @@ export interface Args {
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   autoRoute?: boolean;   // --auto-route: on an --auto --intent grow, first route the intent (route.ts) — if it's a NON-flow shape (blast-radius/find-usages/…), answer it as that --query shape instead of a noFlow flow grow. The agent entry (grow_intent) sets it.
   reviewImpact?: boolean; triage?: boolean;
+  warm?: boolean; warmTop?: number;   // --warm: pre-grow the top-N highest-fan-in hub files to populate the per-node shards (footprint-v1 / coupling-delta-v1), so a later FIRST query on a covered region is served warm. --warm-top N caps the hub set (default 40).
 }
 
 // Resolve the three per-pass engines: a per-pass flag wins; else the --classifier preset; else
@@ -47,6 +48,8 @@ export function parseArgs(argv: string[]): Args {
       case "--submodules": a.submodules = true; break;   // also include each git submodule's diff (paths prefixed by the submodule dir)
       case "--from-classified": a.fromClassified = next(); break;
       case "--repo": a.repo = next(); break;
+      case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
+      case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
       case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | waves | scenarios | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
       case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
       case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout

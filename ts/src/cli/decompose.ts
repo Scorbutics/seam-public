@@ -113,6 +113,28 @@ const decomposeOpts = (a: Args, useLlm: boolean, skeleton?: boolean) => ({
   promoteSpinePath: a.promoteSpinePath, lineage: a.lineage, skeleton,
 });
 
+// --warm: a repo-wide STRUCTURAL precompute. The per-node footprint / coupling-delta shards make a warm
+// re-grow ~20× faster than cold (measured: a cal.com center 140.9s cold → 6.8s with warm shards), but a NEW
+// center in a never-grown subsystem pays the full cold cost because ITS nodes have no shards yet. This pre-grows
+// the top-N highest-fan-in HUB files (a file's importer count = its fan-in): each module grow warms its whole
+// footprint transitively, so a few hub grows populate the shards for most reused nodes. Idempotent + resumable
+// (shards are content-hash keyed); run it in CI / a background pass and the FIRST interactive query on a covered
+// region is served warm. Hub-seeded (not all-exports) trades complete coverage for a minutes-not-hours build —
+// cold corners simply pay the normal first-touch cost. Complements `warm_adapters` (which warms the COUPLING
+// FLYWHEEL / learned matchers); this warms the STRUCTURAL footprint.
+async function runWarm(a: Args): Promise<number> {
+  const { warmRepo } = await import("../codebase/grow/warm.js");
+  const t0 = Date.now();
+  const r = await warmRepo(a.repo, {
+    top: a.warmTop, dataCoupling: a.dataCoupling, includeTests: a.includeTests,
+    excludeDirs: a.excludeDirs, maxNodes: a.maxNodes, onProgress: (l) => process.stderr.write(l + "\n"),
+  });
+  if (r.cacheOff) { process.stderr.write("[warm] SEAM_GRAPH_CACHE=0 — the shard cache is OFF, so warming writes nothing. Unset it and re-run.\n"); return 1; }
+  const secs = ((Date.now() - t0) / 1000).toFixed(1);
+  process.stdout.write(`warmed ${r.grown} hub file(s)${r.failed ? ` (${r.failed} skipped)` : ""} → ${r.covered} distinct node shard(s) in ${secs}s. A first query on a covered region is now served warm.\n`);
+  return 0;
+}
+
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
@@ -706,6 +728,7 @@ async function main(argv: string[]): Promise<number> {
     process.stdout.write(await VIEW_RENDERERS[a.format](m, a) + "\n");
     return 0;
   }
+  if (a.warm) return runWarm(a);   // --warm: repo-wide structural precompute (pre-grow hub files → warm the per-node shards)
   if (a.scan || a.graph || a.expandGraph || a.growFrom) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph / --grow-from
   reset_usage();
   let hunks: Hunk[];
