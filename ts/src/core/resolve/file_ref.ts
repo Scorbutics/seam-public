@@ -8,6 +8,7 @@ import { existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { normpath, walkFiles } from "./walk.js";
 import { SKIP_DIRS, endsWithSourceExt } from "./languages/index.js";
+import { recordQuery } from "./dep_recorder.js";
 
 // Is `s` plausibly a relative file PATH (cheap pre-filter before touching the disk)? Must have a file
 // extension and no scheme/whitespace; a bare word or a URL is not a path reference.
@@ -57,6 +58,10 @@ export function fileRefIndex(repo: string, skipDirs: Set<string> = SKIP_DIRS): M
   return idx;
 }
 export function fileReferencers(repo: string, target: string, skipDirs: Set<string> = SKIP_DIRS): { file: string; line: number }[] {
+  // WHOLE-REPO content dependency: the referencer set is a regex scan of EVERY file's string literals, with no
+  // per-file index — so a footprint that consults it can't express its deps per-file; mark it `whole` → the entry
+  // falls back to the repo epoch. Fires only for non-source anchors, so it rarely costs the granular win.
+  recordQuery("file-referencers", [normpath(target)], [], true);
   return fileRefIndex(repo, skipDirs).get(normpath(target)) ?? [];
 }
 export function resetFileRefIndex(): void { _refIndex.clear(); }

@@ -9,6 +9,7 @@ import {
   _EXPORT_CLAUSE, _EXPORT_SPECIFIER,
 } from "../atoms.js";
 import { provider_for } from "../../core/resolve/languages/index.js";
+import { recordRead } from "../../core/resolve/dep_recorder.js";
 import type { Unit } from "./graph.js";
 
 export const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
@@ -19,7 +20,7 @@ export const stem = (p: string) => { const b = basename(p); const d = b.lastInde
 export function _read(repo: string, rel: string): [string, string] | null {
   const lang = lang_for(rel);
   if (!lang) return null;
-  try { return [readFileSync(join(repo, rel), "utf-8"), lang]; } catch { return null; }
+  try { const content = readFileSync(join(repo, rel), "utf-8"); recordRead(rel, content); return [content, lang]; } catch { return null; }
 }
 
 export function _name_of(ctx: Ctx, node: any): string | null {

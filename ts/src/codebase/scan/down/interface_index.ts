@@ -5,6 +5,7 @@
 import { join, relative } from "node:path";
 import { endsWithSourceExt, SKIP_DIRS, impl_markers } from "../../../core/resolve/languages/index.js";
 import { walk } from "../../../core/resolve/walk.js";
+import { recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
 import {
   makeCtx, available, lang_for,
   _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _HERITAGE, _ANNOTATION,
@@ -158,23 +159,35 @@ async function _impl_index(repo: string): Promise<ImplIndex> {
 // only the genuine interface→impl (DI) relation.
 export async function impls_of(repo: string, name: string): Promise<{ cls: string; file: string }[]> {
   const idx = await _impl_index(repo);
-  if (!idx.interfaces.has(name)) return [];
-  return [...(idx.impls.get(name) ?? [])].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  if (!idx.interfaces.has(name)) { recordQuery("impls", [name], []); return []; }
+  const out = [...(idx.impls.get(name) ?? [])].sort((a, b) => (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
+  recordQuery("impls", [name], out.map(_implKey));   // open-set: a NEW impl of the interface invalidates
+  return out;
 }
+const _implKey = (i: { cls: string; file: string }) => `${i.cls}|${i.file}`;
+registerQueryRerun("impls", async (repo, [name]) => hashSet((await impls_of(repo, name)).map(_implKey)));
 
 // DI PROVIDER-FACTORY resolution (the `session.groups().createGroup()` hop). `methodName → the interface(s) it
 // returns` — but ONLY for zero-arg accessors whose return type is a real in-repo interface WITH impls, so a hop
 // is a grounded fact (declared return type + impl registry), never a name guess. Empty map ⇒ feature is a no-op.
 export async function provider_accessors(repo: string): Promise<Map<string, Set<string>>> {
-  return (await _impl_index(repo)).accessors;
+  const acc = (await _impl_index(repo)).accessors;
+  recordQuery("provider-accessors", [], _accessorKeys(acc));
+  return acc;
 }
+const _accessorKeys = (acc: Map<string, Set<string>>) =>
+  [...acc].map(([m, ifs]) => `${m}:${[...ifs].sort().join(",")}`);
+registerQueryRerun("provider-accessors", async (repo) => hashSet(_accessorKeys(await provider_accessors(repo))));
 
 // `name` is an in-repo interface that HAS impls — the grounding gate for the `getProvider(X.class)` /
 // `getInstance(X.class)` service-locator form (the argument X is the interface to resolve).
 export async function is_provider_interface(repo: string, name: string): Promise<boolean> {
   const idx = await _impl_index(repo);
-  return idx.interfaces.has(name) && !!idx.impls.get(name)?.length;
+  const r = idx.interfaces.has(name) && !!idx.impls.get(name)?.length;
+  recordQuery("is-provider", [name], [String(r)]);
+  return r;
 }
+registerQueryRerun("is-provider", async (repo, [name]) => hashSet([String(await is_provider_interface(repo, name))]));
 
 // The interface names a class `symbol` (in `anchorFile`) IMPLEMENTS. Used to reach the facade-style
 // upstream entries a bidirectional grow misses: DI/CDI consumers import the INTERFACE, not the impl, so

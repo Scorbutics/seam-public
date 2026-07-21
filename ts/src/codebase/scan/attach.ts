@@ -7,6 +7,7 @@ import { join, relative } from "node:path";
 import { _resolve_import, scan_consumers, _kind_for, fileImporters } from "../../core/resolve/consumers.js";
 import { endsWithSourceExt, parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
+import { recordRead, recordQuery, taint } from "../../core/resolve/dep_recorder.js";
 import { makeCtx, available } from "../atoms.js";
 import { _read, _named_units, _usage_lines, _enclosing, _enclosingClass, _exported_members, stem } from "./ast_units.js";
 import { SCAN } from "./config.js";
@@ -56,8 +57,13 @@ export async function _depth2_ripple(repo: string, consumers: GraphNode[], count
   if (process.env.SEAM_RIPPLE_INDEX !== "0") {
     const importers = await fileImporters(repo);
     candidates = new Set<string>();
-    for (const k of targets.keys()) for (const imp of importers.get(k.slice(k.indexOf(" ") + 1)) ?? []) candidates.add(imp);
-  }
+    for (const k of targets.keys()) {
+      const tf = k.slice(k.indexOf(" ") + 1);
+      const imps = importers.get(tf) ?? [];
+      recordQuery("file-importers", [tf], [...imps]);   // open-set: a NEW importer of a rippled target invalidates
+      for (const imp of imps) candidates.add(imp);
+    }
+  } else taint();   // SEAM_RIPPLE_INDEX=0 does a whole-repo walk-read → not per-file expressible; fall back to the epoch
   const newNodes: GraphNode[] = [], newEdges: GraphEdge[] = [];
   for (const [dir, files] of walk(repo, SKIP_DIRS)) {
     for (const fn of files) {
@@ -66,7 +72,7 @@ export async function _depth2_ripple(repo: string, consumers: GraphNode[], count
       const rel = relative(repo, path);
       if (candidates && !candidates.has(normpath(rel))) continue;   // reverse-index says this file imports no target → skip the read+scan
       let text: string;
-      try { text = readFileSync(path, "utf-8"); } catch { continue; }
+      try { text = readFileSync(path, "utf-8"); recordRead(rel, text); } catch { continue; }
       if (![...targetSyms].some((s) => text.includes(s))) continue;
       const hits = new Map<string, string>(); // target consumer node id → local
       for (const ref of parse_imports(rel, text)) {

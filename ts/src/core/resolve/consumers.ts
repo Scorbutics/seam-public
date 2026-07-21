@@ -10,6 +10,7 @@ import type { ImportRef, NamespaceImport, DefaultImport } from "./languages/base
 import { floor_resolve, endsWithSourceExt, parse_imports, namespace_imports, default_imports, SKIP_DIRS } from "./languages/index.js";
 import { normpath, walkFiles } from "./walk.js";
 import { incrementalScan, indexCacheEnabled } from "./index_cache.js";
+import { recordRead, recordQuery, registerQueryRerun, hashSet } from "./dep_recorder.js";
 
 // A resolver: resolve_module(repo, importingFile, source) → repo-relative file | null, and
 // optionally resolve_symbol(repo, importingFile, line, col) → [file, line] | null (LSP). ASYNC —
@@ -108,6 +109,9 @@ export async function fileImporters(repo: string): Promise<Map<string, Set<strin
   _fileImportersCache.set(repo, out);
   return out;
 }
+// The importer SET of one target file — the ripple's open-set dependency (attach.ts records it per target; a new
+// importer of that file → different hash → the ripple footprint misses).
+registerQueryRerun("file-importers", async (repo, [target]) => hashSet([...((await fileImporters(repo)).get(normpath(target)) ?? [])]));
 function _importIndex(repo: string): InvImports {
   let inv = _invImportsCache.get(repo);
   if (inv) return inv;
@@ -150,7 +154,7 @@ function _repoImports(repo: string): ImportEntry[] {
 // has no symbol name, so it never matches (its importers are unattributable without a name anyway).
 function _isDefaultExport(repo: string, anchorFile: string, symbol: string): boolean {
   let text: string;
-  try { text = readFileSync(join(repo, anchorFile), "utf-8"); } catch { return false; }
+  try { text = readFileSync(join(repo, anchorFile), "utf-8"); recordRead(anchorFile, text); } catch { return false; }
   const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`export\\s+default\\s+(?:async\\s+)?(?:function|class)?\\s*${s}\\b`).test(text)
     || new RegExp(`export\\s*\\{[^}]*\\b${s}\\s+as\\s+default\\b`).test(text);
@@ -183,8 +187,13 @@ export async function scan_module_consumers(repo: string, anchorFile: string, me
     }
     if (Object.keys(used).length) out.push([rel, used]);
   }
+  recordQuery("module-consumers", [anchorFile, ...[...memberNames].sort()], out.map(_moduleConsumerKey));
   return out;
 }
+const _moduleConsumerKey = ([rel, used]: [string, Record<string, string>]) =>
+  `${normpath(rel)}|${Object.keys(used).sort().map((k) => `${k}:${used[k]}`).join(",")}`;
+registerQueryRerun("module-consumers", async (repo, [anchorFile, ...members]) =>
+  hashSet((await scan_module_consumers(repo, anchorFile, new Set(members))).map(_moduleConsumerKey)));
 
 // One repo walk → files importing `symbol` whose module resolves to `anchorFile` (resolved) or whose
 // basename matches (suggested). `reexport` is carried so the transitive closure can follow barrels.
@@ -213,7 +222,7 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
   // must resolve to the anchor. Only the (few) files that HAVE namespace imports — text read lazily.
   for (const { rel, norm, ns } of inv.nsEntries) {
     if (norm === anchorAbs) continue;
-    let text = ""; try { text = readFileSync(join(repo, rel), "utf-8"); } catch { /* unreadable → skip ns */ }
+    let text = ""; try { text = readFileSync(join(repo, rel), "utf-8"); recordRead(rel, text); } catch { /* unreadable → skip ns */ }
     for (const n of ns) {
       const t = await _resolve(repo, rel, n.source);
       if (!t || normpath(t) !== anchorNorm) continue;
@@ -260,8 +269,15 @@ export async function scan_consumers(repo: string, anchorFile: string, symbol: s
     }
   }
   const seen = new Set<string>();
-  return out.filter((c) => { const k = `${c.file}::${c.local}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  const result = out.filter((c) => { const k = `${c.file}::${c.local}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  if (_visited === undefined) recordQuery("consumers", [anchorFile, symbol], result.map(_consumerKey));   // top-level call only
+  return result;
 }
+// Membership key for a consumer — file + local + status + source + reexport, so a change in classification (not
+// just presence) flips the sig. The re-runner recomputes it from the current index; a new/removed/reclassified
+// consumer → different hash → the depending footprint misses (closes the new-consumer hole).
+const _consumerKey = (c: Consumer) => `${normpath(c.file)}|${c.local}|${c.status}|${c.source || ""}|${c.reexport ? 1 : 0}`;
+registerQueryRerun("consumers", async (repo, [anchorFile, symbol]) => hashSet((await scan_consumers(repo, anchorFile, symbol)).map(_consumerKey)));
 
 // ── BATCHED consumer scan ──────────────────────────────────────────────────────────────────────────
 // scan_consumers iterates the WHOLE import index per symbol — so N changed symbols re-walk the same index N
@@ -313,7 +329,7 @@ async function _scan_direct_multi(repo: string, targets: { file: string; symbol:
         if (!tt) continue;
         const matches = byNorm.get(normpath(tt));
         if (!matches) continue;
-        if (text === null) { try { text = readFileSync(join(repo, rel), "utf-8"); } catch { text = ""; } }
+        if (text === null) { try { text = readFileSync(join(repo, rel), "utf-8"); recordRead(rel, text); } catch { text = ""; } }
         for (const t of matches) { if (norm === t.abs) continue; const status = _member_use(text, n.local, t.symbol); if (status) _push(out, t.key, { file: rel, local: t.symbol, source: n.source, status }); }
       }
     }

@@ -21,6 +21,7 @@ import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/inde
 import { walk } from "../../core/resolve/walk.js";
 import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
 import { build_footprint } from "./footprint.js";
+import { withRecorder, getQueryRerun, type DepSig } from "../../core/resolve/dep_recorder.js";
 import type { FootprintOpts, ResolvedGraph } from "./graph.js";
 
 const CACHE = "footprint-v1";
@@ -61,7 +62,7 @@ function engineEpoch(): string {
   } catch { /* source tree not walkable (bundled) → keep the fallback constant */ }
   return _engineEpoch;
 }
-type Entry = { e: string; g: ResolvedGraph };   // e = repo content epoch under which g was computed
+type Entry = { e?: string; sig?: DepSig; g: ResolvedGraph };   // e = legacy repo-epoch key; sig = per-footprint deps (v2)
 type Shard = Record<string, Entry>;             // "symbol|direction|depth|verified|coupling" → entry
 
 // module-level mirror of the on-disk per-file shards — a path-keyed persistence layer, which engine_ctx.ts
@@ -158,19 +159,74 @@ function shardOf(repo: string, file: string): Shard {
   return s;
 }
 
+// Per-run depsig cache counters — a structural contract the granular-invalidation test asserts (an unrelated edit
+// must cause 0 rebuilds; a dependency edit must cause >0). Always counted (negligible); optionally exit-flushed.
+const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0 };
+export function _fpStat(): Readonly<typeof _fpstat> { return { ..._fpstat }; }
+export function _resetFpStat(): void { _fpstat.hit = _fpstat.miss = _fpstat.new = _fpstat.taint = _fpstat.whole = 0; }
+if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole}\n`); } catch { /* ignore */ } });
+
 const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));
 const _key = (symbol: string, opts: FootprintOpts) =>
   `${symbol}|${opts.direction ?? "up"}|${opts.depth ?? 1}|${opts.verified ? 1 : 0}`;
 
+// The CURRENT content-hash of one source file — the per-footprint sig's read side. Memoised by (mtime,size) so a
+// warm lookup re-reads a file ONLY when it moved (mirrors CONTENT_MEMO's re-read trigger). A deleted/unreadable
+// file returns "" — which matches no stored non-empty hash → a miss, correctly invalidating a footprint whose
+// dependency vanished. Per-process (one CLI run = fresh state), like _mem/_epoch above.
+const _fhMem = new Map<string, Map<string, ContentEntry>>();
+function _fileContentHash(repo: string, rel: string): string {
+  let byFile = _fhMem.get(repo); if (!byFile) { byFile = new Map(); _fhMem.set(repo, byFile); }
+  let st; try { st = statSync(join(repo, rel)); } catch { return ""; }
+  const m = Math.round(st.mtimeMs), s = st.size;
+  const e = byFile.get(rel);
+  if (e && e.m === m && e.s === s) return e.h;
+  let content: string; try { content = readFileSync(join(repo, rel), "utf-8"); } catch { return ""; }
+  const h = _hash(content); byFile.set(rel, { m, s, h }); return h;
+}
+
+// Is a stored per-footprint sig still valid against the CURRENT tree? Engine epoch first (a seam update invalidates
+// all). A tainted/whole-repo-dependent sig falls back to the repo epoch it was built under (conservative — never
+// stale). Otherwise: every read file's content-hash must be unchanged AND every open-set query must RE-RUN to the
+// same result hash (cheap on a warm in-memory index) — this closes the new-consumer / new-impl hole a read-set
+// alone can't see. Any unknown query kind (a stale-format shard) → safe miss.
+async function sigStillValid(repo: string, sig: DepSig): Promise<boolean> {
+  if (sig.engine !== engineEpoch()) return false;
+  if (sig.tainted || sig.queries.some((q) => q.whole))
+    return sig.epoch !== undefined && sig.epoch === epochOf(repo);
+  for (const rel in sig.reads) if (_fileContentHash(repo, rel) !== sig.reads[rel]) return false;
+  for (const q of sig.queries) {
+    const rr = getQueryRerun(q.kind); if (!rr) return false;
+    if ((await rr(repo, q.args)) !== q.h) return false;
+  }
+  return true;
+}
+
 // build_footprint with the per-node cache in front. The grow TRAVERSAL is purely structural (coupling is a
 // separate overlay — see orchestrate.ts _anchorCouplingDelta), so build_footprint here is a deterministic
-// function of the SOURCE, keyed on the source epoch. Cached whenever there's a real symbol and no caller-files
-// de-noise (which varies by the reaching callers); everything else falls through to live.
+// function of the SOURCE. Two invalidation modes: the legacy whole-repo epoch key, and (SEAM_FP_DEPSIG=1) a
+// per-footprint dependency signature so an edit invalidates ONLY the footprints it actually touches. Cached
+// whenever there's a real symbol and no caller-files de-noise (which varies by the reaching callers).
 export async function build_footprint_cached(
   repo: string, anchorFile: string, symbol: string | null, opts: FootprintOpts = {},
 ): Promise<ResolvedGraph> {
   const cacheable = graphCacheEnabled() && !!symbol && opts.dataCoupling === false && !opts.callerFiles?.length;
   if (!cacheable) return build_footprint(repo, anchorFile, symbol, opts);
+
+  if (process.env.SEAM_FP_DEPSIG === "1") {
+    const key = _key(symbol!, opts);
+    const shard = shardOf(repo, anchorFile);
+    const hit = shard[key];
+    if (hit?.sig && await sigStillValid(repo, hit.sig)) { _fpstat.hit++; return _clone(hit.g); }
+    const { result: g, sig } = await withRecorder(engineEpoch(), () => build_footprint(repo, anchorFile, symbol, opts));
+    const whole = sig.queries.some((q) => q.whole);
+    if (sig.tainted || whole) sig.epoch = epochOf(repo);   // coarse fallback for uncovered inputs
+    if (hit?.sig) _fpstat.miss++; else _fpstat.new++; if (sig.tainted) _fpstat.taint++; if (whole) _fpstat.whole++;
+    shard[key] = { sig, g };
+    saveShard(repo, CACHE, anchorFile, shard);
+    return _clone(g);
+  }
+
   const epoch = epochOf(repo);
   if (!epoch) return build_footprint(repo, anchorFile, symbol, opts);   // no fingerprint → never risk a stale hit
 
@@ -299,4 +355,4 @@ export async function cachedGrow<T>(
 }
 
 // test seam: drop the in-process mirrors so a hermetic test can prove a genuine DISK reuse across "runs".
-export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); }
+export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); _fhMem.clear(); }

@@ -8,6 +8,7 @@ import { _resolve_import, _resolve } from "../../../core/resolve/consumers.js";
 import { parse_imports, default_imports, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
 import { normpath } from "../../../core/resolve/walk.js";
 import { resolveFileRef } from "../../../core/resolve/file_ref.js";
+import { recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
 import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME, _INSTANCE_BINDER, _TYPED_DECL } from "../../atoms.js";
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
@@ -515,6 +516,13 @@ function _rankImpls(repo: string, cands: { cls: string; file: string }[], persis
     .sort((a, b) => (a.test - b.test) || (b.wr - a.wr) || (b.sz - a.sz) || (a.c.file < b.c.file ? -1 : 1))
     .map((x) => x.c);
 }
+// A candidate file's ranking inputs (write-count + size), recomputed on a footprint-cache lookup — a reorder that
+// changes which capped impls are followed invalidates the depending footprint.
+function _fileSize(repo: string, f: string): number { try { return statSync(join(repo, f)).size; } catch { return 0; } }
+registerQueryRerun("impl-rank", async (repo, [f]) => {
+  const { fileStoreWriteCount } = await import("../../coupling/index.js");
+  return hashSet([`${fileStoreWriteCount(repo, f)}:${_fileSize(repo, f)}`]);
+});
 
 // 3) INTERFACE→IMPL pass. SOLE impl → the runtime binding, followed. MULTIPLE impls → the container's choice
 // can't be picked statically, but PARKING them all left the whole layer behind a DI facade (Keycloak: `UserModel`
@@ -553,6 +561,10 @@ async function _followInterface(s: DepScan, iface: string, cap: number, methods:
   const { fileStoreWriteCount } = await import("../../coupling/index.js");
   const _persistOf = new Map<string, number>();
   for (const c of cands) if (!_persistOf.has(c.file)) _persistOf.set(c.file, fileStoreWriteCount(s.repo, c.file));
+  // The impl RANKING (which capped subset is followed, and in what order) reads each candidate's write-count + size
+  // — content-derived inputs of candidates that may NOT be followed (so not otherwise read). Record them per file so
+  // a change that reorders the ranking invalidates the footprint (today's whole-repo epoch captured this implicitly).
+  for (const f of _persistOf.keys()) recordQuery("impl-rank", [f], [`${_persistOf.get(f) ?? 0}:${_fileSize(s.repo, f)}`]);
   const ranked = _rankImpls(s.repo, cands, (f) => _persistOf.get(f) ?? 0);
   const take = ranked.slice(0, cap), rest = ranked.slice(cap);
   for (const c of take) await bind(c);
@@ -663,6 +675,7 @@ async function _stringDispatchPass(s: DepScan, lo: number, hi: number): Promise<
   try {
     const sc = await import("./string_coupling.js");
     const entryIdx = sc.module_entry_index(s.repo, SKIP_DIRS);
+    sc._recordModuleEntry(entryIdx);   // footprint depends on the module-entry SET (precise: filename-set, not content)
     const [scEdges, scAmbig] = sc.detect(s.actx, lo, hi, entryIdx, s.anchorFile);
     for (const [name, path, line] of scEdges) {
       if (s.seen.has(`${name} ${path}`)) continue;

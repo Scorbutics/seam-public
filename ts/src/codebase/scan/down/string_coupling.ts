@@ -5,8 +5,9 @@
 import { readFileSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
 import { type Ctx, makeCtx, available, lang_for, _CALL } from "../../atoms.js";
-import { entrypoint_line, is_module_entry } from "../../../core/resolve/languages/index.js";
+import { entrypoint_line, is_module_entry, SKIP_DIRS } from "../../../core/resolve/languages/index.js";
 import { walk } from "../../../core/resolve/walk.js";
+import { recordRead, recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
 
 const _NAME_RE = /^[A-Za-z][A-Za-z0-9_-]{2,}$/;
 const _MULTISEGMENT = /[-_]/;
@@ -26,11 +27,17 @@ export function module_entry_index(repo: string, skipDirs: Set<string>): Map<str
   _ENTRY_CACHE.set(repo, idx);
   return idx;
 }
+// The module-entry SET is a filename-only walk (dir basename → entry files) — a content edit never changes it, so
+// this is recorded as a precise membership query (NOT a whole-repo epoch dep): a footprint that consulted it misses
+// only when a module-entry file is added/removed, not on every save.
+function _entryKeys(idx: Map<string, string[]>): string[] { return [...idx].flatMap(([k, fs]) => fs.map((f) => `${k}:${f}`)); }
+export function _recordModuleEntry(idx: Map<string, string[]>): void { recordQuery("module-entry", [], _entryKeys(idx)); }
+registerQueryRerun("module-entry", (repo) => hashSet(_entryKeys(module_entry_index(repo, SKIP_DIRS))));
 
 export async function entry_line(repo: string, relPath: string): Promise<number> {
   if (!available()) return 0;
   let ctx: Ctx | null;
-  try { ctx = await makeCtx(readFileSync(join(repo, relPath), "utf-8"), lang_for(relPath) ?? ""); } catch { return 0; }
+  try { const content = readFileSync(join(repo, relPath), "utf-8"); recordRead(relPath, content); ctx = await makeCtx(content, lang_for(relPath) ?? ""); } catch { return 0; }
   if (!ctx) return 0;
   return entrypoint_line(relPath, ctx);
 }

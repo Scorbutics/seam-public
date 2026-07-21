@@ -13,6 +13,7 @@ import { available, makeCtx } from "../../atoms.js";
 import { walkFiles, normpath } from "../../../core/resolve/walk.js";
 import { SKIP_DIRS, endsWithSourceExt } from "../../../core/resolve/languages/index.js";
 import { expanduser, stem, _read, _named_units, _enclosing, _call_lines } from "../ast_units.js";
+import { taint } from "../../../core/resolve/dep_recorder.js";
 
 // A name-grounded consumer: a unit (function/method/module) that USES the symbol name in a code
 // position. `call` = the name appears in a call/instantiation position (stronger), else a bare reference.
@@ -27,6 +28,11 @@ const _NAME_LEAF = (k: string): boolean => k.includes("identifier") || k === "co
 export async function scan_name_consumers(repo: string, anchorFile: string, symbol: string): Promise<NameConsumer[]> {
   repo = expanduser(repo);
   if (!available()) return [];
+  // NAME-RECALL membership is a WHOLE-REPO name walk with no per-file index — a new file using the symbol name
+  // anywhere is a new consumer, unexpressible per-file. A footprint that uses recall depends on the whole tree →
+  // taint so its depsig entry falls back to the repo epoch (correct, just not granular). Import-resolved languages
+  // (TS/Java) don't take this path and keep the granular win.
+  taint();
   const anchorNorm = normpath(anchorFile);
   const out: NameConsumer[] = [];
   const seen = new Set<string>();

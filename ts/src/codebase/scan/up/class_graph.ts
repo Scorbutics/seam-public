@@ -9,6 +9,7 @@ import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
 import { endsWithSourceExt, SKIP_DIRS } from "../../../core/resolve/languages/index.js";
 import { incrementalScanAsync } from "../../../core/resolve/index_cache.js";
 import { normpath, walk } from "../../../core/resolve/walk.js";
+import { recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
 import { makeCtx, available, lang_for, sameLangFamily, _CLASS_KINDS, _INTERFACE } from "../../atoms.js";
 import { dbg } from "../../../core/progress.js";
 import type { EngineCtx } from "../../engine_ctx.js";
@@ -54,6 +55,11 @@ async function _callIndex(repo: string): Promise<CallIndex> {
   _callIndexCache.set(repo, ci);
   return ci;
 }
+// Re-runners for the callsite-index dependencies (recomputed from the CURRENT index on a footprint-cache lookup).
+registerQueryRerun("callers", async (repo, [m, anchorLang]) =>
+  hashSet(((await _callIndex(repo)).callers.get(m) ?? []).filter((rel) => sameLangFamily(lang_for(rel) ?? null, anchorLang || null))));
+registerQueryRerun("class-family", async (repo, [owner]) =>
+  hashSet([..._subclass_family((await _callIndex(repo)).bases, owner)]));
 
 // CALL-SITE discovery: anchor (class/interface/method) + every place a consumer CALLS one of its
 // methods, regardless of how the receiver was obtained (DI/factory/interface/base class). Edges are
@@ -108,7 +114,11 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   // the language registry (a closed structural fact), so it degrades identically for every language.
   const anchorLang = lang_for(anchorFile);
   const candidates = new Set<string>();
-  for (const m of methods) for (const rel of idx.callers.get(m) ?? []) if (sameLangFamily(lang_for(rel), anchorLang)) candidates.add(rel);
+  for (const m of methods) {
+    const callers = (idx.callers.get(m) ?? []).filter((rel) => sameLangFamily(lang_for(rel), anchorLang));
+    recordQuery("callers", [m, anchorLang ?? ""], callers);   // open-set: a NEW caller of a method invalidates
+    for (const rel of callers) candidates.add(rel);
+  }
   const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
   for (const rel of candidates) {
     if (normpath(join(repo, rel)) === anchorAbs) continue;
@@ -121,6 +131,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   }
 
   const family = owner ? _subclass_family(globalBases, owner) : null;
+  if (owner) recordQuery("class-family", [owner], family ? [...family] : []);   // a new subclass changes edge promotion
   const inFamily = (s: { recvId: string | null; recvNew: string | null }, instTypes: Map<string, Set<string>>): boolean => {
     if (!family) return false;
     if (s.recvNew && family.has(s.recvNew)) return true;
