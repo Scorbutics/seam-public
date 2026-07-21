@@ -148,7 +148,10 @@ export function _class_bases(ctx: Ctx): [string, string[]][] {
 // Per-file map of instance binder → the class names it could hold (type annotation OR `new X()`).
 // Generalises _instances_of (which filters by one class) to capture the type NAME, so a call site's
 // receiver can be checked against a whole subclass family. Covers vars, params, and class fields.
+const _instTypesCache = new WeakMap<Ctx, Map<string, Set<string>>>();   // pure ctx→types; memoised (see _all_call_sites)
 export function _instance_types(ctx: Ctx): Map<string, Set<string>> {
+  const memo = _instTypesCache.get(ctx);
+  if (memo) return memo;
   const out = new Map<string, Set<string>>();
   for (const node of ctx.collect(ctx.root, (k) => _INSTANCE_BINDER.has(k))) {
     const nameNode = ctx.children(node).find((c) => _NAME_KINDS.has(c.type));
@@ -160,16 +163,26 @@ export function _instance_types(ctx: Ctx): Map<string, Set<string>> {
     }
     if (types.size) { const cur = out.get(ctx.text(nameNode)) ?? new Set<string>(); for (const x of types) cur.add(x); out.set(ctx.text(nameNode), cur); }
   }
+  _instTypesCache.set(ctx, out);
   return out;
 }
 
 // Call sites of one of `methods`, WITH receiver shape so narrowing can resolve the receiver's type:
 // recvId = `x` in `x.m()` (or the trailing field of `this.x.m()`); recvNew = `X` in `new X().m()`.
-export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: string; line: number; recvId: string | null; recvNew: string | null }[] {
-  const out: { method: string; line: number; recvId: string | null; recvNew: string | null }[] = [];
+type _CallSite = { method: string; line: number; recvId: string | null; recvNew: string | null };
+// PER-Ctx memo of EVERY method call site (method-INDEPENDENT — the expensive `ctx.collect` AST walk). A grow's
+// callsite pass calls _method_call_sites once PER candidate consumer PER up-move, and candidates overlap heavily
+// across moves; the parse (makeCtx) is already cached so the same Ctx object recurs, but the site walk was
+// recomputed every time (measured ~67s / 6195 calls of a cold cal.com grow). Compute all sites once per Ctx,
+// then filter by the requested method set — byte-identical (same sites, same recv fields, filtered the same way).
+const _allSitesCache = new WeakMap<Ctx, _CallSite[]>();
+function _all_call_sites(ctx: Ctx): _CallSite[] {
+  const memo = _allSitesCache.get(ctx);
+  if (memo) return memo;
+  const out: _CallSite[] = [];
   for (const call of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
     const c = _callee(ctx, call);
-    if (!c || !c.obj || !methods.has(c.name)) continue;
+    if (!c || !c.obj) continue;
     const obj = c.obj, m = c.name;
     let recvId: string | null = null, recvNew: string | null = null;
     if (obj.type === "identifier") recvId = ctx.text(obj);
@@ -187,7 +200,11 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
     }
     out.push({ method: m, line: ctx.span(call)[0], recvId, recvNew });
   }
+  _allSitesCache.set(ctx, out);
   return out;
+}
+export function _method_call_sites(ctx: Ctx, methods: Set<string>): _CallSite[] {
+  return _all_call_sites(ctx).filter((s) => methods.has(s.method));   // filter the memoised all-sites walk by the requested methods
 }
 
 // The TYPE-name tokens referenced in a file — every identifier used in a TYPE position (`Optional<X>`, a
@@ -195,13 +212,17 @@ export function _method_call_sites(ctx: Ctx, methods: Set<string>): { method: st
 // (`Optional.empty()` — the receiver IS a type) from an instance one, so a bare-name match to an unrelated
 // class's same-named method (`empty`) is dropped: the call dispatches to that type, not the anchor. Grounded
 // on structural type positions (a closed node-kind set), not a capitalisation/naming convention.
+const _typeNamesCache = new WeakMap<Ctx, Set<string>>();   // pure ctx→type-names; memoised (see _all_call_sites)
 export function _type_names(ctx: Ctx): Set<string> {
+  const memo = _typeNamesCache.get(ctx);
+  if (memo) return memo;
   const out = new Set<string>();
   for (const t of ctx.collect(ctx.root, (k) => _TYPE_REF.has(k))) out.add(ctx.text(t));
   for (const nx of ctx.collect(ctx.root, (k) => _NEW.has(k))) {
     const c = ctx.children(nx).find((x) => x.type === "identifier" || _MEMBER.has(x.type));
     if (c) out.add(ctx.text(c));
   }
+  _typeNamesCache.set(ctx, out);
   return out;
 }
 
