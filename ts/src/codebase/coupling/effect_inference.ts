@@ -149,6 +149,17 @@ function _endpointMapIndex(src: string): Map<string, string> {
 }
 
 const _STR_LIT_RE = /^['"`]([^'"`]*)['"`]$/;
+// Per-RUN memo for resolveHttpCallSites, keyed by the clients Set IDENTITY (ctx.httpClients — built once per run,
+// stable) → file content. The result is a pure function of (file, text, clients), but the SAME file is resolved
+// once per node it appears as (the anchor + every recursed complement, across every anchor in the grow), which on
+// a coupling-heavy repo re-scans the same files thousands of times. WeakMap by the Set → GC'd with the run's ctx.
+const _httpCallMemo = new WeakMap<Set<string>, Map<string, KeyHit[]>>();
+function _httpMemoFor(clients: Set<string>): Map<string, KeyHit[]> {
+  let m = _httpCallMemo.get(clients);
+  if (!m) { m = new Map(); _httpCallMemo.set(clients, m); }
+  return m;
+}
+const _fastHash = (s: string): string => { let h = 5381; for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0; return h.toString(36); };
 // HTTP-route CONSUME keys for a file's calls to an inferred http client, resolving the FIRST argument to a route:
 // a string literal directly, or a `<map>.<key>`/`<map>.<key>.endpoint` descriptor ref against the in-file config.
 // Surfaced at the CALL line (so the calling method node owns the crossing), complementing the channel matcher's
@@ -156,6 +167,21 @@ const _STR_LIT_RE = /^['"`]([^'"`]*)['"`]$/;
 // out of this deterministic slice. Pure → unit-testable on the fixture.
 export function resolveHttpCallSites(file: string, text: string, clients: Set<string>): KeyHit[] {
   if (!clients.size || !lang_for(file)) return [];
+  // PREFILTER (byte-identical): a client token absent from the RAW text can't appear in the masked scan below
+  // (masking only REMOVES content), so there are no call sites — skip the expensive per-client regex loop. This
+  // is what makes a Java-heavy repo cheap: a .java file that uses no JS http client (fetch/axios/$http/…) returns
+  // here after a handful of native String.includes checks, instead of scanning the whole file once per client.
+  const _opt = process.env.SEAM_HTTP_CACHE !== "0";   // kill-switch =0 restores the unoptimised per-node scan
+  if (_opt) {
+    let anyPresent = false;
+    for (const c of clients) if (text.includes(c)) { anyPresent = true; break; }
+    if (!anyPresent) return [];
+  }
+  // CACHE (per-run) — the same file is resolved once per node it appears as; memoize by content so it's scanned
+  // once per run, not once per occurrence. The returned array is READ-ONLY at every call site (iterated, never mutated).
+  const memo = _opt ? _httpMemoFor(clients) : null;
+  const ck = `${file} ${text.length} ${_fastHash(text)}`;
+  if (memo) { const cached = memo.get(ck); if (cached) return cached; }
   const src = makeMaskCtx(text).comments;
   const cfg = _endpointMapIndex(src);
   // Resolve an EXPRESSION to a route: a string literal, or a descriptor ref (`map.key` / `map.key.endpoint`,
@@ -173,6 +199,7 @@ export function resolveHttpCallSites(file: string, text: string, clients: Set<st
   const out: KeyHit[] = [];
   const seen = new Set<string>();
   for (const client of clients) {
+    if (_opt && !src.includes(client)) continue;   // absent from the masked src, its regex can't match (byte-identical skip)
     const esc = client.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     // `<client>.verb( ARG` OR `<client>[verb]( ARG` — dynamic verb included; ARG = the first arg up to , or ).
     const re = new RegExp(`(?<![\\w$.])${esc}[ \\t]*(?:\\.[ \\t]*[A-Za-z_$]\\w*|\\[[^\\]]+\\])[ \\t]*\\([ \\t]*([^,)]+)`, "g");
@@ -196,5 +223,6 @@ export function resolveHttpCallSites(file: string, text: string, clients: Set<st
       out.push({ kind: HTTP_ROUTE_META.kind, value: route, line, produces: false });
     }
   }
+  if (memo) memo.set(ck, out);
   return out;
 }
