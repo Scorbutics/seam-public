@@ -49,16 +49,28 @@ export function moduleKey(repo: string, file: string): string {
 
 // candidate file (normalized, repo-relative) → # of DISTINCT consumer modules importing it. Cached per run
 // on EngineCtx (keyed by repo), derived once from the reverse-import index. Deterministic + LLM-free.
+const _UB = "ubiquity-v1";
 export async function ubiquityIndex(repo: string, ctx?: EngineCtx): Promise<Map<string, number>> {
   const cached = ctx?.ubiquity.get(repo);
   if (cached) return cached;
+  // DISK-persist the derived fan-in map (target → # consumer modules), content-keyed on the source epoch — like the
+  // importer index it derives from. The derivation LOOP (moduleKey over EVERY import across ALL importers — ~144k
+  // files on Keycloak) profiled at ~16.6s and was re-paid on EVERY warm grow (ctx.ubiquity is per-RUN only). A warm
+  // run now LOADS it in ~ms. Pure caching → byte-identical. (moduleKey is also memoized per import file for the cold build.)
+  const epoch = graphCacheEnabled() ? epochOf(repo) : "";
+  if (epoch) {
+    const disk = loadShard<{ e: string; entries: [string, number][] }>(repo, _UB, "index");
+    if (disk && disk.e === epoch) { const m = new Map(disk.entries); ctx?.ubiquity.set(repo, m); return m; }
+  }
   const importers = await _fileImportersPersisted(repo);   // disk-cached → no whole-repo resolve on a warm run
+  const _mk = new Map<string, string>();   // memoize moduleKey per import file — the same file recurs across many importers' lists
   const out = new Map<string, number>();
   for (const [target, imps] of importers) {
     const mods = new Set<string>();
-    for (const imp of imps) mods.add(moduleKey(repo, imp));
+    for (const imp of imps) { let k = _mk.get(imp); if (k === undefined) { k = moduleKey(repo, imp); _mk.set(imp, k); } mods.add(k); }
     out.set(_norm(target), mods.size);
   }
+  if (epoch) saveShard(repo, _UB, "index", { e: epoch, entries: [...out] });
   ctx?.ubiquity.set(repo, out);
   return out;
 }
