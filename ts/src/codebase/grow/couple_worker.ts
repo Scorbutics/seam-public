@@ -25,6 +25,11 @@ self.onmessage = async (e: { data: any }) => {
       // Set module-load-time config (SEAM_PER_NODE_BUDGET, SEAM_COPRODUCERS, …) BEFORE importing the coupling
       // module — its _PER_NODE_BUDGET is a load-time const. Then rehydrate the shipped repo-wide indices.
       if (m.env) for (const [k, v] of Object.entries(m.env)) process.env[k] = v as string;
+      // Workers NEVER surface user-facing progress — the main thread owns it. Suppress @@SEAM_PROGRESS@@ / [tag]
+      // emits at the source, else a worker's stderr leaks them into the parent (breaking quiet mode + risking
+      // interleaving into the stdout agent map). Install before importing the pipeline (which calls emit()).
+      const { installQuietFilter } = await import("../../core/progress.js");
+      installQuietFilter();
       ({ _fileCouplingDelta } = await import("./orchestrate.js"));
       const { EngineCtx } = await import("../engine_ctx.js");
       ctx = new EngineCtx();

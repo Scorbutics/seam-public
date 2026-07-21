@@ -40,10 +40,11 @@ function edgeKeys(data: any): string[] {
 }
 
 async function growWith(repo: string, parallel: boolean): Promise<any> {
-  const prev = { p: process.env.SEAM_PARALLEL_GROW, b: process.env.SEAM_PER_NODE_BUDGET, w: process.env.SEAM_GROW_WORKERS };
+  const prev = { p: process.env.SEAM_PARALLEL_GROW, b: process.env.SEAM_PER_NODE_BUDGET, w: process.env.SEAM_GROW_WORKERS, m: process.env.SEAM_COUPLE_MIN };
   process.env.SEAM_PER_NODE_BUDGET = "40";   // the re-baseline that makes coupling order-independent (both runs)
-  if (parallel) { process.env.SEAM_PARALLEL_GROW = "1"; process.env.SEAM_GROW_WORKERS = "2"; }
-  else { delete process.env.SEAM_PARALLEL_GROW; }
+  // parallel=false uses the explicit kill-switch (SEAM_PARALLEL_GROW=0), NOT unset — the pool is DEFAULT-ON now.
+  process.env.SEAM_PARALLEL_GROW = parallel ? "1" : "0";
+  if (parallel) { process.env.SEAM_GROW_WORKERS = "2"; process.env.SEAM_COUPLE_MIN = "1"; }   // force the pool to engage on the small fixture
   try {
     const [data]: any = await grow_to_terminals(repo, "web/memberBookings.js", "loadBookings",
       { maxSteps: 20, maxNodes: 100, dataCoupling: true, ctx: new EngineCtx() } as any);
@@ -52,6 +53,7 @@ async function growWith(repo: string, parallel: boolean): Promise<any> {
     prev.p === undefined ? delete process.env.SEAM_PARALLEL_GROW : (process.env.SEAM_PARALLEL_GROW = prev.p);
     prev.b === undefined ? delete process.env.SEAM_PER_NODE_BUDGET : (process.env.SEAM_PER_NODE_BUDGET = prev.b);
     prev.w === undefined ? delete process.env.SEAM_GROW_WORKERS : (process.env.SEAM_GROW_WORKERS = prev.w);
+    prev.m === undefined ? delete process.env.SEAM_COUPLE_MIN : (process.env.SEAM_COUPLE_MIN = prev.m);
   }
 }
 

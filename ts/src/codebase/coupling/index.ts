@@ -328,11 +328,19 @@ export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: Engin
 // llm_key_index.ts).
 
 const CHAIN_DEPTH = COUPLING.chainDepth;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
-// PER-NODE COMPLEMENT BUDGET (re-baseline toggle) — 0/unset = the default grow-wide budget (order-dependent);
-// >0 = bound each node's fan independently (the parallelizable matrix model). Read at RUNTIME (not a module-load
-// const) so the main process and the coupling WORKERS agree regardless of when each loaded the module — the
-// byte-identical parallel invariant depends on both using the same budget. See its use in resolveCoupling.
-const _perNodeBudget = (): number => { const v = parseInt(process.env.SEAM_PER_NODE_BUDGET ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 0; };
+// PER-NODE COMPLEMENT BUDGET — bound each node's fan INDEPENDENTLY (the parallelizable matrix model) instead of
+// the grow-wide, sequential-order-dependent budget. DEFAULT ON (the parallel coupling grow needs the order-
+// independent result); SEAM_PER_NODE_BUDGET=0 kills it back to the old grow-wide budget, =<n> tunes the cap. Read
+// at RUNTIME (not a module-load const) so the main process and the coupling WORKERS always agree — the byte-
+// identical parallel invariant depends on it. Small grows never reach the cap (per-node 40 ≈ grow-wide 250 there);
+// it only re-shapes big fans (Keycloak). See its use in resolveCoupling.
+const _PER_NODE_DEFAULT = 40;   // default-on per-node cap; SEAM_PER_NODE_BUDGET=0 kills it back to the grow-wide budget
+const _perNodeBudget = (): number => {
+  const raw = process.env.SEAM_PER_NODE_BUDGET;
+  if (raw === "0") return 0;                                   // kill-switch → the old grow-wide budget
+  const v = parseInt(raw ?? "", 10);
+  return Number.isFinite(v) && v > 0 ? v : _PER_NODE_DEFAULT;  // default ON
+};
 
 // The coupling sub-graph runPipeline builds, as ONE mutable accumulator threaded through the chain recursion
 // (so a deep recursive call appends to the same arrays, with no by-hand counter plumbing). It OWNS the

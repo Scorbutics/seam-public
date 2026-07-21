@@ -33,7 +33,7 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { epochOf } from "../scan/footprint_cache.js";
-import { getCouplePool, serializeCtxIndices } from "./couple_pool.js";
+import { getCouplePool, couplePoolMin, serializeCtxIndices } from "./couple_pool.js";
 import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
@@ -478,7 +478,7 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
   // baseline. The merge below consumes the deltas IN THE ORIGINAL ORDER. Pool null (flag off / no per-node budget /
   // no Worker) → the sequential path runs unchanged (threaded counter, byte-identical to today's per-node grow).
   const _cOpts = { dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin };
-  const pool = getCouplePool();
+  const pool = work.length >= couplePoolMin() ? getCouplePool() : null;
   let deltas: (any | null)[] | null = null;
   if (pool) {
     await pool.ship(serializeCtxIndices(ctx), ctx.footprintFiles ? [...ctx.footprintFiles] : undefined, ctx.stableFloor);

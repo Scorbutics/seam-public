@@ -165,10 +165,16 @@ describe("cross-stack coupling: JAX-RS relative @Path ⇄ AngularJS $http full U
 
   test("the complement budget bounds the data-coupling fanout (a hub anchor can't run for ages)", async () => {
     if (!available()) return;
-    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
-    const ctx = new EngineCtx();
-    ctx.complementBudget = 0;   // exhausted up front → crossBoundary materialises no complement
-    const g = await build_module_graph(REPO, "web/js/fileNoteItem.js", { dataCoupling: true, ctx } as any);
-    expect((g.nodes ?? []).some((n: any) => n.file?.endsWith("FileNoteService.java"))).toBe(false);   // fanout capped
+    const prev = process.env.SEAM_PER_NODE_BUDGET;
+    process.env.SEAM_PER_NODE_BUDGET = "0";   // this asserts the GROW-WIDE budget; disable the (default-on) per-node re-baseline which resets it per call
+    try {
+      const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
+      const ctx = new EngineCtx();
+      ctx.complementBudget = 0;   // exhausted up front → crossBoundary materialises no complement
+      const g = await build_module_graph(REPO, "web/js/fileNoteItem.js", { dataCoupling: true, ctx } as any);
+      expect((g.nodes ?? []).some((n: any) => n.file?.endsWith("FileNoteService.java"))).toBe(false);   // fanout capped
+    } finally {
+      prev === undefined ? delete process.env.SEAM_PER_NODE_BUDGET : (process.env.SEAM_PER_NODE_BUDGET = prev);
+    }
   });
 });

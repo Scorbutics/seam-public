@@ -88,12 +88,14 @@ export class CouplePool {
 
 let _pool: CouplePool | null = null;
 
-// Lazy singleton coupling pool. Null unless SEAM_PARALLEL_GROW + Worker + a per-node budget (the parallelism
-// invariant). Memory-capped size (coupling + shipped indices are heavier than structural — a big repo × many
-// workers OOMs; cap conservatively, tune via SEAM_GROW_WORKERS).
+// Lazy singleton coupling pool. DEFAULT ON — active whenever `Worker` exists and the per-node budget isn't the
+// old grow-wide mode (the parallel result is only deterministic under per-node). Kill-switches:
+// SEAM_PARALLEL_GROW=0 (force sequential) or SEAM_PER_NODE_BUDGET=0 (old budget → can't parallelize). Memory-
+// capped size (coupling + shipped indices are heavier than structural — a big repo × many workers OOMs; cap
+// conservatively, tune via SEAM_GROW_WORKERS).
 export function getCouplePool(): CouplePool | null {
-  const on = process.env.SEAM_PARALLEL_GROW === "1" || process.env.SEAM_PARALLEL_GROW === "true";
-  const perNode = parseInt(process.env.SEAM_PER_NODE_BUDGET ?? "", 10) > 0;
+  const on = process.env.SEAM_PARALLEL_GROW !== "0" && process.env.SEAM_PARALLEL_GROW !== "false";
+  const perNode = process.env.SEAM_PER_NODE_BUDGET !== "0";   // per-node is default-on; only "0" disables it
   if (!on || !perNode || typeof Worker === "undefined") return null;
   if (_pool) return _pool;
   let size = parseInt(process.env.SEAM_GROW_WORKERS ?? "", 10);
@@ -105,6 +107,13 @@ export function getCouplePool(): CouplePool | null {
   }
   try { _pool = new CouplePool(size); } catch { _pool = null; }
   return _pool;
+}
+
+// Min boundary-files in a _fanCouple batch to bother with the pool — below it, the worker spawn + index ship
+// cost more than resolving inline. Each coupling call is ~1.6s so the bar is low. Tune via SEAM_COUPLE_MIN.
+export function couplePoolMin(): number {
+  const v = parseInt(process.env.SEAM_COUPLE_MIN ?? "", 10);
+  return Number.isFinite(v) && v > 0 ? v : 3;
 }
 
 // The repo-wide ctx index maps a coupling worker needs (all pure-data GroundingIndex Maps → structured-clone).
