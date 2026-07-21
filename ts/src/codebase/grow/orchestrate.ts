@@ -33,6 +33,7 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { epochOf } from "../scan/footprint_cache.js";
+import { getCouplePool, serializeCtxIndices } from "./couple_pool.js";
 import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
@@ -226,7 +227,7 @@ function _rehydrateFanDeltaMethodPrecise(
   const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: map(b.node) }));
   return { nodes, edges: outEdges, blindspots, counter: ctr };
 }
-async function _fileCouplingDelta(repo: string, file: string, anchorId: string, srcRange: [number, number] | undefined, fileNodes: { id: string; range: [number, number] }[], counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
+export async function _fileCouplingDelta(repo: string, file: string, anchorId: string, srcRange: [number, number] | undefined, fileNodes: { id: string; range: [number, number] }[], counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
   const empty = { nodes: [], edges: [], blindspots: [], counter };
   const ar = _read(repo, file);
   if (!ar) return empty;
@@ -278,6 +279,21 @@ async function _fileCouplingDelta(repo: string, file: string, anchorId: string, 
 // showed loadBookings/install/every route literal 12-18×). A content-equal node already present REUSES its id
 // (edges remap onto it); only genuinely new complements are pushed. Kind stays in the key so a synthetic
 // boundary node never collapses onto the real method at the same line. Re-id still guards raw id collisions.
+// Re-number a worker-resolved coupling delta's minted ids to a DISJOINT range [start+1, …] in node order —
+// reproducing _fileCouplingDelta's threaded-counter id assignment. The parallel _fanCouple resolves every file
+// from the SAME base counter (workers can't thread), so their deltas' ids COLLIDE; _mergeCouplingOverlay's remap
+// is keyed by id string alone and would conflate two files' same-id nodes (dropping crossings). Relabelling each
+// delta to its own range before merge makes the parallel merge byte-identical to the sequential threaded one.
+// Edges referencing ids OUTSIDE this delta (the anchor / existing data nodes) are left untouched (not in idmap).
+function _renumberCoupleDelta(d: { nodes: any[]; edges: any[]; blindspots?: any[] }, start: number): { delta: { nodes: any[]; edges: any[]; blindspots: any[] }; counter: number } {
+  const idmap = new Map<string, string>();
+  let k = start;
+  const nodes = d.nodes.map((n) => { const nid = `dc${++k}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
+  const edges = d.edges.map((e) => ({ ...e, from: idmap.get(e.from) ?? e.from, to: idmap.get(e.to) ?? e.to }));
+  const blindspots = (d.blindspots ?? []).map((b) => ({ ...b, node: idmap.get(b.node) ?? b.node }));
+  return { delta: { nodes, edges, blindspots }, counter: k };
+}
+
 export function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges: any[]; blindspots: any[] }): void {
   if (!overlay?.nodes?.length) return;
   const used = new Set<string>((data.nodes ?? []).map((n: any) => n.id));
@@ -442,6 +458,9 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
     if (hits === undefined) { const rd = _read(repo, n.file); hits = rd ? resolveResourceRoutes(n.file, rd[0]) : []; _rrCache.set(n.file, hits); }
     return hits.some((h) => h.line >= n.range[0] && h.line <= n.range[1]);
   };
+  // ENUMERATE the files to couple, IN ORDER (mutating `coupled` — each file once). Split from RESOLUTION so the
+  // resolution can fan across the coupling pool: with the per-node budget each file's coupling is order-independent.
+  const work: { file: string; anchorId: string; srcRange: [number, number] | undefined; fileNodes: { id: string; range: [number, number] }[] }[] = [];
   for (const n of (data.nodes ?? [])) {
     if (n.coupling && !producer.has(n.id)) continue;   // skip pure-consumer coupling nodes; couple producer/resource ones
     if (!producer.has(n.id) && !grounded.has(n.id) && !_routeBoundary(n)) continue;   // don't fan a boundary from a bare-name call match — unless the node's span holds a grounded resource route
@@ -451,9 +470,31 @@ async function _fanCouple(repo: string, data: any, opts: any, ctx: EngineCtx, co
     // the file's REAL code nodes (not coupling/boundary nodes) — so a whole-file crossing is re-attributed to the
     // grown method whose span encloses its write line (method-precise), not blanket-credited to the reached node.
     const fileNodes = (data.nodes ?? []).filter((m: any) => !m.coupling && m.file && normpath(m.file) === f && Array.isArray(m.range)).map((m: any) => ({ id: m.id, range: m.range as [number, number] }));
-    const d = await _fileCouplingDelta(repo, n.file, n.id, n.range, fileNodes, counter, opts, ctx);
+    work.push({ file: n.file, anchorId: n.id, srcRange: n.range, fileNodes });
+  }
+  if (!work.length) return;
+  // PARALLEL COUPLING (the 2.4× win, docs: parallel-grow-plan) — fan each file's resolution across the worker pool,
+  // resolved with the ORDER-INDEPENDENT per-node budget so a partition is byte-identical to the sequential per-node
+  // baseline. The merge below consumes the deltas IN THE ORIGINAL ORDER. Pool null (flag off / no per-node budget /
+  // no Worker) → the sequential path runs unchanged (threaded counter, byte-identical to today's per-node grow).
+  const _cOpts = { dataCouplingLlm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin };
+  const pool = getCouplePool();
+  let deltas: (any | null)[] | null = null;
+  if (pool) {
+    await pool.ship(serializeCtxIndices(ctx), ctx.footprintFiles ? [...ctx.footprintFiles] : undefined, ctx.stableFloor);
+    // every file shares the SAME base counter; _mergeCouplingOverlay re-ids id collisions by CONTENT (the output
+    // renders file#symbol, so the transient dc-ids are normalised away → byte-identical to the threaded sequential).
+    deltas = await pool.dispatch(work.map((w) => ({ repo, file: w.file, anchorId: w.anchorId, srcRange: w.srcRange, fileNodes: w.fileNodes, counter, opts: _cOpts })));
+  }
+  for (let i = 0; i < work.length; i++) {
+    const w = work[i];
+    let d = (deltas && deltas[i]) ? deltas[i] : await _fileCouplingDelta(repo, w.file, w.anchorId, w.srcRange, w.fileNodes, counter, opts, ctx);   // inline fallback (pool off / worker error)
     if (!d.nodes.length) continue;
-    counter = d.counter;
+    // Advance the shared counter over DISJOINT id ranges in file order. Sequential: _fileCouplingDelta already
+    // threaded it (byte-identical to today). Parallel: workers all resolved from the same base counter, so relabel
+    // each delta to its own range here — reproducing the threaded id assignment so the merge can't conflate ids.
+    if (deltas) { const r = _renumberCoupleDelta(d, counter); d = r.delta; counter = r.counter; }
+    else counter = d.counter;
     overlay = { nodes: [...overlay.nodes, ...d.nodes], edges: [...overlay.edges, ...d.edges], blindspots: [...overlay.blindspots, ...d.blindspots] };
   }
   _mergeCouplingOverlay(data, overlay);
@@ -513,6 +554,22 @@ export function _mergeInto(data: any, add: any, idx: GrowIndex, expandAnchor?: s
   return added;
 }
 
+// The DOWN-into-class de-noise input: the files that REACHED this class/interface (so its down footprint
+// surfaces only the methods those callers invoke — see _applyMove). Derived from the LIVE `data` graph.
+function _callerFilesFor(data: any, next: any, down: boolean): string[] | undefined {
+  if (!(down && (next.kind === "class" || next.kind === "interface"))) return undefined;
+  const containerInvoked = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && (isHandlerEdge(e.kind) || e.kind === "interface-impl"));
+  if (containerInvoked) return undefined;
+  const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
+  const cf = new Set<string>();
+  for (const e of data.edges as any[]) {
+    if (e.from !== next.id && e.to !== next.id) continue;
+    const f = fileById.get(e.from === next.id ? e.to : e.from);
+    if (f && f !== next.file) cf.add(f);
+  }
+  return [...cf];
+}
+
 async function _applyMove(repo: string, data: any, move: Move, label: string, coStruct: any, prune: (g: any) => any, history: any[], idx: GrowIndex): Promise<{ data: any; added: number }> {
   const next = move.node;
   const down = move.dir === "down";
@@ -533,20 +590,7 @@ async function _applyMove(repo: string, data: any, move: Move, label: string, co
   //     bean lands as a bare class node, its CRUD + the DB calls inside them unreachable).
   // For both, surface ALL methods so the grow lands on each operation and chains DOWN to the DB (and the
   // bidirectional climb can reach the other operations' callers).
-  let callerFiles: string[] | undefined;
-  if (down && (next.kind === "class" || next.kind === "interface")) {
-    const containerInvoked = (data.edges as any[]).some((e) => (e.from === next.id || e.to === next.id) && (isHandlerEdge(e.kind) || e.kind === "interface-impl"));
-    if (!containerInvoked) {
-      const fileById = new Map<string, string>(data.nodes.map((n: any) => [n.id, n.file]));
-      const cf = new Set<string>();
-      for (const e of data.edges as any[]) {
-        if (e.from !== next.id && e.to !== next.id) continue;
-        const f = fileById.get(e.from === next.id ? e.to : e.from);
-        if (f && f !== next.file) cf.add(f);
-      }
-      callerFiles = [...cf];
-    }
-  }
+  const callerFiles = _callerFilesFor(data, next, down);
   let add: any;
   try {
     // NEIGHBOUR SOURCE (border-decoupling, Phase 1) — the ONE seam that separates DISCOVERY from SELECTION. Default:

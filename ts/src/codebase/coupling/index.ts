@@ -328,6 +328,11 @@ export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: Engin
 // llm_key_index.ts).
 
 const CHAIN_DEPTH = COUPLING.chainDepth;   // chain the data-flow boundary this many hops past the anchor (db-table reader → ITS http-route)
+// PER-NODE COMPLEMENT BUDGET (re-baseline toggle) — 0/unset = the default grow-wide budget (order-dependent);
+// >0 = bound each node's fan independently (the parallelizable matrix model). Read at RUNTIME (not a module-load
+// const) so the main process and the coupling WORKERS agree regardless of when each loaded the module — the
+// byte-identical parallel invariant depends on both using the same budget. See its use in resolveCoupling.
+const _perNodeBudget = (): number => { const v = parseInt(process.env.SEAM_PER_NODE_BUDGET ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 0; };
 
 // The coupling sub-graph runPipeline builds, as ONE mutable accumulator threaded through the chain recursion
 // (so a deep recursive call appends to the same arrays, with no by-hand counter plumbing). It OWNS the
@@ -518,6 +523,22 @@ export async function resolveCoupling(
   const _stage = (label: string, t0: number) => dbg(`[${_tag}] ${anchorFile}: ${label} (${Math.round(performance.now() - t0)}ms)`);
   let _t = performance.now();
   const llmOpts = { llm: opts.llm, model: opts.model, claudeBin: opts.claudeBin };
+
+  // PER-NODE COMPLEMENT BUDGET (re-baseline, SEAM_PER_NODE_BUDGET=<n>) — the default grow-wide `complementBudget`
+  // is a SEQUENTIAL-ORDER-dependent guard (consumed in file order across the whole grow), fundamentally
+  // incompatible with the matrix / independent-node parallel model (a node can't determine its own neighbourhood
+  // if its fan depth depends on how much budget earlier nodes already spent). When set, bound each NODE's fan
+  // INDEPENDENTLY: reset the budget per resolveCoupling call, so every node self-bounds → order-independent,
+  // parallelizable, deterministic. Output SHIFTS vs the global race (more complements materialize where the
+  // grow-wide cap used to cut the tail) — measured as the re-baseline delta before the fused-parallel build.
+  const _perNode = _perNodeBudget();
+  if (_perNode > 0) {
+    ctx.complementBudget = _perNode;
+    // sameSideDrawn is a CROSS-node work-dedup (draw a key's co-producers once per grow) — the last piece of
+    // shared grow-wide state. Reset it per call too, so each node draws its OWN co-producers independently
+    // (the merge dedups the co-producer NODES anyway). Node-independent → parallelizable + deterministic.
+    ctx.sameSideDrawn = new Set();
+  }
 
   // GATE
   if (!(await _gateTouchesBoundary(repo, anchorFile, anchorText, lo, hi, llmOpts, opts, ctx))) {
