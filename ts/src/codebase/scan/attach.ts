@@ -4,7 +4,7 @@
 // paths share one implementation.
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
-import { _resolve_import, scan_consumers, _kind_for } from "../../core/resolve/consumers.js";
+import { _resolve_import, scan_consumers, _kind_for, fileImporters } from "../../core/resolve/consumers.js";
 import { endsWithSourceExt, parse_imports, SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walk } from "../../core/resolve/walk.js";
 import { makeCtx, available } from "../atoms.js";
@@ -42,15 +42,32 @@ export async function _depth2_ripple(repo: string, consumers: GraphNode[], count
   }
   if (!targets.size) return [[], [], counter];
   const targetSyms = new Set([...targets.keys()].map((k) => k.split(" ")[0]));
+  // REVERSE-INDEX CANDIDATES (SEAM_RIPPLE_INDEX, ON by default; =0 kill-switch → the old full walk) — the
+  // depth-2 ripple below re-reads + text-scans EVERY repo source file to find who imports a target consumer.
+  // That whole-repo walk was the dominant cost of a cold structural UP-grow (measured on cal.com: up-resolution
+  // is 100–1000× the down side, ~O(moves × repo) — the walk alone was 76s → 3.5s once replaced, 21×). The
+  // reverse-import index (`fileImporters`, built once + cached) already maps target-file → its importer files, so
+  // we SKIP the read+scan for any file that imports NO target. SAFE BY CONSTRUCTION: `fileImporters` is a
+  // file-level SUPERSET of the walk's importers, the inner parse_imports below still does the exact symbol match
+  // (so extra candidates are filtered), and the walk order is preserved (only the read is gated) → `n${counter}`
+  // ids and the whole node set are BYTE-IDENTICAL to the full walk. Validated: W8 node-set identical, the full
+  // suite passes with it on AND off (1150 tests, incl. Java/Ruby/C/C++ fixtures), + a hermetic ripple test.
+  let candidates: Set<string> | null = null;
+  if (process.env.SEAM_RIPPLE_INDEX !== "0") {
+    const importers = await fileImporters(repo);
+    candidates = new Set<string>();
+    for (const k of targets.keys()) for (const imp of importers.get(k.slice(k.indexOf(" ") + 1)) ?? []) candidates.add(imp);
+  }
   const newNodes: GraphNode[] = [], newEdges: GraphEdge[] = [];
   for (const [dir, files] of walk(repo, SKIP_DIRS)) {
     for (const fn of files) {
       if (!endsWithSourceExt(fn)) continue;
       const path = join(dir, fn);
+      const rel = relative(repo, path);
+      if (candidates && !candidates.has(normpath(rel))) continue;   // reverse-index says this file imports no target → skip the read+scan
       let text: string;
       try { text = readFileSync(path, "utf-8"); } catch { continue; }
       if (![...targetSyms].some((s) => text.includes(s))) continue;
-      const rel = relative(repo, path);
       const hits = new Map<string, string>(); // target consumer node id → local
       for (const ref of parse_imports(rel, text)) {
         const target = await _resolve_import(repo, rel, ref);
