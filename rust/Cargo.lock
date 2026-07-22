@@ -289,6 +289,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "seam-grow"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "once_cell",
+ "seam-couple",
+ "seam-fs",
+ "seam-lang",
+ "seam-resolve",
+ "seam-scan",
+]
+
+[[package]]
 name = "seam-lang"
 version = "0.0.0"
 dependencies = [
@@ -309,6 +322,7 @@ dependencies = [
  "napi-derive",
  "seam-couple",
  "seam-fs",
+ "seam-grow",
  "seam-lang",
  "seam-resolve",
  "seam-scan",

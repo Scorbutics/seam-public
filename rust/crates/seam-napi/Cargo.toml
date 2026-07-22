@@ -13,6 +13,7 @@ napi-derive = "2"
 seam-lang = { path = "../seam-lang" }
 seam-resolve = { path = "../seam-resolve" }
 seam-scan = { path = "../seam-scan" }
+seam-grow = { path = "../seam-grow" }
 seam-shapes = { path = "../seam-shapes" }
 seam-couple = { path = "../seam-couple" }
 seam-fs = { path = "../seam-fs" }

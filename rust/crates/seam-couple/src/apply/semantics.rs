@@ -41,3 +41,60 @@ pub fn kind_of(kind: &str) -> KindSemantics {
 pub fn is_terminal_kind(kind: &str) -> bool {
     ARCHETYPES.iter().any(|(k, s)| *k == kind && s.terminal)
 }
+
+// ── Engine-wide edge/node-kind classification (registry-derived) ─────────────────────────────────────────────
+// The archetype+GENERIC table is the source of truth for the crossing/flow-subject/handler vocabulary (TS builds
+// `KEY_EDGE_KINDS`/`KEY_NODE_KINDS`/`HANDLER_EDGE_KINDS` from `_ALL_METAS` = adapters ∪ archetypes ∪ GENERIC; a
+// present adapter reuses its archetype's meta, so the archetype table alone yields the same sets). Small const
+// tables → a linear scan is cheaper than a lazy set. Never a hardcoded list — derived from ARCHETYPES/GENERIC.
+
+/// Iterate every archetype's semantics plus GENERIC (mirrors `_ALL_METAS` for the edge/node-kind derivations).
+fn all_metas() -> impl Iterator<Item = KindSemantics> {
+    ARCHETYPES.iter().map(|(_, s)| *s).chain(std::iter::once(GENERIC))
+}
+
+/// Is `kind` a data-coupling CROSSING edge (any produce/consume edge the rung emits)? Port of `KEY_EDGE_KINDS.has`
+/// / `isCouplingCrossing`.
+pub fn is_coupling_crossing(edge_kind: &str) -> bool {
+    all_metas().any(|s| s.produce_edge == edge_kind || s.consume_edge == edge_kind)
+}
+
+/// Is `edge_kind` a HANDLER edge (route-serve / event-on / queue-subscribe — the archetype's declared downstream
+/// handler)? Port of `HANDLER_EDGE_KINDS.has` / `isHandlerEdge`.
+pub fn is_handler_edge(edge_kind: &str) -> bool {
+    ARCHETYPES.iter().any(|(_, s)| s.handler_edge == Some(edge_kind))
+}
+
+/// Is `node_kind` a boundary/flow-subject NODE kind (table/route/event/…/resource)? Port of `KEY_NODE_KINDS.has`
+/// / `isFlowSubject`.
+pub fn is_flow_subject(node_kind: &str) -> bool {
+    all_metas().any(|s| s.node_kind == node_kind)
+}
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+    // Pin the registry-derived sets: a crossing is any produce/consume edge; a flow subject any boundary node
+    // kind; handler edges are the three archetypes that declare one; plain call/import edges are none of these.
+    #[test]
+    fn crossing_and_flow_subject_membership() {
+        for k in ["db-write", "db-read", "route-serve", "route-fetch", "key-write", "key-read", "egress-call"] {
+            assert!(is_coupling_crossing(k), "{k} should be a crossing");
+        }
+        for k in ["call", "import", "reference", "type-ref", "dispatch"] {
+            assert!(!is_coupling_crossing(k), "{k} is structural, not a crossing");
+        }
+        for k in ["table", "route", "event", "queue", "resource", "egress"] {
+            assert!(is_flow_subject(k), "{k} should be a flow subject");
+        }
+        for k in ["method", "class", "function", "module"] {
+            assert!(!is_flow_subject(k), "{k} is code, not a flow subject");
+        }
+        for k in ["route-serve", "event-on", "queue-subscribe"] {
+            assert!(is_handler_edge(k), "{k} should be a handler edge");
+        }
+        for k in ["db-write", "route-fetch", "call"] {
+            assert!(!is_handler_edge(k), "{k} is not a handler edge");
+        }
+    }
+}

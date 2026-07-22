@@ -307,6 +307,76 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
     }
 }
 
+/// Rebuild a `seam_scan::ResolvedGraph` from its wire form (the inverse of the `From` above) — the parity
+/// surface for graph-level ports (grow roles/crossings) that consume a footprint the JS side already has.
+fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
+    seam_scan::ResolvedGraph {
+        anchor_id: g.anchor_id,
+        anchor_symbol: g.anchor_symbol,
+        anchor_file: g.anchor_file,
+        anchor_range: (g.anchor_range.first().copied().unwrap_or(0) as usize, g.anchor_range.get(1).copied().unwrap_or(0) as usize),
+        language: g.language,
+        nodes: g
+            .nodes
+            .into_iter()
+            .map(|n| seam_scan::graph::GraphNode {
+                id: n.id,
+                symbol: n.symbol,
+                kind: n.kind,
+                file: n.file,
+                range: (n.range.first().copied().unwrap_or(0) as usize, n.range.get(1).copied().unwrap_or(0) as usize),
+                enclosing: n.enclosing,
+                complexity: n.complexity as usize,
+                coupling: n.coupling,
+                direction: n.direction,
+            })
+            .collect(),
+        edges: g
+            .edges
+            .into_iter()
+            .map(|e| seam_scan::graph::GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: e.provenance, line: e.line.map(|l| l as usize), op: e.op })
+            .collect(),
+        blindspots: Vec::new(),
+        unresolved: Vec::new(),
+        anchors: g.anchors,
+        resolved_methods: g.resolved_methods,
+    }
+}
+
+/// One node's assigned role. Parity wire form for `assign_roles`.
+#[napi(object)]
+pub struct RoleEntryDto {
+    pub id: String,
+    pub role: String,
+}
+
+/// The grow's per-wave derivations over a footprint: each node's role + the crossing-target set. Parity
+/// surface for `from_resolved_graph` + `assign_roles` + `_is_crossing`.
+#[napi(object)]
+pub struct GrowRolesDto {
+    pub roles: Vec<RoleEntryDto>,
+    pub crossings: Vec<String>,
+}
+
+/// growRoles — ingest a footprint (its wire form), assign roles, and collect the resolved crossing targets.
+/// The G1 parity entry: the JS side computes the same over `from_resolved_graph`+`assign_roles`+`_is_crossing`
+/// and asserts byte-identity.
+#[napi]
+pub fn grow_roles(graph: GraphDto) -> GrowRolesDto {
+    let rg = dto_to_resolved(graph);
+    let mut g = seam_grow::graph_ir::from_resolved_graph(&rg);
+    seam_grow::roles::assign_roles(&mut g);
+    let roles: Vec<RoleEntryDto> = g.nodes.values().map(|n| RoleEntryDto { id: n.id.clone(), role: n.role.clone() }).collect();
+    let mut crossings: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for e in g.resolved_edges() {
+        if seam_grow::graph_ir::is_crossing(e) && seen.insert(e.dst.clone()) {
+            crossings.push(e.dst.clone());
+        }
+    }
+    GrowRolesDto { roles, crossings }
+}
+
 /// build_callsite_graph — the anchor plus its call-site consumers, receiver-resolved. `method_names` (a
 /// single-method anchor's hunted methods) and `owner_class` (the narrowing owner) are both optional.
 #[napi]

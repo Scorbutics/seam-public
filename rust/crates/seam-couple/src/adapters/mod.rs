@@ -55,6 +55,14 @@ pub fn builtin_adapters() -> Vec<(&'static str, &'static str, &'static str)> {
     ADAPTERS.iter().map(|a| (a.meta().name, a.meta().kind, a.meta().blurb)).collect()
 }
 
+/// Is `edge_kind` a WRITE (produce) edge — the SRC of it PRODUCES the key/subject (a db write, a dispatched
+/// message)? TS: `KEY_PRODUCE_EDGE_KINDS = new Set([...ADAPTERS, GENERIC].map((k) => k.produceEdge))` — the
+/// REGISTERED detection adapters' produce edges plus GENERIC's `key-write` (NOT the full archetype set). Port of
+/// `isProduceEdge`.
+pub fn is_produce_edge(edge_kind: &str) -> bool {
+    edge_kind == "key-write" /* GENERIC */ || ADAPTERS.iter().any(|a| a.meta().produce_edge == edge_kind)
+}
+
 /// The raw hits of ONE adapter (by its `name`) over a file — no plausibility filter. Per-adapter validation
 /// surface; `None` for an unknown adapter name.
 pub fn adapter_keys(name: &str, file: &str, text: &str) -> Option<Vec<KeyHit>> {
