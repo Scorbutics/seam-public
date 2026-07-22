@@ -4,6 +4,7 @@
 use napi_derive::napi;
 
 pub mod java;
+pub mod ruby;
 pub mod typescript;
 
 /// Port of `ImportRef` (core/resolve/languages/base.ts): one import binding — the original `name`, its

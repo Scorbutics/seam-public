@@ -36,6 +36,13 @@ pub fn ts_imports(text: String) -> Vec<ImportRef> {
     lang::typescript::imports(&text)
 }
 
+/// Port of the Ruby provider's `imports(text)` — `require` / `require_relative` / `autoload`. Byte-identical
+/// to TS `parse_imports` for a `.rb`/`.rake` file.
+#[napi]
+pub fn ruby_imports(text: String) -> Vec<ImportRef> {
+    lang::ruby::imports(&text)
+}
+
 /// Port of the Java provider's `floor_resolve` over a batch of `[importing_file, source]` pairs (each
 /// resolved to a repo-relative file, or null). Builds the FQN index once. Byte-identical to TS `floor_resolve`
 /// (see rust/parity/resolve.ts).

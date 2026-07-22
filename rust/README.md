@@ -12,6 +12,7 @@ one vertical slice at a time (strangler).
   - ✅ Repo walk (`src/walk.rs`) — shells to the same `git ls-files` (tracked ∪ untracked-not-ignored), SKIP_DIRS-pruned → byte-identical file set by construction.
   - ✅ Java `floor_resolve` + FQN index (`_java_index`) — **126,358/126,358 resolutions byte-identical** to TS `floor_resolve` over the full corpus (FQN drop, same-package + wildcard bare names) (`bun rust/parity/resolve.ts`).
   - ✅ TS/JS `imports()` (`src/lang/typescript.rs`) — named `{…}`/`as`, barrel re-exports, dynamic `import()` — **3132/3132 files byte-identical** (174 Seam `ts/src` + 2958 node_modules) (`bun rust/parity/imports_ts.ts`).
+  - ✅ Ruby `imports()` (`src/lang/ruby.rs`) — `require`/`require_relative`/`autoload` — **1861/1861 files byte-identical**. Min-set import parsers now complete (C/C++ are LSP-only, no imports). Generic per-ext harness: `bun rust/parity/imports_any.ts <files…>`.
   - ▢ next: the multi-language import index (dispatch by ext) → `scan_consumers` → the `consumers` shape; then the Java callsite graph (tree-sitter).
 
 ## Phase 0 results
