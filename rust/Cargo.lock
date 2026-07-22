@@ -239,6 +239,7 @@ dependencies = [
  "seam-lang",
  "seam-resolve",
  "seam-scan",
+ "seam-shapes",
 ]
 
 [[package]]
@@ -259,6 +260,15 @@ dependencies = [
  "seam-fs",
  "seam-lang",
  "seam-resolve",
+]
+
+[[package]]
+name = "seam-shapes"
+version = "0.0.0"
+dependencies = [
+ "once_cell",
+ "seam-fs",
+ "seam-scan",
 ]
 
 [[package]]

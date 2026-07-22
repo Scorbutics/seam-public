@@ -47,7 +47,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
     let mut pending: Vec<Pend> = Vec::new();
     let mut used_methods: HashSet<String> = HashSet::new();
 
-    let ws = Workspace::new(repo);
+    let ws = Workspace::cached(repo);
     let all_cons = ws.scan_consumers(anchor_file, class_name);
     let (mut parsed, mut capped) = (0usize, 0usize);
     for con in &all_cons {

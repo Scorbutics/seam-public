@@ -81,7 +81,7 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
 
 /// Import-resolved consumers: each file importing `symbol`, attributed to the enclosing unit(s) that use it.
 fn add_import_consumers(b: &mut GraphBuilder, repo: &str, anchor_file: &str, symbol: &str) {
-    let ws = Workspace::new(repo);
+    let ws = Workspace::cached(repo);
     for con in ws.scan_consumers(anchor_file, symbol) {
         if con.status == Status::Suggested {
             b.add_blindspot(

@@ -1,0 +1,10 @@
+[package]
+name = "seam-shapes"
+version = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+seam-scan = { path = "../seam-scan" }
+seam-fs = { path = "../seam-fs" }
+once_cell = { workspace = true }

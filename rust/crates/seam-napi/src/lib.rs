@@ -327,3 +327,80 @@ pub fn build_consumers_graph(repo: String, anchor_file: String, symbol: String, 
     let opts = seam_scan::ConsumersOpts { anchor_line: anchor_line.map(|l| l as usize), skip_callsite: false };
     seam_scan::build_consumers_graph(&repo, &anchor_file, &symbol, &opts).map(Into::into)
 }
+
+/// Wire form of a `seam_shapes::ImpactedSymbol`.
+#[napi(object)]
+pub struct ImpactedSymbolDto {
+    pub symbol: String,
+    pub file: String,
+    pub line: u32,
+    pub kind: String,
+    pub hop: u32,
+}
+
+/// Wire form of a `seam_shapes::ImpactFile`.
+#[napi(object)]
+pub struct ImpactFileDto {
+    pub file: String,
+    pub count: u32,
+}
+
+/// Wire form of a `seam_shapes::ImpactGap`.
+#[napi(object)]
+pub struct ImpactGapDto {
+    pub mechanism: String,
+    pub evidence: String,
+}
+
+/// Wire form of a `seam_shapes::Impact` (the impact shape).
+#[napi(object)]
+pub struct ImpactDto {
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub impacted: Vec<ImpactedSymbolDto>,
+    pub files: Vec<ImpactFileDto>,
+    pub surface: Vec<ImpactedSymbolDto>,
+    pub total: u32,
+    pub file_count: u32,
+    pub gaps: Vec<ImpactGapDto>,
+    pub hops: u32,
+    pub truncated: bool,
+    pub no_structure: bool,
+    pub reason: Option<String>,
+}
+
+impl From<seam_shapes::ImpactedSymbol> for ImpactedSymbolDto {
+    fn from(s: seam_shapes::ImpactedSymbol) -> Self {
+        Self { symbol: s.symbol, file: s.file, line: s.line as u32, kind: s.kind, hop: s.hop as u32 }
+    }
+}
+
+impl From<seam_shapes::Impact> for ImpactDto {
+    fn from(i: seam_shapes::Impact) -> Self {
+        Self {
+            anchor_symbol: i.anchor_symbol,
+            anchor_file: i.anchor_file,
+            impacted: i.impacted.into_iter().map(Into::into).collect(),
+            files: i.files.into_iter().map(|f| ImpactFileDto { file: f.file, count: f.count as u32 }).collect(),
+            surface: i.surface.into_iter().map(Into::into).collect(),
+            total: i.total as u32,
+            file_count: i.file_count as u32,
+            gaps: i.gaps.into_iter().map(|g| ImpactGapDto { mechanism: g.mechanism, evidence: g.evidence }).collect(),
+            hops: i.hops as u32,
+            truncated: i.truncated,
+            no_structure: i.no_structure,
+            reason: i.reason,
+        }
+    }
+}
+
+/// projectImpact — the transitive blast radius (structural closure; couplingOverlay off).
+#[napi]
+pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>) -> ImpactDto {
+    let opts = seam_shapes::ImpactOpts {
+        depth: depth.map(|d| d as usize).unwrap_or(6),
+        max_expansions: max_expansions.map(|m| m as usize).unwrap_or(80),
+        skip_callsite: false,
+    };
+    seam_shapes::project_impact(&repo, &anchor_file, &symbol, &opts).into()
+}
