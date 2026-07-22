@@ -8,8 +8,10 @@ one vertical slice at a time (strangler).
 
 - **Phase 0 (done)** — de-risked napi + AST parity. See below.
 - **Phase 1 (in progress)** — first slice: `--query consumers`, foundation-up.
-  - ✅ Java `imports()` (`src/lang/java.rs`) — **8141/8141 Keycloak `.java` files byte-identical** to TS `parse_imports` (`bun rust/parity/imports.ts <files…>`).
-  - ▢ next: `floor_resolve` + the FQN index + the reverse-import index → `scan_consumers` → the `consumers` shape end-to-end.
+  - ✅ Java `imports()` (`src/lang/java.rs`) — **8141/8141 Keycloak `.java` files byte-identical** to TS `parse_imports` (`bun rust/parity/imports.ts`).
+  - ✅ Repo walk (`src/walk.rs`) — shells to the same `git ls-files` (tracked ∪ untracked-not-ignored), SKIP_DIRS-pruned → byte-identical file set by construction.
+  - ✅ Java `floor_resolve` + FQN index (`_java_index`) — **126,358/126,358 resolutions byte-identical** to TS `floor_resolve` over the full corpus (FQN drop, same-package + wildcard bare names) (`bun rust/parity/resolve.ts`).
+  - ▢ next: the reverse-import index → `scan_consumers` → the `consumers` shape end-to-end; then the Java callsite graph (tree-sitter).
 
 ## Phase 0 results
 

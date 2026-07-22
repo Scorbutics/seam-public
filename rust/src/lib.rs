@@ -8,6 +8,7 @@ use napi_derive::napi;
 use tree_sitter::{Node, Parser, TreeCursor};
 
 pub mod lang;
+pub mod walk;
 pub use lang::ImportRef;
 
 // The pinned Java grammar's raw C entry point (vendor/java/parser.c). Bound directly and re-wrapped with the
@@ -26,6 +27,18 @@ mod java_raw {
 #[napi]
 pub fn java_imports(text: String) -> Vec<ImportRef> {
     lang::java::imports(&text)
+}
+
+/// Port of the Java provider's `floor_resolve` over a batch of `[importing_file, source]` pairs (each
+/// resolved to a repo-relative file, or null). Builds the FQN index once. Byte-identical to TS `floor_resolve`
+/// (see rust/parity/resolve.ts).
+#[napi]
+pub fn java_resolve_batch(repo: String, queries: Vec<Vec<String>>) -> Vec<Option<String>> {
+    let pairs: Vec<(String, String)> = queries
+        .into_iter()
+        .map(|q| (q.first().cloned().unwrap_or_default(), q.get(1).cloned().unwrap_or_default()))
+        .collect();
+    lang::java::resolve_batch(&repo, &pairs)
 }
 
 // ── Phase 0 spike exports (kept: the napi round-trip proof + the tree-sitter parity harness) ──────────────────
