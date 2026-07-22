@@ -24,6 +24,8 @@ pub struct DepOpts {
     pub anchor_line: Option<usize>,
     /// Files that REACHED this type anchor — restricts a type anchor's emitted methods to the ones they call.
     pub caller_files: Option<Vec<String>>,
+    /// Run the dataCoupling OVERLAY (resolveCoupling + route-consumer chaining). Structural-only when false.
+    pub data_coupling: bool,
 }
 
 fn impl_cap() -> usize {
@@ -82,9 +84,9 @@ impl DepScan {
         self.seen.insert(key);
         self.counter += 1;
         let did = format!("d{}", self.counter);
-        self.nodes.push(GraphNode { id: did.clone(), symbol: ref_name.into(), kind, file: dep_file.into(), range: rng, enclosing: String::new(), complexity: complexity(rng) });
+        self.nodes.push(GraphNode { id: did.clone(), symbol: ref_name.into(), kind, file: dep_file.into(), range: rng, enclosing: String::new(), complexity: complexity(rng), ..Default::default() });
         let line = self.actx.as_ref().and_then(|c| ast::usage_lines(c, &self.aunits, ref_name).first().copied());
-        self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: edge_kind.into(), provenance: provenance.into(), line });
+        self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: edge_kind.into(), provenance: provenance.into(), line, ..Default::default() });
     }
 
     /// 1) IMPORT pass — the symbols the anchor file imports; unresolved → external packages.
@@ -200,8 +202,8 @@ impl DepScan {
             let (ms, me) = spans[&name];
             self.counter += 1;
             let did = format!("d{}", self.counter);
-            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: "method".into(), file: self.anchor_file.clone(), range: (ms, me), enclosing: self.symbol.clone(), complexity: complexity((ms, me)) });
-            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "contains".into(), provenance: "RESOLVED_FULL".into(), line: None });
+            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: "method".into(), file: self.anchor_file.clone(), range: (ms, me), enclosing: self.symbol.clone(), complexity: complexity((ms, me)), ..Default::default() });
+            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "contains".into(), provenance: "RESOLVED_FULL".into(), line: None, ..Default::default() });
         }
     }
 
@@ -227,8 +229,8 @@ impl DepScan {
             }
             self.counter += 1;
             let did = format!("d{}", self.counter);
-            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: kind_for_dep(&kind), file: self.anchor_file.clone(), range: (start, end), enclosing: String::new(), complexity: complexity((start, end)) });
-            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_FULL".into(), line: call.or(Some(start)) });
+            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: kind_for_dep(&kind), file: self.anchor_file.clone(), range: (start, end), enclosing: String::new(), complexity: complexity((start, end)), ..Default::default() });
+            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_FULL".into(), line: call.or(Some(start)), ..Default::default() });
         }
     }
 
@@ -358,8 +360,8 @@ impl DepScan {
             self.counter += 1;
             let did = format!("d{}", self.counter);
             let entry = entry_line(&self.repo, &path);
-            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: "module".into(), file: path, range: (entry, entry), enclosing: String::new(), complexity: 1 });
-            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "dispatch".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(line) });
+            self.nodes.push(GraphNode { id: did.clone(), symbol: name, kind: "module".into(), file: path, range: (entry, entry), enclosing: String::new(), complexity: 1, ..Default::default() });
+            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "dispatch".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(line), ..Default::default() });
         }
         for (name, hits) in ambig {
             self.blindspots.push(Blindspot {
@@ -399,6 +401,30 @@ fn rank_impls(repo: &str, cands: &[seam_resolve::Impl], persist: &HashMap<String
     scored.into_iter().map(|x| x.0).collect()
 }
 
+/// The dataCoupling OVERLAY — ground the anchor span's shared keys into boundary nodes + crossing fans
+/// (resolveCoupling), then chain route consumers onto the fetch callers. Port of `_dataCouplingPass`.
+fn data_coupling_pass(s: &mut DepScan, anchor_src: &str, arange: (usize, usize)) {
+    let key_lo = crate::attach::annotation_lo(anchor_src, arange.0); // include a route/entry annotation above the def
+    let delta = seam_couple::resolve_coupling(&s.repo, "n1", &s.anchor_file, anchor_src, key_lo, arange.1, s.counter as u64, false);
+    for n in delta.nodes {
+        s.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction });
+    }
+    for e in delta.edges {
+        s.edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });
+    }
+    for b in delta.blindspots {
+        s.blindspots.push(Blindspot {
+            node: b.node,
+            mechanism: b.mechanism,
+            evidence: b.evidence,
+            candidates: b.candidates.into_iter().map(|c| Candidate { symbol: c.symbol, file: Some(c.file), provenance: Some(c.provenance) }).collect(),
+            persists: false,
+        });
+    }
+    s.counter = delta.counter as usize;
+    s.counter = crate::attach::chain_route_consumers(&s.repo, &mut s.nodes, &mut s.edges, s.counter, &s.ws);
+}
+
 pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &DepOpts) -> ResolvedGraph {
     let src = read(repo, anchor_file);
     let (actx, aunits) = match &src {
@@ -427,7 +453,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         arange = (al, al.max(arange.1));
     }
     let graph_lang = provider_for(anchor_file).map(|p| p.name().to_string()).unwrap_or_default();
-    let anchor_node = GraphNode { id: "n1".into(), symbol: symbol.into(), kind: akind, file: anchor_file.into(), range: arange, enclosing: String::new(), complexity: complexity(arange) };
+    let anchor_node = GraphNode { id: "n1".into(), symbol: symbol.into(), kind: akind, file: anchor_file.into(), range: arange, enclosing: String::new(), complexity: complexity(arange), ..Default::default() };
 
     let mut nodes = vec![anchor_node];
     let mut blindspots = Vec::new();
@@ -465,6 +491,9 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         s.interface_impl_pass();
         s.external_libs_blindspot();
         s.string_dispatch_pass(arange.0, arange.1);
+        if opts.data_coupling {
+            data_coupling_pass(&mut s, anchor_src, arange);
+        }
         nodes = s.nodes;
         blindspots = s.blindspots;
         let mut g = make_graph(("n1".into(), symbol.into(), anchor_file.into(), arange), graph_lang, nodes, s.edges);
@@ -789,8 +818,8 @@ impl DepScan {
                                 self.seen.insert(k);
                                 self.counter += 1;
                                 let did = format!("d{}", self.counter);
-                                self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind, file: cf.clone(), range: rng, enclosing: recv_chain.join("."), complexity: complexity(rng) });
-                                self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(cl) });
+                                self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind, file: cf.clone(), range: rng, enclosing: recv_chain.join("."), complexity: complexity(rng), ..Default::default() });
+                                self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(cl), ..Default::default() });
                             }
                         }
                     }
@@ -813,8 +842,8 @@ impl DepScan {
                                             self.seen.insert(mk);
                                             self.counter += 1;
                                             let did = format!("d{}", self.counter);
-                                            self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind: d.kind, file: tfile, range: (d.start, d.end), enclosing: recv, complexity: complexity((d.start, d.end)) });
-                                            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_FULL".into(), line: Some(cl) });
+                                            self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind: d.kind, file: tfile, range: (d.start, d.end), enclosing: recv, complexity: complexity((d.start, d.end)), ..Default::default() });
+                                            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_FULL".into(), line: Some(cl), ..Default::default() });
                                         }
                                     }
                                 }
@@ -830,8 +859,8 @@ impl DepScan {
                                     self.seen.insert(mk);
                                     self.counter += 1;
                                     let did = format!("d{}", self.counter);
-                                    self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind: d.kind, file, range: (d.start, d.end), enclosing: recv, complexity: complexity((d.start, d.end)) });
-                                    self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(cl) });
+                                    self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind: d.kind, file, range: (d.start, d.end), enclosing: recv, complexity: complexity((d.start, d.end)), ..Default::default() });
+                                    self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(cl), ..Default::default() });
                                 }
                                 None => {
                                     let key = format!("{recv}.{method}");

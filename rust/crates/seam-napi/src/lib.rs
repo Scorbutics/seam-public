@@ -203,6 +203,8 @@ pub struct GraphNodeDto {
     pub range: Vec<u32>,
     pub enclosing: String,
     pub complexity: u32,
+    pub coupling: bool,
+    pub direction: Option<String>,
 }
 
 /// Wire form of a `seam_scan::GraphEdge`.
@@ -213,6 +215,7 @@ pub struct GraphEdgeDto {
     pub kind: String,
     pub provenance: String,
     pub line: Option<u32>,
+    pub op: Option<String>,
 }
 
 /// Wire form of a blindspot candidate.
@@ -276,6 +279,8 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
                     range: vec![n.range.0 as u32, n.range.1 as u32],
                     enclosing: n.enclosing,
                     complexity: n.complexity as u32,
+                    coupling: n.coupling,
+                    direction: n.direction,
                 })
                 .collect(),
             edges: g
@@ -287,6 +292,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
                     kind: e.kind,
                     provenance: e.provenance,
                     line: e.line.map(|l| l as u32),
+                    op: e.op,
                 })
                 .collect(),
             blindspots: g
@@ -740,8 +746,8 @@ pub fn string_dispatch(repo: String, anchor_file: String, text: String, lang: St
 /// build_dependency_graph — the DOWN/dependency footprint (structural; dataCoupling off, qualified-callee &
 /// provider-factory pending).
 #[napi]
-pub fn build_dependency_graph(repo: String, anchor_file: String, symbol: String, anchor_line: Option<u32>) -> GraphDto {
-    let opts = seam_scan::DepOpts { anchor_line: anchor_line.map(|l| l as usize), caller_files: None };
+pub fn build_dependency_graph(repo: String, anchor_file: String, symbol: String, anchor_line: Option<u32>, data_coupling: Option<bool>) -> GraphDto {
+    let opts = seam_scan::DepOpts { anchor_line: anchor_line.map(|l| l as usize), caller_files: None, data_coupling: data_coupling.unwrap_or(false) };
     seam_scan::build_dependency_graph(&repo, &anchor_file, &symbol, &opts).into()
 }
 

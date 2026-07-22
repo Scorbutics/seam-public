@@ -64,8 +64,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         file: anchor_file.into(),
         range: arange,
         enclosing: aencl.clone(),
-        complexity: complexity(arange),
-    }];
+        complexity: complexity(arange), ..Default::default() }];
     if methods.is_empty() {
         return Some(make_graph(anchor, graph_lang, nodes, Vec::new()));
     }
@@ -224,15 +223,13 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             file: v.rel.clone(),
             range: (v.start, v.end),
             enclosing: v.enc_class.clone(),
-            complexity: complexity((v.start, v.end)),
-        });
+            complexity: complexity((v.start, v.end)), ..Default::default() });
         edges.push(GraphEdge {
             from: id,
             to: "n1".into(),
             kind: "call".into(),
             provenance: if v.full { "RESOLVED_FULL".into() } else { "RESOLVED_PARTIAL".into() },
-            line: None,
-        });
+            line: None, ..Default::default() });
     }
 
     let mut g = make_graph(anchor, graph_lang, nodes, edges);

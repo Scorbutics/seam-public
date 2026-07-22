@@ -47,7 +47,7 @@ pub fn merge_resolved(base: &ResolvedGraph, add: &ResolvedGraph) -> ResolvedGrap
         let ek = format!("{} {} {}", f, t, e.kind);
         if present.contains(&f) && present.contains(&t) && !eset.contains(&ek) {
             eset.insert(ek);
-            merged.edges.push(GraphEdge { from: f, to: t, kind: e.kind.clone(), provenance: e.provenance.clone(), line: e.line });
+            merged.edges.push(GraphEdge { from: f, to: t, kind: e.kind.clone(), provenance: e.provenance.clone(), line: e.line, op: e.op.clone() });
         }
     }
 

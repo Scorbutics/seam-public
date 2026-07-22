@@ -26,8 +26,7 @@ pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph
         file: anchor_file.into(),
         range: (0, mlen),
         enclosing: String::new(),
-        complexity: mlen.max(1),
-    }];
+        complexity: mlen.max(1), ..Default::default() }];
     for m in &members {
         nodes.push(GraphNode {
             id: m.name.clone(),
@@ -36,8 +35,7 @@ pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph
             file: anchor_file.into(),
             range: (m.start, m.end),
             enclosing: mod_name.clone(),
-            complexity: complexity((m.start, m.end)),
-        });
+            complexity: complexity((m.start, m.end)), ..Default::default() });
     }
 
     let mut edges: Vec<GraphEdge> = Vec::new();
@@ -60,12 +58,12 @@ pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph
             }
         }
         let cid = format!("c{counter}");
-        nodes.push(GraphNode { id: cid.clone(), symbol: sym, kind: kind_for(&cfile, &kind), file: cfile, range: rng, enclosing: String::new(), complexity: 1 });
+        nodes.push(GraphNode { id: cid.clone(), symbol: sym, kind: kind_for(&cfile, &kind), file: cfile, range: rng, enclosing: String::new(), complexity: 1, ..Default::default() });
         // one edge per used member, member names sorted
         let mut member_used: Vec<&String> = used.iter().map(|(m, _)| m).collect();
         member_used.sort();
         for mname in member_used {
-            edges.push(GraphEdge { from: cid.clone(), to: mname.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None });
+            edges.push(GraphEdge { from: cid.clone(), to: mname.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None, ..Default::default() });
         }
     }
 

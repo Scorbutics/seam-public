@@ -28,8 +28,7 @@ impl GraphBuilder {
             file: file.into(),
             range,
             enclosing: enclosing.into(),
-            complexity: complexity(range),
-        };
+            complexity: complexity(range), ..Default::default() };
         Self {
             anchor: ("n1".into(), symbol.into(), file.into(), range),
             language: language.into(),
@@ -51,8 +50,8 @@ impl GraphBuilder {
         self.counter += 1;
         let id = format!("n{}", self.counter);
         self.seen.insert(key, id.clone());
-        self.nodes.push(GraphNode { id: id.clone(), symbol: symbol.into(), kind: kind.into(), file: file.into(), range, enclosing: enclosing.into(), complexity: complexity(range) });
-        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line: None });
+        self.nodes.push(GraphNode { id: id.clone(), symbol: symbol.into(), kind: kind.into(), file: file.into(), range, enclosing: enclosing.into(), complexity: complexity(range), ..Default::default() });
+        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line: None, ..Default::default() });
         true
     }
 

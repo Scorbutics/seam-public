@@ -108,8 +108,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
         file: anchor_file.into(),
         range: crange,
         enclosing: String::new(),
-        complexity: complexity(crange),
-    }];
+        complexity: complexity(crange), ..Default::default() }];
     let mut edges: Vec<GraphEdge> = Vec::new();
     let mut used_sorted: Vec<String> = used_methods.iter().cloned().collect();
     used_sorted.sort();
@@ -122,9 +121,8 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
             file: anchor_file.into(),
             range: (s, e),
             enclosing: class_name.into(),
-            complexity: complexity((s, e)),
-        });
-        edges.push(GraphEdge { from: format!("{class_name}.{mn}"), to: class_name.into(), kind: "contains".into(), provenance: "RESOLVED_FULL".into(), line: None });
+            complexity: complexity((s, e)), ..Default::default() });
+        edges.push(GraphEdge { from: format!("{class_name}.{mn}"), to: class_name.into(), kind: "contains".into(), provenance: "RESOLVED_FULL".into(), line: None, ..Default::default() });
     }
     // unused methods → a blind spot (order: the method_names walk order, then sorted in the evidence text)
     let unused: Vec<String> = method_names.iter().filter(|m| !used_methods.contains(*m)).cloned().collect();
@@ -155,16 +153,15 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
             file: p.file.clone(),
             range: (p.start, p.end),
             enclosing: p.enc_class.clone(),
-            complexity: complexity((p.start, p.end)),
-        });
+            complexity: complexity((p.start, p.end)), ..Default::default() });
         if !p.usage.is_empty() {
             let mut ms: Vec<&String> = p.usage.keys().collect();
             ms.sort();
             for mn in ms {
-                edges.push(GraphEdge { from: cid.clone(), to: format!("{class_name}.{mn}"), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: Some(p.usage[mn]) });
+                edges.push(GraphEdge { from: cid.clone(), to: format!("{class_name}.{mn}"), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: Some(p.usage[mn]), ..Default::default() });
             }
         } else {
-            edges.push(GraphEdge { from: cid.clone(), to: class_name.into(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None });
+            edges.push(GraphEdge { from: cid.clone(), to: class_name.into(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None, ..Default::default() });
             untraced.push(p.file.clone());
         }
     }

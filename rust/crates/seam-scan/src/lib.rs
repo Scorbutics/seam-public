@@ -5,6 +5,7 @@ mod builder;
 pub mod callsite_graph;
 pub mod class_graph;
 pub mod consumers_graph;
+pub mod attach;
 pub mod dependency_graph;
 pub mod footprint;
 pub mod graph;

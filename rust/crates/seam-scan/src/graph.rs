@@ -1,7 +1,7 @@
 //! The footprint graph types — port of scan/graph.ts. A `ResolvedGraph` is what a footprint builder returns.
 
 /// A node in a footprint (a function/method/class/module, or a coupling boundary).
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphNode {
     pub id: String,
     pub symbol: String,
@@ -10,16 +10,22 @@ pub struct GraphNode {
     pub range: (usize, usize), // [start line, end line]
     pub enclosing: String,     // owning class/module symbol, or ""
     pub complexity: usize,
+    /// A data-coupling node (boundary/complement) — false for structural call/import nodes.
+    pub coupling: bool,
+    /// Grow expansion hint on a coupling complement ("backward" ⇒ downstream); None otherwise.
+    pub direction: Option<String>,
 }
 
 /// An edge wiring two nodes.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
     pub kind: String,
     pub provenance: String, // "RESOLVED_FULL" | "RESOLVED_PARTIAL" | …
     pub line: Option<usize>,
+    /// A write crossing's op-class (create/update/delete); None on structural edges.
+    pub op: Option<String>,
 }
 
 /// A candidate attached to a blindspot. `symbol` always set; `file`/`provenance` set by the dependency/
