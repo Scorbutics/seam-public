@@ -194,6 +194,14 @@ pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {
 }
 
 /// Wire form of a `seam_scan::GraphNode`.
+/// Wire form of a collapsed-hub marker.
+#[napi(object)]
+pub struct HubMarkerDto {
+    pub reason: String,
+    pub fan: u32,
+    pub sample_consumers: Vec<String>,
+}
+
 #[napi(object)]
 pub struct GraphNodeDto {
     pub id: String,
@@ -205,6 +213,7 @@ pub struct GraphNodeDto {
     pub complexity: u32,
     pub coupling: bool,
     pub direction: Option<String>,
+    pub hub: Option<HubMarkerDto>,
 }
 
 /// Wire form of a `seam_scan::GraphEdge`.
@@ -281,6 +290,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
                     complexity: n.complexity as u32,
                     coupling: n.coupling,
                     direction: n.direction,
+                    hub: n.hub.map(|h| HubMarkerDto { reason: h.reason, fan: h.fan as u32, sample_consumers: h.sample_consumers }),
                 })
                 .collect(),
             edges: g
@@ -329,6 +339,7 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
                 complexity: n.complexity as usize,
                 coupling: n.coupling,
                 direction: n.direction,
+                hub: n.hub.map(|h| seam_scan::graph::HubMarker { reason: h.reason, fan: h.fan as usize, sample_consumers: h.sample_consumers }),
             })
             .collect(),
         edges: g

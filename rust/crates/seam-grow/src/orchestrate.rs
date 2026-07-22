@@ -137,6 +137,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     // The (node,direction) expansions already done — file#symbol#dir. Anchors are excluded from moves, so no seed.
     let mut expanded: HashSet<String> = HashSet::new();
     let mut hub_fanned: HashSet<String> = HashSet::new();
+    let mut hub_mark: HashMap<String, seam_scan::graph::HubMarker> = HashMap::new();
 
     let mut step = 0usize;
     while data.nodes.len() < opts.max_nodes {
@@ -241,7 +242,17 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                 continue; // reached only by a bare-name call match → surface it, don't flood through it
             }
             let is_core = role_by_id.get(&n.id).map(String::as_str) == Some("core");
-            let hub = is_hub(n);
+            let hinfo = classify_hub(&hub_opts, &HubNode { id: &n.id, kind: &n.kind, file: &n.file, coupling: n.coupling });
+            let hub = hinfo.is_some();
+            // COLLAPSE: record this ubiquity/type hub's marker (its up-climb fan is never grown; sample consumers
+            // come from the reverse-import index). Stamped onto the surviving node after the flood.
+            if let Some(ref h) = hinfo {
+                hub_mark.entry(n.id.clone()).or_insert_with(|| seam_scan::graph::HubMarker {
+                    reason: h.reason.to_string(),
+                    fan: h.fan,
+                    sample_consumers: crate::ubiquity::ubiquity_consumers(repo, &ubiq, Some(&n.file), 3),
+                });
+            }
             let crossing_ward = crossing_bearers.contains(&n.id) || is_flow_subject(&n.kind) || n.coupling;
             for d in [Dir::Up, Dir::Down] {
                 if expanded.contains(&exp_key(n, d)) {
@@ -298,13 +309,20 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                     let coupling_by: HashMap<&str, bool> = data.nodes.iter().map(|n| (n.id.as_str(), n.coupling)).collect();
                     let spine_ward = added_ids.iter().any(|id| cross_dst.contains(id) || is_flow_subject(kind_by.get(id.as_str()).copied().unwrap_or("")) || coupling_by.get(id.as_str()).copied().unwrap_or(false));
                     if !spine_ward {
+                        let mut sample_files: Vec<String> = Vec::new();
                         for id in &added_ids {
                             hub_fanned.insert(id.clone());
                             if let Some(nn) = data.nodes.iter().find(|n| &n.id == id) {
                                 expanded.insert(exp_key(nn, Dir::Up));
                                 expanded.insert(exp_key(nn, Dir::Down));
+                                let f = normpath(&nn.file);
+                                if !f.is_empty() && sample_files.len() < 3 && !sample_files.contains(&f) {
+                                    sample_files.push(f);
+                                }
                             }
                         }
+                        // COLLAPSE: mark the fanning SOURCE as a hub (the fan we just saw is the sample).
+                        hub_mark.entry(mv.node.id.clone()).or_insert_with(|| seam_scan::graph::HubMarker { reason: "fan".to_string(), fan: added, sample_consumers: sample_files });
                     }
                 }
             }
@@ -323,6 +341,15 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         data.nodes.retain(|n| !hub_fanned.contains(&n.id));
         data.edges.retain(|e| !hub_fanned.contains(&e.from) && !hub_fanned.contains(&e.to));
         data.blindspots.retain(|b| !hub_fanned.contains(&b.node));
+    }
+    // HUB-COLLAPSE MARK — stamp the recorded markers onto the surviving hub nodes (a hub cropped as another
+    // hub's fan member is gone, so skipped). Port of the hub-collapse mark loop.
+    for n in data.nodes.iter_mut() {
+        if n.hub.is_none() {
+            if let Some(m) = hub_mark.get(&n.id) {
+                n.hub = Some(m.clone());
+            }
+        }
     }
     // HONEST BACKSTOP — if the flood hit the node cap, say so (a silently truncated shape reads as complete).
     if data.nodes.len() >= opts.max_nodes {

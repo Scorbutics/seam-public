@@ -72,7 +72,7 @@ impl GraphBuilder {
         let key_hi = if resolved { arange.1 } else { anchor_src.matches('\n').count() };
         let delta = seam_couple::resolve_coupling(repo, "n1", anchor_file, anchor_src, key_lo, key_hi, self.counter as u64, false);
         for n in delta.nodes {
-            self.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction });
+            self.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None });
         }
         for e in delta.edges {
             self.edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });

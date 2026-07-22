@@ -1,5 +1,15 @@
 //! The footprint graph types — port of scan/graph.ts. A `ResolvedGraph` is what a footprint builder returns.
 
+/// A COLLAPSED hub node: it STAYS in the region with its fan count + a handful of sample consumers instead of
+/// expanding its off-intent fan across the codebase (I3 — collapse, never silently drop). Deterministic. Port
+/// of `HubMarker`.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HubMarker {
+    pub reason: String, // "ubiquity" | "fan" | "type"
+    pub fan: usize,
+    pub sample_consumers: Vec<String>,
+}
+
 /// A node in a footprint (a function/method/class/module, or a coupling boundary).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GraphNode {
@@ -14,6 +24,8 @@ pub struct GraphNode {
     pub coupling: bool,
     /// Grow expansion hint on a coupling complement ("backward" ⇒ downstream); None otherwise.
     pub direction: Option<String>,
+    /// A COLLAPSED hub (the wave's hub-collapse mark) — None for a plain node.
+    pub hub: Option<HubMarker>,
 }
 
 /// An edge wiring two nodes.

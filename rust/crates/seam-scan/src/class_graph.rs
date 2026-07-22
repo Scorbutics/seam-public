@@ -186,7 +186,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str, data_c
         let key_lo = crate::attach::annotation_lo(&text, crange.0);
         let delta = seam_couple::resolve_coupling(repo, class_name, anchor_file, &text, key_lo, crange.1, counter as u64, false);
         for n in delta.nodes {
-            nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction });
+            nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None });
         }
         for e in delta.edges {
             edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });

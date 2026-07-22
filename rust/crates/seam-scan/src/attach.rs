@@ -77,6 +77,7 @@ pub fn chain_route_consumers(repo: &str, nodes: &mut Vec<GraphNode>, edges: &mut
                     complexity: (end as i64 - start as i64 + 1).max(1) as usize,
                     coupling: true,
                     direction: None,
+                    hub: None,
                 });
                 edges.push(GraphEdge { from: pid, to: cid.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None, op: None });
                 added += 1;
