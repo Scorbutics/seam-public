@@ -10,6 +10,7 @@ pub mod coupling;
 pub mod exclude;
 pub mod graph_ir;
 pub mod grow_index;
+pub mod orchestrate;
 pub mod roles;
 pub mod seed;
 pub mod ubiquity;

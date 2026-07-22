@@ -358,6 +358,17 @@ pub fn grow_seed_coupled(repo: String, anchor_file: String, symbol: String, stab
     Some(data.into())
 }
 
+/// growToTerminals — the full deterministic structural grow (seed → coupling → wave → deep couple). Parity
+/// surface for grow_to_terminals (structuralGrow, dataCoupling path).
+#[napi]
+pub fn grow_to_terminals(repo: String, anchor_file: String, symbol: String, data_coupling: bool, max_steps: Option<u32>, max_nodes: Option<u32>) -> Option<GraphDto> {
+    let opts = seam_grow::orchestrate::WaveOpts {
+        max_steps: max_steps.map(|v| v as usize).unwrap_or(12),
+        max_nodes: max_nodes.map(|v| v as usize).unwrap_or(80),
+    };
+    seam_grow::orchestrate::grow_to_terminals(&repo, &anchor_file, &symbol, data_coupling, &opts).map(Into::into)
+}
+
 /// growSeed — the P1 structural seed (pruned UP consumers ⊕ DOWN deps, backward-tagged). Parity surface for
 /// `_phaseSeed`.
 #[napi]
