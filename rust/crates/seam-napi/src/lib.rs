@@ -40,6 +40,36 @@ pub fn resolve_batch(repo: String, queries: Vec<Vec<String>>) -> Vec<Option<Stri
     seam_resolve::resolve_batch(&repo, &pairs)
 }
 
+/// Wire form of a `seam_resolve::Consumer`.
+#[napi(object)]
+pub struct ConsumerDto {
+    pub file: String,
+    pub local: String,
+    pub source: String,
+    pub status: String,
+    pub reexport: bool,
+}
+
+impl From<seam_resolve::Consumer> for ConsumerDto {
+    fn from(c: seam_resolve::Consumer) -> Self {
+        Self { file: c.file, local: c.local, source: c.source, status: c.status.as_str().to_string(), reexport: c.reexport }
+    }
+}
+
+/// The consumers of each `[anchor_file, symbol]` anchor, against one workspace (the import index is built once).
+#[napi]
+pub fn scan_consumers_batch(repo: String, anchors: Vec<Vec<String>>) -> Vec<Vec<ConsumerDto>> {
+    let ws = seam_resolve::Workspace::new(&repo);
+    anchors
+        .iter()
+        .map(|a| {
+            let file = a.first().map(String::as_str).unwrap_or("");
+            let symbol = a.get(1).map(String::as_str).unwrap_or("");
+            ws.scan_consumers(file, symbol).into_iter().map(Into::into).collect()
+        })
+        .collect()
+}
+
 /// Parity/debug: `depth|field|kind|start-end` per AST node (drives rust/parity/parity.ts).
 #[napi]
 pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {

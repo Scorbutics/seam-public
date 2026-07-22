@@ -1,6 +1,8 @@
-//! Repo walk — port of core/resolve/walk.ts. Git is the source of truth for which files exist (tracked ∪
-//! untracked-not-ignored), so we shell to the SAME `git ls-files` the TS side does → byte-identical file set
-//! by construction (no re-implemented gitignore semantics). SKIP_DIRS prunes build output / vendored deps.
+//! Repo file enumeration — port of core/resolve/walk.ts. A sorted, pre-order filesystem DFS (a directory's
+//! files, sorted, BEFORE its subdirs), with `git ls-files` (tracked ∪ untracked-not-ignored) as the include
+//! FILTER — not the enumerator. This preserves the exact traversal ORDER TS produces, which downstream
+//! consumers (e.g. the consumer scan) are order-sensitive to; git provides gitignore semantics without
+//! re-implementing them. SKIP_DIRS prunes build output / vendored deps.
 
 use std::collections::HashSet;
 use std::fs;
@@ -12,8 +14,16 @@ pub const SKIP_DIRS: &[&str] = &[
     "vendor", ".gradle", "__pycache__",
 ];
 
-/// normpath (walk.ts): forward slashes, strip a trailing slash (len > 1). Git output is already clean
-/// repo-relative, so this is ~identity there.
+/// basename without its final extension (port of `stem`, ast_units.ts): a dot at index 0 is not an extension.
+pub fn stem(p: &str) -> String {
+    let base = p.rsplit('/').next().unwrap_or(p);
+    match base.rfind('.') {
+        Some(d) if d > 0 => base[..d].to_string(),
+        _ => base.to_string(),
+    }
+}
+
+/// normpath (walk.ts): forward slashes, strip a trailing slash (len > 1).
 pub fn normpath(p: &str) -> String {
     let n = p.replace('\\', "/");
     if n.len() > 1 && n.ends_with('/') {
@@ -35,11 +45,11 @@ fn git_list(repo: &str, args: &[&str]) -> Option<Vec<String>> {
         return None;
     }
     let s = String::from_utf8_lossy(&out.stdout);
-    Some(s.split('\0').filter(|x| !x.is_empty()).map(|x| x.to_string()).collect())
+    Some(s.split('\0').filter(|x| !x.is_empty()).map(str::to_string).collect())
 }
 
-/// gitNonIgnored (walk.ts): tracked (`--recurse-submodules`) ∪ untracked-not-ignored
-/// (`--others --exclude-standard`). None when the dir isn't a git repo / git is absent (→ fs-walk fallback).
+/// gitNonIgnored (walk.ts): tracked ∪ untracked-not-ignored. `None` when not a git repo / git absent
+/// (→ no filtering — the whole tree is walked, minus SKIP_DIRS).
 pub fn git_non_ignored(repo: &str) -> Option<HashSet<String>> {
     if std::env::var("SEAM_NO_GITIGNORE").as_deref() == Ok("1") {
         return None;
@@ -54,52 +64,98 @@ pub fn git_non_ignored(repo: &str) -> Option<HashSet<String>> {
     Some(set)
 }
 
-/// A path is pruned if ANY segment is a SKIP_DIR (mirrors walk()'s directory-level pruning).
-fn is_skipped(rel: &str) -> bool {
-    rel.split('/').any(|seg| SKIP_DIRS.contains(&seg))
-}
-
-/// The set of repo-relative source files matching `ext` (e.g. ".java"). ORDER-INDEPENDENT — the callers that
-/// consume it (the FQN index) dedupe deterministically, so this returns a bare Vec. Git path when available,
-/// else a SKIP_DIRS-pruned filesystem walk (the SEAM_NO_GITIGNORE / non-git fallback).
-pub fn repo_files(repo: &str, ext: &str) -> Vec<String> {
-    match git_non_ignored(repo) {
-        Some(keep) => keep
-            .into_iter()
-            .filter(|r| r.ends_with(ext) && !is_skipped(r))
-            .collect(),
-        None => {
-            let mut out = Vec::new();
-            fs_walk(repo, "", ext, &mut out);
-            out
+// Every ancestor directory (repo-relative) of a kept file — lets the walk prune an entirely-ignored dir
+// without descending into it (port of liveDirsOf).
+fn live_dirs_of(files: &HashSet<String>) -> HashSet<String> {
+    let mut dirs = HashSet::new();
+    for f in files {
+        let mut i = f.rfind('/');
+        while let Some(idx) = i {
+            if idx == 0 {
+                break;
+            }
+            let d = &f[..idx];
+            if dirs.contains(d) {
+                break;
+            }
+            dirs.insert(d.to_string());
+            i = d.rfind('/');
         }
     }
+    dirs
 }
 
-fn fs_walk(repo: &str, rel_dir: &str, ext: &str, out: &mut Vec<String>) {
+/// Repo-relative source files matching `pred`, in TS walk order (sorted pre-order DFS, files before subdirs).
+pub fn source_files(repo: &str, pred: impl Fn(&str) -> bool) -> Vec<String> {
+    let keep = git_non_ignored(repo);
+    let live = keep.as_ref().map(live_dirs_of);
+    let mut out = Vec::new();
+    walk_dir(repo, "", keep.as_ref(), live.as_ref(), &pred, &mut out);
+    out
+}
+
+/// Convenience: all files with a given extension (e.g. ".java"), in walk order.
+pub fn repo_files(repo: &str, ext: &str) -> Vec<String> {
+    source_files(repo, |r| r.ends_with(ext))
+}
+
+fn walk_dir(
+    repo: &str,
+    rel_dir: &str,
+    keep: Option<&HashSet<String>>,
+    live: Option<&HashSet<String>>,
+    pred: &impl Fn(&str) -> bool,
+    out: &mut Vec<String>,
+) {
     let abs = if rel_dir.is_empty() {
         repo.to_string()
     } else {
         format!("{repo}/{rel_dir}")
     };
-    let Ok(entries) = fs::read_dir(&abs) else {
+    let Ok(rd) = fs::read_dir(&abs) else {
         return;
     };
-    for e in entries.flatten() {
-        let name = e.file_name().to_string_lossy().to_string();
+    // sort entries by name ascending (matches TS `entries.sort`); files are emitted before subdirs.
+    let mut entries: Vec<(String, bool)> = rd
+        .flatten()
+        .map(|e| {
+            (
+                e.file_name().to_string_lossy().into_owned(),
+                e.file_type().map(|t| t.is_dir()).unwrap_or(false),
+            )
+        })
+        .collect();
+    entries.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut subdirs = Vec::new();
+    for (name, is_dir) in &entries {
         let rel = if rel_dir.is_empty() {
             name.clone()
         } else {
             format!("{rel_dir}/{name}")
         };
-        let is_dir = e.file_type().map(|t| t.is_dir()).unwrap_or(false);
-        if is_dir {
+        if *is_dir {
             if SKIP_DIRS.contains(&name.as_str()) {
                 continue;
             }
-            fs_walk(repo, &rel, ext, out);
-        } else if rel.ends_with(ext) {
-            out.push(rel);
+            if let Some(ld) = live {
+                if !rel.is_empty() && !ld.contains(&rel) {
+                    continue; // gitignored dir → don't descend
+                }
+            }
+            subdirs.push(rel);
+        } else {
+            if let Some(k) = keep {
+                if !k.contains(&rel) {
+                    continue; // gitignored file
+                }
+            }
+            if pred(&rel) {
+                out.push(rel);
+            }
         }
+    }
+    for rel in subdirs {
+        walk_dir(repo, &rel, keep, live, pred, out);
     }
 }
