@@ -9,31 +9,61 @@ pub use callsite_index::CallsiteIndex;
 pub use consumers::{Consumer, Status};
 
 use import_index::ImportIndex;
+use once_cell::sync::Lazy;
 use seam_fs::{normpath, stem};
 use seam_lang::{provider_for, ModuleResolver};
-use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 const REEXPORT_HOP_CAP: u32 = 5;
 
 /// A repo under analysis: an immutable import index (built once) plus per-language resolvers, built lazily so
 /// each language's repo-wide index is computed at most once. Replaces TS's module-global mutable caches.
+/// Shareable (Send+Sync) so it can be memoized per repo — see `cached`.
 pub struct Workspace {
     repo: String,
     index: ImportIndex,
-    resolvers: RefCell<HashMap<&'static str, Box<dyn ModuleResolver>>>,
+    resolvers: Mutex<HashMap<&'static str, Box<dyn ModuleResolver>>>,
 }
+
+// Per-repo memoization — the index + resolvers are pure functions of the repo's source and immutable within a
+// query run, so building them once and sharing turns a repeated-footprint shape (impact/reaches/compare, which
+// build hundreds of footprints) from N repo-walks into one. Mirrors `CallsiteIndex::cached`.
+static CACHE: Lazy<Mutex<HashMap<String, Arc<Workspace>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
 impl Workspace {
     pub fn new(repo: &str) -> Self {
-        Self { repo: repo.to_string(), index: ImportIndex::build(repo), resolvers: RefCell::new(HashMap::new()) }
+        Self { repo: repo.to_string(), index: ImportIndex::build(repo), resolvers: Mutex::new(HashMap::new()) }
+    }
+
+    /// The memoized workspace for `repo` (built on first request, shared thereafter). Use this on the query
+    /// path; `new` bypasses the cache (tests, or a forced rebuild).
+    pub fn cached(repo: &str) -> Arc<Workspace> {
+        if let Some(ws) = CACHE.lock().unwrap().get(repo) {
+            return ws.clone();
+        }
+        let ws = Arc::new(Self::new(repo));
+        CACHE.lock().unwrap().insert(repo.to_string(), ws.clone());
+        ws
+    }
+
+    /// Drop the memoized workspace for `repo` (or all repos when `None`).
+    pub fn reset(repo: Option<&str>) {
+        let mut c = CACHE.lock().unwrap();
+        match repo {
+            Some(r) => {
+                c.remove(r);
+            }
+            None => c.clear(),
+        }
     }
 
     /// Resolve a module `source` imported from `importing_file`, dispatching to that file's language resolver.
     pub fn resolve(&self, importing_file: &str, source: &str) -> Option<String> {
         let provider = provider_for(importing_file)?;
         self.resolvers
-            .borrow_mut()
+            .lock()
+            .unwrap()
             .entry(provider.name())
             .or_insert_with(|| provider.resolver(&self.repo))
             .resolve(importing_file, source)
