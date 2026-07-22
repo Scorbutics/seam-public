@@ -4,6 +4,7 @@
 //! trait, the coupling counterpart of `seam-lang`'s language providers.
 
 pub mod adapters;
+pub mod apply;
 pub mod grounding;
 pub mod ground;
 pub mod frameworks;
@@ -14,6 +15,7 @@ pub mod mask;
 pub mod types;
 
 pub use adapters::{adapter_keys, scan_file_keys};
+pub use apply::{resolve_coupling, CouplingResult};
 pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};
 pub use grounding::file_store_write_count;
 pub use types::{Access, KeySides};

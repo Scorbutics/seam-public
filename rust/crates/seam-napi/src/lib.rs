@@ -586,6 +586,38 @@ pub fn floor_index(repo: String) -> Vec<Vec<String>> {
     rows
 }
 
+/// resolveCoupling (deterministic floor path) — the anchor's data-coupling BRIDGE delta, pre-serialized for
+/// parity: nodes `id|symbol|kind|file|start|end|enclosing|complexity|direction`, edges
+/// `from|to|kind|line|op`, blindspots `node|mechanism|evidence|cand,cand…` (cand=`file#symbol#prov`). Port of
+/// `resolveCoupling`.
+#[napi(object)]
+pub struct CouplingResultDto {
+    pub nodes: Vec<String>,
+    pub edges: Vec<String>,
+    pub blindspots: Vec<String>,
+    pub counter: u32,
+}
+
+#[napi]
+pub fn resolve_coupling(repo: String, anchor_id: String, anchor_file: String, anchor_text: String, lo: u32, hi: u32, counter: u32) -> CouplingResultDto {
+    let r = seam_couple::resolve_coupling(&repo, &anchor_id, &anchor_file, &anchor_text, lo as usize, hi as usize, counter as u64);
+    let nodes = r
+        .nodes
+        .iter()
+        .map(|n| format!("{}|{}|{}|{}|{}-{}|{}|{}|{}", n.id, n.symbol, n.kind, n.file, n.range.0, n.range.1, n.enclosing, n.complexity, n.direction.clone().unwrap_or_default()))
+        .collect();
+    let edges = r.edges.iter().map(|e| format!("{}|{}|{}|{}|{}", e.from, e.to, e.kind, e.line.map(|l| l.to_string()).unwrap_or_default(), e.op.clone().unwrap_or_default())).collect();
+    let blindspots = r
+        .blindspots
+        .iter()
+        .map(|b| {
+            let cands: Vec<String> = b.candidates.iter().map(|c| format!("{}#{}#{}", c.file, c.symbol, c.provenance)).collect();
+            format!("{}|{}|{}|{}", b.node, b.mechanism, b.evidence, cands.join(","))
+        })
+        .collect();
+    CouplingResultDto { nodes, edges, blindspots, counter: r.counter as u32 }
+}
+
 /// The `other_side` complement lookup over the repo floor index — the counterpart accesses (readers of a key
 /// the anchor writes, or vice-versa), with http-route suffix-specificity scoring. Rows `[file, line]` in emit
 /// order. Port of `otherSide`.
