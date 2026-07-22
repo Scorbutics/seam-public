@@ -64,21 +64,23 @@ struct KeyHitJson {
     produces: bool,
 }
 
-/// The per-file key cache map `rel sha1(text)` → its cached keys, from the repo store. Port of the `files`
-/// half of `_loadStore` + `cachedFileKeys` (repo dir only; shared dir empty in practice).
-fn load_store_files(repo: &str) -> HashMap<String, Vec<KeyHitJson>> {
+/// The per-file key cache map (`rel sha1(text)` AND `route-composed::rel sha1(text)` keys) → its cached keys,
+/// from the repo store. Shared by files_index + compose_routes. Port of the `files` half of `_loadStore` +
+/// `cachedFileKeys` (repo dir only; shared dir empty in practice).
+pub(crate) fn store_files(repo: &str) -> HashMap<String, Vec<KeyHit>> {
     let mut out = HashMap::new();
     let Ok(txt) = std::fs::read_to_string(format!("{repo}/.seam/key-adapters.json")) else { return out };
     let Ok(store) = serde_json::from_str::<StoreFilesJson>(&txt) else { return out };
     if store.schema == Some(3) {
         for (k, v) in store.files {
-            out.insert(k, v.keys);
+            let keys = v.keys.into_iter().map(|h| KeyHit { kind: h.kind, value: h.value, line: h.line, produces: h.produces, ..Default::default() }).collect();
+            out.insert(k, keys);
         }
     }
     out
 }
 
-fn sha1_hex(text: &str) -> String {
+pub(crate) fn sha1_hex(text: &str) -> String {
     let mut h = Sha1::new();
     h.update(text.as_bytes());
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
@@ -88,7 +90,7 @@ fn sha1_hex(text: &str) -> String {
 /// build in `llmKeyIndex` (llm-off path: `augment` off → only floor-blind / bridge files get a disk lookup).
 pub fn files_index(repo: &str, anchor_file: &str) -> GroundingIndex {
     let mut idx: GroundingIndex = GroundingIndex::new();
-    let store = load_store_files(repo);
+    let store = store_files(repo);
     if store.is_empty() {
         return idx;
     }

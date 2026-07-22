@@ -18,15 +18,16 @@ pub mod resource_routes;
 pub mod semantics;
 
 use crate::ground::floor_base_index;
-use crate::learn::{http_client_matchers, infer_http_clients, load_matchers, KeyMatcher};
+use crate::ground::{merge_grounding, GroundingIndex};
+use crate::learn::{http_client_matchers, infer_http_clients, key_index, load_matchers, KeyMatcher};
 use graph::{Blindspot, CouplingNode, Crossing};
 use once_cell::sync::Lazy;
 use pipeline::{run_pipeline, PipelineCtx, PipelineNode, PipelineState};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-/// The data-coupling crossing delta for one anchor span. Port of `resolveCoupling` (deterministic floor path:
-/// dataCoupling ON, llm OFF; 1c/1d/1e learned/http/resource sources deferred).
+/// The data-coupling crossing delta for one anchor span. Port of `resolveCoupling` (dataCoupling ON, llm OFF —
+/// the complete engine: FLOOR + GROUND-from-LEARN + CACHE matchers + effect inference).
 pub struct CouplingResult {
     pub nodes: Vec<CouplingNode>,
     pub edges: Vec<Crossing>,
@@ -79,33 +80,32 @@ fn http_recv_tokens(matchers: &[KeyMatcher]) -> HashSet<String> {
 }
 
 /// Resolve the anchor's data-coupling bridges. `counter` seeds the `dc{n}` id minting. `stable_floor` = the
-/// pre-grow probe path: DETERMINISTIC floor only, no CACHE (learned matchers + effect off) — byte-identical &
-/// fully validated. Port of `resolveCoupling`.
-///
-/// NB (full path, `stable_floor=false`): the CACHE stage is wired (steps 1c/1d apply the learned matchers +
-/// effect matchers at the span, `_httpRecvTokens` drops http-receiver db-table phantoms), but it needs the
-/// GROUND-stage index AUGMENTATION to be complete — `mergeGrounding(floor, llmKeyIndex)` where llmKeyIndex =
-/// applyMatchers(repo, matchers) [repo-wide matcher grounding] ⊕ the per-file key cache (`.seam` `files`, 2107
-/// entries on keycloak) ⊕ composeRoutes. Without it a matcher key surfaced at the anchor finds no complement in
-/// the floor-only index and is dropped. That grounding subsystem (llm_key_index.ts) is the next increment; until
-/// it lands the full path is INCOMPLETE, so it is gated off here.
+/// pre-grow probe path (DETERMINISTIC floor only, no CACHE/LEARN). The FULL path (`stable_floor=false`) is the
+/// complete engine: FLOOR + GROUND-from-LEARN (index = mergeGrounding(floor, key_index)) + CACHE matchers +
+/// effect. Port of `resolveCoupling`.
 pub fn resolve_coupling(repo: &str, anchor_id: &str, anchor_file: &str, anchor_text: &str, lo: usize, hi: usize, counter: u64, stable_floor: bool) -> CouplingResult {
     let idx = floor_base_index(repo);
     let footprint_node_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
-    // CACHE — the LEARNED matcher store (replayed warm) + the deterministic effect-inference matchers. Empty on
-    // the stable-floor probe (the accumulating learned rules are not the probe's job).
-    let (matchers, http_clients): (Vec<KeyMatcher>, Arc<Vec<String>>) = if stable_floor {
-        (Vec::new(), Arc::new(Vec::new()))
+    // CACHE — the LEARNED matcher store (replayed warm) + the deterministic effect-inference matchers. The
+    // pipeline step-1c matchers = persisted ∪ httpClientMatchers; the GROUND index augmentation uses the
+    // PERSISTED matchers only (llmKeyIndex → applyMatchers(loadMatchers)). Empty on the stable-floor probe.
+    let (matchers, http_clients, learned): (Vec<KeyMatcher>, Arc<Vec<String>>, Arc<GroundingIndex>) = if stable_floor {
+        (Vec::new(), Arc::new(Vec::new()), Arc::new(GroundingIndex::new()))
     } else {
         let clients = effect_clients(repo);
-        let mut ms = load_matchers(repo);
+        let persisted = load_matchers(repo);
+        // GROUND from LEARN — the augmented grounding index (files ⊕ matchers ⊕ composed), persisted matchers.
+        let learned = key_index(repo, &persisted, anchor_file);
+        let mut ms = persisted;
         ms.extend(http_client_matchers(&clients));
-        (ms, clients)
+        (ms, clients, learned)
     };
     let http_recv = http_recv_tokens(&matchers);
+    // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
+    let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
     let ctx = PipelineCtx {
         repo,
-        index: &idx.floor_base,
+        index: &index,
         param_index: &idx.param,
         footprint_node_ranges: &footprint_node_ranges,
         matchers: &matchers,
