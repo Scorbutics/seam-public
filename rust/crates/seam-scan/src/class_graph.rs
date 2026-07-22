@@ -185,3 +185,90 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
     g.unresolved = unresolved;
     Some(g)
 }
+
+/// Keep only the call-site consumers `build_class_graph` could NOT already attribute — a file already wired by
+/// a `reference`→`Class.method` edge in `base` is considered covered, so its call-site nodes are dropped (the
+/// n1 anchor is always kept). Makes the subsequent merge purely additive. Port of `_callsite_new_consumers_only`.
+pub fn callsite_new_consumers_only(base: &ResolvedGraph, mut callsite: ResolvedGraph, class_name: &str) -> ResolvedGraph {
+    let file_of: HashMap<&str, &str> = base.nodes.iter().map(|n| (n.id.as_str(), n.file.as_str())).collect();
+    let prefix = format!("{class_name}.");
+    let attributed: HashSet<&str> = base
+        .edges
+        .iter()
+        .filter(|e| e.kind == "reference" && e.to.starts_with(&prefix))
+        .filter_map(|e| file_of.get(e.from.as_str()).copied())
+        .collect();
+    let keep: HashSet<String> = callsite
+        .nodes
+        .iter()
+        .filter(|n| n.id == "n1" || !attributed.contains(n.file.as_str()))
+        .map(|n| n.id.clone())
+        .collect();
+    callsite.nodes.retain(|n| keep.contains(&n.id));
+    callsite.edges.retain(|e| keep.contains(&e.from) && keep.contains(&e.to));
+    callsite
+}
+
+/// After merging the call-site pass into a class base, retire the two now-stale blind spots: a consumer the
+/// pass recovered as a `call` edge is no longer unattributed (drop its redundant weak `reference`→class edge +
+/// orphaned node), and a method the pass found a call site for drops from unused. Recomputes both blind spots
+/// from what survived. Mutates `g`. Port of `_reconcile_class_attribution`.
+pub fn reconcile_class_attribution(g: &mut ResolvedGraph, callsite: &ResolvedGraph, class_name: &str, all_methods: &[String]) {
+    let resolved_files: HashSet<&str> = callsite.nodes.iter().filter(|n| n.id != "n1" && !n.file.is_empty()).map(|n| n.file.as_str()).collect();
+    let resolved_methods: HashSet<&str> = callsite.resolved_methods.iter().map(String::as_str).collect();
+    let file_of: HashMap<String, String> = g.nodes.iter().map(|n| (n.id.clone(), n.file.clone())).collect();
+
+    let mut untraced_files: Vec<String> = Vec::new();
+    let mut untraced_seen: HashSet<String> = HashSet::new();
+    let mut superseded: HashSet<String> = HashSet::new();
+    for e in &g.edges {
+        if e.to != class_name || e.kind != "reference" {
+            continue;
+        }
+        let Some(f) = file_of.get(&e.from) else { continue };
+        if untraced_seen.insert(f.clone()) {
+            untraced_files.push(f.clone());
+        }
+        if resolved_files.contains(f.as_str()) {
+            superseded.insert(e.from.clone());
+        }
+    }
+    // drop the redundant weak reference edge, then the node it left orphaned
+    g.edges.retain(|e| !(e.kind == "reference" && e.to == class_name && superseded.contains(&e.from)));
+    let incident: HashSet<&str> = g.edges.iter().flat_map(|e| [e.from.as_str(), e.to.as_str()]).collect();
+    g.nodes.retain(|n| !(superseded.contains(&n.id) && !incident.contains(n.id.as_str())));
+
+    let used_methods: HashSet<&str> = g.nodes.iter().filter(|n| n.kind == "method" && n.enclosing == class_name).map(|n| n.symbol.as_str()).collect();
+    let mut remaining_unused: Vec<&String> = all_methods.iter().filter(|m| !used_methods.contains(m.as_str()) && !resolved_methods.contains(m.as_str())).collect();
+    remaining_unused.sort();
+    let mut remaining_unattr: Vec<&String> = untraced_files.iter().filter(|f| !resolved_files.contains(f.as_str())).collect();
+    remaining_unattr.sort();
+
+    g.blindspots.retain(|b| b.mechanism != "untraced-or-unused-methods" && b.mechanism != "method-unattributed-consumers");
+    if !remaining_unused.is_empty() {
+        g.blindspots.push(Blindspot {
+            node: class_name.into(),
+            mechanism: "untraced-or-unused-methods".into(),
+            evidence: format!(
+                "{} of {} methods have no traced consumer (unused, or used via an instance we couldn't trace): {}",
+                remaining_unused.len(), all_methods.len(), join_refs(&remaining_unused)
+            ),
+            candidates: Vec::new(),
+        });
+    }
+    if !remaining_unattr.is_empty() {
+        g.blindspots.push(Blindspot {
+            node: class_name.into(),
+            mechanism: "method-unattributed-consumers".into(),
+            evidence: format!(
+                "{} consumer(s) import {} as a RESOLVED reference but no method call could be attributed to an instance (factory/DI/dynamic): {}",
+                remaining_unattr.len(), class_name, join_refs(&remaining_unattr)
+            ),
+            candidates: Vec::new(),
+        });
+    }
+}
+
+fn join_refs(v: &[&String]) -> String {
+    v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+}

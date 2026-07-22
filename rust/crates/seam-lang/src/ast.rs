@@ -335,8 +335,40 @@ pub fn usage_lines(ctx: &Ctx, units: &[Unit], local: &str) -> Vec<usize> {
     }
 }
 
+/// The span of a WRAPPED definition — `const X = wrap(realFn)` / `memo(() => {…})` — so an anchor bound to a
+/// wrapper call still resolves to a real body span, not `[0,0]`. Returns the inline function's span, else the
+/// named impl's span, else the declarator's. Port of `_wrappedDefSpan`.
+pub fn wrapped_def_span(ctx: &Ctx, symbol: &str, units: &[Unit]) -> Option<(usize, usize)> {
+    for d in ctx.collect(ctx.root(), nk::is_var_declarator) {
+        let ch = ctx.children(d);
+        if !ch.first().is_some_and(|c0| nk::is_name_kind(c0.kind()) && ctx.text(*c0) == symbol) {
+            continue;
+        }
+        let Some(&call) = ch.iter().find(|c| nk::is_call(c.kind())) else { continue };
+        let args_node = call
+            .child_by_field_name("arguments")
+            .or_else(|| ctx.children(call).into_iter().find(|c| c.kind().contains("arguments") || c.kind().contains("argument_list")));
+        let args: Vec<Node> = match args_node {
+            Some(an) => ctx.children(an),
+            None => ctx.children(call).into_iter().skip(1).collect(),
+        };
+        if let Some(&inline) = args.iter().find(|a| nk::is_funclike(a.kind())) {
+            return Some(ctx.span(inline)); // `memo(() => {…})` — the arrow IS the body
+        }
+        for a in &args {
+            if a.kind().contains("identifier") {
+                if let Some(u) = units.iter().find(|x| x.name == ctx.text(*a) && (x.kind == "function" || x.kind == "method")) {
+                    return Some((u.start, u.end)); // `withReporting(_impl, …)` — the named impl
+                }
+            }
+        }
+        return Some(ctx.span(d)); // wrapped external fn → the declarator span (a real span, not :0)
+    }
+    None
+}
+
 /// Lines of a call whose callee LEADS with the identifier `local` (port of `_call_lines`).
-fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
+pub fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
     let mut lines = Vec::new();
     for c in ctx.collect(ctx.root(), nk::is_call) {
         if let Some(&c0) = ctx.children(c).first() {
@@ -349,7 +381,7 @@ fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
 }
 
 /// Sorted unique lines of every identifier-kind node whose text is `local` (port of `_ref_lines`).
-fn ref_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
+pub fn ref_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
     let mut v: Vec<usize> = ctx
         .collect(ctx.root(), |k| k.contains("identifier"))
         .into_iter()

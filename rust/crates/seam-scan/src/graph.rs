@@ -59,6 +59,8 @@ pub struct ResolvedGraph {
     pub edges: Vec<GraphEdge>,
     pub blindspots: Vec<Blindspot>,
     pub unresolved: Vec<Unresolved>,
+    /// The anchor id(s) a merge accumulated — empty until `merge_resolved` sets it (TS `anchors?`).
+    pub anchors: Vec<String>,
     /// build_callsite_graph's internal hand-off (the method names a call site was found for), sorted.
     pub resolved_methods: Vec<String>,
 }
@@ -80,6 +82,7 @@ pub fn make_graph(
         edges,
         blindspots: Vec::new(),
         unresolved: Vec::new(),
+        anchors: Vec::new(),
         resolved_methods: Vec::new(),
     }
 }
