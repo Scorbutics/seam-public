@@ -12,6 +12,7 @@ napi = { version = "2", default-features = false, features = ["napi4"] }
 napi-derive = "2"
 seam-lang = { path = "../seam-lang" }
 seam-resolve = { path = "../seam-resolve" }
+seam-fs = { path = "../seam-fs" }
 
 [build-dependencies]
 napi-build = "2"

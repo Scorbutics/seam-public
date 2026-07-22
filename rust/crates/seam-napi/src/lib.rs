@@ -98,6 +98,26 @@ pub fn class_bases(text: String, lang: String) -> Vec<ClassBasesDto> {
         .unwrap_or_default()
 }
 
+/// The transitive subclass family of each `owner` (incl. owner), sorted — building the callsite index once.
+#[napi]
+pub fn subclass_family_batch(repo: String, owners: Vec<String>) -> Vec<Vec<String>> {
+    let idx = seam_resolve::CallsiteIndex::build(&repo);
+    owners
+        .iter()
+        .map(|o| {
+            let mut fam: Vec<String> = idx.subclass_family(o).into_iter().collect();
+            fam.sort();
+            fam
+        })
+        .collect()
+}
+
+/// Repo-relative source files with `ext`, in the exact walk order (so a harness can compare apples-to-apples).
+#[napi]
+pub fn source_files(repo: String, ext: String) -> Vec<String> {
+    seam_fs::source_files(&repo, |r| r.ends_with(ext.as_str()))
+}
+
 /// Parity/debug: `depth|field|kind|start-end` per AST node (drives rust/parity/parity.ts).
 #[napi]
 pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {

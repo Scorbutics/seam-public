@@ -1,9 +1,11 @@
 //! Language-AGNOSTIC cross-file resolution. Dispatches only through the language-layer traits — it never
 //! names a language. Owns the per-repo state (the import index + the per-language module resolvers).
 
+pub mod callsite_index;
 pub mod consumers;
 pub mod import_index;
 
+pub use callsite_index::CallsiteIndex;
 pub use consumers::{Consumer, Status};
 
 use import_index::ImportIndex;

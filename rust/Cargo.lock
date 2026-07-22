@@ -235,6 +235,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "seam-fs",
  "seam-lang",
  "seam-resolve",
 ]
