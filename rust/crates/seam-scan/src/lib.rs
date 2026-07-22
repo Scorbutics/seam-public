@@ -21,4 +21,5 @@ pub use dependency_graph::{build_dependency_graph, DepOpts};
 pub use footprint::{build_bidirectional_graph, build_footprint};
 pub use graph::{Blindspot, Candidate, GraphEdge, GraphNode, ResolvedGraph, Unresolved};
 pub use merge::merge_resolved;
+pub use util::read;
 pub use module_graph::build_module_graph;

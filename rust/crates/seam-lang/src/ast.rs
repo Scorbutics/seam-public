@@ -349,6 +349,29 @@ pub fn enclosing_class(units: &[Unit], start: usize, end: usize) -> String {
         .unwrap_or_default()
 }
 
+/// The method-precise index: the file's named units + a map of bare-callee name → the lines that call it
+/// (a call node whose first child is an identifier). Feeds the grow's method-precise fan attribution. Port of
+/// `methodPreciseIndex`.
+pub struct MpIndex {
+    pub units: Vec<Unit>,
+    pub calls: std::collections::HashMap<String, Vec<usize>>,
+}
+
+/// Build the method-precise index. Port of `methodPreciseIndex`.
+pub fn method_precise_index(ctx: &Ctx) -> MpIndex {
+    let units = named_units(ctx);
+    let mut calls: std::collections::HashMap<String, Vec<usize>> = std::collections::HashMap::new();
+    for c in ctx.collect(ctx.root(), nk::is_call) {
+        let ch = ctx.children(c);
+        if let Some(first) = ch.first() {
+            if first.kind().contains("identifier") {
+                calls.entry(ctx.text(*first).to_string()).or_default().push(ctx.span(c).0);
+            }
+        }
+    }
+    MpIndex { units, calls }
+}
+
 /// The methods of the class/interface named `name` — (name, start, end), deduped. Port of `_type_methods`.
 pub fn type_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
     let cm = class_methods(ctx, name);

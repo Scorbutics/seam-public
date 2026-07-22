@@ -95,8 +95,15 @@ fn http_recv_tokens(matchers: &[KeyMatcher]) -> HashSet<String> {
 /// complete engine: FLOOR + GROUND-from-LEARN (index = mergeGrounding(floor, key_index)) + CACHE matchers +
 /// effect. Port of `resolveCoupling`.
 pub fn resolve_coupling(repo: &str, anchor_id: &str, anchor_file: &str, anchor_text: &str, lo: usize, hi: usize, counter: u64, stable_floor: bool) -> CouplingResult {
+    resolve_coupling_scoped(repo, anchor_id, anchor_file, anchor_text, lo, hi, counter, stable_floor, &HashMap::new())
+}
+
+/// As `resolve_coupling`, but with the reached file's FOOTPRINT node ranges (per file) exposed to the per-node
+/// key cap — a reached method's key is kept among many unreached siblings (the fan couples a resource file with
+/// dozens of routes). The grow's `_fileCouplingDelta` sets these via `ctx.footprintNodeRanges`; the plain entry
+/// passes empty (the anchor overlay never sets them). Port of the `ctx.footprintNodeRanges` bias.
+pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, anchor_text: &str, lo: usize, hi: usize, counter: u64, stable_floor: bool, footprint_node_ranges: &HashMap<String, Vec<(usize, usize)>>) -> CouplingResult {
     let idx = floor_base_index(repo);
-    let footprint_node_ranges: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
     // CACHE — the LEARNED matcher store (replayed warm) + the deterministic effect-inference matchers. The
     // pipeline step-1c matchers = persisted ∪ httpClientMatchers; the GROUND index augmentation uses the
     // PERSISTED matchers only (llmKeyIndex → applyMatchers(loadMatchers)). Empty on the stable-floor probe.
@@ -118,7 +125,7 @@ pub fn resolve_coupling(repo: &str, anchor_id: &str, anchor_file: &str, anchor_t
         repo,
         index: &index,
         param_index: &idx.param,
-        footprint_node_ranges: &footprint_node_ranges,
+        footprint_node_ranges,
         matchers: &matchers,
         http_clients: &http_clients,
         http_recv: &http_recv,

@@ -6,6 +6,7 @@
 //! (ubiquity, hub classification, and the wave itself land in later increments.)
 
 pub mod border_policies;
+pub mod coupling;
 pub mod exclude;
 pub mod graph_ir;
 pub mod roles;

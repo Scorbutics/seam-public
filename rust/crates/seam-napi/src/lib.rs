@@ -343,6 +343,21 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
     }
 }
 
+/// growSeedCoupled — P1 seed ⊕ P3 coupling overlay (anchor + fan), no wave. Parity surface for `_phaseSeed`
+/// + `_phaseCoupling` (validated against grow_to_terminals with maxNodes:1 — seed+coupling, zero expansion).
+#[napi]
+pub fn grow_seed_coupled(repo: String, anchor_file: String, symbol: String, stable_floor: bool) -> Option<GraphDto> {
+    let ex = seam_grow::exclude::Exclusion::new(&[], false);
+    let mut data = seam_grow::seed::phase_seed(&repo, &anchor_file, &symbol, &ex)?;
+    let ws = seam_resolve::Workspace::cached(&repo);
+    let mut coupled = std::collections::HashSet::new();
+    seam_grow::coupling::phase_coupling(&repo, &mut data, &ws, &mut coupled, stable_floor);
+    // DEEP fan (mirrors _growToTerminalsImpl's post-wave _fanCouple): the seed-fan saw only pre-fan nodes;
+    // this couples producer files among the fan-added nodes. `coupled` carries over so each file couples once.
+    seam_grow::coupling::fan_couple(&repo, &mut data, &ws, &mut coupled, stable_floor);
+    Some(data.into())
+}
+
 /// growSeed — the P1 structural seed (pruned UP consumers ⊕ DOWN deps, backward-tagged). Parity surface for
 /// `_phaseSeed`.
 #[napi]
