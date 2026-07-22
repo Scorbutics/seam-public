@@ -65,3 +65,71 @@ pub fn is_heritage(k: &str) -> bool {
 pub fn is_base_name(k: &str) -> bool {
     matches!(k, "identifier" | "type_identifier" | "member_expression" | "scoped_identifier" | "scoped_type_identifier")
 }
+
+/// An instantiation (`new T()` / Java object_creation_expression).
+pub fn is_new(k: &str) -> bool {
+    matches!(k, "new_expression" | "object_creation_expression")
+}
+
+/// A type-reference token.
+pub fn is_type_ref(k: &str) -> bool {
+    k == "type_identifier"
+}
+
+/// A name-binding declaration whose declared type resolves a receiver (field / param / local / var).
+pub fn is_instance_binder(k: &str) -> bool {
+    matches!(
+        k,
+        "variable_declarator"
+            | "required_parameter"
+            | "optional_parameter"
+            | "public_field_definition"
+            | "field_definition"
+            | "property_signature"
+    )
+}
+
+/// A method-declaration node kind.
+pub fn is_method_kind(k: &str) -> bool {
+    matches!(k, "method_definition" | "method_declaration" | "constructor_declaration" | "method" | "singleton_method")
+}
+
+pub fn is_interface(k: &str) -> bool {
+    k == "interface_declaration"
+}
+
+pub fn is_interface_member(k: &str) -> bool {
+    matches!(k, "method_signature" | "property_signature" | "abstract_method_signature")
+}
+
+/// Any function-like declaration.
+pub fn is_funclike(k: &str) -> bool {
+    matches!(
+        k,
+        "arrow_function"
+            | "function_declaration"
+            | "function_expression"
+            | "method_definition"
+            | "generator_function_declaration"
+            | "function_signature"
+            | "function_definition"
+            | "lambda_expression"
+            | "method_declaration"
+            | "constructor_declaration"
+            | "function_item"
+            | "closure_expression"
+            | "lambda"
+            | "function"
+            | "method"
+    )
+}
+
+/// An anonymous function (no declared name).
+pub fn is_anon_func(k: &str) -> bool {
+    matches!(k, "arrow_function" | "function_expression" | "lambda" | "lambda_expression" | "closure_expression")
+}
+
+/// A variable declarator / assignment (may bind a name to a function value).
+pub fn is_var_declarator(k: &str) -> bool {
+    matches!(k, "variable_declarator" | "assignment")
+}

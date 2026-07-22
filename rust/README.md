@@ -33,7 +33,8 @@ Adding a language = one small module implementing the traits. The domain types c
   - ✅ Import index (`seam-resolve::ImportIndex`) + `scan_consumers` (`Workspace`) — **600/600 Keycloak anchors byte-identical** (`bun rust/parity/consumers.ts`), cross-language. Ordered walk, by-name inversion, resolve→FULL/SUGGESTED, dedup, barrel-following — all exact.
   - ✅ Tree-sitter substrate — `Ctx` (parse + `collect`/`children`/`text`/`span`, TS `Ctx` semantics), a node-kind registry (`node_kinds`, the closed concept sets), and the language-agnostic AST scans `name_of`/`callee`/`called_method_names`/`class_bases` (`seam-lang::ast`). The callsite-index building blocks are **8141/8141 Java files byte-identical** (`bun rust/parity/ast.ts`).
   - ✅ Callsite index (`seam-resolve::CallsiteIndex`) — method→caller-files + class→`extends`-bases, built via the AST scans over the ordered walk; + the `subclass_family` fixpoint closure. **8904/8904 Java subclass families byte-identical** (`bun rust/parity/family.ts`).
-  - ▢ next: `build_callsite_graph` (candidate callers filtered by language family + per-candidate `_method_call_sites`/receiver resolution + subclass-family provenance promotion) → `--query consumers` for a class anchor; then TS namespace/default consumer paths; then impact/reaches/etc.
+  - ✅ Receiver-resolution + attribution scans (`seam-lang::ast`) — `call_sites` (receiver-resolved `{method, line, recv_id, recv_new}`), `instance_types`, `type_names`, `named_units`/`type_methods`. **8141/8141 Java files byte-identical for all four** (`bun rust/parity/astscans.ts`), incl. the span/line logic.
+  - ▢ next: `build_callsite_graph` itself — compose these scans + the four provenance rules (inFamily→FULL; provablySibling/staticForeign/provablyForeign→drop) → `--query consumers` for a class anchor; then TS namespace/default consumer paths; then impact/reaches/etc.
 
 ## Phase 0 results
 

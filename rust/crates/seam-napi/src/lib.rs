@@ -118,6 +118,75 @@ pub fn source_files(repo: String, ext: String) -> Vec<String> {
     seam_fs::source_files(&repo, |r| r.ends_with(ext.as_str()))
 }
 
+// --- callsite-graph AST scans (validation surface) ---
+
+#[napi(object)]
+pub struct CallSiteDto {
+    pub method: String,
+    pub line: u32,
+    pub recv_id: Option<String>,
+    pub recv_new: Option<String>,
+}
+
+#[napi]
+pub fn call_sites(text: String, lang: String) -> Vec<CallSiteDto> {
+    seam_lang::Ctx::parse(&text, &lang)
+        .map(|c| {
+            seam_lang::ast::call_sites(&c)
+                .into_iter()
+                .map(|s| CallSiteDto { method: s.method, line: s.line as u32, recv_id: s.recv_id, recv_new: s.recv_new })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[napi(object)]
+pub struct UnitDto {
+    pub name: String,
+    pub kind: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+#[napi]
+pub fn named_units(text: String, lang: String) -> Vec<UnitDto> {
+    seam_lang::Ctx::parse(&text, &lang)
+        .map(|c| {
+            seam_lang::ast::named_units(&c)
+                .into_iter()
+                .map(|u| UnitDto { name: u.name, kind: u.kind, start: u.start as u32, end: u.end as u32 })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// name → its bound types (sorted), as `[name, type, type, …]` rows sorted by name.
+#[napi]
+pub fn instance_types(text: String, lang: String) -> Vec<Vec<String>> {
+    let Some(ctx) = seam_lang::Ctx::parse(&text, &lang) else { return Vec::new() };
+    let mut rows: Vec<Vec<String>> = seam_lang::ast::instance_types(&ctx)
+        .into_iter()
+        .map(|(name, tys)| {
+            let mut t: Vec<String> = tys.into_iter().collect();
+            t.sort();
+            let mut row = vec![name];
+            row.extend(t);
+            row
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// The type tokens named in the file, sorted.
+#[napi]
+pub fn type_names(text: String, lang: String) -> Vec<String> {
+    let Some(ctx) = seam_lang::Ctx::parse(&text, &lang) else { return Vec::new() };
+    let mut t: Vec<String> = seam_lang::ast::type_names(&ctx).into_iter().collect();
+    t.sort();
+    t
+}
+
 /// Parity/debug: `depth|field|kind|start-end` per AST node (drives rust/parity/parity.ts).
 #[napi]
 pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {
