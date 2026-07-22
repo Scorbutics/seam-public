@@ -258,6 +258,7 @@ name = "seam-resolve"
 version = "0.0.0"
 dependencies = [
  "once_cell",
+ "regex",
  "seam-fs",
  "seam-lang",
 ]
@@ -268,6 +269,7 @@ version = "0.0.0"
 dependencies = [
  "once_cell",
  "regex",
+ "seam-couple",
  "seam-fs",
  "seam-lang",
  "seam-resolve",

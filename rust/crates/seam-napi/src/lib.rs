@@ -215,13 +215,22 @@ pub struct GraphEdgeDto {
     pub line: Option<u32>,
 }
 
+/// Wire form of a blindspot candidate.
+#[napi(object)]
+pub struct CandidateDto {
+    pub symbol: String,
+    pub file: Option<String>,
+    pub provenance: Option<String>,
+}
+
 /// Wire form of a `seam_scan::Blindspot`.
 #[napi(object)]
 pub struct BlindspotDto {
     pub node: String,
     pub mechanism: String,
     pub evidence: String,
-    pub candidates: Vec<String>,
+    pub candidates: Vec<CandidateDto>,
+    pub persists: bool,
 }
 
 /// Wire form of a `seam_scan::Unresolved`.
@@ -283,7 +292,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
             blindspots: g
                 .blindspots
                 .into_iter()
-                .map(|b| BlindspotDto { node: b.node, mechanism: b.mechanism, evidence: b.evidence, candidates: b.candidates.into_iter().map(|c| c.symbol).collect() })
+                .map(|b| BlindspotDto { node: b.node, mechanism: b.mechanism, evidence: b.evidence, candidates: b.candidates.into_iter().map(|c| CandidateDto { symbol: c.symbol, file: c.file, provenance: c.provenance }).collect(), persists: b.persists })
                 .collect(),
             unresolved: g.unresolved.into_iter().map(|u| UnresolvedDto { node: u.node, query: u.query, reason: u.reason }).collect(),
             anchors: g.anchors,
@@ -582,4 +591,12 @@ pub fn string_dispatch(repo: String, anchor_file: String, text: String, lang: St
     let mlen = text.matches('\n').count();
     let (edges, _amb) = seam_scan::string_coupling::detect(&ctx, 0, mlen, &idx, &anchor_file);
     edges.into_iter().map(|(n, e, l)| vec![n, e, l.to_string()]).collect()
+}
+
+/// build_dependency_graph — the DOWN/dependency footprint (structural; dataCoupling off, qualified-callee &
+/// provider-factory pending).
+#[napi]
+pub fn build_dependency_graph(repo: String, anchor_file: String, symbol: String, anchor_line: Option<u32>) -> GraphDto {
+    let opts = seam_scan::DepOpts { anchor_line: anchor_line.map(|l| l as usize), caller_files: None };
+    seam_scan::build_dependency_graph(&repo, &anchor_file, &symbol, &opts).into()
 }

@@ -57,7 +57,7 @@ impl GraphBuilder {
     }
 
     pub fn add_blindspot(&mut self, mechanism: &str, evidence: String, candidates: Vec<Candidate>) {
-        self.blindspots.push(Blindspot { node: "n1".into(), mechanism: mechanism.into(), evidence, candidates });
+        self.blindspots.push(Blindspot { node: "n1".into(), mechanism: mechanism.into(), evidence, candidates, persists: false });
     }
 
     pub fn add_unresolved(&mut self, query: &str, reason: String) {

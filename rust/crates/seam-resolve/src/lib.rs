@@ -4,9 +4,11 @@
 pub mod callsite_index;
 pub mod consumers;
 pub mod import_index;
+pub mod file_ref;
 pub mod interface_index;
 
 pub use callsite_index::CallsiteIndex;
+pub use file_ref::{is_path_literal, resolve_file_ref};
 pub use interface_index::{Impl, InterfaceIndex};
 pub use consumers::{Consumer, Status};
 

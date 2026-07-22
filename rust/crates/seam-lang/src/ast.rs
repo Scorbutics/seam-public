@@ -220,6 +220,38 @@ pub fn call_sites(ctx: &Ctx) -> Vec<CallSite> {
     out
 }
 
+/// The type names the file DELEGATES to (call receivers' resolved types + unqualified callee names) — the
+/// "called" set the down builder uses to tell a delegation `import` edge from a payload `type-ref`. Port of
+/// `_called_types`.
+pub fn called_types(ctx: &Ctx) -> HashSet<String> {
+    let mut out = HashSet::new();
+    let inst = instance_types(ctx);
+    for call in ctx.collect(ctx.root(), nk::is_call) {
+        let Some(c) = callee(ctx, call) else { continue };
+        let Some(obj) = c.obj else {
+            out.insert(c.name); // unqualified foo() → foo
+            continue;
+        };
+        let ok = obj.kind();
+        if ok == "identifier" {
+            if let Some(ts) = inst.get(ctx.text(obj)) {
+                out.extend(ts.iter().cloned());
+            }
+        } else if nk::is_new(ok) {
+            if let Some(cons) = ctx.children(obj).into_iter().find(|x| x.kind() == "identifier" || nk::is_member(x.kind())) {
+                out.insert(ctx.text(cons).to_string());
+            }
+        } else if nk::is_member(ok) {
+            if let Some(ip) = ctx.children(obj).into_iter().find(|x| nk::is_member_name(x.kind())) {
+                if let Some(ts) = inst.get(ctx.text(ip)) {
+                    out.extend(ts.iter().cloned());
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Variable/field/param name → the declared/instantiated types bound to it. Port of `_instance_types`.
 pub fn instance_types(ctx: &Ctx) -> HashMap<String, HashSet<String>> {
     let mut out: HashMap<String, HashSet<String>> = HashMap::new();

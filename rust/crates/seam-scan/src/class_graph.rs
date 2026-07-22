@@ -56,7 +56,8 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
                 node: class_name.into(),
                 mechanism: "unresolved-import".into(),
                 evidence: format!("{} imports {} from '{}' (module unresolved)", con.file, class_name, con.source),
-                candidates: vec![Candidate { symbol: con.file.clone() }],
+                candidates: vec![Candidate { symbol: con.file.clone(), ..Default::default() }],
+                persists: false,
             });
             unresolved.push(Unresolved { node: class_name.into(), query: "resolveModule".into(), reason: format!("unresolved:{}", con.source) });
             continue;
@@ -96,6 +97,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
                 class_name, all_cons.len(), CLASS_CONSUMER_PARSE_CAP, capped
             ),
             candidates: Vec::new(),
+                persists: false,
         });
     }
 
@@ -137,6 +139,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
                 unused.len(), method_names.len(), us.join(", ")
             ),
             candidates: Vec::new(),
+                persists: false,
         });
     }
 
@@ -176,6 +179,7 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
                 untraced.len(), class_name, ut.join(", ")
             ),
             candidates: Vec::new(),
+                persists: false,
         });
     }
 
@@ -254,6 +258,7 @@ pub fn reconcile_class_attribution(g: &mut ResolvedGraph, callsite: &ResolvedGra
                 remaining_unused.len(), all_methods.len(), join_refs(&remaining_unused)
             ),
             candidates: Vec::new(),
+                persists: false,
         });
     }
     if !remaining_unattr.is_empty() {
@@ -265,6 +270,7 @@ pub fn reconcile_class_attribution(g: &mut ResolvedGraph, callsite: &ResolvedGra
                 remaining_unattr.len(), class_name, join_refs(&remaining_unattr)
             ),
             candidates: Vec::new(),
+                persists: false,
         });
     }
 }

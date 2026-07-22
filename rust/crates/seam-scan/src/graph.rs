@@ -22,21 +22,25 @@ pub struct GraphEdge {
     pub line: Option<usize>,
 }
 
-/// A candidate attached to a blindspot. Only the `{symbol}` shape occurs in the structural builders; the
-/// coupling layer will add richer shapes later.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A candidate attached to a blindspot. `symbol` always set; `file`/`provenance` set by the dependency/
+/// coupling shapes (an unresolved import, an ambiguous dispatch, a multi-impl interface). Port of the varied
+/// `candidates` shapes.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Candidate {
     pub symbol: String,
+    pub file: Option<String>,
+    pub provenance: Option<String>,
 }
 
 /// An edge the engine SEES but won't draw as resolved (unresolved import, ambiguous dispatch, …) — surfaced
-/// for review. Port of `Blindspot`.
+/// for review. Port of `Blindspot`. `persists` marks a DI wall hiding a real db-store write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Blindspot {
     pub node: String,
     pub mechanism: String,
     pub evidence: String,
     pub candidates: Vec<Candidate>,
+    pub persists: bool,
 }
 
 /// A query the engine couldn't resolve statically — a lead for the LSP/extension layer. Port of `Unresolved`.

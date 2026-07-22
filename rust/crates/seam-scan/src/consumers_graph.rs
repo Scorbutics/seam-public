@@ -87,7 +87,7 @@ fn add_import_consumers(b: &mut GraphBuilder, repo: &str, anchor_file: &str, sym
             b.add_blindspot(
                 "unresolved-import",
                 format!("{} imports {} from '{}' (module unresolved)", con.file, symbol, con.source),
-                vec![Candidate { symbol: con.file.clone() }],
+                vec![Candidate { symbol: con.file.clone(), ..Default::default() }],
             );
             b.add_unresolved("resolveModule", format!("unresolved:{}", con.source));
             continue;
