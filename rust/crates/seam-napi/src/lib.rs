@@ -688,3 +688,46 @@ pub fn project_neighborhood(repo: String, anchor_file: String, symbol: String, d
         no_structure: n.no_structure,
     }
 }
+
+/// Wire form of a `seam_shapes::Dep`.
+#[napi(object)]
+pub struct DepDto {
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+}
+
+/// Wire form of a `seam_shapes::Comparison` (the compare shape).
+#[napi(object)]
+pub struct ComparisonDto {
+    pub a_symbol: String,
+    pub a_file: String,
+    pub b_symbol: String,
+    pub b_file: String,
+    pub depth: u32,
+    pub shared: Vec<DepDto>,
+    pub a_only: Vec<DepDto>,
+    pub b_only: Vec<DepDto>,
+    pub similarity: f64,
+    pub no_structure: bool,
+}
+
+/// projectCompare — how A differs from B by their dependency sets (structural, dataCoupling off).
+#[napi]
+pub fn project_compare(repo: String, a_file: String, a_symbol: String, b_file: String, b_symbol: String, depth: Option<u32>) -> ComparisonDto {
+    let opts = seam_shapes::CompareOpts { depth: depth.map(|d| d as usize).unwrap_or(1), max_expansions: 40 };
+    let c = seam_shapes::project_compare(&repo, &a_file, &a_symbol, &b_file, &b_symbol, &opts);
+    let dep = |d: seam_shapes::Dep| DepDto { symbol: d.symbol, file: d.file, kind: d.kind };
+    ComparisonDto {
+        a_symbol: c.a_symbol,
+        a_file: c.a_file,
+        b_symbol: c.b_symbol,
+        b_file: c.b_file,
+        depth: c.depth as u32,
+        shared: c.shared.into_iter().map(dep).collect(),
+        a_only: c.a_only.into_iter().map(dep).collect(),
+        b_only: c.b_only.into_iter().map(dep).collect(),
+        similarity: c.similarity,
+        no_structure: c.no_structure,
+    }
+}
