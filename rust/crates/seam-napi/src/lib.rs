@@ -586,6 +586,26 @@ pub fn floor_index(repo: String) -> Vec<Vec<String>> {
     rows
 }
 
+/// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
+/// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
+#[napi]
+pub fn infer_http_clients(repo: String) -> Vec<String> {
+    let files: Vec<(String, String)> = seam_fs::source_files(&repo, seam_couple::ground::floor::scannable_for_keys)
+        .into_iter()
+        .filter_map(|rel| std::fs::read(format!("{repo}/{rel}")).ok().map(|b| (rel, String::from_utf8_lossy(&b).into_owned())))
+        .collect();
+    seam_couple::learn::infer_http_clients(&files)
+}
+
+/// The indirected-http-call route CONSUME keys for one file (step 1d). Port of resolveHttpCallSites.
+#[napi]
+pub fn resolve_http_call_sites(file: String, text: String, clients: Vec<String>) -> Vec<String> {
+    seam_couple::learn::resolve_http_call_sites(&file, &text, &clients)
+        .into_iter()
+        .map(|h| format!("{}|{}|{}|{}", h.kind, h.value, h.line, h.produces))
+        .collect()
+}
+
 /// The LEARNED matcher store replayed over one file — every persisted rule's key hits, as
 /// `kind|value|line|produces|op` rows (the CACHE replay). Port of loadMatchers + runMatcher.
 #[napi]
@@ -611,8 +631,8 @@ pub struct CouplingResultDto {
 }
 
 #[napi]
-pub fn resolve_coupling(repo: String, anchor_id: String, anchor_file: String, anchor_text: String, lo: u32, hi: u32, counter: u32) -> CouplingResultDto {
-    let r = seam_couple::resolve_coupling(&repo, &anchor_id, &anchor_file, &anchor_text, lo as usize, hi as usize, counter as u64);
+pub fn resolve_coupling(repo: String, anchor_id: String, anchor_file: String, anchor_text: String, lo: u32, hi: u32, counter: u32, stable_floor: bool) -> CouplingResultDto {
+    let r = seam_couple::resolve_coupling(&repo, &anchor_id, &anchor_file, &anchor_text, lo as usize, hi as usize, counter as u64, stable_floor);
     let nodes = r
         .nodes
         .iter()

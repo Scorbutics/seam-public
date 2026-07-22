@@ -31,9 +31,9 @@ for (const rel of files) {
   if (!/^[\x00-\x7F]*$/.test(text)) continue;                   // ASCII only (dodge the line_of byte/UTF-16 delta)
   const hi = text.split("\n").length;
   const ctx = ref.fork();
-  ctx.stableFloor = true;   // pure deterministic floor: no learned matchers (.seam) + no effect-clients — the APPLY path Rust ports (the matcher/effect key SOURCES are the next increment)
+  if (process.env.SEAM_STABLE) ctx.stableFloor = true;   // SEAM_STABLE=1 → pure floor; default = FULL path (learned matchers + effect-inference on)
   const ts = await resolveCoupling(repo, "n1", rel, text, 0, hi, 0, { dataCoupling: true, llm: false }, ctx);
-  const rust = addon.resolveCoupling(repo, "n1", rel, text, 0, hi, 0);
+  const rust = addon.resolveCoupling(repo, "n1", rel, text, 0, hi, 0, !!process.env.SEAM_STABLE);
   if (ts.nodes.length) nonEmpty++;
   const tn = serNodes(ts.nodes).join(";"), rn = (rust.nodes as string[]).join(";");
   const te = serEdges(ts.edges).join(";"), re = (rust.edges as string[]).join(";");

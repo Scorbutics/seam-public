@@ -37,6 +37,9 @@ pub struct PipelineCtx<'a> {
     pub index: &'a GroundingIndex,     // floor_base — for otherSide grounding
     pub param_index: &'a GroundingIndex, // raw param grounding — for step 1b re-derivation
     pub footprint_node_ranges: &'a HashMap<String, Vec<(usize, usize)>>,
+    pub matchers: &'a [crate::learn::KeyMatcher], // step 1c: LEARNED adapter rules (CACHE replay)
+    pub http_clients: &'a [String],               // step 1d: inferred custom http-client receivers
+    pub http_recv: &'a HashSet<String>,           // classified http receivers → drop a db-table phantom on them
 }
 
 /// The mutable recursion-wide state (graph accumulator + grow-wide budgets).
@@ -219,29 +222,37 @@ struct Grounded {
 /// the shared graph. Recurses one hop into each materialised complement. Port of `runPipeline`.
 #[allow(clippy::too_many_arguments)]
 pub fn run_pipeline(ctx: &PipelineCtx, state: &mut PipelineState, node: &PipelineNode, depth: usize, seen_keys: &HashSet<String>, carrier_accs: &[KeyHit], proposed: &[KeyHit]) {
-    // STEP 1 (inline scan) + STEP 2 — the keys this span touches (matchers/http-recv deferred → empty set).
-    let mut keys = collect_anchor_keys(&node.file, &node.text, node.lo, node.hi, carrier_accs, proposed, &HashSet::new());
-    // STEP 1b — the node's const-resolved param keys, read back from the repo param index (earliest line wins).
-    for hit in param_keys_for_span(ctx.param_index, &node.file, node.lo, node.hi) {
+    // A key from a per-span secondary source (param / matcher / http / resource) — id = `kind value produces`
+    // (no label), earliest-line-wins, tagged scan. Port of the shared step-1b..1e insert.
+    let insert_secondary = |keys: &mut IndexMap<String, AnchorKey>, hit: &KeyHit| {
+        if hit.line < node.lo || hit.line > node.hi {
+            return;
+        }
         let id = format!("{} {} {}", hit.kind, hit.value, hit.produces);
-        let replace = keys.get(&id).map_or(true, |cur| hit.line < cur.line);
-        if replace {
-            keys.insert(id, AnchorKey { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: super::collect::KeySource::Scan, label: None, op: None });
+        if keys.get(&id).map_or(true, |cur| hit.line < cur.line) {
+            keys.insert(id, AnchorKey { kind: hit.kind.clone(), value: hit.value.clone(), produces: hit.produces, line: hit.line, source: super::collect::KeySource::Scan, label: None, op: None });
+        }
+    };
+
+    // STEP 1 (inline scan) + STEP 2 — the keys this span touches; an http-client receiver's db-table phantom dropped.
+    let mut keys = collect_anchor_keys(&node.file, &node.text, node.lo, node.hi, carrier_accs, proposed, ctx.http_recv);
+    // STEP 1b — const-resolved param keys, read back from the repo param index.
+    for hit in param_keys_for_span(ctx.param_index, &node.file, node.lo, node.hi) {
+        insert_secondary(&mut keys, &hit);
+    }
+    // STEP 1c — LEARNED adapter rules applied to THIS span (the CACHE replay), span-filtered like the floor scan.
+    for m in ctx.matchers {
+        for hit in crate::learn::run_matcher(m, &node.text) {
+            insert_secondary(&mut keys, &hit);
         }
     }
-    // STEP 1c/1d (learned matchers, indirected http calls) — deferred (empty on the deterministic floor path:
-    // matchers off under stableFloor, httpClients empty; land with the matcher replay + effect_inference).
-    // STEP 1e — CLASS-BASE-ROUTE inheritance: an SDK resource method inherits its class base path; stamp the
-    // composed route at the METHOD line so the method node owns the crossing. Deterministic (raw text).
+    // STEP 1d — INDIRECTED http calls on a proven edge (custom http client + descriptor ref → resolved route).
+    for hit in crate::learn::resolve_http_call_sites(&node.file, &node.text, ctx.http_clients) {
+        insert_secondary(&mut keys, &hit);
+    }
+    // STEP 1e — CLASS-BASE-ROUTE inheritance: an SDK resource method inherits its class base path.
     for hit in super::resource_routes::resolve_resource_routes(&node.file, &node.text) {
-        if hit.line < node.lo || hit.line > node.hi {
-            continue;
-        }
-        let id = format!("{} {} {}", hit.kind, hit.value, hit.produces);
-        let replace = keys.get(&id).map_or(true, |cur| hit.line < cur.line);
-        if replace {
-            keys.insert(id, AnchorKey { kind: hit.kind, value: hit.value, produces: hit.produces, line: hit.line, source: super::collect::KeySource::Scan, label: None, op: None });
-        }
+        insert_secondary(&mut keys, &hit);
     }
     if keys.is_empty() {
         return;

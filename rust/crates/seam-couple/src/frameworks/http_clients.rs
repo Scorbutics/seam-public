@@ -19,6 +19,12 @@ const HTTP_CLIENTS: &[(&str, bool)] = &[
     ("got", true),
 ];
 
+/// The registered http-client receiver names (the sink vocabulary effect_inference seeds on). Port of
+/// `httpClientNames`.
+pub fn http_client_names() -> Vec<&'static str> {
+    HTTP_CLIENTS.iter().map(|(n, _)| *n).collect()
+}
+
 fn alternation() -> String {
     HTTP_CLIENTS
         .iter()

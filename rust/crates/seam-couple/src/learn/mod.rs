@@ -4,5 +4,7 @@
 //! key_ir's runMatcher.
 
 pub mod matchers;
+pub mod effect_inference;
 
 pub use matchers::{load_matchers, run_matcher, KeyMatcher};
+pub use effect_inference::{infer_http_clients, http_client_matchers, resolve_http_call_sites};

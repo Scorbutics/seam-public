@@ -1,0 +1,271 @@
+//! EFFECT INFERENCE (HTTP slice) — deduce a CUSTOM http-client receiver TRANSITIVELY so its call sites read as
+//! HTTP data-coupling edges even though the receiver name isn't fetch/axios. SEED on grounded I/O PRIMITIVES (a
+//! `fetch`/`axios`/… sink), PROPAGATE over in-repo bindings + aliases (`X = httpService`) to a fixpoint. The
+//! result is the SET of http-client tokens — fed to the route grounding. Deterministic, no LLM. Port of
+//! effect_inference.ts (inferHttpClients + httpClientMatchers + resolveHttpCallSites).
+
+use super::matchers::KeyMatcher;
+use crate::adapters::endpoint_map::resolve_expr;
+use crate::adapters::http_route::norm_path;
+use crate::frameworks::http_clients::http_client_names;
+use crate::key_ir::line_of;
+use crate::mask::mask_comments;
+use crate::types::KeyHit;
+use once_cell::sync::Lazy;
+use regex::Regex;
+use seam_lang::node_kinds::{is_class_kind, is_name_kind, is_var_declarator};
+use seam_lang::{grammar_for, Ctx};
+use std::collections::HashSet;
+
+// The HTTP-method verbs a client is called with — an inferred client's literal-route call emits an http-route
+// CONSUME key. Port of `_HTTP_VERBS`.
+const HTTP_VERBS: &[&str] = &["get", "post", "put", "delete", "patch", "head", "options", "request"];
+// The VALUE shape that makes a binding a client CANDIDATE (a receiver you call verb-methods on).
+fn is_object_kind(k: &str) -> bool {
+    k == "object" || k == "object_expression"
+}
+
+fn word_or_dollar(c: char) -> bool {
+    c.is_ascii_alphanumeric() || c == '_' || c == '$'
+}
+
+fn sink_names_alt() -> String {
+    http_client_names().into_iter().chain(std::iter::once("XMLHttpRequest")).map(regex::escape).collect::<Vec<_>>().join("|")
+}
+static SINK_RE: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r"(?:{})", sink_names_alt())).unwrap());
+
+// The 0-based lines a grounded http sink appears on (`(?<![\w$.])name(?![\w$])`, boundaries emulated). Port of
+// `_lineSet(code, _httpSinkRe())`.
+fn sink_lines(code: &str) -> HashSet<usize> {
+    let mut out = HashSet::new();
+    for m in SINK_RE.find_iter(code) {
+        let (s, e) = (m.start(), m.end());
+        let before_ok = s == 0 || !code[..s].chars().next_back().is_some_and(|c| word_or_dollar(c) || c == '.');
+        let after_ok = code[e..].chars().next().map_or(true, |c| !word_or_dollar(c));
+        if before_ok && after_ok {
+            out.insert(line_of(code, s));
+        }
+    }
+    out
+}
+
+struct Binding {
+    name: String,
+    s: usize,
+    e: usize,
+}
+
+fn value_is_obj_or_class(ctx: &Ctx, n: seam_lang::Node) -> bool {
+    ctx.children(n).iter().any(|c| is_object_kind(c.kind()) || is_class_kind(c.kind()))
+}
+
+// The named CLIENT-CANDIDATE bindings (VALUE is an object/class) + object/class assignments. Port of `_bindings`.
+fn bindings(ctx: &Ctx) -> Vec<Binding> {
+    let mut out = Vec::new();
+    for n in ctx.collect(ctx.root(), |k| is_var_declarator(k) || is_class_kind(k)) {
+        if is_var_declarator(n.kind()) && !value_is_obj_or_class(ctx, n) {
+            continue; // a function/value wrapper is a CALLER, not a client
+        }
+        let name = if let Some(nf) = n.child_by_field_name("name") {
+            Some(ctx.text(nf).to_string())
+        } else {
+            ctx.children(n).into_iter().find(|c| is_name_kind(c.kind())).map(|id| ctx.text(id).to_string())
+        };
+        if let Some(name) = name {
+            let (s, e) = ctx.span(n);
+            out.push(Binding { name, s, e });
+        }
+    }
+    for n in ctx.collect(ctx.root(), |k| k == "assignment_expression") {
+        let kids = ctx.children(n);
+        if let Some(lhs) = kids.first() {
+            if (is_name_kind(lhs.kind()) || lhs.kind() == "member_expression") && value_is_obj_or_class(ctx, n) {
+                let name: String = ctx.text(*lhs).chars().filter(|c| !c.is_whitespace()).collect();
+                let (s, e) = ctx.span(n);
+                out.push(Binding { name, s, e });
+            }
+        }
+    }
+    out
+}
+
+// `X = Y` / `const X = Y` / `X.y = Y` where Y is a bare identifier — an alias edge (X inherits Y's effect).
+static ALIAS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|[\s;{(])(?:(?:const|let|var)[ \t]+)?([A-Za-z_$][\w$.]*)[ \t]*=[ \t]*([A-Za-z_$][\w$]*)[ \t]*[;\n]").unwrap());
+
+/// Infer the set of http-client receiver TOKENS across the given files. Insertion-ordered (walk order, then
+/// alias-fixpoint additions) — the httpClientMatchers order depends on it. Port of `inferHttpClients`.
+pub fn infer_http_clients(files: &[(String, String)]) -> Vec<String> {
+    let mut http_effect: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut push = |effect: &mut Vec<String>, seen: &mut HashSet<String>, name: String| {
+        if seen.insert(name.clone()) {
+            effect.push(name);
+        }
+    };
+    let mut aliases: Vec<(String, String)> = Vec::new();
+    for (rel, text) in files {
+        let Some(grammar) = grammar_for(rel) else { continue };
+        let code = mask_comments(text); // sink/alias scan on comment-masked code
+        let sinks = sink_lines(&code);
+        if !sinks.is_empty() {
+            if let Some(ctx) = Ctx::parse(&code, grammar) {
+                for b in bindings(&ctx) {
+                    if sinks.iter().any(|l| *l >= b.s && *l <= b.e) {
+                        push(&mut http_effect, &mut seen, b.name);
+                    }
+                }
+            }
+        }
+        for c in ALIAS_RE.captures_iter(&code) {
+            let lhs: String = c[1].chars().filter(|ch| !ch.is_whitespace()).collect();
+            aliases.push((lhs, c[2].to_string()));
+        }
+    }
+    // propagate the http effect across aliases to a fixpoint (X = httpService → X is http).
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for (lhs, rhs) in &aliases {
+            if seen.contains(rhs) && !seen.contains(lhs) {
+                push(&mut http_effect, &mut seen, lhs.clone());
+                changed = true;
+            }
+        }
+    }
+    http_effect
+}
+
+/// Channel http-route matchers for a set of custom clients — a `<client>.<verb>('/route')` call → an http-route
+/// CONSUME key. Port of `httpClientMatchers`.
+pub fn http_client_matchers(clients: &[String]) -> Vec<KeyMatcher> {
+    clients
+        .iter()
+        .map(|token| KeyMatcher::Channel { token: token.clone(), verbs: HTTP_VERBS.iter().map(|v| v.to_string()).collect(), kind: "http-route".into(), role: "consumes".into() })
+        .collect()
+}
+
+// ── INDIRECTED route resolution (step 1d) ────────────────────────────────────────────────────────────────────
+
+static CONST_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*['"`]([^'"`\n]+)['"`]"#).unwrap());
+const TOKEN: &str = r#"(?:[A-Za-z_$][\w$.]*|['"`][^'"`]*['"`])"#;
+static ENDPOINT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r"\b(?:endpoint|url|path|route)\b[ \t]*:[ \t]*({TOKEN}(?:[ \t]*\+[ \t]*{TOKEN})*)")).unwrap());
+static MAP_DECL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:const|let|var)[ \t]+([A-Za-z_$][\w$]*)[ \t]*=[ \t]*\{").unwrap());
+// TS `(['"]?)(id)\1[ \t]*:[ \t]*{` — the `\1` backref (matching quotes) emulated as two optional-quote groups
+// + an equality check (Rust regex has no backrefs).
+static MAP_ENTRY: Lazy<Regex> = Lazy::new(|| Regex::new(r#"(['"]?)([A-Za-z_$][\w$]*)(['"]?)[ \t]*:[ \t]*\{"#).unwrap());
+static STR_LIT: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^['"`]([^'"`]*)['"`]$"#).unwrap());
+static DOTTED: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*").unwrap());
+static BARE_VAR: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_$][\w$]*$").unwrap());
+
+// s[open]=='{' → the inner text (brace-balanced). Port of `_balancedFrom`.
+fn balanced_from(s: &str, open: usize) -> Option<String> {
+    let b = s.as_bytes();
+    let mut depth = 0i32;
+    for i in open..s.len() {
+        if b[i] == b'{' {
+            depth += 1;
+        } else if b[i] == b'}' {
+            depth -= 1;
+            if depth == 0 {
+                return Some(s[open + 1..i].to_string());
+            }
+        }
+    }
+    None
+}
+
+// `<map>.<key>` → resolved endpoint route, from in-file `const <map> = { <key>: { endpoint: … } }`. Port of
+// `_endpointMapIndex`.
+fn endpoint_map_index(src: &str) -> std::collections::HashMap<String, String> {
+    let mut consts: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for cm in CONST_RE.captures_iter(src) {
+        consts.entry(cm[1].to_string()).or_insert_with(|| cm[2].to_string());
+    }
+    let mut out = std::collections::HashMap::new();
+    for dm in MAP_DECL.captures_iter(src) {
+        let whole = dm.get(0).unwrap();
+        let Some(body) = balanced_from(src, whole.end() - 1) else { continue };
+        for em in MAP_ENTRY.captures_iter(&body) {
+            if em.get(1).map(|m| m.as_str()) != em.get(3).map(|m| m.as_str()) {
+                continue; // opening/closing quote must match (the `\1` backref)
+            }
+            let ewhole = em.get(0).unwrap();
+            let Some(ent_body) = balanced_from(&body, ewhole.end() - 1) else { continue };
+            let Some(e2) = ENDPOINT_RE.captures(&ent_body) else { continue };
+            if let Some(route) = resolve_expr(&e2[1], &consts) {
+                if route.starts_with('/') {
+                    out.insert(format!("{}.{}", &dm[1], &em[2]), norm_path(&route));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// HTTP-route CONSUME keys for a file's calls to an inferred http client (literal route, or a `<map>.<key>`
+/// descriptor ref against the in-file config). Port of `resolveHttpCallSites`.
+pub fn resolve_http_call_sites(file: &str, text: &str, clients: &[String]) -> Vec<KeyHit> {
+    if clients.is_empty() || grammar_for(file).is_none() {
+        return Vec::new();
+    }
+    // prefilter: a client token absent from raw text can't appear in the masked scan.
+    if !clients.iter().any(|c| text.contains(c)) {
+        return Vec::new();
+    }
+    let src = mask_comments(text);
+    let cfg = endpoint_map_index(&src);
+    let desc_route = |expr: &str| -> Option<String> {
+        if let Some(lit) = STR_LIT.captures(expr) {
+            return if lit[1].starts_with('/') { Some(norm_path(&lit[1])) } else { None };
+        }
+        let dotted = DOTTED.find(expr)?.as_str();
+        let mut p = dotted.to_string();
+        if let Some(ei) = p.find(".endpoint") {
+            p = p[..ei].to_string();
+        }
+        cfg.get(&p).cloned()
+    };
+    let mut out = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for client in clients {
+        if !src.contains(client) {
+            continue;
+        }
+        let esc = regex::escape(client);
+        // `<client>.verb( ARG` OR `<client>[verb]( ARG` — ARG = first arg up to , or ). `(?<![\w$.])` emulated.
+        let re = Regex::new(&format!(r"{esc}[ \t]*(?:\.[ \t]*[A-Za-z_$]\w*|\[[^\]]+\])[ \t]*\([ \t]*([^,)]+)")).unwrap();
+        for m in re.captures_iter(&src) {
+            let whole = m.get(0).unwrap();
+            let start = whole.start();
+            // lookbehind (?<![\w$.]): char before the client token not a word/`$`/`.`
+            if start > 0 && src[..start].chars().next_back().is_some_and(|c| word_or_dollar(c) || c == '.') {
+                continue;
+            }
+            let arg = m[1].trim().to_string();
+            let mut route = desc_route(&arg);
+            if route.is_none() && BARE_VAR.is_match(&arg) {
+                // trace a bare local var to its nearest preceding assignment.
+                let asn_re = Regex::new(&format!(r"(?:const|let|var)[ \t]+{}[ \t]*=[ \t]*(.+)", regex::escape(&arg))).unwrap();
+                let before = &src[..start];
+                let mut rhs: Option<String> = None;
+                for a in asn_re.captures_iter(before) {
+                    rhs = Some(a[1].to_string());
+                }
+                if let Some(rhs) = rhs {
+                    route = desc_route(rhs.trim());
+                }
+            }
+            let Some(route) = route else { continue };
+            if route == "/" {
+                continue;
+            }
+            let line = line_of(&src, start);
+            let id = format!("{route}@{line}");
+            if !seen.insert(id) {
+                continue;
+            }
+            out.push(KeyHit { kind: "http-route".into(), value: route, line, produces: false, ..Default::default() });
+        }
+    }
+    out
+}

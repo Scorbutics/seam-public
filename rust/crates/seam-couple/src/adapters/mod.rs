@@ -11,7 +11,7 @@ use crate::types::{CouplingAdapter, KeyHit};
 mod active_record;
 mod annotation_route;
 mod db_table;
-mod endpoint_map;
+pub mod endpoint_map;
 mod file_channel;
 mod http_egress;
 pub mod http_route;
