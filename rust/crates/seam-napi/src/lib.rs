@@ -215,7 +215,24 @@ pub struct GraphEdgeDto {
     pub line: Option<u32>,
 }
 
-/// Wire form of a resolved callsite graph (the fields build_consumers_graph consumes).
+/// Wire form of a `seam_scan::Blindspot`.
+#[napi(object)]
+pub struct BlindspotDto {
+    pub node: String,
+    pub mechanism: String,
+    pub evidence: String,
+    pub candidates: Vec<String>,
+}
+
+/// Wire form of a `seam_scan::Unresolved`.
+#[napi(object)]
+pub struct UnresolvedDto {
+    pub node: String,
+    pub query: String,
+    pub reason: String,
+}
+
+/// Wire form of a resolved graph (the fields build_consumers_graph consumes).
 #[napi(object)]
 pub struct GraphDto {
     pub anchor_id: String,
@@ -225,6 +242,8 @@ pub struct GraphDto {
     pub language: String,
     pub nodes: Vec<GraphNodeDto>,
     pub edges: Vec<GraphEdgeDto>,
+    pub blindspots: Vec<BlindspotDto>,
+    pub unresolved: Vec<UnresolvedDto>,
     pub resolved_methods: Vec<String>,
 }
 
@@ -260,6 +279,12 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
                     line: e.line.map(|l| l as u32),
                 })
                 .collect(),
+            blindspots: g
+                .blindspots
+                .into_iter()
+                .map(|b| BlindspotDto { node: b.node, mechanism: b.mechanism, evidence: b.evidence, candidates: b.candidates.into_iter().map(|c| c.symbol).collect() })
+                .collect(),
+            unresolved: g.unresolved.into_iter().map(|u| UnresolvedDto { node: u.node, query: u.query, reason: u.reason }).collect(),
             resolved_methods: g.resolved_methods,
         }
     }
@@ -282,4 +307,12 @@ pub fn build_callsite_graph(
         owner_class,
     };
     seam_scan::build_callsite_graph(&repo, &anchor_file, &symbol, &opts).map(Into::into)
+}
+
+/// build_class_graph — a CLASS anchor's structural footprint (class + used methods + attributed consumers +
+/// blind spots). The data-coupling overlay and depth-2 ripple are later migration phases, so this is the
+/// `dataCoupling:false`, depth-1 graph.
+#[napi]
+pub fn build_class_graph(repo: String, anchor_file: String, class_name: String) -> Option<GraphDto> {
+    seam_scan::build_class_graph(&repo, &anchor_file, &class_name).map(Into::into)
 }

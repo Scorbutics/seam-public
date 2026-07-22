@@ -22,6 +22,31 @@ pub struct GraphEdge {
     pub line: Option<usize>,
 }
 
+/// A candidate attached to a blindspot. Only the `{symbol}` shape occurs in the structural builders; the
+/// coupling layer will add richer shapes later.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Candidate {
+    pub symbol: String,
+}
+
+/// An edge the engine SEES but won't draw as resolved (unresolved import, ambiguous dispatch, …) — surfaced
+/// for review. Port of `Blindspot`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Blindspot {
+    pub node: String,
+    pub mechanism: String,
+    pub evidence: String,
+    pub candidates: Vec<Candidate>,
+}
+
+/// A query the engine couldn't resolve statically — a lead for the LSP/extension layer. Port of `Unresolved`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Unresolved {
+    pub node: String,
+    pub query: String,
+    pub reason: String,
+}
+
 /// The footprint contract (the fields a footprint builder populates; scalars are constant here).
 #[derive(Clone, Debug)]
 pub struct ResolvedGraph {
@@ -32,6 +57,8 @@ pub struct ResolvedGraph {
     pub language: String,
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
+    pub blindspots: Vec<Blindspot>,
+    pub unresolved: Vec<Unresolved>,
     /// build_callsite_graph's internal hand-off (the method names a call site was found for), sorted.
     pub resolved_methods: Vec<String>,
 }
@@ -51,6 +78,8 @@ pub fn make_graph(
         language,
         nodes,
         edges,
+        blindspots: Vec::new(),
+        unresolved: Vec::new(),
         resolved_methods: Vec::new(),
     }
 }

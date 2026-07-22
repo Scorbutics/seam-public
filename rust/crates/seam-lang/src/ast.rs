@@ -254,7 +254,116 @@ pub fn type_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
     dedup_methods(ctx.collect(iface, nk::is_interface_member).into_iter().filter_map(|m| name_of(ctx, m).map(|nm| (nm, ctx.span(m)))))
 }
 
-fn class_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
+/// Is `node` a `new ClassName(...)` of exactly `class_name`? (port of `_is_new_of`).
+fn is_new_of(ctx: &Ctx, node: Node, class_name: &str) -> bool {
+    if !nk::is_new(node.kind()) {
+        return false;
+    }
+    ctx.children(node)
+        .into_iter()
+        .find(|c| c.kind() == "identifier" || nk::is_member(c.kind()))
+        .is_some_and(|c| ctx.text(c) == class_name)
+}
+
+/// The local names bound to an instance of `class_name` — typed (`C x` / `x: C`) or `= new C()`. Port of
+/// `_instances_of`.
+pub fn instances_of(ctx: &Ctx, class_name: &str) -> HashSet<String> {
+    let mut names = HashSet::new();
+    for node in ctx.collect(ctx.root(), nk::is_instance_binder) {
+        let Some(name_node) = ctx.children(node).into_iter().find(|c| nk::is_name_kind(c.kind())) else { continue };
+        let typed = binder_types(ctx, node).iter().any(|t| t == class_name);
+        let newed = ctx.collect(node, nk::is_new).into_iter().any(|nx| is_new_of(ctx, nx, class_name));
+        if typed || newed {
+            names.insert(ctx.text(name_node).to_string());
+        }
+    }
+    names
+}
+
+/// The names `Object.prototype` exposes to a JS `key in {}` check (spec + Annex B, as JSC/bun report them).
+/// TS's `_class_method_usage` guards insertion with `!(m in used)` on a bare `{}` object, so a method whose
+/// name is one of these is NEVER recorded (the guard reads true from the empty object's prototype chain). We
+/// reproduce that exactly for byte-identical parity — a `toString()`/`valueOf()` call is not attributed.
+const JS_OBJECT_PROTO_PROPS: &[&str] = &[
+    "toString", "valueOf", "constructor", "hasOwnProperty", "isPrototypeOf", "propertyIsEnumerable",
+    "toLocaleString", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__",
+];
+
+/// `{method → first call line}` for methods of `class_name` called on a PROVABLE instance of it (an
+/// instances_of local, a `new C()`, or a member of one). Port of `_class_method_usage`.
+pub fn class_method_usage(ctx: &Ctx, class_name: &str, methods: &HashSet<String>) -> HashMap<String, usize> {
+    let inst = instances_of(ctx, class_name);
+    let mut used: HashMap<String, usize> = HashMap::new();
+    for call in ctx.collect(ctx.root(), nk::is_call) {
+        let Some(c) = callee(ctx, call) else { continue };
+        let Some(obj) = c.obj else { continue };
+        if !methods.contains(&c.name) {
+            continue;
+        }
+        let ok = obj.kind();
+        let hit = if ok == "identifier" {
+            inst.contains(ctx.text(obj))
+        } else if nk::is_new(ok) {
+            is_new_of(ctx, obj, class_name)
+        } else if nk::is_member(ok) {
+            ctx.children(obj).into_iter().find(|x| nk::is_member_name(x.kind())).is_some_and(|ip| inst.contains(ctx.text(ip)))
+        } else {
+            false
+        };
+        // `!(m in used)`: skip when already recorded OR when the name is an Object.prototype property (the
+        // JS quirk — see JS_OBJECT_PROTO_PROPS), so those method calls are never attributed.
+        if hit && !JS_OBJECT_PROTO_PROPS.contains(&c.name.as_str()) {
+            used.entry(c.name).or_insert_with(|| ctx.span(call).0);
+        }
+    }
+    used
+}
+
+/// Lines where `local` is USED: call sites if any, else references inside a unit, else all-but-first
+/// reference (drops the binding line). Port of `_usage_lines`.
+pub fn usage_lines(ctx: &Ctx, units: &[Unit], local: &str) -> Vec<usize> {
+    let calls = call_lines(ctx, local);
+    if !calls.is_empty() {
+        return calls;
+    }
+    let refs = ref_lines(ctx, local);
+    let inside: Vec<usize> = refs.iter().copied().filter(|&ln| enclosing(units, ln).is_some()).collect();
+    if !inside.is_empty() {
+        inside
+    } else {
+        refs.into_iter().skip(1).collect()
+    }
+}
+
+/// Lines of a call whose callee LEADS with the identifier `local` (port of `_call_lines`).
+fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
+    let mut lines = Vec::new();
+    for c in ctx.collect(ctx.root(), nk::is_call) {
+        if let Some(&c0) = ctx.children(c).first() {
+            if c0.kind().contains("identifier") && ctx.text(c0) == local {
+                lines.push(ctx.span(c).0);
+            }
+        }
+    }
+    lines
+}
+
+/// Sorted unique lines of every identifier-kind node whose text is `local` (port of `_ref_lines`).
+fn ref_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
+    let mut v: Vec<usize> = ctx
+        .collect(ctx.root(), |k| k.contains("identifier"))
+        .into_iter()
+        .filter(|i| ctx.text(*i) == local)
+        .map(|i| ctx.span(i).0)
+        .collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
+/// The methods of the class named `name` — (name, start, end), constructor excluded, deduped. Port of
+/// `_class_methods`.
+pub fn class_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
     let Some(cls) = ctx.collect(ctx.root(), nk::is_class_kind).into_iter().find(|c| name_of(ctx, *c).as_deref() == Some(name)) else {
         return Vec::new();
     };
@@ -305,5 +414,18 @@ mod tests {
         let units: Vec<(&str, &str)> = nu.iter().map(|u| (u.name.as_str(), u.kind.as_str())).collect();
         assert!(units.contains(&("Foo", "class")));
         assert!(units.contains(&("run", "method")));
+    }
+
+    #[test]
+    fn class_method_usage_skips_object_proto_names() {
+        // A call to a method named after an Object.prototype property (`toString`/`getX`) on a provable
+        // instance: TS's `!(m in used)` guard on a bare `{}` skips `toString` (proto chain) but records
+        // `getX`. We reproduce that exactly (see JS_OBJECT_PROTO_PROPS).
+        let src = "class C {\n  void use() {\n    Widget w = new Widget();\n    w.toString();\n    w.getX();\n  }\n}\n";
+        let ctx = Ctx::parse(src, "java").unwrap();
+        let methods = HashSet::from(["toString".to_string(), "getX".to_string()]);
+        let usage = class_method_usage(&ctx, "Widget", &methods);
+        assert!(!usage.contains_key("toString"), "toString must be skipped (Object.prototype quirk)");
+        assert!(usage.contains_key("getX"), "getX must be recorded");
     }
 }

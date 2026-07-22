@@ -5,8 +5,7 @@
 //! callsite index; the receiver logic is the same, just assembled here.
 
 use crate::graph::{make_graph, GraphEdge, GraphNode, ResolvedGraph};
-use once_cell::sync::Lazy;
-use regex::Regex;
+use crate::util::{complexity, kind_for, read};
 use seam_fs::{join, normpath, stem};
 use seam_lang::ast::{self, CallSite, Unit};
 use seam_lang::{node_kinds as nk, provider_for, same_lang_family, Ctx};
@@ -20,25 +19,6 @@ pub struct CallsiteOpts {
     pub method_names: Option<Vec<String>>,
     /// The narrowing owner class (a method anchor) — enables FULL promotion + foreign dropping.
     pub owner_class: Option<String>,
-}
-
-static TEST_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|([-_.](testing|fixture|mock)\.[a-z0-9]+$)|((^|/)(tests?|__tests__|__mocks__|mocks?|fixtures?|testing|spec|e2e|cypress|playwright)/)|((^|/)seed[-_.][^/]*$)").unwrap()
-});
-fn is_test_file(f: &str) -> bool {
-    TEST_RE.is_match(&f.replace('\\', "/"))
-}
-fn kind_for(file: &str, kind: &str) -> String {
-    if is_test_file(file) { "test".into() } else { kind.into() }
-}
-
-fn read(repo: &str, rel: &str) -> Option<(String, String)> {
-    let lang = provider_for(rel)?.name().to_string();
-    let text = std::fs::read(format!("{repo}/{rel}")).ok().map(|b| String::from_utf8_lossy(&b).into_owned())?;
-    Some((text, lang))
-}
-fn complexity(range: (usize, usize)) -> usize {
-    (range.1 as i64 - range.0 as i64 + 1).max(1) as usize
 }
 
 pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &CallsiteOpts) -> Option<ResolvedGraph> {
