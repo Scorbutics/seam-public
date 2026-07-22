@@ -1,0 +1,29 @@
+# Seam Rust core — PHASE 0 de-risk spike (see the migration plan). Not the real crate layout yet;
+# this proves the two load-bearing assumptions before any engine code: (1) bun can load a Rust napi
+# addon in-process, and (2) native tree-sitter produces the SAME AST node-kinds/fields as the
+# web-tree-sitter 0.25 grammars Seam bundles (the parity byte-identical depends on).
+[package]
+name = "seam_phase0"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+# Match Seam's web-tree-sitter 0.25 core so native ASTs line up with the bundled wasm grammars.
+tree-sitter = "0.25"
+# The Java grammar itself is VENDORED (vendor/java/parser.c, from tree-sitter-java 0.20.2 — the exact source
+# tree-sitter-wasms@0.1.13 bundles) and compiled by build.rs against THIS single tree-sitter runtime. Vendoring
+# only parser.c (not the old crate's tree-sitter 0.20 runtime) avoids the duplicate-C-runtime link clash and
+# pins node-kinds to the wasm (0.23.x renamed the if/while `condition` node → `parenthesized_expression`).
+
+[build-dependencies]
+napi-build = "2"
+cc = "1"
+
+[profile.release]
+lto = true
