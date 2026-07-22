@@ -4,6 +4,7 @@
 //! trait, the coupling counterpart of `seam-lang`'s language providers.
 
 pub mod adapters;
+pub mod grounding;
 pub mod frameworks;
 pub mod regex_util;
 pub mod verb_class;
@@ -12,6 +13,7 @@ pub mod mask;
 pub mod types;
 
 pub use adapters::{adapter_keys, scan_file_keys};
+pub use grounding::file_store_write_count;
 pub use key_ir::{line_of, plausible_key_value};
 pub use mask::{mask_comments, string_literals_only, MaskCtx};
 pub use types::{CouplingAdapter, KeyHit, KindMeta};

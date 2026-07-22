@@ -552,3 +552,9 @@ pub fn scan_file_keys(path: String, text: String) -> Vec<Vec<String>> {
         .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default(), h.label.unwrap_or_default(), h.method.unwrap_or_default(), h.recv.unwrap_or_default()])
         .collect()
 }
+
+/// The db-table write count the floor grounds in one file (the interface→impl persistence-rank bias).
+#[napi]
+pub fn file_store_write_count(repo: String, rel: String) -> u32 {
+    seam_couple::file_store_write_count(&repo, &rel) as u32
+}
