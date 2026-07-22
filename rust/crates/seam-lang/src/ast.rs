@@ -88,6 +88,81 @@ pub fn called_method_names(ctx: &Ctx) -> Vec<String> {
     out
 }
 
+/// One file's interface→impl contribution: the interface names it declares, the `(super, subtype)` implements/
+/// interface-extends edges, and the zero-arg `(method, returnType)` provider accessors. Port of `_scanImplFile`
+/// (the AST part; the marker pre-gate lives in the index build). Framework-agnostic — structural relations only.
+pub struct ImplContribution {
+    pub interfaces: Vec<String>,
+    pub edges: Vec<(String, String)>,
+    pub accessors: Vec<(String, String)>,
+}
+
+/// The BASE name of a type token — strip a generic arg list + package qualifier (`a.b.List<X>` → `List`).
+/// Empty when the residue isn't a plain identifier. Port of `_baseTypeName`.
+fn base_type_name(t: &str) -> String {
+    let no_gen = t.split('<').next().unwrap_or(t).trim();
+    let seg = no_gen.rsplit('.').next().unwrap_or(no_gen);
+    if !seg.is_empty() && seg.chars().enumerate().all(|(i, c)| if i == 0 { c.is_ascii_alphabetic() || c == '_' || c == '$' } else { c.is_ascii_alphanumeric() || c == '_' || c == '$' }) {
+        seg.to_string()
+    } else {
+        String::new()
+    }
+}
+
+/// The base names of an `implements`/heritage clause on `node` — direct clause children, or nested under a TS
+/// `class_heritage` wrapper (filtered to implements clauses). `pred` selects which clause kinds count.
+fn heritage_bases(ctx: &Ctx, node: Node, pred: fn(&str) -> bool) -> Vec<String> {
+    let mut out = Vec::new();
+    for h in ctx.children(node) {
+        if pred(h.kind()) {
+            out.extend(ctx.collect(h, nk::is_base_name).into_iter().map(|n| ctx.text(n).to_string()));
+        } else if h.kind() == "class_heritage" {
+            for ec in ctx.children(h).into_iter().filter(|c| pred(c.kind())) {
+                out.extend(ctx.collect(ec, nk::is_base_name).into_iter().map(|n| ctx.text(n).to_string()));
+            }
+        }
+    }
+    out
+}
+
+pub fn impl_contribution(ctx: &Ctx) -> ImplContribution {
+    let mut interfaces = Vec::new();
+    let mut edges: Vec<(String, String)> = Vec::new();
+    // interfaces + interface-extends edges [super, sub]
+    for itf in ctx.collect(ctx.root(), nk::is_interface) {
+        let Some(nm) = name_of(ctx, itf) else { continue };
+        interfaces.push(nm.clone());
+        for sn in heritage_bases(ctx, itf, nk::is_heritage) {
+            if !sn.is_empty() && sn != nm {
+                edges.push((sn, nm.clone()));
+            }
+        }
+    }
+    // class implements edges [super, class]
+    for cls in ctx.collect(ctx.root(), nk::is_class_kind) {
+        let Some(cn) = name_of(ctx, cls) else { continue };
+        for s in heritage_bases(ctx, cls, nk::is_implements) {
+            edges.push((s, cn.clone()));
+        }
+    }
+    // zero-arg provider accessors (method → return type name)
+    let mut accessors: Vec<(String, String)> = Vec::new();
+    for m in ctx.collect(ctx.root(), nk::is_method_kind) {
+        let Some(nm) = name_of(ctx, m) else { continue };
+        if let Some(params) = m.child_by_field_name("parameters") {
+            if ctx.children(params).iter().any(|c| c.kind().contains("parameter")) {
+                continue; // zero-arg only
+            }
+        }
+        let Some(rt) = m.child_by_field_name("type") else { continue };
+        let tn = base_type_name(ctx.text(rt));
+        if !tn.is_empty() && tn != nm {
+            accessors.push((nm, tn));
+        }
+    }
+    ImplContribution { interfaces, edges, accessors }
+}
+
 /// Each class → its `extends` base names (port of `_class_bases`). The extends clause is a direct heritage
 /// child, or nested one level under a TS `class_heritage` wrapper.
 pub fn class_bases(ctx: &Ctx) -> Vec<(String, Vec<String>)> {

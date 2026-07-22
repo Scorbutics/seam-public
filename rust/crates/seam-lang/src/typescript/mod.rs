@@ -39,4 +39,7 @@ impl LanguageProvider for TypeScriptProvider {
     fn member_use(&self, text: &str, local: &str, symbol: &str) -> Option<&'static str> {
         imports::member_use(text, local, symbol)
     }
+    fn impl_markers(&self) -> &'static [&'static str] {
+        &["interface", "implements"]
+    }
 }

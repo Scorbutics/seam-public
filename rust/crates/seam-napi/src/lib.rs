@@ -491,3 +491,30 @@ impl From<seam_shapes::ModuleContract> for ModuleContractDto {
 pub fn project_contract(repo: String, module_file: String) -> ModuleContractDto {
     seam_shapes::project_contract(&repo, &module_file).into()
 }
+
+/// The concrete impls of each interface `name`, as `[cls, file]` rows sorted by file (building the interface
+/// index once). Validation surface for the interface→impl (DI) index.
+#[napi]
+pub fn impls_of_batch(repo: String, names: Vec<String>) -> Vec<Vec<Vec<String>>> {
+    let idx = seam_resolve::InterfaceIndex::cached(&repo);
+    names.iter().map(|n| idx.impls_of(n).into_iter().map(|i| vec![i.cls, i.file]).collect()).collect()
+}
+
+/// Provider accessors: `[method, iface, iface, …]` rows (interfaces sorted), rows sorted — the DI factory-hop map.
+#[napi]
+pub fn provider_accessors(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_resolve::InterfaceIndex::cached(&repo);
+    let mut rows: Vec<Vec<String>> = idx
+        .accessors()
+        .iter()
+        .map(|(m, ifs)| {
+            let mut v: Vec<String> = ifs.iter().cloned().collect();
+            v.sort();
+            let mut row = vec![m.clone()];
+            row.extend(v);
+            row
+        })
+        .collect();
+    rows.sort();
+    rows
+}

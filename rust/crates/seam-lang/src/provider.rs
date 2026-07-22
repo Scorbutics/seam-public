@@ -26,6 +26,12 @@ pub trait LanguageProvider: Send + Sync {
     fn export_statements(&self) -> bool {
         false
     }
+    /// Textual keywords that MUST be present for a file to declare an interface/implements relation — a cheap
+    /// pre-gate that skips the tree-sitter parse when absent. `[]` (the default) skips every file (a language
+    /// with no interface concept, e.g. Ruby). Java/TS: `["interface", "implements"]`.
+    fn impl_markers(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// Namespace imports (`import * as ns from "m"`) — TS/JS only; other languages have none.
     fn namespace_imports(&self, text: &str) -> Vec<NamespaceImport> {
         let _ = text;

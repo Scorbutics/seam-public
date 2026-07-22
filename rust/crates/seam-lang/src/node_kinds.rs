@@ -98,6 +98,16 @@ pub fn is_interface(k: &str) -> bool {
     k == "interface_declaration"
 }
 
+/// An `implements` clause (Java super_interfaces, TS implements_clause) — the interface→impl (DI) relation.
+pub fn is_implements(k: &str) -> bool {
+    matches!(k, "super_interfaces" | "implements_clause")
+}
+
+/// An annotation/decorator node (Java annotation/marker_annotation, TS decorator) — framework-entry PRESENCE.
+pub fn is_annotation(k: &str) -> bool {
+    matches!(k, "annotation" | "marker_annotation" | "decorator")
+}
+
 pub fn is_interface_member(k: &str) -> bool {
     matches!(k, "method_signature" | "property_signature" | "abstract_method_signature")
 }

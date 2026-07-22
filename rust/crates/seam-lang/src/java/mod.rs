@@ -22,4 +22,7 @@ impl LanguageProvider for JavaProvider {
     fn resolver(&self, repo: &str) -> Box<dyn ModuleResolver> {
         Box::new(resolve::JavaResolver::build(repo))
     }
+    fn impl_markers(&self) -> &'static [&'static str] {
+        &["interface", "implements"]
+    }
 }
