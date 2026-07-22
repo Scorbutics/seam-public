@@ -41,7 +41,7 @@ for (const rel of files) {
   const rust = addon.adapterKeys(name, rel, text) as string[][];
   if (ts.length) nonEmpty++;
   // rust rows are [kind,value,line,produces,op]; TS may carry more fields — compare the 5 rust emits
-  const tsS = ts.map((h: any) => `${h.kind}|${h.value}|${h.line}|${h.produces}|${h.op ?? ""}`).join(";");
+  const tsS = ts.map((h: any) => `${h.kind}|${h.value}|${h.line}|${h.produces}|${h.op ?? ""}|${h.label ?? ""}|${h.method ?? ""}|${h.recv ?? ""}`).join(";");
   const rS = rust.map((r) => r.join("|")).join(";");
   if (tsS === rS) ok++; else { bad++; if (fails.length < 10) fails.push(`✗ ${rel}\n    ts:   ${tsS}\n    rust: ${rS}`); }
 }

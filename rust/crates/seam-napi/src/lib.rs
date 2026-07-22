@@ -538,6 +538,6 @@ pub fn adapter_keys(name: String, path: String, text: String) -> Vec<Vec<String>
     seam_couple::adapter_keys(&name, &path, &text)
         .unwrap_or_default()
         .into_iter()
-        .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default()])
+        .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default(), h.label.unwrap_or_default(), h.method.unwrap_or_default(), h.recv.unwrap_or_default()])
         .collect()
 }

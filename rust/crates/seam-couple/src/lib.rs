@@ -4,6 +4,7 @@
 //! trait, the coupling counterpart of `seam-lang`'s language providers.
 
 pub mod adapters;
+pub mod frameworks;
 pub mod key_ir;
 pub mod mask;
 pub mod types;

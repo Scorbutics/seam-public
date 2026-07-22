@@ -8,16 +8,19 @@ use crate::key_ir::plausible_key_value;
 use crate::mask::MaskCtx;
 use crate::types::{CouplingAdapter, KeyHit};
 
+mod annotation_route;
 mod db_table;
+mod http_route;
 mod jpa_entity;
 mod raw_sql;
 
 static RAW_SQL: raw_sql::RawSql = raw_sql::RawSql;
 static JPA_ENTITY: jpa_entity::JpaEntity = jpa_entity::JpaEntity;
+static ANNOTATION_ROUTE: annotation_route::AnnotationRoute = annotation_route::AnnotationRoute;
 
 /// Every registered framework adapter, in the TS `ADAPTERS` order (so `scan_file_keys` is byte-identical).
 /// Framework-specific code lives ONLY in these modules.
-static ADAPTERS: &[&dyn CouplingAdapter] = &[&RAW_SQL, &JPA_ENTITY];
+static ADAPTERS: &[&dyn CouplingAdapter] = &[&RAW_SQL, &JPA_ENTITY, &ANNOTATION_ROUTE];
 
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.
