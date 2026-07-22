@@ -227,6 +227,21 @@ fn named_units_visit(ctx: &Ctx, n: Node, in_class: bool, units: &mut Vec<Unit>) 
     }
 }
 
+/// The smallest-span unit containing `line` (port of `_enclosing`); ties keep the first.
+pub fn enclosing(units: &[Unit], line: usize) -> Option<&Unit> {
+    units.iter().filter(|u| u.start <= line && line <= u.end).min_by_key(|u| u.end - u.start)
+}
+
+/// The smallest CLASS unit strictly containing [start,end] — the owning class name, or "" (port of `_enclosingClass`).
+pub fn enclosing_class(units: &[Unit], start: usize, end: usize) -> String {
+    units
+        .iter()
+        .filter(|u| u.kind == "class" && u.start <= start && end <= u.end && !(u.start == start && u.end == end))
+        .min_by_key(|u| u.end - u.start)
+        .map(|u| u.name.clone())
+        .unwrap_or_default()
+}
+
 /// The methods of the class/interface named `name` — (name, start, end), deduped. Port of `_type_methods`.
 pub fn type_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
     let cm = class_methods(ctx, name);

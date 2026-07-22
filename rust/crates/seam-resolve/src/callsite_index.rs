@@ -3,15 +3,44 @@
 //! tree-sitter AST scans over the source files. The subclass-family closure lives here too (it's a pure
 //! operation over the bases map).
 
+use once_cell::sync::Lazy;
 use seam_lang::{ast, provider_for, Ctx};
 use std::collections::{HashMap, HashSet};
+use std::sync::{Arc, Mutex};
 
 pub struct CallsiteIndex {
     callers: HashMap<String, Vec<String>>,
     bases: HashMap<String, Vec<String>>,
 }
 
+// Per-repo memoization — the index is a pure function of the repo's source, immutable within a query run,
+// so building it once and sharing it is safe and turns N queries against a repo from N full-repo parses
+// into one. Mirrors TS `_callIndexCache` / `resetCallIndex`.
+static CACHE: Lazy<Mutex<HashMap<String, Arc<CallsiteIndex>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
 impl CallsiteIndex {
+    /// The memoized index for `repo` (built on first request, shared thereafter). Use this on the query
+    /// path; `build` bypasses the cache (tests, or a forced rebuild).
+    pub fn cached(repo: &str) -> Arc<CallsiteIndex> {
+        if let Some(idx) = CACHE.lock().unwrap().get(repo) {
+            return idx.clone();
+        }
+        let idx = Arc::new(Self::build(repo));
+        CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+        idx
+    }
+
+    /// Drop the memoized index for `repo` (or all repos when `None`). Mirrors TS `resetCallIndex`.
+    pub fn reset(repo: Option<&str>) {
+        let mut c = CACHE.lock().unwrap();
+        match repo {
+            Some(r) => {
+                c.remove(r);
+            }
+            None => c.clear(),
+        }
+    }
+
     pub fn build(repo: &str) -> Self {
         let mut callers: HashMap<String, Vec<String>> = HashMap::new();
         let mut bases: HashMap<String, Vec<String>> = HashMap::new();
@@ -41,6 +70,11 @@ impl CallsiteIndex {
     /// Files that call a method named `method`, in walk order.
     pub fn callers(&self, method: &str) -> &[String] {
         self.callers.get(method).map(Vec::as_slice).unwrap_or(&[])
+    }
+
+    /// The `extends` bases of the class named `cls`.
+    pub fn bases(&self, cls: &str) -> &[String] {
+        self.bases.get(cls).map(Vec::as_slice).unwrap_or(&[])
     }
 
     /// The transitive set of classes that (directly or indirectly) extend `owner`, including `owner` — a

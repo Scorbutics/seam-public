@@ -192,3 +192,94 @@ pub fn type_names(text: String, lang: String) -> Vec<String> {
 pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {
     seam_lang::treesitter::parse_kinds(&source, &lang).map_err(napi::Error::from_reason)
 }
+
+/// Wire form of a `seam_scan::GraphNode`.
+#[napi(object)]
+pub struct GraphNodeDto {
+    pub id: String,
+    pub symbol: String,
+    pub kind: String,
+    pub file: String,
+    pub range: Vec<u32>,
+    pub enclosing: String,
+    pub complexity: u32,
+}
+
+/// Wire form of a `seam_scan::GraphEdge`.
+#[napi(object)]
+pub struct GraphEdgeDto {
+    pub from: String,
+    pub to: String,
+    pub kind: String,
+    pub provenance: String,
+    pub line: Option<u32>,
+}
+
+/// Wire form of a resolved callsite graph (the fields build_consumers_graph consumes).
+#[napi(object)]
+pub struct GraphDto {
+    pub anchor_id: String,
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub anchor_range: Vec<u32>,
+    pub language: String,
+    pub nodes: Vec<GraphNodeDto>,
+    pub edges: Vec<GraphEdgeDto>,
+    pub resolved_methods: Vec<String>,
+}
+
+impl From<seam_scan::ResolvedGraph> for GraphDto {
+    fn from(g: seam_scan::ResolvedGraph) -> Self {
+        Self {
+            anchor_id: g.anchor_id,
+            anchor_symbol: g.anchor_symbol,
+            anchor_file: g.anchor_file,
+            anchor_range: vec![g.anchor_range.0 as u32, g.anchor_range.1 as u32],
+            language: g.language,
+            nodes: g
+                .nodes
+                .into_iter()
+                .map(|n| GraphNodeDto {
+                    id: n.id,
+                    symbol: n.symbol,
+                    kind: n.kind,
+                    file: n.file,
+                    range: vec![n.range.0 as u32, n.range.1 as u32],
+                    enclosing: n.enclosing,
+                    complexity: n.complexity as u32,
+                })
+                .collect(),
+            edges: g
+                .edges
+                .into_iter()
+                .map(|e| GraphEdgeDto {
+                    from: e.from,
+                    to: e.to,
+                    kind: e.kind,
+                    provenance: e.provenance,
+                    line: e.line.map(|l| l as u32),
+                })
+                .collect(),
+            resolved_methods: g.resolved_methods,
+        }
+    }
+}
+
+/// build_callsite_graph — the anchor plus its call-site consumers, receiver-resolved. `method_names` (a
+/// single-method anchor's hunted methods) and `owner_class` (the narrowing owner) are both optional.
+#[napi]
+pub fn build_callsite_graph(
+    repo: String,
+    anchor_file: String,
+    symbol: String,
+    anchor_line: Option<u32>,
+    method_names: Option<Vec<String>>,
+    owner_class: Option<String>,
+) -> Option<GraphDto> {
+    let opts = seam_scan::CallsiteOpts {
+        anchor_line: anchor_line.map(|l| l as usize),
+        method_names,
+        owner_class,
+    };
+    seam_scan::build_callsite_graph(&repo, &anchor_file, &symbol, &opts).map(Into::into)
+}

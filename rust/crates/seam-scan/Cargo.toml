@@ -1,0 +1,12 @@
+[package]
+name = "seam-scan"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+once_cell = { workspace = true }
+regex = { workspace = true }
+seam-lang = { path = "../seam-lang" }
+seam-resolve = { path = "../seam-resolve" }
+seam-fs = { path = "../seam-fs" }

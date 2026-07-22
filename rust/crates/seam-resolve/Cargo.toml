@@ -6,4 +6,5 @@ publish.workspace = true
 
 [dependencies]
 seam-lang = { path = "../seam-lang" }
+once_cell = { workspace = true }
 seam-fs = { path = "../seam-fs" }

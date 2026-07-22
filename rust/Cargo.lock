@@ -238,14 +238,27 @@ dependencies = [
  "seam-fs",
  "seam-lang",
  "seam-resolve",
+ "seam-scan",
 ]
 
 [[package]]
 name = "seam-resolve"
 version = "0.0.0"
 dependencies = [
+ "once_cell",
  "seam-fs",
  "seam-lang",
+]
+
+[[package]]
+name = "seam-scan"
+version = "0.0.0"
+dependencies = [
+ "once_cell",
+ "regex",
+ "seam-fs",
+ "seam-lang",
+ "seam-resolve",
 ]
 
 [[package]]
