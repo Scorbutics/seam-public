@@ -47,7 +47,7 @@ for (const rel of sample) {
 // TS reference (floor_resolve caches its index after the first call)
 const ts = queries.map(([f, s]) => floor_resolve(repo, f, s));
 // Rust batch (builds the index once)
-const rust = addon.javaResolveBatch(repo, queries);
+const rust = addon.resolveBatch(repo, queries);
 
 let ok = 0;
 let bad = 0;

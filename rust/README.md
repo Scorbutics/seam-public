@@ -4,6 +4,21 @@ napi-rs in-process addon — the Rust half of the [migration](../../). STRUCTURE
 couple) moves here; the TS shell keeps semantics + I/O + render. Ported byte-identical against the TS engine,
 one vertical slice at a time (strangler).
 
+## Architecture
+
+A Cargo **workspace** — crate boundaries enforce the layering the TS engine lost, so no crate can reach into
+another's internals (the strongest guard against tight coupling). We adapt as we port; we do **not** translate
+TS as-is (e.g. TS's module-global `_INDEX_CACHE` became a per-repo `Workspace`).
+
+| crate | responsibility | deps |
+|---|---|---|
+| `seam-fs` | file enumeration (git walk) | — |
+| `seam-lang` | language layer: `LanguageProvider` (stateless syntax) + `ModuleResolver` (stateful per-repo resolution) traits, pure domain types, per-language modules (`java/`, `typescript/`, `ruby/`), tree-sitter substrate | `seam-fs` |
+| `seam-resolve` | language-**agnostic** cross-file logic (`Workspace`, import index, consumers) — dispatches only through traits | `seam-lang`, `seam-fs` |
+| `seam-napi` | thin binding: wire DTOs + entry points, the only crate with napi-derive | all |
+
+Adding a language = one small module implementing the traits. The domain types carry no napi; the boundary converts.
+
 ## Status
 
 - **Phase 0 (done)** — de-risked napi + AST parity. See below.
@@ -45,12 +60,13 @@ reports. The harness classifies this as 🟡 *structure-identical* (exit 1) vs �
 
 ```sh
 . "$HOME/.cargo/env"
-cd rust && cargo test --release            # Rust unit tests
-cargo build --release                       # → target/release/libseam_core.so
-cp target/release/libseam_core.so seam_core.node
+cd rust && cargo test --release            # all crate unit tests
+cargo build --release                       # → target/release/libseam_napi.so
+cp target/release/libseam_napi.so seam_core.node
 # byte-identical harnesses (need ../ts/node_modules — symlink the main checkout's, or `bun install`):
-bun parity/parity.ts  [file.java]          # native vs web-tree-sitter AST
-bun parity/imports.ts <file.java> [...]    # Rust javaImports vs TS parse_imports
+bun parity/parity.ts      [file.java]      # native vs web-tree-sitter AST
+bun parity/imports_any.ts <files…>         # imports, any language (importsOf dispatches by ext)
+bun parity/resolve.ts     [repo]           # Java floor_resolve vs TS
 ```
 
 ## Phase 1 hand-off

@@ -1,27 +1,25 @@
-# Seam Rust core. napi-rs in-process addon (the migration's FFI boundary). Phase 1: the foundation +
-# the first vertical slice (`--query consumers`), built byte-identical against the TS engine.
-[package]
-name = "seam_core"
+# Seam Rust core — a workspace. Crate boundaries enforce the layering (no crate reaches into another's
+# internals), which is the strongest guard against the tight coupling the TS engine accumulated.
+#
+#   seam-fs       file enumeration (git walk)              — no deps
+#   seam-lang     language layer: traits + per-language    — deps: seam-fs
+#                 modules + tree-sitter substrate
+#   seam-resolve  language-agnostic cross-file logic       — deps: seam-lang, seam-fs
+#                 (import index, workspace, consumers)
+#   seam-napi     thin napi binding (DTOs + entry points)  — deps: all
+[workspace]
+resolver = "2"
+members = ["crates/seam-fs", "crates/seam-lang", "crates/seam-resolve", "crates/seam-napi"]
+
+[workspace.package]
 version = "0.0.0"
 edition = "2021"
 publish = false
 
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-napi = { version = "2", default-features = false, features = ["napi4"] }
-napi-derive = "2"
-regex = "1"
+[workspace.dependencies]
 once_cell = "1"
-# Match Seam's web-tree-sitter 0.25 core so native ASTs line up with the bundled wasm grammars.
+regex = "1"
 tree-sitter = "0.25"
-# The Java grammar is VENDORED (vendor/java/parser.c, from tree-sitter-java 0.20.2 — the exact source
-# tree-sitter-wasms@0.1.13 bundles) and compiled by build.rs against this single tree-sitter runtime.
-
-[build-dependencies]
-napi-build = "2"
-cc = "1"
 
 [profile.release]
 lto = true

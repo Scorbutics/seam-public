@@ -1,0 +1,47 @@
+//! The napi boundary — the ONLY crate with napi-derive. It converts pure domain types to wire DTOs and
+//! exposes a small set of entry points; all logic lives in the seam-lang / seam-resolve crates.
+
+use napi_derive::napi;
+
+/// Wire form of `seam_lang::ImportRef` — kept separate so the domain type stays free of napi constraints.
+#[napi(object)]
+pub struct ImportRefDto {
+    pub name: String,
+    pub local: String,
+    pub line: u32,
+    pub col: u32,
+    pub source: Option<String>,
+    pub reexport: bool,
+}
+
+impl From<seam_lang::ImportRef> for ImportRefDto {
+    fn from(r: seam_lang::ImportRef) -> Self {
+        Self { name: r.name, local: r.local, line: r.line, col: r.col, source: r.source, reexport: r.reexport }
+    }
+}
+
+/// The file's imports, dispatched to `path`'s language provider (empty for an unknown extension).
+#[napi]
+pub fn imports_of(path: String, text: String) -> Vec<ImportRefDto> {
+    match seam_lang::provider_for(&path) {
+        Some(p) => p.imports(&text).into_iter().map(Into::into).collect(),
+        None => Vec::new(),
+    }
+}
+
+/// Resolve a batch of `[importing_file, source]` pairs to repo-relative files (or null), dispatching each to
+/// the importing file's language resolver.
+#[napi]
+pub fn resolve_batch(repo: String, queries: Vec<Vec<String>>) -> Vec<Option<String>> {
+    let pairs: Vec<(String, String)> = queries
+        .iter()
+        .map(|q| (q.first().cloned().unwrap_or_default(), q.get(1).cloned().unwrap_or_default()))
+        .collect();
+    seam_resolve::resolve_batch(&repo, &pairs)
+}
+
+/// Parity/debug: `depth|field|kind|start-end` per AST node (drives rust/parity/parity.ts).
+#[napi]
+pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {
+    seam_lang::treesitter::parse_kinds(&source, &lang).map_err(napi::Error::from_reason)
+}

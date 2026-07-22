@@ -1,0 +1,17 @@
+[package]
+name = "seam-napi"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi4"] }
+napi-derive = "2"
+seam-lang = { path = "../seam-lang" }
+seam-resolve = { path = "../seam-resolve" }
+
+[build-dependencies]
+napi-build = "2"

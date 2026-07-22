@@ -8,13 +8,8 @@ import { parse_imports } from "../../ts/src/core/resolve/languages/index.js";
 const require = createRequire(import.meta.url);
 const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 
-const rustFor = (file: string) => {
-  const f = file.toLowerCase();
-  if (f.endsWith(".java")) return addon.javaImports;
-  if (f.endsWith(".rb") || f.endsWith(".rake")) return addon.rubyImports;
-  if ([".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"].some((e) => f.endsWith(e))) return addon.tsImports;
-  return null;
-};
+const SRC_EXT = [".java", ".rb", ".rake", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+const isSrc = (f: string) => SRC_EXT.some((e) => f.toLowerCase().endsWith(e));
 const key = (r: any) => `${r.name}${r.local}${r.line}${r.col}${r.source}${r.reexport ? 1 : 0}`;
 const dump = (refs: any[]) => refs.map(key).join("\n");
 
@@ -23,8 +18,7 @@ let bad = 0;
 let skip = 0;
 const fails: string[] = [];
 for (const file of process.argv.slice(2)) {
-  const rf = rustFor(file);
-  if (!rf) {
+  if (!isSrc(file)) {
     skip++;
     continue;
   }
@@ -35,7 +29,7 @@ for (const file of process.argv.slice(2)) {
     continue;
   }
   const ts = dump(parse_imports(file, text));
-  const rust = dump(rf(text));
+  const rust = dump(addon.importsOf(file, text));
   if (ts === rust) ok++;
   else {
     bad++;

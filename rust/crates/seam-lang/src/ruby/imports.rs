@@ -1,7 +1,7 @@
-//! Ruby provider — port of the import parser in languages/ruby/resolve.ts. `require` / `require_relative` /
-//! `autoload`, regex-based. name/local = the required file's basename (a best-effort label).
+//! Ruby import parsing — port of the parser in languages/ruby/resolve.ts. `require` / `require_relative` /
+//! `autoload`, regex-based. `name`/`local` = the required file's basename (a best-effort label).
 
-use super::ImportRef;
+use crate::types::ImportRef;
 use once_cell::sync::Lazy;
 use regex::Regex;
 
@@ -23,7 +23,7 @@ fn line_at(text: &str, idx: usize) -> u32 {
     text[..idx].bytes().filter(|&b| b == b'\n').count() as u32
 }
 
-// `raw.replace(/^\.\/+/, "")` — strip a leading dot followed by one-or-more slashes (once).
+// `raw.replace(/^\.\/+/, "")` — strip a leading dot followed by one-or-more slashes.
 fn strip_dot_slash(raw: &str) -> &str {
     if let Some(after_dot) = raw.strip_prefix('.') {
         if after_dot.starts_with('/') {
@@ -34,8 +34,7 @@ fn strip_dot_slash(raw: &str) -> &str {
 }
 
 fn emit(text: &str, raw: &str, relative: bool, idx: usize, out: &mut Vec<ImportRef>) {
-    let line = line_at(text, idx);
-    // require_relative → leading "./" so floor_resolve treats it as file-relative (TS convention).
+    // require_relative → leading "./" so the resolver treats it as file-relative (TS convention).
     let source = if relative {
         format!("./{}", strip_dot_slash(raw))
     } else {
@@ -45,10 +44,10 @@ fn emit(text: &str, raw: &str, relative: bool, idx: usize, out: &mut Vec<ImportR
     out.push(ImportRef {
         name: name.clone(),
         local: name,
-        line,
+        line: line_at(text, idx),
         col: 0,
         source: Some(source),
-        reexport: None,
+        reexport: false,
     });
 }
 

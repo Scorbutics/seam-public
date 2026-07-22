@@ -1,0 +1,9 @@
+[package]
+name = "seam-resolve"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+seam-lang = { path = "../seam-lang" }
+seam-fs = { path = "../seam-fs" }
