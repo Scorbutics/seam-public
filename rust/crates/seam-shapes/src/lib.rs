@@ -5,7 +5,9 @@
 pub mod collate;
 pub mod contract;
 pub mod impact;
+pub mod reach;
 
 pub use collate::locale_compare;
 pub use contract::{project_contract, Consumer, ExternalDep, ModuleContract, ProvidedSymbol};
 pub use impact::{project_impact, Impact, ImpactFile, ImpactGap, ImpactOpts, ImpactedSymbol};
+pub use reach::{find_reach, ReachOpts, ReachResult, ReachStep};

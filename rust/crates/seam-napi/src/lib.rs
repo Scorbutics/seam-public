@@ -600,3 +600,44 @@ pub fn build_dependency_graph(repo: String, anchor_file: String, symbol: String,
     let opts = seam_scan::DepOpts { anchor_line: anchor_line.map(|l| l as usize), caller_files: None };
     seam_scan::build_dependency_graph(&repo, &anchor_file, &symbol, &opts).into()
 }
+
+/// Wire form of a `seam_shapes::ReachStep`.
+#[napi(object)]
+pub struct ReachStepDto {
+    pub symbol: String,
+    pub file: String,
+    pub line: u32,
+    pub edge_kind: String,
+}
+
+/// Wire form of a `seam_shapes::ReachResult` (the reaches shape).
+#[napi(object)]
+pub struct ReachResultDto {
+    pub from_symbol: String,
+    pub from_file: String,
+    pub to_symbol: String,
+    pub to_file: Option<String>,
+    pub reachable: bool,
+    pub path: Vec<ReachStepDto>,
+    pub hops: u32,
+    pub no_structure: bool,
+    pub reason: String,
+}
+
+/// findReach — can FROM reach TO through the dependency graph? (structural, dataCoupling off).
+#[napi]
+pub fn find_reach(repo: String, from_file: String, from_symbol: String, to_symbol: String, to_file: Option<String>, max_hops: Option<u32>) -> ReachResultDto {
+    let opts = seam_shapes::ReachOpts { to_file, max_hops: max_hops.map(|h| h as usize).unwrap_or(40), skip_callsite: false };
+    let r = seam_shapes::find_reach(&repo, &from_file, &from_symbol, &to_symbol, &opts);
+    ReachResultDto {
+        from_symbol: r.from_symbol,
+        from_file: r.from_file,
+        to_symbol: r.to_symbol,
+        to_file: r.to_file,
+        reachable: r.reachable,
+        path: r.path.into_iter().map(|s| ReachStepDto { symbol: s.symbol, file: s.file, line: s.line as u32, edge_kind: s.edge_kind }).collect(),
+        hops: r.hops as u32,
+        no_structure: r.no_structure,
+        reason: r.reason,
+    }
+}
