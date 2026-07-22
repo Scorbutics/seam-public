@@ -38,6 +38,7 @@ pub fn imports(text: &str) -> Vec<ImportRef> {
             line: i as u32,
             col,
             source: Some(fqn.to_string()),
+            reexport: None,
         });
     }
     out

@@ -11,7 +11,8 @@ one vertical slice at a time (strangler).
   - ✅ Java `imports()` (`src/lang/java.rs`) — **8141/8141 Keycloak `.java` files byte-identical** to TS `parse_imports` (`bun rust/parity/imports.ts`).
   - ✅ Repo walk (`src/walk.rs`) — shells to the same `git ls-files` (tracked ∪ untracked-not-ignored), SKIP_DIRS-pruned → byte-identical file set by construction.
   - ✅ Java `floor_resolve` + FQN index (`_java_index`) — **126,358/126,358 resolutions byte-identical** to TS `floor_resolve` over the full corpus (FQN drop, same-package + wildcard bare names) (`bun rust/parity/resolve.ts`).
-  - ▢ next: the reverse-import index → `scan_consumers` → the `consumers` shape end-to-end; then the Java callsite graph (tree-sitter).
+  - ✅ TS/JS `imports()` (`src/lang/typescript.rs`) — named `{…}`/`as`, barrel re-exports, dynamic `import()` — **3132/3132 files byte-identical** (174 Seam `ts/src` + 2958 node_modules) (`bun rust/parity/imports_ts.ts`).
+  - ▢ next: the multi-language import index (dispatch by ext) → `scan_consumers` → the `consumers` shape; then the Java callsite graph (tree-sitter).
 
 ## Phase 0 results
 

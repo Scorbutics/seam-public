@@ -29,6 +29,13 @@ pub fn java_imports(text: String) -> Vec<ImportRef> {
     lang::java::imports(&text)
 }
 
+/// Port of the TS/JS provider's `imports(text)` — named `{…}` imports, barrel re-exports, and dynamic
+/// `import("…")`. Byte-identical to TS `parse_imports` for a `.ts/.js/.tsx/…` file (see rust/parity/imports_ts.ts).
+#[napi]
+pub fn ts_imports(text: String) -> Vec<ImportRef> {
+    lang::typescript::imports(&text)
+}
+
 /// Port of the Java provider's `floor_resolve` over a batch of `[importing_file, source]` pairs (each
 /// resolved to a repo-relative file, or null). Builds the FQN index once. Byte-identical to TS `floor_resolve`
 /// (see rust/parity/resolve.ts).

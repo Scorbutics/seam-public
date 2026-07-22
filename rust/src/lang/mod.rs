@@ -4,10 +4,11 @@
 use napi_derive::napi;
 
 pub mod java;
+pub mod typescript;
 
 /// Port of `ImportRef` (core/resolve/languages/base.ts): one import binding — the original `name`, its
-/// `local` alias, 0-based `line`/`col`, and the module `source`. (`reexport`, the TS/JS barrel-hop flag, is
-/// added when the TS provider lands; Java never sets it, so the Java path is byte-identical without it.)
+/// `local` alias, 0-based `line`/`col`, the module `source`, and `reexport` (`export { X } from …` — a
+/// barrel hop, not a use; TS/JS only; `None` elsewhere, matching TS where the field is simply absent).
 #[napi(object)]
 #[derive(Clone, Debug, PartialEq)]
 pub struct ImportRef {
@@ -16,4 +17,5 @@ pub struct ImportRef {
     pub line: u32,
     pub col: u32,
     pub source: Option<String>,
+    pub reexport: Option<bool>,
 }
