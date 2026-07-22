@@ -4,5 +4,7 @@
 //! (`files_index`), and the composed sub-resource routes (`compose_routes`), unioned onto the floor.
 
 pub mod apply_matchers;
+pub mod files_cache;
 
 pub use apply_matchers::apply_matchers;
+pub use files_cache::{files_index, module_scope};

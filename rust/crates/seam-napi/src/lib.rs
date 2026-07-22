@@ -606,6 +606,28 @@ pub fn resolve_http_call_sites(file: String, text: String, clients: Vec<String>)
         .collect()
 }
 
+/// The deterministic llmKeyIndex WITHOUT composed routes — `files_index ⊕ apply_matchers` (the union order),
+/// as `key|side|file|line` rows. For validating files_index + apply_matchers against TS llmKeyIndex (residual =
+/// composed routes).
+#[napi]
+pub fn key_index_no_compose(repo: String, anchor_file: String) -> Vec<String> {
+    let matchers = seam_couple::load_matchers(&repo);
+    let files = seam_couple::learn::files_index(&repo, &anchor_file);
+    let mi = seam_couple::learn::apply_matchers(&repo, &matchers);
+    let mut idx = seam_couple::merge_grounding(&[&files, &mi]);
+    let _ = &mut idx;
+    let mut rows = Vec::new();
+    for (key, sides) in idx.iter() {
+        for a in &sides.producers {
+            rows.push(format!("{}|p|{}|{}", key, a.file, a.line));
+        }
+        for a in &sides.consumers {
+            rows.push(format!("{}|c|{}|{}", key, a.file, a.line));
+        }
+    }
+    rows
+}
+
 /// applyMatchers — the LEARNED rules grounded repo-wide → `key|side|file|line` rows (side p/c), in the index's
 /// insertion order, producers before consumers per key. Port of applyMatchers.
 #[napi]
