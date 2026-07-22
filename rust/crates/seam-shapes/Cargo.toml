@@ -7,4 +7,6 @@ publish = false
 [dependencies]
 seam-scan = { path = "../seam-scan" }
 seam-fs = { path = "../seam-fs" }
+seam-lang = { path = "../seam-lang" }
+seam-resolve = { path = "../seam-resolve" }
 once_cell = { workspace = true }

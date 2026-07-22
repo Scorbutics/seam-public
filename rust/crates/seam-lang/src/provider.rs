@@ -7,7 +7,7 @@
 //!
 //! A provider is the factory for its resolver, so adding a language is: one small module implementing these.
 
-use crate::types::ImportRef;
+use crate::types::{ImportRef, NamespaceImport};
 
 pub trait LanguageProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -25,6 +25,11 @@ pub trait LanguageProvider: Send + Sync {
     /// (Java/Ruby/C/C++/Python) return false → their public surface is read from top-level declarations.
     fn export_statements(&self) -> bool {
         false
+    }
+    /// Namespace imports (`import * as ns from "m"`) — TS/JS only; other languages have none.
+    fn namespace_imports(&self, text: &str) -> Vec<NamespaceImport> {
+        let _ = text;
+        Vec::new()
     }
 }
 

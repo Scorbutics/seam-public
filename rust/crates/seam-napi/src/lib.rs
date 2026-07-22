@@ -424,3 +424,70 @@ pub fn exported_members(path: String, text: String, lang: String) -> Vec<UnitDto
         })
         .unwrap_or_default()
 }
+
+/// Wire form of a `seam_shapes::Consumer`.
+#[napi(object)]
+pub struct ContractConsumerDto {
+    pub file: String,
+    pub symbol: String,
+}
+
+/// Wire form of a `seam_shapes::ProvidedSymbol`.
+#[napi(object)]
+pub struct ProvidedSymbolDto {
+    pub symbol: String,
+    pub kind: String,
+    pub consumers: Vec<ContractConsumerDto>,
+    pub consumer_count: u32,
+}
+
+/// Wire form of a `seam_shapes::ExternalDep`.
+#[napi(object)]
+pub struct ExternalDepDto {
+    pub symbol: String,
+    pub source: String,
+    pub file: String,
+}
+
+/// Wire form of a `seam_shapes::ModuleContract` (the contract shape).
+#[napi(object)]
+pub struct ModuleContractDto {
+    pub module: String,
+    pub provides: Vec<ProvidedSymbolDto>,
+    pub unused_exports: Vec<String>,
+    pub depends: Vec<ExternalDepDto>,
+    pub afferent: u32,
+    pub efferent: u32,
+    pub no_structure: bool,
+    pub reason: Option<String>,
+}
+
+impl From<seam_shapes::ModuleContract> for ModuleContractDto {
+    fn from(c: seam_shapes::ModuleContract) -> Self {
+        Self {
+            module: c.module,
+            provides: c
+                .provides
+                .into_iter()
+                .map(|p| ProvidedSymbolDto {
+                    symbol: p.symbol,
+                    kind: p.kind,
+                    consumers: p.consumers.into_iter().map(|x| ContractConsumerDto { file: x.file, symbol: x.symbol }).collect(),
+                    consumer_count: p.consumer_count as u32,
+                })
+                .collect(),
+            unused_exports: c.unused_exports,
+            depends: c.depends.into_iter().map(|d| ExternalDepDto { symbol: d.symbol, source: d.source, file: d.file }).collect(),
+            afferent: c.afferent as u32,
+            efferent: c.efferent as u32,
+            no_structure: c.no_structure,
+            reason: c.reason,
+        }
+    }
+}
+
+/// projectContract — a module's boundary (used exports + their consumers, dead exports, external deps).
+#[napi]
+pub fn project_contract(repo: String, module_file: String) -> ModuleContractDto {
+    seam_shapes::project_contract(&repo, &module_file).into()
+}

@@ -13,3 +13,12 @@ pub struct ImportRef {
     pub source: Option<String>,
     pub reexport: bool,
 }
+
+/// A namespace import (`import * as ns from "m"`, TS/JS only): the `local` binding and the module `source`.
+/// Port of `NamespaceImport`. Exportless languages have none.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceImport {
+    pub local: String,
+    pub source: String,
+    pub line: u32,
+}
