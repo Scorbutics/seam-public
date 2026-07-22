@@ -24,3 +24,15 @@ pub use types::{Access, KeySides};
 pub use key_ir::{line_of, plausible_key_value};
 pub use mask::{mask_comments, string_literals_only, MaskCtx};
 pub use types::{CouplingAdapter, KeyHit, KindMeta};
+
+/// Invalidate ALL per-repo coupling caches for `repo` (or every repo when `None`) — floor indices, the JPA
+/// manager index, inferred http-clients, and the key-index (matcher/composed/merged) caches. The edit-loop
+/// hook: after a file change a resident (napi) process calls this so the next query re-derives instead of
+/// serving stale grounding. The counterpart of the seam-resolve `reset()`s (Workspace/CallsiteIndex/
+/// InterfaceIndex) and TS's per-run EngineCtx rebuild. Call BOTH crates' resets for a full engine invalidation.
+pub fn reset(repo: Option<&str>) {
+    ground::reset_floor_indices(repo);
+    ground::jpa_wrapper::reset(repo);
+    apply::reset_effect_clients(repo);
+    learn::key_index::reset(repo);
+}

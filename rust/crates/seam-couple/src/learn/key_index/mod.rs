@@ -41,6 +41,27 @@ fn composed_cached(repo: &str) -> Arc<GroundingIndex> {
     v
 }
 
+/// Drop the memoized key-index caches for `repo` (or all when `None`) — the matcher/composed grounding and the
+/// per-scope merged index. Invalidation hook for an edit-loop (a file change, or a newly learned matcher).
+pub fn reset(repo: Option<&str>) {
+    let clear = |c: &Mutex<HashMap<String, Arc<GroundingIndex>>>| {
+        let mut g = c.lock().unwrap();
+        match repo {
+            Some(r) => {
+                g.remove(r);
+            }
+            None => g.clear(),
+        }
+    };
+    clear(&MATCHERS_CACHE);
+    clear(&COMPOSED_CACHE);
+    let mut k = KEY_INDEX_CACHE.lock().unwrap();
+    match repo {
+        Some(r) => k.retain(|(repo_key, _), _| repo_key != r),
+        None => k.clear(),
+    }
+}
+
 /// The DETERMINISTIC llmKeyIndex — `filesIdx ⊕ matchersIdx ⊕ composedIdx` (the union order), scoped to the
 /// anchor's module. Memoized per (repo, module-scope). The grow's coupling `index` is
 /// `mergeGrounding(floor, key_index(...))`. Port of the llm-off path of `llmKeyIndex`.

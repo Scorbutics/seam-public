@@ -71,3 +71,44 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
 pub fn floor_base_index(repo: &str) -> Arc<FloorIndices> {
     floor_indices(repo)
 }
+
+/// Drop the memoized floor indices for `repo` (or all when `None`) — the invalidation hook for an edit-loop, so
+/// a resident process re-derives the floor after a file change (mirrors the TS ctx-per-run rebuild).
+pub fn reset_floor_indices(repo: Option<&str>) {
+    let mut c = CACHE.lock().unwrap();
+    match repo {
+        Some(r) => {
+            c.remove(r);
+        }
+        None => c.clear(),
+    }
+}
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    // A resident (napi) process keeps the per-repo indices RESIDENT across queries (the warm-path win), so the
+    // cache MUST (a) return the SAME instance on a warm hit and (b) drop it on reset() — else an edit-loop
+    // serves STALE grounding (the TS cache-invalidation pain we must not regress). Hermetic tmp repo.
+    #[test]
+    fn floor_indices_memoize_and_invalidate() {
+        let dir = std::env::temp_dir().join(format!("seam-cache-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_str().unwrap();
+        std::fs::write(dir.join("A.java"), "@Entity class Foo {}").unwrap();
+
+        reset_floor_indices(Some(repo));
+        let a = floor_indices(repo);
+        let b = floor_indices(repo);
+        assert!(Arc::ptr_eq(&a, &b), "warm hit must return the SAME cached instance");
+
+        reset_floor_indices(Some(repo));
+        let c = floor_indices(repo);
+        assert!(!Arc::ptr_eq(&a, &c), "reset() must drop the cache so the next call re-derives");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

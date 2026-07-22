@@ -98,6 +98,17 @@ pub fn jpa_manager_index(repo: &str) -> Arc<ManagerIndex> {
     idx
 }
 
+/// Drop the memoized JPA manager index for `repo` (or all when `None`). Invalidation hook for an edit-loop.
+pub fn reset(repo: Option<&str>) {
+    let mut c = CACHE.lock().unwrap();
+    match repo {
+        Some(r) => {
+            c.remove(r);
+        }
+        None => c.clear(),
+    }
+}
+
 fn build(repo: &str) -> ManagerIndex {
     let mut uses_em: HashSet<String> = HashSet::new();
     let mut parent: HashMap<String, String> = HashMap::new();

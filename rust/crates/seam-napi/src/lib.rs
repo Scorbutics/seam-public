@@ -625,6 +625,19 @@ pub fn key_index(repo: String, anchor_file: String) -> Vec<String> {
     rows
 }
 
+/// Invalidate EVERY per-repo cache for `repo` (or all repos when `repo` is null) — the edit-loop hook a
+/// resident (napi) process calls after a file change so the next query re-derives instead of serving stale
+/// indices. Resets both crates: seam-resolve (Workspace / CallsiteIndex / InterfaceIndex) and seam-couple
+/// (floor / JPA / effect-clients / key-index). Mirrors TS's per-run EngineCtx rebuild + the reset* functions.
+#[napi]
+pub fn reset_caches(repo: Option<String>) {
+    let r = repo.as_deref();
+    seam_resolve::Workspace::reset(r);
+    seam_resolve::CallsiteIndex::reset(r);
+    seam_resolve::InterfaceIndex::reset(r);
+    seam_couple::reset(r);
+}
+
 /// applyMatchers — the LEARNED rules grounded repo-wide → `key|side|file|line` rows (side p/c), in the index's
 /// insertion order, producers before consumers per key. Port of applyMatchers.
 #[napi]

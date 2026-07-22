@@ -67,6 +67,17 @@ fn effect_clients(repo: &str) -> Arc<Vec<String>> {
     clients
 }
 
+/// Drop the memoized inferred-http-clients for `repo` (or all when `None`). Invalidation hook for an edit-loop.
+pub fn reset_effect_clients(repo: Option<&str>) {
+    let mut c = HTTP_CLIENTS_CACHE.lock().unwrap();
+    match repo {
+        Some(r) => {
+            c.remove(r);
+        }
+        None => c.clear(),
+    }
+}
+
 // The classified http-receiver tokens — a member_access db-table on one of these is an SDK call, not a write, so
 // it's dropped. Derived from the channel/http-route matchers' OWN verdict. Port of `_httpRecvTokens`.
 fn http_recv_tokens(matchers: &[KeyMatcher]) -> HashSet<String> {
