@@ -530,3 +530,14 @@ pub fn mask_comments(text: String) -> String {
 pub fn string_literals_only(text: String) -> String {
     seam_couple::string_literals_only(&text)
 }
+
+/// One coupling adapter's raw key hits over a file — `[kind, value, line, produces, op]` rows. Per-adapter
+/// validation surface.
+#[napi]
+pub fn adapter_keys(name: String, path: String, text: String) -> Vec<Vec<String>> {
+    seam_couple::adapter_keys(&name, &path, &text)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default()])
+        .collect()
+}

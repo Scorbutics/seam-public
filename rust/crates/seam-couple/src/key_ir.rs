@@ -14,9 +14,11 @@ static GENERIC_KEY: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 
-/// The 0-based line of char offset `idx` in `text` (count of `\n` before it). Port of `lineOf`.
-pub fn line_of(text: &str, idx: usize) -> usize {
-    text.chars().take(idx).filter(|&c| c == '\n').count()
+/// The 0-based line at BYTE offset `byte` in `text` (count of `\n` before it — invariant across byte/char/
+/// UTF-16, so this matches TS `lineOf`). `byte` must be a char boundary (regex match offsets always are).
+/// Port of `lineOf`.
+pub fn line_of(text: &str, byte: usize) -> usize {
+    text[..byte].bytes().filter(|&b| b == b'\n').count()
 }
 
 /// Is `value` plausibly a shared-key identifier (a table/route/topic name), not prose or a generic token?

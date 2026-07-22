@@ -8,7 +8,7 @@ pub mod key_ir;
 pub mod mask;
 pub mod types;
 
-pub use adapters::scan_file_keys;
+pub use adapters::{adapter_keys, scan_file_keys};
 pub use key_ir::{line_of, plausible_key_value};
 pub use mask::{mask_comments, string_literals_only, MaskCtx};
 pub use types::{CouplingAdapter, KeyHit, KindMeta};

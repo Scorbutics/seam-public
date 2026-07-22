@@ -8,8 +8,13 @@ use crate::key_ir::plausible_key_value;
 use crate::mask::MaskCtx;
 use crate::types::{CouplingAdapter, KeyHit};
 
+mod db_table;
+mod jpa_entity;
+
+static JPA_ENTITY: jpa_entity::JpaEntity = jpa_entity::JpaEntity;
+
 /// Every registered framework adapter. Framework-specific code lives ONLY in these modules.
-static ADAPTERS: &[&dyn CouplingAdapter] = &[];
+static ADAPTERS: &[&dyn CouplingAdapter] = &[&JPA_ENTITY];
 
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.
@@ -24,4 +29,11 @@ pub fn scan_file_keys(file: &str, text: &str, mask: &MaskCtx) -> Vec<KeyHit> {
 /// The registered adapters' metadata catalogue (`seam-adapters`).
 pub fn builtin_adapters() -> Vec<(&'static str, &'static str, &'static str)> {
     ADAPTERS.iter().map(|a| (a.meta().name, a.meta().kind, a.meta().blurb)).collect()
+}
+
+/// The raw hits of ONE adapter (by its `name`) over a file — no plausibility filter. Per-adapter validation
+/// surface; `None` for an unknown adapter name.
+pub fn adapter_keys(name: &str, file: &str, text: &str) -> Option<Vec<KeyHit>> {
+    let mask = MaskCtx::new(text);
+    ADAPTERS.iter().find(|a| a.meta().name == name).map(|a| a.scan(file, text, &mask))
 }
