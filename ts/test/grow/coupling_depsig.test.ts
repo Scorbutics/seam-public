@@ -43,7 +43,7 @@ afterEach(() => { delete process.env.SEAM_FP_DEPSIG; freshRun(); });
 describe("coupling depsig cache — per-delta granular invalidation (byte-identical)", () => {
   test("cold flag-on grow equals a flag-off grow (recording is transparent)", async () => {
     if (!available()) return;
-    const rOff = copy(); process.env.SEAM_FP_DEPSIG = ""; const off = ser(await grow(rOff));
+    const rOff = copy(); process.env.SEAM_FP_DEPSIG = "0"; const off = ser(await grow(rOff));
     freshRun(); process.env.SEAM_FP_DEPSIG = "1"; const rOn = copy(); const on = ser(await grow(rOn));
     expect(on).toBe(off);
     rmSync(rOff, { recursive: true, force: true }); rmSync(rOn, { recursive: true, force: true });
@@ -62,7 +62,7 @@ describe("coupling depsig cache — per-delta granular invalidation (byte-identi
 
     // and identical to a fresh from-scratch grow on the same edited tree (no stale hit)
     const Rref = copy(); writeFileSync(join(Rref, "lib", "unrelated_probe.ts"), "export const zzz = 42;\n");
-    process.env.SEAM_FP_DEPSIG = ""; freshRun();
+    process.env.SEAM_FP_DEPSIG = "0"; freshRun();
     expect(out).toBe(ser(await grow(Rref)));
     rmSync(R, { recursive: true, force: true }); rmSync(Rref, { recursive: true, force: true });
   });
@@ -78,7 +78,7 @@ describe("coupling depsig cache — per-delta granular invalidation (byte-identi
     expect(_fpStat().cmiss).toBeGreaterThan(0);                       // the delta whose complement changed rebuilt
 
     const Rref = copy(); appendFileSync(join(Rref, "app", "api", "admin", "payments", "route.ts"), "\n// touched the payments route handler body\n");
-    process.env.SEAM_FP_DEPSIG = ""; freshRun();
+    process.env.SEAM_FP_DEPSIG = "0"; freshRun();
     expect(out).toBe(ser(await grow(Rref)));                          // rebuilt grow == fresh grow
     rmSync(R, { recursive: true, force: true }); rmSync(Rref, { recursive: true, force: true });
   });

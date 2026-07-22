@@ -100,7 +100,7 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   // never re-resolves with the learned matchers — a `service`/`handle` boundary never surfaces). The probe is cheap + transient
   // scoping, so bypass the cache for it entirely: never read the real grow's slot, never write the floor-only result into it.
   if (ctx.stableFloor) return doCompute();
-  const envHash = process.env.SEAM_FP_DEPSIG === "1" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
+  const envHash = process.env.SEAM_FP_DEPSIG !== "0" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
   return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, doCompute, envHash);
 }
 
@@ -260,7 +260,7 @@ export async function _fileCouplingDelta(repo: string, file: string, anchorId: s
   if (!cacheOn || ctx.stableFloor) out = await compute(anchorId, counter);   // stableFloor probe: floor-only, transient — never read/write the shared delta cache (else it poisons the real LLM grow), see _anchorCouplingDelta
   else {
     // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
-    const envHash = process.env.SEAM_FP_DEPSIG === "1" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
+    const envHash = process.env.SEAM_FP_DEPSIG !== "0" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
     const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0), envHash);
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the ENCLOSING method within the
     // reached node's same-file call closure (drops the sibling/class-wide bleed). Needs a parse — degrade to the flat

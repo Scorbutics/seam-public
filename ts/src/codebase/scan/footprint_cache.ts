@@ -205,16 +205,16 @@ async function sigStillValid(repo: string, sig: DepSig, coupling = false, curEnv
 
 // build_footprint with the per-node cache in front. The grow TRAVERSAL is purely structural (coupling is a
 // separate overlay — see orchestrate.ts _anchorCouplingDelta), so build_footprint here is a deterministic
-// function of the SOURCE. Two invalidation modes: the legacy whole-repo epoch key, and (SEAM_FP_DEPSIG=1) a
-// per-footprint dependency signature so an edit invalidates ONLY the footprints it actually touches. Cached
-// whenever there's a real symbol and no caller-files de-noise (which varies by the reaching callers).
+// function of the SOURCE. Two invalidation modes: the DEFAULT per-footprint dependency signature (so an edit
+// invalidates ONLY the footprints it actually touches) and the legacy whole-repo epoch key (SEAM_FP_DEPSIG=0
+// kill-switch). Cached whenever there's a real symbol and no caller-files de-noise (which varies by the callers).
 export async function build_footprint_cached(
   repo: string, anchorFile: string, symbol: string | null, opts: FootprintOpts = {},
 ): Promise<ResolvedGraph> {
   const cacheable = graphCacheEnabled() && !!symbol && opts.dataCoupling === false && !opts.callerFiles?.length;
   if (!cacheable) return build_footprint(repo, anchorFile, symbol, opts);
 
-  if (process.env.SEAM_FP_DEPSIG === "1") {
+  if (process.env.SEAM_FP_DEPSIG !== "0") {
     const key = _key(symbol!, opts);
     const shard = shardOf(repo, anchorFile);
     const hit = shard[key];
@@ -277,7 +277,7 @@ export async function cachedCouplingDelta<T>(
   // route-chain structural queries; `envHash` (floor⊕http⊕matchers) captures the whole-repo MEMBERSHIP/env changes a
   // per-file read-set can't see. A delta reused iff engine + env + every read's content-hash + every query re-run
   // match → an edit invalidates only the deltas whose complements/anchor changed, not every delta on every save.
-  if (process.env.SEAM_FP_DEPSIG === "1" && !dataCouplingLlm && envHash !== undefined) {
+  if (process.env.SEAM_FP_DEPSIG !== "0" && !dataCouplingLlm && envHash !== undefined) {
     const shard = cShardOf(repo, anchorFile);
     const hit = shard[anchorKey];
     if (hit?.sig && await sigStillValid(repo, hit.sig, true, envHash)) { _fpstat.chit++; return _clone(hit.d) as T; }
