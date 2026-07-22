@@ -17,6 +17,7 @@ import { join, dirname, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { available } from "../atoms.js";
 import { SKIP_DIRS, hasCarrierEngine, isHandlerFileByLanguage } from "../../core/resolve/languages/index.js";
+import { depHash, recordRead } from "../../core/resolve/dep_recorder.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { type Access, type KeyHit, type AnchorKey, type KeySource, type GroundingIndex, type CouplingNode, type Crossing, type Blindspot, isFloor } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
@@ -320,6 +321,33 @@ export function param_key_index(repo: string, skipDirs: Set<string>, ctx: Engine
 export function floor_base_index(repo: string, skipDirs: Set<string>, ctx: EngineCtx): GroundingIndex {
   if (!ctx.floorBase.has(repo)) build_floor_indices(repo, skipDirs, ctx);
   return ctx.floorBase.get(repo)!;
+}
+
+// WHOLE-REPO COUPLING-ENVIRONMENT fingerprint for the floor-mode per-delta signature (footprint-cache v2). A
+// coupling delta depends on three whole-repo aggregates that live on ctx (not a per-file index): the MERGED floor
+// index (which already folds JPA-wrapper keys — so a new @Entity/producer that adds a key the anchor touches shows
+// up here), the inferred http-CLIENT set, and the LEARNED matcher store. This hashes all three so the delta's sig
+// invalidates when the coupling ENVIRONMENT changes (a new key/route/manager/client, or a learned matcher) — but
+// NOT on a plain body edit, so a delta whose complements' CONTENT is unchanged survives an unrelated edit (the
+// content dimension is caught separately by the recorded complement reads). Membership changes (a new complement
+// producing the anchor's key) are captured because a new access changes the floor index → this hash. Memoised per
+// (ctx, repo): the floor/http builds are the ones the grow needs anyway. stableFloor bypasses the delta cache.
+const _serAccess = (a: Access[]): string => a.map((x) => `${x.file}:${x.line}`).sort().join(",");
+function _serFloor(idx: GroundingIndex): string {
+  const parts: string[] = [];
+  for (const [k, v] of idx) parts.push(`${k}${_serAccess(v.producers)}${_serAccess(v.consumers)}`);
+  return parts.sort().join("\n");
+}
+const _envHashMemo = new WeakMap<EngineCtx, Map<string, string>>();
+export async function couplingEnvHash(repo: string, ctx: EngineCtx): Promise<string> {
+  let byRepo = _envHashMemo.get(ctx); if (!byRepo) { byRepo = new Map(); _envHashMemo.set(ctx, byRepo); }
+  const memo = byRepo.get(repo); if (memo !== undefined) return memo;
+  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const clients = await _effectClients(repo, ctx);
+  const matchers = ["key-adapters.json", "key-matchers.json"]
+    .map((n) => { try { return depHash(readFileSync(join(repo, ".seam", n), "utf-8")); } catch { return "0"; } }).join(",");
+  const h = depHash(`${_serFloor(floor)}${[...clients].sort().join(",")}${matchers}`);
+  byRepo.set(repo, h); return h;
 }
 
 // complement_unit/grepFiles/couplingOtherSides (the TARGETED/bridge pipeline — review-impact's per-anchor
@@ -828,7 +856,7 @@ async function crossBoundary(
     // fetches). Recurse one hop into its body, scanning ITS keys — `surfacedKeys` blocks the table it reads.
     if (depth > 0) {
       let complementText = "";
-      try { complementText = readFileSync(join(repo, file), "utf-8"); } catch { /* unreadable complement → no chain */ }
+      try { complementText = readFileSync(join(repo, file), "utf-8"); recordRead(file, complementText); } catch { /* unreadable complement → no chain */ }
       if (complementText) await runPipeline(s, { id: complementId, file, text: complementText, lo: unit.start, hi: unit.end }, depth - 1, surfacedKeys);
     }
   }

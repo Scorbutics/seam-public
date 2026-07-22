@@ -13,6 +13,7 @@ import { spawnSync } from "node:child_process";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
+import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { type KeyHit } from "./types.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { scan_file_keys, scannableForKeys, kindOf } from "./adapters/index.js";
@@ -47,7 +48,7 @@ export async function complement_unit(repo: string, file: string, line: number):
   const lang = lang_for(file);
   if (!lang || !available()) return fallback;
   let ctx: Ctx | null;
-  try { ctx = await makeCtx(readFileSync(join(repo, file), "utf-8"), lang); } catch { return fallback; }
+  try { const content = readFileSync(join(repo, file), "utf-8"); recordRead(file, content); ctx = await makeCtx(content, lang); } catch { return fallback; }
   if (!ctx) return fallback;
   let best: { symbol: string; kind: string; start: number; end: number } | null = null;
   for (const n of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k))) {

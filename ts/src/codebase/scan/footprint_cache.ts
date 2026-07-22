@@ -161,10 +161,10 @@ function shardOf(repo: string, file: string): Shard {
 
 // Per-run depsig cache counters — a structural contract the granular-invalidation test asserts (an unrelated edit
 // must cause 0 rebuilds; a dependency edit must cause >0). Always counted (negligible); optionally exit-flushed.
-const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0 };
+const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0, chit: 0, cmiss: 0, cnew: 0, ctaint: 0, cwhole: 0 };
 export function _fpStat(): Readonly<typeof _fpstat> { return { ..._fpstat }; }
-export function _resetFpStat(): void { _fpstat.hit = _fpstat.miss = _fpstat.new = _fpstat.taint = _fpstat.whole = 0; }
-if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole}\n`); } catch { /* ignore */ } });
+export function _resetFpStat(): void { for (const k of Object.keys(_fpstat) as (keyof typeof _fpstat)[]) _fpstat[k] = 0; }
+if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
 
 const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));
 const _key = (symbol: string, opts: FootprintOpts) =>
@@ -190,10 +190,11 @@ function _fileContentHash(repo: string, rel: string): string {
 // stale). Otherwise: every read file's content-hash must be unchanged AND every open-set query must RE-RUN to the
 // same result hash (cheap on a warm in-memory index) — this closes the new-consumer / new-impl hole a read-set
 // alone can't see. Any unknown query kind (a stale-format shard) → safe miss.
-async function sigStillValid(repo: string, sig: DepSig): Promise<boolean> {
+async function sigStillValid(repo: string, sig: DepSig, coupling = false, curEnv?: string): Promise<boolean> {
   if (sig.engine !== engineEpoch()) return false;
+  if (sig.env !== undefined && sig.env !== curEnv) return false;   // coupling-environment fingerprint moved (key/route/manager/client/matcher)
   if (sig.tainted || sig.queries.some((q) => q.whole))
-    return sig.epoch !== undefined && sig.epoch === epochOf(repo);
+    return sig.epoch !== undefined && sig.epoch === (coupling ? couplingEpochOf(repo) : epochOf(repo));
   for (const rel in sig.reads) if (_fileContentHash(repo, rel) !== sig.reads[rel]) return false;
   for (const q of sig.queries) {
     const rr = getQueryRerun(q.kind); if (!rr) return false;
@@ -252,7 +253,7 @@ export async function build_footprint_cached(
 // stable and the delta replays. Keyed by the anchor identity; sharded per anchor file. The overlay's node ids
 // (c${count}) are reconciled by merge_resolved's content dedup, so a cached delta replays safely.
 const CDELTA = "coupling-delta-v1";
-type CEntry<T> = { e: string; d: T };
+type CEntry<T> = { e?: string; sig?: DepSig; d: T };   // e = legacy coupling-epoch key; sig = per-delta deps (v2)
 type CShard<T> = Record<string, CEntry<T>>;
 const _cmem = new Map<string, Map<string, CShard<unknown>>>();
 function cShardOf(repo: string, file: string): CShard<unknown> {
@@ -265,9 +266,31 @@ function cShardOf(repo: string, file: string): CShard<unknown> {
 // Memoize the anchor coupling overlay across runs. `compute` runs on a miss; the cached delta is deep-cloned on
 // a hit (the caller merges/mutates it). `anchorKey` identifies the anchor within its file (symbol/id).
 export async function cachedCouplingDelta<T>(
-  repo: string, anchorFile: string, anchorKey: string, _dataCouplingLlm: boolean, compute: () => Promise<T>,
+  repo: string, anchorFile: string, anchorKey: string, dataCouplingLlm: boolean, compute: () => Promise<T>,
+  envHash?: string,
 ): Promise<T> {
   if (!graphCacheEnabled()) return compute();
+
+  // v2 — per-delta dependency signature (SEAM_FP_DEPSIG). ONLY for deterministic FLOOR coupling (the LLM flywheel
+  // learns/replays matchers via the coupling epoch, so it stays on the coarse key) AND only when the caller supplies
+  // the coupling-environment fingerprint. The recorder captures the anchor + complement file reads (content) and the
+  // route-chain structural queries; `envHash` (floor⊕http⊕matchers) captures the whole-repo MEMBERSHIP/env changes a
+  // per-file read-set can't see. A delta reused iff engine + env + every read's content-hash + every query re-run
+  // match → an edit invalidates only the deltas whose complements/anchor changed, not every delta on every save.
+  if (process.env.SEAM_FP_DEPSIG === "1" && !dataCouplingLlm && envHash !== undefined) {
+    const shard = cShardOf(repo, anchorFile);
+    const hit = shard[anchorKey];
+    if (hit?.sig && await sigStillValid(repo, hit.sig, true, envHash)) { _fpstat.chit++; return _clone(hit.d) as T; }
+    const { result: d, sig } = await withRecorder(engineEpoch(), () => compute());
+    sig.env = envHash;
+    const whole = sig.queries.some((q) => q.whole);
+    if (sig.tainted || whole) sig.epoch = couplingEpochOf(repo);   // coarse fallback folds the matcher state
+    if (hit?.sig) _fpstat.cmiss++; else _fpstat.cnew++; if (sig.tainted) _fpstat.ctaint++; if (whole) _fpstat.cwhole++;
+    shard[anchorKey] = { sig, d };
+    saveShard(repo, CDELTA, anchorFile, shard);
+    return _clone(d) as T;
+  }
+
   const epoch = couplingEpochOf(repo);        // captures the learned-matcher state → an LLM overlay replays safely once settled
   if (!epoch) return compute();
   const shard = cShardOf(repo, anchorFile);

@@ -32,6 +32,7 @@ import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { epochOf } from "../scan/footprint_cache.js";
 import { getCouplePool, couplePoolMin, serializeCtxIndices } from "./couple_pool.js";
 import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
@@ -57,7 +58,7 @@ import { RegionCentroid } from "./field.js";
 import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
-import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling } from "../coupling/index.js";
+import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling, couplingEnvHash } from "../coupling/index.js";
 import { resolveResourceRoutes } from "../coupling/resource_routes.js";
 import { _read, _enclosing, methodPreciseIndex } from "../scan/ast_units.js";
 import { makeCtx, available, type Ctx } from "../atoms.js";
@@ -88,6 +89,7 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   // anchor span + the learned state (the coupling epoch), independent of the settled footprint's shape (it reads
   // only the anchor + a node count for id numbering, which merge_resolved re-ids anyway). LLM stays live (learns).
   const doCompute = async () => {
+    recordRead(anchorFile, ar[0]);   // the anchor's own content (its keys/routes) is a coupling dependency
     const delta = await resolveCoupling(repo, anchorId, anchorFile, ar[0], keyLo, keyHi, (data.nodes ?? []).length, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
     delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);   // route → its consumers (2nd hop), as before
     return delta;
@@ -98,7 +100,8 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
   // never re-resolves with the learned matchers — a `service`/`handle` boundary never surfaces). The probe is cheap + transient
   // scoping, so bypass the cache for it entirely: never read the real grow's slot, never write the floor-only result into it.
   if (ctx.stableFloor) return doCompute();
-  return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, doCompute);
+  const envHash = process.env.SEAM_FP_DEPSIG === "1" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
+  return cachedCouplingDelta(repo, anchorFile, `${anchorId}|${keyLo}|${keyHi}`, !!opts.dataCouplingLlm, doCompute, envHash);
 }
 
 // Couple ONE reached node's whole file, attaching the bridge to that node. The anchor coupling above is span-
@@ -248,6 +251,7 @@ export async function _fileCouplingDelta(repo: string, file: string, anchorId: s
   if (srcRange) fpRanges.push(srcRange);
   ctx.footprintNodeRanges.set(normpath(file), fpRanges);
   const compute = async (srcId: string, ctr: number) => {
+    recordRead(file, ar[0]);   // the coupled file's own content (its keys/routes) is a coupling dependency
     const delta = await resolveCoupling(repo, srcId, file, ar[0], 0, hi, ctr, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
     delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
     return delta;
@@ -256,7 +260,8 @@ export async function _fileCouplingDelta(repo: string, file: string, anchorId: s
   if (!cacheOn || ctx.stableFloor) out = await compute(anchorId, counter);   // stableFloor probe: floor-only, transient — never read/write the shared delta cache (else it poisons the real LLM grow), see _anchorCouplingDelta
   else {
     // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
-    const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0));
+    const envHash = process.env.SEAM_FP_DEPSIG === "1" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
+    const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0), envHash);
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the ENCLOSING method within the
     // reached node's same-file call closure (drops the sibling/class-wide bleed). Needs a parse — degrade to the flat
     // rehydrate offline (no tree-sitter) or when opted out.

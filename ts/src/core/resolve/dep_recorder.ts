@@ -34,6 +34,7 @@ export type DepSig = {
   queries: RecordedQuery[];          // open-set membership dependencies
   tainted?: boolean;                 // an input was read outside the wired primitives → fall back to the repo epoch
   epoch?: string;                    // repo content epoch, stored ONLY when tainted or a whole-repo query fired
+  env?: string;                      // coupling-only: a whole-repo coupling-environment fingerprint (floor⊕http⊕matchers)
 };
 
 type Recorder = { reads: Map<string, string>; queries: RecordedQuery[]; tainted: boolean };
