@@ -586,6 +586,18 @@ pub fn floor_index(repo: String) -> Vec<Vec<String>> {
     rows
 }
 
+/// The LEARNED matcher store replayed over one file — every persisted rule's key hits, as
+/// `kind|value|line|produces|op` rows (the CACHE replay). Port of loadMatchers + runMatcher.
+#[napi]
+pub fn matcher_keys(repo: String, _file: String, text: String) -> Vec<String> {
+    let matchers = seam_couple::load_matchers(&repo);
+    matchers
+        .iter()
+        .flat_map(|m| seam_couple::run_matcher(m, &text))
+        .map(|h| format!("{}|{}|{}|{}|{}", h.kind, h.value, h.line, h.produces, h.op.unwrap_or_default()))
+        .collect()
+}
+
 /// resolveCoupling (deterministic floor path) — the anchor's data-coupling BRIDGE delta, pre-serialized for
 /// parity: nodes `id|symbol|kind|file|start|end|enclosing|complexity|direction`, edges
 /// `from|to|kind|line|op`, blindspots `node|mechanism|evidence|cand,cand…` (cand=`file#symbol#prov`). Port of
