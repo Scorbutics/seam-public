@@ -42,4 +42,10 @@ impl LanguageProvider for TypeScriptProvider {
     fn impl_markers(&self) -> &'static [&'static str] {
         &["interface", "implements"]
     }
+    fn module_entry(&self, basename: &str) -> bool {
+        imports::is_module_entry(basename)
+    }
+    fn entrypoint(&self, ctx: &crate::treesitter::Ctx) -> Option<usize> {
+        imports::entrypoint(ctx)
+    }
 }

@@ -37,6 +37,16 @@ pub trait LanguageProvider: Send + Sync {
         let _ = text;
         Vec::new()
     }
+    /// Is `basename` this language's MODULE-ENTRY file (`index.ts` etc.)? Exportless/dir-less languages: no.
+    fn module_entry(&self, basename: &str) -> bool {
+        let _ = basename;
+        false
+    }
+    /// The MAIN entrypoint line inside a module-entry file, by the language's heuristic. `None` = no heuristic.
+    fn entrypoint(&self, ctx: &crate::treesitter::Ctx) -> Option<usize> {
+        let _ = ctx;
+        None
+    }
     /// Default imports (`import X from "m"`) — TS/JS only; other languages have none.
     fn default_imports(&self, text: &str) -> Vec<DefaultImport> {
         let _ = text;

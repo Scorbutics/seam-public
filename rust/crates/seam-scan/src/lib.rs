@@ -8,6 +8,7 @@ pub mod consumers_graph;
 pub mod graph;
 pub mod merge;
 pub mod module_graph;
+pub mod string_coupling;
 mod util;
 
 pub use callsite_graph::{build_callsite_graph, CallsiteOpts};

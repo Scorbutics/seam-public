@@ -14,6 +14,7 @@ mod typescript;
 
 pub use provider::{LanguageProvider, ModuleResolver, NullResolver};
 pub use treesitter::Ctx;
+pub use tree_sitter::Node;
 pub use types::{DefaultImport, ImportRef, NamespaceImport};
 
 static PROVIDERS: &[&dyn LanguageProvider] = &[&java::JAVA, &typescript::TYPESCRIPT, &ruby::RUBY];
@@ -42,6 +43,18 @@ static GRAMMAR_BY_EXT: &[(&str, &str)] = &[
 
 /// The tree-sitter grammar name for `path`'s extension (port of `langForExt`). This is what a parse must use —
 /// see `GRAMMAR_BY_EXT`. `None` for an unknown extension.
+/// Is `file`'s basename a module-entry (`index.*`) for ANY language? Port of `is_module_entry`.
+pub fn is_module_entry(file: &str) -> bool {
+    let base = file.rsplit(['/', '\\']).next().unwrap_or(file);
+    PROVIDERS.iter().any(|p| p.module_entry(base))
+}
+
+/// The main entrypoint line inside a module-entry file, via the file's language heuristic (0 if none). Port
+/// of `entrypoint_line`.
+pub fn entrypoint_line(file: &str, ctx: &Ctx) -> usize {
+    provider_for(file).and_then(|p| p.entrypoint(ctx)).unwrap_or(0)
+}
+
 pub fn grammar_for(path: &str) -> Option<&'static str> {
     let f = path.to_ascii_lowercase();
     GRAMMAR_BY_EXT.iter().find(|(ext, _)| f.ends_with(ext)).map(|(_, g)| *g)

@@ -153,3 +153,26 @@ pub fn member_use(text: &str, local: &str, symbol: &str) -> Option<&'static str>
     }
     None
 }
+
+// ── Module-entry detection + entrypoint heuristic (string-dispatch tier). ──
+use crate::treesitter::Ctx;
+
+static MODULE_ENTRY_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^index\.(ts|tsx|js|jsx|mts|cts|mjs|cjs)$").unwrap());
+
+/// Is `basename` a TS/JS module-entry file (`index.*`)? Port of the TS provider's `moduleEntry`.
+pub fn is_module_entry(basename: &str) -> bool {
+    MODULE_ENTRY_RE.is_match(basename)
+}
+
+/// The main entrypoint line of a module-entry file: a leading call statement, else a `default` export, else
+/// the first real (non comment/import/hashbang) top-level node. Port of `_entrypoint`.
+pub fn entrypoint(ctx: &Ctx) -> Option<usize> {
+    let top = ctx.children(ctx.root());
+    if let Some(call) = top.iter().find(|n| n.kind() == "expression_statement" && ctx.children(**n).first().is_some_and(|c| c.kind().contains("call"))) {
+        return Some(ctx.span(*call).0);
+    }
+    if let Some(deflt) = top.iter().find(|n| n.kind() == "export_statement" && ctx.text(**n).chars().take(30).collect::<String>().contains("default")) {
+        return Some(ctx.span(*deflt).0);
+    }
+    top.iter().find(|n| !matches!(n.kind(), "comment" | "import_statement" | "hash_bang_line")).map(|n| ctx.span(*n).0)
+}

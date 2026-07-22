@@ -558,3 +558,28 @@ pub fn scan_file_keys(path: String, text: String) -> Vec<Vec<String>> {
 pub fn file_store_write_count(repo: String, rel: String) -> u32 {
     seam_couple::file_store_write_count(&repo, &rel) as u32
 }
+
+/// Module-entry index: `[dirBasename, entry, entry, …]` rows (validation surface for string-dispatch).
+#[napi]
+pub fn module_entry_index(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_scan::string_coupling::module_entry_index(&repo);
+    let mut rows: Vec<Vec<String>> = idx
+        .into_iter()
+        .map(|(k, mut v)| {
+            v.insert(0, k);
+            v
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
+/// String-dispatch detect over a file's whole span → `[name, entry, line]` edge rows (validation surface).
+#[napi]
+pub fn string_dispatch(repo: String, anchor_file: String, text: String, lang: String) -> Vec<Vec<String>> {
+    let Some(ctx) = seam_lang::Ctx::parse(&text, &lang) else { return Vec::new() };
+    let idx = seam_scan::string_coupling::module_entry_index(&repo);
+    let mlen = text.matches('\n').count();
+    let (edges, _amb) = seam_scan::string_coupling::detect(&ctx, 0, mlen, &idx, &anchor_file);
+    edges.into_iter().map(|(n, e, l)| vec![n, e, l.to_string()]).collect()
+}
