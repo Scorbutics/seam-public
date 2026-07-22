@@ -568,6 +568,36 @@ pub fn file_store_write_count(repo: String, rel: String) -> u32 {
     seam_couple::file_store_write_count(&repo, &rel) as u32
 }
 
+/// The deterministic GROUND index (`floorBase = mergeGrounding(shared, param)`) flattened for parity: one row
+/// per access, `[key, side, file, line]` (side = "p"/"c"), in the index's insertion order, producers before
+/// consumers per key. Port of `floor_base_index` (the FLOOR+GROUND half of resolveCoupling).
+#[napi]
+pub fn floor_index(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_couple::floor_base_index(&repo);
+    let mut rows = Vec::new();
+    for (key, sides) in idx.floor_base.iter() {
+        for a in &sides.producers {
+            rows.push(vec![key.clone(), "p".into(), a.file.clone(), a.line.to_string()]);
+        }
+        for a in &sides.consumers {
+            rows.push(vec![key.clone(), "c".into(), a.file.clone(), a.line.to_string()]);
+        }
+    }
+    rows
+}
+
+/// The `other_side` complement lookup over the repo floor index — the counterpart accesses (readers of a key
+/// the anchor writes, or vice-versa), with http-route suffix-specificity scoring. Rows `[file, line]` in emit
+/// order. Port of `otherSide`.
+#[napi]
+pub fn other_side(repo: String, kind: String, value: String, produces: bool) -> Vec<Vec<String>> {
+    let idx = seam_couple::floor_base_index(&repo);
+    seam_couple::other_side(&idx.floor_base, &kind, &value, produces)
+        .into_iter()
+        .map(|a| vec![a.file, a.line.to_string()])
+        .collect()
+}
+
 /// Module-entry index: `[dirBasename, entry, entry, …]` rows (validation surface for string-dispatch).
 #[napi]
 pub fn module_entry_index(repo: String) -> Vec<Vec<String>> {

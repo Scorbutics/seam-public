@@ -1,17 +1,9 @@
 //! Small shared helpers for the footprint builders.
 
-use once_cell::sync::Lazy;
-use regex::Regex;
 use seam_lang::{grammar_for, provider_for};
 
-static TEST_RE: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"(?i)(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|([-_.](testing|fixture|mock)\.[a-z0-9]+$)|((^|/)(tests?|__tests__|__mocks__|mocks?|fixtures?|testing|spec|e2e|cypress|playwright)/)|((^|/)seed[-_.][^/]*$)").unwrap()
-});
-
-/// Does `f` look like a test/fixture/mock file? (port of `isTestFile`).
-pub fn is_test_file(f: &str) -> bool {
-    TEST_RE.is_match(&f.replace('\\', "/"))
-}
+/// Does `f` look like a test/fixture/mock file? (port of `isTestFile`). Single source of truth in seam-fs.
+pub use seam_fs::is_test_file;
 
 /// A consumer node's kind, downgraded to "test" for a test file (port of `_kind_for`).
 pub fn kind_for(file: &str, kind: &str) -> String {

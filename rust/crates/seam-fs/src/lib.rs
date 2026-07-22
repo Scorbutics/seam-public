@@ -4,9 +4,20 @@
 //! consumers (e.g. the consumer scan) are order-sensitive to; git provides gitignore semantics without
 //! re-implementing them. SKIP_DIRS prunes build output / vendored deps.
 
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashSet;
 use std::fs;
 use std::process::Command;
+
+static TEST_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|([-_.](testing|fixture|mock)\.[a-z0-9]+$)|((^|/)(tests?|__tests__|__mocks__|mocks?|fixtures?|testing|spec|e2e|cypress|playwright)/)|((^|/)seed[-_.][^/]*$)").unwrap()
+});
+
+/// Does `f` look like a test/fixture/mock file? (port of `isTestFile`, core/resolve/consumers.ts).
+pub fn is_test_file(f: &str) -> bool {
+    TEST_RE.is_match(&f.replace('\\', "/"))
+}
 
 // Port of SKIP_DIRS (core/resolve/languages/base.ts) — pruned by NAME at any path depth.
 pub const SKIP_DIRS: &[&str] = &[

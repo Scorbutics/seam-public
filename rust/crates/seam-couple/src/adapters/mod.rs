@@ -11,26 +11,34 @@ use crate::types::{CouplingAdapter, KeyHit};
 mod active_record;
 mod annotation_route;
 mod db_table;
+mod endpoint_map;
 mod file_channel;
 mod http_egress;
-mod http_route;
+pub mod http_route;
 mod jooq;
 mod jpa_entity;
 mod member_access;
 mod raw_sql;
+mod vue_inject;
 
 static RAW_SQL: raw_sql::RawSql = raw_sql::RawSql;
 static ACTIVE_RECORD: active_record::ActiveRecord = active_record::ActiveRecord;
 static JOOQ: jooq::Jooq = jooq::Jooq;
 static JPA_ENTITY: jpa_entity::JpaEntity = jpa_entity::JpaEntity;
+static HTTP_ROUTE: http_route::HttpRoute = http_route::HttpRoute;
 static HTTP_EGRESS: http_egress::HttpEgress = http_egress::HttpEgress;
+static ENDPOINT_MAP: endpoint_map::EndpointMap = endpoint_map::EndpointMap;
 static ANNOTATION_ROUTE: annotation_route::AnnotationRoute = annotation_route::AnnotationRoute;
 static FILE_CHANNEL: file_channel::FileChannel = file_channel::FileChannel;
+static VUE_INJECT: vue_inject::VueInject = vue_inject::VueInject;
 static MEMBER_ACCESS: member_access::MemberAccess = member_access::MemberAccess;
 
 /// Every registered framework adapter, in the TS `ADAPTERS` order (so `scan_file_keys` is byte-identical).
-/// Framework-specific code lives ONLY in these modules.
-static ADAPTERS: &[&dyn CouplingAdapter] = &[&RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_EGRESS, &ANNOTATION_ROUTE, &FILE_CHANNEL, &MEMBER_ACCESS];
+/// Framework-specific code lives ONLY in these modules. NB: SUPABASE (registry slot 0) is DEFERRED — it grounds
+/// query-builder `.from(t).verb` table access via the language provider's `table_access`, not yet ported; it
+/// emits nothing on a non-query-builder repo, so its absence is byte-identical there (e.g. Keycloak).
+static ADAPTERS: &[&dyn CouplingAdapter] =
+    &[&RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_ROUTE, &HTTP_EGRESS, &ENDPOINT_MAP, &ANNOTATION_ROUTE, &FILE_CHANNEL, &VUE_INJECT, &MEMBER_ACCESS];
 
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.

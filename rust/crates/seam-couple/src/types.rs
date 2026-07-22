@@ -17,6 +17,24 @@ pub struct KeyHit {
     pub recv: Option<String>,
 }
 
+/// One PRODUCER or CONSUMER of a shared key — the file that touches it and the line. The grounding index
+/// groups these per key so the `other_side` lookup can pair a producer with its consumers (and vice-versa).
+/// Port of `Access`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Access {
+    pub file: String,
+    pub line: usize,
+}
+
+/// A grounded key's two sides — who WRITES it (producers) and who READS it (consumers). Insertion-ordered
+/// (Vec), because `other_side` emits complements in the order the floor walk discovered them. Port of the
+/// `{producers, consumers}` value of a `GroundingIndex` entry.
+#[derive(Clone, Debug, Default)]
+pub struct KeySides {
+    pub producers: Vec<Access>,
+    pub consumers: Vec<Access>,
+}
+
 /// An adapter's boundary-kind metadata: the key `kind` it emits and the graph node/edge labels a crossing of
 /// it wears. Data adapters (db-table) leave `handler_edge`/`terminal` unset; call/route adapters set them.
 /// Port of the metadata half of `KeyKind`.
