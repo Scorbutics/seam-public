@@ -4,7 +4,7 @@
 //! operation over the bases map).
 
 use once_cell::sync::Lazy;
-use seam_lang::{ast, provider_for, Ctx};
+use seam_lang::{ast, grammar_for, provider_for, Ctx};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
@@ -45,16 +45,16 @@ impl CallsiteIndex {
         let mut callers: HashMap<String, Vec<String>> = HashMap::new();
         let mut bases: HashMap<String, Vec<String>> = HashMap::new();
         for rel in seam_fs::source_files(repo, |r| provider_for(r).is_some()) {
-            let Some(provider) = provider_for(&rel) else {
+            let Some(_provider) = provider_for(&rel) else {
                 continue;
             };
             let Some(text) = read_text(repo, &rel) else {
                 continue;
             };
-            // Parse only when the language's grammar is vendored; others contribute nothing (as they do in TS
-            // when makeCtx fails). NB: uses the provider name as the grammar — fine while Java is the only
-            // vendored grammar; a per-extension grammar map (tsx vs typescript) is needed as more land.
-            let Some(ctx) = Ctx::parse(&text, provider.name()) else {
+            // Parse with the file's GRAMMAR (grammar_for: .tsx→tsx, .js→javascript, …), only when it's vendored;
+            // others contribute nothing (as in TS when makeCtx fails).
+            let Some(grammar) = grammar_for(&rel) else { continue };
+            let Some(ctx) = Ctx::parse(&text, grammar) else {
                 continue;
             };
             for m in ast::called_method_names(&ctx) {

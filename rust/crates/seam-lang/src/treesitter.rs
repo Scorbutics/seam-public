@@ -6,13 +6,21 @@ use tree_sitter::{Language, Node, Parser, TreeCursor};
 mod grammar_c {
     extern "C" {
         pub fn tree_sitter_java() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_typescript() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_tsx() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_javascript() -> *const tree_sitter::ffi::TSLanguage;
     }
 }
 
-/// The native `Language` for a grammar name, or `None` if not vendored yet.
+/// The native `Language` for a grammar name, or `None` if not vendored yet. Names are GRAMMAR names
+/// (`java`, `typescript`, `tsx`, `javascript`), selected per file extension by `grammar_for` — a `.tsx`
+/// file needs the tsx grammar, a `.js` file the javascript grammar (see `provider::grammar_for`).
 pub fn language(name: &str) -> Option<Language> {
     match name {
         "java" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_java()) }),
+        "typescript" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_typescript()) }),
+        "tsx" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_tsx()) }),
+        "javascript" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_javascript()) }),
         _ => None,
     }
 }

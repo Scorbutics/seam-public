@@ -28,6 +28,25 @@ pub fn provider_for(path: &str) -> Option<&'static dyn LanguageProvider> {
         .find(|p| p.extensions().iter().any(|e| f.ends_with(e)))
 }
 
+// Extension → tree-sitter GRAMMAR name (port of `_LANG_BY_EXT`). A file's parse grammar is NOT its provider
+// name: `.ts`/`.mts`/`.cts` are the `typescript` grammar, `.tsx` a SEPARATE `tsx` grammar, `.js`/`.jsx` the
+// `javascript` grammar — while all share the one `typescript` PROVIDER. `treesitter::language` maps a grammar
+// name to a vendored `Language` (or `None`), so an unvendored grammar simply doesn't parse yet.
+static GRAMMAR_BY_EXT: &[(&str, &str)] = &[
+    (".py", "python"), (".pyi", "python"), (".ts", "typescript"), (".mts", "typescript"), (".cts", "typescript"),
+    (".tsx", "tsx"), (".js", "javascript"), (".jsx", "javascript"), (".mjs", "javascript"), (".cjs", "javascript"),
+    (".c", "c"), (".h", "cpp"), (".hpp", "cpp"), (".hh", "cpp"), (".hxx", "cpp"),
+    (".cc", "cpp"), (".cpp", "cpp"), (".cxx", "cpp"), (".kt", "kotlin"), (".kts", "kotlin"),
+    (".go", "go"), (".rb", "ruby"), (".rake", "ruby"), (".java", "java"), (".cs", "csharp"), (".rs", "rust"),
+];
+
+/// The tree-sitter grammar name for `path`'s extension (port of `langForExt`). This is what a parse must use —
+/// see `GRAMMAR_BY_EXT`. `None` for an unknown extension.
+pub fn grammar_for(path: &str) -> Option<&'static str> {
+    let f = path.to_ascii_lowercase();
+    GRAMMAR_BY_EXT.iter().find(|(ext, _)| f.ends_with(ext)).map(|(_, g)| *g)
+}
+
 // The runtime/link family a language belongs to — two files in the same family can host an in-process call
 // (JS/TS → js, Java/Kotlin → jvm, C/C++ → native; anything else is its own singleton). Port of `langFamily`.
 fn lang_family(name: &str) -> &str {
