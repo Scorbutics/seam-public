@@ -7,7 +7,7 @@
 //!
 //! A provider is the factory for its resolver, so adding a language is: one small module implementing these.
 
-use crate::types::{ImportRef, NamespaceImport};
+use crate::types::{DefaultImport, ImportRef, NamespaceImport};
 
 pub trait LanguageProvider: Send + Sync {
     fn name(&self) -> &'static str;
@@ -30,6 +30,23 @@ pub trait LanguageProvider: Send + Sync {
     fn namespace_imports(&self, text: &str) -> Vec<NamespaceImport> {
         let _ = text;
         Vec::new()
+    }
+    /// Default imports (`import X from "m"`) — TS/JS only; other languages have none.
+    fn default_imports(&self, text: &str) -> Vec<DefaultImport> {
+        let _ = text;
+        Vec::new()
+    }
+    /// Is `symbol` the DEFAULT export of a file with this text? (`export default …symbol`, `export { symbol
+    /// as default }`.) TS/JS only — a language with no default-export concept always returns false.
+    fn is_default_export(&self, text: &str, symbol: &str) -> bool {
+        let _ = (text, symbol);
+        false
+    }
+    /// Does `text` USE a namespace member `local.symbol`? Returns the provenance ("RESOLVED_FULL" for a call
+    /// `local.symbol(`, "RESOLVED_PARTIAL" for a bare reference), or `None`. TS/JS namespace-consumer detection.
+    fn member_use(&self, text: &str, local: &str, symbol: &str) -> Option<&'static str> {
+        let _ = (text, local, symbol);
+        None
     }
 }
 

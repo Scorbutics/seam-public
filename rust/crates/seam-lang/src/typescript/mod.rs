@@ -27,4 +27,16 @@ impl LanguageProvider for TypeScriptProvider {
     fn export_statements(&self) -> bool {
         true
     }
+    fn namespace_imports(&self, text: &str) -> Vec<crate::types::NamespaceImport> {
+        imports::namespace_imports(text)
+    }
+    fn default_imports(&self, text: &str) -> Vec<crate::types::DefaultImport> {
+        imports::default_imports(text)
+    }
+    fn is_default_export(&self, text: &str, symbol: &str) -> bool {
+        imports::is_default_export(text, symbol)
+    }
+    fn member_use(&self, text: &str, local: &str, symbol: &str) -> Option<&'static str> {
+        imports::member_use(text, local, symbol)
+    }
 }

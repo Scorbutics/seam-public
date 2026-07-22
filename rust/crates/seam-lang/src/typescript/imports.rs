@@ -95,3 +95,61 @@ mod tests {
         );
     }
 }
+
+// ── Namespace / default imports + default-export & namespace-member detection (the TS/JS consumer paths). ──
+use crate::types::{DefaultImport, NamespaceImport};
+
+static NS_STATIC_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"import\s+(?:type\s+)?(?:[A-Za-z_$][\w$]*\s*,\s*)?\*\s*as\s+([A-Za-z_$][\w$]*)\s*from\s*["']([^"']+)["']"#).unwrap()
+});
+static NS_DYN_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*(?:await\s+)?import\s*\(\s*["']([^"']+)["']\s*\)"#).unwrap()
+});
+static DEFAULT_RE: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r#"import\s+(?:type\s+)?([A-Za-z_$][\w$]*)\s*(?:,\s*(?:\{[^}]*\}|\*\s*as\s+[A-Za-z_$][\w$]*))?\s*from\s*["']([^"']+)["']"#).unwrap()
+});
+
+/// `import * as X from "m"` (static) + `const X = await import("m")` (dynamic). Port of `namespaceImports`.
+pub fn namespace_imports(text: &str) -> Vec<NamespaceImport> {
+    let mut out = Vec::new();
+    for m in NS_STATIC_RE.captures_iter(text) {
+        out.push(NamespaceImport { local: m[1].to_string(), source: m[2].to_string(), line: line_at(text, m.get(0).unwrap().start()) });
+    }
+    for m in NS_DYN_RE.captures_iter(text) {
+        out.push(NamespaceImport { local: m[1].to_string(), source: m[2].to_string(), line: line_at(text, m.get(0).unwrap().start()) });
+    }
+    out
+}
+
+/// `import X from "m"` (with optional `, {…}` / `, * as Y`). Port of `defaultImports`.
+pub fn default_imports(text: &str) -> Vec<DefaultImport> {
+    DEFAULT_RE
+        .captures_iter(text)
+        .map(|m| DefaultImport { local: m[1].to_string(), source: m[2].to_string(), line: line_at(text, m.get(0).unwrap().start()) })
+        .collect()
+}
+
+/// Is `symbol` the default export of `text`? (`export default …symbol` / `export { symbol as default }`.)
+/// Port of `_isDefaultExport`.
+pub fn is_default_export(text: &str, symbol: &str) -> bool {
+    let s = regex::escape(symbol);
+    let a = Regex::new(&format!(r"export\s+default\s+(?:async\s+)?(?:function|class)?\s*{s}\b")).unwrap();
+    if a.is_match(text) {
+        return true;
+    }
+    let b = Regex::new(&format!(r"export\s*\{{[^}}]*\b{s}\s+as\s+default\b")).unwrap();
+    b.is_match(text)
+}
+
+/// Does `text` use `local.symbol` — a call (`local.symbol(` → FULL) or a bare reference (→ PARTIAL)? Port of
+/// `_member_use`.
+pub fn member_use(text: &str, local: &str, symbol: &str) -> Option<&'static str> {
+    let (l, s) = (regex::escape(local), regex::escape(symbol));
+    if Regex::new(&format!(r"\b{l}\s*\.\s*{s}\s*\(")).unwrap().is_match(text) {
+        return Some("RESOLVED_FULL");
+    }
+    if Regex::new(&format!(r"\b{l}\s*\.\s*{s}\b")).unwrap().is_match(text) {
+        return Some("RESOLVED_PARTIAL");
+    }
+    None
+}

@@ -93,14 +93,16 @@ impl Workspace {
         out
     }
 
-    // The NAMED consumer path: files importing a binding named `symbol` whose module resolves to the anchor
-    // (RESOLVED_FULL), or whose unresolved source basename matches it (SUGGESTED). Namespace/default-import
-    // paths (TS/JS) aren't ported yet — they contribute nothing for a Java anchor.
+    // The direct consumers of `symbol` at `anchor_file`: NAMED (a binding called `symbol`), NAMESPACE-member
+    // (`X.symbol` where X binds the anchor module), and DEFAULT-export (a default import of the anchor, when
+    // `symbol` IS its default export). The ns/default paths are TS/JS — dispatched via the provider, so they
+    // contribute nothing for a Java anchor (no ns/default entries).
     fn scan_direct(&self, anchor_file: &str, symbol: &str) -> Vec<Consumer> {
         let anchor_norm = normpath(anchor_file);
         let anchor_base = stem(anchor_file);
         let anchor_abs = normpath(&format!("{}/{}", self.repo, anchor_file));
         let mut out = Vec::new();
+        // NAMED
         for entry in self.index.by_name(symbol) {
             if entry.norm == anchor_abs {
                 continue; // the anchor's own file
@@ -134,7 +136,54 @@ impl Workspace {
                 }
             }
         }
+        // NAMESPACE-member: `const X = import("…anchor…")` / `import * as X` then `X.symbol`.
+        for entry in self.index.ns_entries() {
+            if entry.norm == anchor_abs {
+                continue;
+            }
+            let Some(text) = read_text(&self.repo, &entry.rel) else { continue };
+            let provider = provider_for(&entry.rel);
+            for n in &entry.ns {
+                match self.resolve(&entry.rel, &n.source) {
+                    Some(t) if normpath(&t) == anchor_norm => {}
+                    _ => continue,
+                }
+                if let Some(status) = provider.and_then(|p| p.member_use(&text, &n.local, symbol)) {
+                    out.push(Consumer { file: entry.rel.clone(), local: symbol.to_string(), source: n.source.clone(), status: status_of(status), reexport: false });
+                    break;
+                }
+            }
+        }
+        // DEFAULT-export: only when `symbol` is the anchor's default export. A `default as Name` re-export
+        // barrel (followed transitively) and a direct `import Name from "anchor"`.
+        if self.is_default_export(anchor_file, symbol) {
+            for entry in self.index.default_entries() {
+                if entry.norm == anchor_abs {
+                    continue;
+                }
+                for r in entry.refs.iter().filter(|r| r.name == "default" && r.reexport) {
+                    let source = r.source.as_deref().unwrap_or("");
+                    if self.resolve(&entry.rel, source).is_some_and(|t| normpath(&t) == anchor_norm) {
+                        out.push(Consumer { file: entry.rel.clone(), local: r.local.clone(), source: r.source.clone().unwrap_or_default(), status: Status::ResolvedFull, reexport: true });
+                        break;
+                    }
+                }
+                for d in &entry.defs {
+                    if self.resolve(&entry.rel, &d.source).is_some_and(|t| normpath(&t) == anchor_norm) {
+                        out.push(Consumer { file: entry.rel.clone(), local: d.local.clone(), source: d.source.clone(), status: Status::ResolvedFull, reexport: false });
+                        break;
+                    }
+                }
+            }
+        }
         out
+    }
+
+    /// Is `symbol` the default export of `anchor_file`? Dispatched to the file's provider (TS/JS only).
+    fn is_default_export(&self, anchor_file: &str, symbol: &str) -> bool {
+        let Some(provider) = provider_for(anchor_file) else { return false };
+        let Some(text) = read_text(&self.repo, anchor_file) else { return false };
+        provider.is_default_export(&text, symbol)
     }
 
     /// Files consuming ANY of `member_names` exported from `anchor_file` → `(rel, [(member, local), …])` in
@@ -172,6 +221,18 @@ impl Workspace {
             }
         }
         out
+    }
+}
+
+fn read_text(repo: &str, rel: &str) -> Option<String> {
+    std::fs::read(format!("{repo}/{rel}")).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
+}
+
+/// Map a provenance string (from `member_use`) to a `Status`.
+fn status_of(s: &str) -> Status {
+    match s {
+        "RESOLVED_PARTIAL" => Status::ResolvedPartial,
+        _ => Status::ResolvedFull,
     }
 }
 

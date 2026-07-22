@@ -14,7 +14,7 @@ mod typescript;
 
 pub use provider::{LanguageProvider, ModuleResolver, NullResolver};
 pub use treesitter::Ctx;
-pub use types::{ImportRef, NamespaceImport};
+pub use types::{DefaultImport, ImportRef, NamespaceImport};
 
 static PROVIDERS: &[&dyn LanguageProvider] = &[&java::JAVA, &typescript::TYPESCRIPT, &ruby::RUBY];
 

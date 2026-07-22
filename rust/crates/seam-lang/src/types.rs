@@ -22,3 +22,12 @@ pub struct NamespaceImport {
     pub source: String,
     pub line: u32,
 }
+
+/// A default import (`import X from "m"`, TS/JS only): the `local` binding and the module `source`. Port of
+/// `DefaultImport`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DefaultImport {
+    pub local: String,
+    pub source: String,
+    pub line: u32,
+}
