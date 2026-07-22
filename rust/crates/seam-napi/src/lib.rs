@@ -541,3 +541,14 @@ pub fn adapter_keys(name: String, path: String, text: String) -> Vec<Vec<String>
         .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default(), h.label.unwrap_or_default(), h.method.unwrap_or_default(), h.recv.unwrap_or_default()])
         .collect()
 }
+
+/// The deterministic coupling FLOOR — all registered adapters' key hits over a file (plausibility-filtered),
+/// as `[kind, value, line, produces, op, label, method, recv]` rows. Port of scan_file_keys.
+#[napi]
+pub fn scan_file_keys(path: String, text: String) -> Vec<Vec<String>> {
+    let mask = seam_couple::MaskCtx::new(&text);
+    seam_couple::scan_file_keys(&path, &text, &mask)
+        .into_iter()
+        .map(|h| vec![h.kind, h.value, h.line.to_string(), h.produces.to_string(), h.op.unwrap_or_default(), h.label.unwrap_or_default(), h.method.unwrap_or_default(), h.recv.unwrap_or_default()])
+        .collect()
+}

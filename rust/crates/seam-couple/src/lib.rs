@@ -5,6 +5,8 @@
 
 pub mod adapters;
 pub mod frameworks;
+pub mod regex_util;
+pub mod verb_class;
 pub mod key_ir;
 pub mod mask;
 pub mod types;
