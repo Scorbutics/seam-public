@@ -606,6 +606,24 @@ pub fn resolve_http_call_sites(file: String, text: String, clients: Vec<String>)
         .collect()
 }
 
+/// applyMatchers — the LEARNED rules grounded repo-wide → `key|side|file|line` rows (side p/c), in the index's
+/// insertion order, producers before consumers per key. Port of applyMatchers.
+#[napi]
+pub fn apply_matchers(repo: String) -> Vec<String> {
+    let matchers = seam_couple::load_matchers(&repo);
+    let idx = seam_couple::learn::apply_matchers(&repo, &matchers);
+    let mut rows = Vec::new();
+    for (key, sides) in idx.iter() {
+        for a in &sides.producers {
+            rows.push(format!("{}|p|{}|{}", key, a.file, a.line));
+        }
+        for a in &sides.consumers {
+            rows.push(format!("{}|c|{}|{}", key, a.file, a.line));
+        }
+    }
+    rows
+}
+
 /// The LEARNED matcher store replayed over one file — every persisted rule's key hits, as
 /// `kind|value|line|produces|op` rows (the CACHE replay). Port of loadMatchers + runMatcher.
 #[napi]

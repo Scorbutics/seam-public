@@ -5,6 +5,8 @@
 
 pub mod matchers;
 pub mod effect_inference;
+pub mod key_index;
 
 pub use matchers::{load_matchers, run_matcher, KeyMatcher};
 pub use effect_inference::{infer_http_clients, http_client_matchers, resolve_http_call_sites};
+pub use key_index::apply_matchers;
