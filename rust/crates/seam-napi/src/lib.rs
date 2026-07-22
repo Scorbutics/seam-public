@@ -343,6 +343,14 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
     }
 }
 
+/// growSeed — the P1 structural seed (pruned UP consumers ⊕ DOWN deps, backward-tagged). Parity surface for
+/// `_phaseSeed`.
+#[napi]
+pub fn grow_seed(repo: String, anchor_file: String, symbol: String) -> Option<GraphDto> {
+    let ex = seam_grow::exclude::Exclusion::new(&[], false);
+    seam_grow::seed::phase_seed(&repo, &anchor_file, &symbol, &ex).map(Into::into)
+}
+
 /// One node's assigned role. Parity wire form for `assign_roles`.
 #[napi(object)]
 pub struct RoleEntryDto {

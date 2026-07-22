@@ -6,8 +6,10 @@
 //! (ubiquity, hub classification, and the wave itself land in later increments.)
 
 pub mod border_policies;
+pub mod exclude;
 pub mod graph_ir;
 pub mod roles;
+pub mod seed;
 pub mod ubiquity;
 
 /// Invalidate ALL per-repo grow caches for `repo` (or every repo when `None`). The grow-layer counterpart of
