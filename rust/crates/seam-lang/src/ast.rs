@@ -289,6 +289,13 @@ const JS_OBJECT_PROTO_PROPS: &[&str] = &[
     "toLocaleString", "__proto__", "__defineGetter__", "__defineSetter__", "__lookupGetter__", "__lookupSetter__",
 ];
 
+/// Is `name` a property `Object.prototype` exposes to a JS `key in {}` check? Several ports build a plain `{}`
+/// object keyed by symbol/import names and guard insertion with `!(name in obj)`, so such names are silently
+/// dropped — reproduce that for byte-identical parity.
+pub fn is_js_object_proto_prop(name: &str) -> bool {
+    JS_OBJECT_PROTO_PROPS.contains(&name)
+}
+
 /// `{method → first call line}` for methods of `class_name` called on a PROVABLE instance of it (an
 /// instances_of local, a `new C()`, or a member of one). Port of `_class_method_usage`.
 pub fn class_method_usage(ctx: &Ctx, class_name: &str, methods: &HashSet<String>) -> HashMap<String, usize> {
@@ -391,6 +398,93 @@ pub fn ref_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
     v.sort_unstable();
     v.dedup();
     v
+}
+
+/// A module's PUBLIC SURFACE — the exported members as units (deduped by name, first-wins). For an
+/// export-statement language (TS/JS) it reads the `export` nodes; for an exportless one (Java/Ruby/C/C++) it
+/// reads top-level type declarations + their members + free functions. Dispatched by the file's provider.
+/// Port of `_exported_members`.
+pub fn exported_members(ctx: &Ctx, file: &str) -> Vec<Unit> {
+    if !crate::provider_for(file).map(|p| p.export_statements()).unwrap_or(false) {
+        return public_surface(ctx);
+    }
+    let mut out: Vec<Unit> = Vec::new();
+    for es in ctx.collect(ctx.root(), nk::is_export) {
+        for ch in ctx.children(es) {
+            let k = ch.kind();
+            if nk::is_funclike(k) && !nk::is_anon_func(k) {
+                if let Some(nm) = name_of(ctx, ch) {
+                    let (s, e) = ctx.span(ch);
+                    out.push(Unit { name: nm, kind: "function".into(), start: s, end: e });
+                }
+            } else if nk::is_class_kind(k) {
+                if let Some(nm) = name_of(ctx, ch) {
+                    let (s, e) = ctx.span(ch);
+                    out.push(Unit { name: nm, kind: "class".into(), start: s, end: e });
+                }
+            } else if nk::is_var_decl(k) {
+                for d in ctx.children(ch) {
+                    if !nk::is_var_declarator(d.kind()) {
+                        continue;
+                    }
+                    let dch = ctx.children(d);
+                    if dch.first().is_some_and(|c0| nk::is_name_kind(c0.kind())) {
+                        let is_fn = dch.iter().any(|c| nk::is_funclike(c.kind()));
+                        let (s, e) = ctx.span(ch);
+                        out.push(Unit { name: ctx.text(dch[0]).to_string(), kind: if is_fn { "function" } else { "constant" }.into(), start: s, end: e });
+                    }
+                }
+            } else if nk::is_export_clause(k) {
+                // `export { a, b }` / `export { a as b } from "./x"` — the exported NAME is the specifier's LAST
+                // name identifier (the local alias is irrelevant at the boundary).
+                for sp in ctx.children(ch) {
+                    if !nk::is_export_specifier(sp.kind()) {
+                        continue;
+                    }
+                    let names: Vec<Node> = ctx.children(sp).into_iter().filter(|c| nk::is_name_kind(c.kind())).collect();
+                    if let Some(&last) = names.last() {
+                        let (s, e) = ctx.span(sp);
+                        out.push(Unit { name: ctx.text(last).to_string(), kind: "reference".into(), start: s, end: e });
+                    }
+                }
+            }
+        }
+    }
+    dedup_units(out)
+}
+
+/// The public surface of an EXPORTLESS language: top-level type declarations + the members in their bodies +
+/// top-level free functions (nested/local functions are not surface). Port of `_public_surface`.
+fn public_surface(ctx: &Ctx) -> Vec<Unit> {
+    let mut out: Vec<Unit> = Vec::new();
+    public_surface_visit(ctx, ctx.root(), 0, &mut out);
+    dedup_units(out)
+}
+
+fn public_surface_visit(ctx: &Ctx, n: Node, depth: usize, out: &mut Vec<Unit>) {
+    let k = n.kind();
+    if nk::is_class_kind(k) {
+        if let Some(nm) = name_of(ctx, n) {
+            let (s, e) = ctx.span(n);
+            out.push(Unit { name: nm, kind: "class".into(), start: s, end: e });
+        }
+    } else if nk::is_funclike(k) && !nk::is_anon_func(k) {
+        if let Some(nm) = name_of(ctx, n) {
+            let (s, e) = ctx.span(n);
+            let kind = if nk::is_method_kind(k) || depth > 0 { "method" } else { "function" };
+            out.push(Unit { name: nm, kind: kind.into(), start: s, end: e });
+        }
+        return; // a function body holds locals, not surface
+    }
+    let child_depth = if nk::is_class_kind(k) { depth + 1 } else { depth };
+    for c in ctx.children(n) {
+        public_surface_visit(ctx, c, child_depth, out);
+    }
+}
+
+fn dedup_units(units: Vec<Unit>) -> Vec<Unit> {
+    let mut seen = HashSet::new();
+    units.into_iter().filter(|u| seen.insert(u.name.clone())).collect()
 }
 
 /// The methods of the class named `name` — (name, start, end), constructor excluded, deduped. Port of

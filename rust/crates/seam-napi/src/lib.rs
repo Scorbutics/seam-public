@@ -404,3 +404,23 @@ pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: 
     };
     seam_shapes::project_impact(&repo, &anchor_file, &symbol, &opts).into()
 }
+
+/// build_module_graph — a whole file's exported members + their cross-file consumers (the --center <file>
+/// module footprint). Structural core (dataCoupling off).
+#[napi]
+pub fn build_module_graph(repo: String, anchor_file: String) -> Option<GraphDto> {
+    seam_scan::build_module_graph(&repo, &anchor_file).map(Into::into)
+}
+
+/// The exported members (public surface) of `text` under `lang`, as `[name, kind, start, end]` unit rows.
+#[napi]
+pub fn exported_members(path: String, text: String, lang: String) -> Vec<UnitDto> {
+    seam_lang::Ctx::parse(&text, &lang)
+        .map(|c| {
+            seam_lang::ast::exported_members(&c, &path)
+                .into_iter()
+                .map(|u| UnitDto { name: u.name, kind: u.kind, start: u.start as u32, end: u.end as u32 })
+                .collect()
+        })
+        .unwrap_or_default()
+}

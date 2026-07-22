@@ -50,6 +50,11 @@ impl ImportIndex {
     pub fn by_name(&self, name: &str) -> impl Iterator<Item = &FileImports> + '_ {
         self.by_name.get(name).into_iter().flatten().map(move |&i| &self.files[i])
     }
+
+    /// Every file's import contribution, in walk order (for a whole-repo scan).
+    pub fn files(&self) -> &[FileImports] {
+        &self.files
+    }
 }
 
 fn read_text(repo: &str, rel: &str) -> Option<String> {

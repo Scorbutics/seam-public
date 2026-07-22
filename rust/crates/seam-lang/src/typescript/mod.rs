@@ -24,4 +24,7 @@ impl LanguageProvider for TypeScriptProvider {
     fn resolver(&self, repo: &str) -> Box<dyn ModuleResolver> {
         Box::new(resolve::TypeScriptResolver::build(repo))
     }
+    fn export_statements(&self) -> bool {
+        true
+    }
 }

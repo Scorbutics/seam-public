@@ -133,3 +133,23 @@ pub fn is_anon_func(k: &str) -> bool {
 pub fn is_var_declarator(k: &str) -> bool {
     matches!(k, "variable_declarator" | "assignment")
 }
+
+/// A variable-declaration statement (holds one or more declarators): TS `const`/`let`/`var`.
+pub fn is_var_decl(k: &str) -> bool {
+    matches!(k, "lexical_declaration" | "variable_declaration")
+}
+
+/// An `export` statement (TS/JS module boundary node).
+pub fn is_export(k: &str) -> bool {
+    k == "export_statement"
+}
+
+/// The `{ … }` clause of an export/re-export statement.
+pub fn is_export_clause(k: &str) -> bool {
+    k == "export_clause"
+}
+
+/// One specifier within an export clause (`a`, `a as b`).
+pub fn is_export_specifier(k: &str) -> bool {
+    k == "export_specifier"
+}

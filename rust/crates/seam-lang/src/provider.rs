@@ -21,6 +21,11 @@ pub trait LanguageProvider: Send + Sync {
         let _ = repo;
         Box::new(NullResolver)
     }
+    /// Does this language express its module boundary via `export` statements (TS/JS)? Exportless languages
+    /// (Java/Ruby/C/C++/Python) return false → their public surface is read from top-level declarations.
+    fn export_statements(&self) -> bool {
+        false
+    }
 }
 
 pub trait ModuleResolver: Send + Sync {

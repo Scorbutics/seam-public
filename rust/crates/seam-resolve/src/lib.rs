@@ -136,6 +136,43 @@ impl Workspace {
         }
         out
     }
+
+    /// Files consuming ANY of `member_names` exported from `anchor_file` → `(rel, [(member, local), …])` in
+    /// walk order, the `used` map in first-seen order. The whole-module reverse-import scan behind the module
+    /// footprint. Port of `scan_module_consumers`.
+    pub fn scan_module_consumers(&self, anchor_file: &str, member_names: &HashSet<String>) -> Vec<(String, Vec<(String, String)>)> {
+        let anchor_norm = normpath(anchor_file);
+        let anchor_abs = normpath(&format!("{}/{}", self.repo, anchor_file));
+        let mut out = Vec::new();
+        for fi in self.index.files() {
+            if fi.norm == anchor_abs {
+                continue;
+            }
+            let mut used_names: HashSet<String> = HashSet::new();
+            let mut used: Vec<(String, String)> = Vec::new();
+            for r in &fi.refs {
+                if !member_names.contains(&r.name) {
+                    continue;
+                }
+                // _resolve_import: a source-less ref resolves via LSP (no active resolver here) → skip.
+                let Some(source) = &r.source else { continue };
+                let Some(target) = self.resolve(&fi.rel, source) else { continue };
+                if normpath(&target) != anchor_norm {
+                    continue;
+                }
+                // `used[name] = local` guarded by `!(name in used)` — skip an already-seen name OR a JS
+                // Object.prototype property name (the `in`-on-`{}` quirk).
+                if !used_names.contains(&r.name) && !seam_lang::ast::is_js_object_proto_prop(&r.name) {
+                    used_names.insert(r.name.clone());
+                    used.push((r.name.clone(), r.local.clone()));
+                }
+            }
+            if !used.is_empty() {
+                out.push((fi.rel.clone(), used));
+            }
+        }
+        out
+    }
 }
 
 /// Resolve a batch of `(importing_file, source)` queries against one workspace.
