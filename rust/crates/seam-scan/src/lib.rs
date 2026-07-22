@@ -18,7 +18,7 @@ pub use callsite_graph::{build_callsite_graph, CallsiteOpts};
 pub use class_graph::build_class_graph;
 pub use consumers_graph::{build_consumers_graph, ConsumersOpts};
 pub use dependency_graph::{build_dependency_graph, DepOpts};
-pub use footprint::build_bidirectional_graph;
+pub use footprint::{build_bidirectional_graph, build_footprint};
 pub use graph::{Blindspot, Candidate, GraphEdge, GraphNode, ResolvedGraph, Unresolved};
 pub use merge::merge_resolved;
 pub use module_graph::build_module_graph;

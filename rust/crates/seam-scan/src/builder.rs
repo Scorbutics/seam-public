@@ -63,6 +63,33 @@ impl GraphBuilder {
         self.unresolved.push(Unresolved { node: "n1".into(), query: query.into(), reason });
     }
 
+    /// The dataCoupling OVERLAY for the UP builder — ground the anchor span's shared keys (whole-file when the
+    /// symbol didn't resolve to a def range), append the crossing delta with `dc{n}` ids continuing this
+    /// builder's counter, then chain route consumers. Port of the consumers_graph.ts dataCoupling block.
+    pub fn overlay_coupling(&mut self, repo: &str, anchor_file: &str, anchor_src: &str, arange: (usize, usize), ws: &seam_resolve::Workspace) {
+        let resolved = arange.1 > 0;
+        let key_lo = if resolved { crate::attach::annotation_lo(anchor_src, arange.0) } else { 0 };
+        let key_hi = if resolved { arange.1 } else { anchor_src.matches('\n').count() };
+        let delta = seam_couple::resolve_coupling(repo, "n1", anchor_file, anchor_src, key_lo, key_hi, self.counter as u64, false);
+        for n in delta.nodes {
+            self.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction });
+        }
+        for e in delta.edges {
+            self.edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });
+        }
+        for b in delta.blindspots {
+            self.blindspots.push(Blindspot {
+                node: b.node,
+                mechanism: b.mechanism,
+                evidence: b.evidence,
+                candidates: b.candidates.into_iter().map(|c| Candidate { symbol: c.symbol, file: Some(c.file), provenance: Some(c.provenance) }).collect(),
+                persists: false,
+            });
+        }
+        self.counter = delta.counter as usize;
+        self.counter = crate::attach::chain_route_consumers(repo, &mut self.nodes, &mut self.edges, self.counter, ws);
+    }
+
     pub fn into_graph(self) -> ResolvedGraph {
         let mut g = make_graph(self.anchor, self.language, self.nodes, self.edges);
         g.blindspots = self.blindspots;

@@ -67,7 +67,7 @@ pub fn project_neighborhood(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 break;
             }
             hops += 1;
-            let g = build_bidirectional_graph(repo, &node.0, &node.1);
+            let g = build_bidirectional_graph(repo, &node.0, &node.1, false);
             let by_id: HashMap<&str, &seam_scan::GraphNode> = g.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
             let node_key = key(&node.0, &node.1);
             for e in &g.edges {

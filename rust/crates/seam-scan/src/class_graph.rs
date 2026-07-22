@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 const CLASS_CONSUMER_PARSE_CAP: usize = 120;
 
-pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Option<ResolvedGraph> {
+pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str, data_coupling: bool) -> Option<ResolvedGraph> {
     let (text, lang) = read(repo, anchor_file)?;
     let ctx = Ctx::parse(&text, &lang)?;
 
@@ -179,6 +179,31 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str) -> Opt
                 persists: false,
         });
     }
+
+    // dataCoupling OVERLAY — anchor id is the CLASS NAME (not "n1"); span = the class range. Port of the
+    // build_class_graph dataCoupling block.
+    if data_coupling {
+        let key_lo = crate::attach::annotation_lo(&text, crange.0);
+        let delta = seam_couple::resolve_coupling(repo, class_name, anchor_file, &text, key_lo, crange.1, counter as u64, false);
+        for n in delta.nodes {
+            nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction });
+        }
+        for e in delta.edges {
+            edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });
+        }
+        for b in delta.blindspots {
+            blindspots.push(Blindspot {
+                node: b.node,
+                mechanism: b.mechanism,
+                evidence: b.evidence,
+                candidates: b.candidates.into_iter().map(|c| Candidate { symbol: c.symbol, file: Some(c.file), provenance: Some(c.provenance) }).collect(),
+                persists: false,
+            });
+        }
+        counter = delta.counter as usize;
+        counter = crate::attach::chain_route_consumers(repo, &mut nodes, &mut edges, counter, &seam_resolve::Workspace::cached(repo));
+    }
+    let _ = counter;
 
     let graph_lang = provider_for(anchor_file).map(|p| p.name().to_string()).unwrap_or_default();
     let mut g = make_graph((class_name.into(), class_name.into(), anchor_file.into(), crange), graph_lang, nodes, edges);

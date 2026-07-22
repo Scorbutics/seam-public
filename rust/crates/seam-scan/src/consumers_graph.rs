@@ -24,6 +24,8 @@ pub struct ConsumersOpts {
     pub anchor_line: Option<usize>,
     /// Skip the receiver-agnostic call-site pass (blast-radius counts don't need it).
     pub skip_callsite: bool,
+    /// Run the dataCoupling OVERLAY (resolveCoupling + route-consumer chaining). Structural-only when false.
+    pub data_coupling: bool,
 }
 
 /// The import-scan core: anchor node + import-resolved consumers + same-file callers. A CLASS anchor is
@@ -56,7 +58,7 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         range = (al, al.max(range.1));
     }
     if kind == "class" {
-        return build_class_graph(repo, anchor_file, symbol);
+        return build_class_graph(repo, anchor_file, symbol, opts.data_coupling);
     }
 
     let enclosing = if kind == "method" {
@@ -74,6 +76,13 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
     if kind != "symbol" {
         if let Some(c) = &actx {
             add_intra_file_callers(&mut b, c, anchor_file, symbol, range, &aunits);
+        }
+    }
+    // dataCoupling OVERLAY — the anchor's shared-key boundaries + route-consumer chain (whole-file span when
+    // the symbol didn't resolve). Port of the consumers_graph.ts dataCoupling block.
+    if opts.data_coupling {
+        if let Some((text, _)) = &src {
+            b.overlay_coupling(repo, anchor_file, text, range, &Workspace::cached(repo));
         }
     }
     Some(b.into_graph())

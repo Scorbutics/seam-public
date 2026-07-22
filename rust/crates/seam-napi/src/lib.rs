@@ -331,7 +331,7 @@ pub fn build_callsite_graph(
 /// `dataCoupling:false`, depth-1 graph.
 #[napi]
 pub fn build_class_graph(repo: String, anchor_file: String, class_name: String) -> Option<GraphDto> {
-    seam_scan::build_class_graph(&repo, &anchor_file, &class_name).map(Into::into)
+    seam_scan::build_class_graph(&repo, &anchor_file, &class_name, false).map(Into::into)
 }
 
 /// build_consumers_graph — the UP/consumers footprint completing `--query consumers`: routes a class anchor to
@@ -339,7 +339,7 @@ pub fn build_class_graph(repo: String, anchor_file: String, class_name: String) 
 /// (dataCoupling off, depth 1).
 #[napi]
 pub fn build_consumers_graph(repo: String, anchor_file: String, symbol: String, anchor_line: Option<u32>) -> Option<GraphDto> {
-    let opts = seam_scan::ConsumersOpts { anchor_line: anchor_line.map(|l| l as usize), skip_callsite: false };
+    let opts = seam_scan::ConsumersOpts { anchor_line: anchor_line.map(|l| l as usize), skip_callsite: false, data_coupling: false };
     seam_scan::build_consumers_graph(&repo, &anchor_file, &symbol, &opts).map(Into::into)
 }
 
@@ -422,6 +422,13 @@ pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: 
 
 /// build_module_graph — a whole file's exported members + their cross-file consumers (the --center <file>
 /// module footprint). Structural core (dataCoupling off).
+/// build_footprint — the direction-selected footprint (up|down|both) with an optional dataCoupling overlay.
+/// `None` symbol → the whole-module footprint. Port of build_footprint.
+#[napi]
+pub fn build_footprint(repo: String, anchor_file: String, symbol: Option<String>, direction: String, data_coupling: Option<bool>) -> Option<GraphDto> {
+    seam_scan::build_footprint(&repo, &anchor_file, symbol.as_deref(), &direction, data_coupling.unwrap_or(false)).map(Into::into)
+}
+
 #[napi]
 pub fn build_module_graph(repo: String, anchor_file: String) -> Option<GraphDto> {
     seam_scan::build_module_graph(&repo, &anchor_file).map(Into::into)
