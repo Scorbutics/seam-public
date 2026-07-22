@@ -70,6 +70,34 @@ pub fn scan_consumers_batch(repo: String, anchors: Vec<Vec<String>>) -> Vec<Vec<
         .collect()
 }
 
+/// The distinct method names called on a receiver in `text` (the callsite-index building block).
+#[napi]
+pub fn called_methods(text: String, lang: String) -> Vec<String> {
+    seam_lang::Ctx::parse(&text, &lang)
+        .map(|c| seam_lang::ast::called_method_names(&c))
+        .unwrap_or_default()
+}
+
+/// Wire form of a class's `extends` bases.
+#[napi(object)]
+pub struct ClassBasesDto {
+    pub name: String,
+    pub bases: Vec<String>,
+}
+
+/// Each class in `text` → its `extends` base names.
+#[napi]
+pub fn class_bases(text: String, lang: String) -> Vec<ClassBasesDto> {
+    seam_lang::Ctx::parse(&text, &lang)
+        .map(|c| {
+            seam_lang::ast::class_bases(&c)
+                .into_iter()
+                .map(|(name, bases)| ClassBasesDto { name, bases })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Parity/debug: `depth|field|kind|start-end` per AST node (drives rust/parity/parity.ts).
 #[napi]
 pub fn parse_kinds(source: String, lang: String) -> napi::Result<Vec<String>> {

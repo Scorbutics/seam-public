@@ -17,6 +17,67 @@ pub fn language(name: &str) -> Option<Language> {
     }
 }
 
+/// A parsed file — an immutable AST + its source, with the small read-only query surface the AST scans use
+/// (port of the TS `Ctx`). Owns the tree; nodes borrow from it, so a `Ctx` is self-contained.
+pub struct Ctx {
+    source: String,
+    tree: tree_sitter::Tree,
+}
+
+impl Ctx {
+    /// Parse `source` with `lang`'s grammar. `None` if the grammar isn't vendored or parsing fails.
+    pub fn parse(source: &str, lang: &str) -> Option<Ctx> {
+        let language = language(lang)?;
+        let mut parser = Parser::new();
+        parser.set_language(&language).ok()?;
+        let tree = parser.parse(source, None)?;
+        Some(Ctx { source: source.to_string(), tree })
+    }
+
+    pub fn root(&self) -> Node<'_> {
+        self.tree.root_node()
+    }
+
+    /// The node's source text.
+    pub fn text<'a>(&'a self, n: Node) -> &'a str {
+        &self.source[n.start_byte()..n.end_byte()]
+    }
+
+    /// ALL children (named and anonymous), in order — matches TS `Ctx.children`.
+    pub fn children<'a>(&self, n: Node<'a>) -> Vec<Node<'a>> {
+        (0..n.child_count()).filter_map(|i| n.child(i)).collect()
+    }
+
+    /// Descendants of `root` whose kind satisfies `pred`, in TS `collect` order (a pre-order DFS visiting
+    /// children last-to-first — the LIFO-stack order the extractors are byte-identical to). Recurses THROUGH
+    /// matched nodes, so nested matches are found.
+    pub fn collect<'a>(&self, root: Node<'a>, pred: impl Fn(&str) -> bool) -> Vec<Node<'a>> {
+        let mut out = Vec::new();
+        let mut st = vec![root];
+        while let Some(x) = st.pop() {
+            if pred(x.kind()) {
+                out.push(x);
+            }
+            for i in 0..x.child_count() {
+                if let Some(c) = x.child(i) {
+                    st.push(c);
+                }
+            }
+        }
+        out
+    }
+
+    /// 0-based line of a byte offset (count of `\n` before it) — TS `Ctx.ln`.
+    pub fn line_of(&self, byte_off: usize) -> usize {
+        self.source.as_bytes()[..byte_off].iter().filter(|&&b| b == b'\n').count()
+    }
+
+    /// [start line, end line] of a node — TS `Ctx.span`.
+    pub fn span(&self, n: Node) -> (usize, usize) {
+        (self.line_of(n.start_byte()), self.line_of(n.end_byte()))
+    }
+}
+
 /// Parity/debug helper: parse `source` with `lang`'s grammar → `depth|field|kind|start-end` per node
 /// (pre-order DFS). Drives rust/parity/parity.ts.
 pub fn parse_kinds(source: &str, lang: &str) -> Result<Vec<String>, String> {

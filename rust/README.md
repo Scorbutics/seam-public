@@ -31,7 +31,8 @@ Adding a language = one small module implementing the traits. The domain types c
   - ✅ Ordered walk (`seam-fs::source_files`) — a sorted pre-order DFS (files before subdirs) with `git ls-files` as the FILTER, matching TS's traversal order (which the consumer scan is order-sensitive to).
   - ✅ TS module resolver (`seam-lang::typescript::resolve`) — relative + `.js`→`.ts` NodeNext + `index.*`, workspace-package entries, tsconfig `paths` aliases (+ JSONC/`extends`) — **16,390/16,390 resolutions byte-identical** (5136 Seam + 11,254 Keycloak JS) (`bun rust/parity/ts_resolve.ts`). Redesigned as a stateful `TypeScriptResolver` (TS's module-global `_PKG_CACHE`/`_TS_ALIAS_CACHE` → per-resolver state); node-path semantics ported into `seam-fs` (`dirname`/`normalize`/`join`).
   - ✅ Import index (`seam-resolve::ImportIndex`) + `scan_consumers` (`Workspace`) — **600/600 Keycloak anchors byte-identical** (`bun rust/parity/consumers.ts`), cross-language. Ordered walk, by-name inversion, resolve→FULL/SUGGESTED, dedup, barrel-following — all exact.
-  - ▢ next: TS namespace/default consumer paths; then the Java callsite graph (tree-sitter) for `--query consumers` on a class anchor; then impact/reaches/etc.
+  - ✅ Tree-sitter substrate — `Ctx` (parse + `collect`/`children`/`text`/`span`, TS `Ctx` semantics), a node-kind registry (`node_kinds`, the closed concept sets), and the language-agnostic AST scans `name_of`/`callee`/`called_method_names`/`class_bases` (`seam-lang::ast`). The callsite-index building blocks are **8141/8141 Java files byte-identical** (`bun rust/parity/ast.ts`).
+  - ▢ next: the callsite index (method→callers, class→bases) + `build_callsite_graph` (receiver resolution, subclass-family provenance) → `--query consumers` for a class anchor; then TS namespace/default consumer paths; then impact/reaches/etc.
 
 ## Phase 0 results
 
