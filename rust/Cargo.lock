@@ -213,13 +213,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
-name = "seam_phase0"
+name = "seam_core"
 version = "0.0.0"
 dependencies = [
  "cc",
  "napi",
  "napi-build",
  "napi-derive",
+ "once_cell",
+ "regex",
  "tree-sitter",
 ]
 

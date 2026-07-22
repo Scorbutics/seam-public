@@ -9,7 +9,7 @@ import { createRequire } from "node:module";
 import { getParser } from "../../ts/src/core/treesitter.js";
 
 const require = createRequire(import.meta.url);
-const addon = require("/home/scorbutics/seam-phase0/rust/seam_phase0.node");
+const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 
 // Recursive pre-order walk over a web-tree-sitter node, matching the Rust TreeCursor walk exactly:
 // every child (named AND anonymous), the field it occupies in its parent, and its byte span.

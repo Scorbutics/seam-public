@@ -1,9 +1,17 @@
-# Seam Rust core — Phase 0 (de-risk spike)
+# Seam Rust core
 
-Proves the two load-bearing assumptions of the [Rust migration plan](../../) **before** any engine code is
-written. Not the real crate layout — a single throwaway crate that answers two questions.
+napi-rs in-process addon — the Rust half of the [migration](../../). STRUCTURE (parse / resolve / grow /
+couple) moves here; the TS shell keeps semantics + I/O + render. Ported byte-identical against the TS engine,
+one vertical slice at a time (strangler).
 
-## Results
+## Status
+
+- **Phase 0 (done)** — de-risked napi + AST parity. See below.
+- **Phase 1 (in progress)** — first slice: `--query consumers`, foundation-up.
+  - ✅ Java `imports()` (`src/lang/java.rs`) — **8141/8141 Keycloak `.java` files byte-identical** to TS `parse_imports` (`bun rust/parity/imports.ts <files…>`).
+  - ▢ next: `floor_resolve` + the FQN index + the reverse-import index → `scan_consumers` → the `consumers` shape end-to-end.
+
+## Phase 0 results
 
 | Assumption | Verdict |
 |---|---|
@@ -33,9 +41,12 @@ reports. The harness classifies this as 🟡 *structure-identical* (exit 1) vs �
 
 ```sh
 . "$HOME/.cargo/env"
-cd rust && cargo build --release           # → target/release/libseam_phase0.so
-cp target/release/libseam_phase0.so seam_phase0.node
-bun parity/parity.ts [file.java]           # diff harness: native vs web-tree-sitter AST
+cd rust && cargo test --release            # Rust unit tests
+cargo build --release                       # → target/release/libseam_core.so
+cp target/release/libseam_core.so seam_core.node
+# byte-identical harnesses (need ../ts/node_modules — symlink the main checkout's, or `bun install`):
+bun parity/parity.ts  [file.java]          # native vs web-tree-sitter AST
+bun parity/imports.ts <file.java> [...]    # Rust javaImports vs TS parse_imports
 ```
 
 ## Phase 1 hand-off
