@@ -213,6 +213,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "seam-couple"
+version = "0.0.0"
+dependencies = [
+ "once_cell",
+ "regex",
+ "seam-fs",
+ "seam-lang",
+]
+
+[[package]]
 name = "seam-fs"
 version = "0.0.0"
 
@@ -235,6 +245,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "seam-couple",
  "seam-fs",
  "seam-lang",
  "seam-resolve",

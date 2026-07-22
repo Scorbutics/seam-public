@@ -1,0 +1,11 @@
+[package]
+name = "seam-couple"
+version = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+seam-lang = { path = "../seam-lang" }
+seam-fs = { path = "../seam-fs" }
+once_cell = { workspace = true }
+regex = { workspace = true }

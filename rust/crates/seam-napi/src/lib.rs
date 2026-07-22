@@ -518,3 +518,15 @@ pub fn provider_accessors(repo: String) -> Vec<Vec<String>> {
     rows.sort();
     rows
 }
+
+/// Coupling mask: comment content blanked (string-aware), offset/line-preserving. Validation surface.
+#[napi]
+pub fn mask_comments(text: String) -> String {
+    seam_couple::mask_comments(&text)
+}
+
+/// Coupling mask: only string-literal content kept, code + comments blanked. Validation surface.
+#[napi]
+pub fn string_literals_only(text: String) -> String {
+    seam_couple::string_literals_only(&text)
+}
