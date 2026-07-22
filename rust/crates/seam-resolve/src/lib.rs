@@ -81,6 +81,35 @@ impl Workspace {
         out.into_iter().filter(|c| seen.insert(format!("{}::{}", c.file, c.local))).collect()
     }
 
+    /// The repo-wide REVERSE-IMPORT map: `normpath(target file) → the files that import it`. Every file's
+    /// import sources (named/namespace/default) are resolved to their target; a file importing itself is
+    /// skipped. The ubiquity prior derives cross-module fan-in from this. Port of `fileImporters`.
+    pub fn file_importers(&self) -> HashMap<String, HashSet<String>> {
+        let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+        for fi in self.index.files() {
+            let mut sources: HashSet<String> = HashSet::new();
+            for r in &fi.refs {
+                if let Some(s) = &r.source {
+                    sources.insert(s.clone());
+                }
+            }
+            for n in &fi.ns {
+                sources.insert(n.source.clone());
+            }
+            for d in &fi.defs {
+                sources.insert(d.source.clone());
+            }
+            for src in &sources {
+                if let Some(t) = self.resolve(&fi.rel, src) {
+                    if normpath(&t) != normpath(&fi.rel) {
+                        out.entry(normpath(&t)).or_default().insert(fi.rel.clone());
+                    }
+                }
+            }
+        }
+        out
+    }
+
     fn scan_rec(&self, anchor_file: &str, symbol: &str, visited: &mut HashSet<String>, hop: u32) -> Vec<Consumer> {
         if hop > REEXPORT_HOP_CAP || !visited.insert(format!("{}::{}", normpath(anchor_file), symbol)) {
             return Vec::new();

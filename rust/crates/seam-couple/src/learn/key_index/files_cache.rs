@@ -16,12 +16,13 @@ use std::collections::HashMap;
 // A module boundary — the nearest ancestor dir with a build manifest. Union of provider rootMarkers + the
 // hardcoded set (core/resolve/languages MODULE_MARKERS). Order-independent (any match).
 const MODULE_MARKERS: &[&str] = &[
+    "tsconfig.json", "jsconfig.json", "package.json", // typescript/js (the TS provider's lsp.rootMarkers)
     "pom.xml", "build.gradle", "build.gradle.kts", ".project", // java
     "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "Pipfile", // python
     "Gemfile", ".ruby-version",          // ruby
     "settings.gradle",                   // kotlin
     "compile_commands.json", "Makefile", "CMakeLists.txt", // c/cpp
-    "package.json", "go.mod", "Cargo.toml", "BUILD.bazel", // hardcoded extras
+    "go.mod", "Cargo.toml", "BUILD.bazel", // hardcoded universal extras
 ];
 
 /// The repo-RELATIVE prefix of the SMALLEST enclosing module of `file` (nearest ancestor with a build manifest),
@@ -129,4 +130,28 @@ pub fn files_index(repo: &str, anchor_file: &str) -> GroundingIndex {
         }
     }
     idx
+}
+
+#[cfg(test)]
+mod module_scope_tests {
+    use super::module_scope;
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // Hermetic: a tmp repo with a nested tsconfig.json module. Guards that the TS provider's markers
+    // (tsconfig.json / jsconfig.json) are in MODULE_MARKERS — the fan-in prior mis-grouped a nested TS test
+    // module without them (Keycloak js/apps/admin-ui/test/tsconfig.json).
+    #[test]
+    fn nested_tsconfig_is_a_module_boundary() {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let repo = std::env::temp_dir().join(format!("seam_modscope_{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let inner = repo.join("app/test/unit");
+        fs::create_dir_all(&inner).unwrap();
+        fs::write(repo.join("app/package.json"), "{}").unwrap();
+        fs::write(repo.join("app/test/tsconfig.json"), "{}").unwrap();
+        let r = repo.to_str().unwrap();
+        assert_eq!(module_scope(r, "app/test/unit/x.spec.ts"), "app/test/");
+        assert_eq!(module_scope(r, "app/src/y.ts"), "app/");
+        fs::remove_dir_all(&repo).ok();
+    }
 }

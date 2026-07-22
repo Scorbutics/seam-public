@@ -719,6 +719,28 @@ pub fn reset_caches(repo: Option<String>) {
     seam_resolve::CallsiteIndex::reset(r);
     seam_resolve::InterfaceIndex::reset(r);
     seam_couple::reset(r);
+    seam_grow::reset(r);
+}
+
+/// One file's cross-module fan-in. Parity wire form for `ubiquityIndex`.
+#[napi(object)]
+pub struct UbiquityEntryDto {
+    pub file: String,
+    pub count: u32,
+}
+
+/// ubiquityIndex — every file's distinct-consumer-module fan-in (the parity surface for the ubiquity prior).
+#[napi]
+pub fn ubiquity_index(repo: String) -> Vec<UbiquityEntryDto> {
+    let u = seam_grow::ubiquity::ubiquity(&repo);
+    seam_grow::ubiquity::fan_in_pairs(&u).into_iter().map(|(file, count)| UbiquityEntryDto { file, count: count as u32 }).collect()
+}
+
+/// ubiquityConsumers — a file's distinct-module sample consumers (the hub-collapse provenance).
+#[napi]
+pub fn ubiquity_consumers(repo: String, file: String, limit: Option<u32>) -> Vec<String> {
+    let u = seam_grow::ubiquity::ubiquity(&repo);
+    seam_grow::ubiquity::ubiquity_consumers(&repo, &u, Some(&file), limit.unwrap_or(3) as usize)
 }
 
 /// applyMatchers — the LEARNED rules grounded repo-wide → `key|side|file|line` rows (side p/c), in the index's

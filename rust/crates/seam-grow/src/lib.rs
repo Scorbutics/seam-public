@@ -5,5 +5,13 @@
 //!   - `roles`      anchor-relative core/link/environment/test classification
 //! (ubiquity, hub classification, and the wave itself land in later increments.)
 
+pub mod border_policies;
 pub mod graph_ir;
 pub mod roles;
+pub mod ubiquity;
+
+/// Invalidate ALL per-repo grow caches for `repo` (or every repo when `None`). The grow-layer counterpart of
+/// the seam-couple/seam-resolve resets; wired into napi `resetCaches`.
+pub fn reset(repo: Option<&str>) {
+    ubiquity::reset(repo);
+}
