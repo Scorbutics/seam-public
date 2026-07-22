@@ -641,3 +641,50 @@ pub fn find_reach(repo: String, from_file: String, from_symbol: String, to_symbo
         reason: r.reason,
     }
 }
+
+/// Wire form of a `seam_shapes::NeighborFile`.
+#[napi(object)]
+pub struct NeighborFileDto {
+    pub file: String,
+    pub symbols: Vec<String>,
+    pub internal: u32,
+    pub external: u32,
+    pub core: bool,
+}
+
+/// Wire form of a `seam_shapes::Neighborhood` (the neighborhood shape).
+#[napi(object)]
+pub struct NeighborhoodDto {
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub depth: u32,
+    pub members: Vec<NeighborFileDto>,
+    pub core_files: Vec<String>,
+    pub periphery_files: Vec<String>,
+    pub boundary_cut: u32,
+    pub cohesion: f64,
+    pub hops: u32,
+    pub no_structure: bool,
+}
+
+/// projectNeighborhood — the cohesive subsystem around a symbol (structural, dataCoupling off).
+#[napi]
+pub fn project_neighborhood(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>) -> NeighborhoodDto {
+    let opts = seam_shapes::NeighborhoodOpts {
+        depth: depth.map(|d| d as usize).unwrap_or(2),
+        max_expansions: max_expansions.map(|m| m as usize).unwrap_or(40),
+    };
+    let n = seam_shapes::project_neighborhood(&repo, &anchor_file, &symbol, &opts);
+    NeighborhoodDto {
+        anchor_symbol: n.anchor_symbol,
+        anchor_file: n.anchor_file,
+        depth: n.depth as u32,
+        members: n.members.into_iter().map(|m| NeighborFileDto { file: m.file, symbols: m.symbols, internal: m.internal as u32, external: m.external as u32, core: m.core }).collect(),
+        core_files: n.core_files,
+        periphery_files: n.periphery_files,
+        boundary_cut: n.boundary_cut as u32,
+        cohesion: n.cohesion,
+        hops: n.hops as u32,
+        no_structure: n.no_structure,
+    }
+}
