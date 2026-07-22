@@ -224,6 +224,7 @@ dependencies = [
  "once_cell",
  "regex",
  "seam-fs",
+ "serde_json",
  "tree-sitter",
 ]
 

@@ -1,9 +1,11 @@
-//! TypeScript / JavaScript provider. The full TS module *resolver* (monorepo package map + tsconfig paths) is
-//! a separate, larger port — until it lands, `resolver()` falls back to the default no-op.
+//! TypeScript / JavaScript provider. All TS/JS-specific code (import parsing + module resolution) is isolated
+//! here.
 
 mod imports;
+mod jsonc;
+mod resolve;
 
-use crate::provider::LanguageProvider;
+use crate::provider::{LanguageProvider, ModuleResolver};
 use crate::types::ImportRef;
 
 pub struct TypeScriptProvider;
@@ -18,5 +20,8 @@ impl LanguageProvider for TypeScriptProvider {
     }
     fn imports(&self, text: &str) -> Vec<ImportRef> {
         imports::imports(text)
+    }
+    fn resolver(&self, repo: &str) -> Box<dyn ModuleResolver> {
+        Box::new(resolve::TypeScriptResolver::build(repo))
     }
 }

@@ -29,8 +29,9 @@ Adding a language = one small module implementing the traits. The domain types c
   - ✅ TS/JS `imports()` (`src/lang/typescript.rs`) — named `{…}`/`as`, barrel re-exports, dynamic `import()` — **3132/3132 files byte-identical** (174 Seam `ts/src` + 2958 node_modules) (`bun rust/parity/imports_ts.ts`).
   - ✅ Ruby `imports()` (`src/lang/ruby.rs`) — `require`/`require_relative`/`autoload` — **1861/1861 files byte-identical**. Min-set import parsers now complete (C/C++ are LSP-only, no imports). Generic per-ext harness: `bun rust/parity/imports_any.ts <files…>`.
   - ✅ Ordered walk (`seam-fs::source_files`) — a sorted pre-order DFS (files before subdirs) with `git ls-files` as the FILTER, matching TS's traversal order (which the consumer scan is order-sensitive to).
-  - ✅ Import index (`seam-resolve::ImportIndex`) + `scan_consumers` (`Workspace`) — **399/400 Keycloak Java anchors byte-identical** (`bun rust/parity/consumers.ts`). The ordered walk, by-name inversion, resolve→FULL/SUGGESTED, dedup, and barrel-following are all byte-identical. The single mismatch is a JS import Rust marks SUGGESTED because the **TS module resolver** isn't ported yet (it would resolve-and-skip) — the next piece.
-  - ▢ next: the TS module resolver (package map + tsconfig paths + extension probing) → full `scan_consumers` parity; then the Java callsite graph (tree-sitter).
+  - ✅ TS module resolver (`seam-lang::typescript::resolve`) — relative + `.js`→`.ts` NodeNext + `index.*`, workspace-package entries, tsconfig `paths` aliases (+ JSONC/`extends`) — **16,390/16,390 resolutions byte-identical** (5136 Seam + 11,254 Keycloak JS) (`bun rust/parity/ts_resolve.ts`). Redesigned as a stateful `TypeScriptResolver` (TS's module-global `_PKG_CACHE`/`_TS_ALIAS_CACHE` → per-resolver state); node-path semantics ported into `seam-fs` (`dirname`/`normalize`/`join`).
+  - ✅ Import index (`seam-resolve::ImportIndex`) + `scan_consumers` (`Workspace`) — **600/600 Keycloak anchors byte-identical** (`bun rust/parity/consumers.ts`), cross-language. Ordered walk, by-name inversion, resolve→FULL/SUGGESTED, dedup, barrel-following — all exact.
+  - ▢ next: TS namespace/default consumer paths; then the Java callsite graph (tree-sitter) for `--query consumers` on a class anchor; then impact/reaches/etc.
 
 ## Phase 0 results
 

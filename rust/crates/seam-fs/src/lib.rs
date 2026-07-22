@@ -14,6 +14,69 @@ pub const SKIP_DIRS: &[&str] = &[
     "vendor", ".gradle", "__pycache__",
 ];
 
+/// node `path.posix.dirname` — the directory part (trailing slashes ignored; "." when there's no slash).
+pub fn dirname(p: &str) -> String {
+    let end = p.trim_end_matches('/');
+    if end.is_empty() {
+        return if p.starts_with('/') { "/".into() } else { ".".into() };
+    }
+    match end.rfind('/') {
+        None => ".".into(),
+        Some(0) => "/".into(),
+        Some(i) => end[..i].to_string(),
+    }
+}
+
+/// node `path.posix.normalize` — collapse `.`/`..`/`//`; preserve a leading `/` and a trailing `/`.
+pub fn normalize(p: &str) -> String {
+    if p.is_empty() {
+        return ".".into();
+    }
+    let is_abs = p.starts_with('/');
+    let trailing = p.len() > 1 && p.ends_with('/');
+    let mut out: Vec<&str> = Vec::new();
+    for seg in p.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                if out.last().is_some_and(|&l| l != "..") {
+                    out.pop();
+                } else if !is_abs {
+                    out.push("..");
+                }
+            }
+            s => out.push(s),
+        }
+    }
+    let mut s = out.join("/");
+    if is_abs {
+        s.insert(0, '/');
+    }
+    if s.is_empty() {
+        s = if is_abs { "/".into() } else { ".".into() };
+    }
+    if trailing && s != "/" {
+        s.push('/');
+    }
+    s
+}
+
+/// node `path.posix.join(a, b)` — concatenate then normalize.
+pub fn join(a: &str, b: &str) -> String {
+    if a.is_empty() {
+        return normalize(b);
+    }
+    if b.is_empty() {
+        return normalize(a);
+    }
+    normalize(&format!("{a}/{b}"))
+}
+
+/// Is `repo/rel` a regular file?
+pub fn is_file(repo: &str, rel: &str) -> bool {
+    std::fs::metadata(format!("{repo}/{rel}")).map(|m| m.is_file()).unwrap_or(false)
+}
+
 /// basename without its final extension (port of `stem`, ast_units.ts): a dot at index 0 is not an extension.
 pub fn stem(p: &str) -> String {
     let base = p.rsplit('/').next().unwrap_or(p);
@@ -97,6 +160,27 @@ pub fn source_files(repo: &str, pred: impl Fn(&str) -> bool) -> Vec<String> {
 /// Convenience: all files with a given extension (e.g. ".java"), in walk order.
 pub fn repo_files(repo: &str, ext: &str) -> Vec<String> {
     source_files(repo, |r| r.ends_with(ext))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn node_path_parity() {
+        assert_eq!(dirname("a/b/c.ts"), "a/b");
+        assert_eq!(dirname("a"), ".");
+        assert_eq!(dirname("a/"), ".");
+        assert_eq!(normalize("a/./b"), "a/b");
+        assert_eq!(normalize("a/../b"), "b");
+        assert_eq!(normalize("../a"), "../a");
+        assert_eq!(normalize("a//b"), "a/b");
+        assert_eq!(normalize("/x/../y"), "/y");
+        assert_eq!(join("a/b/c", "../../x"), "a/x");
+        assert_eq!(join("a/b", "./c.js"), "a/b/c.js");
+        assert_eq!(stem("d/Foo.java"), "Foo");
+        assert_eq!(stem(".gitignore"), ".gitignore");
+    }
 }
 
 fn walk_dir(
