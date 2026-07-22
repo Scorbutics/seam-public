@@ -47,6 +47,12 @@ pub trait LanguageProvider: Send + Sync {
         let _ = ctx;
         None
     }
+    /// The interface named by a `<Iface>.class` literal in a call's argument text (Java DI service-locator). `None`
+    /// for a language with no class-literal form.
+    fn class_literal_arg(&self, args_text: &str) -> Option<String> {
+        let _ = args_text;
+        None
+    }
     /// Default imports (`import X from "m"`) — TS/JS only; other languages have none.
     fn default_imports(&self, text: &str) -> Vec<DefaultImport> {
         let _ = text;

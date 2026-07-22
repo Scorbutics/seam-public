@@ -19,7 +19,7 @@ pub struct Impl {
 pub struct InterfaceIndex {
     interfaces: HashSet<String>,
     impls: HashMap<String, Vec<Impl>>, // closed to CONCRETE impls (interface-extends expanded)
-    accessors: HashMap<String, HashSet<String>>,
+    accessors: HashMap<String, Vec<String>>, // method → interface(s), INSERTION order (TS Set) — the seed order
 }
 
 static CACHE: Lazy<Mutex<HashMap<String, Arc<InterfaceIndex>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
@@ -85,10 +85,13 @@ impl InterfaceIndex {
         let closed = close_to_concrete(&interfaces, &impls);
 
         // KEEP an accessor only when its return type is a real interface WITH impls (a grounded factory hop).
-        let mut accessors: HashMap<String, HashSet<String>> = HashMap::new();
+        let mut accessors: HashMap<String, Vec<String>> = HashMap::new();
         for (m, ret) in raw_accessors {
             if interfaces.contains(&ret) && closed.get(&ret).is_some_and(|v| !v.is_empty()) {
-                accessors.entry(m).or_default().insert(ret);
+                let v = accessors.entry(m).or_default();
+                if !v.contains(&ret) {
+                    v.push(ret);
+                }
             }
         }
 
@@ -108,7 +111,7 @@ impl InterfaceIndex {
 
     /// The DI provider accessors: method name → the interface(s) its zero-arg form returns. Port of
     /// `provider_accessors`.
-    pub fn accessors(&self) -> &HashMap<String, HashSet<String>> {
+    pub fn accessors(&self) -> &HashMap<String, Vec<String>> {
         &self.accessors
     }
 

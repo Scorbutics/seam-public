@@ -108,6 +108,22 @@ pub fn is_annotation(k: &str) -> bool {
     matches!(k, "annotation" | "marker_annotation" | "decorator")
 }
 
+/// A typed DECLARATION node carrying a `type` field + a bound name (field / ctor-param / local / TS binder) —
+/// its declared type resolves a receiver.
+pub fn is_typed_decl(k: &str) -> bool {
+    matches!(
+        k,
+        "field_declaration"
+            | "formal_parameter"
+            | "local_variable_declaration"
+            | "public_field_definition"
+            | "field_definition"
+            | "property_signature"
+            | "required_parameter"
+            | "optional_parameter"
+    )
+}
+
 pub fn is_interface_member(k: &str) -> bool {
     matches!(k, "method_signature" | "property_signature" | "abstract_method_signature")
 }
