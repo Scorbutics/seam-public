@@ -236,9 +236,27 @@ fn file_coupling_delta(repo: &str, file: &str, anchor_id: &str, src_range: (usiz
     let mut fp: Vec<(usize, usize)> = file_nodes.iter().map(|(_, r)| *r).collect();
     fp.push(src_range);
     let mut fp_map: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
-    fp_map.insert(normpath(file), fp);
-    // the placeholder-sourced, zero-based whole-file delta (computed once per file in TS's cache; here direct).
-    let cached = compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws);
+    fp_map.insert(normpath(file), fp.clone());
+    // The placeholder-sourced, zero-based whole-file delta — the EXPENSIVE part (resolve_coupling_scoped +
+    // chain_route_consumers), and the dominant fresh-process cost. It is counter-NORMALISED (source FAN_SRC,
+    // counter 0) so the rehydration below re-numbers ids fresh from the live counter → the cached value is
+    // TRANSPARENT (cache-on == cache-off). DISK-cache it per (file content ⊕ FOOTPRINT ranges ⊕ stable_floor),
+    // under the COUPLING epoch (source ⊕ learned matchers → any edit invalidates). Keying on the fp-hash is
+    // exactly option-b: distinct footprints get distinct entries, so there is NO first-fp-wins bias. A NEAR
+    // center reuses every file whose reached-node set matches → the ~35s fan compute becomes a disk load.
+    let fp_key = {
+        let mut ranges = fp.clone();
+        ranges.sort_unstable(); // order-independent: the same reached-node SET → the same key
+        let mut s = format!("{}|sf={}", seam_cache::hash(&text), stable_floor);
+        for (a, b) in &ranges {
+            s.push_str(&format!(";{a},{b}"));
+        }
+        seam_cache::hash(&s)
+    };
+    let cepoch = seam_cache::coupling_epoch_of(repo);
+    let cached = seam_cache::cached(repo, "coupling-fan-v1", file, &fp_key, &cepoch, || {
+        compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws)
+    });
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the enclosing method within
     // the reached node's same-file call closure. Degrade to the flat rehydrate when the file won't parse.
     // The method-precise INDEX (tree-sitter parse → units + call map) is a PURE function of the file bytes, so
