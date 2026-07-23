@@ -128,6 +128,9 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
         eprintln!("[perf]         resolve setup(matchers+key_index+merge) {:.2}s", _ts.elapsed().as_secs_f64());
     }
     let http_recv = http_recv_tokens(&matchers);
+    // Compile each rule's regex ONCE here (not once per matcher per pipeline node) — the pipeline STEP-1c then
+    // masks the span once and runs the pre-compiled rules over it.
+    let compiled: Vec<crate::learn::matchers::CompiledMatcher> = matchers.iter().map(crate::learn::matchers::CompiledMatcher::new).collect();
     // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
     let _tg = std::time::Instant::now();
     let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
@@ -138,7 +141,7 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
         index: &index,
         param_index: &idx.param,
         footprint_node_ranges,
-        matchers: &matchers,
+        matchers: &compiled,
         http_clients: &http_clients,
         http_recv: &http_recv,
     };

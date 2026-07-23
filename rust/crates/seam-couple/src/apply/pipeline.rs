@@ -37,7 +37,7 @@ pub struct PipelineCtx<'a> {
     pub index: &'a GroundingIndex,     // floor_base — for otherSide grounding
     pub param_index: &'a GroundingIndex, // raw param grounding — for step 1b re-derivation
     pub footprint_node_ranges: &'a HashMap<String, Vec<(usize, usize)>>,
-    pub matchers: &'a [crate::learn::KeyMatcher], // step 1c: LEARNED adapter rules (CACHE replay)
+    pub matchers: &'a [crate::learn::matchers::CompiledMatcher], // step 1c: LEARNED rules (regex pre-COMPILED)
     pub http_clients: &'a [String],               // step 1d: inferred custom http-client receivers
     pub http_recv: &'a HashSet<String>,           // classified http receivers → drop a db-table phantom on them
 }
@@ -240,10 +240,14 @@ pub fn run_pipeline(ctx: &PipelineCtx, state: &mut PipelineState, node: &Pipelin
     for hit in param_keys_for_span(ctx.param_index, &node.file, node.lo, node.hi) {
         insert_secondary(&mut keys, &hit);
     }
-    // STEP 1c — LEARNED adapter rules applied to THIS span (the CACHE replay), span-filtered like the floor scan.
-    for m in ctx.matchers {
-        for hit in crate::learn::run_matcher(m, &node.text) {
-            insert_secondary(&mut keys, &hit);
+    // STEP 1c — LEARNED adapter rules applied to THIS span (the CACHE replay). Mask ONCE for all rules (was 16×
+    // per file inside run_matcher — the dominant coupling-fan allocation traffic) and run each PRE-COMPILED rule.
+    if !ctx.matchers.is_empty() {
+        let masked = crate::mask::mask_comments(&node.text);
+        for cm in ctx.matchers {
+            for hit in cm.run(&node.text, &masked) {
+                insert_secondary(&mut keys, &hit);
+            }
         }
     }
     // STEP 1d — INDIRECTED http calls on a proven edge (custom http client + descriptor ref → resolved route).
