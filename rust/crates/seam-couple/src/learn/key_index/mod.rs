@@ -24,11 +24,44 @@ static MATCHERS_CACHE: Lazy<Mutex<HashMap<String, Arc<GroundingIndex>>>> = Lazy:
 static COMPOSED_CACHE: Lazy<Mutex<HashMap<String, Arc<GroundingIndex>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static KEY_INDEX_CACHE: Lazy<Mutex<HashMap<(String, String), Arc<GroundingIndex>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
+// Load-or-build a repo-wide grounding index with a DISK shard (direct bincode, COUPLING-epoch keyed: source ⊕
+// learned matchers — the inputs apply_matchers/compose_routes depend on), so a FRESH process LOADS instead of
+// rebuilding — the same persistence floor/callsite/interface use. Without it, every cold (incl. a far center)
+// re-derived the repo-wide matcher grounding (~1s+). Stale epochs pruned. Byte-identical (IndexMap order survives
+// bincode, as proven for the floor index).
+fn load_or_build_persisted(repo: &str, name: &str, build: impl FnOnce() -> GroundingIndex) -> Arc<GroundingIndex> {
+    let epoch = seam_cache::coupling_epoch_of(repo);
+    let shard = |e: &str| format!("{repo}/.seam/rust/{name}/{e}.bin");
+    if !epoch.is_empty() {
+        if let Ok(bytes) = std::fs::read(shard(&epoch)) {
+            if let Ok(idx) = bincode::deserialize::<GroundingIndex>(&bytes) {
+                return Arc::new(idx);
+            }
+        }
+    }
+    let idx = build();
+    if !epoch.is_empty() {
+        let dir = format!("{repo}/.seam/rust/{name}");
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy() != format!("{epoch}.bin") {
+                    let _ = std::fs::remove_file(e.path()); // drop stale epochs
+                }
+            }
+        }
+        if let Ok(bytes) = bincode::serialize(&idx) {
+            let _ = std::fs::write(shard(&epoch), bytes);
+        }
+    }
+    Arc::new(idx)
+}
+
 fn matchers_idx_cached(repo: &str, matchers: &[KeyMatcher]) -> Arc<GroundingIndex> {
     if let Some(hit) = MATCHERS_CACHE.lock().unwrap().get(repo) {
         return hit.clone();
     }
-    let v = Arc::new(apply_matchers(repo, matchers));
+    let v = load_or_build_persisted(repo, "matchers-idx-v1", || apply_matchers(repo, matchers));
     MATCHERS_CACHE.lock().unwrap().insert(repo.to_string(), v.clone());
     v
 }
@@ -36,7 +69,7 @@ fn composed_cached(repo: &str) -> Arc<GroundingIndex> {
     if let Some(hit) = COMPOSED_CACHE.lock().unwrap().get(repo) {
         return hit.clone();
     }
-    let v = Arc::new(compose_routes(repo));
+    let v = load_or_build_persisted(repo, "composed-idx-v1", || compose_routes(repo));
     COMPOSED_CACHE.lock().unwrap().insert(repo.to_string(), v.clone());
     v
 }
