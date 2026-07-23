@@ -9,6 +9,7 @@ use crate::mask::mask_comments;
 use crate::regex_util::captures_not_word_before;
 use crate::types::KeyHit;
 use crate::verb_class::write_op;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::Deserialize;
 use std::collections::HashSet;
@@ -155,20 +156,79 @@ pub fn load_matchers(repo: &str) -> Vec<KeyMatcher> {
 
 /// Execute a matcher over ONE file → the keys it detects. Deterministic, bounded, no LLM. Port of `runMatcher`
 /// (the 4 regex shapes that appear in practice: call / repository / channel / handle).
+/// A learned rule with its regex COMPILED once (the pattern is a pure function of token+verbs, not the file),
+/// so a repo-wide scan compiles each rule once instead of once per (rule, file). `run_compiled` executes it
+/// over PRE-MASKED text — so the comment mask is computed once per file, not once per (rule, file). Together
+/// these remove the two hot-loop wastes `apply_matchers` was paying ~147k times. Byte-identical to `run_matcher`.
+pub struct CompiledMatcher {
+    matcher: KeyMatcher,
+    re: Option<Regex>,
+}
+
+impl CompiledMatcher {
+    pub fn new(m: &KeyMatcher) -> Self {
+        CompiledMatcher { matcher: m.clone(), re: matcher_regex(m) }
+    }
+    /// Run over PRE-MASKED text (`raw` = unmasked source, for the literal prefilter). Byte-identical to
+    /// `run_matcher(&self.matcher, raw)` but with the regex + mask hoisted out of the hot loop.
+    pub fn run(&self, raw: &str, masked: &str) -> Vec<KeyHit> {
+        run_compiled(&self.matcher, self.re.as_ref(), raw, masked)
+    }
+}
+
+fn prefilter_on() -> bool {
+    std::env::var("SEAM_MATCHER_PREFILTER").as_deref() != Ok("0")
+}
+
+// A matcher's constant look-back regex (ROOT / this-field guard) — compiled ONCE, not per call.
+static PRE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"([A-Za-z_$][\w$]*)\s*\.\s*$").unwrap());
+
+/// The per-rule regex (pure function of token/verbs). `None` for shapes with no regex (Method/unported AST).
+fn matcher_regex(m: &KeyMatcher) -> Option<Regex> {
+    match m {
+        KeyMatcher::Call { token, .. } => Some(Regex::new(&format!(r"{}\s*\(", regex::escape(token))).unwrap()),
+        KeyMatcher::Repository { token, verbs, .. } => {
+            let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
+            Some(Regex::new(&format!(r"{}\s*\.\s*({verbs_alt})\s*[(<]", regex::escape(token))).unwrap())
+        }
+        KeyMatcher::Channel { token, verbs, .. } => {
+            let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
+            Some(Regex::new(&format!(r#"{}\s*\.\s*(?:{verbs_alt})\s*\(\s*['"`]([^'"`]{{1,80}})['"`]"#, regex::escape(token))).unwrap())
+        }
+        KeyMatcher::Handle { token, verbs, .. } => {
+            let recv = token.split('.').map(regex::escape).collect::<Vec<_>>().join(r"\s*\.\s*");
+            let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
+            Some(Regex::new(&format!(r"{recv}\s*\.\s*(?:{verbs_alt})\s*\(")).unwrap())
+        }
+        _ => None,
+    }
+}
+
+/// Execute ONE rule over a file → the keys it detects (regex over comment-masked text). Port of `runMatcher`.
+/// A one-shot convenience (compiles + masks per call) — the repo-wide scan uses `CompiledMatcher` + pre-masked
+/// text instead. Kept for the pipeline's per-anchor calls.
 pub fn run_matcher(m: &KeyMatcher, text: &str) -> Vec<KeyHit> {
-    // prefilter: a file lacking the required literal can never match.
-    if std::env::var("SEAM_MATCHER_PREFILTER").as_deref() != Ok("0") {
+    let re = matcher_regex(m);
+    let masked = mask_comments(text);
+    run_compiled(m, re.as_ref(), text, &masked)
+}
+
+/// Run a matcher with its PRECOMPILED regex over PRE-MASKED text. `raw` is the unmasked source (the literal
+/// prefilter checks it, byte-identical to `run_matcher`). Used by `apply_matchers` (mask + compile hoisted out).
+pub fn run_compiled(m: &KeyMatcher, re: Option<&Regex>, raw: &str, masked: &str) -> Vec<KeyHit> {
+    // prefilter: a file lacking the required literal can never match (checked on the RAW text, as before).
+    if prefilter_on() {
         if let Some(lit) = m.literal() {
-            if !text.contains(&lit) {
+            if !raw.contains(&lit) {
                 return Vec::new();
             }
         }
     }
     match m {
-        KeyMatcher::Call { token, arg_index, strip, kind, role } => run_call(token, *arg_index, strip.as_deref(), kind, produces(role), text),
-        KeyMatcher::Repository { token, verbs, kind, role } => run_repository(token, verbs, kind, produces(role), text),
-        KeyMatcher::Channel { token, verbs, kind, role } => run_channel(token, verbs, kind, produces(role), text),
-        KeyMatcher::Handle { token, verbs, kind, role } => run_handle(token, verbs, kind, produces(role), text),
+        KeyMatcher::Call { arg_index, strip, kind, role, .. } => run_call(re.unwrap(), *arg_index, strip.as_deref(), kind, produces(role), masked),
+        KeyMatcher::Repository { token, kind, role, .. } => run_repository(re.unwrap(), token, kind, produces(role), masked),
+        KeyMatcher::Channel { kind, role, .. } => run_channel(re.unwrap(), kind, produces(role), masked),
+        KeyMatcher::Handle { token, kind, role, .. } => run_handle(re.unwrap(), token, kind, produces(role), masked),
         // The AST shapes (assign/method/attr/annotation/member) don't appear in practice yet — port on demand.
         _ => Vec::new(),
     }
@@ -250,13 +310,11 @@ fn nth_string_arg(text: &str, start: usize, n: i64) -> Option<String> {
     None
 }
 
-fn run_call(token: &str, arg_index: i64, strip: Option<&str>, kind: &str, produces: bool, text: &str) -> Vec<KeyHit> {
-    let masked = mask_comments(text);
-    let re = Regex::new(&format!(r"{}\s*\(", regex::escape(token))).unwrap();
+fn run_call(re: &Regex, arg_index: i64, strip: Option<&str>, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
     let mut out = Vec::new();
-    for c in captures_not_word_before(&re, &masked) {
+    for c in captures_not_word_before(re, masked) {
         let whole = c.get(0).unwrap();
-        let mut value = match nth_string_arg(&masked, whole.end(), arg_index) {
+        let mut value = match nth_string_arg(masked, whole.end(), arg_index) {
             Some(v) => v,
             None => continue,
         };
@@ -267,23 +325,19 @@ fn run_call(token: &str, arg_index: i64, strip: Option<&str>, kind: &str, produc
             value = value[strip.len()..].to_string();
         }
         if plausible_key_value(&value) {
-            out.push(KeyHit { kind: kind.into(), value, line: line_of(&masked, whole.start()), produces, ..Default::default() });
+            out.push(KeyHit { kind: kind.into(), value, line: line_of(masked, whole.start()), produces, ..Default::default() });
         }
     }
     out
 }
 
-fn run_repository(token: &str, verbs: &[String], kind: &str, produces: bool, text: &str) -> Vec<KeyHit> {
-    let masked = mask_comments(text);
-    let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
-    let re = Regex::new(&format!(r"{}\s*\.\s*({verbs_alt})\s*[(<]", regex::escape(token))).unwrap();
-    let pre_re = Regex::new(r"([A-Za-z_$][\w$]*)\s*\.\s*$").unwrap();
+fn run_repository(re: &Regex, token: &str, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
     let mut out = Vec::new();
-    for c in captures_not_word_before(&re, &masked) {
+    for c in captures_not_word_before(re, masked) {
         let start = c.get(0).unwrap().start();
         // ROOT / this-field only: reject a preceding `<ident>.` unless this/self/super.
         let lo = start.saturating_sub(48);
-        if let Some(pre) = pre_re.captures(&masked[lo..start]) {
+        if let Some(pre) = PRE_RE.captures(&masked[lo..start]) {
             let id = &pre[1];
             if id != "this" && id != "self" && id != "super" {
                 continue;
@@ -291,39 +345,32 @@ fn run_repository(token: &str, verbs: &[String], kind: &str, produces: bool, tex
         }
         if plausible_key_value(token) {
             let op = if produces { write_op(&c[1]) } else { None };
-            out.push(KeyHit { kind: kind.into(), value: token.into(), line: line_of(&masked, start), produces, op: op.map(|s| s.to_string()), ..Default::default() });
+            out.push(KeyHit { kind: kind.into(), value: token.into(), line: line_of(masked, start), produces, op: op.map(|s| s.to_string()), ..Default::default() });
         }
     }
     out
 }
 
-fn run_channel(token: &str, verbs: &[String], kind: &str, produces: bool, text: &str) -> Vec<KeyHit> {
-    let masked = mask_comments(text);
-    let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
-    let re = Regex::new(&format!(r#"{}\s*\.\s*(?:{verbs_alt})\s*\(\s*['"`]([^'"`]{{1,80}})['"`]"#, regex::escape(token))).unwrap();
+fn run_channel(re: &Regex, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
     let mut out = Vec::new();
-    for c in captures_not_word_before(&re, &masked) {
+    for c in captures_not_word_before(re, masked) {
         let start = c.get(0).unwrap().start();
         if plausible_key_value(&c[1]) {
-            out.push(KeyHit { kind: kind.into(), value: c[1].to_string(), line: line_of(&masked, start), produces, ..Default::default() });
+            out.push(KeyHit { kind: kind.into(), value: c[1].to_string(), line: line_of(masked, start), produces, ..Default::default() });
         }
     }
     out
 }
 
-fn run_handle(token: &str, verbs: &[String], kind: &str, produces: bool, text: &str) -> Vec<KeyHit> {
-    let masked = mask_comments(text);
-    let recv = token.split('.').map(regex::escape).collect::<Vec<_>>().join(r"\s*\.\s*");
-    let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
-    let re = Regex::new(&format!(r"{recv}\s*\.\s*(?:{verbs_alt})\s*\(")).unwrap();
+fn run_handle(re: &Regex, token: &str, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
     let value = slug(token);
     if !plausible_key_value(&value) {
         return Vec::new();
     }
     let mut out = Vec::new();
-    for c in captures_not_word_before(&re, &masked) {
+    for c in captures_not_word_before(re, masked) {
         let start = c.get(0).unwrap().start();
-        out.push(KeyHit { kind: kind.into(), value: value.clone(), line: line_of(&masked, start), produces, ..Default::default() });
+        out.push(KeyHit { kind: kind.into(), value: value.clone(), line: line_of(masked, start), produces, ..Default::default() });
     }
     out
 }
