@@ -4,6 +4,7 @@
 // A match proves: the Rust grow produces the same end-to-end SKELETON as the TS grow. dataCoupling:false
 // (structural — where the grow is byte-identical); pass "1" as arg 6 to include the coupling overlay.
 process.env.SEAM_PARALLEL_GROW = "0";
+process.env.SEAM_GRAPH_CACHE = "0"; // compare pure-compute vs pure-compute (TS build_footprint_cached conflates same-name symbols)
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";
