@@ -644,6 +644,139 @@ pub fn project_contract(repo: String, module_file: String) -> ModuleContractDto 
     seam_shapes::project_contract(&repo, &module_file).into()
 }
 
+/// Wire form of a `seam_shapes::ConsumerMember`.
+#[napi(object)]
+pub struct ConsumerMemberDto {
+    pub symbol: String,
+    pub file: String,
+    pub line: u32,
+    pub kind: String,
+    pub enclosing: String,
+    pub edge_kind: String,
+    pub provenance: String,
+}
+
+/// Wire form of a `seam_shapes::UnresolvedCaller`.
+#[napi(object)]
+pub struct UnresolvedCallerDto {
+    pub mechanism: String,
+    pub evidence: String,
+    pub candidates: Vec<String>,
+}
+
+/// Wire form of a `seam_shapes::ConsumerSet` (the consumers/dependencies SET shape).
+#[napi(object)]
+pub struct ConsumerSetDto {
+    pub shape: String,
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub members: Vec<ConsumerMemberDto>,
+    pub unresolved: Vec<UnresolvedCallerDto>,
+    pub recalled: Vec<ConsumerMemberDto>,
+    pub no_structure: bool,
+    pub reason: Option<String>,
+    pub resolution_quality: String,
+}
+
+impl From<seam_shapes::ConsumerMember> for ConsumerMemberDto {
+    fn from(m: seam_shapes::ConsumerMember) -> Self {
+        Self {
+            symbol: m.symbol,
+            file: m.file,
+            line: m.line as u32,
+            kind: m.kind,
+            enclosing: m.enclosing,
+            edge_kind: m.edge_kind,
+            provenance: m.provenance,
+        }
+    }
+}
+
+impl From<seam_shapes::ConsumerSet> for ConsumerSetDto {
+    fn from(s: seam_shapes::ConsumerSet) -> Self {
+        Self {
+            shape: s.shape,
+            anchor_symbol: s.anchor_symbol,
+            anchor_file: s.anchor_file,
+            members: s.members.into_iter().map(Into::into).collect(),
+            unresolved: s
+                .unresolved
+                .into_iter()
+                .map(|u| UnresolvedCallerDto { mechanism: u.mechanism, evidence: u.evidence, candidates: u.candidates })
+                .collect(),
+            recalled: s.recalled.into_iter().map(Into::into).collect(),
+            no_structure: s.no_structure,
+            reason: s.reason,
+            resolution_quality: s.resolution_quality,
+        }
+    }
+}
+
+/// projectConsumerSet — the anchor's resolved IN-edges (who calls/uses it), as a SET (built from an UP footprint).
+#[napi]
+pub fn project_consumer_set(repo: String, anchor_file: String, symbol: String, data_coupling: Option<bool>) -> ConsumerSetDto {
+    match seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "up", data_coupling.unwrap_or(false)) {
+        Some(g) => seam_shapes::project_consumer_set(&g).into(),
+        None => seam_shapes::ConsumerSet {
+            shape: "set".to_string(),
+            anchor_symbol: symbol,
+            anchor_file,
+            members: Vec::new(),
+            unresolved: Vec::new(),
+            recalled: Vec::new(),
+            no_structure: true,
+            reason: Some("none".to_string()),
+            resolution_quality: "FULL".to_string(),
+        }
+        .into(),
+    }
+}
+
+/// projectDependencySet — the anchor's resolved OUT-edges (what it uses), as a SET (built from a DOWN footprint).
+#[napi]
+pub fn project_dependency_set(repo: String, anchor_file: String, symbol: String, data_coupling: Option<bool>) -> ConsumerSetDto {
+    match seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "down", data_coupling.unwrap_or(false)) {
+        Some(g) => seam_shapes::project_dependency_set(&g).into(),
+        None => seam_shapes::ConsumerSet {
+            shape: "deps".to_string(),
+            anchor_symbol: symbol,
+            anchor_file,
+            members: Vec::new(),
+            unresolved: Vec::new(),
+            recalled: Vec::new(),
+            no_structure: true,
+            reason: Some("none".to_string()),
+            resolution_quality: "FULL".to_string(),
+        }
+        .into(),
+    }
+}
+
+/// Wire form of a `seam_shapes::RefactorFacts` (impact ⊕ dependencies ⊕ contract — the "how to refactor X" bundle).
+#[napi(object)]
+pub struct RefactorFactsDto {
+    pub shape: String,
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub impact: ImpactDto,
+    pub dependencies: ConsumerSetDto,
+    pub contract: ModuleContractDto,
+}
+
+/// gatherRefactorFacts — the composed FACTS bundle (impact + dependencies + contract) in one call.
+#[napi]
+pub fn gather_refactor_facts(repo: String, anchor_file: String, symbol: String) -> RefactorFactsDto {
+    let f = seam_shapes::gather_refactor_facts(&repo, &anchor_file, &symbol);
+    RefactorFactsDto {
+        shape: f.shape,
+        anchor_symbol: f.anchor_symbol,
+        anchor_file: f.anchor_file,
+        impact: f.impact.into(),
+        dependencies: f.dependencies.into(),
+        contract: f.contract.into(),
+    }
+}
+
 /// The concrete impls of each interface `name`, as `[cls, file]` rows sorted by file (building the interface
 /// index once). Validation surface for the interface→impl (DI) index.
 #[napi]
