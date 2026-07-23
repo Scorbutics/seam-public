@@ -78,6 +78,35 @@ pub fn reset_effect_clients(repo: Option<&str>) {
     }
 }
 
+// The repo's learned rules with their regexes COMPILED — a pure function of the repo's matcher set (load_matchers
+// ∪ http-client matchers, both repo-wide), so compile ONCE per repo, not once per resolve_coupling call: the fan
+// calls resolve_coupling ~once per reached file (150+ per grow) and recompiling the 20-verb `session` regex each
+// time cost ~150s of the cold coupling. The pipeline STEP-1c runs these pre-compiled over the once-masked span.
+static COMPILED_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<crate::learn::matchers::CompiledMatcher>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn compiled_matchers_cached(repo: &str, matchers: &[KeyMatcher]) -> Arc<Vec<crate::learn::matchers::CompiledMatcher>> {
+    if matchers.is_empty() {
+        return Arc::new(Vec::new());
+    }
+    if let Some(c) = COMPILED_CACHE.lock().unwrap().get(repo) {
+        return c.clone();
+    }
+    let c: Arc<Vec<_>> = Arc::new(matchers.iter().map(crate::learn::matchers::CompiledMatcher::new).collect());
+    COMPILED_CACHE.lock().unwrap().insert(repo.to_string(), c.clone());
+    c
+}
+
+/// Drop the per-repo compiled-matcher cache (wired into the coupling reset — the edit-loop invalidation hook).
+pub fn reset_compiled_matchers(repo: Option<&str>) {
+    let mut c = COMPILED_CACHE.lock().unwrap();
+    match repo {
+        Some(r) => {
+            c.remove(r);
+        }
+        None => c.clear(),
+    }
+}
+
 // The classified http-receiver tokens — a member_access db-table on one of these is an SDK call, not a write, so
 // it's dropped. Derived from the channel/http-route matchers' OWN verdict. Port of `_httpRecvTokens`.
 fn http_recv_tokens(matchers: &[KeyMatcher]) -> HashSet<String> {
@@ -128,9 +157,9 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
         eprintln!("[perf]         resolve setup(matchers+key_index+merge) {:.2}s", _ts.elapsed().as_secs_f64());
     }
     let http_recv = http_recv_tokens(&matchers);
-    // Compile each rule's regex ONCE here (not once per matcher per pipeline node) — the pipeline STEP-1c then
-    // masks the span once and runs the pre-compiled rules over it.
-    let compiled: Vec<crate::learn::matchers::CompiledMatcher> = matchers.iter().map(crate::learn::matchers::CompiledMatcher::new).collect();
+    // The rules' regexes compiled ONCE PER REPO (memoized) — not per matcher per pipeline node, and not per
+    // resolve_coupling call. The pipeline STEP-1c masks the span once and runs the pre-compiled rules over it.
+    let compiled = compiled_matchers_cached(repo, &matchers);
     // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
     let _tg = std::time::Instant::now();
     let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
@@ -141,7 +170,7 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
         index: &index,
         param_index: &idx.param,
         footprint_node_ranges,
-        matchers: &compiled,
+        matchers: &compiled[..],
         http_clients: &http_clients,
         http_recv: &http_recv,
     };

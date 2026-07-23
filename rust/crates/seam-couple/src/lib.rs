@@ -35,5 +35,6 @@ pub fn reset(repo: Option<&str>) {
     ground::reset_floor_indices(repo);
     ground::jpa_wrapper::reset(repo);
     apply::reset_effect_clients(repo);
+    apply::reset_compiled_matchers(repo);
     learn::key_index::reset(repo);
 }
