@@ -1238,3 +1238,26 @@ pub fn defs_in_file(rel: String, text: String, module_def: Option<bool>) -> Vec<
     }
     defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
 }
+
+/// Wire form of a blind-file cluster (Phase 2 parity — cluster_blind_files). rep/members are indices into the
+/// input `files` array.
+#[napi(object)]
+pub struct BlindClusterDto {
+    pub signature: String,
+    pub shaped: bool,
+    pub rep: u32,
+    pub members: Vec<u32>,
+}
+
+/// STRUCTURAL PRE-CLUSTERING of floor-blind files (port of clusterBlindFiles). `files` = [[relpath, text], …].
+#[napi]
+pub fn cluster_blind_files(files: Vec<Vec<String>>) -> Vec<BlindClusterDto> {
+    let pairs: Vec<(String, String)> = files
+        .iter()
+        .map(|f| (f.first().cloned().unwrap_or_default(), f.get(1).cloned().unwrap_or_default()))
+        .collect();
+    seam_couple::learn::key_cluster::cluster_blind_files(&pairs)
+        .into_iter()
+        .map(|c| BlindClusterDto { signature: c.signature, shaped: c.shaped, rep: c.rep as u32, members: c.members.into_iter().map(|m| m as u32).collect() })
+        .collect()
+}

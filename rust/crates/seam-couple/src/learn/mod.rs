@@ -5,6 +5,7 @@
 
 pub mod matchers;
 pub mod effect_inference;
+pub mod key_cluster;
 pub mod key_index;
 
 pub use matchers::{load_matchers, run_matcher, KeyMatcher};

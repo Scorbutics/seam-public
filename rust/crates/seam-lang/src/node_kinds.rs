@@ -37,6 +37,11 @@ pub fn is_member_name(k: &str) -> bool {
     matches!(k, "property_identifier" | "field_identifier")
 }
 
+/// A string-literal node kind (port of atoms `_STRING_KINDS`) — the key carrier for a string-keyed channel.
+pub fn is_string_kind(k: &str) -> bool {
+    matches!(k, "string" | "string_literal" | "interpreted_string_literal" | "raw_string_literal" | "string_fragment")
+}
+
 /// A plain name identifier (declared/reference).
 pub fn is_name_kind(k: &str) -> bool {
     matches!(k, "identifier" | "property_identifier" | "type_identifier")
