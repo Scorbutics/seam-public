@@ -25,7 +25,7 @@ pub fn build_bidirectional_graph(repo: &str, anchor_file: &str, symbol: &str, da
     match fwd {
         Some(mut fwd) => {
             tag(&mut fwd, "forward");
-            merge_resolved(&fwd, &bwd) // anchor (n1) shared; deps merge in as backward-tagged nodes
+            merge_resolved(&fwd, &bwd, None) // anchor (n1) shared; deps merge in as backward-tagged nodes
         }
         None => bwd,
     }

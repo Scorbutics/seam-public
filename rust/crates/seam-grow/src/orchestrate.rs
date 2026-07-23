@@ -15,7 +15,7 @@ use indexmap::IndexMap;
 use seam_couple::{is_flow_subject, is_handler_edge};
 use seam_fs::normpath;
 use seam_scan::graph::{Blindspot, GraphEdge, GraphNode, ResolvedGraph};
-use seam_scan::{build_consumers_graph, build_dependency_graph, ConsumersOpts, DepOpts};
+use seam_scan::{build_consumers_graph, build_dependency_graph, merge_resolved, ConsumersOpts, DepOpts};
 use std::collections::{HashMap, HashSet, VecDeque};
 
 const MOVE_CAP: usize = 30; // GROW.moveCap — a move adding more than this non-coupling nodes is "too broad" → skipped
@@ -495,6 +495,41 @@ pub fn grow_to_terminals(repo: &str, anchor_file: &str, symbol: &str, data_coupl
     let epoch = if data_coupling { seam_cache::coupling_epoch_of(repo) } else { seam_cache::epoch_of(repo) };
     let key = seam_cache::hash(&format!("{symbol}|{data_coupling}|{}|{}|{}", opts.max_steps, opts.max_nodes, seam_cache::seam_env_snapshot()));
     seam_cache::cached(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts))
+}
+
+/// A concern's mechanism center — a (file, symbol) pair.
+pub struct Center {
+    pub file: String,
+    pub symbol: String,
+}
+
+/// MULTI-CENTER concern grow — the DETERMINISTIC/floor path of `grow_centers_scoped` folded with the caller's
+/// `mergeOne` loop (decompose.ts): grow each center's settled closure via `grow_to_terminals` (P5 answer-cached
+/// by symbol, so related concerns reuse shared centers), merge them sequentially — content-keyed + idempotent,
+/// every center's anchor accumulated — under the GLOBAL node budget, and stop adding mechanisms once the merged
+/// graph reaches `max_nodes`. Returns the merged center-rooted star (None if no center grew).
+///
+/// The LLM-scoping orchestration (`grow_footprint_scoped`, the fork/flywheel-warming in the `dataCouplingLlm`
+/// branch) is a no-op in the deterministic replay engine — there is no live key-discovery to scope; the learned
+/// matchers are replayed from the `.seam` cache regardless. So the floor path IS the whole multi-center grow here.
+pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
+    let mut data: Option<ResolvedGraph> = None;
+    for c in centers {
+        if let Some(d) = &data {
+            if d.nodes.len() >= opts.max_nodes {
+                break; // global budget reached — skip the remaining mechanism(s)
+            }
+        }
+        let Some(cd) = grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts) else { continue };
+        data = Some(match data {
+            Some(base) => {
+                let anchor = cd.anchor_id.clone();
+                merge_resolved(&base, &cd, Some(&anchor))
+            }
+            None => cd,
+        });
+    }
+    data
 }
 
 fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {

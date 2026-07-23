@@ -186,7 +186,7 @@ pub fn build_consumers_graph(repo: &str, anchor_file: &str, symbol: &str, opts: 
         if is_class {
             callsite = callsite_new_consumers_only(&base, callsite, symbol);
         }
-        base = merge_resolved(&base, &callsite);
+        base = merge_resolved(&base, &callsite, None);
         if is_class {
             let methods: Vec<String> = ast::class_methods(&ctx, symbol).into_iter().map(|(n, _, _)| n).collect();
             reconcile_class_attribution(&mut base, &callsite, symbol, &methods);

@@ -395,6 +395,26 @@ pub fn grow_to_terminals(repo: String, anchor_file: String, symbol: String, data
     seam_grow::orchestrate::grow_to_terminals(&repo, &anchor_file, &symbol, data_coupling, &opts).map(Into::into)
 }
 
+/// A concern center — `[file, symbol]`.
+#[napi(object)]
+pub struct CenterDto {
+    pub file: String,
+    pub symbol: String,
+}
+
+/// growCenters — the multi-center concern grow (deterministic/floor path of grow_centers_scoped + the caller's
+/// mergeOne merge): grow each center, merge sequentially under the global node budget, accumulate anchors.
+#[napi]
+pub fn grow_centers(repo: String, centers: Vec<CenterDto>, data_coupling: bool, max_steps: Option<u32>, max_nodes: Option<u32>) -> Option<GraphDto> {
+    let opts = seam_grow::orchestrate::WaveOpts {
+        max_steps: max_steps.map(|v| v as usize).unwrap_or(12),
+        max_nodes: max_nodes.map(|v| v as usize).unwrap_or(80),
+    };
+    let cs: Vec<seam_grow::orchestrate::Center> =
+        centers.into_iter().map(|c| seam_grow::orchestrate::Center { file: c.file, symbol: c.symbol }).collect();
+    seam_grow::orchestrate::grow_centers(&repo, &cs, data_coupling, &opts).map(Into::into)
+}
+
 /// growSeed — the P1 structural seed (pruned UP consumers ⊕ DOWN deps, backward-tagged). Parity surface for
 /// `_phaseSeed`.
 #[napi]

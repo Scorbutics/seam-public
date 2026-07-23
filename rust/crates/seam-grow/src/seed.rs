@@ -27,7 +27,7 @@ pub fn phase_seed(repo: &str, anchor_file: &str, symbol: &str, ex: &Exclusion) -
     });
     match (up, down) {
         // expandAnchor = down.anchor_id (= "n1", already in up's anchors), so plain merge_resolved matches.
-        (Some(u), Some(d)) => Some(merge_resolved(&u, &d)),
+        (Some(u), Some(d)) => Some(merge_resolved(&u, &d, None)),
         (Some(u), None) => Some(u),
         (None, Some(d)) => Some(d),
         (None, None) => None,

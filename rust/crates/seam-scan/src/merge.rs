@@ -12,7 +12,9 @@ fn key(n: &GraphNode) -> String {
 }
 
 /// Merge `add` into `base` (returns a new graph). Node ids that collide with base's are remapped to `x{n}`.
-pub fn merge_resolved(base: &ResolvedGraph, add: &ResolvedGraph) -> ResolvedGraph {
+/// `expand_anchor` (TS's 3rd arg) folds one extra add-side anchor id into the merged `anchors` union — used by
+/// the multi-center merge to accumulate every center's anchor.
+pub fn merge_resolved(base: &ResolvedGraph, add: &ResolvedGraph, expand_anchor: Option<&str>) -> ResolvedGraph {
     let mut merged = base.clone();
     let mut by_key: HashMap<String, String> = merged.nodes.iter().map(|n| (key(n), n.id.clone())).collect();
     let mut used_ids: HashSet<String> = merged.nodes.iter().map(|n| n.id.clone()).collect();
@@ -68,10 +70,15 @@ pub fn merge_resolved(base: &ResolvedGraph, add: &ResolvedGraph) -> ResolvedGrap
         .into_iter()
         .map(|a| idmap.get(&a).cloned().unwrap_or(a))
         .collect();
+    let extra: Vec<String> = match expand_anchor {
+        Some(a) if !a.is_empty() => vec![idmap.get(a).cloned().unwrap_or_else(|| a.to_string())],
+        _ => Vec::new(),
+    };
     let mut seen = HashSet::new();
     merged.anchors = base_anchors
         .into_iter()
         .chain(add_anchors)
+        .chain(extra)
         .filter(|a| !a.is_empty() && seen.insert(a.clone()))
         .collect();
     merged
