@@ -533,16 +533,27 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
 }
 
 fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
+    let perf = std::env::var("SEAM_PERF").is_ok();
+    macro_rules! phase {
+        ($label:expr, $body:expr) => {{
+            let t = std::time::Instant::now();
+            let r = $body;
+            if perf {
+                eprintln!("[perf]   {} {:.2}s", $label, t.elapsed().as_secs_f64());
+            }
+            r
+        }};
+    }
     let ex = Exclusion::new(&[], false);
-    let mut data = crate::seed::phase_seed(repo, anchor_file, symbol, &ex)?;
+    let mut data = phase!("phase_seed", crate::seed::phase_seed(repo, anchor_file, symbol, &ex))?;
     let ws = seam_resolve::Workspace::cached(repo);
     let mut coupled: HashSet<String> = HashSet::new();
     if data_coupling {
-        crate::coupling::phase_coupling(repo, &mut data, &ws, &mut coupled, false); // P3 seed coupling
+        phase!("phase_coupling", crate::coupling::phase_coupling(repo, &mut data, &ws, &mut coupled, false)); // P3 seed coupling
     }
-    data = phase_expand(repo, data, &ex, opts); // P2 structural wave
+    data = phase!("phase_expand", phase_expand(repo, data, &ex, opts)); // P2 structural wave
     if data_coupling {
-        crate::coupling::fan_couple(repo, &mut data, &ws, &mut coupled, false); // P3 deep couple (post-wave)
+        phase!("fan_couple", crate::coupling::fan_couple(repo, &mut data, &ws, &mut coupled, false)); // P3 deep couple (post-wave)
     }
     Some(data)
 }

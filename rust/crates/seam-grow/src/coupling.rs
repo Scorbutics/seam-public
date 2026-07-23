@@ -17,6 +17,14 @@ use std::collections::{HashMap, HashSet};
 
 const FAN_SRC: &str = "__FANSRC__";
 
+// SEAM_PERF fan-phase accumulators (ns): the compute_delta cache path, the mp-index parse cache, and the
+// method-precise rehydration — reset + reported per fan_couple to localise the coupling cost.
+use std::sync::atomic::{AtomicU64, Ordering};
+static COMPUTE_NS: AtomicU64 = AtomicU64::new(0);
+static MP_NS: AtomicU64 = AtomicU64::new(0);
+static REHYD_NS: AtomicU64 = AtomicU64::new(0);
+static FILES: AtomicU64 = AtomicU64::new(0);
+
 /// A coupling overlay increment — the delta the merge folds onto the settled footprint.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Delta {
@@ -137,6 +145,7 @@ pub fn merge_coupling_overlay(data: &mut ResolvedGraph, overlay: &Delta) {
 /// boundary files. Port of `_phaseCoupling`.
 pub fn phase_coupling(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled: &mut HashSet<String>, stable_floor: bool) {
     let anchor_file = data.anchor_file.clone();
+    let _ta = std::time::Instant::now();
     let mut overlay = anchor_coupling_delta(repo, &anchor_file, data, false, stable_floor, ws);
     if overlay.nodes.is_empty() {
         // the anchor's own span surfaced no boundary — widen the scan to the whole FILE, keep the anchor id.
@@ -147,12 +156,22 @@ pub fn phase_coupling(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coup
     }
     merge_coupling_overlay(data, &overlay);
     coupled.insert(normpath(&anchor_file));
+    if std::env::var("SEAM_PERF").is_ok() {
+        eprintln!("[perf]     anchor_coupling_delta {:.2}s", _ta.elapsed().as_secs_f64());
+    }
     fan_couple(repo, data, ws, coupled, stable_floor);
 }
 
 /// FAN — couple each distinct REACHED boundary file not yet coupled (whole-file), so a boundary on a reached
 /// node crosses to its consumers. Port of `_fanCouple` (sequential path — byte-identical to the parallel pool).
 pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled: &mut HashSet<String>, stable_floor: bool) {
+    let perf = std::env::var("SEAM_PERF").is_ok();
+    if perf {
+        COMPUTE_NS.store(0, Ordering::Relaxed);
+        MP_NS.store(0, Ordering::Relaxed);
+        REHYD_NS.store(0, Ordering::Relaxed);
+        FILES.store(0, Ordering::Relaxed);
+    }
     let mut counter = data.nodes.len();
     // producer set — a node incident to a handler/produce edge (a resource: reached via ONE route, may serve others).
     let mut producer: HashSet<String> = HashSet::new();
@@ -171,6 +190,7 @@ pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled:
             grounded.insert(e.to.clone());
         }
     }
+    let _te = std::time::Instant::now();
     let mut rr_cache: HashMap<String, Vec<usize>> = HashMap::new();
     // ENUMERATE the files to couple, in order (mutating `coupled` — each file once).
     struct Work {
@@ -196,7 +216,11 @@ pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled:
             data.nodes.iter().filter(|m| !m.coupling && !m.file.is_empty() && normpath(&m.file) == f).map(|m| (m.id.clone(), m.range)).collect();
         work.push(Work { file: n.file.clone(), anchor_id: n.id.clone(), src_range: n.range, file_nodes });
     }
+    let enum_s = _te.elapsed().as_secs_f64();
     if work.is_empty() {
+        if perf {
+            eprintln!("[perf]     fan: 0 files (enum {:.2}s)", enum_s);
+        }
         return;
     }
     let mut overlay = Delta { nodes: Vec::new(), edges: Vec::new(), blindspots: Vec::new(), counter };
@@ -209,6 +233,13 @@ pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled:
         overlay.nodes.extend(d.nodes);
         overlay.edges.extend(d.edges);
         overlay.blindspots.extend(d.blindspots);
+    }
+    if perf {
+        let ns = |a: &AtomicU64| a.load(Ordering::Relaxed) as f64 / 1e9;
+        eprintln!(
+            "[perf]     fan: {} files | enum(route_boundary) {:.2}s | compute_delta(cache) {:.2}s | mp-parse(cache) {:.2}s | rehydrate {:.2}s",
+            FILES.load(Ordering::Relaxed), enum_s, ns(&COMPUTE_NS), ns(&MP_NS), ns(&REHYD_NS)
+        );
     }
     merge_coupling_overlay(data, &overlay);
 }
@@ -254,19 +285,27 @@ fn file_coupling_delta(repo: &str, file: &str, anchor_id: &str, src_range: (usiz
         seam_cache::hash(&s)
     };
     let cepoch = seam_cache::coupling_epoch_of(repo);
+    let _tc = std::time::Instant::now();
     let cached = seam_cache::cached(repo, "coupling-fan-v1", file, &fp_key, &cepoch, || {
         compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws)
     });
+    COMPUTE_NS.fetch_add(_tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    FILES.fetch_add(1, Ordering::Relaxed);
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the enclosing method within
     // the reached node's same-file call closure. Degrade to the flat rehydrate when the file won't parse.
     // The method-precise INDEX (tree-sitter parse → units + call map) is a PURE function of the file bytes, so
     // cache it per content-hash — a warm grow skips the parse (the O(footprint) warm cost). Port of cachedMPIndex.
+    let _tm = std::time::Instant::now();
     let mp: Option<seam_lang::ast::MpIndex> =
         seam_cache::cached(repo, "mp-index-v1", file, &seam_cache::hash(&text), "mp", || Ctx::parse(&text, &lang).map(|c| method_precise_index(&c)));
-    match mp {
+    MP_NS.fetch_add(_tm.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    let _tr = std::time::Instant::now();
+    let out = match mp {
         Some(mp) => rehydrate_fan_delta_method_precise(cached, anchor_id, Some(src_range), file_nodes, file, &mp.units, &mp.calls, counter),
         None => rehydrate_fan_delta(cached, anchor_id, counter),
-    }
+    };
+    REHYD_NS.fetch_add(_tr.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    out
 }
 
 /// The FLAT fan rehydration (offline / no tree-sitter): renumber into the `fc` namespace, remap the placeholder
