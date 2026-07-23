@@ -71,10 +71,21 @@ pub fn key_index(repo: &str, matchers: &[KeyMatcher], anchor_file: &str) -> Arc<
     if let Some(hit) = KEY_INDEX_CACHE.lock().unwrap().get(&ck) {
         return hit.clone();
     }
+    let perf = std::env::var("SEAM_PERF").is_ok();
+    let t0 = std::time::Instant::now();
     let files = files_index(repo, anchor_file);
+    let t1 = std::time::Instant::now();
     let matchers_idx = matchers_idx_cached(repo, matchers);
+    let t2 = std::time::Instant::now();
     let composed = composed_cached(repo);
+    let t3 = std::time::Instant::now();
     let merged = Arc::new(crate::ground::merge_grounding(&[&files, &matchers_idx, &composed]));
+    if perf {
+        eprintln!(
+            "[perf]           key_index: files_index={:.2}s apply_matchers={:.2}s compose_routes={:.2}s merge={:.2}s",
+            (t1 - t0).as_secs_f64(), (t2 - t1).as_secs_f64(), (t3 - t2).as_secs_f64(), t3.elapsed().as_secs_f64()
+        );
+    }
     KEY_INDEX_CACHE.lock().unwrap().insert(ck, merged.clone());
     merged
 }

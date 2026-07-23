@@ -70,9 +70,20 @@ fn to_delta(r: seam_couple::CouplingResult) -> Delta {
 
 /// resolve_coupling (scoped) + chain_route_consumers — the shared per-span compute for the anchor + the fan.
 fn compute_delta(repo: &str, src_id: &str, file: &str, text: &str, lo: usize, hi: usize, counter: usize, stable_floor: bool, fp_ranges: &HashMap<String, Vec<(usize, usize)>>, ws: &Workspace) -> Delta {
+    let perf = std::env::var("SEAM_PERF").is_ok();
+    let t0 = std::time::Instant::now();
     let r = resolve_coupling_scoped(repo, src_id, file, text, lo, hi, counter as u64, stable_floor, fp_ranges);
+    let t1 = std::time::Instant::now();
     let mut d = to_delta(r);
+    let nn = d.nodes.len();
     d.counter = chain_route_consumers(repo, &mut d.nodes, &mut d.edges, d.counter, ws);
+    if perf {
+        eprintln!(
+            "[perf]       compute_delta[{}:{}-{}] resolve={:.2}s chain_route={:.2}s nodes={}->{}",
+            file.rsplit('/').next().unwrap_or(file), lo, hi,
+            (t1 - t0).as_secs_f64(), t1.elapsed().as_secs_f64(), nn, d.nodes.len()
+        );
+    }
     d
 }
 

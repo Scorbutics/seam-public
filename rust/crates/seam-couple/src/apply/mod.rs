@@ -107,17 +107,26 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     // CACHE — the LEARNED matcher store (replayed warm) + the deterministic effect-inference matchers. The
     // pipeline step-1c matchers = persisted ∪ httpClientMatchers; the GROUND index augmentation uses the
     // PERSISTED matchers only (llmKeyIndex → applyMatchers(loadMatchers)). Empty on the stable-floor probe.
+    let _perf = std::env::var("SEAM_PERF").is_ok();
+    let _ts = std::time::Instant::now();
     let (matchers, http_clients, learned): (Vec<KeyMatcher>, Arc<Vec<String>>, Arc<GroundingIndex>) = if stable_floor {
         (Vec::new(), Arc::new(Vec::new()), Arc::new(GroundingIndex::new()))
     } else {
         let clients = effect_clients(repo);
         let persisted = load_matchers(repo);
+        let _tk = std::time::Instant::now();
         // GROUND from LEARN — the augmented grounding index (files ⊕ matchers ⊕ composed), persisted matchers.
         let learned = key_index(repo, &persisted, anchor_file);
+        if _perf {
+            eprintln!("[perf]         key_index build {:.2}s ({} keys)", _tk.elapsed().as_secs_f64(), learned.len());
+        }
         let mut ms = persisted;
         ms.extend(http_client_matchers(&clients));
         (ms, clients, learned)
     };
+    if _perf {
+        eprintln!("[perf]         resolve setup(matchers+key_index+merge) {:.2}s", _ts.elapsed().as_secs_f64());
+    }
     let http_recv = http_recv_tokens(&matchers);
     // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
     let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
