@@ -20,7 +20,7 @@ pub struct KeyHit {
 /// One PRODUCER or CONSUMER of a shared key — the file that touches it and the line. The grounding index
 /// groups these per key so the `other_side` lookup can pair a producer with its consumers (and vice-versa).
 /// Port of `Access`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Access {
     pub file: String,
     pub line: usize,
@@ -29,7 +29,7 @@ pub struct Access {
 /// A grounded key's two sides — who WRITES it (producers) and who READS it (consumers). Insertion-ordered
 /// (Vec), because `other_side` emits complements in the order the floor walk discovered them. Port of the
 /// `{producers, consumers}` value of a `GroundingIndex` entry.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, serde::Serialize, serde::Deserialize)]
 pub struct KeySides {
     pub producers: Vec<Access>,
     pub consumers: Vec<Access>,

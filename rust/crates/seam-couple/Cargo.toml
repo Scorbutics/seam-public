@@ -7,10 +7,12 @@ publish = false
 [dependencies]
 seam-lang = { path = "../seam-lang" }
 seam-fs = { path = "../seam-fs" }
+seam-cache = { path = "../seam-cache" }
 once_cell = { workspace = true }
 regex = { workspace = true }
-indexmap = { workspace = true }
+indexmap = { workspace = true, features = ["serde"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
+bincode = { workspace = true }
 rayon = { workspace = true }
 sha1 = { workspace = true }

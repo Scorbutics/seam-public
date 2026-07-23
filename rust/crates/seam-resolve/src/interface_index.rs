@@ -6,16 +6,18 @@
 
 use seam_lang::{ast, grammar_for, provider_for, Ctx};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
 /// A concrete implementation: the class name + the file declaring it.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Impl {
     pub cls: String,
     pub file: String,
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct InterfaceIndex {
     interfaces: HashSet<String>,
     impls: HashMap<String, Vec<Impl>>, // closed to CONCRETE impls (interface-extends expanded)
@@ -29,12 +31,50 @@ impl InterfaceIndex {
         if let Some(idx) = CACHE.lock().unwrap().get(repo) {
             return idx.clone();
         }
+        let idx = Arc::new(Self::load_or_build(repo));
+        CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+        idx
+    }
+
+    fn shard(repo: &str, epoch: &str) -> String {
+        format!("{repo}/.seam/rust/interface-index-v1/{epoch}.bin")
+    }
+
+    /// DISK-persisted (per-repo content epoch) via direct bincode — a fresh process LOADS instead of re-parsing
+    /// the whole repo. Same scheme as CallsiteIndex.
+    fn load_or_build(repo: &str) -> Self {
+        let perf = std::env::var("SEAM_PERF").is_ok();
+        let epoch = seam_cache::epoch_of(repo);
+        if !epoch.is_empty() {
+            let t = std::time::Instant::now();
+            if let Ok(bytes) = std::fs::read(Self::shard(repo, &epoch)) {
+                if let Ok(idx) = bincode::deserialize::<InterfaceIndex>(&bytes) {
+                    if perf {
+                        eprintln!("[perf] interface_index LOAD {:.2}s", t.elapsed().as_secs_f64());
+                    }
+                    return idx;
+                }
+            }
+        }
         let t = std::time::Instant::now();
-        let idx = Arc::new(Self::build(repo));
-        if std::env::var("SEAM_PERF").is_ok() {
+        let idx = Self::build(repo);
+        if perf {
             eprintln!("[perf] interface_index build {:.2}s", t.elapsed().as_secs_f64());
         }
-        CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+        if !epoch.is_empty() {
+            let dir = format!("{repo}/.seam/rust/interface-index-v1");
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy() != format!("{epoch}.bin") {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+            if let Ok(bytes) = bincode::serialize(&idx) {
+                let _ = std::fs::write(Self::shard(repo, &epoch), bytes);
+            }
+        }
         idx
     }
 

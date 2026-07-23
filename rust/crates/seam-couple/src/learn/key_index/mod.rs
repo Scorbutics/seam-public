@@ -80,10 +80,11 @@ pub fn key_index(repo: &str, matchers: &[KeyMatcher], anchor_file: &str) -> Arc<
     let composed = composed_cached(repo);
     let t3 = std::time::Instant::now();
     let merged = Arc::new(crate::ground::merge_grounding(&[&files, &matchers_idx, &composed]));
-    if perf {
+    // Only log a NON-trivial key_index build (a new module-scope's first derivation) to avoid flooding.
+    if perf && t0.elapsed().as_secs_f64() > 0.05 {
         eprintln!(
-            "[perf]           key_index: files_index={:.2}s apply_matchers={:.2}s compose_routes={:.2}s merge={:.2}s",
-            (t1 - t0).as_secs_f64(), (t2 - t1).as_secs_f64(), (t3 - t2).as_secs_f64(), t3.elapsed().as_secs_f64()
+            "[perf]           key_index[{}]: files_index={:.2}s apply_matchers={:.2}s compose_routes={:.2}s merge={:.2}s",
+            ck.1, (t1 - t0).as_secs_f64(), (t2 - t1).as_secs_f64(), (t3 - t2).as_secs_f64(), t3.elapsed().as_secs_f64()
         );
     }
     KEY_INDEX_CACHE.lock().unwrap().insert(ck, merged.clone());

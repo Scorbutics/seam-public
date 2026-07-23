@@ -43,6 +43,7 @@ pub fn merge_grounding(parts: &[&GroundingIndex]) -> GroundingIndex {
 
 /// The three floor indices, computed once per repo. `shared` = adapter scan, `param` = const-resolved param
 /// keys, `floor_base` = `mergeGrounding(shared, param)`. Port of the `build_floor_indices` outputs.
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct FloorIndices {
     pub shared: GroundingIndex,
     pub param: GroundingIndex,
@@ -51,21 +52,57 @@ pub struct FloorIndices {
 
 static CACHE: Lazy<Mutex<std::collections::HashMap<String, Arc<FloorIndices>>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
+fn floor_shard(repo: &str, epoch: &str) -> String {
+    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}.bin")
+}
+
 /// Build (or fetch cached) the deterministic floor indices for `repo`. Port of `build_floor_indices` +
 /// `floorContributions`/`jpaWrapperContributions` fused. `floorBase = mergeGrounding(shared, param)`.
+///
+/// DISK-persisted (per-repo content epoch) via direct bincode — a fresh process LOADS instead of re-scanning
+/// every file for adapter keys. Keyed on the SOURCE epoch (the floor is source-only, no learned matchers).
 pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     if let Some(hit) = CACHE.lock().unwrap().get(repo) {
         return hit.clone();
+    }
+    let perf = std::env::var("SEAM_PERF").is_ok();
+    let epoch = seam_cache::epoch_of(repo);
+    if !epoch.is_empty() {
+        let t = std::time::Instant::now();
+        if let Ok(bytes) = std::fs::read(floor_shard(repo, &epoch)) {
+            if let Ok(idx) = bincode::deserialize::<FloorIndices>(&bytes) {
+                if perf {
+                    eprintln!("[perf] floor_indices LOAD {:.2}s", t.elapsed().as_secs_f64());
+                }
+                let arc = Arc::new(idx);
+                CACHE.lock().unwrap().insert(repo.to_string(), arc.clone());
+                return arc;
+            }
+        }
     }
     let t = std::time::Instant::now();
     let mut contribs = floor::floor_contributions(repo);
     contribs.extend(floor::jpa_wrapper_contributions(repo));
     let (shared, param) = floor::merge_floor(&contribs);
     let floor_base = merge_grounding(&[&shared, &param]);
-    if std::env::var("SEAM_PERF").is_ok() {
+    if perf {
         eprintln!("[perf] floor_indices build {:.2}s", t.elapsed().as_secs_f64());
     }
     let idx = Arc::new(FloorIndices { shared, param, floor_base });
+    if !epoch.is_empty() {
+        let dir = format!("{repo}/.seam/rust/floor-indices-v1");
+        let _ = std::fs::create_dir_all(&dir);
+        if let Ok(rd) = std::fs::read_dir(&dir) {
+            for e in rd.flatten() {
+                if e.file_name().to_string_lossy() != format!("{epoch}.bin") {
+                    let _ = std::fs::remove_file(e.path());
+                }
+            }
+        }
+        if let Ok(bytes) = bincode::serialize(&*idx) {
+            let _ = std::fs::write(floor_shard(repo, &epoch), bytes);
+        }
+    }
     CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
     idx
 }
