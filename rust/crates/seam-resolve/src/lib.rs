@@ -274,3 +274,27 @@ pub fn resolve_batch(repo: &str, queries: &[(String, String)]) -> Vec<Option<Str
     let ws = Workspace::new(repo);
     queries.iter().map(|(f, s)| ws.resolve(f, s)).collect()
 }
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    // Workspace (the import index) is per-repo RESIDENT; a warm hit MUST return the same instance and reset()
+    // MUST drop it, else an edit-loop resolves imports against a stale index. Hermetic tmp repo.
+    #[test]
+    fn workspace_memoize_and_invalidate() {
+        let dir = std::env::temp_dir().join(format!("seam-ws-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_str().unwrap();
+        std::fs::write(dir.join("a.ts"), "export const x = 1;\n").unwrap();
+
+        Workspace::reset(Some(repo));
+        let a = Workspace::cached(repo);
+        let b = Workspace::cached(repo);
+        assert!(Arc::ptr_eq(&a, &b), "warm hit returns the SAME cached Workspace");
+        Workspace::reset(Some(repo));
+        let c = Workspace::cached(repo);
+        assert!(!Arc::ptr_eq(&a, &c), "reset() drops the cache so the next call rebuilds the index");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

@@ -109,3 +109,30 @@ pub fn reset(repo: Option<&str>) {
         None => c.clear(),
     }
 }
+
+#[cfg(test)]
+mod cache_tests {
+    use super::*;
+    // The ubiquity fan-in index is per-repo RESIDENT (a warm-path win); it MUST return the same instance on a
+    // warm hit and drop on reset(), else an edit-loop serves a stale fan-in prior. Hermetic tmp repo (2 TS files
+    // so the reverse-import map is non-empty).
+    #[test]
+    fn ubiquity_memoize_and_invalidate() {
+        let dir = std::env::temp_dir().join(format!("seam-ubiq-cache-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_str().unwrap();
+        std::fs::write(dir.join("b.ts"), "export const x = 1;\n").unwrap();
+        std::fs::write(dir.join("a.ts"), "import { x } from './b';\n").unwrap();
+
+        seam_resolve::Workspace::reset(Some(repo));
+        reset(Some(repo));
+        let a = ubiquity(repo);
+        let b = ubiquity(repo);
+        assert!(Arc::ptr_eq(&a, &b), "warm hit returns the SAME cached instance");
+        reset(Some(repo));
+        let c = ubiquity(repo);
+        assert!(!Arc::ptr_eq(&a, &c), "reset() drops the cache so the next call re-derives");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
