@@ -56,6 +56,7 @@ import { makeHubClassifier } from "./border_policies.js";
 import type { HubMarker } from "../../core/graph_ir.js";
 import { RegionCentroid } from "./field.js";
 import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
+import { rustCoreEnabled, growViaRust } from "./rust_core.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling, couplingEnvHash } from "../coupling/index.js";
@@ -1172,6 +1173,12 @@ export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvaila
 
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const deterministic = !opts.onWave;
+  // RUST-CORE STRANGLER (Phase 1): route the deterministic grow through the Rust addon — the intent-free
+  // STRUCTURAL grow + coupling replay, byte-identical to TS in structural mode. It caches internally (grow-v1
+  // shards) so it bypasses the TS-level cachedGrow. Streaming (onWave) grows stay in TS. See grow/rust_core.ts.
+  if (rustCoreEnabled() && deterministic) {
+    return growViaRust(repo, anchorFile, symbol, { ...opts, structuralGrow: true });
+  }
   const emb = await transformersAvailable();   // env-stable + memoised
   // STRUCTURAL GROW (SEAM_GROW_STRUCTURAL / opts.structuralGrow) — force the grow intent-INDEPENDENT even WITH
   // embeddings: up-hop (default K=2) + hub + ubiquity do ALL the containment, the intent field is not built, so
