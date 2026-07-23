@@ -1042,3 +1042,39 @@ pub fn project_compare(repo: String, a_file: String, a_symbol: String, b_file: S
         no_structure: c.no_structure,
     }
 }
+
+/// Wire form of a `Def`.
+#[napi(object)]
+pub struct DefDto {
+    pub name: String,
+    pub kind: String,
+    pub file: String,
+    pub signature: String,
+    pub enclosing: String,
+    pub doc: String,
+    pub body: Option<String>,
+}
+
+/// enumerate_defs — the repo's declaration candidate table (or a file-scoped subset). Parity surface for
+/// `enumerate_defs`.
+#[napi]
+pub fn enumerate_defs(repo: String, limit: Option<u32>, files: Option<Vec<String>>, module_defs: Option<bool>) -> Vec<DefDto> {
+    let lim = limit.map(|l| l as usize).unwrap_or(4000);
+    let defs = seam_scan::def_table::enumerate_defs(&repo, lim, files.as_deref(), module_defs.unwrap_or(false));
+    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+}
+
+/// defsInFile — one file's declarations (regex for TS/JS, tree-sitter otherwise). Parity surface for the
+/// per-file def extraction (`_scan_defs_file`'s defs).
+#[napi]
+pub fn defs_in_file(rel: String, text: String, module_def: Option<bool>) -> Vec<DefDto> {
+    let mut defs = if seam_lang::has_validated_regex_defs(&rel) {
+        seam_scan::def_table::defs_in_file(&rel, &text)
+    } else {
+        seam_scan::def_table::defs_in_file_treesitter(&rel, &text).unwrap_or_else(|| seam_scan::def_table::defs_in_file(&rel, &text))
+    };
+    if module_def.unwrap_or(false) {
+        defs.push(seam_scan::def_table::module_def(&rel, &text));
+    }
+    defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+}

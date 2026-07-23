@@ -80,3 +80,9 @@ pub fn same_lang_family(a: &str, b: &str) -> bool {
         _ => false,
     }
 }
+
+/// Is `file`'s language validated for the JS-shaped REGEX def extractor (else fall back to tree-sitter)? Port
+/// of `hasValidatedRegexDefs`.
+pub fn has_validated_regex_defs(file: &str) -> bool {
+    provider_for(file).map_or(false, |p| p.regex_defs_validated())
+}

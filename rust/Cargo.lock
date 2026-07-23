@@ -366,6 +366,7 @@ dependencies = [
  "seam-lang",
  "seam-resolve",
  "serde",
+ "tree-sitter",
 ]
 
 [[package]]

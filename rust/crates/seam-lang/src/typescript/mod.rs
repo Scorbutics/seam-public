@@ -15,6 +15,9 @@ impl LanguageProvider for TypeScriptProvider {
     fn name(&self) -> &'static str {
         "typescript"
     }
+    fn regex_defs_validated(&self) -> bool {
+        true
+    }
     fn extensions(&self) -> &'static [&'static str] {
         &[".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"]
     }

@@ -26,6 +26,12 @@ pub trait LanguageProvider: Send + Sync {
     fn export_statements(&self) -> bool {
         false
     }
+    /// Is this language's JS/JS-shaped REGEX def extractor (def_table) validated for it? TS/JS: yes (the
+    /// embed-recall path was tuned against it). Others fall back to the tree-sitter extractor. Port of
+    /// `regexDefsValidated`.
+    fn regex_defs_validated(&self) -> bool {
+        false
+    }
     /// Textual keywords that MUST be present for a file to declare an interface/implements relation — a cheap
     /// pre-gate that skips the tree-sitter parse when absent. `[]` (the default) skips every file (a language
     /// with no interface concept, e.g. Ruby). Java/TS: `["interface", "implements"]`.

@@ -26,6 +26,12 @@ const SOURCE_EXTS: &[&str] = &[
 ];
 const EXTRA_EXTS: &[&str] = &[".vue", ".html", ".htm"];
 
+/// Does `file` end with a language SOURCE extension (NOT template/extra exts)? Port of `endsWithSourceExt`.
+pub fn ends_with_source_ext(file: &str) -> bool {
+    let f = file.to_lowercase();
+    SOURCE_EXTS.iter().any(|e| f.ends_with(e))
+}
+
 /// "Is this file worth scanning for shared keys?" — a source file, or (adapters on) a template/extra ext. Port
 /// of `scannableForKeys` (+ `endsWithSourceExt`).
 pub fn scannable_for_keys(file: &str) -> bool {
