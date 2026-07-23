@@ -129,7 +129,10 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     }
     let http_recv = http_recv_tokens(&matchers);
     // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
+    let _tg = std::time::Instant::now();
     let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
+    let merge_s = _tg.elapsed().as_secs_f64();
+    let _tp = std::time::Instant::now();
     let ctx = PipelineCtx {
         repo,
         index: &index,
@@ -143,5 +146,8 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     let node = PipelineNode { id: anchor_id.to_string(), file: anchor_file.to_string(), text: anchor_text.to_string(), lo, hi };
     // CHAIN_DEPTH = 1 (chain the data-flow boundary one hop past the anchor: reader → its http-route).
     run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &[], &[]);
+    if _perf {
+        eprintln!("[perf]           resolve: merge_grounding(floor∪learned)={:.2}s run_pipeline={:.2}s", merge_s, _tp.elapsed().as_secs_f64());
+    }
     CouplingResult { counter: state.graph.counter(), nodes: state.graph.nodes, edges: state.graph.edges, blindspots: state.graph.blindspots }
 }
