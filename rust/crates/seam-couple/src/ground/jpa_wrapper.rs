@@ -114,9 +114,15 @@ fn build(repo: &str) -> ManagerIndex {
     let mut parent: HashMap<String, String> = HashMap::new();
     let mut entities: HashSet<String> = HashSet::new();
     let mut entity_parents: HashMap<String, HashSet<String>> = HashMap::new();
-    for rel in seam_fs::repo_files(repo, ".java") {
-        let Ok(text) = std::fs::read(format!("{repo}/{rel}")).map(|b| String::from_utf8_lossy(&b).into_owned()) else { continue };
-        let f = file_facts(&text);
+    use rayon::prelude::*;
+    // Parse file_facts in PARALLEL (per-file, independent), then MERGE sequentially in walk order — the only
+    // order-sensitive merge is `parent` (last-write-wins on a class name), which walk order preserves; every
+    // other field is set-membership. Byte-identical to the sequential build.
+    let per_file: Vec<FileFacts> = seam_fs::repo_files(repo, ".java")
+        .par_iter()
+        .filter_map(|rel| std::fs::read(format!("{repo}/{rel}")).ok().map(|b| file_facts(&String::from_utf8_lossy(&b))))
+        .collect();
+    for f in &per_file {
         for e in &f.entities {
             entities.insert(e.clone());
         }

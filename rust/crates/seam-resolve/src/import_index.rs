@@ -29,35 +29,40 @@ pub struct ImportIndex {
 
 impl ImportIndex {
     pub fn build(repo: &str) -> Self {
+        use rayon::prelude::*;
+        // Parse each file's imports in PARALLEL (per-file, independent), then MERGE sequentially in source_files
+        // (walk) order so the positional idx and by_name / ns / default push-order are byte-identical.
+        let per_file: Vec<Option<FileImports>> = seam_fs::source_files(repo, |r| provider_for(r).is_some())
+            .par_iter()
+            .map(|rel| {
+                let provider = provider_for(rel)?;
+                let text = read_text(repo, rel)?; // unreadable → skipped, exactly like walkFiles' try/catch
+                let refs = provider.imports(&text);
+                let ns = provider.namespace_imports(&text);
+                let defs = provider.default_imports(&text);
+                let norm = seam_fs::normpath(&format!("{repo}/{rel}"));
+                Some(FileImports { rel: rel.clone(), norm, refs, ns, defs })
+            })
+            .collect();
         let mut files = Vec::new();
         let mut by_name: HashMap<String, Vec<usize>> = HashMap::new();
         let (mut ns_entries, mut default_entries) = (Vec::new(), Vec::new());
-        for rel in seam_fs::source_files(repo, |r| provider_for(r).is_some()) {
-            let Some(provider) = provider_for(&rel) else {
-                continue;
-            };
-            let Some(text) = read_text(repo, &rel) else {
-                continue; // unreadable → skipped, exactly like walkFiles' try/catch
-            };
-            let refs = provider.imports(&text);
-            let ns = provider.namespace_imports(&text);
-            let defs = provider.default_imports(&text);
+        for fi in per_file.into_iter().flatten() {
             let idx = files.len();
             let mut seen = HashSet::new(); // one entry per (file, distinct binding name)
-            for r in &refs {
+            for r in &fi.refs {
                 if seen.insert(r.name.clone()) {
                     by_name.entry(r.name.clone()).or_default().push(idx);
                 }
             }
-            if !ns.is_empty() {
+            if !fi.ns.is_empty() {
                 ns_entries.push(idx);
             }
             // a default consumer via a default import OR a `default as X` re-export barrel
-            if !defs.is_empty() || refs.iter().any(|r| r.name == "default" && r.reexport) {
+            if !fi.defs.is_empty() || fi.refs.iter().any(|r| r.name == "default" && r.reexport) {
                 default_entries.push(idx);
             }
-            let norm = seam_fs::normpath(&format!("{repo}/{rel}"));
-            files.push(FileImports { rel, norm, refs, ns, defs });
+            files.push(fi);
         }
         Self { files, by_name, ns_entries, default_entries }
     }
