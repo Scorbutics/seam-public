@@ -69,6 +69,20 @@ pub struct Unresolved {
     pub reason: String,
 }
 
+/// A tier-3 decision point: a node whose fan the wave declined (off-spine up-climb / budget), kept in the
+/// region + surfaced as a ranked handle the caller can deepen from (I3 — never silently cut). Port of
+/// `FrontierPoint`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FrontierPoint {
+    pub id: String,
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+    pub reached_via: String,
+    pub score: f64,
+    pub cut_by: String, // "decision" | "hub" | "border" | "budget"
+}
+
 /// The footprint contract (the fields a footprint builder populates; scalars are constant here).
 #[derive(Clone, Debug)]
 pub struct ResolvedGraph {
@@ -85,6 +99,8 @@ pub struct ResolvedGraph {
     pub anchors: Vec<String>,
     /// build_callsite_graph's internal hand-off (the method names a call site was found for), sorted.
     pub resolved_methods: Vec<String>,
+    /// The wave's decision-point frontier (tier-3 residue). Empty on a plain footprint build.
+    pub frontier: Vec<FrontierPoint>,
 }
 
 /// Assemble a `ResolvedGraph` around an anchor (port of `makeGraph`).
@@ -106,5 +122,6 @@ pub fn make_graph(
         unresolved: Vec::new(),
         anchors: Vec::new(),
         resolved_methods: Vec::new(),
+        frontier: Vec::new(),
     }
 }

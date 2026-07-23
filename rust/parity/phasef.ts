@@ -28,7 +28,7 @@ const toData = (g: any) => ({
   anchor: { id: g.anchorId, symbol: g.anchorSymbol, file: g.anchorFile, range: g.anchorRange },
   anchors: g.anchors,
   blindspots: g.blindspots.map((b: any) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence, candidates: b.candidates.map((c: any) => ({ symbol: c.symbol, file: c.file ?? undefined })), persists: b.persists })),
-  unresolved: g.unresolved,
+  unresolved: g.unresolved, frontier: g.frontier,
 });
 
 // Canonicalize a decompose model: map every node id → "file:start", strip raw ids, stable-stringify.

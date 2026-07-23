@@ -253,6 +253,18 @@ pub struct UnresolvedDto {
     pub reason: String,
 }
 
+/// Wire form of a decision-point frontier entry.
+#[napi(object)]
+pub struct FrontierPointDto {
+    pub id: String,
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+    pub reached_via: String,
+    pub score: f64,
+    pub cut_by: String,
+}
+
 /// Wire form of a resolved graph (the fields build_consumers_graph consumes).
 #[napi(object)]
 pub struct GraphDto {
@@ -267,6 +279,7 @@ pub struct GraphDto {
     pub unresolved: Vec<UnresolvedDto>,
     pub anchors: Vec<String>,
     pub resolved_methods: Vec<String>,
+    pub frontier: Vec<FrontierPointDto>,
 }
 
 impl From<seam_scan::ResolvedGraph> for GraphDto {
@@ -313,6 +326,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
             unresolved: g.unresolved.into_iter().map(|u| UnresolvedDto { node: u.node, query: u.query, reason: u.reason }).collect(),
             anchors: g.anchors,
             resolved_methods: g.resolved_methods,
+            frontier: g.frontier.into_iter().map(|f| FrontierPointDto { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),
         }
     }
 }
@@ -351,6 +365,7 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
         unresolved: Vec::new(),
         anchors: g.anchors,
         resolved_methods: g.resolved_methods,
+        frontier: g.frontier.into_iter().map(|f| seam_scan::graph::FrontierPoint { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),
     }
 }
 

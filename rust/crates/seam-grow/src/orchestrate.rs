@@ -14,7 +14,7 @@ use crate::ubiquity::{ubiquity, Ubiquity};
 use indexmap::IndexMap;
 use seam_couple::{is_flow_subject, is_handler_edge};
 use seam_fs::normpath;
-use seam_scan::graph::{Blindspot, GraphNode, ResolvedGraph};
+use seam_scan::graph::{Blindspot, GraphEdge, GraphNode, ResolvedGraph};
 use seam_scan::{build_consumers_graph, build_dependency_graph, ConsumersOpts, DepOpts};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -138,6 +138,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     let mut expanded: HashSet<String> = HashSet::new();
     let mut hub_fanned: HashSet<String> = HashSet::new();
     let mut hub_mark: HashMap<String, seam_scan::graph::HubMarker> = HashMap::new();
+    let mut parked: IndexMap<String, String> = IndexMap::new(); // node id → cutBy (decision/budget)
 
     let mut step = 0usize;
     while data.nodes.len() < opts.max_nodes {
@@ -261,7 +262,8 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                 let is_complement = n.coupling && !is_flow_subject(&n.kind);
                 let eff_up_hop = if is_complement { COMPLEMENT_UP_HOP } else if crossing_ward { 0 } else { UP_HOP_STRUCTURAL };
                 if d == Dir::Up && eff_up_hop > 0 && up_depth_of(&n.id) >= eff_up_hop {
-                    continue; // parked as a decision point (frontier output deferred to G5b)
+                    parked.insert(n.id.clone(), "decision".to_string());
+                    continue;
                 }
                 // tierUp is always false without an embedding field → the legacy hop-distance gate governs the up-climb.
                 if d == Dir::Up {
@@ -271,6 +273,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                     if hub {
                         continue;
                     }
+                }
+                if d == Dir::Up {
+                    parked.shift_remove(&n.id); // a later wave admitted this up-climb → no longer a decision point
                 }
                 moves.push(Move { node: n.clone(), dir: d });
             }
@@ -282,9 +287,13 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
 
         // ── the wavefront flood: expand EVERY ready head this wave ───────────────────────────────────────
         let mut wave_added = 0usize;
-        for mv in &ordered {
+        for (mi, mv) in ordered.iter().enumerate() {
             if data.nodes.len() >= opts.max_nodes {
-                break; // budget backstop
+                // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget.
+                for m in &ordered[mi..] {
+                    parked.entry(m.node.id.clone()).or_insert_with(|| "budget".to_string());
+                }
+                break;
             }
             let k = exp_key(&mv.node, mv.dir);
             if expanded.contains(&k) {
@@ -365,7 +374,81 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             persists: false,
         });
     }
+    // ── DECISION-POINT FRONTIER (Phase 2.2) — the tier-3 residue as the ranked list a caller can deepen from ──
+    // RESOLVED-BUT-UNFOLLOWED call leads: a node reached by a RESOLVED_PARTIAL `call` edge with NO out-edges and a
+    // non-trivial body (≥3 lines) is an unmapped deepen handle — park it so the frontier advertises it.
+    {
+        let out_src: HashSet<&str> = data.edges.iter().map(|e| e.from.as_str()).collect();
+        let cx: HashMap<&str, usize> = data.nodes.iter().map(|n| (n.id.as_str(), n.complexity)).collect();
+        for e in &data.edges {
+            if e.kind == "call" && e.provenance == "RESOLVED_PARTIAL" && e.to != "n1" && !out_src.contains(e.to.as_str()) && !parked.contains_key(&e.to) && cx.get(e.to.as_str()).copied().unwrap_or(0) >= 3 {
+                parked.insert(e.to.clone(), "decision".to_string());
+            }
+        }
+    }
+    if !parked.is_empty() {
+        let by_id: HashMap<&str, &GraphNode> = data.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
+        let present: HashSet<&str> = by_id.keys().copied().collect();
+        // node → its qualified display symbol (enclosing.symbol when distinct) for the reach phrasing.
+        let node_sym: HashMap<String, String> = data.nodes.iter().map(|n| (n.id.clone(), if !n.enclosing.is_empty() && n.enclosing != n.symbol { format!("{}.{}", n.enclosing, n.symbol) } else { n.symbol.clone() })).collect();
+        let cut_rank = |c: &str| -> u8 { match c { "decision" => 0, "hub" => 1, "border" => 2, _ => 3 } };
+        let mut front: Vec<seam_scan::graph::FrontierPoint> = parked
+            .iter()
+            .filter(|(id, _)| present.contains(id.as_str()))
+            .map(|(id, cut_by)| {
+                let n = by_id[id.as_str()];
+                let reached_via = reach_phrases(n, &data.edges, |x| x != n.id && present.contains(x), |x| node_sym.get(x).cloned().unwrap_or_else(|| x.to_string()));
+                seam_scan::graph::FrontierPoint { id: id.clone(), symbol: n.symbol.clone(), file: normpath(&n.file), kind: n.kind.clone(), reached_via, score: 0.0, cut_by: cut_by.clone() }
+            })
+            .collect();
+        // sort: score desc (all 0) → cutRank → symbol.
+        front.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| cut_rank(&a.cut_by).cmp(&cut_rank(&b.cut_by))).then_with(|| a.symbol.cmp(&b.symbol)));
+        data.frontier = front;
+    }
     data
+}
+
+/// The resolved relation(s) that REACHED a candidate from a node already in the region — phrased from the
+/// candidate's point of view, top 2 by relation rank. Port of `_reachPhrases`.
+fn reach_phrases(n: &GraphNode, edges: &[GraphEdge], is_reacher: impl Fn(&str) -> bool, sym_of: impl Fn(&str) -> String) -> String {
+    let phrase = |kind: &str| -> (&'static str, &'static str) {
+        match kind {
+            "call" => ("called by", "calls"),
+            "import" => ("used by", "uses"),
+            "reference" => ("referenced by", "references"),
+            "interface-impl" => ("implemented by", "implements"),
+            "contains" => ("a member of", "contains"),
+            "route-fetch" | "route-serve" => ("reached over a route from", "reaches over a route to"),
+            "data-coupling" => ("shares data with", "shares data with"),
+            "type-ref" => ("a data type used by", "uses the type"),
+            _ => ("reached from", "reaches"),
+        }
+    };
+    let rank = |k: &str| -> u8 { if k == "call" { 0 } else if k == "route-serve" || k == "route-fetch" { 1 } else if k == "import" || k == "reference" { 2 } else { 3 } };
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut cands: Vec<(u8, String)> = Vec::new();
+    for e in edges {
+        let (dir_from, other): (bool, &str) = if e.to == n.id && e.from != n.id && is_reacher(&e.from) {
+            (true, &e.from)
+        } else if e.from == n.id && e.to != n.id && is_reacher(&e.to) {
+            (false, &e.to)
+        } else {
+            continue;
+        };
+        let p = phrase(&e.kind);
+        let s = format!("{} {}", if dir_from { p.0 } else { p.1 }, sym_of(other));
+        if !seen.insert(s.clone()) {
+            continue;
+        }
+        cands.push((rank(&e.kind), s));
+    }
+    cands.sort_by_key(|c| c.0);
+    let out: Vec<String> = cands.into_iter().take(2).map(|c| c.1).collect();
+    if out.is_empty() {
+        "(reached from the region)".to_string()
+    } else {
+        out.join(", ")
+    }
 }
 
 /// ORDER the whole frontier best-first. Port of `_orderMoves` (structural: iscore/band are 0, so the effective
