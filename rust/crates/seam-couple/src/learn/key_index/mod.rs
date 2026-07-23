@@ -55,6 +55,7 @@ pub fn reset(repo: Option<&str>) {
     };
     clear(&MATCHERS_CACHE);
     clear(&COMPOSED_CACHE);
+    files_cache::reset_file_contrib(repo);
     let mut k = KEY_INDEX_CACHE.lock().unwrap();
     match repo {
         Some(r) => k.retain(|(repo_key, _), _| repo_key != r),

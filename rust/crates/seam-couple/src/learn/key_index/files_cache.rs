@@ -9,9 +9,11 @@ use crate::types::KeySides;
 use crate::key_ir::plausible_key_value;
 use crate::mask::MaskCtx;
 use crate::types::{Access, KeyHit};
+use once_cell::sync::Lazy;
 use serde::Deserialize;
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 // A module boundary — the nearest ancestor dir with a build manifest. Union of provider rootMarkers + the
 // hardcoded set (core/resolve/languages MODULE_MARKERS). Order-independent (any match).
@@ -87,6 +89,59 @@ pub(crate) fn sha1_hex(text: &str) -> String {
     h.finalize().iter().map(|b| format!("{b:02x}")).collect()
 }
 
+// A file's SCOPE-INDEPENDENT files_index contribution: the ordered `(keyId, produces, line)` triples it grounds
+// (floor-reconciled, plausibility-filtered). A pure function of (repo, rel, file content) — so compute it ONCE
+// per file and reuse across the many module scopes a single fan spans (a fan reaches 27–44 scopes, each of which
+// otherwise re-read + re-masked + re-scanned every in-scope file: ~18k redundant scans → ~one per file). Within a
+// process the content is fixed; `reset_file_contrib` (wired into the coupling reset) drops it on an edit-loop.
+static FILE_CONTRIB_CACHE: Lazy<Mutex<HashMap<(String, String), Arc<Vec<(String, bool, usize)>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Drop the memoized per-file files_index contributions for `repo` (or all when `None`) — invalidation hook so a
+/// resident process re-derives after a file change (mirrors reset of the other key_index caches).
+pub fn reset_file_contrib(repo: Option<&str>) {
+    let mut c = FILE_CONTRIB_CACHE.lock().unwrap();
+    match repo {
+        Some(r) => c.retain(|(repo_key, _), _| repo_key != r),
+        None => c.clear(),
+    }
+}
+
+/// Compute (or fetch cached) one file's files_index contribution. The read + mask + `scan_file_keys` floor scan —
+/// the expensive part the fan otherwise repeats per scope — runs at most once per file per process.
+fn file_contrib(repo: &str, rel: &str, store: &HashMap<String, Vec<KeyHit>>) -> Arc<Vec<(String, bool, usize)>> {
+    let ck = (repo.to_string(), rel.to_string());
+    if let Some(hit) = FILE_CONTRIB_CACHE.lock().unwrap().get(&ck) {
+        return hit.clone();
+    }
+    let mut entries: Vec<(String, bool, usize)> = Vec::new();
+    if let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) {
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        let mask = MaskCtx::new(&text);
+        let floor: Vec<KeyHit> = scan_file_keys(rel, &text, &mask);
+        let is_bridge = !floor.is_empty() && floor.iter().all(|h| h.kind == "binding");
+        // floor-covered non-bridge → leave to the shared_key_index (augment is off by default): no contribution.
+        if floor.is_empty() || is_bridge {
+            let sck = format!("{rel} {}", sha1_hex(&text));
+            if let Some(keys) = store.get(&sck) {
+                let floor_set: std::collections::HashSet<String> = floor.iter().map(|h| format!("{} {}", h.kind, h.value)).collect();
+                for h in keys {
+                    if !plausible_key_value(&h.value) {
+                        continue;
+                    }
+                    let id = format!("{} {}", h.kind, h.value);
+                    if floor_set.contains(&id) {
+                        continue; // floor already has this key
+                    }
+                    entries.push((id, h.produces, h.line));
+                }
+            }
+        }
+    }
+    let arc = Arc::new(entries);
+    FILE_CONTRIB_CACHE.lock().unwrap().insert(ck, arc.clone());
+    arc
+}
+
 /// The per-file cache replay grounded into an index (module-scoped, floor-reconciled). Port of the filesIdx
 /// build in `llmKeyIndex` (llm-off path: `augment` off → only floor-blind / bridge files get a disk lookup).
 pub fn files_index(repo: &str, anchor_file: &str) -> GroundingIndex {
@@ -100,29 +155,12 @@ pub fn files_index(repo: &str, anchor_file: &str) -> GroundingIndex {
         if !in_scope(&scope, &rel) {
             continue;
         }
-        let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { continue };
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        let mask = MaskCtx::new(&text);
-        let floor: Vec<KeyHit> = scan_file_keys(&rel, &text, &mask);
-        let is_bridge = !floor.is_empty() && floor.iter().all(|h| h.kind == "binding");
-        // floor-covered non-bridge → leave to the shared_key_index (augment is off by default).
-        if !floor.is_empty() && !is_bridge {
-            continue;
-        }
-        let ck = format!("{rel} {}", sha1_hex(&text));
-        let Some(keys) = store.get(&ck) else { continue }; // no cache hit (blind, no LLM synth to fill it)
-        let floor_set: std::collections::HashSet<String> = floor.iter().map(|h| format!("{} {}", h.kind, h.value)).collect();
-        for h in keys {
-            if !plausible_key_value(&h.value) {
-                continue;
-            }
-            let id = format!("{} {}", h.kind, h.value);
-            if floor_set.contains(&id) {
-                continue; // floor already has this key
-            }
-            let entry = idx.entry(id).or_insert_with(KeySides::default);
-            let acc = Access { file: rel.clone(), line: h.line };
-            if h.produces {
+        // Per-file contribution is scope-independent → compute once, reuse across scopes. Order preserved: the
+        // source_files iteration + per-file triple order match the original inline loop exactly (byte-identical).
+        for (id, produces, line) in file_contrib(repo, &rel, &store).iter() {
+            let entry = idx.entry(id.clone()).or_insert_with(KeySides::default);
+            let acc = Access { file: rel.clone(), line: *line };
+            if *produces {
                 entry.producers.push(acc);
             } else {
                 entry.consumers.push(acc);
@@ -152,6 +190,62 @@ mod module_scope_tests {
         let r = repo.to_str().unwrap();
         assert_eq!(module_scope(r, "app/test/unit/x.spec.ts"), "app/test/");
         assert_eq!(module_scope(r, "app/src/y.ts"), "app/");
+        fs::remove_dir_all(&repo).ok();
+    }
+}
+
+#[cfg(test)]
+mod file_contrib_cache_tests {
+    use super::{files_index, reset_file_contrib, sha1_hex};
+    use std::fs;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    // The per-file files_index contribution cache (compute-once-per-file, reuse across the scopes a fan spans)
+    // MUST be TRANSPARENT: files_index's output is byte-identical whether the cache is cold or warm. A future
+    // change that made `file_contrib` scope-dependent, or reordered the merge, would corrupt the grounding a
+    // fan reuses — this guards that. Hermetic tmp repo: two floor-BLIND source files whose keys live only in the
+    // `.seam` store (schema 3, keyed `rel sha1(text)`), so the store-replay path (the cached path) is exercised.
+    #[test]
+    fn file_contrib_cache_is_transparent() {
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let repo = std::env::temp_dir().join(format!("seam_filecontrib_{}_{}", std::process::id(), N.fetch_add(1, Ordering::SeqCst)));
+        let svc = repo.join("svc");
+        fs::create_dir_all(repo.join(".seam")).unwrap();
+        fs::create_dir_all(&svc).unwrap();
+        fs::write(svc.join("pom.xml"), "<project/>").unwrap(); // module marker → scope "svc/"
+
+        // Two plain files with no floor-recognisable adapter keys (floor-blind) → the store lookup applies.
+        let a = "export function a() { return 1; }\n";
+        let b = "export function b() { return 2; }\n";
+        fs::write(svc.join("a.js"), a).unwrap();
+        fs::write(svc.join("b.js"), b).unwrap();
+
+        // The `.seam` store: schema 3, keys `rel sha1(text)` → the LLM-discovered keys replayed with 0 LLM.
+        let store = format!(
+            r#"{{"schema":3,"files":{{
+                "svc/a.js {}":{{"keys":[{{"kind":"db-table","value":"users","line":1,"produces":true}}]}},
+                "svc/b.js {}":{{"keys":[{{"kind":"db-table","value":"users","line":2,"produces":false}}]}}
+            }}}}"#,
+            sha1_hex(a), sha1_hex(b)
+        );
+        fs::write(repo.join(".seam/key-adapters.json"), store).unwrap();
+
+        let r = repo.to_str().unwrap();
+        reset_file_contrib(Some(r));
+        let cold = files_index(r, "svc/a.js"); // cache cold → computes each file's contribution
+        let warm = files_index(r, "svc/a.js"); // cache warm → reuses the cached contributions
+        let ser = |idx: &super::GroundingIndex| format!("{idx:?}");
+        assert_eq!(ser(&cold), ser(&warm), "cache must be transparent: cold == warm");
+
+        // Behaviour: the store keys are grounded (floor-blind files → store replay), producers/consumers split.
+        let sides = cold.get("db-table users").expect("store key must be grounded");
+        assert_eq!(sides.producers.len(), 1, "a.js writes users");
+        assert_eq!(sides.consumers.len(), 1, "b.js reads users");
+        assert_eq!(sides.producers[0].file, "svc/a.js");
+        assert_eq!(sides.consumers[0].file, "svc/b.js");
+
+        reset_file_contrib(Some(r));
+        assert_eq!(ser(&cold), ser(&files_index(r, "svc/a.js")), "recompute after reset == original");
         fs::remove_dir_all(&repo).ok();
     }
 }
