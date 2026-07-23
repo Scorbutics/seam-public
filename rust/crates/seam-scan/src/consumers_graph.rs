@@ -70,9 +70,19 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
     let mut b = GraphBuilder::new(symbol, &kind, anchor_file, range, &enclosing, &lang);
 
     add_import_consumers(&mut b, repo, anchor_file, symbol);
-    // The reverse file-path reference (a template/asset anchor's consumers) applies only to NON-source
-    // anchors; a source file's users come through the import scan above. Deferred with the file-ref index.
-    // if provider_for(anchor_file).is_none() { … fileReferencers … }
+    // REVERSE FILE-PATH REFERENCE — source files that name THIS file by a path LITERAL (a component's
+    // styleUrls, a `require('./x.css')`) are its consumers, so a template/asset anchor reaches its owner.
+    // Gated to NON-SOURCE anchors (a code file's users come through the import scan above). Port of the
+    // `fileReferencers` block in build_resolved_graph.
+    if seam_lang::provider_for(anchor_file).is_none() {
+        let anchor_norm = seam_fs::normpath(anchor_file);
+        for (file, line) in seam_resolve::file_ref::file_referencers(repo, anchor_file) {
+            if seam_fs::normpath(&file) == anchor_norm {
+                continue;
+            }
+            b.add_consumer(format!("{file}#fileref"), &stem(&file), "module", &file, (line, line), "", "file-ref", "RESOLVED_FULL");
+        }
+    }
     if kind != "symbol" {
         if let Some(c) = &actx {
             add_intra_file_callers(&mut b, c, anchor_file, symbol, range, &aunits);

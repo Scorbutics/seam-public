@@ -38,3 +38,62 @@ pub fn resolve_file_ref(repo: &str, from_file: &str, lit: &str) -> Option<String
     }
     None
 }
+
+// ── the REVERSE file-ref index (target → its referencers) ─────────────────────────────────────────────────────
+// Source files that name a target file by a path LITERAL (a component's styleUrls, a `require('./x.css')`) are
+// that file's consumers — the up/consumers side used for a template/asset anchor. Port of `fileReferencers` /
+// `fileRefIndex`. Memoized per repo (a whole-repo string-literal scan), invalidated via `reset`.
+
+use std::sync::{Arc, Mutex};
+
+// A quoted string literal (', ", or `) with 1..256 non-quote/newline chars — the TS `_STRLIT` `\1` backref
+// emulated as three quote-specific alternatives (Rust regex has no backreferences).
+static STRLIT: Lazy<Regex> = Lazy::new(|| Regex::new("'([^'\\n]{1,256}?)'|\"([^\"\\n]{1,256}?)\"|`([^`\\n]{1,256}?)`").unwrap());
+
+type RefIndex = std::collections::HashMap<String, Vec<(String, usize)>>; // normpath(target) → [(referencer file, 0-based line)]
+static REF_INDEX: Lazy<Mutex<std::collections::HashMap<String, Arc<RefIndex>>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
+
+fn file_ref_index(repo: &str) -> Arc<RefIndex> {
+    if let Some(i) = REF_INDEX.lock().unwrap().get(repo) {
+        return i.clone();
+    }
+    let mut idx: RefIndex = std::collections::HashMap::new();
+    for rel in seam_fs::source_files(repo, |r| seam_lang::provider_for(r).is_some()) {
+        let Ok(text) = std::fs::read_to_string(format!("{repo}/{rel}")) else { continue };
+        for m in STRLIT.captures_iter(&text) {
+            let lit = m.get(1).or_else(|| m.get(2)).or_else(|| m.get(3)).map(|g| g.as_str()).unwrap_or("");
+            if let Some(target) = resolve_file_ref(repo, &rel, lit) {
+                let tk = normpath(&target);
+                if tk == normpath(&rel) {
+                    continue;
+                }
+                let arr = idx.entry(tk).or_default();
+                if !arr.iter().any(|(f, _)| f == &rel) {
+                    let start = m.get(0).unwrap().start();
+                    let line = text[..start].matches('\n').count(); // 0-based line of the literal
+                    arr.push((rel.clone(), line));
+                }
+            }
+        }
+    }
+    let arc = Arc::new(idx);
+    REF_INDEX.lock().unwrap().insert(repo.to_string(), arc.clone());
+    arc
+}
+
+/// The source files that reference `target` by a path literal — its up/consumers set for a non-source anchor.
+/// Port of `fileReferencers`.
+pub fn file_referencers(repo: &str, target: &str) -> Vec<(String, usize)> {
+    file_ref_index(repo).get(&normpath(target)).cloned().unwrap_or_default()
+}
+
+/// Invalidate the per-repo reverse file-ref index (the caching contract).
+pub fn reset_file_ref_index(repo: Option<&str>) {
+    let mut c = REF_INDEX.lock().unwrap();
+    match repo {
+        Some(r) => {
+            c.remove(r);
+        }
+        None => c.clear(),
+    }
+}

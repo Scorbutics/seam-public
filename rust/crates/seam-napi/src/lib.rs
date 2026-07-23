@@ -778,6 +778,7 @@ pub fn reset_caches(repo: Option<String>) {
     seam_resolve::Workspace::reset(r);
     seam_resolve::CallsiteIndex::reset(r);
     seam_resolve::InterfaceIndex::reset(r);
+    seam_resolve::reset_file_ref_index(r);
     seam_couple::reset(r);
     seam_grow::reset(r);
     seam_cache::reset(r);

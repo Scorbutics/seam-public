@@ -8,7 +8,7 @@ pub mod file_ref;
 pub mod interface_index;
 
 pub use callsite_index::CallsiteIndex;
-pub use file_ref::{is_path_literal, resolve_file_ref};
+pub use file_ref::{file_referencers, is_path_literal, reset_file_ref_index, resolve_file_ref};
 pub use interface_index::{Impl, InterfaceIndex};
 pub use consumers::{Consumer, Status};
 
