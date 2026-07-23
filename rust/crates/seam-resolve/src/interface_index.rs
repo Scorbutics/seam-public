@@ -29,7 +29,11 @@ impl InterfaceIndex {
         if let Some(idx) = CACHE.lock().unwrap().get(repo) {
             return idx.clone();
         }
+        let t = std::time::Instant::now();
         let idx = Arc::new(Self::build(repo));
+        if std::env::var("SEAM_PERF").is_ok() {
+            eprintln!("[perf] interface_index build {:.2}s", t.elapsed().as_secs_f64());
+        }
         CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
         idx
     }

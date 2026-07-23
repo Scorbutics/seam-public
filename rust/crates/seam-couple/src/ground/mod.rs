@@ -57,10 +57,14 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     if let Some(hit) = CACHE.lock().unwrap().get(repo) {
         return hit.clone();
     }
+    let t = std::time::Instant::now();
     let mut contribs = floor::floor_contributions(repo);
     contribs.extend(floor::jpa_wrapper_contributions(repo));
     let (shared, param) = floor::merge_floor(&contribs);
     let floor_base = merge_grounding(&[&shared, &param]);
+    if std::env::var("SEAM_PERF").is_ok() {
+        eprintln!("[perf] floor_indices build {:.2}s", t.elapsed().as_secs_f64());
+    }
     let idx = Arc::new(FloorIndices { shared, param, floor_base });
     CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
     idx

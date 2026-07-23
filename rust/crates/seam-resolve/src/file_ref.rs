@@ -57,6 +57,7 @@ fn file_ref_index(repo: &str) -> Arc<RefIndex> {
     if let Some(i) = REF_INDEX.lock().unwrap().get(repo) {
         return i.clone();
     }
+    let _t = std::time::Instant::now();
     let mut idx: RefIndex = std::collections::HashMap::new();
     for rel in seam_fs::source_files(repo, |r| seam_lang::provider_for(r).is_some()) {
         let Ok(text) = std::fs::read_to_string(format!("{repo}/{rel}")) else { continue };
@@ -75,6 +76,9 @@ fn file_ref_index(repo: &str) -> Arc<RefIndex> {
                 }
             }
         }
+    }
+    if std::env::var("SEAM_PERF").is_ok() {
+        eprintln!("[perf] file_ref_index build {:.2}s", _t.elapsed().as_secs_f64());
     }
     let arc = Arc::new(idx);
     REF_INDEX.lock().unwrap().insert(repo.to_string(), arc.clone());

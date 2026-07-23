@@ -46,7 +46,11 @@ impl Workspace {
         if let Some(ws) = CACHE.lock().unwrap().get(repo) {
             return ws.clone();
         }
+        let t = std::time::Instant::now();
         let ws = Arc::new(Self::new(repo));
+        if std::env::var("SEAM_PERF").is_ok() {
+            eprintln!("[perf] workspace(import_index) build {:.2}s", t.elapsed().as_secs_f64());
+        }
         CACHE.lock().unwrap().insert(repo.to_string(), ws.clone());
         ws
     }
