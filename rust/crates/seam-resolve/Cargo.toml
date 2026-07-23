@@ -11,4 +11,5 @@ once_cell = { workspace = true }
 regex = { workspace = true }
 serde = { workspace = true }
 bincode = { workspace = true }
+rayon = { workspace = true }
 seam-fs = { path = "../seam-fs" }

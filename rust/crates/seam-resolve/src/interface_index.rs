@@ -101,18 +101,29 @@ impl InterfaceIndex {
             }
         };
 
-        for rel in seam_fs::source_files(repo, |r| provider_for(r).is_some()) {
-            let Some(provider) = provider_for(&rel) else { continue };
-            let Some(text) = read_text(repo, &rel) else { continue };
-            // PARSE PRE-GATE (language keywords): skip a file that can't declare an interface/implements. `[]`
-            // markers (Ruby) skip every file; Java/TS skip unless the keyword is textually present.
-            let markers = provider.impl_markers();
-            if !markers.iter().any(|m| text.contains(m)) {
-                continue;
-            }
-            let Some(grammar) = grammar_for(&rel) else { continue };
-            let Some(ctx) = Ctx::parse(&text, grammar) else { continue };
-            let contrib = ast::impl_contribution(&ctx);
+        use rayon::prelude::*;
+        // Parse each candidate file in PARALLEL (the cold cost), then MERGE sequentially in source_files (walk)
+        // order so interfaces/impls/accessors are byte-identical to the sequential build. The cheap textual
+        // PARSE PRE-GATE stays inside the parallel map so only impl-bearing files actually parse.
+        let files = seam_fs::source_files(repo, |r| provider_for(r).is_some());
+        let per_file: Vec<Option<ast::ImplContribution>> = files
+            .par_iter()
+            .map(|rel| {
+                let provider = provider_for(rel)?;
+                let text = read_text(repo, rel)?;
+                // PARSE PRE-GATE (language keywords): skip a file that can't declare an interface/implements. `[]`
+                // markers (Ruby) skip every file; Java/TS skip unless the keyword is textually present.
+                let markers = provider.impl_markers();
+                if !markers.iter().any(|m| text.contains(m)) {
+                    return None;
+                }
+                let grammar = grammar_for(rel)?;
+                let ctx = Ctx::parse(&text, grammar)?;
+                Some(ast::impl_contribution(&ctx))
+            })
+            .collect();
+        for (rel, contrib) in files.iter().zip(per_file) {
+            let Some(contrib) = contrib else { continue };
             for itf in contrib.interfaces {
                 interfaces.insert(itf);
             }

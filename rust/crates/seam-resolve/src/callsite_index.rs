@@ -87,25 +87,31 @@ impl CallsiteIndex {
     }
 
     pub fn build(repo: &str) -> Self {
+        use rayon::prelude::*;
+        // Parse each file in PARALLEL (tree-sitter parse is the cold cost; each Ctx::parse owns its parser), then
+        // MERGE sequentially in source_files (walk) order so `callers` push-order and `bases` last-write-wins are
+        // byte-identical to the sequential build. Per-file compute is independent (no shared state).
+        let files = seam_fs::source_files(repo, |r| provider_for(r).is_some());
+        let per_file: Vec<Option<(Vec<String>, Vec<(String, Vec<String>)>)>> = files
+            .par_iter()
+            .map(|rel| {
+                provider_for(rel)?;
+                let text = read_text(repo, rel)?;
+                // Parse with the file's GRAMMAR (grammar_for: .tsx→tsx, .js→javascript, …), only when vendored;
+                // others contribute nothing (as in TS when makeCtx fails).
+                let grammar = grammar_for(rel)?;
+                let ctx = Ctx::parse(&text, grammar)?;
+                Some((ast::called_method_names(&ctx), ast::class_bases(&ctx)))
+            })
+            .collect();
         let mut callers: HashMap<String, Vec<String>> = HashMap::new();
         let mut bases: HashMap<String, Vec<String>> = HashMap::new();
-        for rel in seam_fs::source_files(repo, |r| provider_for(r).is_some()) {
-            let Some(_provider) = provider_for(&rel) else {
-                continue;
-            };
-            let Some(text) = read_text(repo, &rel) else {
-                continue;
-            };
-            // Parse with the file's GRAMMAR (grammar_for: .tsx→tsx, .js→javascript, …), only when it's vendored;
-            // others contribute nothing (as in TS when makeCtx fails).
-            let Some(grammar) = grammar_for(&rel) else { continue };
-            let Some(ctx) = Ctx::parse(&text, grammar) else {
-                continue;
-            };
-            for m in ast::called_method_names(&ctx) {
+        for (rel, contrib) in files.iter().zip(per_file) {
+            let Some((methods, class_bases)) = contrib else { continue };
+            for m in methods {
                 callers.entry(m).or_default().push(rel.clone());
             }
-            for (cls, bs) in ast::class_bases(&ctx) {
+            for (cls, bs) in class_bases {
                 bases.insert(cls, bs); // last write wins (walk order), like TS `bases.set`
             }
         }

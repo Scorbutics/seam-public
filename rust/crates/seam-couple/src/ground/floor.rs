@@ -103,17 +103,21 @@ pub fn merge_floor(contribs: &[(String, FloorContribution)]) -> (GroundingIndex,
 /// Every file's raw floor contribution, plain walk (memoization is the caller's, in `mod`). Port of
 /// `floorContributions` (non-incremental path).
 pub fn floor_contributions(repo: &str) -> Vec<(String, FloorContribution)> {
+    use rayon::prelude::*;
     let cap = max_scan_bytes();
-    let mut out = Vec::new();
-    for rel in seam_fs::source_files(repo, scannable_for_keys) {
-        let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { continue };
-        if cap > 0 && bytes.len() > cap {
-            continue; // oversized (minified/generated) — memory-safe skip
-        }
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        out.push((rel.clone(), scan_floor_file(&rel, &text)));
-    }
-    out
+    // Scan each file in PARALLEL (the per-file adapter + param pass is the cold cost); rayon's filter_map keeps
+    // source_files (walk) order, so the downstream order-stable merge_floor stays byte-identical.
+    seam_fs::source_files(repo, scannable_for_keys)
+        .par_iter()
+        .filter_map(|rel| {
+            let bytes = std::fs::read(format!("{repo}/{rel}")).ok()?;
+            if cap > 0 && bytes.len() > cap {
+                return None; // oversized (minified/generated) — memory-safe skip
+            }
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            Some((rel.clone(), scan_floor_file(rel, &text)))
+        })
+        .collect()
 }
 
 /// JPA persistence-WRAPPER contributions — repo-wide (a `mgr.customSave(entity)` grounds because `mgr` resolves
@@ -127,17 +131,22 @@ pub fn jpa_wrapper_contributions(repo: &str) -> Vec<(String, FloorContribution)>
         return Vec::new();
     }
     let cap = max_scan_bytes();
-    let mut out = Vec::new();
-    for rel in seam_fs::repo_files(repo, ".java") {
-        let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { continue };
-        if cap > 0 && bytes.len() > cap {
-            continue;
-        }
-        let text = String::from_utf8_lossy(&bytes).into_owned();
-        let keys = jpa_wrapper_keys(&text, &idx);
-        if !keys.is_empty() {
-            out.push((rel, FloorContribution { keys, const_decls: Vec::new(), sites: Vec::new() }));
-        }
-    }
-    out
+    use rayon::prelude::*;
+    // Parallel per-file scan (jpa_wrapper_keys is independent, idx is shared read-only); filter_map keeps walk
+    // order, so the downstream merge is byte-identical.
+    seam_fs::repo_files(repo, ".java")
+        .par_iter()
+        .filter_map(|rel| {
+            let bytes = std::fs::read(format!("{repo}/{rel}")).ok()?;
+            if cap > 0 && bytes.len() > cap {
+                return None;
+            }
+            let text = String::from_utf8_lossy(&bytes).into_owned();
+            let keys = jpa_wrapper_keys(&text, &idx);
+            if keys.is_empty() {
+                return None;
+            }
+            Some((rel.clone(), FloorContribution { keys, const_decls: Vec::new(), sites: Vec::new() }))
+        })
+        .collect()
 }
