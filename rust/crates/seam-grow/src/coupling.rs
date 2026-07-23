@@ -5,6 +5,7 @@
 //!
 //! Reuses the already byte-identical `seam_couple::resolve_coupling` + `seam_scan::attach::chain_route_consumers`.
 
+use rayon::prelude::*;
 use seam_couple::resolve_coupling_scoped;
 use seam_fs::normpath;
 use seam_lang::ast::{enclosing, method_precise_index, Unit};
@@ -235,8 +236,15 @@ pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled:
         return;
     }
     let mut overlay = Delta { nodes: Vec::new(), edges: Vec::new(), blindspots: Vec::new(), counter };
-    for w in &work {
-        let d = file_coupling_delta(repo, &w.file, &w.anchor_id, w.src_range, &w.file_nodes, counter, ws, stable_floor);
+    // PARALLEL: the counter-INDEPENDENT per-file compute (resolve_coupling + chain_route at counter 0, + the
+    // mp-index parse) — the ~205s cold fan, spread across cores. Each file is independent; ws is shared read-only.
+    let computed: Vec<Option<(Delta, Option<seam_lang::ast::MpIndex>)>> =
+        work.par_iter().map(|w| fan_compute(repo, &w.file, w.src_range, &w.file_nodes, ws, stable_floor)).collect();
+    // SEQUENTIAL: rehydrate each with the running counter in file order → id assignment byte-identical to the
+    // old sequential fan (the compute is counter-0-normalised, so parallel-compute + in-order rehydrate is exact).
+    for (w, c) in work.iter().zip(computed) {
+        let Some(compute) = c else { continue };
+        let d = fan_rehydrate(compute, &w.anchor_id, w.src_range, &w.file_nodes, &w.file, counter);
         if d.nodes.is_empty() {
             continue;
         }
@@ -267,12 +275,14 @@ fn route_boundary(repo: &str, n: &GraphNode, cache: &mut HashMap<String, Vec<usi
     hits.iter().any(|&l| l >= n.range.0 && l <= n.range.1)
 }
 
-/// Couple ONE reached file whole-file (placeholder-sourced delta), then re-attribute its crossings method-
-/// precise. Port of `_fileCouplingDelta` (the default cache-on, method-precise path).
-fn file_coupling_delta(repo: &str, file: &str, anchor_id: &str, src_range: (usize, usize), file_nodes: &[(String, (usize, usize))], counter: usize, ws: &Workspace, stable_floor: bool) -> Delta {
-    let Some((text, lang)) = read(repo, file) else {
-        return Delta { nodes: Vec::new(), edges: Vec::new(), blindspots: Vec::new(), counter };
-    };
+/// The counter-INDEPENDENT compute for ONE fan file: read + the cached whole-file coupling delta (compute_delta
+/// at counter 0 — the ~1s/file cold cost) + the cached method-precise parse. Pure per-file (⊕ footprint ranges ⊕
+/// coupling epoch), so the fan runs this in PARALLEL across cores; the caller `fan_couple` rehydrates each with
+/// the running counter SEQUENTIALLY (id assignment stays byte-identical). `None` = unreadable file (the old
+/// path's empty delta → skipped anyway). ws is shared read-only (Workspace is Sync — Mutex, not RefCell). Split
+/// out of the former `_fileCouplingDelta` (compute half).
+fn fan_compute(repo: &str, file: &str, src_range: (usize, usize), file_nodes: &[(String, (usize, usize))], ws: &Workspace, stable_floor: bool) -> Option<(Delta, Option<seam_lang::ast::MpIndex>)> {
+    let (text, lang) = read(repo, file)?;
     let hi = text.matches('\n').count();
     // footprint-membership prioritisation: expose the reached method ranges so the per-node key cap keeps them.
     let mut fp: Vec<(usize, usize)> = file_nodes.iter().map(|(_, r)| *r).collect();
@@ -310,6 +320,13 @@ fn file_coupling_delta(repo: &str, file: &str, anchor_id: &str, src_range: (usiz
     let mp: Option<seam_lang::ast::MpIndex> =
         seam_cache::cached(repo, "mp-index-v1", file, &seam_cache::hash(&text), "mp", || Ctx::parse(&text, &lang).map(|c| method_precise_index(&c)));
     MP_NS.fetch_add(_tm.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    Some((cached, mp))
+}
+
+/// Rehydrate one fan file's counter-0 `compute` (from `fan_compute`) at the running `counter` — the SEQUENTIAL
+/// half (id assignment). Method-precise when the file parsed, else the flat rehydrate.
+fn fan_rehydrate(compute: (Delta, Option<seam_lang::ast::MpIndex>), anchor_id: &str, src_range: (usize, usize), file_nodes: &[(String, (usize, usize))], file: &str, counter: usize) -> Delta {
+    let (cached, mp) = compute;
     let _tr = std::time::Instant::now();
     let out = match mp {
         Some(mp) => rehydrate_fan_delta_method_precise(cached, anchor_id, Some(src_range), file_nodes, file, &mp.units, &mp.calls, counter),

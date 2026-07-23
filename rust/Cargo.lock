@@ -370,6 +370,7 @@ version = "0.0.0"
 dependencies = [
  "indexmap",
  "once_cell",
+ "rayon",
  "seam-cache",
  "seam-couple",
  "seam-fs",

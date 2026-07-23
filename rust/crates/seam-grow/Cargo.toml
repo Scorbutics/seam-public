@@ -13,4 +13,5 @@ seam-couple = { path = "../seam-couple" }
 seam-scan = { path = "../seam-scan" }
 seam-fs = { path = "../seam-fs" }
 serde = { workspace = true }
+rayon = { workspace = true }
 seam-cache = { path = "../seam-cache" }
