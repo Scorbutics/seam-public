@@ -5,9 +5,11 @@
 
 use once_cell::sync::Lazy;
 use seam_lang::{ast, grammar_for, provider_for, Ctx};
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+#[derive(Serialize, Deserialize)]
 pub struct CallsiteIndex {
     callers: HashMap<String, Vec<String>>,
     bases: HashMap<String, Vec<String>>,
@@ -25,12 +27,51 @@ impl CallsiteIndex {
         if let Some(idx) = CACHE.lock().unwrap().get(repo) {
             return idx.clone();
         }
+        let idx = Arc::new(Self::load_or_build(repo));
+        CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+        idx
+    }
+
+    fn shard(repo: &str, epoch: &str) -> String {
+        format!("{repo}/.seam/rust/callsite-index-v1/{epoch}.bin")
+    }
+
+    /// DISK-persisted (per-repo content epoch): a fresh process LOADS the index via DIRECT bincode (no
+    /// serde_json Value round-trip) instead of re-parsing the whole repo. A near center has the same epoch →
+    /// disk HIT; any source edit bumps the epoch (a new filename) → rebuild.
+    fn load_or_build(repo: &str) -> Self {
+        let perf = std::env::var("SEAM_PERF").is_ok();
+        let epoch = seam_cache::epoch_of(repo);
+        if !epoch.is_empty() {
+            let t = std::time::Instant::now();
+            if let Ok(bytes) = std::fs::read(Self::shard(repo, &epoch)) {
+                if let Ok(idx) = bincode::deserialize::<CallsiteIndex>(&bytes) {
+                    if perf {
+                        eprintln!("[perf] callsite_index LOAD {:.2}s ({} KB)", t.elapsed().as_secs_f64(), bytes.len() / 1024);
+                    }
+                    return idx;
+                }
+            }
+        }
         let t = std::time::Instant::now();
-        let idx = Arc::new(Self::build(repo));
-        if std::env::var("SEAM_PERF").is_ok() {
+        let idx = Self::build(repo);
+        if perf {
             eprintln!("[perf] callsite_index build {:.2}s", t.elapsed().as_secs_f64());
         }
-        CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+        if !epoch.is_empty() {
+            let dir = format!("{repo}/.seam/rust/callsite-index-v1");
+            let _ = std::fs::create_dir_all(&dir);
+            if let Ok(rd) = std::fs::read_dir(&dir) {
+                for e in rd.flatten() {
+                    if e.file_name().to_string_lossy() != format!("{epoch}.bin") {
+                        let _ = std::fs::remove_file(e.path());
+                    }
+                }
+            }
+            if let Ok(bytes) = bincode::serialize(&idx) {
+                let _ = std::fs::write(Self::shard(repo, &epoch), bytes);
+            }
+        }
         idx
     }
 

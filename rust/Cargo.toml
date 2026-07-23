@@ -22,6 +22,7 @@ regex = "1"
 indexmap = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bincode = "1"
 rayon = "1"
 sha1 = "0.10"
 tree-sitter = "0.25"

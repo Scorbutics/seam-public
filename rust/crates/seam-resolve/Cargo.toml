@@ -6,6 +6,9 @@ publish.workspace = true
 
 [dependencies]
 seam-lang = { path = "../seam-lang" }
+seam-cache = { path = "../seam-cache" }
 once_cell = { workspace = true }
 regex = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }
 seam-fs = { path = "../seam-fs" }
