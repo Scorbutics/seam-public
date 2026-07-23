@@ -21,6 +21,7 @@ mod member_access;
 mod raw_sql;
 mod vue_inject;
 
+static SUPABASE: db_table::Supabase = db_table::Supabase;
 static RAW_SQL: raw_sql::RawSql = raw_sql::RawSql;
 static ACTIVE_RECORD: active_record::ActiveRecord = active_record::ActiveRecord;
 static JOOQ: jooq::Jooq = jooq::Jooq;
@@ -34,11 +35,12 @@ static VUE_INJECT: vue_inject::VueInject = vue_inject::VueInject;
 static MEMBER_ACCESS: member_access::MemberAccess = member_access::MemberAccess;
 
 /// Every registered framework adapter, in the TS `ADAPTERS` order (so `scan_file_keys` is byte-identical).
-/// Framework-specific code lives ONLY in these modules. NB: SUPABASE (registry slot 0) is DEFERRED — it grounds
-/// query-builder `.from(t).verb` table access via the language provider's `table_access`, not yet ported; it
-/// emits nothing on a non-query-builder repo, so its absence is byte-identical there (e.g. Keycloak).
+/// Framework-specific code lives ONLY in these modules. SUPABASE is registry slot 0: it grounds query-builder
+/// `.from(t).verb` table access via the language provider's `table_access`, which no language implements (the
+/// TS hook is unimplemented everywhere) — so it emits nothing on every repo, byte-identical, but it is
+/// registered FIRST to match the TS order and appear in the adapter catalogue.
 static ADAPTERS: &[&dyn CouplingAdapter] =
-    &[&RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_ROUTE, &HTTP_EGRESS, &ENDPOINT_MAP, &ANNOTATION_ROUTE, &FILE_CHANNEL, &VUE_INJECT, &MEMBER_ACCESS];
+    &[&SUPABASE, &RAW_SQL, &ACTIVE_RECORD, &JOOQ, &JPA_ENTITY, &HTTP_ROUTE, &HTTP_EGRESS, &ENDPOINT_MAP, &ANNOTATION_ROUTE, &FILE_CHANNEL, &VUE_INJECT, &MEMBER_ACCESS];
 
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.

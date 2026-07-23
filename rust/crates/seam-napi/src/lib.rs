@@ -847,6 +847,13 @@ pub fn adapter_keys(name: String, path: String, text: String) -> Vec<Vec<String>
         .collect()
 }
 
+/// The registered coupling-adapter catalogue — `[name, kind, blurb]` rows in registry order (supabase-table
+/// first). Port of listAdapters.
+#[napi]
+pub fn builtin_adapters() -> Vec<Vec<String>> {
+    seam_couple::builtin_adapters().into_iter().map(|(name, kind, blurb)| vec![name.to_string(), kind.to_string(), blurb.to_string()]).collect()
+}
+
 /// The deterministic coupling FLOOR — all registered adapters' key hits over a file (plausibility-filtered),
 /// as `[kind, value, line, produces, op, label, method, recv]` rows. Port of scan_file_keys.
 #[napi]

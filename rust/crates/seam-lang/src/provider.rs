@@ -76,6 +76,14 @@ pub trait LanguageProvider: Send + Sync {
         let _ = (text, local, symbol);
         None
     }
+    /// Query-builder table accesses (`.from('t').verb`) — Supabase/PostgREST/Knex. The syntactic-shape
+    /// extraction was never wired to any language (the TS `tableAccess` hook is unimplemented everywhere), so
+    /// the default — and every provider — returns none. Kept as the seam for future query-builder support.
+    /// Port of the optional `tableAccess` provider hook.
+    fn table_access(&self, text: &str) -> Vec<crate::types::TableAccess> {
+        let _ = text;
+        Vec::new()
+    }
 }
 
 pub trait ModuleResolver: Send + Sync {

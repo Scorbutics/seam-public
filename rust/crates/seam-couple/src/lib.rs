@@ -15,7 +15,7 @@ pub mod key_ir;
 pub mod mask;
 pub mod types;
 
-pub use adapters::{adapter_keys, is_produce_edge, scan_file_keys};
+pub use adapters::{adapter_keys, builtin_adapters, is_produce_edge, scan_file_keys};
 pub use apply::semantics::{is_coupling_crossing, is_flow_subject, is_handler_edge};
 pub use apply::{resolve_coupling, resolve_coupling_scoped, CouplingResult};
 pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};

@@ -31,3 +31,12 @@ pub struct DefaultImport {
     pub source: String,
     pub line: u32,
 }
+
+/// One query-builder table access (`.from('t').verb`) — Supabase/PostgREST/Knex. The LANGUAGE provider
+/// extracts the syntactic shape; the db-table adapter owns the verb SEMANTICS. Port of `TableAccess`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TableAccess {
+    pub table: String,
+    pub verb: String,
+    pub line: usize,
+}

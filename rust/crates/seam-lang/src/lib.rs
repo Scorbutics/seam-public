@@ -15,7 +15,7 @@ mod typescript;
 pub use provider::{LanguageProvider, ModuleResolver, NullResolver};
 pub use treesitter::Ctx;
 pub use tree_sitter::Node;
-pub use types::{DefaultImport, ImportRef, NamespaceImport};
+pub use types::{DefaultImport, ImportRef, NamespaceImport, TableAccess};
 
 static PROVIDERS: &[&dyn LanguageProvider] = &[&java::JAVA, &typescript::TYPESCRIPT, &ruby::RUBY];
 
@@ -53,6 +53,12 @@ pub fn is_module_entry(file: &str) -> bool {
 /// of `entrypoint_line`.
 pub fn entrypoint_line(file: &str, ctx: &Ctx) -> usize {
     provider_for(file).and_then(|p| p.entrypoint(ctx)).unwrap_or(0)
+}
+
+/// Query-builder table accesses (`.from('t').verb`) in `file` — dispatched to its language provider. No
+/// language implements the hook, so this returns empty everywhere (byte-identical to TS `table_access`).
+pub fn table_access(file: &str, text: &str) -> Vec<TableAccess> {
+    provider_for(file).map(|p| p.table_access(text)).unwrap_or_default()
 }
 
 pub fn grammar_for(path: &str) -> Option<&'static str> {
