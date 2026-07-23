@@ -98,12 +98,22 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
     let next = &mv.node;
     let down = mv.dir == Dir::Down;
     let caller_files = caller_files_for(data, next, down);
+    // PER-NODE FOOTPRINT CACHE (docs/GRAPH_CACHE.md P3): cache the structural build per (file, symbol, dir, line),
+    // keyed on the SOURCE epoch — EXCEPT a class/interface DOWN footprint with caller_files (it varies by the
+    // reaching callers). `anchor_line` is folded into the key so same-named siblings never conflate. Prune AFTER
+    // the cache (the cached value is the pristine build; the caller mutates its own copy).
+    let epoch = seam_cache::epoch_of(repo);
+    let dir_s = if down { "down" } else { "up" };
+    let no_callers = caller_files.as_ref().map_or(true, |c| c.is_empty());
+    let cache_key = format!("{}|{}|{}", next.symbol, dir_s, next.range.0);
     let built: Option<ResolvedGraph> = if down {
-        let mut g = build_dependency_graph(repo, &next.file, &next.symbol, &DepOpts { anchor_line: Some(next.range.0), caller_files, data_coupling: false });
+        let build = || build_dependency_graph(repo, &next.file, &next.symbol, &DepOpts { anchor_line: Some(next.range.0), caller_files: caller_files.clone(), data_coupling: false });
+        let mut g = if no_callers { seam_cache::cached(repo, "footprint-v1", &next.file, &cache_key, &epoch, build) } else { build() };
         ex.prune(&mut g);
         Some(g)
     } else {
-        build_consumers_graph(repo, &next.file, &next.symbol, &ConsumersOpts { anchor_line: Some(next.range.0), skip_callsite: false, data_coupling: false }).map(|mut g| {
+        let build = || build_consumers_graph(repo, &next.file, &next.symbol, &ConsumersOpts { anchor_line: Some(next.range.0), skip_callsite: false, data_coupling: false });
+        seam_cache::cached::<Option<ResolvedGraph>, _>(repo, "footprint-v1", &next.file, &cache_key, &epoch, build).map(|mut g| {
             ex.prune(&mut g);
             g
         })
@@ -480,6 +490,14 @@ fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only:
 /// only (intent/embeddings are render-time). Port of `_growToTerminalsImpl` (the structuralGrow, dataCoupling
 /// path — no border-coupling-det [needs intent], no P5 answer-cache [a perf memo]). Returns the grown footprint.
 pub fn grow_to_terminals(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
+    // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run skips the wave.
+    // The COUPLING epoch guards a coupling grow (folds the learned-matcher state); the SOURCE epoch a structural.
+    let epoch = if data_coupling { seam_cache::coupling_epoch_of(repo) } else { seam_cache::epoch_of(repo) };
+    let key = seam_cache::hash(&format!("{symbol}|{data_coupling}|{}|{}|{}", opts.max_steps, opts.max_nodes, seam_cache::seam_env_snapshot()));
+    seam_cache::cached(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts))
+}
+
+fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
     let ex = Exclusion::new(&[], false);
     let mut data = crate::seed::phase_seed(repo, anchor_file, symbol, &ex)?;
     let ws = seam_resolve::Workspace::cached(repo);

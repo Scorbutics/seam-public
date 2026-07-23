@@ -1,9 +1,10 @@
 //! The footprint graph types — port of scan/graph.ts. A `ResolvedGraph` is what a footprint builder returns.
+use serde::{Deserialize, Serialize};
 
 /// A COLLAPSED hub node: it STAYS in the region with its fan count + a handful of sample consumers instead of
 /// expanding its off-intent fan across the codebase (I3 — collapse, never silently drop). Deterministic. Port
 /// of `HubMarker`.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HubMarker {
     pub reason: String, // "ubiquity" | "fan" | "type"
     pub fan: usize,
@@ -11,7 +12,7 @@ pub struct HubMarker {
 }
 
 /// A node in a footprint (a function/method/class/module, or a coupling boundary).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
     pub symbol: String,
@@ -29,7 +30,7 @@ pub struct GraphNode {
 }
 
 /// An edge wiring two nodes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
@@ -43,7 +44,7 @@ pub struct GraphEdge {
 /// A candidate attached to a blindspot. `symbol` always set; `file`/`provenance` set by the dependency/
 /// coupling shapes (an unresolved import, an ambiguous dispatch, a multi-impl interface). Port of the varied
 /// `candidates` shapes.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
     pub symbol: String,
     pub file: Option<String>,
@@ -52,7 +53,7 @@ pub struct Candidate {
 
 /// An edge the engine SEES but won't draw as resolved (unresolved import, ambiguous dispatch, …) — surfaced
 /// for review. Port of `Blindspot`. `persists` marks a DI wall hiding a real db-store write.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Blindspot {
     pub node: String,
     pub mechanism: String,
@@ -62,7 +63,7 @@ pub struct Blindspot {
 }
 
 /// A query the engine couldn't resolve statically — a lead for the LSP/extension layer. Port of `Unresolved`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unresolved {
     pub node: String,
     pub query: String,
@@ -72,7 +73,7 @@ pub struct Unresolved {
 /// A tier-3 decision point: a node whose fan the wave declined (off-spine up-climb / budget), kept in the
 /// region + surfaced as a ranked handle the caller can deepen from (I3 — never silently cut). Port of
 /// `FrontierPoint`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FrontierPoint {
     pub id: String,
     pub symbol: String,
@@ -84,7 +85,7 @@ pub struct FrontierPoint {
 }
 
 /// The footprint contract (the fields a footprint builder populates; scalars are constant here).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedGraph {
     pub anchor_id: String,
     pub anchor_symbol: String,

@@ -8,6 +8,7 @@ publish.workspace = true
 once_cell = { workspace = true }
 regex = { workspace = true }
 tree-sitter = { workspace = true }
+serde = { workspace = true }
 serde_json = { version = "1", features = ["preserve_order"] }
 seam-fs = { path = "../seam-fs" }
 

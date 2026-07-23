@@ -1,13 +1,14 @@
 //! Language-agnostic AST extractors over a `Ctx`, driven by the node-kind registry (port of the shared
 //! helpers in ast_units.ts / ast_class.ts). These are the substrate the callsite graph is built on.
 
+use serde::{Deserialize, Serialize};
 use crate::node_kinds as nk;
 use crate::treesitter::Ctx;
 use std::collections::{HashMap, HashSet};
 use tree_sitter::Node;
 
 /// A named code unit (function / method / class): (name, kind, start line, end line). Port of `Unit`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unit {
     pub name: String,
     pub kind: String,
@@ -352,6 +353,7 @@ pub fn enclosing_class(units: &[Unit], start: usize, end: usize) -> String {
 /// The method-precise index: the file's named units + a map of bare-callee name → the lines that call it
 /// (a call node whose first child is an identifier). Feeds the grow's method-precise fan attribution. Port of
 /// `methodPreciseIndex`.
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MpIndex {
     pub units: Vec<Unit>,
     pub calls: std::collections::HashMap<String, Vec<usize>>,

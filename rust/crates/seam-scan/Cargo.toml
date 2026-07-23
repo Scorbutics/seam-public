@@ -11,3 +11,4 @@ seam-lang = { path = "../seam-lang" }
 seam-resolve = { path = "../seam-resolve" }
 seam-couple = { path = "../seam-couple" }
 seam-fs = { path = "../seam-fs" }
+serde = { workspace = true }

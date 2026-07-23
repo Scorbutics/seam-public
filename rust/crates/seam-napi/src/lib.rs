@@ -780,6 +780,7 @@ pub fn reset_caches(repo: Option<String>) {
     seam_resolve::InterfaceIndex::reset(r);
     seam_couple::reset(r);
     seam_grow::reset(r);
+    seam_cache::reset(r);
 }
 
 /// One file's cross-module fan-in. Parity wire form for `ubiquityIndex`.

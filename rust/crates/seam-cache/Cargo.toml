@@ -1,0 +1,12 @@
+[package]
+name = "seam-cache"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+once_cell = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+seam-fs = { path = "../seam-fs" }
+seam-lang = { path = "../seam-lang" }

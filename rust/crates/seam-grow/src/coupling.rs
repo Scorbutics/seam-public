@@ -18,6 +18,7 @@ use std::collections::{HashMap, HashSet};
 const FAN_SRC: &str = "__FANSRC__";
 
 /// A coupling overlay increment — the delta the merge folds onto the settled footprint.
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Delta {
     pub nodes: Vec<GraphNode>,
     pub edges: Vec<GraphEdge>,
@@ -240,11 +241,12 @@ fn file_coupling_delta(repo: &str, file: &str, anchor_id: &str, src_range: (usiz
     let cached = compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws);
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the enclosing method within
     // the reached node's same-file call closure. Degrade to the flat rehydrate when the file won't parse.
-    match Ctx::parse(&text, &lang) {
-        Some(ctx) => {
-            let mp = method_precise_index(&ctx);
-            rehydrate_fan_delta_method_precise(cached, anchor_id, Some(src_range), file_nodes, file, &mp.units, &mp.calls, counter)
-        }
+    // The method-precise INDEX (tree-sitter parse → units + call map) is a PURE function of the file bytes, so
+    // cache it per content-hash — a warm grow skips the parse (the O(footprint) warm cost). Port of cachedMPIndex.
+    let mp: Option<seam_lang::ast::MpIndex> =
+        seam_cache::cached(repo, "mp-index-v1", file, &seam_cache::hash(&text), "mp", || Ctx::parse(&text, &lang).map(|c| method_precise_index(&c)));
+    match mp {
+        Some(mp) => rehydrate_fan_delta_method_precise(cached, anchor_id, Some(src_range), file_nodes, file, &mp.units, &mp.calls, counter),
         None => rehydrate_fan_delta(cached, anchor_id, counter),
     }
 }

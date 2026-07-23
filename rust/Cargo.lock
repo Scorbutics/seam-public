@@ -267,6 +267,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "seam-cache"
+version = "0.0.0"
+dependencies = [
+ "once_cell",
+ "seam-fs",
+ "seam-lang",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "seam-couple"
 version = "0.0.0"
 dependencies = [
@@ -294,11 +305,13 @@ version = "0.0.0"
 dependencies = [
  "indexmap",
  "once_cell",
+ "seam-cache",
  "seam-couple",
  "seam-fs",
  "seam-lang",
  "seam-resolve",
  "seam-scan",
+ "serde",
 ]
 
 [[package]]
@@ -309,6 +322,7 @@ dependencies = [
  "once_cell",
  "regex",
  "seam-fs",
+ "serde",
  "serde_json",
  "tree-sitter",
 ]
@@ -320,6 +334,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
+ "seam-cache",
  "seam-couple",
  "seam-fs",
  "seam-grow",
@@ -350,6 +365,7 @@ dependencies = [
  "seam-fs",
  "seam-lang",
  "seam-resolve",
+ "serde",
 ]
 
 [[package]]
