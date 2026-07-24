@@ -14,6 +14,18 @@ static GENERIC_KEY: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     .collect()
 });
 
+/// Canonicalise a matcher's kind: route/endpoint/http/url/path → "http-route"; else the lowercased-trimmed kind
+/// or "key" when empty. Port of `_canonKind` / `_KIND_ALIASES`.
+pub fn canon_kind(k: &str) -> String {
+    let t = k.to_lowercase();
+    let t = t.trim();
+    match t {
+        "route" | "endpoint" | "http" | "url" | "path" => "http-route".to_string(),
+        "" => "key".to_string(),
+        other => other.to_string(),
+    }
+}
+
 /// The 0-based line at BYTE offset `byte` in `text` (count of `\n` before it — invariant across byte/char/
 /// UTF-16, so this matches TS `lineOf`). `byte` must be a char boundary (regex match offsets always are).
 /// Port of `lineOf`.

@@ -11,43 +11,115 @@ use crate::types::KeyHit;
 use crate::verb_class::write_op;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-/// A learned key-adapter rule — the persisted shapes the flywheel synthesises. Port of `KeyMatcher`. Extra JSON
-/// fields (name/description) are ignored.
-#[derive(Clone, Debug, Deserialize)]
+// `#[serde(default, skip_serializing_if)]` for the cosmetic round-trip fields (name/description) + the optional
+// shape fields (strip/element) — so a WRITE emits exactly what TS `JSON.stringify` does: the field present when
+// set, omitted when absent, in the TS declaration order (…kind, role, name, description).
+type Opt = Option<String>;
+fn is_none(o: &Opt) -> bool {
+    o.is_none()
+}
+
+/// A learned key-adapter rule — the persisted shapes the flywheel synthesises. Port of `KeyMatcher`. Round-trips:
+/// deserialises the store AND serialises byte-identically to TS (`name`/`description` preserved; field order =
+/// TS `{via, token, …, kind, role, name?, description?}`).
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "via", rename_all = "lowercase")]
 pub enum KeyMatcher {
     Call {
         token: String,
         #[serde(rename = "argIndex")]
         arg_index: i64,
-        #[serde(default)]
-        strip: Option<String>,
+        #[serde(default, skip_serializing_if = "is_none")]
+        strip: Opt,
         kind: String,
         role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
     },
-    Assign { token: String, kind: String, role: String },
-    Method { kind: String, role: String },
+    Assign {
+        token: String,
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
+    Method {
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
     Attr {
         directive: String,
         #[serde(rename = "keyFrom")]
         key_from: String,
         kind: String,
         role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
     },
     Annotation {
         annotation: String,
-        #[serde(default)]
-        element: Option<String>,
+        #[serde(default, skip_serializing_if = "is_none")]
+        element: Opt,
         kind: String,
         role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
     },
-    Member { token: String, verbs: Vec<String>, kind: String, role: String },
-    Repository { token: String, verbs: Vec<String>, kind: String, role: String },
-    Channel { token: String, verbs: Vec<String>, kind: String, role: String },
-    Handle { token: String, verbs: Vec<String>, kind: String, role: String },
+    Member {
+        token: String,
+        verbs: Vec<String>,
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
+    Repository {
+        token: String,
+        verbs: Vec<String>,
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
+    Channel {
+        token: String,
+        verbs: Vec<String>,
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
+    Handle {
+        token: String,
+        verbs: Vec<String>,
+        kind: String,
+        role: String,
+        #[serde(default, skip_serializing_if = "is_none")]
+        name: Opt,
+        #[serde(default, skip_serializing_if = "is_none")]
+        description: Opt,
+    },
 }
 
 #[derive(Deserialize)]
@@ -61,15 +133,15 @@ impl KeyMatcher {
     /// Stable identity for dedup — the shape + distinguishing fields. Port of `matcherKey`.
     pub fn key(&self) -> String {
         match self {
-            KeyMatcher::Call { token, arg_index, strip, kind, role } => format!("call:{kind}:{role}:{token}:{arg_index}:{}", strip.as_deref().unwrap_or("")),
-            KeyMatcher::Assign { token, kind, role } => format!("assign:{kind}:{role}:{token}"),
-            KeyMatcher::Method { kind, role } => format!("method:{kind}:{role}"),
-            KeyMatcher::Attr { directive, key_from, kind, role } => format!("attr:{kind}:{role}:{directive}:{key_from}"),
-            KeyMatcher::Annotation { annotation, element, kind, role } => format!("annotation:{kind}:{role}:{annotation}:{}", element.as_deref().unwrap_or("")),
-            KeyMatcher::Member { token, verbs, kind, role } => format!("member:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
-            KeyMatcher::Repository { token, verbs, kind, role } => format!("repository:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
-            KeyMatcher::Channel { token, verbs, kind, role } => format!("channel:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
-            KeyMatcher::Handle { token, verbs, kind, role } => format!("handle:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
+            KeyMatcher::Call { token, arg_index, strip, kind, role, .. } => format!("call:{kind}:{role}:{token}:{arg_index}:{}", strip.as_deref().unwrap_or("")),
+            KeyMatcher::Assign { token, kind, role, .. } => format!("assign:{kind}:{role}:{token}"),
+            KeyMatcher::Method { kind, role, .. } => format!("method:{kind}:{role}"),
+            KeyMatcher::Attr { directive, key_from, kind, role, .. } => format!("attr:{kind}:{role}:{directive}:{key_from}"),
+            KeyMatcher::Annotation { annotation, element, kind, role, .. } => format!("annotation:{kind}:{role}:{annotation}:{}", element.as_deref().unwrap_or("")),
+            KeyMatcher::Member { token, verbs, kind, role, .. } => format!("member:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
+            KeyMatcher::Repository { token, verbs, kind, role, .. } => format!("repository:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
+            KeyMatcher::Channel { token, verbs, kind, role, .. } => format!("channel:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
+            KeyMatcher::Handle { token, verbs, kind, role, .. } => format!("handle:{kind}:{role}:{token}:{}", sorted_verbs(verbs)),
         }
     }
 
@@ -89,6 +161,209 @@ fn sorted_verbs(verbs: &[String]) -> String {
     let mut v = verbs.to_vec();
     v.sort();
     v.join(",")
+}
+
+// ── validateMatcher — LLM object → KeyMatcher (the gate that keeps a free-text answer from becoming an
+// executable rule unless it fits the closed template). Ports key_ir.ts:validateMatcher byte-for-byte. Rust
+// regex `\w` is Unicode; TS `\w` is ASCII, so the classes are spelled out ASCII. ─────────────────────────
+static TOKEN_OK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_$][A-Za-z0-9_$]*$").unwrap());
+static RECEIVER_OK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_$][A-Za-z0-9_$]*(?:\.[A-Za-z_$][A-Za-z0-9_$]*)*$").unwrap());
+static DIRECTIVE_OK: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[-A-Za-z0-9_@:()\[\]*]{1,24}$").unwrap());
+
+// JS `String(v)` on a DEFINED value (null → "null"). Used for array elements (obj.verbs).
+fn js_string(v: &serde_json::Value) -> String {
+    match v {
+        serde_json::Value::Null => "null".to_string(),
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Number(n) => n.to_string(),
+        serde_json::Value::Bool(b) => b.to_string(),
+        other => other.to_string(),
+    }
+}
+
+// `String(obj.key ?? default)`: null/absent → default, else JS-String the value.
+fn field_or(obj: &serde_json::Value, key: &str, default: &str) -> String {
+    match obj.get(key) {
+        None | Some(serde_json::Value::Null) => default.to_string(),
+        Some(v) => js_string(v),
+    }
+}
+
+// `[...new Set(obj.verbs.map(v=>String(v).trim()).filter(TOKEN_OK))]` — trimmed, TOKEN_OK, deduped first-seen.
+fn dedup_verbs(obj: &serde_json::Value) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    if let Some(arr) = obj.get("verbs").and_then(|v| v.as_array()) {
+        for v in arr {
+            let s = js_string(v).trim().to_string();
+            if TOKEN_OK.is_match(&s) && seen.insert(s.clone()) {
+                out.push(s);
+            }
+        }
+    }
+    out
+}
+
+/// Validate ONE LLM object → a KeyMatcher, or None. Port of `validateMatcher`.
+pub fn validate_matcher(obj: &serde_json::Value) -> Option<KeyMatcher> {
+    if !obj.is_object() {
+        return None;
+    }
+    let via = field_or(obj, "via", "call").to_lowercase();
+    let role = if field_or(obj, "role", "").to_lowercase().starts_with("produc") { "produces" } else { "consumes" }.to_string();
+    let kind = crate::key_ir::canon_kind(&field_or(obj, "kind", "key"));
+    // nm(fallback) = _slug(String(obj.name ?? "")) || fallback ; dsc(fallback) = trim(desc).slice(0,200) || fallback
+    let name_slug = slug(&field_or(obj, "name", ""));
+    let nm = |fallback: String| -> Option<String> { Some(if name_slug.is_empty() { fallback } else { name_slug.clone() }) };
+    let desc_raw: String = field_or(obj, "description", "").trim().chars().take(200).collect();
+    let dsc = |fallback: String| -> Option<String> { Some(if desc_raw.is_empty() { fallback } else { desc_raw.clone() }) };
+
+    match via.as_str() {
+        "call" => {
+            let token = field_or(obj, "token", "").trim().rsplit('.').next().unwrap_or("").trim().to_string();
+            if !TOKEN_OK.is_match(&token) {
+                return None;
+            }
+            let arg_index = obj.get("argIndex").and_then(|v| v.as_i64()).filter(|n| *n >= 0).unwrap_or(0);
+            let strip_raw = field_or(obj, "strip", "").trim().to_string();
+            let strip = if !strip_raw.is_empty() && DIRECTIVE_OK.is_match(&strip_raw) { Some(strip_raw.clone()) } else { None };
+            let stripd = strip.as_ref().map(|s| format!(" strip \"{s}\"")).unwrap_or_default();
+            Some(KeyMatcher::Call {
+                name: nm(format!("{}-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}(arg {arg_index}){stripd}")),
+                token,
+                arg_index,
+                strip,
+                kind,
+                role,
+            })
+        }
+        "assign" => {
+            let token = field_or(obj, "token", "").trim().to_string();
+            if !TOKEN_OK.is_match(&token) {
+                return None;
+            }
+            Some(KeyMatcher::Assign {
+                name: nm(format!("{}-assign-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}.<member> = function")),
+                token,
+                kind,
+                role,
+            })
+        }
+        "method" => Some(KeyMatcher::Method {
+            name: nm(format!("class-method-{kind}")),
+            description: dsc(format!("{role} {kind} via a class method definition")),
+            kind,
+            role,
+        }),
+        "attr" => {
+            let directive = field_or(obj, "directive", "").trim().to_string();
+            if !DIRECTIVE_OK.is_match(&directive) {
+                return None;
+            }
+            let key_from = if field_or(obj, "keyFrom", "name").to_lowercase() == "call" { "call" } else { "name" }.to_string();
+            Some(KeyMatcher::Attr {
+                name: nm(format!("{}-attr-{kind}", slug(&directive))),
+                description: dsc(format!("{role} {kind} via template {directive}<name> (key from {key_from})")),
+                directive,
+                key_from,
+                kind,
+                role,
+            })
+        }
+        "annotation" => {
+            let a = field_or(obj, "annotation", "").trim().to_string();
+            let annotation = a.strip_prefix('@').unwrap_or(&a).to_string();
+            if !TOKEN_OK.is_match(&annotation) {
+                return None;
+            }
+            let element_raw = field_or(obj, "element", "").trim().to_string();
+            let element = if !element_raw.is_empty() && TOKEN_OK.is_match(&element_raw) { Some(element_raw) } else { None };
+            let elem_desc = element.as_ref().map(|e| format!("{e}=\"\u{2026}\"")).unwrap_or_else(|| "\"\u{2026}\"".to_string());
+            Some(KeyMatcher::Annotation {
+                name: nm(format!("{}-annot-{kind}", slug(&annotation))),
+                description: dsc(format!("{role} {kind} via @{annotation}({elem_desc})")),
+                annotation,
+                element,
+                kind,
+                role,
+            })
+        }
+        "member" => {
+            let token = field_or(obj, "token", "").trim().to_string();
+            if !TOKEN_OK.is_match(&token) {
+                return None;
+            }
+            let verbs = dedup_verbs(obj);
+            if verbs.is_empty() {
+                return None;
+            }
+            Some(KeyMatcher::Member {
+                name: nm(format!("{}-member-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}.<member>.{{{}}}()", verbs.join("|"))),
+                token,
+                verbs,
+                kind,
+                role,
+            })
+        }
+        "repository" => {
+            let token = field_or(obj, "token", "").trim().to_string();
+            if !TOKEN_OK.is_match(&token) {
+                return None;
+            }
+            let verbs = dedup_verbs(obj);
+            if verbs.is_empty() {
+                return None;
+            }
+            Some(KeyMatcher::Repository {
+                name: nm(format!("{}-repo-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}.{{{}}}() (receiver = table)", verbs.join("|"))),
+                token,
+                verbs,
+                kind,
+                role,
+            })
+        }
+        "channel" => {
+            let token = field_or(obj, "token", "").trim().to_string();
+            if !RECEIVER_OK.is_match(&token) {
+                return None;
+            }
+            let verbs = dedup_verbs(obj);
+            if verbs.is_empty() {
+                return None;
+            }
+            Some(KeyMatcher::Channel {
+                name: nm(format!("{}-channel-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}.{{{}}}('<key>')", verbs.join("|"))),
+                token,
+                verbs,
+                kind,
+                role,
+            })
+        }
+        "handle" => {
+            let token = field_or(obj, "token", "").trim().to_string();
+            if !RECEIVER_OK.is_match(&token) {
+                return None;
+            }
+            let verbs = dedup_verbs(obj);
+            if verbs.is_empty() {
+                return None;
+            }
+            Some(KeyMatcher::Handle {
+                name: nm(format!("{}-handle-{kind}", slug(&token))),
+                description: dsc(format!("{role} {kind} via {token}.{{{}}}() (receiver = handle)", verbs.join("|"))),
+                token,
+                verbs,
+                kind,
+                role,
+            })
+        }
+        _ => None,
+    }
 }
 
 fn produces(role: &str) -> bool {

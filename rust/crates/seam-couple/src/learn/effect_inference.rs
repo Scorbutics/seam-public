@@ -140,7 +140,7 @@ pub fn infer_http_clients(files: &[(String, String)]) -> Vec<String> {
 pub fn http_client_matchers(clients: &[String]) -> Vec<KeyMatcher> {
     clients
         .iter()
-        .map(|token| KeyMatcher::Channel { token: token.clone(), verbs: HTTP_VERBS.iter().map(|v| v.to_string()).collect(), kind: "http-route".into(), role: "consumes".into() })
+        .map(|token| KeyMatcher::Channel { token: token.clone(), verbs: HTTP_VERBS.iter().map(|v| v.to_string()).collect(), kind: "http-route".into(), role: "consumes".into(), name: None, description: None })
         .collect()
 }
 

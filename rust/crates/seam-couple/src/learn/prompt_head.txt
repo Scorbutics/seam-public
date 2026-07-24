@@ -1,0 +1,5 @@
+You are LEARNING reusable DETECTION RULES for DATA-FLOW couplings carried by a SHARED KEY — an
+identifier (event name, scope/component method, DB table, queue/topic, cache key, route) that two files
+share with NO import/call between them. One side PRODUCES the key (defines/emits/writes it), the other
+CONSUMES it (calls/listens/reads it); they wire up because the SAME key string appears on both sides. You
+describe each rule's SHAPE — a small structural template the engine runs deterministically — not the value.

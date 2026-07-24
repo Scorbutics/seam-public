@@ -19,6 +19,7 @@ seam-shapes = { path = "../seam-shapes" }
 seam-couple = { path = "../seam-couple" }
 seam-fs = { path = "../seam-fs" }
 serde_json = { workspace = true }
+indexmap = { workspace = true }
 
 [build-dependencies]
 napi-build = "2"

@@ -375,7 +375,14 @@ async function runCodebase(a: Args): Promise<number> {
       // `structural` forces the intent-FREE grow (cache reuses across intents) — set when growing FROM a CONFIRMED
       // center (the mechanism was already picked semantically); left off (env-driven) for a DETECTION grow whose
       // region must stay intent-shaped so center-detection reads the right fan-in.
+      const { rustCoreEnabled } = await import("../codebase/grow/rust_core.js");
       const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
+        // RUST MIDDLE: the Rust core does the grow + coupling REPLAY, so the LLM flywheel runs FIRST (learn-once,
+        // persisted to .seam), then grow_to_terminals replays it via the addon. The TS scoped-LLM grow is bypassed.
+        if (rustCoreEnabled()) {
+          if (dc && dcLlm) { const { rustDiscover } = await import("../codebase/grow/rust_discover.js"); await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin }); }
+          return orch.grow_to_terminals(a.repo, af, sym, gOptsFor(ctx, { dataCoupling: dc, dataCouplingLlm: false, structuralGrow: true }));
+        }
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
         if (dc && dcLlm) return orch.grow_footprint_scoped(a.repo, af, sym, gOptsFor(ctx, { structuralGrow: structural || undefined }));

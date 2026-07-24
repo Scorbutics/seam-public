@@ -1261,3 +1261,98 @@ pub fn cluster_blind_files(files: Vec<Vec<String>>) -> Vec<BlindClusterDto> {
         .map(|c| BlindClusterDto { signature: c.signature, shaped: c.shaped, rep: c.rep as u32, members: c.members.into_iter().map(|m| m as u32).collect() })
         .collect()
 }
+
+/// Validate LLM objects → matchers (parity for key_ir.validateMatcher). In: JSON array of objects. Out: JSON
+/// array of the validated matcher objects (null where rejected).
+#[napi]
+pub fn validate_matchers(objs_json: String) -> String {
+    let vals: Vec<serde_json::Value> = serde_json::from_str(&objs_json).unwrap_or_default();
+    let out: Vec<serde_json::Value> = vals
+        .iter()
+        .map(|v| match seam_couple::learn::matchers::validate_matcher(v) {
+            Some(m) => serde_json::to_value(&m).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        })
+        .collect();
+    serde_json::to_string(&out).unwrap_or_default()
+}
+
+/// Serialize a schema-3 store to the exact bytes TS JSON.stringify(store,null,2) produces (store-write parity).
+/// `matchers_json` = JSON array of validated matcher objects; `sigs_json` = JSON array of learnedSig strings.
+#[napi]
+pub fn write_store_json(matchers_json: String, sigs_json: String) -> String {
+    use seam_couple::learn::key_store::{write_store_string, Store};
+    let vals: Vec<serde_json::Value> = serde_json::from_str(&matchers_json).unwrap_or_default();
+    let rules: Vec<seam_couple::KeyMatcher> = vals.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    let learned_sigs: Vec<String> = serde_json::from_str(&sigs_json).unwrap_or_default();
+    let store = Store { rules, files: indexmap::IndexMap::new(), learned_sigs };
+    write_store_string(&store)
+}
+
+// ── FLYWHEEL DISCOVERY (state-machine steps; the JS driver serves the LLM between them) ─────────────────────
+fn parse_pairs(json: &str) -> Vec<(String, String)> {
+    let v: Vec<Vec<String>> = serde_json::from_str(json).unwrap_or_default();
+    v.into_iter().map(|p| (p.first().cloned().unwrap_or_default(), p.get(1).cloned().unwrap_or_default())).collect()
+}
+
+/// Discovery prompt (parity for _prompt). files = [[file,snippet],…], dead = [token,…].
+#[napi]
+pub fn discover_prompt(files_json: String, dead_json: String) -> String {
+    let files = parse_pairs(&files_json);
+    let dead: Vec<String> = serde_json::from_str(&dead_json).unwrap_or_default();
+    seam_couple::learn::discover::prompt(&files, &dead)
+}
+
+/// Step 1 — gate/replay/first-prompt. Returns {kind:"replay",matchers}|{kind:"prompt",prompt,sig,snippets}|{kind:"nothing"}.
+#[napi]
+pub fn learn_start(repo: String, blind_json: String, key_budget: i64) -> String {
+    use seam_couple::learn::discover::{learn_start as ls, LearnStart};
+    let blind = parse_pairs(&blind_json);
+    let out = match ls(&repo, &blind, key_budget) {
+        LearnStart::Nothing => serde_json::json!({ "kind": "nothing" }),
+        LearnStart::Replay(m) => serde_json::json!({ "kind": "replay", "matchers": m }),
+        LearnStart::Prompt { prompt, sig, snippets } => {
+            let snips: Vec<Vec<String>> = snippets.into_iter().map(|(a, b)| vec![a, b]).collect();
+            serde_json::json!({ "kind": "prompt", "prompt": prompt, "sig": sig, "snippets": snips })
+        }
+    };
+    out.to_string()
+}
+
+/// Step 2 — ingest answer1. Returns {kind:"done",matchers}|{kind:"retry",prompt,accepted}.
+#[napi]
+pub fn learn_ingest(blind_json: String, snippets_json: String, answer1: String) -> String {
+    use seam_couple::learn::discover::{learn_ingest as li, LearnIngest};
+    let blind = parse_pairs(&blind_json);
+    let snips = parse_pairs(&snippets_json);
+    let out = match li(&blind, &snips, &answer1) {
+        LearnIngest::Done(m) => serde_json::json!({ "kind": "done", "matchers": m }),
+        LearnIngest::Retry { prompt, accepted } => serde_json::json!({ "kind": "retry", "prompt": prompt, "accepted": accepted }),
+    };
+    out.to_string()
+}
+
+/// Step 3a — finalize with a retry answer (persist + record). Returns the accepted matchers JSON.
+#[napi]
+pub fn learn_finalize(repo: String, sig: String, blind_json: String, accepted_json: String, answer2: String) -> String {
+    let blind = parse_pairs(&blind_json);
+    let accepted: Vec<seam_couple::KeyMatcher> = serde_json::from_str(&accepted_json).unwrap_or_default();
+    let out = seam_couple::learn::discover::learn_finalize(&repo, &sig, &blind, accepted, &answer2);
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
+
+/// Step 3b — commit the no-retry (done) path (persist + record). Returns the accepted matchers JSON.
+#[napi]
+pub fn learn_commit(repo: String, sig: String, accepted_json: String) -> String {
+    let accepted: Vec<seam_couple::KeyMatcher> = serde_json::from_str(&accepted_json).unwrap_or_default();
+    let out = seam_couple::learn::discover::learn_commit(&repo, &sig, &accepted);
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
+
+/// Find floor-blind representative files to learn from (repo-wide). Returns [[file,text],…]. key_budget=60 default.
+#[napi]
+pub fn find_blind_reps(repo: String, key_budget: i64) -> String {
+    let reps = seam_couple::learn::discover::find_blind_reps(&repo, key_budget.max(0) as usize);
+    let out: Vec<Vec<String>> = reps.into_iter().map(|(f, t)| vec![f, t]).collect();
+    serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
+}
