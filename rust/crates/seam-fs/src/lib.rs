@@ -22,7 +22,7 @@ pub fn is_test_file(f: &str) -> bool {
 // Port of SKIP_DIRS (core/resolve/languages/base.ts) — pruned by NAME at any path depth.
 pub const SKIP_DIRS: &[&str] = &[
     "node_modules", ".next", ".git", "dist", "build", ".turbo", "coverage", ".venv", "out", "target",
-    "vendor", ".gradle", "__pycache__",
+    "vendor", ".gradle", "__pycache__", ".yarn",
 ];
 
 /// node `path.posix.dirname` — the directory part (trailing slashes ignored; "." when there's no slash).

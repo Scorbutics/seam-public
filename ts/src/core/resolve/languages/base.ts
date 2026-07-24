@@ -6,7 +6,7 @@ import { sep, delimiter as pathSep } from "node:path";
 
 export const SKIP_DIRS = new Set([
   "node_modules", ".next", ".git", "dist", "build", ".turbo", "coverage", ".venv", "out",
-  "target", "vendor", ".gradle", "__pycache__",
+  "target", "vendor", ".gradle", "__pycache__", ".yarn",
 ]);
 
 // One query-builder TABLE access — `client.from('table').verb(...)` — the SYNTACTIC shape in a given
