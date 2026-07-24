@@ -11,8 +11,15 @@ export interface DiscoverOpts { model?: string; claudeBin?: string | null; keyBu
 // Serve one discovery pass → the JSON array of the model's parsed objects (run_pass_async returns a Map keyed by
 // id; Rust parse() validates the values, exactly as TS _parse iterates out.values()).
 async function serve(prompt: string, opts: DiscoverOpts): Promise<string> {
-  const out = await run_pass_async(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: "discover-key-matchers" });
-  return JSON.stringify([...out.values()]);
+  try {
+    const out = await run_pass_async(prompt, { model: opts.model, claudeBin: opts.claudeBin, tag: "discover-key-matchers" });
+    return JSON.stringify([...out.values()]);
+  } catch (e) {
+    // DEGRADE like TS learnKeyMatchers' `catch (LLMError) → []`: a failed/malformed LLM pass yields no new rules,
+    // and the grow proceeds by replaying the matchers already in .seam. Never abort the grow on a flaky reply.
+    process.stderr.write(`[rust-discover] LLM pass yielded no rules (${String((e as any)?.message ?? e).slice(0, 80)}) — replaying existing matchers\n`);
+    return "[]";
+  }
 }
 
 // Run the flywheel: find floor-blind reps → learn matcher rules (≤2 LLM passes) → persist. Returns #rules learned
