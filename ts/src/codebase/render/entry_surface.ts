@@ -16,7 +16,15 @@ import { type Seam, buildNodeIndex } from "./vocab.js";
 import { at } from "./shapes.js";
 
 /** One way IN: the entry node + the distinct operations that reach a mechanism through it. */
-export interface EntryRay { entry: string; vias: Set<string> }
+export interface EntryRay {
+  entry: string;
+  vias: Set<string>;
+  /** the REST of this way in: the bounded call-upstream cone of the interaction, minus the entry the climb picked.
+   * MONOTONICITY — a node that WAS the entry at a smaller --max-nodes is still in the cone at a larger one, so it
+   * is still NAMED (the `…and behind those` block) instead of silently disappearing when the climb reroutes past it.
+   * Value = hop distance from the interaction (the render orders it nearest-first). */
+  through: Map<string, number>;
+}
 
 // A real INVOCATION edge (call/dispatch/interface-impl), NOT a weak reference/import. Entry attribution and the
 // forward delegation walk both key on this closed set — one definition, not a copy per call site.
@@ -61,6 +69,8 @@ export interface EntrySurface {
   viasStr: (r: EntryRay) => string;
   /** the ONE rendered row both "## In" sections print (`entry ──crossing──▶ ● (via …)  grow: …`). */
   entryRow: (r: EntryRay) => string;
+  /** the deduped `…and behind those` block for the rows actually SHOWN — the monotonicity guarantee, rendered. */
+  upstreamSection: (shown: EntryRay[]) => string[];
 }
 
 /**
@@ -119,6 +129,9 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   const primary = hunkById.get(centerIds[0]);
   // INTERACTIONS = consumers of ANY mechanism (its class OR its methods), each walked UP to its entry point
   // (stopping at any mechanism), so a ray is named by its interaction. Deduped by entry.
+  // The climb picks ONE caller per hop, by a least-fan-in tiebreak over a fan-in the grow keeps changing, and
+  // returns only its TERMINUS — so on its own it is NOT monotone in --max-nodes (see `upstreamConeOf` below,
+  // which is what repairs that). Unchanged here: the terminus is still what NAMES the ray.
   const entryOf = (start: string): string => {
     let cur = start; const seen = new Set<string>(mechNodes);
     for (let hop = 0; hop < 8; hop++) {
@@ -128,6 +141,29 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
       cur = callers.sort((a, b) => (fanIn(a) - fanIn(b)))[0];   // climb the least-shared caller (toward a specific entry)
     }
     return cur;
+  };
+  // …and the WHOLE bounded call-UPSTREAM CONE of that consumer — every node that can trigger the mechanism THROUGH
+  // it, not just the one branch the climb happened to take. THIS is what makes --max-nodes monotone. MEASURED on
+  // cal.com: `RegularBookingService.createBooking` (RegularBookingService.ts:3061, the checkout entry a blind
+  // grader decided the round on) had NO caller at --max-nodes 120, so it WAS the climb's terminus and ranked 2 of
+  // 68 ways in; at 400 it had gained ten callers, the climb walked past it onto an off-tier unscored node
+  // (`CalendarSyncService.handleEvents`, relevance −1) whose ray ranked 67 of 84 — and the answer disappeared.
+  // The cone can only ever GAIN members as the region grows, so a node that was the entry at a smaller
+  // --max-nodes is still in it at a larger one, and the section NAMES it. Memoised per start, capped, purely
+  // structural. BREADTH-first so each member carries its HOP DISTANCE from the interaction (a tiebreak below).
+  const _CONE_CAP = Math.max(8, parseInt(process.env.SEAM_ENTRY_CONE ?? "256", 10) || 256);
+  const _coneCache = new Map<string, Map<string, number>>();
+  const upstreamConeOf = (start: string): Map<string, number> => {
+    const hit = _coneCache.get(start); if (hit) return hit;
+    const depth = new Map<string, number>([[start, 0]]); let frontier = [start];
+    while (frontier.length && depth.size <= _CONE_CAP) {
+      const next: string[] = [];
+      for (const n of frontier) for (const p of (callIn.get(n) ?? []))
+        if (!depth.has(p) && !mechNodes.has(p)) { depth.set(p, depth.get(n)! + 1); next.push(p); }
+      frontier = next;
+    }
+    depth.delete(start);
+    _coneCache.set(start, depth); return depth;
   };
   const invokersOf = (id: string): string[] => { const inv = [...(invokeIn.get(id) ?? [])]; return inv.length ? inv : [...(callIn.get(id) ?? [])]; };
   const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
@@ -162,9 +198,18 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   // Rays are keyed by ENTRY, but MANY operations climb to the same entry — ACCUMULATE the distinct vias so the
   // entry lists every operation reaching it: `via book, createBooking, updateBooking, …`.
   const rays = new Map<string, EntryRay>();
-  const addRay = (entry: string, via: string) => { if (mechNodes.has(entry)) return; const r = rays.get(entry) ?? { entry, vias: new Set<string>() }; r.vias.add(via); rays.set(entry, r); };
+  // `cone` = the other nodes upstream of this way in (the entry the climb picked is only one of them). They stay
+  // attached to the ray so a longer/rerouted climb never deletes an answer a smaller --max-nodes gave.
+  const addRay = (entry: string, via: string, cone?: Map<string, number>) => {
+    if (mechNodes.has(entry)) return;
+    const r = rays.get(entry) ?? { entry, vias: new Set<string>(), through: new Map<string, number>() };
+    r.vias.add(via);
+    for (const [id, d] of (cone ?? [])) if (id !== entry && !mechNodes.has(id) && hunkById.get(id)?.file)
+      r.through.set(id, Math.min(d, r.through.get(id) ?? d));   // nearest occurrence wins (a shared upstream node)
+    rays.set(entry, r);
+  };
   for (const cid of mechNodes)   // consumers of the mechanism's CLASS or any of its METHODS
-    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; addRay(entryOf(consumer), qual(hunkById.get(consumer))); }
+    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; addRay(entryOf(consumer), qual(hunkById.get(consumer)), upstreamConeOf(consumer)); }
   // CROSS-STACK interactions — the boundary can sit on an INTERMEDIATE that reaches the mechanism (a REST endpoint
   // the bean sits BEHIND), NOT on the center itself. Walk the mechanism's call-UPSTREAM closure and surface the
   // crossing counterpart of ANY of them; the boundary node is skipped, the counterpart is the interaction.
@@ -178,6 +223,7 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
     if (upstream.has(y) || boundaries.has(y) || isBoundaryNode(y) || !hunkById.has(y)) continue;   // call-side / medium / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart itself
     if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
+    const ec = upstreamConeOf(y);
     // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names each OP as a route node's label, and they
     // fold into one code entry. Collect every op-labelled route boundary reachable THROUGH the route-node chain.
     const ops = new Set<string>();
@@ -187,15 +233,22 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
       if (_isSym(rh.label)) ops.add(rh.label);
       for (const nx of (crossAdj.get(r) ?? [])) if (!seenR.has(nx)) stack.push(nx);
     }
-    if (ops.size) for (const op of ops) addRay(e, op);
-    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
+    if (ops.size) for (const op of ops) addRay(e, op, ec);
+    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`, ec);
     if (!mechNodes.has(e)) (rayCross.get(e) ?? rayCross.set(e, new Set()).get(e)!).add(b);   // this ray crosses boundary b
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
   // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
+  // RANK ON THE WHOLE RAY, not on its terminus. A ray is as on-subject as the BEST node on it: when the climb
+  // overshoots a highly-relevant node onto a generic outer wrapper, ranking the terminus alone sinks the ray
+  // below the display cap and the relevant node is lost with it. Taking the best tier/relevance over
+  // {entry} ∪ through makes the ray's rank MONOTONE — extending the climb can only keep or improve it.
+  const rayNodes = (r: EntryRay) => [r.entry, ...r.through.keys()];
+  const rayTier = (r: EntryRay) => Math.min(...rayNodes(r).map((id) => tierRank(seamOf.get(id))));
+  const rayRel = (r: EntryRay) => Math.max(...rayNodes(r).map(centerRel));
   const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label && !isBoundaryNode(r.entry); }).sort((a, b) =>
-    (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
-    (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
+    (rayTier(a) - rayTier(b)) ||                                         // spine interactions first
+    (rayRel(b) - rayRel(a)) ||                                           // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
@@ -206,6 +259,41 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
     // DROP the raw "the /X boundary" vias — the crossing is rendered as the flow EDGE, so repeating it is noise.
     const v = [...r.vias].filter((x) => !/^the .+ boundary$/.test(x)).sort((a, b) => (Number(b === self) - Number(a === self)) || (a < b ? -1 : 1));
     return v.slice(0, _VIA_CAP).join(", ") + (v.length > _VIA_CAP ? `, … (+${v.length - _VIA_CAP})` : "");
+  };
+  // THE REST OF THE WAYS IN — every grounded caller behind the rows above, DEDUPED across them and rendered ONCE
+  // as its own block under "## In" (not repeated per row, which made 1 KB rows and spent the same name budget
+  // sixteen times over). Each of these is a node that a SMALLER --max-nodes could have printed as an entry in its
+  // own right, so naming it at its own file:line is what makes "a bigger budget never removes an answer" literally
+  // true rather than merely intended. Ranked, capped, and the residue COUNTED with the knob (honesty contract).
+  //
+  // ORDER, all structural: a node with NO caller is an entry point and a node with ≥2 callers is a shared JOIN —
+  // both are ways in in their own right — whereas a node with EXACTLY ONE caller is a pass-through link already
+  // represented by the caller above it, so links sink (they are never dropped: a node can go from 0 callers to 1
+  // as the region grows, and dropping it would re-open the very hole this fixes). Then INTENT RELEVANCE, as every
+  // other capped section in this render ranks (render-time crop only — the grow stays intent-free). Then NEAREST
+  // the mechanism: hop distance can only stay or shrink as the region grows, while the nodes a bigger --max-nodes
+  // ADDS arrive at the far end, so it is a stable tiebreak rather than a churning one.
+  const _THROUGH_CAP = Math.max(1, parseInt(process.env.SEAM_ENTRY_CHAIN ?? "20", 10) || 20);
+  const _wayIn = (id: string) => ((callIn.get(id)?.size ?? 0) === 1 ? 1 : 0);   // 0 = root/join, 1 = pass-through link
+  const upstreamOf = (shown: EntryRay[]): { ids: string[]; rest: number } => {
+    const cited = new Set(shown.map((r) => r.entry));       // already printed as a row — never repeat it here
+    const hop = new Map<string, number>();
+    for (const r of shown) for (const [id, d] of r.through) {
+      if (cited.has(id) || isBoundaryNode(id)) continue;
+      const h = hunkById.get(id); if (!h?.file || !h?.label) continue;
+      hop.set(id, Math.min(d, hop.get(id) ?? d));
+    }
+    const ids = [...hop.keys()].sort((a, b) => (_wayIn(a) - _wayIn(b))       // real ways in before pass-through links
+      || (tierRank(seamOf.get(a)) - tierRank(seamOf.get(b))) || (centerRel(b) - centerRel(a))   // then on-intent, as every capped section here ranks
+      || (hop.get(a)! - hop.get(b)!)                                          // then nearest the mechanism
+      || (String(hunkById.get(a)?.label) < String(hunkById.get(b)?.label) ? -1 : 1));
+    return { ids: ids.slice(0, _THROUGH_CAP), rest: Math.max(0, ids.length - _THROUGH_CAP) };
+  };
+  const upstreamSection = (shown: EntryRay[]): string[] => {
+    const { ids, rest } = upstreamOf(shown); if (!ids.length) return [];
+    return ["  …and behind those, the grounded callers upstream of them (each is itself a way in — deepen with --grow-from):",
+      ...ids.map((id) => `    ${where(hunkById.get(id))}${seamOf.get(id)?.tier ? ` [${seamOf.get(id)!.tier}]` : ""}`),
+      ...(rest ? [`    (+${rest} more upstream caller(s) — raise SEAM_ENTRY_CHAIN)`] : [])];
   };
   const entryRow = (r: EntryRay): string => {
     const eh = hunkById.get(r.entry);
@@ -218,5 +306,5 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   };
   return { hunkById, seamOf, nodes, inEdges, callIn, invokeIn, crossAdj, fanIn, centerRel, tierRank,
     isBoundaryNode, crossingEdge, enclOf, qual, where, fileClass, symLike, entryOf, invokersOf,
-    centerIds, centerSet, mechNodes, primary, matchNode, rayCross, rayList, viasStr, entryRow };
+    centerIds, centerSet, mechNodes, primary, matchNode, rayCross, rayList, viasStr, entryRow, upstreamSection };
 }

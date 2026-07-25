@@ -636,7 +636,8 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         "   a framework/DI-mounted or top-level entry, or the entry is outside the grown region — widen with --max-nodes)"];
     return ["", head,
       `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`,
-      ...renderCapped(_entry.rayList, IN_N, (r) => _entry.entryRow(r), "way(s) in")];
+      ...renderCapped(_entry.rayList, IN_N, (r) => _entry.entryRow(r), "way(s) in"),
+      ..._entry.upstreamSection(_entry.rayList.slice(0, IN_N))];
   };
   // WHICH steps survive the cap — INTENT-RANKED, at RENDER time only (the grow stays intent-free: this reorders
   // nothing in the model, it only chooses what fits). Pre-order POSITION is not relevance: on cal.com's
@@ -1202,6 +1203,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   if (rayList.length) out.push(`  deepen any: seam --grow-from <file>#<symbol>${q}`);
   for (const r of rayList.slice(0, cap)) out.push(entryRow(r));   // the SHARED row (render/entry_surface.ts)
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
+  out.push(..._es.upstreamSection(rayList.slice(0, cap)));   // …and the callers behind them (monotonicity)
   // OUT — what the mechanism itself does: the boundaries it writes/reads (db table, queue), threaded as edges off ●.
   if (outCross.length) {
     // Name the mechanism side per row when the star has ≥2 mechanisms (a class fanned into its methods) — each
