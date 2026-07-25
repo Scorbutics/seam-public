@@ -59,18 +59,15 @@ export interface ConsumerSet {
 const TIER_RANK: Record<string, number> = { RESOLVED_FULL: 0, RESOLVED_PARTIAL: 1, SUGGESTED: 2 };
 const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p === "RESOLVED_PARTIAL";
 
-// THE LINE CONTRACT — the one place the engine's internal line convention meets the rendered one.
-// EVERY line the scan produces is 0-BASED: node.range comes from `Ctx.span`, edge.line from `Ctx.span(call)` /
-// `_call_lines` / `_usage_lines`, and `Ctx.ln` returns the count of newlines before the offset. A projected
-// member's `line` is what a human/editor jumps to, so it is 1-BASED. Converting per-branch is what produced the
-// systematic off-by-one every projected consumer carried (`getUserAvailability.ts:341` for a symbol on 342, and
-// the same on every fallback path): one branch added 1, the other passed the raw 0-based value through. Route
-// EVERY line through this helper — a raw `range[0]` or `e.line` reaching a member is the bug, by construction.
-// EXPORTED because it is the contract for EVERY structural shape, not just this one: impact/reaches/writers/
-// coupling project the SAME 0-based scan values and render them as `file:line`, so they convert HERE too.
+// THE LINE CONTRACT — 0-BASED inside the engine, 1-BASED in anything rendered as `file:line`. The helper now
+// lives in `core/lines.ts` because the SEAM-MODEL front (`from_resolved_graph`) converts through it too — the
+// grow renders (`--format agent` / `concern`) were the last shape still citing raw 0-based scan values.
+// RE-EXPORTED here because this is the import site every structural shape already knows (impact/reaches/
+// writers/coupling project the SAME 0-based scan values and convert HERE).
 // (impact was the one shape that didn't: it cited `getUserAvailability.ts:581` — the line ABOVE the real call
 // on 582 — while `consumers` on the same anchor said 582. One helper, one convention, no per-shape drift.)
-export const to1 = (l: number | null | undefined): number => (l == null ? 0 : l + 1);
+export { to1 } from "../../core/lines.js";
+import { to1 } from "../../core/lines.js";
 // A node's declaration start, or `undefined` when the node is UNLOCATED (its `range` is the [0,0] sentinel
 // the up-scan places when no real site was grounded). Shared by every projection that cites a node — see
 // GraphNode.unlocated. A projected `line` of 0 means "no line": renderers must print no location at all.

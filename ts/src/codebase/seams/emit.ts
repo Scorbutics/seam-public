@@ -7,6 +7,18 @@ import { git_lineage } from "../lineage.js";
 import { type Seam } from "./clusters.js";
 import { _spine_order, _structural_spine } from "./spine.js";
 import { BOUND_KINDS as _BOUND_KINDS } from "../render/medium_registry.js";
+import { to1OrNone } from "../../core/lines.js";
+
+// THE LINE CONTRACT, seam-model side (core/lines.ts). The Graph IR stays 0-BASED — `scan/detect.ts` slices the
+// file with `node.start/end` and hands them to tree-sitter as row INDICES, so shifting them there would corrupt
+// every contract/subcore span. This function is the internal→MODEL boundary (the codebase mirror of diff mode's
+// `emit_seams_json`, whose hunks are already 1-based new-side file lines), so the +1 happens HERE, once: every
+// `start`/`end`/`line` leaving emit is 1-BASED and every consumer of the model (the agent/concern spine, the
+// seam hunks, `--from-seams`) cites a line that really holds the code. The grow renders were the last shape
+// still printing the raw 0-based value (`core.target (src/core.ts:2)` for a declaration on line 3).
+// An UNLOCATED node keeps the [0,0] sentinel (0 = "no line" — the renderers print no location, never `:1`).
+const _mstart = (n: Node): number => (n.start > 0 || n.end > 0 ? n.start + 1 : 0);
+const _mend = (n: Node): number => (n.start > 0 || n.end > 0 ? n.end + 1 : 0);
 
 // BOUNDARY (shared-key medium) node kinds — the crossing sites, NOT code. The seam hunk carries `kind` only for
 // these (a route labelled by its op, a table, a queue, a service handle…) so the render can name/ground the
@@ -21,7 +33,7 @@ const _FRONTIER_CAP = Math.max(1, parseInt(process.env.SEAM_FRONTIER_CAP ?? "20"
 
 function _seam_hunk(n: Node, provenance: string): any {
   const out: any = {
-    id: n.id, file: n.file, start: n.start, end: n.end, role: n.role,
+    id: n.id, file: n.file, start: _mstart(n), end: _mend(n), role: n.role,
     confidence: Math.round(n.role_confidence * 100) / 100, label: n.label,
     provenance, relevant: n.relevant, external: [], externalRefs: [], rewire: null,
     direction: n.direction,
@@ -48,7 +60,7 @@ function _seam_contracts(g: Graph, seams: Seam[]): any[] {
       if (seen.has(dk)) continue;
       seen.add(dk);
       if (!pairs.has(key)) pairs.set(key, []);
-      pairs.get(key)!.push({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line });
+      pairs.get(key)!.push({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: to1OrNone(e.line) });
     }
   }
   const out: any[] = [];
@@ -97,7 +109,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
       const c = g.nodes.get(e.src);
       if (!c || seenC.has(`${e.src} ${e.dst}`)) continue;
       seenC.add(`${e.src} ${e.dst}`);
-      const cl = e.line && e.line > 0 ? e.line : c.start;
+      const cl = e.line && e.line > 0 ? to1OrNone(e.line) : _mstart(c);   // the CALL site (1-based), else the caller's own declaration
       const ch = { id: `call:${e.src}:${e.dst}`, file: c.file, start: cl, end: cl, role: "link",
         confidence: 0.9, label: c.label, caller: true, provenance: e.provenance, relevant: c.relevant,
         external: [], externalRefs: [], rewire: null };
@@ -167,7 +179,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     const pn = pid ? g.nodes.get(pid) : undefined;
     outSeams.push({ id: s.id, label: s.label, linkOnly: s.linkOnly, uncertain: false, warnings: warns,
       hunks: deduped, proposedBy: s.proposedBy ?? "floor", selected: s.selected ?? false, suggested: s.suggested ?? false,
-      tier: s.tier, ...(pn ? { primary: { file: pn.file, line: pn.start, symbol: pn.label } } : {}),
+      tier: s.tier, ...(pn ? { primary: { file: pn.file, line: _mstart(pn), symbol: pn.label } } : {}),
       // Intent pass only (additive + conditional → non-intent *_seams oracles stay byte-identical).
       ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
       ...(opts.intent ? { region: _seamRegion(ids) } : {}),   // wave-shell + direction (the region view's structure)
@@ -250,7 +262,7 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
     ...(opts.shape ? { shape: opts.shape } : {}), ...(opts.lead ? { lead: opts.lead } : {}),
     resolutionQuality: g.resolution_quality, language: g.language, complete: g.complete,
     seamEdges: [],
-    edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: e.line, ...((e as any).op ? { op: (e as any).op } : {}) })),
+    edges: g.resolved_edges().map((e) => ({ from: e.src, to: e.dst, kind: e.kind, provenance: e.provenance, line: to1OrNone(e.line), ...((e as any).op ? { op: (e as any).op } : {}) })),
     seamContracts: _seam_contracts(g, seams),
     blindspots: _blindspots.map((b) => ({ node: b.node, mechanism: b.mechanism, evidence: b.evidence,
       candidates: b.candidates.map((c: any) => ({ symbol: c.symbol ?? c.dst, provenance: c.provenance, ...(c.file ? { file: c.file } : {}) })), ...((b as any).persists ? { persists: true } : {}) })),

@@ -1,5 +1,8 @@
 // Shared render VOCABULARY for the flood/wave/scenario/agent/concern render family — one seam-rendering
 // language (where/roles/facts/lineage/members) reused across every view instead of each view re-deriving it.
+// CITATIONS go through `at` (render/shapes.ts) — the seam model's lines are 1-BASED (core/lines.ts) and a
+// missing one must render as a bare path, never a fabricated `:0`/`:1`.
+import { at } from "./shapes.js";
 export type Hunk = { file?: string; role?: string; label?: string; enclosing?: string; kind?: string; start?: number; relevance?: number; spine?: boolean };
 export type Seam = { id: string; label: string; tier?: string; selected?: boolean; suggested?: boolean;
   primary?: { file: string; line: number; symbol: string }; hunks?: Hunk[];
@@ -21,7 +24,7 @@ export const where = (s: Seam): string => {
   if (!s.primary) return filesOf(s)[0] ?? "—";
   const c = _container(s.primary.file);
   const qualified = c && c !== s.primary.symbol ? `${c}.${s.primary.symbol}` : s.primary.symbol;
-  return `${qualified} (${s.primary.file}:${s.primary.line})`;
+  return `${qualified} (${at(s.primary.file, s.primary.line)})`;
 };
 export const facts = (s: Seam): string => {
   const bits: string[] = [];
@@ -41,7 +44,7 @@ const _MEMBER_CAP = 8;
 export const memberLines = (s: Seam): string[] => {
   const sp = (s.hunks ?? []).filter((h) => h.spine && typeof h.relevance === "number")
     .sort((a, b) => (b.relevance! - a.relevance!)).slice(0, _MEMBER_CAP);
-  return sp.map((h) => `     ★ ${h.relevance!.toFixed(2)} ${h.label ?? "?"}${h.file ? ` (${h.file}:${h.start ?? 0})` : ""}`);
+  return sp.map((h) => `     ★ ${h.relevance!.toFixed(2)} ${h.label ?? "?"}${h.file ? ` (${at(h.file, h.start)})` : ""}`);
 };
 
 // A seam's WAVE SHELL — hops from the anchor (the flood's own bookkeeping). Shared by the region/wave/

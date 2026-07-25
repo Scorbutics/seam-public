@@ -16,6 +16,10 @@ export type { Hunk, Seam, Ranked };
 // The 8 structural-shape renderers (consumers/deps/refactor/impact/compare/neighborhood/contract/reach)
 // moved to render/shapes.ts — self-contained, no shared state with the flood/wave/agent/concern family below.
 export { renderConsumerSet, renderDependencySet, renderWritersSet, renderCoupling, renderRefactorFacts, renderImpact, renderComparison, renderNeighborhood, renderContract, renderReach } from "./render/shapes.js";
+// CITATION helper — one no-fabricated-line rule for EVERY `file:line` the engine prints (see render/shapes.ts).
+// The seam model this family renders is 1-BASED at its source (core/lines.ts), so the value renders as-is and a
+// missing/unlocated one renders as a bare path — never the `:0` these sites used to print.
+import { at } from "./render/shapes.js";
 
 // The region/wave/scenario render family (renderLlmContext/renderWaves/renderScenarios + their shared
 // _floodParents helper) moved to render/region_views.ts — self-contained aside from the vocab/medium_registry
@@ -379,7 +383,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const l = label.get(a) ?? "?";
     const c = _container(f);
     const q = c && c !== l ? `${c}.${l}` : l;
-    return `${q} (${f}:${startOfId.get(a) ?? 0})`;
+    return `${q} (${at(f, startOfId.get(a))})`;
   })();
   const seamLine = (s: Seam, n?: number) => `  ${n != null ? `${n}. ` : ""}${(s.id === _anchorSeamId && _anchorWhere) ? _anchorWhere : where(s)} — ${rolesOf(s)} — ${reachSeam(s)}${cross(s)}`;
   // THE CALL SITE between two consecutive spine seams — the resolved edge connecting them, rendered from its OWN
@@ -405,7 +409,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     }
     if (!best) return null;
     const f = String(best.from);
-    const site = `${fileOfId.get(f) ?? "?"}:${best.line || startOfId.get(f) || "?"}`;
+    const site = at(fileOfId.get(f) ?? "?", best.line || startOfId.get(f));
     return `${site} ──${best.kind}──▶ ${label.get(String(best.to)) ?? "?"}`;
   };
   // SPINE — three honest states, never a confident-but-wrong path (the trust rule): (a) GROUNDED — the anchor→sink
@@ -522,7 +526,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     if (!showPipeline) return [];
     return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
       ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
-        const f = fileOfId.get(p.id), where2 = f ? ` (${f}:${startOfId.get(p.id) ?? 0})` : "";
+        const f = fileOfId.get(p.id), where2 = f ? ` (${at(f, startOfId.get(p.id))})` : "";
         const dyn = _dynDispatch.get(p.id);
         return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
       }, "step(s)")];
@@ -902,7 +906,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "50", 10) || 50);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
-  const where = (h: any) => `${qual(h)} (${h?.file ?? "?"}:${h?.start ?? 0})`;
+  const where = (h: any) => `${qual(h)} (${at(h?.file ?? "?", h?.start)})`;
   // the operations reaching a mechanism through this entry, distinct, capped + counted (a fat orchestrator stays
   // scannable). The entry's OWN name (when it is itself a direct consumer) sorts first; other operations follow.
   const _VIA_CAP = Math.max(1, parseInt(process.env.SEAM_CONCERN_VIAS ?? "8", 10) || 8);

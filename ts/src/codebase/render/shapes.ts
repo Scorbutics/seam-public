@@ -16,7 +16,10 @@ interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
 // `to1`/`_start` + GraphNode.unlocated): that member is rendered as a bare path. Printing `:0`/`:1` there sends
 // the reader to an unrelated line and destroys the one thing a structural citation is for. Every `file:line` in
 // this module goes through here — a shape that formats its own `${file}:${line}` is how the rule gets lost.
-const at = (file: string, line: number | null | undefined): string => (line ? `${file}:${line}` : `${file}`);
+// EXPORTED: the flood/wave/agent/concern family (llm_context.ts, render/vocab.ts) cites the SEAM MODEL, whose
+// lines are 1-based too (`from_resolved_graph` converts at the codebase front — see core/lines.ts), so it must
+// obey the SAME no-fabricated-line rule. It used to print `file:0` for an unlocated node; one helper, one rule.
+export const at = (file: string, line: number | null | undefined): string => (line ? `${file}:${line}` : `${file}`);
 // Same rule where the FILE is already stated by an enclosing group heading (impact's per-file rollup) and only
 // the line is cited: a real line renders as ` (:582)`, a missing one renders as NOTHING. Sharing the falsy test
 // with `at` is the point — one place decides what "no grounded line" looks like.

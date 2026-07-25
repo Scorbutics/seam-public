@@ -15,8 +15,8 @@
             {
               "id": "PaymentService",
               "file": "src/payment/service.ts",
-              "start": 0,
-              "end": 5,
+              "start": 1,
+              "end": 6,
               "role": "core",
               "confidence": 1,
               "label": "PaymentService",
@@ -29,8 +29,8 @@
             {
               "id": "x6",
               "file": "src/untraced.ts",
-              "start": 1,
-              "end": 4,
+              "start": 2,
+              "end": 5,
               "role": "link",
               "confidence": 0.9,
               "label": "make",
@@ -43,8 +43,8 @@
             {
               "id": "PaymentService.charge",
               "file": "src/payment/service.ts",
-              "start": 2,
-              "end": 2,
+              "start": 3,
+              "end": 3,
               "role": "core",
               "confidence": 1,
               "label": "charge",
@@ -58,8 +58,8 @@
             {
               "id": "c1",
               "file": "src/admin.ts",
-              "start": 1,
-              "end": 4,
+              "start": 2,
+              "end": 5,
               "role": "link",
               "confidence": 0.9,
               "label": "admin",
@@ -72,8 +72,8 @@
             {
               "id": "c2",
               "file": "src/checkout.ts",
-              "start": 1,
-              "end": 4,
+              "start": 2,
+              "end": 5,
               "role": "link",
               "confidence": 0.9,
               "label": "checkout",
@@ -89,7 +89,7 @@
           "suggested": false,
           "primary": {
             "file": "src/payment/service.ts",
-            "line": 0,
+            "line": 1,
             "symbol": "PaymentService"
           }
         },
@@ -103,8 +103,8 @@
             {
               "id": "PaymentService",
               "file": "src/payment/service.ts",
-              "start": 0,
-              "end": 5,
+              "start": 1,
+              "end": 6,
               "role": "core",
               "confidence": 1,
               "label": "PaymentService",
@@ -117,8 +117,8 @@
             {
               "id": "call:x6:PaymentService",
               "file": "src/untraced.ts",
-              "start": 3,
-              "end": 3,
+              "start": 4,
+              "end": 4,
               "role": "link",
               "confidence": 0.9,
               "label": "make",
@@ -132,8 +132,8 @@
             {
               "id": "PaymentService.refund",
               "file": "src/payment/service.ts",
-              "start": 3,
-              "end": 3,
+              "start": 4,
+              "end": 4,
               "role": "core",
               "confidence": 1,
               "label": "refund",
@@ -147,8 +147,8 @@
             {
               "id": "call:c1:PaymentService.refund",
               "file": "src/admin.ts",
-              "start": 3,
-              "end": 3,
+              "start": 4,
+              "end": 4,
               "role": "link",
               "confidence": 0.9,
               "label": "admin",
@@ -165,7 +165,7 @@
           "suggested": false,
           "primary": {
             "file": "src/payment/service.ts",
-            "line": 0,
+            "line": 1,
             "symbol": "PaymentService"
           }
         }
@@ -201,28 +201,28 @@
       "to": "PaymentService.charge",
       "kind": "reference",
       "provenance": "RESOLVED_FULL",
-      "line": 2
+      "line": 3
     },
     {
       "from": "c1",
       "to": "PaymentService.refund",
       "kind": "reference",
       "provenance": "RESOLVED_FULL",
-      "line": 3
+      "line": 4
     },
     {
       "from": "c2",
       "to": "PaymentService.charge",
       "kind": "reference",
       "provenance": "RESOLVED_FULL",
-      "line": 3
+      "line": 4
     },
     {
       "from": "x6",
       "to": "PaymentService",
       "kind": "call",
       "provenance": "RESOLVED_PARTIAL",
-      "line": 3
+      "line": 4
     }
   ],
   "seamContracts": [
@@ -235,14 +235,14 @@
           "to": "PaymentService.refund",
           "kind": "reference",
           "provenance": "RESOLVED_FULL",
-          "line": 3
+          "line": 4
         },
         {
           "from": "x6",
           "to": "PaymentService",
           "kind": "call",
           "provenance": "RESOLVED_PARTIAL",
-          "line": 3
+          "line": 4
         }
       ],
       "blurry": true

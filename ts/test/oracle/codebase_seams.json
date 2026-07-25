@@ -29,8 +29,8 @@
             {
               "id": "c1",
               "file": "src/app.ts",
-              "start": 1,
-              "end": 1,
+              "start": 2,
+              "end": 2,
               "role": "link",
               "confidence": 0.9,
               "label": "app",
@@ -89,8 +89,8 @@
             {
               "id": "call:c1:WidgetEngine",
               "file": "src/app.ts",
-              "start": 1,
-              "end": 1,
+              "start": 2,
+              "end": 2,
               "role": "link",
               "confidence": 0.9,
               "label": "app",

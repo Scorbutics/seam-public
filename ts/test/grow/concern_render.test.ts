@@ -114,7 +114,8 @@ describe("renderConcern — center-first star (pure model)", () => {
     expect(out).toMatch(/mechanisms: 2/);                                // BOTH picked centers counted
     expect(out).toContain("notGrown (svc/other.ts) — picked, not reached in this region");
     expect(out).toContain("grow: svc/caller.ts#fnEntry");                // valid symbol → deepen handle
-    expect(out).toContain("sweep.ts (svc/sweep.ts:0)");                  // file node rendered…
+    expect(out).toContain("sweep.ts (svc/sweep.ts)");                    // file node rendered — as a BARE path: start 0 = "no grounded line", never a fabricated `:0`/`:1`
+    expect(out).not.toContain("svc/sweep.ts:");                          // …
     expect(out).not.toContain("#sweep.ts");                              // …but WITHOUT a broken file#filename handle
   });
 

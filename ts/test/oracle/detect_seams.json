@@ -15,8 +15,8 @@
             {
               "id": "Widget",
               "file": "src/Widget.tsx",
-              "start": 0,
-              "end": 8,
+              "start": 1,
+              "end": 9,
               "role": "core",
               "confidence": 1,
               "label": "Widget",
@@ -130,8 +130,8 @@
             {
               "id": "App",
               "file": "src/App.tsx",
-              "start": 1,
-              "end": 6,
+              "start": 2,
+              "end": 7,
               "role": "link",
               "confidence": 0.9,
               "label": "App",
@@ -147,7 +147,7 @@
           "suggested": false,
           "primary": {
             "file": "src/Widget.tsx",
-            "line": 0,
+            "line": 1,
             "symbol": "Widget"
           }
         }
@@ -169,7 +169,7 @@
       "to": "Widget",
       "kind": "call",
       "provenance": "RESOLVED_FULL",
-      "line": 5
+      "line": 6
     }
   ],
   "seamContracts": [],
