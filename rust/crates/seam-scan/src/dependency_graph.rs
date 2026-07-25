@@ -234,6 +234,80 @@ impl DepScan {
         }
     }
 
+    /// 2c-bis) SELF-MEMBER pass — the anchor uses a member of its OWN class: `this.m(...)`, `f(this.m)` (a
+    /// callback), or `f(this.m.bind(this))` (the bound reference). None of these were followed:
+    /// `intra_file_callee_pass` reads `call_lines`, which only matches a BARE-identifier callee, so a
+    /// `this.`-qualified call is invisible; and a bound reference passed as an ARGUMENT is never a call at that
+    /// site at all. Measured on cal.com: `_getAvailableSlots` -> `this.getBusyTimesFromLimitsForUsers(...)` ->
+    /// the wrapper FIELD `getBusyTimesFromLimitsForUsers = withReporting(this._getBusyTimesFromLimitsForUsers
+    /// .bind(this), ...)` -> the real `_getBusyTimesFromLimitsForUsers` produced ZERO edges, so the batched
+    /// limit-busy-times implementation the slots path actually runs was unreachable.
+    ///
+    /// GROUNDED, never a name guess: `this` IS the enclosing class, so the member resolves against THAT class's
+    /// own declarations, span-scoped inside the class node — a same-name method on an unrelated class (in this
+    /// file or any other) can never match. One ALIAS hop: a function-valued class FIELD is dispatched like a
+    /// method but is not a `method_definition`, so it has no unit; its initializer's own self-member reference
+    /// names the sibling method that really implements it, and the edge lands on the IMPLEMENTATION rather than
+    /// dead-ending on the wrapper. Anything the class does NOT declare (inherited member, data field) is left
+    /// unresolved, not guessed. Port of `_selfMemberPass`.
+    fn self_member_pass(&mut self) {
+        let Some(actx) = &self.actx else { return };
+        let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
+        if anchor.kind != "method" && anchor.kind != "function" {
+            return;
+        }
+        let (alo, ahi) = (anchor.start, anchor.end);
+        let cls = ast::enclosing_class(&self.aunits, alo, ahi);
+        if cls.is_empty() {
+            return;
+        }
+        let Some(clsu) = self.aunits.iter().find(|u| u.kind == "class" && u.name == cls) else { return };
+        let (clo, chi) = (clsu.start, clsu.end);
+        // the methods THIS class declares (span-scoped: a same-name method on another class in this file is out)
+        let mut methods: HashMap<String, (usize, usize)> = HashMap::new();
+        for u in &self.aunits {
+            if u.kind == "method" && u.start >= clo && u.end <= chi && u.name != self.symbol {
+                methods.entry(u.name.clone()).or_insert((u.start, u.end));
+            }
+        }
+        if methods.is_empty() {
+            return;
+        }
+        // function-valued FIELDS of this class -> the sibling method their initializer references (wrapper alias)
+        let mut alias: HashMap<String, String> = HashMap::new();
+        for f in actx.collect(actx.root(), nk::is_class_field) {
+            let (fs, fe) = actx.span(f);
+            if fs < clo || fe > chi {
+                continue;
+            }
+            let Some(fname) = ast::name_of(actx, f) else { continue };
+            if methods.contains_key(&fname) || alias.contains_key(&fname) {
+                continue;
+            }
+            if let Some((m, _)) = ast::self_member_refs(actx, &self.anchor_file, fs, fe)
+                .into_iter()
+                .find(|(m, _)| *m != fname && methods.contains_key(m))
+            {
+                alias.insert(fname, m);
+            }
+        }
+        let refs = ast::self_member_refs(actx, &self.anchor_file, alo, ahi);
+        for (member, line) in refs {
+            let Some(target) = (if methods.contains_key(&member) { Some(member.clone()) } else { alias.get(&member).cloned() }) else { continue };
+            if target == self.symbol {
+                continue;
+            }
+            if !self.seen.insert(format!("{target} {}", self.anchor_file)) {
+                continue;
+            }
+            let (ls, le) = methods[&target];
+            self.counter += 1;
+            let did = format!("d{}", self.counter);
+            self.nodes.push(GraphNode { id: did.clone(), symbol: target, kind: "method".into(), file: self.anchor_file.clone(), range: (ls, le), enclosing: cls.clone(), complexity: complexity((ls, le)), ..Default::default() });
+            self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_FULL".into(), line: Some(line), ..Default::default() });
+        }
+    }
+
     /// The method names the anchor INVOKES in its own span (insertion order = collect order — it drives the
     /// DI method-binding order). Port of `_anchorCalledMethods`.
     fn anchor_called_methods(&self) -> Vec<String> {
@@ -485,6 +559,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
         } else {
             s.same_package_pass();
             s.intra_file_callee_pass();
+            s.self_member_pass();
             s.qualified_callee_pass();
         }
         s.provider_factory_pass();

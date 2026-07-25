@@ -9,13 +9,13 @@ import { parse_imports, default_imports, SKIP_DIRS, provider_for } from "../../.
 import { normpath } from "../../../core/resolve/walk.js";
 import { resolveFileRef } from "../../../core/resolve/file_ref.js";
 import { recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
-import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME, _INSTANCE_BINDER, _TYPED_DECL } from "../../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _CLASS_FIELD, _INTERFACE, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD, _MEMBER, _MEMBER_NAME, _INSTANCE_BINDER, _TYPED_DECL } from "../../atoms.js";
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
 } from "../graph.js";
-import { expanduser, _read, _name_of, _named_units, _wrappedDefSpan, _usage_lines, _call_lines } from "../ast_units.js";
-import { _type_methods, _class_method_usage, _called_types } from "../ast_class.js";
+import { expanduser, _read, _name_of, _named_units, _wrappedDefSpan, _usage_lines, _call_lines, _enclosingClass } from "../ast_units.js";
+import { _type_methods, _class_method_usage, _called_types, _self_member_refs } from "../ast_class.js";
 import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "../attach.js";
 import { resolveDefFile } from "../def_resolve.js";
@@ -209,6 +209,61 @@ function _intraFileCalleePass(s: DepScan): void {
     const did = `d${s.counter}`;
     s.nodes.push({ id: did, symbol: name, kind, file: s.anchorFile, range: [dlo, dhi], enclosing: "", complexity: Math.max(1, dhi - dlo + 1) });
     s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_FULL", line: _call_lines(s.actx, name).find((ln) => ln >= alo && ln <= ahi) ?? dlo });
+  }
+}
+
+// 2c-bis) SELF-MEMBER pass (a FUNCTION/METHOD anchor inside a class) — the anchor uses a member of its OWN
+// class: `this.m(...)`, `f(this.m)` (a callback), or `f(this.m.bind(this))` (the bound reference). None of these
+// were followed: `_intraFileCalleePass` reads `_call_lines`, which only matches a BARE-identifier callee, so a
+// `this.`-qualified call is invisible; and a bound reference passed as an ARGUMENT is never a call at that site
+// at all. Consequence measured on cal.com: `_getAvailableSlots` →
+// `this.getBusyTimesFromLimitsForUsers(...)` → the wrapper FIELD
+// `getBusyTimesFromLimitsForUsers = withReporting(this._getBusyTimesFromLimitsForUsers.bind(this), …)` → the real
+// `_getBusyTimesFromLimitsForUsers` produced ZERO edges, so the batched limit-busy-times implementation the slots
+// path actually runs was unreachable.
+//
+// GROUNDED, never a name guess: `this` IS the enclosing class, so the member is resolved against THAT class's own
+// declarations, span-scoped inside the class node. A same-name method on an unrelated class — in this file or any
+// other — can never match, which is exactly the false-positive family recent commits removed.
+//
+// One ALIAS hop: a function-valued class FIELD (`m = wrap(this._impl.bind(this))`) is dispatched like a method but
+// is not a `method_definition`, so it has no unit to link to. Its initializer's own self-member reference names the
+// sibling method that really implements it, so the edge lands on the IMPLEMENTATION rather than dead-ending on the
+// wrapper. Anything the class does NOT declare (an inherited / base-class member, a plain data field) is left
+// alone — unresolved, not guessed.
+function _selfMemberPass(s: DepScan): void {
+  if (!s.actx) return;
+  const anchor = s.aunits.find((u) => u[0] === s.symbol);
+  if (!anchor || (anchor[1] !== "method" && anchor[1] !== "function")) return;
+  const [, , alo, ahi] = anchor;
+  const cls = _enclosingClass(s.aunits, alo, ahi);
+  const clsU = cls ? s.aunits.find((u) => u[1] === "class" && u[0] === cls) : undefined;
+  if (!clsU) return;                                                              // not in a class ⇒ no `this` receiver
+  const [, , clo, chi] = clsU;
+  // The methods THIS class declares (span-scoped — a same-name method on another class in the same file is out).
+  const methods = new Map<string, [number, number]>();
+  for (const [n, k, ls, le] of s.aunits) if (k === "method" && ls >= clo && le <= chi && n !== s.symbol) methods.set(n, [ls, le]);
+  if (!methods.size) return;
+  // Function-valued FIELDS of this class → the sibling method their initializer references (the wrapper alias).
+  const alias = new Map<string, string>();
+  for (const f of s.actx.collect(s.actx.root, (k: string) => _CLASS_FIELD.has(k))) {
+    const [fs, fe] = s.actx.span(f);
+    if (fs < clo || fe > chi) continue;
+    const fname = _name_of(s.actx, f);
+    if (!fname || methods.has(fname) || alias.has(fname)) continue;
+    for (const r of _self_member_refs(s.actx, s.anchorFile, fs, fe))
+      if (r.member !== fname && methods.has(r.member)) { alias.set(fname, r.member); break; }
+  }
+  for (const r of _self_member_refs(s.actx, s.anchorFile, alo, ahi)) {
+    const target = methods.has(r.member) ? r.member : alias.get(r.member);
+    if (!target || target === s.symbol) continue;
+    if (s.seen.has(`${target} ${s.anchorFile}`)) continue;
+    const [ls, le] = methods.get(target)!;
+    s.seen.add(`${target} ${s.anchorFile}`);
+    s.counter += 1;
+    const did = `d${s.counter}`;
+    s.nodes.push({ id: did, symbol: target, kind: "method", file: s.anchorFile, range: [ls, le], enclosing: cls, complexity: Math.max(1, le - ls + 1) });
+    s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_FULL", line: r.line });
   }
 }
 
@@ -713,7 +768,7 @@ export async function build_dependency_graph(repo: string, anchorFile: string, s
     await _importPass(s, ar[0]); _de("import", _t); _t = _dt();
     await _fileRefPass(s); _de("fileRef", _t); _t = _dt();
     if (isType) { await _typeMethodsPass(s, opts.callerFiles); _de("typeMethods", _t); }
-    else { await _samePackagePass(s); _intraFileCalleePass(s); await _qualifiedCalleePass(s); _de("samePackage+intraCallee+qualified", _t); }
+    else { await _samePackagePass(s); _intraFileCalleePass(s); _selfMemberPass(s); await _qualifiedCalleePass(s); _de("samePackage+intraCallee+self+qualified", _t); }
     _t = _dt();
     await _providerFactoryPass(s); _de("providerFactory", _t); _t = _dt();   // DI factory hop (default-on, opt out =0), before the @Inject pass
     await _interfaceImplPass(s); _de("interfaceImpl", _t); _t = _dt();

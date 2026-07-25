@@ -102,6 +102,12 @@ export interface LanguageProvider {
   // top-level type declarations + members — asking them for `export_statement` nodes finds nothing and makes
   // every module shape (contract) report "no exported members". undefined/false ⇒ exportless.
   exportStatements?: boolean;
+  // The node KIND(s) that denote the ENCLOSING INSTANCE as a receiver — TS/Java/C++ `this`, Ruby `self`. A
+  // member access on one of these (`this.m()`, `this.m` passed as a callback, `this.m.bind(this)`) names a
+  // member of a KNOWN class (the enclosing one), so it resolves to a definite declaration without any
+  // repo-wide name match. undefined ⇒ the language has no such distinct receiver node (Python's `self` is an
+  // ordinary parameter identifier, indistinguishable from any other local) ⇒ no self-member edges there.
+  selfReceiver?: string[];
 }
 
 // Locate a binary on PATH (the sync `shutil.which` equivalent). Returns the absolute path or null.

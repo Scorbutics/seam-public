@@ -53,6 +53,14 @@ pub trait LanguageProvider: Send + Sync {
         let _ = ctx;
         None
     }
+    /// The node KIND(s) denoting the ENCLOSING INSTANCE as a receiver — TS/Java/C++ `this`, Ruby `self`. A member
+    /// access on one of these (`this.m()`, `this.m` as a callback, `this.m.bind(this)`) names a member of a KNOWN
+    /// class, so it resolves to a definite declaration without any repo-wide name match. `[]` (the default) = the
+    /// language has no such distinct receiver node (Python's `self` is an ordinary parameter identifier) ⇒ no
+    /// self-member edges. Port of `LanguageProvider.selfReceiver`.
+    fn self_receiver(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// The interface named by a `<Iface>.class` literal in a call's argument text (Java DI service-locator). `None`
     /// for a language with no class-literal form.
     fn class_literal_arg(&self, args_text: &str) -> Option<String> {

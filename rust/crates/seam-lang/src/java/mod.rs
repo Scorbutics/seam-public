@@ -25,6 +25,9 @@ impl LanguageProvider for JavaProvider {
     fn impl_markers(&self) -> &'static [&'static str] {
         &["interface", "implements"]
     }
+    fn self_receiver(&self) -> &'static [&'static str] {
+        &["this"]
+    }
     fn class_literal_arg(&self, args_text: &str) -> Option<String> {
         static RE: once_cell::sync::Lazy<regex::Regex> = once_cell::sync::Lazy::new(|| regex::Regex::new(r"([A-Za-z_$][\w$]*)\s*\.\s*class").unwrap());
         RE.captures(args_text).map(|c| c[1].to_string())

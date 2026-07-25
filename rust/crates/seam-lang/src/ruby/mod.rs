@@ -19,4 +19,7 @@ impl LanguageProvider for RubyProvider {
     fn imports(&self, text: &str) -> Vec<ImportRef> {
         imports::imports(text)
     }
+    fn self_receiver(&self) -> &'static [&'static str] {
+        &["self"]
+    }
 }

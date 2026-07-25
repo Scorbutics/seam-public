@@ -31,6 +31,9 @@ impl LanguageProvider for TypeScriptProvider {
     fn export_statements(&self) -> bool {
         true
     }
+    fn self_receiver(&self) -> &'static [&'static str] {
+        &["this"]
+    }
     fn namespace_imports(&self, text: &str) -> Vec<crate::types::NamespaceImport> {
         imports::namespace_imports(text)
     }

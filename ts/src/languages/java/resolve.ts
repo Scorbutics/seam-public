@@ -121,7 +121,7 @@ function classLiteralArg(argsText: string): string | null {
 
 export const PROVIDER: LanguageProvider = {
   name: "java", extensions: EXTENSIONS, resolve: floor_resolve, imports, implMarkers: ["interface", "implements"],
-  handlerFileConvention: /(controller|resource)\.java$/, classLiteralArg,
+  handlerFileConvention: /(controller|resource)\.java$/, classLiteralArg, selfReceiver: ["this"],
   lsp: {
     language: "java", command: system("jdtls"), languageId: "java",
     rootMarkers: ["pom.xml", "build.gradle", "build.gradle.kts", ".project"],

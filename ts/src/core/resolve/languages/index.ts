@@ -20,7 +20,8 @@ export const PROVIDERS: LanguageProvider[] = [
   minimal("kotlin", [".kt", ".kts"], { language: "kotlin", command: system("kotlin-language-server"), languageId: "kotlin", rootMarkers: ["build.gradle", "build.gradle.kts", "settings.gradle"] },
     { handlerFileConvention: /controller\.kt$/ }),
   minimal("c", [".c", ".h"], { language: "c", command: system("clangd"), languageId: "c", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
-  minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"], { language: "cpp", command: system("clangd"), languageId: "cpp", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] }),
+  minimal("cpp", [".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"], { language: "cpp", command: system("clangd"), languageId: "cpp", rootMarkers: ["compile_commands.json", "Makefile", "CMakeLists.txt"] },
+    { selfReceiver: ["this"] }),   // C++ `this->m()` — a field_expression on the `this` node
 ];
 
 // Handler/controller-file recall net (coupling L3's SIGNAL #5), driven by each language's own

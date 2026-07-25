@@ -7,6 +7,7 @@ import {
   _INTERFACE, _INTERFACE_MEMBER, _HERITAGE, _BASE_NAME, _NAME_KINDS, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD,
   _CLASS_FIELD, _FUNCLIKE, _VAR_DECLARATOR, _RETURN_TYPE_FIELD, _CALL_VALUE_UNWRAP,
 } from "../atoms.js";
+import { provider_for } from "../../core/resolve/languages/index.js";
 import { type Unit } from "./graph.js";
 import { _name_of, _enclosingClass } from "./ast_units.js";
 
@@ -25,6 +26,43 @@ export function _field_fn_owner(ctx: Ctx, symbol: string, units: Unit[]): string
     if (owner) return owner;
   }
   return "";
+}
+
+// Every use of a member on the ENCLOSING INSTANCE inside [lo, hi] → {member, line}. Three shapes, one concept:
+//   • `this.m(...)`            — a plain sibling call.
+//   • `f(this.m)`              — the method passed as a CALLBACK (never called at this site).
+//   • `f(this.m.bind(this))`   — the BOUND reference, the HOF/telemetry-wrapper idiom.
+// All three NAME a member of a KNOWN receiver (the enclosing class), so the caller can resolve them to a
+// definite declaration on that class — never a repo-wide name match. Reading the reference (not the call)
+// is what catches the last two: `_call_lines` only sees a BARE-identifier callee, so a bound reference
+// passed as an ARGUMENT produced no signal at all and the real implementation behind a batching/wrapper
+// helper was unreachable.
+// The self-receiver NODE KIND is language-owned (LanguageProvider.selfReceiver) — no kind literal here; a
+// language that declares none (Python: `self` is an ordinary parameter) yields [], the conservative side.
+// Both call grammars are covered: the NESTED member form (TS/JS/C++ — `_MEMBER` over the self node) and the
+// FLAT form (Java/Ruby — the call node's own receiver/name fields).
+export function _self_member_refs(ctx: Ctx, file: string, lo: number, hi: number): { member: string; line: number }[] {
+  const self = new Set(provider_for(file)?.selfReceiver ?? []);
+  if (!self.size) return [];
+  const out: { member: string; line: number }[] = [];
+  const seen = new Set<string>();
+  const add = (member: string, line: number) => { const k = `${member}@${line}`; if (!seen.has(k)) { seen.add(k); out.push({ member, line }); } };
+  for (const m of ctx.collect(ctx.root, (k) => _MEMBER.has(k))) {
+    const [ln] = ctx.span(m);
+    if (ln < lo || ln > hi) continue;
+    const ch = ctx.children(m);
+    if (!ch.length || !self.has(ch[0].type)) continue;
+    const prop = ch.find((c) => _MEMBER_NAME.has(c.type) || _NAME_KINDS.has(c.type));
+    if (prop && prop !== ch[0]) add(ctx.text(prop), ln);
+  }
+  for (const c of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
+    const [ln] = ctx.span(c);
+    if (ln < lo || ln > hi) continue;
+    const recv = _CALL_RECV_FIELD.map((f) => c.childForFieldName?.(f)).find(Boolean);
+    const nm = _CALL_NAME_FIELD.map((f) => c.childForFieldName?.(f)).find(Boolean);
+    if (recv && nm && self.has(recv.type)) add(ctx.text(nm), ln);
+  }
+  return out.sort((a, b) => a.line - b.line);
 }
 
 // The (method name + its node + receiver) of a call site, across the two call-grammar shapes. NESTED

@@ -526,6 +526,62 @@ pub fn wrapped_def_span(ctx: &Ctx, symbol: &str, units: &[Unit]) -> Option<(usiz
 }
 
 /// Lines of a call whose callee LEADS with the identifier `local` (port of `_call_lines`).
+/// Every use of a member on the ENCLOSING INSTANCE inside `[lo, hi]` → `(member, line)`. Three shapes, one
+/// concept: the plain sibling call `this.m(...)`, the CALLBACK `f(this.m)`, and the BOUND reference
+/// `f(this.m.bind(this))`. All three NAME a member of a KNOWN receiver (the enclosing class), so the caller can
+/// resolve them against THAT class's declarations — never a repo-wide name match. Reading the REFERENCE (not the
+/// call) is what catches the last two: `call_lines` only sees a bare-identifier callee, so a bound reference
+/// passed as an ARGUMENT produced no signal at all.
+/// The self-receiver node KIND is language-owned (`LanguageProvider::self_receiver`); a language declaring none
+/// (Python — `self` is an ordinary parameter) yields `[]`, the conservative side. Both call grammars are covered:
+/// the NESTED member form (TS/JS/C++) and the FLAT receiver/name-field form (Java/Ruby). Port of
+/// `_self_member_refs`.
+pub fn self_member_refs(ctx: &Ctx, file: &str, lo: usize, hi: usize) -> Vec<(String, usize)> {
+    let selfk: &[&str] = crate::provider_for(file).map(|p| p.self_receiver()).unwrap_or(&[]);
+    if selfk.is_empty() {
+        return Vec::new();
+    }
+    let is_self = |k: &str| selfk.contains(&k);
+    let mut out: Vec<(String, usize)> = Vec::new();
+    let mut seen: HashSet<(String, usize)> = HashSet::new();
+    let mut add = |member: String, line: usize, out: &mut Vec<(String, usize)>, seen: &mut HashSet<(String, usize)>| {
+        if seen.insert((member.clone(), line)) {
+            out.push((member, line));
+        }
+    };
+    for m in ctx.collect(ctx.root(), nk::is_member) {
+        let ln = ctx.span(m).0;
+        if ln < lo || ln > hi {
+            continue;
+        }
+        let ch = ctx.children(m);
+        let Some(&first) = ch.first() else { continue };
+        if !is_self(first.kind()) {
+            continue;
+        }
+        if let Some(&prop) = ch.iter().find(|c| nk::is_member_name(c.kind()) || nk::is_name_kind(c.kind())) {
+            if prop.id() != first.id() {
+                add(ctx.text(prop).to_string(), ln, &mut out, &mut seen);
+            }
+        }
+    }
+    for c in ctx.collect(ctx.root(), nk::is_call) {
+        let ln = ctx.span(c).0;
+        if ln < lo || ln > hi {
+            continue;
+        }
+        let recv = nk::CALL_RECV_FIELD.iter().find_map(|f| c.child_by_field_name(f));
+        let nm = nk::CALL_NAME_FIELD.iter().find_map(|f| c.child_by_field_name(f));
+        if let (Some(r), Some(n)) = (recv, nm) {
+            if is_self(r.kind()) {
+                add(ctx.text(n).to_string(), ln, &mut out, &mut seen);
+            }
+        }
+    }
+    out.sort_by_key(|x| x.1);
+    out
+}
+
 pub fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
     let mut lines = Vec::new();
     for c in ctx.collect(ctx.root(), nk::is_call) {
