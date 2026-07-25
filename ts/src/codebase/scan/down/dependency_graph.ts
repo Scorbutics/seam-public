@@ -18,6 +18,7 @@ import { expanduser, _read, _name_of, _named_units, _wrappedDefSpan, _usage_line
 import { _type_methods, _class_method_usage, _called_types } from "../ast_class.js";
 import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";
 import { _annotationLo, _chain_route_consumers } from "../attach.js";
+import { resolveDefFile } from "../def_resolve.js";
 import { timingOn } from "../../../core/progress.js";
 
 type BuildOpts = {
@@ -268,36 +269,6 @@ function _qualCallMemberChain(ctx: Ctx, c: any): string[] | null {
   return parts.length >= 3 ? parts : null;   // need base + ≥1 field + method to be a CHAIN (2-part is the plain-qualified case)
 }
 
-// Resolve a type/symbol NAME to the file that DEFINES it (a class/interface), following the resolution graph:
-// same-file def → a NAMED import/re-export → a DEFAULT import (→ the module's default export) → a barrel re-export.
-// Deps-free (tree-sitter + the deterministic import resolver + the source's own `export`s). Depth-capped against
-// import cycles. Closes kc_3's last hops: `KeycloakAdminClient` is a DEFAULT import (`import X from "@pkg"`) and the
-// package entry is a BARREL (`export default KeycloakAdminClient` re-exporting the class from `./client`).
-async function _resolveTypeDefFile(repo: string, fromFile: string, typeName: string, depth = 0): Promise<string | null> {
-  if (depth > 6) return null;
-  const rd = _read(repo, fromFile); if (!rd) return null;
-  const ctx = await makeCtx(rd[0], rd[1]); if (!ctx) return null;
-  if (_named_units(ctx).some((u) => u[0] === typeName && (u[1] === "class" || u[1] === "interface"))) return fromFile;   // defined here
-  for (const ref of parse_imports(fromFile, rd[0])) if (ref.local === typeName || ref.name === typeName) {   // named import / re-export
-    const t = await _resolve_import(repo, fromFile, ref);
-    if (t && t[0]) { const d = await _resolveTypeDefFile(repo, t[0], ref.name, depth + 1); if (d) return d; }
-  }
-  for (const di of default_imports(fromFile, rd[0])) if (di.local === typeName) {   // `import typeName from "m"` → m's DEFAULT export
-    const t = await _resolve_import(repo, fromFile, { name: di.local, local: di.local, source: di.source, line: di.line ?? 0, col: 0 });
-    if (t && t[0]) { const d = await _resolveDefaultExportDef(repo, t[0], depth + 1); if (d) return d; }
-  }
-  return null;
-}
-// The file that DEFINES a module's DEFAULT export: `export default class X {}` (here) / `export default X` /
-// `export { X as default }` (→ resolve the NAME X, which may itself be a named import from `./client`).
-async function _resolveDefaultExportDef(repo: string, moduleFile: string, depth: number): Promise<string | null> {
-  if (depth > 6) return null;
-  const rd = _read(repo, moduleFile); if (!rd) return null;
-  const text = rd[0];
-  if (/export\s+default\s+(?:async\s+)?(?:function|class)\s+[A-Za-z_$][\w$]*/.test(text)) return moduleFile;   // default def is HERE
-  const m = text.match(/export\s+default\s+([A-Za-z_$][\w$]*)\s*;/) ?? text.match(/export\s*\{[^}]*\b([A-Za-z_$][\w$]*)\s+as\s+default\b/);
-  return m ? _resolveTypeDefFile(repo, moduleFile, m[1], depth + 1) : null;
-}
 
 // A class MEMBER (method OR an arrow/function-VALUED field) named `member` in `file` → its [lo, hi] span. The
 // chain's final hop needs this because SDK builders declare their operations as FIELDS (`public create =
@@ -329,7 +300,7 @@ async function _fieldTypeIn(repo: string, file: string, field: string): Promise<
   }
   if (!typeName) return null;
   // resolve the type NAME to the file that DEFINES it — same-file, named/default import, or barrel re-export
-  return { type: typeName, file: await _resolveTypeDefFile(repo, file, typeName) };
+  return { type: typeName, file: await resolveDefFile(repo, file, typeName) };
 }
 
 // kc_3 (tree-sitter, NO LSP / node_modules): resolve an UNTYPED base var to its type by following a PROVIDER-HOOK

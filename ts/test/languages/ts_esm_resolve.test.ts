@@ -81,3 +81,25 @@ describe("default import parsing (for default-export consumer resolution)", () =
     expect(defaultImports("import * as ns from \"./widget\";\n")).toEqual([]);
   });
 });
+
+// INLINE type-only specifiers: `import { type X, Y }` / `export { type X } from`. The clause-level
+// `import type {…}` form was already stripped, but the PER-SPECIFIER modifier stayed glued to the name,
+// binding the symbol as "type X" — so no consumer edge and no def-resolution hop ever matched it (the
+// cal.com DI container re-exports its service type exactly this way, which is what left a factory-obtained
+// receiver unresolvable and produced a false caller edge).
+describe("inline type-only import specifiers bind the real symbol name", () => {
+  test("`import { type X, Y } from` binds X (not `type X`)", () => {
+    expect(imports("import { type Svc, loader } from \"./m\";\n").map((r) => [r.name, r.local]))
+      .toEqual([["Svc", "Svc"], ["loader", "loader"]]);
+  });
+  test("`export { type X } from` binds X as a re-export", () => {
+    expect(imports("export { type Svc } from \"./m\";\n")).toEqual([{ name: "Svc", local: "Svc", line: 0, col: 0, source: "./m", reexport: true }]);
+  });
+  test("an aliased inline type keeps its alias", () => {
+    expect(imports("import { type Svc as S } from \"./m\";\n").map((r) => [r.name, r.local])).toEqual([["Svc", "S"]]);
+  });
+  test("a binding literally NAMED `type` is untouched", () => {
+    expect(imports("import { type } from \"./m\";\n").map((r) => [r.name, r.local])).toEqual([["type", "type"]]);
+    expect(imports("import { type as T } from \"./m\";\n").map((r) => [r.name, r.local])).toEqual([["type", "T"]]);
+  });
+});

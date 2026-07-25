@@ -46,6 +46,16 @@ export const _CALL_NAME_FIELD = ["name", "method"];
 export const _CALL_RECV_FIELD = ["object", "receiver"];
 export const _NEW = new Set(["new_expression", "object_creation_expression"]);
 export const _TYPE_REF = new Set(["type_identifier"]);
+// The declaration FIELD holding a function-like's RETURN TYPE: TS/JS `return_type` (a `type_annotation`
+// wrapper), Java/C#/C/C++ `type`. Reading it turns `const x = makeThing()` — a receiver the type-annotation
+// pass sees as UNRESOLVED — into a provable type, which is what re-arms receiver grounding for a
+// factory/DI-getter-obtained receiver. Field names are the grammar's stable structural interface.
+export const _RETURN_TYPE_FIELD = ["return_type", "type"];
+// Expression wrappers that are TRANSPARENT around a call in an initializer (`const x = await f()`,
+// `(f())`, `f()!`, `f() as T`): unwrapping them lets a binder be tied to the call it is initialised from
+// without ever mistaking a call NESTED inside a bigger expression (`{ a: f() }`) for the whole value.
+export const _CALL_VALUE_UNWRAP = new Set(["await_expression", "parenthesized_expression",
+  "non_null_expression", "as_expression", "type_assertion_expression", "unary_expression"]);
 export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",
   "public_field_definition", "field_definition", "property_signature"]);
 // Class-member FIELD declarations that can BIND A FUNCTION as a member — the HOF/telemetry-wrapper idiom

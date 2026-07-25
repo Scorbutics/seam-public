@@ -5,7 +5,7 @@ import {
   type Ctx,
   _CLASS_KINDS, _METHOD_KINDS, _MEMBER, _MEMBER_NAME, _NEW, _INSTANCE_BINDER, _TYPE_REF,
   _INTERFACE, _INTERFACE_MEMBER, _HERITAGE, _BASE_NAME, _NAME_KINDS, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD,
-  _CLASS_FIELD,
+  _CLASS_FIELD, _FUNCLIKE, _VAR_DECLARATOR, _RETURN_TYPE_FIELD, _CALL_VALUE_UNWRAP,
 } from "../atoms.js";
 import { type Unit } from "./graph.js";
 import { _name_of, _enclosingClass } from "./ast_units.js";
@@ -184,6 +184,72 @@ export function _instance_types(ctx: Ctx): Map<string, Set<string>> {
   }
   _instTypesCache.set(ctx, out);
   return out;
+}
+
+// Per-file map of binder name → the UNQUALIFIED callee it is initialised from (`const x = makeThing()`,
+// `const x = await makeThing()`). This is the receiver shape a factory / DI getter produces: no type
+// annotation and no `new`, so `_instance_types` yields NOTHING and every receiver-grounding check is
+// disarmed. Pairing the callee with its DECLARED RETURN TYPE (resolved cross-file by
+// scan/up/receiver_types.ts) recovers the type the annotation would have given.
+// Value `null` = the name is bound more than once from DIFFERENT callees → ambiguous, callers must bail.
+// Only the WHOLE initializer counts (wrappers unwrapped): a call nested in a larger expression says
+// nothing about the binder's type. Grounded on the parse tree, not on a naming convention.
+const _callBoundCache = new WeakMap<Ctx, Map<string, string | null>>();
+export function _call_bound_binders(ctx: Ctx): Map<string, string | null> {
+  const memo = _callBoundCache.get(ctx);
+  if (memo) return memo;
+  const out = new Map<string, string | null>();
+  for (const node of ctx.collect(ctx.root, (k) => _INSTANCE_BINDER.has(k))) {
+    const nameNode = ctx.children(node).find((c) => _NAME_KINDS.has(c.type));
+    if (!nameNode) continue;
+    const name = ctx.text(nameNode);
+    let value: any = ctx.children(node).filter((c) => c !== nameNode).pop() ?? null;
+    while (value && _CALL_VALUE_UNWRAP.has(value.type)) value = value.namedChildCount ? value.namedChild(0) : null;   // first NAMED child = the wrapped expression, every wrapper kind
+    const callee = value && _CALL.has(value.type) ? _callee(ctx, value) : null;
+    const bound = callee && !callee.obj ? callee.name : null;   // unqualified `f()` only — a `o.f()` receiver is its own resolution problem
+    if (bound === null) continue;
+    out.set(name, out.has(name) && out.get(name) !== bound ? null : bound);
+  }
+  _callBoundCache.set(ctx, out);
+  return out;
+}
+
+// The single DECLARED return-type name of the function-like named `fnName` in this file, or null when it
+// has none / is not a lone type reference (`Promise<T>`, a union, a generic — ambiguous, so we refuse to
+// narrow). Cross-language via the `_RETURN_TYPE_FIELD` registry.
+export function _declared_return_type(ctx: Ctx, fnName: string): string | null {
+  for (const fn of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k))) {
+    if (_name_of(ctx, fn) !== fnName) continue;
+    for (const f of _RETURN_TYPE_FIELD) {
+      const rt = fn.childForFieldName?.(f);
+      if (!rt) continue;
+      const names = new Set((_TYPE_REF.has(rt.type) ? [rt] : ctx.collect(rt, (k) => _TYPE_REF.has(k))).map((t: any) => ctx.text(t)));
+      if (names.size === 1) return [...names][0];
+    }
+  }
+  // `export const f = (): T => …` — the funclike is the declarator's VALUE, so it carries no name of its own.
+  for (const d of ctx.collect(ctx.root, (k) => _VAR_DECLARATOR.has(k))) {
+    const ch = ctx.children(d);
+    if (!ch.length || !_NAME_KINDS.has(ch[0].type) || ctx.text(ch[0]) !== fnName) continue;
+    const fl = ch.find((c) => _FUNCLIKE.has(c.type));
+    if (!fl) continue;
+    for (const f of _RETURN_TYPE_FIELD) {
+      const rt = fl.childForFieldName?.(f);
+      if (!rt) continue;
+      const names = new Set((_TYPE_REF.has(rt.type) ? [rt] : ctx.collect(rt, (k) => _TYPE_REF.has(k))).map((t: any) => ctx.text(t)));
+      if (names.size === 1) return [...names][0];
+    }
+  }
+  return null;
+}
+
+// Does this file declare `typeName` as a CONCRETE class (not an interface) that owns its OWN `method`?
+// The proof a `typeName`-typed receiver's `method()` call has a real, non-anchor target. Interfaces are
+// excluded on purpose: an interface-typed receiver is genuinely polymorphic (the anchor's class may
+// implement it), so narrowing there would trade a false positive for a FALSE NEGATIVE.
+export function _class_owns_method(ctx: Ctx, typeName: string, method: string): boolean {
+  const cls = ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k) && !_INTERFACE.has(k)).find((c) => _name_of(ctx, c) === typeName);
+  return !!cls && _class_methods(ctx, typeName).some((m) => m[0] === method);
 }
 
 // Call sites of one of `methods`, WITH receiver shape so narrowing can resolve the receiver's type:

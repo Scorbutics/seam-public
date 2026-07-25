@@ -22,6 +22,7 @@ import {
   _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names, _field_fn_owner,
 } from "../ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
+import { factoryReceiverType } from "./receiver_types.js";
 
 const _CLASS_CONSUMER_PARSE_CAP = 120;   // parse at most this many consumers for method attribution (rest = module nodes); bounds a hub class's per-run parse cost
 
@@ -123,7 +124,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     recordQuery("callers", [m, anchorLang ?? ""], callers);   // open-set: a NEW caller of a method invalidates
     for (const rel of callers) candidates.add(rel);
   }
-  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
+  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; facTypes: Map<string, string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
   for (const rel of candidates) {
     if (normpath(join(repo, rel)) === anchorAbs) continue;
     const rd = _read(repo, rel);
@@ -131,7 +132,21 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     const cctx = await makeCtx(rd[0], rd[1]);
     if (!cctx) { dbg(`[callsite] SKIPPED unparseable candidate consumer ${rel} — its calls to ${[...methods].join("/")} are NOT resolved`); continue; }
     const sites = _method_call_sites(cctx, methods);
-    if (sites.length) pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes: owner ? _instance_types(cctx) : new Map(), typeNames: owner ? _type_names(cctx) : new Set<string>(), sites });
+    if (!sites.length) continue;
+    const instTypes = owner ? _instance_types(cctx) : new Map<string, Set<string>>();
+    // FACTORY-NARROWED receivers: a receiver the type pass could NOT resolve, bound from a call whose callee
+    // declares a return type (`const svc = getThingService();`). Resolved only for the receivers that actually
+    // appear at a matched call site and only when an owner is set (the narrowing is off otherwise), so the two
+    // module hops are paid for a handful of binders per file, memoised across up-builds.
+    const facTypes = new Map<string, string>();
+    if (owner) {
+      for (const s of sites) {
+        if (!s.recvId || s.recvNew || facTypes.has(s.recvId) || instTypes.get(s.recvId)?.size) continue;
+        const t = await factoryReceiverType(repo, rel, cctx, s.recvId, s.method);
+        if (t) facTypes.set(s.recvId, t);
+      }
+    }
+    pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes, typeNames: owner ? _type_names(cctx) : new Set<string>(), facTypes, sites });
   }
 
   const family = owner ? _subclass_family(globalBases, owner) : null;
@@ -185,6 +200,22 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     if (!tys.length) return false;   // unresolved receiver → PARTIAL (keep — the ambiguity is real)
     return tys.every((t) => t !== owner && !family?.has(t) && !ownerBaseSet.has(t));   // every resolved type dispatches ELSEWHERE
   };
+  // PROVABLY-FOREIGN FACTORY receiver — same rule as provablyForeign, on a receiver whose type came from the
+  // FACTORY hop (up/receiver_types.ts) instead of an annotation: `const svc = getThingService();` where the
+  // getter declares `: ThingService`. Without it a DI/factory receiver is UNRESOLVED, so every receiver check
+  // no-ops and a same-named method on an unrelated service is ASSERTED as a caller — the cal.com false
+  // positive where `instantBookingService.createBooking()` (InstantBookingCreateService, which defines and
+  // serves its own `createBooking`) was reported as a caller of RegularBookingService.createBooking.
+  // Kept as its OWN predicate (not folded into instTypes) so it can only ever DROP, never promote a site to
+  // RESOLVED_FULL. `receiver_types` has already proved T is a concrete class owning the method; here we only
+  // need T to be unrelated to the owner — and, because T is a class, `owner ∈ subclass-family(T)` is the
+  // complete "the owner could BE a T" test, so a subclass receiver is never dropped.
+  const factoryForeign = (s: { recvId: string | null; recvNew: string | null }, facTypes: Map<string, string>): boolean => {
+    if (!owner || !s.recvId || s.recvNew) return false;
+    const t = facTypes.get(s.recvId);
+    if (!t) return false;   // unresolved receiver → PARTIAL (keep — the ambiguity is real)
+    return t !== owner && !family?.has(t) && !ownerBaseSet.has(t) && !_subclass_family(globalBases, t).has(owner);
+  };
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
@@ -196,7 +227,8 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   const resolvedMethods = new Set<string>();   // every method name a call site was found for (any provenance)
   for (const pf of pending) {
     for (const s of pf.sites) {
-      if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames) || provablyForeign(s, pf.instTypes)) continue;   // dispatches to a different type — not a consumer of this class
+      if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames) || provablyForeign(s, pf.instTypes)
+          || factoryForeign(s, pf.facTypes)) continue;   // dispatches to a different type — not a consumer of this class
       resolvedMethods.add(s.method);
       const enc = _enclosing(pf.units, s.line);
       const [sym, kind, start, end] = enc ? enc : [stem(pf.fn), "module", s.line, s.line];
