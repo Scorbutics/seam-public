@@ -187,15 +187,24 @@ export interface CouplingOtherSide { kind: string; value: string; file: string; 
 
 // Files containing `value` literally — ripgrep (gitignore-aware, instant) with a walk+substring fallback. The
 // value is a plausible key (identifier/path), matched as a FIXED string, so there's no regex/shell hazard.
+//
+// TOTALLY ORDERED (path ascending) — NOT a ranking, a DETERMINISM contract. `rg -l` walks the tree on a THREAD
+// POOL, so its emission order is a RACE: the same repo + same value yields a different permutation every run.
+// Every caller then CAPS the list (the targeted candidate cap, files-per-class), which turned a bounded scan
+// into a LOTTERY — a different subset survived the cap each run, so the SAME query answered differently
+// (measured on cal.com: `getBusyTimes` reported 1..6 cross-stack crossings across identical cold runs, each run's
+// set a different prefix of a different permutation). The result is a SET semantically, so normalise it to its
+// canonical order in ONE place and every caller's budget becomes order-independent. Same set, fixed order — no
+// re-ranking, no recall trade. (The walk fallback is already ordered — walk.ts sorts readdir.)
 export function grepFiles(repo: string, value: string): string[] {
   try {
     const r = spawnSync("rg", ["-l", "-F", "--no-messages", "--", value, "."], { cwd: repo, encoding: "utf-8", maxBuffer: 1 << 27 });
-    if (r.status === 0 && r.stdout) return r.stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, ""));
+    if (r.status === 0 && r.stdout) return r.stdout.split("\n").filter(Boolean).map((f) => f.replace(/^\.\//, "")).sort();
     if (r.status === 1) return [];   // ripgrep ran, no matches
   } catch { /* rg absent → fallback */ }
   const out: string[] = [];          // fallback: read+includes (no masking/adapters → far cheaper than the floor scan)
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) if (text.includes(value)) out.push(rel);
-  return out;
+  return out.sort();
 }
 
 const _TARGETED_CAND_CAP = 200;   // bound the candidate scan for a hot value (a common table name); the relevance floor dampens the rest
@@ -247,6 +256,8 @@ export async function couplingOtherSides(
     // excludes tests everywhere else by default; this path (grep → candidate scan) was the last one that didn't, so
     // an intent's subject write-set got flooded by integration-test writers (cal.com `booking`) and the real
     // producers were crowded out. Structural (path shape), matches the engine-wide default test exclusion.
+    // `grepFiles` is TOTALLY ORDERED (see there), so this cap — and the READER_CAP break below — consume a fixed
+    // prefix of a fixed set: the crossing this resolves is the same on every run.
     const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f) && !isTestFile(f)).slice(0, _TARGETED_CAND_CAP);
     let materialised = 0;
     for (const cand of candidates) {

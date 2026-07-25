@@ -36,6 +36,35 @@ describe("couplingOtherSides — targeted value-grep, not a full-repo index", ()
     expect(sides.some((s) => s.file === "util/log.ts")).toBe(false);
   });
 
+  // DETERMINISM (regression): the candidate list comes from `grepFiles`, which shells out to `rg -l`. ripgrep
+  // walks the tree on a THREAD POOL, so its emission order is a RACE — the same repo + value yields a different
+  // permutation every run. This path then CAPS the candidates (_TARGETED_CAND_CAP) and stops materialising at
+  // READER_CAP, so an unordered candidate list made the cap a lottery: the same query answered differently run
+  // to run (cal.com `getBusyTimes` reported 1..6 cross-stack crossings across identical cold runs). The contract
+  // is that a repeated query over an UNCHANGED repo returns the SAME crossings — grepFiles is totally ordered.
+  //
+  // The repo is built WIDE (enough `payments` mentions to exceed the caps, spread over many directories) so
+  // ripgrep genuinely parallelises the walk — that is what makes this test non-vacuous.
+  test("repeating the same query over an unchanged repo returns the SAME crossings (rg order is a race)", async () => {
+    if (!available()) return;
+    w("api/charge.ts", 'import { supabase } from "../db";\nexport function chargeCard(amount: number) {\n  return supabase.from("payments").insert({ amount });\n}\n');
+    // 400 candidate files across 20 directories that MENTION the key — the bulk that makes rg's walk race and
+    // pushes the candidate set past the cap. Prose-only, so they can never be a crossing themselves.
+    for (let i = 0; i < 400; i++) w(`pkg${String(i % 20).padStart(2, "0")}/note${String(i).padStart(3, "0")}.ts`, `export const n${i} = "payments ledger note ${i}";\n`);
+    // REAL readers of the same table, scattered through that crowd so no fixed prefix of any permutation
+    // trivially contains them all.
+    for (let i = 0; i < 12; i++) w(`pkg${String((i * 7) % 20).padStart(2, "0")}/reader${i}.ts`, `import { supabase } from "../db";\nexport function showBilling${i}() {\n  return supabase.from("payments").select("*");\n}\n`);
+
+    const runs: string[] = [];
+    for (let i = 0; i < 5; i++) {
+      const sides = await couplingOtherSides(REPO, "api/charge.ts", "chargeCard");
+      runs.push(JSON.stringify(sides));
+    }
+    expect(runs.length).toBe(5);
+    expect(runs.every((r) => r === runs[0])).toBe(true);   // byte-identical across repeats — no rg-order lottery
+    expect(JSON.parse(runs[0]).length).toBeGreaterThan(0); // non-vacuous: the query really does resolve crossings
+  });
+
   test("an anchor that touches NO boundary returns [] (the fast no-scan path)", async () => {
     if (!available()) return;
     w("util/calc.ts", "export function addOne(x: number) {\n  const base = x;\n  return base + 1;\n}\n");
