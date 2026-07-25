@@ -11,7 +11,7 @@
 // Everything here is STRUCTURAL and GROUNDED (resolved call/invoke edges + registry boundary kinds); no name
 // heuristics, no intent, no LLM. An entry is a node the graph actually reached — never invented.
 
-import { CROSS_KINDS as _CROSS_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./medium_registry.js";
+import { CROSS_KINDS as _CROSS_KINDS, BOUND_KINDS as _BOUND_KINDS, STORE_KINDS as _STORE_KINDS } from "./medium_registry.js";
 import { type Seam, buildNodeIndex } from "./vocab.js";
 import { at } from "./shapes.js";
 
@@ -24,7 +24,27 @@ export interface EntryRay {
    * is still NAMED (the `…and behind those` block) instead of silently disappearing when the climb reroutes past it.
    * Value = hop distance from the interaction (the render orders it nearest-first). */
   through: Map<string, number>;
+  /** EVIDENCE STRENGTH of this way in — how strongly the edge that produced it says "this TRIGGERS the region".
+   * The value is `EVIDENCE.*` (see below): the STRONGEST origin the ray has, so it can only ever improve as the
+   * region grows (a co-accessor that later gains a call edge is promoted, never demoted) — monotone by construction. */
+  strength: number;
 }
+
+/**
+ * The evidence ladder "## In" tiers on, sourced from the medium registry's OWN closed sets — not a parallel notion:
+ *  - INVOKE — a grounded CALL-graph in-edge (call/dispatch/interface-impl/import/reference). Something in the region
+ *    literally hands control to the mechanism. For a "trace from X" question this chain IS the answer.
+ *  - RELAY  — a crossing over a RELAY boundary (an HTTP route / annotation: everything in `BOUND_KINDS` that is NOT
+ *    a `STORE_KIND`). A route is a call that the resolver cannot follow across the process edge — a trigger too,
+ *    one indirection out.
+ *  - SHARED_KEY — a crossing over a STORE (`STORE_KINDS`: table/queue/cache/file/…). Two functions touch the same
+ *    table with NO control-flow edge between them. That is real, un-greppable CONTEXT — a co-accessor, not a trigger.
+ * Ranking these in order is the whole point: cal.com's payment region has 582 shared-key crossings and ~16 grounded
+ * call entries, so an undifferentiated relevance sort filled the head with co-access and the call chain fell off.
+ */
+export const EVIDENCE = { INVOKE: 0, RELAY: 1, SHARED_KEY: 2 } as const;
+/** boundary node kind → the evidence tier a crossing THROUGH it carries. Registry-sourced, no hardcoded kind list. */
+export const evidenceOfBoundaryKind = (kind: string): number => (_STORE_KINDS.has(kind) ? EVIDENCE.SHARED_KEY : EVIDENCE.RELAY);
 
 // A real INVOCATION edge (call/dispatch/interface-impl), NOT a weak reference/import. Entry attribution and the
 // forward delegation walk both key on this closed set — one definition, not a copy per call site.
@@ -64,8 +84,11 @@ export interface EntrySurface {
   matchNode: (c: { file: string; symbol: string }) => string | undefined;
   /** entry id → the boundary id(s) its ray crosses (rendered as the flow edge). */
   rayCross: Map<string, Set<string>>;
-  /** the ways in, ranked (spine tier → intent relevance → label). ALL of them; the caller caps + says so. */
+  /** the ways in, ranked (evidence strength → spine tier → intent relevance → label). ALL of them; the caller caps + says so. */
   rayList: EntryRay[];
+  /** the `cap` rows to SHOW — the ranked head, but with a reserved slice for the weakest tier so shared-key
+   * co-access is never wholly invisible. The caller still reports the residue (`rayList.length - picked.length`). */
+  topRays: (cap: number) => EntryRay[];
   viasStr: (r: EntryRay) => string;
   /** the ONE rendered row both "## In" sections print (`entry ──crossing──▶ ● (via …)  grow: …`). */
   entryRow: (r: EntryRay) => string;
@@ -200,9 +223,12 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   const rays = new Map<string, EntryRay>();
   // `cone` = the other nodes upstream of this way in (the entry the climb picked is only one of them). They stay
   // attached to the ray so a longer/rerouted climb never deletes an answer a smaller --max-nodes gave.
-  const addRay = (entry: string, via: string, cone?: Map<string, number>) => {
+  // `strength` = the EVIDENCE tier of the edge that PROPOSED this way in (see EVIDENCE above). Many origins can
+  // reach the same entry — keep the STRONGEST (min), so a co-accessor that also calls in is ranked as a caller.
+  const addRay = (entry: string, via: string, cone?: Map<string, number>, strength: number = EVIDENCE.INVOKE) => {
     if (mechNodes.has(entry)) return;
-    const r = rays.get(entry) ?? { entry, vias: new Set<string>(), through: new Map<string, number>() };
+    const r = rays.get(entry) ?? { entry, vias: new Set<string>(), through: new Map<string, number>(), strength };
+    r.strength = Math.min(r.strength, strength);
     r.vias.add(via);
     for (const [id, d] of (cone ?? [])) if (id !== entry && !mechNodes.has(id) && hunkById.get(id)?.file)
       r.through.set(id, Math.min(d, r.through.get(id) ?? d));   // nearest occurrence wins (a shared upstream node)
@@ -223,7 +249,14 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
     if (upstream.has(y) || boundaries.has(y) || isBoundaryNode(y) || !hunkById.has(y)) continue;   // call-side / medium / non-region → not a counterpart
     let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart itself
     if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
-    const ec = upstreamConeOf(y);
+    // …and the COUNTERPART ITSELF is on this way in. `upstreamConeOf` drops its own start (it is normally the node
+    // that NAMES the ray), but here the ray is named by `e` — the ENTRY the climb walked up to — so without this the
+    // node that actually PERFORMS the crossing is never named anywhere. MEASURED on cal.com: the checkout fetch
+    // `create-booking.createBooking` (create-booking.ts:5) crosses HTTP /api/book/event into the booking mechanism,
+    // the climb walked past it onto its React caller `RerouteDialog.NewRoutingManager`, and the fetch itself vanished
+    // from "## In" at EVERY budget. Same shape as the terminus bug 6ae4697 fixed on the CALL side. Hop 0 = it IS the
+    // interaction, so it sorts nearest.
+    const ec = new Map(upstreamConeOf(y)); if (y !== e) ec.set(y, 0);
     // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names each OP as a route node's label, and they
     // fold into one code entry. Collect every op-labelled route boundary reachable THROUGH the route-node chain.
     const ops = new Set<string>();
@@ -233,8 +266,11 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
       if (_isSym(rh.label)) ops.add(rh.label);
       for (const nx of (crossAdj.get(r) ?? [])) if (!seenR.has(nx)) stack.push(nx);
     }
-    if (ops.size) for (const op of ops) addRay(e, op, ec);
-    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`, ec);
+    // EVIDENCE of THIS way in = the kind of the boundary `b` that actually links it to the mechanism (a route RELAYS
+    // control; a store is co-access), never the op labels harvested downstream of it.
+    const ev = evidenceOfBoundaryKind(hunkById.get(b)?.kind ?? "");
+    if (ops.size) for (const op of ops) addRay(e, op, ec, ev);
+    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`, ec, ev);
     if (!mechNodes.has(e)) (rayCross.get(e) ?? rayCross.set(e, new Set()).get(e)!).add(b);   // this ray crosses boundary b
   }
   // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
@@ -246,10 +282,32 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   const rayNodes = (r: EntryRay) => [r.entry, ...r.through.keys()];
   const rayTier = (r: EntryRay) => Math.min(...rayNodes(r).map((id) => tierRank(seamOf.get(id))));
   const rayRel = (r: EntryRay) => Math.max(...rayNodes(r).map(centerRel));
+  // EVIDENCE STRENGTH FIRST, then the existing relevance ordering WITHIN a tier. A way in reached by a grounded
+  // call / route relay is stronger evidence of "this TRIGGERS the region" than a shared-key co-access, and for a
+  // "trace from X through to Y" question the grounded chain IS the answer while the co-access is context. Both are
+  // still enumerated (nothing is dropped — the cap is stated with how to raise it); they are TIERED, not filtered.
+  // MEASURED on cal.com (payment trace, --max-nodes 400): the head was 60+ `──db "payment"──▶ ●` co-accessors deep
+  // and the checkout call chain ranked below the display cap, so it only rendered at --token-budget 32000.
   const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label && !isBoundaryNode(r.entry); }).sort((a, b) =>
+    (a.strength - b.strength) ||                                         // grounded call / route relay above shared-key co-access
     (rayTier(a) - rayTier(b)) ||                                         // spine interactions first
     (rayRel(b) - rayRel(a)) ||                                           // then most intent-relevant
     (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
+  // TIERING IS NOT FILTERING. Strength-first ranking alone would let a region with hundreds of shared-key
+  // co-accessors (cal.com's payment region: 582 crossings) push EVERY co-access out of the visible head — and the
+  // co-access rows are exactly what a text search cannot find (a denormalisation trigger, a cross-stack writer).
+  // So the weakest tier PRESENT keeps a reserved quarter of the cap: the grounded call chain leads, the coupling
+  // still shows, and the caller states the residue with how to raise it. Deterministic: both slices keep rayList
+  // order, so the picked list is a stable subsequence of it.
+  const topRays = (cap: number): EntryRay[] => {
+    if (rayList.length <= cap || cap <= 0) return rayList.slice(0, Math.max(0, cap));
+    const head = rayList.slice(0, cap);
+    const weakest = Math.max(...rayList.map((r) => r.strength));
+    if (head.some((r) => r.strength === weakest)) return head;             // already represented — nothing to reserve
+    const weak = rayList.filter((r) => r.strength === weakest);
+    const reserve = Math.min(Math.max(1, Math.floor(cap / 4)), weak.length);
+    return [...head.slice(0, cap - reserve), ...weak.slice(0, reserve)];
+  };
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
@@ -306,5 +364,5 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   };
   return { hunkById, seamOf, nodes, inEdges, callIn, invokeIn, crossAdj, fanIn, centerRel, tierRank,
     isBoundaryNode, crossingEdge, enclOf, qual, where, fileClass, symLike, entryOf, invokersOf,
-    centerIds, centerSet, mechNodes, primary, matchNode, rayCross, rayList, viasStr, entryRow, upstreamSection };
+    centerIds, centerSet, mechNodes, primary, matchNode, rayCross, rayList, topRays, viasStr, entryRow, upstreamSection };
 }
