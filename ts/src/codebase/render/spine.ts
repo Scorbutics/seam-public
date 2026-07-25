@@ -9,6 +9,38 @@
 // comments below (kept verbatim) for why each rule exists.
 import { type Hunk, type Seam, filesOf } from "./vocab.js";
 import { CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./medium_registry.js";
+import { COUPLING } from "../coupling/config.js";
+
+// THE ONE SHARED-KEY notion every render view uses, in its two strengths — sourced from the COUPLING ENGINE's own
+// measurement (the `shared-key-fanout` blindspot it already emits and the header already counts), never from a
+// second heuristic or a name list:
+//  - `fannedKeysOf` — EVERY key whose complement set overflowed its cap. The spine's crown exclusion uses this
+//    (a crossing to any over-fanned key must not be crowned).
+//  - `hubKeysOf`     — the UBIQUITY subset: keys whose OVER-FAN (the co-accessor files the coupling could not
+//    even materialise = the blindspot's own candidate records) exceeds `COUPLING.hubFan`, the same threshold the
+//    coupling itself calls "infra hub, damped". cal.com: `user` 141, `team` 100, `membership` 91, `booking` 69 —
+//    versus `verificationToken` 3, `bookingSeat` 2, `tempOrgRedirect` 1, which stay NARROW and are never damped.
+// The candidate COUNT is a structural fact carried in the model (one record per unmaterialised co-accessor file),
+// so this reads the engine's measurement rather than parsing its prose. Conservative by construction: it
+// under-counts the fan by the materialised head (≤ readerCap), so it errs toward KEEPING a crossing — the narrow
+// shared key (what text search structurally cannot find) is preserved by construction, not by a tuned cutoff.
+const _keyOf = (b: any): string | undefined =>
+  String(b.evidence ?? "").match(/'([^']+)'/)?.[1] ?? (b.candidates ?? [])[0]?.symbol;
+export function fannedKeysOf(model: any): Set<string> {
+  const out = new Set<string>();
+  for (const b of (model?.blindspots ?? []) as any[]) if (b.mechanism === "shared-key-fanout") { const k = _keyOf(b); if (k) out.add(String(k)); }
+  return out;
+}
+export function hubKeysOf(model: any): Set<string> {
+  const fan = new Map<string, number>();
+  for (const b of (model?.blindspots ?? []) as any[]) if (b.mechanism === "shared-key-fanout") {
+    const k = _keyOf(b); if (!k) continue;
+    fan.set(String(k), Math.max(fan.get(String(k)) ?? 0, (b.candidates ?? []).length));
+  }
+  const out = new Set<string>();
+  for (const [k, n] of fan) if (n > COUPLING.hubFan) out.add(k);
+  return out;
+}
 
 export type DerivedIndex = {
   label: Map<string, string>;
@@ -323,8 +355,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // crowned `clients` — an unrelated import/export path. NEVER crown a hub crossing: the spine then crowns a REAL
     // write if one exists, else falls to an honest inferred/frontier terminus (a coincidental hub bleed is worse than
     // "no grounded boundary"). A NON-hub crossing (a specific shared key — the co-producer / data-flow rung) is kept.
-    const _hubTables = new Set<string>();
-    for (const b of (model.blindspots ?? []) as any[]) if (b.mechanism === "shared-key-fanout") { const t = String(b.evidence ?? "").match(/'([^']+)'/)?.[1]; if (t) _hubTables.add(t); }
+    const _hubTables = fannedKeysOf(model);   // the ONE shared-key notion (see fannedKeysOf above) — unchanged semantics
     // …UNLESS the anchor's own CALL CLOSURE writes it MORE THAN ONCE. A table the flow's mechanism produces into
     // across MULTIPLE steps (private-app `payments`, written by its runPhaseEnrich/Invoice/Notify phases — _flowWriters ≥ 2)
     // is the SUBJECT even when it's globally a shared-key hub (written across 10 files → flagged shared-key-fanout);

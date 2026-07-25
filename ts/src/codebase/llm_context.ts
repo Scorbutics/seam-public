@@ -10,7 +10,7 @@
 
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, WAVE_RANK as _WAVE_RANK, CROSS_SOURCE as _CROSS_SOURCE, CROSS_SINK as _CROSS_SINK, CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./render/medium_registry.js";
 import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf, buildNodeIndex } from "./render/vocab.js";
-import { buildDerivedIndex, computeSpine } from "./render/spine.js";
+import { buildDerivedIndex, computeSpine, hubKeysOf } from "./render/spine.js";
 import { buildEntrySurface, INVOKE_KINDS, type EntryRay } from "./render/entry_surface.js";
 export type { Hunk, Seam, Ranked };
 
@@ -274,6 +274,64 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
   const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM !== "0" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
 
+  // HUB-KEY CROSSINGS (default-ON; opt-OUT SEAM_HUB_CROSSING=1 keeps them expanded) — "these two functions both
+  // touch the `user` table" is NOT a relationship in a large app: a UBIQUITOUS key is shared by a hundred unrelated
+  // sites, so each such crossing carries ~no information yet costs a line and CROWDS OUT the flow. On cal.com's
+  // availability trace, 190 of 358 rendered lines were `sharing a DB table with …` — `_patch.user`, the helpscout
+  // sync `route.user`, signup `getServerSideProps` — while ## Mechanism, the actual answer to a "trace the flow"
+  // question, was cut at step 32 of 81. The engine ALREADY measures this (it prints `(+17 hub table(s))` in the
+  // header); it just didn't act on it.
+  // This is a DEMOTION/FOLD, never a drop of coupling in general: a NARROW shared key is the highest-value thing
+  // this render produces (the link a text search structurally cannot follow — cal.com `selectedSlots`, a Postgres
+  // denormalisation trigger). Only keys the coupling itself measured as over-fanned past `COUPLING.hubFan` are
+  // damped (hubKeysOf — see render/spine.ts), and only for a seam that entered the footprint BY that crossing
+  // (`proposedBy === "crossing"`, the same gate the spine's crown exclusion uses) and by NOTHING narrower.
+  // HONESTY: every folded crossing is counted and its hub key(s) named, with the recipe to get them back.
+  const _hubSuppress = process.env.SEAM_HUB_CROSSING !== "1";
+  const _hubKeys = hubKeysOf(model);
+  // Every label that NAMES a shared key in this footprint — a boundary-kinded node's label, per the media registry.
+  // Needed because the coupling labels a write-SITE by its table too (a `user`-labelled node of no boundary kind),
+  // so the key on either end of a crossing edge is recognised by being a known key, not by that node's own kind.
+  const _keyLabels = new Set<string>();
+  for (const id of allIds) if (_BOUND_KINDS.has(kindOfId.get(id) ?? "")) { const l = label.get(id); if (l) _keyLabels.add(l); }
+  // The KEY(S) a seam is linked into this footprint through: the known-key label on the OTHER end of every crossing
+  // edge incident to it, plus its own label when that IS a key. Structural — resolved coupling edges, no matching.
+  const _seamKeyCache = new Map<string, Set<string>>();
+  const _seamKeys = (s: Seam): Set<string> => {
+    const hit = _seamKeyCache.get(s.id); if (hit) return hit;
+    const ids = seamIds(s), out = new Set<string>();
+    if (s.label && _keyLabels.has(s.label)) out.add(s.label);
+    for (const e of (model.edges ?? []) as any[]) {
+      if (!_CROSS_KINDS.has(e.kind)) continue;
+      const f = String(e.from), t = String(e.to), fi = ids.has(f), ti = ids.has(t);
+      if (fi === ti) continue;                                   // both ends in (or both out) → not a crossing INTO this seam
+      const l = label.get(fi ? t : f); if (l && _keyLabels.has(l)) out.add(l);
+    }
+    _seamKeyCache.set(s.id, out);
+    return out;
+  };
+  // A HUB CROSSING: reached ONLY by ubiquitous key(s). ONE narrow key among them is enough to keep it expanded —
+  // that is the recall-safe half of the rule. The spine, the anchor's own seam and the anchor's own module are
+  // never folded (they are the flow), and neither is anything the graph reached by a real CALL (proposedBy).
+  const _hubCrossing = (s: Seam): boolean => {
+    if (!_hubSuppress || !_hubKeys.size) return false;
+    if ((s as any).proposedBy !== "crossing" || spineSet.has(s.id) || s.id === _anchorSeamId) return false;
+    if (s.primary?.file && anchorDir && s.primary.file.startsWith(anchorDir + "/")) return false;
+    const k = _seamKeys(s);
+    return k.size > 0 && [...k].every((x) => _hubKeys.has(x));
+  };
+  // Split a crossing-fed list into what stays expanded and the hub-only tail, plus the ONE honest roll-up line
+  // naming the ubiquitous keys it folded and how to expand them. One mechanism, used by every such section.
+  const _foldHubs = <T extends Seam>(items: T[]): { kept: T[]; note: string[] } => {
+    const kept: T[] = [], dropped: T[] = [];
+    for (const s of items) (_hubCrossing(s) ? dropped : kept).push(s);
+    if (!dropped.length) return { kept, note: [] };
+    const keys = new Set<string>(); for (const s of dropped) for (const k of _seamKeys(s)) keys.add(k);
+    const names = [...keys].sort();
+    return { kept, note: [`  (+${dropped.length} co-access(es) of ubiquitous key(s) folded: ${names.slice(0, 10).join(", ")}${names.length > 10 ? ", …" : ""}`
+      + ` — shared by too many unrelated sites to imply a relationship; SEAM_HUB_CROSSING=1 expands them)`] };
+  };
+
   // SUBJECT FOLD (render-side, recall-safe) — the grow is intent-free, so a broad anchor grounds to MANY off-subject
   // crossings (private-app' payments page ↔ every admin route via the shared auth key; keycloak create-user ↔ every
   // sub-resource). A key's SUBJECT (the resource segments of its route / its table name) is a STRUCTURAL fact, so
@@ -456,11 +514,14 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // both "none" and the tier-band "inferred" case (neither reached a grounded sink on the anchor's own spine).
   const culmSection = (): string[] => {
     const storeSeams = seams.filter((s) => _STORE_KINDS.has((primaryHunk(s) as any)?.kind ?? "") && (primaryHunk(s) as any)?.kind !== "service");
-    const seenT = new Set<string>(); const culm: Seam[] = [];
-    for (const s of [...storeSeams].sort((a, b) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)))) { const t = (primaryHunk(s) as any)?.label; if (!t || seenT.has(t)) continue; seenT.add(t); culm.push(s); }
-    if (!culm.length) return [];
-    return ["", "## Culminations (grounded writes in this footprint — intent-ranked; NOT on the anchor's own call spine, verify the link)",
-      ...culm.slice(0, 6).map((s) => `  ${where(s)} — ${reachSeam(s)}`), ...(culm.length > 6 ? [`  (+${culm.length - 6} more grounded store(s))`] : [])];
+    const seenT = new Set<string>(); const culm0: Seam[] = [];
+    for (const s of [...storeSeams].sort((a, b) => (((b as any).relevance ?? 0) - ((a as any).relevance ?? 0)))) { const t = (primaryHunk(s) as any)?.label; if (!t || seenT.has(t)) continue; seenT.add(t); culm0.push(s); }
+    // a store this footprint touches ONLY through a ubiquitous key is not the flow's culmination — folded, but counted.
+    const { kept: culm, note } = _foldHubs(culm0);
+    const head = "## Culminations (grounded writes in this footprint — intent-ranked; NOT on the anchor's own call spine, verify the link)";
+    if (!culm.length) return note.length ? ["", head, ...note] : [];
+    return ["", head,
+      ...culm.slice(0, 6).map((s) => `  ${where(s)} — ${reachSeam(s)}`), ...(culm.length > 6 ? [`  (+${culm.length - 6} more grounded store(s))`] : []), ...note];
   };
   const spineSection = (): string[] => {
     if (!hasSpine) {
@@ -529,18 +590,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const alsoWritesSection = (): string[] => {
     if (!coProducers.length) return [];
     const seen = new Set<string>();
-    const uniq = [...coProducers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const uniq0 = [...coProducers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    // co-writing a UBIQUITOUS table is not being an alternate entry point to THIS flow (cal.com: 33 `user`/`team`/
+    // `schedule` writers — signup, helpscout sync, verify-email — displacing the mechanism). Fold, name, count.
+    const { kept: uniq, note } = _foldHubs(uniq0);
+    if (!uniq.length && !note.length) return [];
     return ["", "## Also writes (other producers of this flow's data — alternate entry points a call-trace misses)",
-      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "producer(s)")];
+      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "producer(s)"), ...note];
   };
   // ALSO READ — the OTHER files that read the subject table (the display/consume side): admin lists, the member
   // invoice page. Exempt from the region crop so the "…and where is it displayed" half isn't lost to a hub label.
   const alsoReadSection = (): string[] => {
     if (!readers.length) return [];
     const seen = new Set<string>();
-    const uniq = [...readers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const uniq0 = [...readers].sort(byRelDesc).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const { kept: uniq, note } = _foldHubs(uniq0);
+    if (!uniq.length && !note.length) return [];
     return ["", "## Also read (where this flow's data is consumed — the display/read side)",
-      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "consumer(s)")];
+      ...renderCapped(uniq, EXEMPT_N, (s) => seamLine(s), "consumer(s)"), ...note];
   };
   // MECHANISM — the anchor's downstream operations in call/execution order (the CALL fan a thin one-sink spine
   // buries: EventManager.create / handlePayment / scheduleWorkflows). Numbered = flow order; each carries its call
@@ -571,10 +638,15 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`,
       ...renderCapped(_entry.rayList, IN_N, (r) => _entry.entryRow(r), "way(s) in")];
   };
-  const pipelineSection = (): string[] => {
+  const pipelineSection = (mechCap: number): string[] => {
     if (!showPipeline) return [];
+    // Numbered by the step's position in the FULL call order (not in the shown subset), so a gap in the numbering
+    // is the honest, readable signal that steps between them were cropped — never a silently renumbered sequence.
+    const numbered = pipeline.map((p, i) => ({ ...p, n: i + 1 }));
+    const shown = numbered.slice(0, mechCap);
+    const cropped = numbered.length - shown.length;
     return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
-      ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
+      ...renderCapped(shown, mechCap, (p) => {
         const f = fileOfId.get(p.id), where2 = f ? ` (${at(f, startOfId.get(p.id))})` : "";
         const dyn = _dynDispatch.get(p.id);
         // CALL SITE — the line lives in the file of the step's CALLER, which is the anchor's file ONLY at depth 1.
@@ -582,19 +654,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         // `getBusyCalendarTimes … [called at util.ts:193]`, when the call is at getBusyTimes.ts:193). Fall back to
         // the anchor's file when the caller has none — depth-1 output is unchanged.
         const callerBase = (p.caller ? fileOfId.get(String(p.caller)) : undefined)?.split("/").pop() ?? _anchorFileBase;
-        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`;
-      }, "step(s)")];
+        return `  ${p.n}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`;
+      }, "step(s)", cropped, "numbering is call order, so a gap = a cropped step — raise --token-budget for the rest")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
   // after the spine (not in the region) so the shared-key link a grep can't follow is PROMINENT, per the ask.
   const crossStackSection = (): string[] => {
     if (!crossStack.length) return [];
     const seen = new Set<string>();
-    const uniq = [...crossStack].sort(byRel).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    const uniq0 = [...crossStack].sort(byRel).filter((s) => { const k = where(s); if (seen.has(k)) return false; seen.add(k); return true; });
+    // A node reached ONLY over a ubiquitous key is coincidental co-access. A NARROW shared key is exactly the link
+    // grep cannot follow and is never in _hubKeys, so it survives here untouched (the recall 45f7b7e raised).
+    const { kept: uniq, note } = _foldHubs(uniq0);
     const onSub = uniq.filter((s) => !_offSubjTok(s)), offSub = uniq.filter((s) => _offSubjTok(s));
+    if (!onSub.length && !offSub.length && !note.length) return [];
     const lines = ["", "## Cross-stack (the OTHER side of a shared-key boundary — grep can't link these)",
       ...renderCapped(onSub, EXEMPT_N, (s) => seamLine(s), "cross-stack node(s)")];
     if (offSub.length) lines.push(_foldLine(offSub, "crossing(s)"));
+    lines.push(...note);
     return lines;
   };
   // INTENT CROP AT RENDER — the grown footprint may be the FULL structural closure (structural grow: the wave is
@@ -630,6 +707,11 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       for (const s of list) {
         const l = s.label ?? "";
         if (l && (cnt.get(l) ?? 0) >= _HUB_K) { if (seen.has(l)) { hubs.set(l, (hubs.get(l) ?? 0) + 1); continue; } seen.add(l); }   // keep the 1st (top-relevance), roll up the rest
+        // …and the SAME fold keyed on the KEY rather than the label: the hub fan mostly arrives as DISTINCT symbols
+        // (`updateProfile.handler`, `verify-email.handler`, `route.postHandler`) that share nothing but a ubiquitous
+        // table, so the label-repeat test never fires on it. Keep the 1st (top-relevance) example per hub key so the
+        // co-access is still VISIBLE, roll the rest into the same honest pointer line.
+        else if (_hubCrossing(s)) { const k = [..._seamKeys(s)].sort()[0] ?? "?"; if (seen.has(k)) { hubs.set(k, (hubs.get(k) ?? 0) + 1); continue; } seen.add(k); }
         kept.push(s);
       }
       return { kept, hubs };
@@ -724,10 +806,21 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     return out;
   };
 
-  // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
-  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
-  const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
+  // ---- assemble; degrade OFF → supporting → hub samples → (LAST) the mechanism, never the other exempt sections (I3)
+  // THE ORDER IS THE CONTRACT. For a "trace the flow" question the anchor's own call MECHANISM is the answer, and
+  // the REGION TAIL is context — so the tail yields FIRST and the mechanism is the last thing cropped. Without
+  // this the budget went the other way round: the region printed its full off-path list (165 lines of co-access)
+  // while the mechanism stopped at step 34 of 84, which is the shape of output a plain text search out-scored.
+  // It also keeps the hub-crossing fold HONEST at the whole-render level: folding a hundred `user`/`team`
+  // co-accesses must give the budget back to the flow, not simply let the region tail expand to refill it.
+  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, mechCap: number): string[] =>
+    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+  // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
+  // intent-relevance ranking above decides WHICH steps survive.
+  const MECH_FULL = pipeline.length;
+  const steps: [boolean, boolean, boolean, number][] = [
+    [false, false, false, MECH_FULL], [true, false, false, MECH_FULL], [true, true, false, MECH_FULL],
+    [true, true, true, MECH_FULL], [true, true, true, EXEMPT_N]];
   let out: string[] = [];
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
   return out.join("\n");
