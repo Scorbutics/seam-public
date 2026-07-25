@@ -7,6 +7,7 @@
 import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { EngineCtx } from "../engine_ctx.js";
+import { _start } from "./project_set.js";
 
 export interface ImpactedSymbol { symbol: string; file: string; line: number; kind: string; hop: number }
 export interface ImpactFile { file: string; count: number }
@@ -72,7 +73,9 @@ export async function projectImpact(
         const k = key(n.file, n.symbol);
         if (visited.has(k)) continue;
         visited.add(k);
-        const imp: ImpactedSymbol = { symbol: n.symbol, file: n.file, line: e.line ?? n.range?.[0] ?? 0, kind: n.kind, hop: node.hop + 1 };
+        // `_start` refuses an UNLOCATED node's [0,0] sentinel range (see GraphNode.unlocated): `line: 0` here means
+        // "no grounded site", and the render omits it rather than printing a fabricated one.
+        const imp: ImpactedSymbol = { symbol: n.symbol, file: n.file, line: e.line ?? _start(n) ?? 0, kind: n.kind, hop: node.hop + 1 };
         impacted.set(k, imp);
         next.push({ file: n.file, symbol: n.symbol, hop: node.hop + 1 });
       }

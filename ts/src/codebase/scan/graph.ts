@@ -25,6 +25,9 @@ export interface GraphNode {
   coupling?: true;         // a data-flow (key/route) node, not a call/import node
   direction?: "forward" | "backward";   // tagged on a bidirectional footprint
   entry?: boolean;         // a framework/external entry point (set by decompose)
+  unlocated?: true;        // NO real site was grounded for this node — `range` is the [0,0] SENTINEL, not a
+                           // location. A projection MUST omit the line rather than render it (0-based 0 →
+                           // `:1` is a fabricated citation pointing at an unrelated first line).
 }
 
 // An edge wiring two nodes. `line` is the call/usage line on the consumer side, when known.

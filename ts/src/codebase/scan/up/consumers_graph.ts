@@ -79,10 +79,15 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
     if (!cctx) continue;
     const units = _named_units(cctx);
     let lines = _usage_lines(cctx, units, con.local);
-    // `0` is a SENTINEL for "the import resolved but no usage site was found in the body", used only to place
-    // the consumer node. It must never reach an EDGE as a usage line: 0 is not a valid 1-based line, so it
-    // renders as `file:0` and sends a reader nowhere. An edge carries `line` only when a real site grounded it.
-    const grounded = lines.length > 0;
+    // NO USAGE IN A BODY — the bare BARREL / re-export case (`export { X } from "./x"`), and the plain
+    // "imported but only re-bound" one. The import statement IS a real, locatable site in the consumer's own
+    // file, and the resolver already grounded its 0-based line (Consumer.line, from parse_imports), so cite
+    // THAT. `0` remains a SENTINEL for "no site at all" (no line from the resolver either): it must never
+    // reach an EDGE nor be rendered — 0 is not a valid line, and after the 0-based→1-based conversion it
+    // reads as `file:1`, a FABRICATED citation pointing at an unrelated first line. Nodes placed on the
+    // sentinel are marked `unlocated` so every projection can omit the location instead of inventing one.
+    let grounded = lines.length > 0;
+    if (!lines.length && con.line != null) { lines = [con.line]; grounded = true; }
     if (!lines.length) lines = [0];
     for (const ln of lines) {
       const enc = _enclosing(units, ln);
@@ -96,7 +101,8 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       counter += 1;
       const cid = `n${counter}`;
       seenKeys.set(key, cid);
-      nodes.push({ id: cid, symbol: name, kind: _kind_for(con.file, kind), file: con.file, range: [start, end], enclosing: cls, complexity: Math.max(1, end - start + 1) });
+      nodes.push({ id: cid, symbol: name, kind: _kind_for(con.file, kind), file: con.file, range: [start, end], enclosing: cls, complexity: Math.max(1, end - start + 1),
+        ...(grounded ? {} : { unlocated: true as const }) });
       // carry the USAGE line (0-based, the internal convention) so the SET projection can cite where the symbol
       // is actually used rather than the consuming unit's declaration — see project_set's line contract.
       edges.push({ from: cid, to: "n1", kind: "reference", provenance: "RESOLVED_FULL", ...(grounded ? { line: ln } : {}) });

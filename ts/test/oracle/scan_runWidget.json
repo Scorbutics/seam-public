@@ -56,7 +56,8 @@
       "from": "n2",
       "to": "n1",
       "kind": "reference",
-      "provenance": "RESOLVED_FULL"
+      "provenance": "RESOLVED_FULL",
+      "line": 0
     },
     {
       "from": "n3",

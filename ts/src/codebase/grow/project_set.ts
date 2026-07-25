@@ -67,6 +67,11 @@ const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p === "R
 // the same on every fallback path): one branch added 1, the other passed the raw 0-based value through. Route
 // EVERY line through this helper — a raw `range[0]` or `e.line` reaching a member is the bug, by construction.
 const to1 = (l: number | null | undefined): number => (l == null ? 0 : l + 1);
+// A node's declaration start, or `undefined` when the node is UNLOCATED (its `range` is the [0,0] sentinel
+// the up-scan places when no real site was grounded). Shared by every projection that cites a node — see
+// GraphNode.unlocated. A projected `line` of 0 means "no line": renderers must print no location at all.
+export const _start = (n: { range?: number[]; unlocated?: true } | null | undefined): number | undefined =>
+  (!n || n.unlocated) ? undefined : n.range?.[0];
 
 // Project the anchor's direct edges in ONE direction into a SET. `in` = consumers (edges TO the anchor →
 // the from-node is a member); `out` = dependencies (edges FROM the anchor → the to-node is a member).
@@ -92,7 +97,9 @@ function projectEdgeSet(graph: ResolvedGraph, dir: "in" | "out", shape: Consumer
       // but WRONG for `out` (the member is the DEP; pairing its file with the anchor's usage line printed
       // impossible locations like `getCalendar.ts:260` for a 121-line file). For `out`, use the dep's own
       // declaration range. See `to1` for the 0-based → 1-based contract.
-      line: to1(dir === "in" ? e.line ?? n.range?.[0] : n.range?.[0] ?? e.line),
+      // `unlocated` nodes carry the [0,0] SENTINEL, not a range — never fall back to it (that is how a bare
+      // barrel re-export got cited as `index.ts:1`). `to1(null)` → 0 = "no line", which the renderer omits.
+      line: to1(dir === "in" ? e.line ?? _start(n) : _start(n) ?? e.line),
       kind: n.kind,
       enclosing: n.enclosing ?? "",
       edgeKind: e.kind,

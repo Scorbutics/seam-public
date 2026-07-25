@@ -12,6 +12,7 @@ import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { anchorCounterparts } from "../coupling/bridge.js";
 import { EngineCtx } from "../engine_ctx.js";
+import { _start } from "./project_set.js";
 
 export interface ReachStep { symbol: string; file: string; line: number; edgeKind: string }
 
@@ -72,7 +73,7 @@ export async function findReach(
     try { g = await build_footprint_cached(repo, cur.file, cur.symbol, { direction: "down", depth: 1, dataCoupling: opts.dataCoupling ?? false }); }
     catch { continue; }
     const aid = g.anchor.id;
-    if (!startStep) startStep = { symbol: fromSymbol, file: fromFile, line: g.anchor.range?.[0] ?? 0, edgeKind: "anchor" };
+    if (!startStep) startStep = { symbol: fromSymbol, file: fromFile, line: _start(g.anchor) ?? 0, edgeKind: "anchor" };
     for (const e of g.edges) {
       if (e.from !== aid) continue;
       const dep = g.nodes.find((n) => n.id === e.to);
@@ -81,7 +82,7 @@ export async function findReach(
       const dk = key(dep.file, dep.symbol);
       if (visited.has(dk)) continue;
       visited.add(dk);
-      const step: ReachStep = { symbol: dep.symbol, file: dep.file, line: e.line ?? dep.range?.[0] ?? 0, edgeKind: e.kind };
+      const step: ReachStep = { symbol: dep.symbol, file: dep.file, line: e.line ?? _start(dep) ?? 0, edgeKind: e.kind };   // never the unlocated sentinel
       parent.set(dk, { prevKey: key(cur.file, cur.symbol), step });
       if (match(dep.file, dep.symbol)) return { ...base, hops, reachable: true, path: reconstruct(dk), reason: "found" };
       queue.push({ file: dep.file, symbol: dep.symbol });

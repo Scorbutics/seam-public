@@ -66,7 +66,10 @@ export function _kind_for(file: string, kind: string): string {
 
 const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
-export interface Consumer { file: string; local: string; source: string; status: Provenance; reexport?: boolean; }
+// `line` is the 0-BASED line of the IMPORT / RE-EXPORT statement that binds the symbol in `file`. It is the
+// only REAL site a bare barrel (`export { X } from "./x"`, no body usage) has, so the graph can cite it
+// instead of inventing one — parse_imports already grounded it, so nothing is re-parsed to obtain it.
+export interface Consumer { file: string; local: string; source: string; status: Provenance; reexport?: boolean; line?: number; }
 
 // Repo-wide parsed-imports index, built ONCE per repo and reused by every consumer scan. Each
 // scan_consumers otherwise re-walks + re-reads + re-PARSES every file in the repo, and the grow calls it
@@ -211,9 +214,9 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
       if (ref.name !== symbol) continue;
       const target = await _resolve_import(repo, rel, ref);
       if (target !== null) {
-        if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: ref.reexport });
+        if (target[0] !== null && normpath(target[0]) === anchorNorm) out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: ref.reexport, line: ref.line });
       } else if (ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === anchorBase) {
-        out.push({ file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport });
+        out.push({ file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport, line: ref.line });
       }
       break;
     }
@@ -227,7 +230,7 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
       const t = await _resolve(repo, rel, n.source);
       if (!t || normpath(t) !== anchorNorm) continue;
       const status = _member_use(text, n.local, symbol);
-      if (status) { out.push({ file: rel, local: symbol, source: n.source, status }); break; }
+      if (status) { out.push({ file: rel, local: symbol, source: n.source, status, line: n.line }); break; }
     }
   }
   // DEFAULT-export consumers (only when `symbol` IS the anchor's default export — matched by MODULE). A
@@ -238,11 +241,11 @@ async function _scan_direct(repo: string, anchorFile: string, symbol: string): P
     for (const ref of refs) {
       if (ref.name !== "default" || !ref.reexport) continue;
       const t = await _resolve_import(repo, rel, ref);
-      if (t?.[0] && normpath(t[0]) === anchorNorm) { out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: true }); break; }
+      if (t?.[0] && normpath(t[0]) === anchorNorm) { out.push({ file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: true, line: ref.line }); break; }
     }
     for (const d of defs) {
       const t = await _resolve(repo, rel, d.source);
-      if (t && normpath(t) === anchorNorm) { out.push({ file: rel, local: d.local, source: d.source, status: "RESOLVED_FULL" }); break; }
+      if (t && normpath(t) === anchorNorm) { out.push({ file: rel, local: d.local, source: d.source, status: "RESOLVED_FULL", line: d.line }); break; }
     }
   }
   return out;
@@ -317,8 +320,8 @@ async function _scan_direct_multi(repo: string, targets: { file: string; symbol:
       const resolved = target && target[0] ? normpath(target[0]) : null;
       for (const t of matches) {
         if (norm === t.abs) continue;
-        if (resolved !== null) { if (resolved === t.norm) _push(out, t.key, { file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: ref.reexport }); }
-        else if (target === null && ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === t.base) _push(out, t.key, { file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport });
+        if (resolved !== null) { if (resolved === t.norm) _push(out, t.key, { file: rel, local: ref.local, source: ref.source || "", status: "RESOLVED_FULL", reexport: ref.reexport, line: ref.line }); }
+        else if (target === null && ref.source && ref.source.replace(/\/+$/, "").split("/").pop() === t.base) _push(out, t.key, { file: rel, local: ref.local, source: ref.source, status: "SUGGESTED", reexport: ref.reexport, line: ref.line });
       }
     }
     // NAMESPACE-member consumers (X.symbol) — resolve each ns source once, match against targets by module

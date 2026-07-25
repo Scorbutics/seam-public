@@ -10,6 +10,12 @@
 // the direction-specific wording. See grow/project_set.ts.
 interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
 
+// CITATION — `file:line`, but NEVER a fabricated line. A projected `line` of 0 means "no real site was
+// grounded" (see project_set's `to1`/`_start` + GraphNode.unlocated): a member with no location is rendered
+// as a bare path. Printing `:0`/`:1` there sends the reader to an unrelated line and destroys the one thing
+// a structural citation is for. Every `file:line` in this module goes through here.
+const at = (file: string, line: number | null | undefined): string => (line ? `${file}:${line}` : `${file}`);
+
 // COUPLING TRUNCATION note (Seam's honesty contract) — the targeted bridge walks a key's candidate files in a
 // TOTAL order and stops at READER_CAP complements (or the run's scan budget). Whenever it stopped before the
 // list was exhausted the answer is a lower bound, so SAY so per key, with the grep that completes it — never
@@ -68,7 +74,7 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
   };
   // provenance (when shown) rides the member's OWN line; the DI-binding block comes UNDER it.
   const member = (m: any, prov?: string): string =>
-    `- ${m.symbol} (${m.file}:${m.line})  [${m.kind}, ${m.edgeKind}]${m.enclosing ? `  in ${m.enclosing}` : ""}`
+    `- ${m.symbol} (${at(m.file, m.line)})  [${m.kind}, ${m.edgeKind}]${m.enclosing ? `  in ${m.enclosing}` : ""}`
     + (prov ? `  {${prov}}` : "") + bindLine(m);
   if (resolved.length) {
     out.push(`## Resolved ${L.nounPl} (verified edges)`);
@@ -251,7 +257,7 @@ export function renderImpact(model: any): string {
     out.push(`- ${f.file}  (${f.count})`);
     const syms = (model.impacted ?? []).filter((x: any) => x.file === f.file).sort(byHop);
     const shown = PER_FILE ? syms.slice(0, PER_FILE) : syms;
-    for (const m of shown) out.push(`    ${m.symbol} (:${m.line}) [${m.kind}, hop ${m.hop}]`);
+    for (const m of shown) out.push(`    ${m.symbol}${m.line ? ` (:${m.line})` : ""} [${m.kind}, hop ${m.hop}]`);
     if (syms.length > shown.length) out.push(`    … +${syms.length - shown.length} more in this file (nearest hops shown)`);
   }
   if (files.length > shownFiles.length) {
@@ -265,7 +271,7 @@ export function renderImpact(model: any): string {
     out.push("## Surface (outermost callers — where the change ripples to; re-verify here)");
     const surf: any[] = model.surface;
     const shownSurf = SURFACE ? surf.slice(0, SURFACE) : surf;
-    for (const m of shownSurf) out.push(`- ${m.symbol} (${m.file}:${m.line})`);
+    for (const m of shownSurf) out.push(`- ${m.symbol} (${at(m.file, m.line)})`);
     if (surf.length > shownSurf.length) out.push(`- … +${surf.length - shownSurf.length} more outermost caller(s) — elided from this render`);
     out.push("");
   }
@@ -393,7 +399,7 @@ export function renderReach(model: any): string {
       + " writes and the other reads). The connection is real but runs through STATE, not a call/import edge —"
       + " nothing links them textually, so grep/a call-graph would report 'no path'. Verify the marked step.", "");
     out.push("## Witness path (resolved edges, in order)");
-    (model.path ?? []).forEach((s: any, i: number) => out.push(`${i + 1}. ${s.symbol} (${s.file}:${s.line})${s.edgeKind && s.edgeKind !== "anchor" ? `  [${s.edgeKind}]` : "  [anchor]"}`));
+    (model.path ?? []).forEach((s: any, i: number) => out.push(`${i + 1}. ${s.symbol} (${at(s.file, s.line)})${s.edgeKind && s.edgeKind !== "anchor" ? `  [${s.edgeKind}]` : "  [anchor]"}`));
   } else {
     out.push("## No path",
       model.reason === "exhausted"
