@@ -138,6 +138,16 @@ async function runWarm(a: Args): Promise<number> {
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
+  // SAME FAILURE MODE, DIFFERENT CAUSE — a broken/missing tree-sitter grammar pack. Codebase mode's whole
+  // output is STRUCTURE (who calls this / what this depends on), and every builder resolves it by PARSING
+  // candidate files. With no parser each candidate is skipped, so the graph collapses to the anchor and
+  // renders the same authoritative lie: `resolution: FULL | resolved: 0` + "Nothing in the repo calls this
+  // symbol" (seen on cal.com — getBusyTimes reported 0 callers while having 4). That is an INSTALL fault,
+  // not a property of the code, so it must never degrade into a `noStructure` answer. Guarded here (before
+  // any work, so the cached-footprint path is covered too) AND at the engine's build_footprint entry, so a
+  // library/MCP consumer that bypasses the CLI still gets the throw instead of a silent zero.
+  const { requireAvailable } = await import("../core/treesitter.js");
+  try { requireAvailable("a codebase query"); } catch (e) { err((e as Error).message); }
   // A --center that does not EXIST under --repo is a caller mistake (nearly always a forgotten --repo, so the paths
   // resolve against the wrong tree). Growing from a nonexistent anchor produced the WORST possible output: a
   // confident, well-formed `## No callers — Nothing in the repo calls this symbol`. An authoritative-looking empty

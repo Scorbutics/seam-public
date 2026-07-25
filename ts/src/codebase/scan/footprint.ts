@@ -3,6 +3,7 @@
 // instead of choosing a function. This collapses the direction ternary that was previously duplicated
 // across the orchestrator and the CLI.
 import { merge_resolved } from "./expand.js";
+import { requireAvailable } from "../../core/treesitter.js";
 import type { FootprintOpts, ResolvedGraph } from "./graph.js";
 import { build_consumers_graph } from "./up/consumers_graph.js";
 import { build_dependency_graph } from "./down/dependency_graph.js";
@@ -29,6 +30,11 @@ async function build_bidirectional_graph(repo: string, anchorFile: string, symbo
 // a null/empty `symbol` builds the whole-module footprint. The builders read only the options that apply
 // to them — see FootprintOpts.
 export function build_footprint(repo: string, anchorFile: string, symbol: string | null, opts: FootprintOpts = {}): Promise<ResolvedGraph> {
+  // A footprint IS the structural answer — with no parser the consumer/dependency builders skip every
+  // candidate file and return the anchor alone, which renders as a confident "nothing calls this". Guard
+  // the ONE public entry so no shape (consumers/dependencies/impact/reaches/grow/…) can emit that lie;
+  // per-builder `available()` checks below stay as-is for the OPTIONAL enrichment they gate.
+  requireAvailable(`the ${opts.direction ?? "up"} footprint of ${symbol ?? anchorFile}`);
   if (!symbol) return build_module_graph(repo, anchorFile, opts);
   switch (opts.direction ?? "up") {
     case "down": return build_dependency_graph(repo, anchorFile, symbol, opts);

@@ -90,6 +90,27 @@ export function available(): boolean {
   return existsSync(WASM_DIR) && existsSync(`${WASM_DIR}tree-sitter-python.wasm`);
 }
 
+// TOTAL-CAPABILITY GUARD. `available()` is a per-call-site DEGRADATION check: every enrichment pass
+// (coupling overlay, DI index, name recall, depth-2 ripple) reads it and returns its empty value, which
+// is honest — those are OPTIONAL layers on top of a structural answer. But the STRUCTURAL answer itself
+// (a consumers / dependency footprint) is built by parsing each candidate file, so with no parser every
+// candidate is skipped and the graph collapses to the anchor alone. That renders as a CONFIDENT FALSE
+// NEGATIVE — `resolution: FULL | resolved: 0` + "Nothing in the repo calls this symbol" — which a caller
+// cannot tell from a real negative. Observed on cal.com: `getBusyTimes` reported 0 callers while having 4.
+//
+// A missing grammar pack is an INSTALL FAULT, not a property of the code under analysis, so it must FAIL
+// LOUDLY (throw → `err()` → non-zero exit + stderr) rather than degrade into a `noStructure` answer:
+// `noStructure` means "Seam looked and the structure isn't there", and here Seam could not look at all.
+// Call this at the entry of any path whose OUTPUT IS THE STRUCTURE — never in an enrichment pass.
+export function requireAvailable(what: string): void {
+  if (available()) return;
+  throw new Error(
+    `tree-sitter grammars unavailable — no tree-sitter-*.wasm under ${WASM_DIR}. ` +
+    `${what} cannot be resolved without a parser: EVERY candidate file would be skipped and the answer ` +
+    `would read as "nothing found", which is a FALSE NEGATIVE, not a real one. Results are NOT trustworthy. ` +
+    `Fix the install (reinstall the 'tree-sitter-wasms' package), or point SEAM_WASM_DIR at the grammar pack.`);
+}
+
 let _inited = false;
 const _parsers = new Map<string, any>();
 
