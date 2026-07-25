@@ -14,12 +14,14 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
   const members: any[] = model.members ?? [];
   const unresolved: any[] = model.unresolved ?? [];
   const recalled: any[] = model.recalled ?? [];
+  const crossStack: any[] = model.crossStack ?? [];
   const resolved = members.filter((m) => m.provenance !== "SUGGESTED");
   const suggested = members.filter((m) => m.provenance === "SUGGESTED");
   const out: string[] = [];
   const head = [`anchor: ${model.anchor?.symbol ?? "?"}`, `shape: ${model.shape}`, `resolution: ${model.resolutionQuality ?? "?"}`,
     `resolved: ${resolved.length}`, `suggested: ${suggested.length}`, `unresolved: ${unresolved.length}`,
-    ...(recalled.length ? [`recalled: ${recalled.length}`] : [])];
+    ...(recalled.length ? [`recalled: ${recalled.length}`] : []),
+    ...(crossStack.length ? [`cross-stack: ${crossStack.length}`] : [])];
   out.push(`# ${L.title} ${model.anchor?.symbol ?? "?"}`, head.join(" | "), "");
 
   // noStructure — the honest negative. Say it plainly and route to grep; do NOT pad with a half-answer.
@@ -31,10 +33,31 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
     out.push("");
   }
 
-  const member = (m: any): string => `- ${m.symbol} (${m.file}:${m.line})  [${m.kind}, ${m.edgeKind}]${m.enclosing ? `  in ${m.enclosing}` : ""}`;
+  // OPTIONAL DI-binding line (SEAM_DI_RESOLVE): when a resolved member is a container-bound concrete impl, say
+  // HOW it's wired — token + binding site, and for a selecting factory whether THIS impl is the conditional or
+  // the fallback branch. This is the interface→impl→binding hop surfaced inline (no follow-up grep).
+  const bindLine = (m: any): string => {
+    const b = m.binding; if (!b) return "";
+    const isImpl = (b.impls ?? []).includes(m.symbol);   // member is a concrete impl vs the interface (aggregate)
+    if (b.kind === "toFactory" && (b.impls?.length ?? 0) > 1) {
+      if (isImpl) {
+        const sel = m.symbol === b.impls[0] ? `when (${b.condition ?? "?"})` : "otherwise (fallback)";
+        return `\n    ↳ DI: token ${b.token} — bound via toFactory @ ${b.file}:${b.line}; this impl selected ${sel}`;
+      }
+      // interface type-ref → show the full branch: which impl runs when, which is the fallback
+      const branch = b.impls.map((c: string, i: number) => i === 0 ? `${c} when (${b.condition ?? "?"})` : `${c} otherwise`);
+      return `\n    ↳ DI: token ${b.token} — bound via toFactory @ ${b.file}:${b.line} → ${branch.join(" · ")}`;
+    }
+    const impl = !isImpl && (b.impls?.length ?? 0) ? ` → ${b.impls.join("/")}` : "";
+    return `\n    ↳ DI: token ${b.token} — bound via ${b.kind} @ ${b.file}:${b.line}${impl}`;
+  };
+  // provenance (when shown) rides the member's OWN line; the DI-binding block comes UNDER it.
+  const member = (m: any, prov?: string): string =>
+    `- ${m.symbol} (${m.file}:${m.line})  [${m.kind}, ${m.edgeKind}]${m.enclosing ? `  in ${m.enclosing}` : ""}`
+    + (prov ? `  {${prov}}` : "") + bindLine(m);
   if (resolved.length) {
     out.push(`## Resolved ${L.nounPl} (verified edges)`);
-    for (const m of resolved) out.push(member(m) + `  {${m.provenance}}`);
+    for (const m of resolved) out.push(member(m, m.provenance));
     out.push("");
   }
   if (suggested.length) {
@@ -52,6 +75,13 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
     for (const m of recalled) out.push(member(m));
     out.push("");
   }
+  // CROSS-STACK COUPLING (the moat) — shared-key readers/writers of the anchor's data boundary. NOT a call/import
+  // edge (grep/RAG can't link a backend write to its frontend reader); the coupling runs through a table/route/event.
+  if (crossStack.length) {
+    out.push(`## Cross-stack coupling (shared-key readers/writers — no import/call edge; grep can't link these; verify)`);
+    for (const c of crossStack) out.push(`- ${c.symbol} (${c.file})  [${c.edgeKind} · via ${c.via}]  {RESOLVED_PARTIAL}`);
+    out.push("");
+  }
   out.push("## How to use",
     `Resolved ${L.nounPl} are the verified set (correct where grep yields false positives from`,
     `comments/strings/same-name symbols). Suggested ${L.nounPl} are leads the resolver couldn't ground.`,
@@ -59,6 +89,78 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
     ...(recalled.length ? [`Recalled ${L.nounPl} use the symbol NAME in a code position but aren't import-verified`,
       "(a same-named symbol elsewhere can match) — they recover edges in languages without symbol imports",
       "(Ruby globals, C/C++), but confirm each before trusting."] : []));
+  return out.join("\n");
+}
+
+// WRITERS (`shape:"writers"`) — REVERSE data-coupling: every repo-wide write site of the DB table(s) the anchor
+// READS. Not an edge-set projection (no call/import edge links a shared-table writer to the reader), so it renders
+// its own block, grouped implicitly by table via the per-member `writes "<table>"` tag. Honest about its grain.
+export function renderWritersSet(model: any): string {
+  if (!model || model.shape !== "writers") return "(not a writers-set model)";
+  const members: any[] = model.members ?? [];
+  const tables: string[] = model.tables ?? [];
+  const out: string[] = [];
+  const filterCols: Record<string, string[]> = model.filterColumns ?? {};
+  const filterDesc = Object.keys(filterCols).length
+    ? Object.entries(filterCols).map(([t, cs]) => `${t}.{${(cs as string[]).join(",")}}`).join(" ") : "";
+  out.push(`# Writers of the state ${model.anchor?.symbol ?? "?"} reads`,
+    `anchor: ${model.anchor?.symbol ?? "?"} | shape: writers | tables: ${tables.map((t) => `"${t}"`).join(", ") || "none"}`
+    + (model.columnGrain && filterDesc ? ` | reader filters on: ${filterDesc}` : "") + ` | write-sites: ${members.length}`, "");
+  if (model.noStructure) {
+    out.push(model.reason === "none"
+      ? `## No DB table read here\n${model.anchor?.symbol ?? "?"} reads no resolvable DB table — there is no shared-state (table) coupling to reverse. This is a grep question.`
+      : `## No writers resolved\nThe table(s) are read here, but no writer grounded in the coupling floor (opaque writes — grep the table name).`);
+    return out.join("\n");
+  }
+  const colGrain = model.columnGrain && Object.keys(filterCols).length;
+  out.push(colGrain
+    ? `## Write sites (deterministic — writers of the COLUMN(S) the anchor filters on; a "col?" writer's columns were unparseable so it's kept unverified)`
+    : `## Write sites (repo-wide, deterministic — every method that writes the table(s) the anchor reads)`);
+  for (const m of members) {
+    const cols = (m.columns?.length) ? `.{${m.columns.join(",")}}` : (colGrain && !m.colVerified ? " col?" : "");
+    out.push(`- ${m.symbol} (${m.file}:${m.line})  [${m.kind}, writes "${m.table}"${cols}]  {${m.provenance}}`);
+  }
+  out.push("", "## How to use",
+    "These are the resolved writers of the shared state this anchor reads — the coupling runs through these table",
+    "writes (no import/call edge links them to the reader, so grep-by-symbol can't find them as a set).",
+    ...(colGrain
+      ? ["COLUMN-GRAINED: a writer is listed only if it writes a column the reader FILTERS on (shown as `.{cols}`).",
+         "A `col?` writer's argument columns couldn't be parsed, so it's kept but unverified — confirm it by hand.",
+         "Set SEAM_WRITERS_COLUMNS=0 for the broader table-level set."]
+      : ["TABLE-grained (the floor keys tables, not columns): crop to the writers relevant to your intent."]));
+  return out.join("\n");
+}
+
+// COUPLING (`shape:"coupling"`) — the anchor's DATA BOUNDARY: every shared key it reads/writes, and per key the
+// counterpart sites on the other side. The moat's front door: these pairs share no import, no call, and often no
+// literal token — grep and RAG structurally cannot link them; only the resolved key can.
+export function renderCoupling(model: any): string {
+  if (!model || model.shape !== "coupling") return "(not a coupling model)";
+  const keys: any[] = model.keys ?? [];
+  const out: string[] = [];
+  out.push(`# Coupling of ${model.anchor?.symbol ?? "?"} (cross-stack data boundary)`,
+    `anchor: ${model.anchor?.symbol ?? "?"} | shape: coupling | shared keys: ${keys.length} | counterpart sites: ${model.total ?? 0}`, "");
+  if (model.noStructure) {
+    out.push(model.reason === "none"
+      ? `## No shared key\n${model.anchor?.symbol ?? "?"} touches no db-table / http-route / event boundary — it has no cross-stack coupling. Its dependencies are plain code edges (use --query dependencies).`
+      : `## No counterparts\nThe anchor touches shared key(s), but no counterpart site grounded in the coupling floor — nothing else in the repo reads/writes them (or the accesses are opaque).`);
+    return out.join("\n");
+  }
+  for (const k of keys) {
+    out.push(`## ${k.kind} "${k.value}"  — anchor ${k.anchorRole}`);
+    if (!k.sides.length) out.push(`  (no counterpart — the anchor is the only side of this key in the repo)`);
+    for (const s of k.sides) {
+      const cols = s.columns?.length ? `.{${s.columns.join(",")}}` : "";   // column grain (subsumes the writers shape)
+      out.push(`  ${s.role === "writes" ? "←" : "→"} ${s.symbol} (${s.file}:${s.line})  [${s.kind}, ${s.role} ${k.value}${cols}]`);
+    }
+    out.push("");
+  }
+  out.push("## How to use",
+    "Each block is ONE shared key and the sites on the other side of it. `←` writes the key the anchor reads",
+    "(a change there changes what the anchor sees); `→` reads what the anchor writes (a change here ripples there).",
+    "NO import or call edge links these to the anchor — they meet only through the key, so a call-graph, grep, and",
+    "semantic search all miss them. Grain is the key (a table, not a column), and provenance is RESOLVED_PARTIAL:",
+    "the access is grounded, but confirm the specific field/branch matters to your change.");
   return out.join("\n");
 }
 
@@ -267,8 +369,12 @@ export function renderReach(model: any): string {
   const fromS = model.from?.symbol ?? "?", toS = model.to?.symbol ?? "?";
   out.push(`# Reachability: ${fromS} → ${toS}`,
     [`from: ${fromS} (${model.from?.file ?? "?"})`, `to: ${toS}${model.to?.file ? ` (${model.to.file})` : ""}`,
-     `reachable: ${model.reachable ? "yes" : "no"}`, `reason: ${model.reason}`, `explored: ${model.hops} hop(s)`].join(" | "), "");
+     `reachable: ${model.reachable ? "yes" : "no"}${model.viaCoupling ? " (via data coupling)" : ""}`, `reason: ${model.reason}`, `explored: ${model.hops} hop(s)`].join(" | "), "");
   if (model.reachable) {
+    // A path that crosses shared state is a REAL connection but NOT a call chain — never conflate the two.
+    if (model.viaCoupling) out.push("> NOTE: this path crosses a DATA-COUPLING hop (a shared table/route one side"
+      + " writes and the other reads). The connection is real but runs through STATE, not a call/import edge —"
+      + " nothing links them textually, so grep/a call-graph would report 'no path'. Verify the marked step.", "");
     out.push("## Witness path (resolved edges, in order)");
     (model.path ?? []).forEach((s: any, i: number) => out.push(`${i + 1}. ${s.symbol} (${s.file}:${s.line})${s.edgeKind && s.edgeKind !== "anchor" ? `  [${s.edgeKind}]` : "  [anchor]"}`));
   } else {

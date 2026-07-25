@@ -8,6 +8,7 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
+import { resolveStructuralKnobs } from "./structural_knobs.js";
 
 let _addon: any | undefined; // lazy singleton
 
@@ -18,9 +19,65 @@ function addonPath(): string {
   return resolve(here, "../../../../rust/seam_core.node");
 }
 
+// DEFAULT-ON. An opt-in flag is a trap for the caller — a harness that forgets it measures the slow TS grow and
+// reports that as Seam's speed — so this was always meant to end up here. The first attempt at the flip was
+// REVERTED because 41 grow/coupling/wavefront tests failed on the addon path; those had four root causes, all
+// now closed: the containment options never crossed the napi boundary (the addon hard-coded hub fan / up-hop /
+// exclusions), `tableAccess` was stubbed on a false premise, the CLI rewrote every grow to `structuralGrow:
+// true` (so a DETECTION grow came back with a fraction of its mechanisms), and bun's `process.env` writes never
+// reached Rust's `std::env`.
+//
+// The flip is guarded rather than unconditional. `grow_to_terminals` routes to the addon only for a
+// DETERMINISTIC, intent-free grow whose language the addon can actually parse (both the anchor's and the rest
+// of the repo's) — an intent-shaped grow has no embedding field over there, and an unvendored grammar returns
+// an empty AST rather than an error. Everything else stays on the TS engine, which remains the reference
+// implementation, not a fallback. `=0` forces the TS path outright.
 export function rustCoreEnabled(): boolean {
-  return process.env.SEAM_RUST_CORE === "1" || process.env.SEAM_RUST_CORE === "true";
+  return process.env.SEAM_RUST_CORE !== "0" && process.env.SEAM_RUST_CORE !== "false";
 }
+
+// Can the addon PARSE this file's language? The Rust core links only a subset of the grammars the TS engine
+// loads as wasm (java/typescript/tsx/javascript today), and a missing grammar fails SILENTLY: tree-sitter
+// returns no AST, every scan comes back empty, and the grow yields a well-formed graph missing whatever it
+// could not read. Measured on a two-file Ruby repo: the TS engine reaches both files, the addon reaches the
+// anchor alone — indistinguishable, to a caller, from "this symbol has no consumers". So the router asks first
+// and leaves an unparseable language on the TS path. Unknown addon (older build without the probe) → assume NO,
+// because the failure mode of guessing wrong is a confidently wrong answer.
+export function rustCanParse(file: string): boolean {
+  try {
+    const addon = loadAddon();
+    return typeof addon.canParse === "function" ? !!addon.canParse(file) : false;
+  } catch {
+    return false;
+  }
+}
+
+// Can the addon serve grows for this REPO at all — i.e. is every source language in it one the addon can read?
+// The per-file check above gates the ANCHOR, which settles a single-language repo; it does NOT stop a grow that
+// starts in TypeScript and REACHES a Ruby file, which drops out just as silently. Memoised per repo because the
+// answer is a property of the checkout, and the underlying walk is the same cached one the grow already does.
+const _repoOk = new Map<string, boolean>();
+export function rustCanServeRepo(repo: string): boolean {
+  let ok = _repoOk.get(repo);
+  if (ok === undefined) {
+    try {
+      const addon = loadAddon();
+      // No probe (an older addon build) → NO. Guessing wrong here yields a confidently incomplete answer.
+      if (typeof addon.unparseableLanguages !== "function") ok = false;
+      else {
+        const missing: string[] = addon.unparseableLanguages(repo) ?? [];
+        ok = missing.length === 0;
+        if (!ok && process.env.SEAM_FP_DEBUG)
+          process.stderr.write(`[grow] rust-core OFF for this repo — unvendored grammar(s): ${missing.join(", ")}\n`);
+      }
+    } catch { ok = false; }
+    _repoOk.set(repo, ok);
+  }
+  return ok;
+}
+
+// test seam: the capability is memoised per repo, so a hermetic test that rewrites a repo must clear it.
+export function _resetRustRepoCapability(): void { _repoOk.clear(); }
 
 export function loadAddon(): any {
   if (_addon === undefined) {
@@ -71,15 +128,31 @@ function toResolvedGraph(dto: any): any {
   return data;
 }
 
+// Mirror the host's SEAM_* env into the addon's process env before every call. bun's `process.env` is a JS-side
+// object, so a runtime flag flip never reaches Rust's `std::env` — without this the addon answers under the
+// environment it saw at process START, which is both a divergence from the TS engine (it re-reads process.env
+// per call) and a cache hazard (seam_env_snapshot keys the answer cache on those same vars). Cheap enough to do
+// unconditionally: it is a few dozen string compares, and skipping it when "nothing changed" would require
+// tracking exactly the state this exists to distrust.
+function syncEnv(addon: any): void {
+  addon.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
+}
+
 // The Rust structural grow. Returns [data, history] matching grow_to_terminals. History is diagnostic-only for
 // rendering; flagTruncation "unfollowable" blindspots are synthesized here from the addon's build-failed frontier
 // points (cutBy === "build-failed"), preserving the TS truncation-honesty behavior.
 export function growViaRust(repo: string, anchorFile: string, symbol: string, opts: any = {}): [any, any[]] {
   const addon = loadAddon();
-  const maxSteps = opts.maxSteps ?? 12;
-  const maxNodes = opts.maxNodes ?? 80;
-  const dataCoupling = opts.dataCoupling !== false;
-  const dto = addon.growToTerminals(repo, anchorFile, symbol, dataCoupling, maxSteps, maxNodes);
+  syncEnv(addon);
+  // The containment knobs are resolved on THIS side (opts → env → default) and handed over as finished values;
+  // the Rust core holds no defaulting logic, so the two engines cannot disagree about what a knob means.
+  const k = resolveStructuralKnobs(opts, false, false);
+  const dto = addon.growToTerminals(repo, anchorFile, symbol, opts.dataCoupling !== false, k);
+  // The addon answer-caches internally (grow-v1 shards) instead of going through the TS `cachedGrow`, so it
+  // reports its warm-path verdict back and we emit the SAME line cachedGrow does — through process.stderr, which
+  // is both the TS shell's job and the only stream a caller intercepting process.stderr.write can observe.
+  if (process.env.SEAM_FP_DEBUG && dto?.cacheVerdict)
+    process.stderr.write(`[grow] ${anchorFile} ${dto.cacheKey} epoch=${dto.cacheEpoch} ${dto.cacheVerdict}\n`);
   const data = toResolvedGraph(dto);
   const history: any[] = [];
   if (opts.flagTruncation) {

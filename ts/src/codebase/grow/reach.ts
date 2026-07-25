@@ -10,6 +10,8 @@
 //   exhausted    : the hop budget ran out first → INCONCLUSIVE (a path may exist beyond the bound).
 import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
+import { anchorCounterparts } from "../coupling/bridge.js";
+import { EngineCtx } from "../engine_ctx.js";
 
 export interface ReachStep { symbol: string; file: string; line: number; edgeKind: string }
 
@@ -22,13 +24,22 @@ export interface ReachResult {
   hops: number;                      // dependency footprints expanded (the search cost)
   noStructure?: boolean;             // FROM couldn't be analyzed (no resolved out-edges)
   reason: "found" | "no-out-edges" | "unreachable" | "exhausted";
+  viaCoupling?: boolean;             // the witness path crosses a DATA-COUPLING hop (shared table/route), not
+                                     // a pure call chain — a REAL connection, but through state, not an edge a
+                                     // call-graph (or grep) can see. Flagged so the answer is never conflated
+                                     // with "it calls it".
 }
+
+// Bound on how many nodes get a coupling expansion per search. Each is a targeted grep-based pass, and a hub table
+// can fan to hundreds of counterparts, so the cheap structural BFS stays dominant and coupling is the assist.
+const _COUPLING_EXPANSIONS = 12;
+const _COUPLING_FAN = 80;   // per-node counterpart cap (a hub table's fan would otherwise flood the frontier)
 
 const key = (file: string, symbol: string) => `${normpath(file)}#${symbol}`;
 
 export async function findReach(
   repo: string, fromFile: string, fromSymbol: string, toSymbol: string,
-  opts: { toFile?: string; maxHops?: number; dataCoupling?: boolean } = {},
+  opts: { toFile?: string; maxHops?: number; dataCoupling?: boolean; couplingHops?: boolean; dataCouplingLlm?: boolean; model?: string; claudeBin?: string | null } = {},
 ): Promise<ReachResult> {
   const maxHops = opts.maxHops ?? 40;
   const toFileNorm = opts.toFile ? normpath(opts.toFile) : null;
@@ -43,6 +54,8 @@ export async function findReach(
   const queue: { file: string; symbol: string }[] = [{ file: fromFile, symbol: fromSymbol }];
   let hops = 0;
   let sawAnyOutEdge = false;
+  let couplingExpansions = 0;
+  const cctx = new EngineCtx();   // one coupling ctx for the whole search (indices built once, then reused)
 
   const reconstruct = (depKey: string): ReachStep[] => {
     const chain: ReachStep[] = [];
@@ -72,6 +85,42 @@ export async function findReach(
       parent.set(dk, { prevKey: key(cur.file, cur.symbol), step });
       if (match(dep.file, dep.symbol)) return { ...base, hops, reachable: true, path: reconstruct(dk), reason: "found" };
       queue.push({ file: dep.file, symbol: dep.symbol });
+    }
+
+    // ── DATA-COUPLING HOPS (opt-in via couplingHops). A call-graph BFS answers "does FROM CALL its way to TO"; a
+    // real system also connects through SHARED STATE — FROM writes a table TO reads, with no call or import edge
+    // between them (the non-textual link grep/RAG can't see). Without this, `reaches` returns a misleading
+    // "unreachable/exhausted" for a genuinely coupled pair (measured: reschedule→availability, which IS connected —
+    // through booking.status — reported "no path"). Each counterpart becomes a frontier node via a coupling STEP,
+    // so a witness path can mix call hops and data hops; `viaCoupling` marks that it did. Bounded (see caps above).
+    if (opts.couplingHops && couplingExpansions < _COUPLING_EXPANSIONS) {
+      couplingExpansions++;
+      try {
+        // UNCAPPED floor counterparts (anchorCounterparts) — the targeted `couplingOtherSides` pipeline is capped and
+        // silently drops real counterparts on a hub key, which made a genuinely coupled pair look unreachable.
+        const sides = await anchorCounterparts(repo, cur.file, cur.symbol, cctx);
+        if (sides.length) sawAnyOutEdge = true;
+        // MATCH FIRST across ALL counterparts (a name compare — cheap), THEN bound only the frontier expansion.
+        // Slicing before the match silently loses a real hit on a hub key (195 counterparts here; the target sorted
+        // past any sane fan cap), which is exactly the false "unreachable" this feature exists to remove.
+        const hit = sides.find((s) => s.file && s.symbol && match(s.file, s.symbol) && !visited.has(key(s.file, s.symbol)));
+        if (hit) {
+          const dk = key(hit.file, hit.symbol);
+          visited.add(dk);
+          parent.set(dk, { prevKey: key(cur.file, cur.symbol),
+            step: { symbol: hit.symbol, file: hit.file, line: hit.line, edgeKind: `${hit.role} · via ${hit.kind} ${hit.value}` } });
+          return { ...base, hops, reachable: true, path: reconstruct(dk), reason: "found", viaCoupling: true };
+        }
+        for (const s of sides.slice(0, _COUPLING_FAN)) {   // frontier expansion stays bounded (hub fans are huge)
+          if (!s.file || !s.symbol) continue;
+          const dk = key(s.file, s.symbol);
+          if (visited.has(dk)) continue;
+          visited.add(dk);
+          const step: ReachStep = { symbol: s.symbol, file: s.file, line: s.line, edgeKind: `${s.role} · via ${s.kind} ${s.value}` };
+          parent.set(dk, { prevKey: key(cur.file, cur.symbol), step });
+          queue.push({ file: s.file, symbol: s.symbol });
+        }
+      } catch { /* coupling unavailable → the structural search still stands */ }
     }
   }
 

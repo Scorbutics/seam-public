@@ -10,6 +10,6 @@ pub mod key_cluster;
 pub mod key_index;
 pub mod key_store;
 
-pub use matchers::{load_matchers, run_matcher, KeyMatcher};
+pub use matchers::{load_matchers, run_matcher, run_matcher_at, KeyMatcher};
 pub use effect_inference::{infer_http_clients, http_client_matchers, resolve_http_call_sites};
 pub use key_index::{apply_matchers, compose_routes, files_index, key_index, module_scope};

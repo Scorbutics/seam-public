@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { build_footprint } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { parse_imports, namespace_imports } from "../../core/resolve/languages/index.js";
-import { _resolve, _resolve_import } from "../../core/resolve/consumers.js";
+import { _resolve, _resolve_import, fileImporters } from "../../core/resolve/consumers.js";
 
 export interface ProvidedSymbol { symbol: string; kind: string; consumers: { file: string; symbol: string }[]; consumerCount: number }
 export interface ExternalDep { symbol: string; source: string; file: string }
@@ -80,10 +80,45 @@ export async function projectContract(repo: string, moduleFile: string, opts: { 
   }
   depends.sort((a, b) => a.file.localeCompare(b.file) || a.symbol.localeCompare(b.symbol));
 
+  // TYPE-LEVEL exports (`export type|interface|enum X`) are NOT callable defs, so build_footprint doesn't emit them
+  // as nodes — they were invisible to the contract, so a dead type export (a real safe-to-narrow signal) was wrongly
+  // reported as "0 unused". Enumerate them from source and resolve their consumers via the reverse-import index
+  // (fileImporters + parse_imports), scoped to refs that resolve back to THIS module. Interfaces/enums already in
+  // `members` (captured as footprint nodes) are skipped to avoid double-counting.
+  const memberNames = new Set(members.map((m) => m.symbol));
+  const typeExports: { name: string; kind: string }[] = [];
+  if (text) {
+    const TYPE_RE = /^[ \t]*export[ \t]+(?:declare[ \t]+)?(type|interface|enum)[ \t]+([A-Za-z_$][\w$]*)/gm;
+    let tm: RegExpExecArray | null;
+    while ((tm = TYPE_RE.exec(text))) if (!memberNames.has(tm[2])) typeExports.push({ kind: tm[1], name: tm[2] });
+  }
+  if (typeExports.length) {
+    const typeNames = new Set(typeExports.map((t) => t.name));
+    const importers = [...((await fileImporters(repo)).get(modNorm) ?? [])];
+    const importsFromModule = new Map<string, Set<string>>();   // importer file -> names it imports FROM this module
+    for (const imp of importers) {
+      let itext = ""; try { itext = readFileSync(join(repo, imp), "utf-8"); } catch { continue; }
+      const names = new Set<string>();
+      for (const ref of parse_imports(imp, itext)) {
+        if (!typeNames.has(ref.name)) continue;                 // only resolve refs that could be one of our type exports
+        const t = await _resolve_import(repo, imp, ref);
+        if (t && normpath(t[0]) === modNorm) names.add(ref.name);
+      }
+      if (names.size) importsFromModule.set(imp, names);
+    }
+    for (const te of typeExports) {
+      const cons = importers.filter((imp) => importsFromModule.get(imp)?.has(te.name)).map((imp) => ({ file: imp, symbol: te.name }));
+      if (cons.length) provides.push({ symbol: te.name, kind: te.kind, consumers: cons.sort((a, b) => a.file.localeCompare(b.file)), consumerCount: cons.length });
+      else unusedExports.push(te.name);
+    }
+    provides.sort((a, b) => b.consumerCount - a.consumerCount || a.symbol.localeCompare(b.symbol));
+    unusedExports.sort();
+  }
+
   const afferent = new Set(provides.flatMap((p) => p.consumers.map((c) => normpath(c.file)))).size;
   const efferent = new Set(depends.map((d) => normpath(d.file))).size;
 
   const contract: ModuleContract = { shape: "contract", module: moduleFile, provides, unusedExports, depends, afferent, efferent };
-  if (!members.length) { contract.noStructure = true; contract.reason = "no-exports"; }
+  if (!provides.length && !unusedExports.length) { contract.noStructure = true; contract.reason = "no-exports"; }
   return contract;
 }

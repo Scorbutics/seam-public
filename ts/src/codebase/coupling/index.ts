@@ -516,6 +516,26 @@ async function _gateTouchesBoundary(repo: string, anchorFile: string, anchorText
   return false;
 }
 
+// FOOTPRINT-LEVEL P3 GATE — does ANY node of a (floor pre-)grown footprint touch a coupling boundary? On the TS
+// path the flywheel is driven LAZILY from resolveCoupling, so `_gateTouchesBoundary` above already decides it per
+// coupled anchor: no anchor touches a boundary ⇒ no repo-wide grounding pass ⇒ NO LLM. The RUST-middle driver runs
+// the flywheel UP FRONT (learn-once, then the Rust grow replays), so it has no per-anchor site to gate at — this
+// folds the same gate over the footprint's nodes, which ARE the anchors the TS path would have gated. Same
+// grounded signals, same bypasses, one text read per file.
+export async function footprintTouchesBoundary(repo: string, nodes: { file?: string; range?: [number, number] }[],
+    llmOpts: _LlmOpts, ctx: EngineCtx): Promise<boolean> {
+  const texts = new Map<string, string | null>();
+  for (const n of nodes) {
+    if (!n.file) continue;
+    if (!texts.has(n.file)) { try { texts.set(n.file, readFileSync(join(repo, n.file), "utf-8")); } catch { texts.set(n.file, null); } }
+    const text = texts.get(n.file);
+    if (text == null) continue;
+    const [lo, hi] = n.range ?? [0, text.split("\n").length];
+    if (await _gateTouchesBoundary(repo, n.file, text, lo, hi, llmOpts, { llm: llmOpts.llm }, ctx)) return true;
+  }
+  return false;
+}
+
 // Effect inference (DETERMINISTIC, no LLM) — the SET of custom http-client receiver tokens deduced transitively
 // from grounded fetch/axios sinks, cached per repo on the ctx. Footprint-scoped when a pre-grow set
 // ctx.footprintFiles (cheap); else a bounded repo walk (reusing the floor's scannable-file set). Empty under

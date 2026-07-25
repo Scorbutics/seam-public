@@ -23,7 +23,13 @@ import { type KeyMatcher, validateMatcher, runMatcher, matcherKey, matcherPasses
 import { persistMatchers, loadMatchers, hasLearnedMatchersFor, recordLearnedMatchers } from "./key_store.js";
 import { createHash } from "node:crypto";
 
-const PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
+// EXPORTED because the pass has a SECOND driver: the Rust-middle flywheel (grow/rust_discover.ts) serves the
+// same synthesis over the same prompt. Both must name it through THIS spec — importing it is what performs the
+// registration, and the registry is what routes the pass to its `strong` tier. A driver that re-spells the tag
+// as a bare string gets NO registry entry and silently runs on the cheap base model (measured: haiku instead of
+// sonnet, weaker rules → extra parse-retries → ~2× the cold LLM calls).
+export const KEY_MATCHER_PASS = registerPass({ tag: "discover-key-matchers", tier: "strong", note: "reusable shared-key adapter-rule synthesis (semantic, learn-once → .seam)" });
+const PASS = KEY_MATCHER_PASS;
 
 const MATCHER_SNIPPET_CAP = COUPLING.matcherSnippetCap;
 const MATCHER_PER_FILE = COUPLING.matcherPerFile;

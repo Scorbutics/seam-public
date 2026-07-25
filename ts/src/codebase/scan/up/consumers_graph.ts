@@ -180,7 +180,15 @@ export async function build_consumers_graph(repo: string, anchorFile: string, sy
       // `instance.method()` callers — the receiver may come from DI, a factory, or a base class
       // (`engine.generate()` where engine: MissionEngine extends Engine). Merge the same receiver-
       // agnostic call-site pass interfaces already use, scoped to this one method → RESOLVED_PARTIAL.
-      const isMethod = !isInterface && _named_units(ctx).some((u) => u[0] === symbol && u[1] === "method");
+      // METHOD-LIKE also covers a class FIELD holding a function — `m = withReporting(this._m.bind(this))`,
+      // `m = (x) => …` — the HOF/telemetry-wrapper idiom. Such a field is NOT a method node (it never reaches
+      // _named_units), so `isMethod` was false, the receiver-agnostic call-site pass never ran, and `consumers`
+      // returned 0 for a symbol with real callers. MEASURED cost of that empty answer: an agent refused to accept
+      // "0", tried 5 more query shapes hunting for signal, and burned 8 calls on a 1-call question. Callers still
+      // write `instance.m(...)`, so the same call-site pass scoped to this NAME recovers them (RESOLVED_PARTIAL).
+      const isFieldFn = !isInterface && ctx.collect(ctx.root, (k) => k === "public_field_definition" || k === "field_definition")
+        .some((f: any) => _name_of(ctx, f) === symbol);
+      const isMethod = !isInterface && (isFieldFn || _named_units(ctx).some((u) => u[0] === symbol && u[1] === "method"));
       // A CLASS anchor IS an import binding, so build_class_graph attributes the methods it can tie to a
       // provable instance (a typed var / `new C()`). The residual — a method dispatched on an instance
       // obtained via factory/DI or as a base-class array element (`new C()` pushed into a `Base[]` looped

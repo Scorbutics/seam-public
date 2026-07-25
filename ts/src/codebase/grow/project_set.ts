@@ -23,6 +23,10 @@ export interface ConsumerMember {
   enclosing: string;
   edgeKind: string;        // "call" | "reference" | a coupling crossing label
   provenance: Provenance;  // RESOLVED_FULL | RESOLVED_PARTIAL | SUGGESTED
+  // OPTIONAL DI binding (opt-in SEAM_DI_RESOLVE; TS/ioctopus): when this member is a DI-bound concrete impl,
+  // how the runtime container wires it — the token, binding site, and (for a factory) the selecting condition.
+  // Recovers the interface→impl→binding hop grep can't, in the same query. See languages/typescript/di_bindings.ts.
+  binding?: { token: string; kind: string; impls: string[]; condition?: string; file: string; line: number };
 }
 
 // An opaque caller the resolver SAW but could not ground (an unresolved import, an ambiguous dispatch) —
@@ -73,7 +77,14 @@ function projectEdgeSet(graph: ResolvedGraph, dir: "in" | "out", shape: Consumer
     members.push({
       symbol: n.symbol,
       file: n.file,
-      line: e.line ?? n.range?.[0] ?? 0,
+      // LOCATION must belong to the MEMBER's own file. `edge.line` is the USAGE line recorded in the ANCHOR's
+      // file (_addDep/_usage_lines), so it is right for `in` (the member IS the consumer — its usage sits in its
+      // own file) but WRONG for `out` (the member is the DEP; pairing its file with the anchor's usage line
+      // printed impossible locations like `getCalendar.ts:260` for a 121-line file). For `out`, use the dep's
+      // own declaration range.
+      // (node ranges are 0-based, edge usage-lines are already 1-based → +1 only on the range path so both render
+      // as clickable 1-based locations.)
+      line: (dir === "in" ? e.line ?? n.range?.[0] : (n.range?.[0] != null ? n.range[0] + 1 : e.line)) ?? 0,
       kind: n.kind,
       enclosing: n.enclosing ?? "",
       edgeKind: e.kind,

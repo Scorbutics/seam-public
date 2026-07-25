@@ -56,7 +56,7 @@ pub fn apply_matchers(repo: &str, matchers: &[KeyMatcher]) -> GroundingIndex {
             let mut floor: Option<HashSet<String>> = None; // computed lazily — only once a matcher hits
             for cm in &compiled {
                 let _tm = std::time::Instant::now();
-                let hits = cm.run(&text, &masked);
+                let hits = cm.run(rel, &text, &masked);
                 if perf { MATCH_NS.fetch_add(_tm.elapsed().as_nanos() as u64, Ordering::Relaxed); }
                 if hits.is_empty() {
                     continue;

@@ -20,7 +20,7 @@ pub use apply::semantics::{is_coupling_crossing, is_flow_subject, is_handler_edg
 pub use apply::{resolve_coupling, resolve_coupling_scoped, CouplingResult};
 pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};
 pub use grounding::file_store_write_count;
-pub use learn::{load_matchers, run_matcher, KeyMatcher};
+pub use learn::{load_matchers, run_matcher, run_matcher_at, KeyMatcher};
 pub use types::{Access, KeySides};
 pub use key_ir::{line_of, plausible_key_value};
 pub use mask::{mask_comments, string_literals_only, MaskCtx};

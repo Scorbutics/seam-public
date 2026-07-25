@@ -1,7 +1,9 @@
 //! LEARN/CACHE replay — the persisted `.seam/key-adapters.json` matcher store the flywheel LEARNED, replayed
 //! deterministically (warm = 0 LLM). `load_matchers` reads the store (repo then shared, deduped by executable
 //! identity); `run_matcher` executes ONE rule over a file → the keys it detects (regex over comment-masked
-//! text, no tree-sitter for these shapes). Port of key_store.loadMatchers + key_ir.runMatcher. The framework
+//! text for the literal-carrying shapes, tree-sitter over the RAW text for the structural ones — assign/method/
+//! attr, where the comment mask is free because a commented-out `$scope.x = fn` is a `comment` node and never an
+//! `assignment_expression`). Port of key_store.loadMatchers + key_ir.runMatcher. The framework
 //! SEMANTICS a rule encodes are learned data, so this stays framework-agnostic (it just replays a rule shape).
 
 use crate::key_ir::{line_of, plausible_key_value};
@@ -11,6 +13,7 @@ use crate::types::KeyHit;
 use crate::verb_class::write_op;
 use once_cell::sync::Lazy;
 use regex::Regex;
+use seam_lang::{grammar_for, Ctx};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -444,10 +447,12 @@ impl CompiledMatcher {
     pub fn new(m: &KeyMatcher) -> Self {
         CompiledMatcher { matcher: m.clone(), re: matcher_regex(m) }
     }
-    /// Run over PRE-MASKED text (`raw` = unmasked source, for the literal prefilter). Byte-identical to
-    /// `run_matcher(&self.matcher, raw)` but with the regex + mask hoisted out of the hot loop.
-    pub fn run(&self, raw: &str, masked: &str) -> Vec<KeyHit> {
-        run_compiled(&self.matcher, self.re.as_ref(), raw, masked)
+    /// Run over PRE-MASKED text (`raw` = unmasked source, for the literal prefilter AND the tree-sitter parse
+    /// of the AST shapes; `file` selects their grammar, exactly as TS `runMatcher(m, file, text)`).
+    /// Byte-identical to `run_matcher_at(&self.matcher, file, raw)` but with the regex + mask hoisted out of
+    /// the hot loop.
+    pub fn run(&self, file: &str, raw: &str, masked: &str) -> Vec<KeyHit> {
+        run_compiled(&self.matcher, self.re.as_ref(), file, raw, masked)
     }
 }
 
@@ -458,10 +463,18 @@ fn prefilter_on() -> bool {
 // A matcher's constant look-back regex (ROOT / this-field guard) — compiled ONCE, not per call.
 static PRE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"([A-Za-z_$][\w$]*)\s*\.\s*$").unwrap());
 
-/// The per-rule regex (pure function of token/verbs). `None` for shapes with no regex (Method/unported AST).
+/// The per-rule regex (pure function of token/verbs). `None` for the AST shapes (assign/method/attr), which
+/// walk tree-sitter instead of scanning text.
 fn matcher_regex(m: &KeyMatcher) -> Option<Regex> {
     match m {
         KeyMatcher::Call { token, .. } => Some(Regex::new(&format!(r"{}\s*\(", regex::escape(token))).unwrap()),
+        KeyMatcher::Member { token, verbs, .. } => {
+            let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
+            // `\w` is ASCII in JS but Unicode in the regex crate — spell the member class out so a non-ASCII
+            // identifier char can't widen the match beyond what TS sees.
+            Some(Regex::new(&format!(r"{}\s*\.\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*\.\s*({verbs_alt})\s*[(<]", regex::escape(token))).unwrap())
+        }
+        KeyMatcher::Annotation { annotation, .. } => Some(Regex::new(&format!(r"@{}\s*\(([^)]*)\)", regex::escape(annotation))).unwrap()),
         KeyMatcher::Repository { token, verbs, .. } => {
             let verbs_alt = verbs.iter().map(|v| regex::escape(v)).collect::<Vec<_>>().join("|");
             Some(Regex::new(&format!(r"{}\s*\.\s*({verbs_alt})\s*[(<]", regex::escape(token))).unwrap())
@@ -479,18 +492,26 @@ fn matcher_regex(m: &KeyMatcher) -> Option<Regex> {
     }
 }
 
-/// Execute ONE rule over a file → the keys it detects (regex over comment-masked text). Port of `runMatcher`.
-/// A one-shot convenience (compiles + masks per call) — the repo-wide scan uses `CompiledMatcher` + pre-masked
-/// text instead. Kept for the pipeline's per-anchor calls.
-pub fn run_matcher(m: &KeyMatcher, text: &str) -> Vec<KeyHit> {
+/// Execute ONE rule over a file → the keys it detects. Port of `runMatcher(m, file, text)`. A one-shot
+/// convenience (compiles + masks per call) — the repo-wide scan uses `CompiledMatcher` + pre-masked text
+/// instead. Kept for the pipeline's per-anchor calls.
+pub fn run_matcher_at(m: &KeyMatcher, file: &str, text: &str) -> Vec<KeyHit> {
     let re = matcher_regex(m);
     let masked = mask_comments(text);
-    run_compiled(m, re.as_ref(), text, &masked)
+    run_compiled(m, re.as_ref(), file, text, &masked)
+}
+
+/// `run_matcher_at` with no FILE — the caller doesn't know the path, so the AST shapes (assign/method/attr)
+/// have no grammar to parse with and yield nothing, exactly as TS `runMatcher(m, "", text)` does. The
+/// regex shapes are unaffected. Kept so a call site that only holds the text still compiles.
+pub fn run_matcher(m: &KeyMatcher, text: &str) -> Vec<KeyHit> {
+    run_matcher_at(m, "", text)
 }
 
 /// Run a matcher with its PRECOMPILED regex over PRE-MASKED text. `raw` is the unmasked source (the literal
-/// prefilter checks it, byte-identical to `run_matcher`). Used by `apply_matchers` (mask + compile hoisted out).
-pub fn run_compiled(m: &KeyMatcher, re: Option<&Regex>, raw: &str, masked: &str) -> Vec<KeyHit> {
+/// prefilter checks it, and the AST shapes parse it — a tree-sitter walk masks comments for free); `file`
+/// selects the grammar for those shapes. Used by `apply_matchers` (mask + compile hoisted out).
+pub fn run_compiled(m: &KeyMatcher, re: Option<&Regex>, file: &str, raw: &str, masked: &str) -> Vec<KeyHit> {
     // prefilter: a file lacking the required literal can never match (checked on the RAW text, as before).
     if prefilter_on() {
         if let Some(lit) = m.literal() {
@@ -504,8 +525,11 @@ pub fn run_compiled(m: &KeyMatcher, re: Option<&Regex>, raw: &str, masked: &str)
         KeyMatcher::Repository { token, kind, role, .. } => run_repository(re.unwrap(), token, kind, produces(role), masked),
         KeyMatcher::Channel { kind, role, .. } => run_channel(re.unwrap(), kind, produces(role), masked),
         KeyMatcher::Handle { token, kind, role, .. } => run_handle(re.unwrap(), token, kind, produces(role), masked),
-        // The AST shapes (assign/method/attr/annotation/member) don't appear in practice yet — port on demand.
-        _ => Vec::new(),
+        KeyMatcher::Member { kind, role, .. } => run_member(re.unwrap(), kind, produces(role), masked),
+        KeyMatcher::Annotation { element, kind, role, .. } => run_annotation(re.unwrap(), element.as_deref(), kind, produces(role), masked),
+        KeyMatcher::Assign { token, kind, role, .. } => run_assign(token, kind, produces(role), file, raw),
+        KeyMatcher::Method { kind, role, .. } => run_method(kind, produces(role), file, raw),
+        KeyMatcher::Attr { directive, key_from, kind, role, .. } => run_attr(directive, key_from, kind, produces(role), file, raw),
     }
 }
 
@@ -637,6 +661,190 @@ fn run_channel(re: &Regex, kind: &str, produces: bool, masked: &str) -> Vec<KeyH
     out
 }
 
+// `<token>.<KEY>.<verb>(` — the KEY is the member identifier (an ORM/repo layer: `prisma.eventType.findMany`).
+// Capture 1 = the member (the key), capture 2 = the verb (its write op-class). Port of `runMember`.
+fn run_member(re: &Regex, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
+    let mut out = Vec::new();
+    for c in captures_not_word_before(re, masked) {
+        let start = c.get(0).unwrap().start();
+        let value = &c[1];
+        // the WRITE op-class (create/update/delete) from the matched verb — the genesis-vs-mutation fact the
+        // crown uses; sourced from the shared convention so a learned rule grounds the op like the floor does.
+        let op = if produces { write_op(&c[2]) } else { None };
+        if plausible_key_value(value) {
+            out.push(KeyHit { kind: kind.into(), value: value.to_string(), line: line_of(masked, start), produces, op: op.map(|s| s.to_string()), ..Default::default() });
+        }
+    }
+    out
+}
+
+// The first string literal in an annotation's arg body — the positional form `@KafkaListener("orders")`.
+static ANNOT_POS_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"["'`]([^"'`\s]+)["'`]"#).unwrap());
+
+// `@Name( … )` — the key is either `element = "key"` (a named member, `@JmsListener(destination = "q")`) or,
+// with no `element`, the first positional literal. NO lookbehind in TS here, so this scans every occurrence.
+// Port of `runAnnotation`.
+fn run_annotation(re: &Regex, element: Option<&str>, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
+    // `element` is TOKEN_OK-validated, so the escape is a no-op — kept so the pattern can never be injected.
+    let elem_re = element.map(|e| Regex::new(&format!(r#"\b{}\s*=\s*["'`]([^"'`\s]+)["'`]"#, regex::escape(e))).unwrap());
+    let mut out = Vec::new();
+    for c in re.captures_iter(masked) {
+        let start = c.get(0).unwrap().start();
+        let body = &c[1];
+        let hit = match &elem_re {
+            Some(er) => er.captures(body),
+            None => ANNOT_POS_RE.captures(body),
+        };
+        let Some(hit) = hit else { continue };
+        let value = &hit[1];
+        if plausible_key_value(value) {
+            out.push(KeyHit { kind: kind.into(), value: value.to_string(), line: line_of(masked, start), produces, ..Default::default() });
+        }
+    }
+    out
+}
+
+// The RHS kinds that make an assignment/field a METHOD DEFINITION. This is key_ir.ts's own `_FUNCLIKE` — a
+// deliberately NARROWER set than the scan registry's (no declarations: a `function_declaration` is never the
+// right-hand side of `$scope.x = …`), so it is spelled out here rather than reusing `node_kinds::is_funclike`.
+const FUNCLIKE: &[&str] = &["function_expression", "arrow_function", "function", "generator_function", "method_definition"];
+// a class method, or a field holding an arrow/function
+const CLASS_MEMBER: &[&str] = &["method_definition", "public_field_definition"];
+
+// ASSIGN — `token.MEMBER = <function>` via the AST. Comment/string masking is FREE (a `$scope.x = function` in
+// a comment is a `comment` node, never an `assignment_expression`), so this parses the RAW text. Key = the
+// member name; receiver = the token. Port of `runAssign`.
+fn run_assign(token: &str, kind: &str, produces: bool, file: &str, text: &str) -> Vec<KeyHit> {
+    let Some(lang) = grammar_for(file) else { return Vec::new() };
+    let Some(ctx) = Ctx::parse(text, lang) else { return Vec::new() };
+    let mut out = Vec::new();
+    for node in ctx.collect(ctx.root(), |k| k == "assignment_expression") {
+        let (Some(lhs), Some(rhs)) = (node.child_by_field_name("left"), node.child_by_field_name("right")) else { continue };
+        if lhs.kind() != "member_expression" || !FUNCLIKE.contains(&rhs.kind()) {
+            continue;
+        }
+        let (Some(obj), Some(prop)) = (lhs.child_by_field_name("object"), lhs.child_by_field_name("property")) else { continue };
+        if ctx.text(obj) != token {
+            continue; // the receiver must be the token ($scope)
+        }
+        let value = ctx.text(prop);
+        if plausible_key_value(value) {
+            out.push(KeyHit { kind: kind.into(), value: value.to_string(), line: ctx.span(node).0, produces, ..Default::default() });
+        }
+    }
+    out
+}
+
+// METHOD — every CLASS METHOD definition's name is a key (the component methods a template calls). LIBERAL by
+// design: grounding keeps only the names a consumer actually references. `constructor` is excluded (never a
+// binding). Port of `runMethod`.
+fn run_method(kind: &str, produces: bool, file: &str, text: &str) -> Vec<KeyHit> {
+    let Some(lang) = grammar_for(file) else { return Vec::new() };
+    let Some(ctx) = Ctx::parse(text, lang) else { return Vec::new() };
+    let mut out = Vec::new();
+    for node in ctx.collect(ctx.root(), |k| CLASS_MEMBER.contains(&k)) {
+        if node.kind() == "public_field_definition" {
+            // a field is a method only if it HOLDS a function
+            match node.child_by_field_name("value") {
+                Some(v) if FUNCLIKE.contains(&v.kind()) => {}
+                _ => continue,
+            }
+        }
+        let Some(name_node) = node.child_by_field_name("name") else { continue };
+        let value = ctx.text(name_node);
+        if value == "constructor" || !plausible_key_value(value) {
+            continue;
+        }
+        out.push(KeyHit { kind: kind.into(), value: value.to_string(), line: ctx.span(node).0, produces, ..Default::default() });
+    }
+    out
+}
+
+static CALLEE_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"([A-Za-z_$][A-Za-z0-9_$]*)\s*\(").unwrap()); // callee identifiers in a template expression
+static INTERP_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\{\{([^}]*)\}\}").unwrap()); // `{{ expr }}` mustache interpolation
+
+fn push_key(out: &mut Vec<KeyHit>, kind: &str, produces: bool, value: &str, line: usize) {
+    if plausible_key_value(value) {
+        out.push(KeyHit { kind: kind.into(), value: value.to_string(), line, produces, ..Default::default() });
+    }
+}
+
+fn push_callees(out: &mut Vec<KeyHit>, kind: &str, produces: bool, expr: &str, line: usize) {
+    for c in CALLEE_RE.captures_iter(expr) {
+        push_key(out, kind, produces, &c[1], line);
+    }
+}
+
+// The callees inside an attribute's VALUE (`ng-click="refresh()"`) — the first `attribute_value` descendant.
+fn push_attr_value_callees(ctx: &Ctx, attr: seam_lang::Node, kind: &str, produces: bool, line: usize, out: &mut Vec<KeyHit>) {
+    if let Some(v) = ctx.collect(attr, |k| k == "attribute_value").into_iter().next() {
+        push_callees(out, kind, produces, ctx.text(v), line);
+    }
+}
+
+// ATTR — a TEMPLATE directive, via the html/vue AST. For each `<directive><NAME>="<expr>"`: key_from="name" ⇒
+// the directive suffix is the key (an event listener `@sync`); key_from="call" ⇒ each callee in the expression
+// is a key (a scope call `ng-click="x()"`), and `{{ expr }}` interpolations are scanned too. Port of `runAttr`.
+//
+// GAP (honest): the html/vue grammars are NOT vendored in `seam-lang` yet (only java/typescript/tsx/javascript),
+// so `Ctx::parse` returns None and this yields nothing — the SAME degraded answer TS gives with no wasm. The
+// walk below is the faithful port and becomes live the moment those grammars are vendored.
+fn run_attr(directive: &str, key_from: &str, kind: &str, produces: bool, file: &str, text: &str) -> Vec<KeyHit> {
+    let f = file.to_ascii_lowercase();
+    let g = if f.ends_with(".vue") {
+        "vue"
+    } else if f.ends_with(".html") || f.ends_with(".htm") {
+        "html"
+    } else {
+        return Vec::new();
+    };
+    let Some(ctx) = Ctx::parse(text, g) else { return Vec::new() };
+    let mut out = Vec::new();
+    let dn_prefix = directive.strip_suffix(':').unwrap_or(directive); // `v-on:`→`v-on`, `@`→`@`
+    for attr in ctx.collect(ctx.root(), |k| k == "attribute" || k == "directive_attribute") {
+        let line = ctx.span(attr).0;
+        if attr.kind() == "directive_attribute" {
+            // Vue: directive_name (@/v-on) + directive_argument (the event)
+            let Some(dn) = ctx.collect(attr, |k| k == "directive_name").into_iter().next() else { continue };
+            if !ctx.text(dn).starts_with(dn_prefix) {
+                continue;
+            }
+            if key_from == "name" {
+                if let Some(da) = ctx.collect(attr, |k| k == "directive_argument").into_iter().next() {
+                    push_key(&mut out, kind, produces, ctx.text(da), line);
+                }
+            } else {
+                push_attr_value_callees(&ctx, attr, kind, produces, line, &mut out);
+            }
+        } else {
+            // HTML plain attribute (AngularJS ng-*, raw @/v-on:)
+            let Some(nn) = ctx.collect(attr, |k| k == "attribute_name").into_iter().next() else { continue };
+            let name = ctx.text(nn).to_string();
+            if !name.starts_with(directive) {
+                continue;
+            }
+            if key_from == "name" {
+                // `@sync`→sync, `(click)`→click — strip the non-`[\w$]` runs (ASCII, as JS `\w`)
+                let suffix = name[directive.len()..].trim_matches(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '$'));
+                push_key(&mut out, kind, produces, suffix, line);
+            } else {
+                push_attr_value_callees(&ctx, attr, kind, produces, line, &mut out);
+            }
+        }
+    }
+    if key_from == "call" {
+        // `{{ method() }}` interpolations live in text nodes
+        for t in ctx.collect(ctx.root(), |k| k == "text" || k == "raw_text" || k == "interpolation") {
+            let s = ctx.text(t).to_string();
+            let line0 = ctx.span(t).0;
+            for im in INTERP_RE.captures_iter(&s) {
+                push_callees(&mut out, kind, produces, &im[1], line0);
+            }
+        }
+    }
+    out
+}
+
 fn run_handle(re: &Regex, token: &str, kind: &str, produces: bool, masked: &str) -> Vec<KeyHit> {
     let value = slug(token);
     if !plausible_key_value(&value) {
@@ -648,4 +856,60 @@ fn run_handle(re: &Regex, token: &str, kind: &str, produces: bool, masked: &str)
         out.push(KeyHit { kind: kind.into(), value: value.clone(), line: line_of(masked, start), produces, ..Default::default() });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn m(json: serde_json::Value) -> KeyMatcher {
+        validate_matcher(&json).expect("matcher validates")
+    }
+    fn values(hits: &[KeyHit]) -> Vec<&str> {
+        hits.iter().map(|h| h.value.as_str()).collect()
+    }
+
+    // member — `prisma.<table>.<verb>()`: the MEMBER is the key, and a write verb carries its op-class.
+    #[test]
+    fn member_key_is_the_member_with_write_op() {
+        let rule = m(serde_json::json!({ "via": "member", "token": "prisma", "verbs": ["findMany", "update"], "kind": "db-table", "role": "produces" }));
+        let src = "await prisma.eventType.findMany({});\nawait prisma.booking.update({});\n// await prisma.ghost.update({});\n";
+        let hits = run_matcher_at(&rule, "a.ts", src);
+        assert_eq!(values(&hits), vec!["eventType", "booking"], "a commented-out access is masked away");
+        assert_eq!(hits[1].op.as_deref(), Some("update"), "the write op-class comes from the matched verb");
+    }
+
+    // annotation — the named `element = "key"` form and the positional first-literal form.
+    #[test]
+    fn annotation_named_element_and_positional() {
+        let named = m(serde_json::json!({ "via": "annotation", "annotation": "JmsListener", "element": "destination", "kind": "queue", "role": "consumes" }));
+        let hits = run_matcher_at(&named, "A.java", "@JmsListener(destination = \"export.queue\")\nvoid onExport() {}\n");
+        assert_eq!(values(&hits), vec!["export.queue"]);
+        let positional = m(serde_json::json!({ "via": "annotation", "annotation": "KafkaListener", "kind": "queue", "role": "consumes" }));
+        let hits = run_matcher_at(&positional, "A.java", "@KafkaListener(\"orders\")\nvoid onOrder() {}\n");
+        assert_eq!(values(&hits), vec!["orders"]);
+    }
+
+    // assign — `$scope.<member> = function`: the AST shape, so a non-function RHS and a commented-out
+    // assignment are both excluded for free.
+    #[test]
+    fn assign_member_of_receiver_bound_to_a_function() {
+        let rule = m(serde_json::json!({ "via": "assign", "token": "$scope", "kind": "key", "role": "produces" }));
+        let src = "$scope.refreshSection = function () {};\n$scope.count = 3;\nvm.other = function () {};\n// $scope.ghost = function () {};\n";
+        let hits = run_matcher_at(&rule, "ctrl.js", src);
+        assert_eq!(values(&hits), vec!["refreshSection"]);
+        // no FILE ⇒ no grammar ⇒ the AST shape yields nothing (the degraded, parser-less answer)
+        assert!(run_matcher(&rule, src).is_empty());
+    }
+
+    // method — every class method name is a key; the constructor never is.
+    #[test]
+    fn method_names_excluding_constructor() {
+        let rule = m(serde_json::json!({ "via": "method", "kind": "key", "role": "produces" }));
+        let src = "class C {\n  constructor() {}\n  refreshSection() {}\n  handler = () => {};\n  label = 3;\n}\n";
+        let hits = run_matcher_at(&rule, "c.ts", src);
+        // `collect` is the LIFO pre-order DFS (children pushed 0..n, popped last-first), so later siblings come
+        // FIRST — the same order TS `Ctx.collect` yields, which is what parity is measured against.
+        assert_eq!(values(&hits), vec!["handler", "refreshSection"], "a field is a method only when it holds a function");
+    }
 }

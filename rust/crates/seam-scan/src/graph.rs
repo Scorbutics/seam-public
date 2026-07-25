@@ -102,6 +102,15 @@ pub struct ResolvedGraph {
     pub resolved_methods: Vec<String>,
     /// The wave's decision-point frontier (tier-3 residue). Empty on a plain footprint build.
     pub frontier: Vec<FrontierPoint>,
+    /// WARM-PATH DIAGNOSTICS (not part of the footprint contract — empty on every path but the answer-cached
+    /// grow): how the P5 answer cache resolved, and the key/epoch it resolved under. Carried here so the TS
+    /// shell can emit the same `[grow] … HIT (skip wave)` line its own cache does; see grow::grow_to_terminals.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache_verdict: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cache_epoch: String,
 }
 
 /// Assemble a `ResolvedGraph` around an anchor (port of `makeGraph`).
@@ -124,5 +133,8 @@ pub fn make_graph(
         anchors: Vec::new(),
         resolved_methods: Vec::new(),
         frontier: Vec::new(),
+        cache_verdict: String::new(),
+        cache_key: String::new(),
+        cache_epoch: String::new(),
     }
 }

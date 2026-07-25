@@ -15,7 +15,7 @@ export type { Hunk, Seam, Ranked };
 
 // The 8 structural-shape renderers (consumers/deps/refactor/impact/compare/neighborhood/contract/reach)
 // moved to render/shapes.ts — self-contained, no shared state with the flood/wave/agent/concern family below.
-export { renderConsumerSet, renderDependencySet, renderRefactorFacts, renderImpact, renderComparison, renderNeighborhood, renderContract, renderReach } from "./render/shapes.js";
+export { renderConsumerSet, renderDependencySet, renderWritersSet, renderCoupling, renderRefactorFacts, renderImpact, renderComparison, renderNeighborhood, renderContract, renderReach } from "./render/shapes.js";
 
 // The region/wave/scenario render family (renderLlmContext/renderWaves/renderScenarios + their shared
 // _floodParents helper) moved to render/region_views.ts — self-contained aside from the vocab/medium_registry

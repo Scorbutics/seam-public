@@ -56,7 +56,8 @@ import { makeHubClassifier } from "./border_policies.js";
 import type { HubMarker } from "../../core/graph_ir.js";
 import { RegionCentroid } from "./field.js";
 import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
-import { rustCoreEnabled, growViaRust } from "./rust_core.js";
+import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "./rust_core.js";
+import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling, couplingEnvHash } from "../coupling/index.js";
@@ -766,11 +767,10 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // consumers) is off-spine sibling code, NOT coupling-relevant — and the hub gate's I4 invariant NEVER drops a
   // crossing-bearing node — so gating it shrinks the probe from a whole-repo flood (8.7s on Acme) to ~the answer's
   // size without losing any coupling file. Opt back to the old fully-inclusive probe with SEAM_PROBE_INCLUSIVE=1.
-  const hubCollapse = (opts.hubCollapse ?? _envFlag(process.env.SEAM_HUB_COLLAPSE) ?? true) && !(stableFloor && _PROBE_INCLUSIVE);
-  const hubGate = (opts.hubGate ?? false) || hubCollapse;   // opts.hubGate only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
-  const hubFan = Math.max(2, opts.hubFan ?? (parseInt(process.env.SEAM_HUB_FAN ?? "12", 10) || 12));   // fan width that marks a hub
-  const hubUbiquity = Math.max(2, opts.hubUbiquity ?? (parseInt(process.env.SEAM_HUB_UBIQUITY ?? "12", 10) || 12));  // consumer-module fan-in that marks a ubiquity hub
-  const hubTypeFan = Math.max(2, opts.hubTypeFan ?? (parseInt(process.env.SEAM_HUB_TYPE_FAN ?? "5", 10) || 5));      // lower fan-in for a type-ref-only hub (the MyString shape)
+  // Resolved by the SHARED resolver (grow/structural_knobs.ts) — the same values the Rust core is handed, so
+  // the two engines cannot disagree about what a knob means. See that module for why this is centralised.
+  const _knobs = resolveStructuralKnobs(opts as any, !!stableFloor, _PROBE_INCLUSIVE);
+  const { hubCollapse, hubGate, hubFan, hubUbiquity, hubTypeFan } = _knobs;
   const hubFanned = new Set<string>();   // node ids belonging to a gated hub fan — cropped + never re-expanded
   const hubMark = new Map<string, HubMarker>();   // hub node id → its marker (stamped onto data.nodes after the flood)
   // CONVERGENCE GROW / TIER RULE (SEAM_TIER_GROW / opts.tierGrow) — the three-tier move-admission policy (docs
@@ -789,9 +789,8 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // it — but ONLY when it bears NO grounded crossing (I4: a shared DAO on the flow's crossing is scored high yet
   // never gated). DEFAULT ON (env=0 / opts=false opts out); no index → empty → no effect (I1/I3).
   // hubCollapse subsumes the ubiquity gate (one mechanism) — it needs the fan-in prior to classify ubiquity/type hubs.
-  const ubiquity = (opts.ubiquity ?? true) || hubCollapse;   // opts.ubiquity only matters when hubCollapse is explicitly off (its own env var was removed as redundant with SEAM_HUB_COLLAPSE)
-  const ubiquityFan = Math.max(2, opts.ubiquityFan ?? (parseInt(process.env.SEAM_UBIQUITY_FAN ?? "12", 10) || 12));
-  const upHopCap = Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : (parseInt(process.env.SEAM_UP_HOP ?? "0", 10) || 0)));   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. STRUCTURAL grow defaults K=2 (it's the sole container). Hoisted above the wave loop so the post-loop frontier block sees it.
+  const { ubiquity, ubiquityFan } = _knobs;
+  const upHopCap = _knobs.upHop;   // plain-call up-fan border (SEAM_UP_HOP); 0 = off. Hoisted above the wave loop so the post-loop frontier block sees it.
   // COMPLEMENT UP-HOP BORDER (SEAM_COMPLEMENT_UP_HOP, default 1; 0 = off) — a coupling COMPLEMENT (the co-accessor
   // OTHER side of a shared-key crossing: a sibling file that also reads/writes the key) is I4 crossing-ward, so the
   // general upHopCap (off by default) never bounds its UP-climb — its whole consumer web is grown. On a large seed
@@ -801,14 +800,14 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // the deep climb is PARKED as a decision point. Distinct from upHopCap so PLAIN-call nodes are unaffected, and a
   // ROUTE complement (a sibling-route UI reached across the route crossing) is still materialised (the node itself is
   // depth 0, kept — only its further up-web is bounded).
-  const complementUpHop = Math.max(0, parseInt(process.env.SEAM_COMPLEMENT_UP_HOP ?? "1", 10) || 0);
+  const complementUpHop = _knobs.complementUpHop;
   const _num = (v: any, d: number): number => { const n = typeof v === "number" ? v : parseFloat(v ?? ""); return Number.isFinite(n) ? n : d; };
   const tierMargin = _num(opts.tierMargin ?? process.env.SEAM_TIER_MARGIN, 0.20);   // tier-2 on-intent pivot floor (blend-field); harness-derived (Phase 2.4)
   const ubiqScore = ubiquity ? await ubiquityIndex(repo, coStruct.ctx as EngineCtx) : null;
   // DATA-SINK HUB CONTAINMENT (SEAM_COUPLING_HUB_CONTAIN, default on) — a kill-switch for the I4 refinement below
   // (contain a coupling-revealed db-table sink's up-fan). Inert unless coupling is on (the sink set is built from
   // db-table crossing edges per wave; empty = a no-op, I1).
-  const _hubContain = process.env.SEAM_COUPLING_HUB_CONTAIN !== "0" && opts.dataCoupling !== false;
+  const _hubContain = _knobs.couplingHubContain;
   let moveNo = 0;
   // STREAM: emit the SEED (P1 + P3-coupling nodes that exist BEFORE the flood) as the first record, so the union
   // of every record's `added` equals the final region (else the seed would be missing from the stream). wave 0.
@@ -1173,12 +1172,6 @@ export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvaila
 
 export async function grow_to_terminals(repo: string, anchorFile: string, symbol: string, opts: GrowToTerminalsOpts = {}): Promise<[any, any[]]> {
   const deterministic = !opts.onWave;
-  // RUST-CORE STRANGLER (Phase 1): route the deterministic grow through the Rust addon — the intent-free
-  // STRUCTURAL grow + coupling replay, byte-identical to TS in structural mode. It caches internally (grow-v1
-  // shards) so it bypasses the TS-level cachedGrow. Streaming (onWave) grows stay in TS. See grow/rust_core.ts.
-  if (rustCoreEnabled() && deterministic) {
-    return growViaRust(repo, anchorFile, symbol, { ...opts, structuralGrow: true });
-  }
   const emb = await transformersAvailable();   // env-stable + memoised
   // STRUCTURAL GROW (SEAM_GROW_STRUCTURAL / opts.structuralGrow) — force the grow intent-INDEPENDENT even WITH
   // embeddings: up-hop (default K=2) + hub + ubiquity do ALL the containment, the intent field is not built, so
@@ -1189,7 +1182,29 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // Whether the intent SHAPES this grow (embeddings ON and NOT structural → intent-dependent, keyed per-intent)
   // or NOT (embeddings off OR structural → the grown set is intent-independent; intent only crops → cache reuses).
   const intentShapesGrow = emb && !structuralGrow;
+  // Logged BEFORE the engine choice: whether the intent field shapes this grow is a property of the QUERY, not
+  // of which engine serves it, so the line must appear either way (it is how a caller confirms `--symbol`
+  // defaulted to a structural, cross-intent-cacheable grow).
   _logIntentFieldState(opts.intent, emb, structuralGrow);
+  // RUST-CORE STRANGLER (Phase 1): route the deterministic grow through the Rust addon — the intent-free
+  // STRUCTURAL grow + coupling replay, byte-identical to TS in structural mode. It caches internally (grow-v1
+  // shards) so it bypasses the TS-level cachedGrow. Streaming (onWave) grows stay in TS. See grow/rust_core.ts.
+  //
+  // The gate is `!intentShapesGrow`, NOT merely `rustCoreEnabled()`: the Rust core implements ONLY the
+  // structural wave — it has no embedding field, so densify/soft-border/tier-gate do not exist there. Routing an
+  // intent-SHAPED grow to it therefore returns a different region while looking like the same call. This used to
+  // read `{ ...opts, structuralGrow: true }`, which silently REWROTE the caller's request to the one thing the
+  // addon can do; a DETECTION grow (which must stay intent-shaped so center-detection reads the right fan-in)
+  // came back with a fraction of its mechanisms. When embeddings are absent the TS grow is intent-free anyway,
+  // so the two engines agree and the addon is used — that is the common case, not a fallback.
+  // The language conditions are the least obvious of the four: the addon links only a subset of the grammars,
+  // and an unparseable language degrades SILENTLY rather than erroring (see rust_core.ts). `rustCanParse` gates
+  // the ANCHOR; `rustCanServeRepo` gates everything the grow could REACH from it, since a grow that starts in
+  // TypeScript and crosses into Ruby would otherwise lose that file just as quietly. Both shrink to no-ops as
+  // the remaining grammars are vendored.
+  if (rustCoreEnabled() && deterministic && !intentShapesGrow && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+    return growViaRust(repo, anchorFile, symbol, opts);
+  }
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());
   return cachedGrow(repo, anchorFile, km, opts.dataCoupling !== false, deterministic, () => _growToTerminalsImpl(repo, anchorFile, symbol, opts));
 }
@@ -1426,6 +1441,18 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
 export async function grow_footprint_scoped(repo: string, anchorFile: string, symbol: string,
     opts: { ctx: EngineCtx; [k: string]: any }): Promise<[any, any[]]> {
   const ctx = opts.ctx;
+  const floorData = await scoping_pre_grow(repo, anchorFile, symbol, opts);
+  ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
+  process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
+  return grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: true, ctx });
+}
+
+// The SCOPING pre-grow itself (phase 1 of grow_footprint_scoped), extracted so the RUST-middle flywheel driver
+// scopes its discovery from the SAME probe instead of re-inventing one (or scanning the whole repo). Returns the
+// throwaway floor footprint — the caller reads its nodes (files/ranges) and discards the rest.
+export async function scoping_pre_grow(repo: string, anchorFile: string, symbol: string,
+    opts: { ctx: EngineCtx; [k: string]: any }): Promise<any> {
+  const ctx = opts.ctx;
   emit("Floor pre-grow to scope coupling discovery to the footprint…");
   ctx.stableFloor = true;
   const budget0 = { complementBudget: ctx.complementBudget, keyBudget: ctx.keyBudget, synthBudget: ctx.synthBudget };
@@ -1444,9 +1471,7 @@ export async function grow_footprint_scoped(repo: string, anchorFile: string, sy
   ctx.complementBudget = budget0.complementBudget;   // RESTORE: the scoping probe must not starve the answer
   ctx.keyBudget = budget0.keyBudget;
   ctx.synthBudget = budget0.synthBudget;
-  ctx.footprintFiles = new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[]);
-  process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${ctx.footprintFiles.size} files across the flow (vs the anchor's whole module)\n`);
-  return grow_to_terminals(repo, anchorFile, symbol, { ...opts, dataCouplingLlm: true, ctx });
+  return floorData;
 }
 
 // MULTI-CENTER concern grow: discover coupling ONCE over the union scope, then grow the mechanisms in PARALLEL.

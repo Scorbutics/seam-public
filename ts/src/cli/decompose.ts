@@ -4,8 +4,8 @@
 // clearly rather than silently degrading. Reproduces the flags the VS Code extension uses for
 // the `det` engine: --git/--file, --repo, --emit-seams, --format ascii|llm, --emit-hunks,
 // --dump-classified/--from-classified, --facts.
-import { writeFileSync } from "node:fs";
-import { basename } from "node:path";
+import { writeFileSync, existsSync } from "node:fs";
+import { basename, resolve as resolvePath } from "node:path";
 import * as diff_source from "../diff/diff_source.js";
 import { parse, hunksToJson, hunksFromJson, type Hunk } from "../diff/parser.js";
 import * as noise from "../diff/noise_filter.js";
@@ -40,7 +40,7 @@ import { readFileSync } from "node:fs";
 
 import { type Args, parseArgs, parseCenters, resolveEngines } from "./args.js";
 import { err, stamp } from "./util.js";
-import { runAsk, runConsumerSet, runDependencySet, runRefactorFacts, runImpact, runCompare, runNeighborhood, runContract, runReaches } from "./queries.js";
+import { runAsk, runConsumerSet, runDependencySet, runWritersSet, runCouplingSet, runRefactorFacts, runImpact, runCompare, runNeighborhood, runContract, runReaches } from "./queries.js";
 
 // The llm_context view-renderer table — the one map both the codebase-mode format switch (runCodebase) and
 // the --from-seams switch look up into, instead of each hand-writing its own `if (a.format === "…") { const
@@ -58,7 +58,7 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
 // consumers/dependencies additionally need the `scan` module (a footprint build), the rest just `a`.
 const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/scan/index.js")) => Promise<number>> = {
-  consumers: runConsumerSet, dependencies: runDependencySet, impact: runImpact, refactor: runRefactorFacts,
+  consumers: runConsumerSet, dependencies: runDependencySet, writers: runWritersSet, coupling: runCouplingSet, impact: runImpact, refactor: runRefactorFacts,
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
 };
 
@@ -138,6 +138,18 @@ async function runWarm(a: Args): Promise<number> {
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
+  // A --center that does not EXIST under --repo is a caller mistake (nearly always a forgotten --repo, so the paths
+  // resolve against the wrong tree). Growing from a nonexistent anchor produced the WORST possible output: a
+  // confident, well-formed `## No callers — Nothing in the repo calls this symbol`. An authoritative-looking empty
+  // answer is worse than an error — a caller can't tell it from a real negative — so fail loudly. One guard here
+  // covers every codebase mode, since they all address their node through --center.
+  if (a.center) {
+    for (const c of parseCenters(a.center)) {
+      if (!existsSync(resolvePath(a.repo ?? ".", c.file)))
+        err(`--center path not found under --repo ${a.repo ?? "."}: ${c.file}\n` +
+            `       (pass --repo <path-to-repo>, or make the path relative to it)`);
+    }
+  }
   reset_usage();
   resetStages();   // stage-summary buckets (SEAM_TIMING) — detection/probe/structural/coupling/render, printed at the end
   // IMPLY --auto for a MAP request. A codebase map (`--format agent/concern/…`, or any `--intent` grow) is a GROWN
@@ -380,8 +392,26 @@ async function runCodebase(a: Args): Promise<number> {
         // RUST MIDDLE: the Rust core does the grow + coupling REPLAY, so the LLM flywheel runs FIRST (learn-once,
         // persisted to .seam), then grow_to_terminals replays it via the addon. The TS scoped-LLM grow is bypassed.
         if (rustCoreEnabled()) {
-          if (dc && dcLlm) { const { rustDiscover } = await import("../codebase/grow/rust_discover.js"); await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin }); }
-          return orch.grow_to_terminals(a.repo, af, sym, gOptsFor(ctx, { dataCoupling: dc, dataCouplingLlm: false, structuralGrow: true }));
+          // FLYWHEEL, FOOTPRINT-SCOPED — same contract as the TS branch's `grow_footprint_scoped` below: a cheap
+          // deterministic FLOOR pre-grow enumerates the flow's files, and the LLM key-discovery is bounded to
+          // THOSE (never the whole repo). REUSE that pre-grow (`scoping_pre_grow`, phase 1 of
+          // grow_footprint_scoped) rather than a second one, so probe budget/restore stay in one place.
+          // The P3 GATE comes with it: on the TS path the flywheel is driven lazily from resolveCoupling, so it
+          // only ever fires when some coupled anchor's span touches a grounded boundary. The Rust driver runs it
+          // UP FRONT, so gate it here over the probe's nodes — otherwise a flow with no boundary at all (which
+          // costs TS zero LLM) paid a full synth pass on every Rust run.
+          if (dc && dcLlm) {
+            const floorData = await orch.scoping_pre_grow(a.repo, af, sym, gOptsFor(ctx, { structuralGrow: structural || undefined }));
+            const scopeFiles = [...new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[])];
+            ctx.footprintFiles = new Set(scopeFiles);
+            const { footprintTouchesBoundary } = await import("../codebase/coupling/index.js");
+            const gated = await footprintTouchesBoundary(a.repo, floorData.nodes ?? [], { llm: true, model: a.model, claudeBin: a.claudeBin }, ctx);
+            process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scopeFiles.length} files across the flow${gated ? "" : " — no grounded boundary in the footprint, flywheel skipped"}\n`);
+            if (gated) { const { rustDiscover } = await import("../codebase/grow/rust_discover.js"); await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin, scopeFiles }); }
+          }
+          // `structural` is passed through, NOT forced true: a DETECTION grow must stay intent-shaped (see the
+          // comment above), and grow_to_terminals itself decides whether the addon can serve this grow.
+          return orch.grow_to_terminals(a.repo, af, sym, gOptsFor(ctx, { dataCoupling: dc, dataCouplingLlm: false, structuralGrow: structural || undefined }));
         }
         // FOOTPRINT-SCOPED coupling discovery (cheap FLOOR pre-grow → scope the LLM grow to its files), with the
         // probe's drained budgets restored so it can't starve the real grow's crossing materialisation.
@@ -736,7 +766,11 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
   if (a.warm) return runWarm(a);   // --warm: repo-wide structural precompute (pre-grow hub files → warm the per-node shards)
-  if (a.scan || a.graph || a.expandGraph || a.growFrom) return runCodebase(a);   // codebase mode claims --scan / --graph / --expand-graph / --grow-from
+  // Codebase mode claims --scan / --graph / --expand-graph / --grow-from, AND the codebase-ONLY entry points
+  // --query (shape queries) and --ask (router): these are unambiguously codebase operations, so their presence
+  // implies scan mode. Without this a bare `--query … --center …` (no --scan) wrongly fell through to DIFF mode
+  // and died with the misleading "No diff source given: pass --file or --git" — an agent then can't drive the CLI.
+  if (a.scan || a.graph || a.expandGraph || a.growFrom || a.query || a.ask) return runCodebase(a);
   reset_usage();
   let hunks: Hunk[];
 

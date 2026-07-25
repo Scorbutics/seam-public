@@ -146,6 +146,8 @@ export function parseArgs(argv: string[]): Args {
   // full list (parseCenters) to grow a multi-center star; here we only need the addressing anchor.
   if (a.center) {
     const cs = parseCenters(a.center);
+    // NOTE: existence of each center under --repo is validated in decompose.ts:runCodebase, not here — this module
+    // is pure (argv in, Args out) and must not touch the filesystem.
     if (cs.length) { if (!a.anchorFile) a.anchorFile = cs[0].file; if (!a.symbol && cs[0].symbol) a.symbol = cs[0].symbol; }
   }
   return a;

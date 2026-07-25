@@ -11,6 +11,7 @@ import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
+import { field } from "../../core/treesitter.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
@@ -61,6 +62,125 @@ export async function complement_unit(repo: string, file: string, line: number):
     }
   }
   return best ?? fallback;
+}
+
+// The [start,end] line span of a NAMED symbol in a file (the reverse of complement_unit: name → span, not line →
+// unit). Used by the `writers` shape query to scope the center's own table READS to its method body. null when the
+// symbol isn't found (or no tree-sitter) → the caller falls back to the whole file.
+export async function symbol_span(repo: string, file: string, symbol: string): Promise<[number, number] | null> {
+  const lang = lang_for(file);
+  if (!lang || !available()) return null;
+  let ctx: Ctx | null;
+  try { const content = readFileSync(join(repo, file), "utf-8"); recordRead(file, content); ctx = await makeCtx(content, lang); } catch { return null; }
+  if (!ctx) return null;
+  let best: [number, number] | null = null;
+  for (const n of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k))) {
+    if (_name_of(ctx, n) !== symbol) continue;
+    const [s, e] = ctx.span(n);
+    if (!best || (e - s) < (best[1] - best[0])) best = [s, e];   // tightest match if the name recurs
+  }
+  return best;
+}
+
+// COLUMN-GRAIN for the `writers` shape query (TS/ORM convention, isolated per CLAUDE.md). The coupling floor keys
+// the TABLE (`booking`); to refine "who writes the state a reader FILTERS on" we read the actual COLUMNS an ORM
+// access touches — a write's `data` object keys, a read's `where` object keys (descending AND/OR/NOT). Given the
+// file+line of a `<recv>.<table>.<verb>({…})` access, return {writes, reads} column sets. Empty ⇒ opaque (no
+// `{data|where}` object arg we could parse), and the caller then KEEPS the writer marked unverified — never drops
+// a real write just because its columns were unreadable. STRUCTURAL (AST keys), never a name guess.
+const _WHERE_LOGIC = new Set(["AND", "OR", "NOT"]);
+const _unquote = (s: string) => s.replace(/^["'`]|["'`]$/g, "");
+function _objColumns(ctx: Ctx, obj: any | null): string[] {
+  if (!obj || obj.type !== "object") return [];
+  const cols: string[] = [];
+  for (const p of ctx.children(obj)) {
+    if (p.type !== "pair") continue;
+    const keyN = field(p, "key");
+    const key = keyN ? _unquote(ctx.text(keyN)) : "";
+    if (!key) continue;
+    if (_WHERE_LOGIC.has(key)) {                          // AND/OR (array of objs) | NOT (obj) → descend one level
+      const val = field(p, "value");
+      const subs = val?.type === "array" ? ctx.children(val).filter((c: any) => c.type === "object")
+                 : val?.type === "object" ? [val] : [];
+      for (const so of subs) cols.push(..._objColumns(ctx, so));
+    } else cols.push(key);
+  }
+  return [...new Set(cols)];
+}
+function _prop(ctx: Ctx, obj: any, name: string): any | null {
+  for (const p of ctx.children(obj)) {
+    if (p.type !== "pair") continue;
+    const k = field(p, "key");
+    if (k && _unquote(ctx.text(k)) === name) return field(p, "value");
+  }
+  return null;
+}
+export async function accessColumns(repo: string, file: string, line: number, ctxCache?: Map<string, Ctx | null>): Promise<{ writes: string[]; reads: string[] }> {
+  const empty = { writes: [] as string[], reads: [] as string[] };
+  const lang = lang_for(file); if (!lang || !available()) return empty;
+  let ctx = ctxCache?.get(file);
+  if (ctx === undefined) {
+    try { const content = readFileSync(join(repo, file), "utf-8"); ctx = await makeCtx(content, lang); } catch { ctx = null; }
+    ctxCache?.set(file, ctx);
+  }
+  if (!ctx) return empty;
+  // the INNERMOST call_expression containing the access line that carries a `{data|where}` config object = the ORM call.
+  let best: { writes: string[]; reads: string[] } | null = null, bestSize = Infinity;
+  for (const call of ctx.collect(ctx.root, (k) => k === "call_expression")) {
+    const [s, e] = ctx.span(call);
+    if (line < s || line > e || (e - s) >= bestSize) continue;
+    const args = field(call, "arguments");
+    const cfg = args && args.namedChildCount ? args.namedChild(0) : null;
+    if (!cfg || cfg.type !== "object") continue;
+    const writes = _objColumns(ctx, _prop(ctx, cfg, "data"));
+    const reads = _objColumns(ctx, _prop(ctx, cfg, "where"));
+    if (writes.length || reads.length) { best = { writes, reads }; bestSize = e - s; }
+  }
+  return best ?? empty;
+}
+
+// UNCAPPED anchor counterparts — the anchor's own shared keys (span-scoped) × the repo-wide FLOOR's other side.
+// `couplingOtherSides` (the targeted grep pipeline below) is CAPPED (_TARGETED_CAND_CAP/READER_CAP) so it can miss
+// a real counterpart on a hub key; the floor index is complete. Used where completeness matters more than the
+// bounded cost (the `coupling` shape, and reachability's data hops). Dynamic imports break the index.ts↔bridge.ts cycle.
+export interface AnchorCounterpart { file: string; symbol: string; line: number; kind: string; value: string; role: "reads" | "writes" }
+export async function anchorCounterparts(repo: string, file: string, symbol: string | null, ctx?: EngineCtx): Promise<AnchorCounterpart[]> {
+  const { floor_base_index, otherSide, scan_file_keys } = await import("./index.js");
+  const { SKIP_DIRS: SD } = await import("../../core/resolve/languages/index.js");
+  let text: string;
+  try { text = readFileSync(join(repo, file), "utf-8"); } catch { return []; }
+  const span = symbol ? await symbol_span(repo, file, symbol) : null;
+  const inSpan = (l: number) => !span || (l >= span[0] && l <= span[1]);
+  const own = new Map<string, { kind: string; value: string; reads: boolean; writes: boolean }>();
+  for (const h of scan_file_keys(file, text)) {
+    if (!inSpan(h.line)) continue;
+    const k = `${h.kind} ${h.value}`;
+    const e = own.get(k) ?? { kind: h.kind, value: h.value, reads: false, writes: false };
+    if (h.produces) e.writes = true; else e.reads = true;
+    own.set(k, e);
+  }
+  if (!own.size) return [];
+  const idx = floor_base_index(repo, SD, ctx ?? new EngineCtx());
+  const out: AnchorCounterpart[] = [];
+  const seen = new Set<string>();
+  const anchorNorm = normpath(file);
+  for (const e of own.values()) {
+    // the anchor READS a key → its counterparts are the WRITERS (otherSide produces:false ⇒ producers), and vice versa.
+    for (const [role, produces] of [["writes", false], ["reads", true]] as const) {
+      if (role === "writes" && !e.reads) continue;
+      if (role === "reads" && !e.writes) continue;
+      for (const acc of otherSide(idx, e.kind, e.value, produces)) {
+        if (normpath(acc.file) === anchorNorm) continue;
+        const unit = await complement_unit(repo, acc.file, acc.line);
+        const dk = `${acc.file}#${unit.symbol}#${e.kind} ${e.value}#${role}`;
+        if (seen.has(dk)) continue;
+        seen.add(dk);
+        out.push({ file: acc.file, symbol: unit.symbol, line: acc.line, kind: e.kind, value: e.value, role });
+      }
+    }
+  }
+  out.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+  return out;
 }
 
 export interface CouplingOtherSide { kind: string; value: string; file: string; symbol: string; edgeKind: string; provenance: string }

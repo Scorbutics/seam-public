@@ -20,6 +20,15 @@ const TS_DIR = join(import.meta.dir, "..", "..");   // …/ts — where src/ + n
 let repo: string;
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, t); };
 
+// Was a shard for this cache persisted to disk? ENGINE-AGNOSTIC on purpose: the two grow engines namespace
+// their shards apart deliberately (TS `.seam/<name>/`, Rust `.seam/rust/<name>/`) so they can share a repo
+// without reading each other's entry formats, and the Rust core decomposes the coupling overlay per-FAN rather
+// than per-DELTA. The contract these tests exist to guard is "the warm cache is ENGAGED and persists across
+// processes", not which directory a given engine chose — asserting the TS path alone made a correctly-caching
+// Rust run look like a cache that never ran. Pass every name that expresses the same concern.
+const shardWritten = (...names: string[]): boolean =>
+  names.some((n) => existsSync(join(repo, `.seam/${n}/f`)) || existsSync(join(repo, `.seam/rust/${n}/f`)));
+
 // One warm-mode CLI grow in its OWN process (SEAM_GRAPH_CACHE on) → the sorted set of files its footprint spans.
 // `coupling` selects the data-coupling mode: "off" exercises the structural per-node cache (Phase 3), "floor"
 // also exercises the deterministic anchor-coupling overlay cache (Phase 4), "llm" the LLM-coupling answer cache
@@ -50,8 +59,8 @@ describe("build_footprint per-node cache (via CLI subprocesses)", () => {
   test("WARM REUSE — a second run is identical, and the shard cache is written", () => {
     if (!available()) return;
     const f1 = growFiles();
-    expect(existsSync(join(repo, ".seam/footprint-v1/f"))).toBe(true);   // Phase 3: per-node cache written cold
-    expect(existsSync(join(repo, ".seam/grow-v1/f"))).toBe(true);        // Phase 5: settled-grow answer cache written
+    expect(shardWritten("footprint-v1")).toBe(true);   // Phase 3: per-node cache written cold
+    expect(shardWritten("grow-v1")).toBe(true);        // Phase 5: settled-grow answer cache written
     const f2 = growFiles();                                              // fresh process → hydrates from disk (skips the wave)
     expect(f2).toEqual(f1);
     expect(f1).toContain("svc/dbRepo.ts");                               // it did reach the impl (a real footprint)
@@ -76,7 +85,7 @@ describe("anchor coupling overlay cache — Phase 4 (via CLI subprocesses, --dat
   test("WARM REUSE — a floor-coupling run is identical warm, and the overlay cache is written", () => {
     if (!available()) return;
     const f1 = growFiles("floor");
-    expect(existsSync(join(repo, ".seam/coupling-delta-v1/f"))).toBe(true);   // overlay memoized to disk
+    expect(shardWritten("coupling-delta-v1", "coupling-fan-v1")).toBe(true);   // overlay memoized to disk
     const f2 = growFiles("floor");                                            // fresh process → overlay hydrated from disk
     expect(f2).toEqual(f1);
     expect(f1).toContain("svc/dbRepo.ts");
@@ -104,7 +113,7 @@ describe("LLM-coupling answer cache — Phase 5 under the flywheel (via CLI subp
   test("WARM REUSE — an llm-coupling grow writes the answer cache and replays identical warm", () => {
     if (!available()) return;
     const f1 = growFiles("llm");
-    expect(existsSync(join(repo, ".seam/grow-v1/f"))).toBe(true);   // the answer cache NOW covers llm coupling (was excluded)
+    expect(shardWritten("grow-v1")).toBe(true);   // the answer cache NOW covers llm coupling (was excluded)
     const f2 = growFiles("llm");                                    // fresh process → served from the answer cache, no wave
     expect(f2).toEqual(f1);
     expect(f1).toContain("svc/dbRepo.ts");                          // a real footprint (reached the impl)

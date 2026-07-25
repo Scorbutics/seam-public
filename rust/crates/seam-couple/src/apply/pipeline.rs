@@ -245,7 +245,7 @@ pub fn run_pipeline(ctx: &PipelineCtx, state: &mut PipelineState, node: &Pipelin
     if !ctx.matchers.is_empty() {
         let masked = crate::mask::mask_comments(&node.text);
         for cm in ctx.matchers {
-            for hit in cm.run(&node.text, &masked) {
+            for hit in cm.run(&node.file, &node.text, &masked) {
                 insert_secondary(&mut keys, &hit);
             }
         }

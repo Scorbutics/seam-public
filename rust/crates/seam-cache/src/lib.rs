@@ -216,9 +216,42 @@ where
     T: serde::Serialize + serde::de::DeserializeOwned,
     F: FnOnce() -> T,
 {
-    if !cache_enabled() || epoch.is_empty() {
-        return compute();
+    cached_reporting(repo, cache, file, key, epoch, compute).0
+}
+
+/// How a `cached` lookup resolved — the observable the warm-path diagnostics report. TS prints the same three
+/// verdicts from `cachedGrow`, and a test asserts on them, so the Rust engine must be able to say the same
+/// thing: a cache that silently works is indistinguishable from one that silently doesn't.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Verdict {
+    Hit,
+    MissStale,
+    MissNew,
+    Off,
+}
+
+impl Verdict {
+    /// The TS `cachedGrow` wording, so one grep finds a warm-path decision from either engine.
+    pub fn label(self) -> &'static str {
+        match self {
+            Verdict::Hit => "HIT (skip wave)",
+            Verdict::MissStale => "MISS(stale)",
+            Verdict::MissNew => "MISS(new)",
+            Verdict::Off => "OFF",
+        }
     }
+}
+
+/// `cached`, additionally reporting how the lookup resolved.
+pub fn cached_reporting<T, F>(repo: &str, cache: &str, file: &str, key: &str, epoch: &str, compute: F) -> (T, Verdict)
+where
+    T: serde::Serialize + serde::de::DeserializeOwned,
+    F: FnOnce() -> T,
+{
+    if !cache_enabled() || epoch.is_empty() {
+        return (compute(), Verdict::Off);
+    }
+    let mut verdict = Verdict::MissNew;
     let mkey = format!("{cache}\u{0}{repo}\u{0}{file}");
     {
         let mut m = MIRROR.lock().unwrap();
@@ -227,9 +260,10 @@ where
             m.insert(mkey.clone(), disk);
         }
         if let Some(e) = m.get(&mkey).and_then(|s| s.get(key)) {
+            verdict = if e.e == epoch { Verdict::Hit } else { Verdict::MissStale };
             if e.e == epoch {
                 if let Ok(v) = serde_json::from_value::<T>(e.d.clone()) {
-                    return v; // fresh deep copy (the caller mutates it)
+                    return (v, verdict); // fresh deep copy (the caller mutates it)
                 }
             }
         }
@@ -241,7 +275,7 @@ where
         shard.insert(key.to_string(), Entry { e: epoch.to_string(), d: val });
         save_shard(repo, cache, file, shard);
     }
-    d
+    (d, verdict)
 }
 
 /// Drop the in-memory epoch mirrors + the graph mirror (the edit-loop invalidation hook; the disk memo

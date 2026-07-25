@@ -55,8 +55,8 @@ pub fn entrypoint_line(file: &str, ctx: &Ctx) -> usize {
     provider_for(file).and_then(|p| p.entrypoint(ctx)).unwrap_or(0)
 }
 
-/// Query-builder table accesses (`.from('t').verb`) in `file` — dispatched to its language provider. No
-/// language implements the hook, so this returns empty everywhere (byte-identical to TS `table_access`).
+/// Query-builder table accesses (`.from('t').verb`) in `file` — dispatched to its language provider (TS/JS
+/// implements it; the rest return none). Port of `table_access`.
 pub fn table_access(file: &str, text: &str) -> Vec<TableAccess> {
     provider_for(file).map(|p| p.table_access(text)).unwrap_or_default()
 }

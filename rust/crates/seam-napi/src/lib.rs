@@ -3,6 +3,84 @@
 
 use napi_derive::napi;
 
+/// syncSeamEnv — mirror the HOST's `SEAM_*` environment into this process's `std::env`.
+///
+/// The addon runs in-process with bun, but they do NOT share one view of the environment: bun's `process.env`
+/// is a JS-side object, so a runtime write (`process.env.SEAM_METHOD_PRECISE = "0"`, which the engine's own
+/// tests and the CLI both do) never reaches the real environ that Rust's `std::env::var` reads. The Rust core
+/// therefore saw the environment as it was at PROCESS START and silently ignored every flag flipped after —
+/// diverging from the TS engine, which re-reads `process.env` on each call.
+///
+/// One sync point fixes every flag at once, which is why this is a general mirror rather than per-flag
+/// plumbing: the flags are read from ~20 sites across 8 crates, and each one added is a fresh chance to forget.
+/// Only `SEAM_*` keys are touched — this must never become a general environment-write channel. Keys the host
+/// no longer has are REMOVED, so unsetting a flag propagates too (a stale leftover would be the same silent
+/// divergence in the other direction). Called from the TS boundary before each grow, on the main JS thread and
+/// before any rayon work is spawned.
+#[napi]
+pub fn sync_seam_env(vars: Vec<(String, String)>) {
+    let want: std::collections::HashMap<String, String> =
+        vars.into_iter().filter(|(k, _)| k.starts_with("SEAM_")).collect();
+    let stale: Vec<String> =
+        std::env::vars().map(|(k, _)| k).filter(|k| k.starts_with("SEAM_") && !want.contains_key(k)).collect();
+    for k in stale {
+        std::env::remove_var(k);
+    }
+    for (k, v) in want {
+        if std::env::var(&k).as_deref() != Ok(v.as_str()) {
+            std::env::set_var(&k, &v);
+        }
+    }
+}
+
+/// canParse — can this addon parse `path`'s language? The router's capability probe.
+///
+/// The Rust core links only a subset of the grammars the TS engine loads as wasm, and a missing one does not
+/// error — it yields an empty AST, so the grow silently returns a graph missing everything it could not read.
+/// Asking BEFORE routing is the only way to keep that degradation from reaching a caller as a confident answer.
+#[napi]
+pub fn can_parse(path: String) -> bool {
+    seam_lang::grammar_for(&path).is_some_and(|g| seam_lang::treesitter::vendored_grammars().contains(&g))
+}
+
+/// unparseableLanguages — the source languages present in `repo` that this addon CANNOT parse, as sorted
+/// grammar names (empty = the whole repo is within the addon's reach).
+///
+/// The per-file `can_parse` gate covers the ANCHOR, which decides the common single-language repo. It does not
+/// cover a grow that STARTS in a parseable language and REACHES a file in an unvendored one — that file drops
+/// out silently, same as before. A repo-level answer is what makes the router's decision sound rather than
+/// probable: if anything here is unparseable, the grow could reach it, so the TS engine takes the query.
+///
+/// Deliberately conservative in the safe direction — a monorepo with three stray `.rb` scripts gives up the
+/// Rust speedup entirely. That is the right way to be wrong while grammars are still being vendored: the cost
+/// is latency, and the alternative cost is a confidently incomplete answer. Each grammar vendored shrinks this.
+#[napi]
+pub fn unparseable_languages(repo: String) -> Vec<String> {
+    let vendored = seam_lang::treesitter::vendored_grammars();
+    let mut out: Vec<String> = seam_fs::source_files(&repo, |f| {
+        seam_lang::grammar_for(f).is_some_and(|g| !vendored.contains(&g))
+    })
+    .iter()
+    .filter_map(|f| seam_lang::grammar_for(f))
+    .map(|g| g.to_string())
+    .collect();
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// readSeamEnv — read one `SEAM_*` var as the ADDON sees it. The read-back seam for `sync_seam_env`: without
+/// it, "did the flag cross the boundary?" is only observable as a difference in a grown graph, which cannot
+/// tell "the flag never arrived" apart from "it arrived and was ignored" — the two bugs needing opposite fixes.
+/// Restricted to the `SEAM_*` prefix so this cannot be used to read the host's environment generally.
+#[napi]
+pub fn read_seam_env(key: String) -> Option<String> {
+    if !key.starts_with("SEAM_") {
+        return None;
+    }
+    std::env::var(&key).ok()
+}
+
 /// Wire form of `seam_lang::ImportRef` — kept separate so the domain type stays free of napi constraints.
 #[napi(object)]
 pub struct ImportRefDto {
@@ -280,6 +358,10 @@ pub struct GraphDto {
     pub anchors: Vec<String>,
     pub resolved_methods: Vec<String>,
     pub frontier: Vec<FrontierPointDto>,
+    /// Warm-path diagnostics from the P5 answer cache (empty on every other path) — the TS shell prints them.
+    pub cache_verdict: String,
+    pub cache_key: String,
+    pub cache_epoch: String,
 }
 
 impl From<seam_scan::ResolvedGraph> for GraphDto {
@@ -327,6 +409,9 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
             anchors: g.anchors,
             resolved_methods: g.resolved_methods,
             frontier: g.frontier.into_iter().map(|f| FrontierPointDto { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),
+            cache_verdict: g.cache_verdict,
+            cache_key: g.cache_key,
+            cache_epoch: g.cache_epoch,
         }
     }
 }
@@ -366,6 +451,9 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
         anchors: g.anchors,
         resolved_methods: g.resolved_methods,
         frontier: g.frontier.into_iter().map(|f| seam_scan::graph::FrontierPoint { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),
+        cache_verdict: g.cache_verdict,
+        cache_key: g.cache_key,
+        cache_epoch: g.cache_epoch,
     }
 }
 
@@ -384,15 +472,54 @@ pub fn grow_seed_coupled(repo: String, anchor_file: String, symbol: String, stab
     Some(data.into())
 }
 
+/// The grow's containment knobs, already resolved by the TS caller (`resolveStructuralKnobs`) — see WaveOpts.
+/// Every field is optional on the wire so the parity harness can pass `{}`; an omitted field falls back to the
+/// STRUCTURAL default, which is the same value the TS resolver produces for an absent opt.
+#[napi(object)]
+pub struct GrowOptsDto {
+    pub max_steps: Option<u32>,
+    pub max_nodes: Option<u32>,
+    pub hub_gate: Option<bool>,
+    pub hub_fan: Option<u32>,
+    pub hub_collapse: Option<bool>,
+    pub hub_ubiquity: Option<u32>,
+    pub hub_type_fan: Option<u32>,
+    pub ubiquity: Option<bool>,
+    pub ubiquity_fan: Option<u32>,
+    pub up_hop: Option<u32>,
+    pub complement_up_hop: Option<u32>,
+    pub coupling_hub_contain: Option<bool>,
+    pub exclude_dirs: Option<Vec<String>>,
+    pub include_tests: Option<bool>,
+}
+
+impl GrowOptsDto {
+    fn to_wave_opts(self) -> seam_grow::orchestrate::WaveOpts {
+        let d = seam_grow::orchestrate::WaveOpts::default();
+        seam_grow::orchestrate::WaveOpts {
+            max_steps: self.max_steps.map(|v| v as usize).unwrap_or(d.max_steps),
+            max_nodes: self.max_nodes.map(|v| v as usize).unwrap_or(d.max_nodes),
+            hub_gate: self.hub_gate.unwrap_or(d.hub_gate),
+            hub_fan: self.hub_fan.map(|v| v as usize).unwrap_or(d.hub_fan),
+            hub_collapse: self.hub_collapse.unwrap_or(d.hub_collapse),
+            hub_ubiquity: self.hub_ubiquity.map(|v| v as usize).unwrap_or(d.hub_ubiquity),
+            hub_type_fan: self.hub_type_fan.map(|v| v as usize).unwrap_or(d.hub_type_fan),
+            ubiquity: self.ubiquity.unwrap_or(d.ubiquity),
+            ubiquity_fan: self.ubiquity_fan.map(|v| v as usize).unwrap_or(d.ubiquity_fan),
+            up_hop: self.up_hop.map(|v| v as usize).unwrap_or(d.up_hop),
+            complement_up_hop: self.complement_up_hop.map(|v| v as usize).unwrap_or(d.complement_up_hop),
+            coupling_hub_contain: self.coupling_hub_contain.unwrap_or(d.coupling_hub_contain),
+            exclude_dirs: self.exclude_dirs.unwrap_or(d.exclude_dirs),
+            include_tests: self.include_tests.unwrap_or(d.include_tests),
+        }
+    }
+}
+
 /// growToTerminals — the full deterministic structural grow (seed → coupling → wave → deep couple). Parity
 /// surface for grow_to_terminals (structuralGrow, dataCoupling path).
 #[napi]
-pub fn grow_to_terminals(repo: String, anchor_file: String, symbol: String, data_coupling: bool, max_steps: Option<u32>, max_nodes: Option<u32>) -> Option<GraphDto> {
-    let opts = seam_grow::orchestrate::WaveOpts {
-        max_steps: max_steps.map(|v| v as usize).unwrap_or(12),
-        max_nodes: max_nodes.map(|v| v as usize).unwrap_or(80),
-    };
-    seam_grow::orchestrate::grow_to_terminals(&repo, &anchor_file, &symbol, data_coupling, &opts).map(Into::into)
+pub fn grow_to_terminals(repo: String, anchor_file: String, symbol: String, data_coupling: bool, opts: GrowOptsDto) -> Option<GraphDto> {
+    seam_grow::orchestrate::grow_to_terminals(&repo, &anchor_file, &symbol, data_coupling, &opts.to_wave_opts()).map(Into::into)
 }
 
 /// A concern center — `[file, symbol]`.
@@ -405,11 +532,8 @@ pub struct CenterDto {
 /// growCenters — the multi-center concern grow (deterministic/floor path of grow_centers_scoped + the caller's
 /// mergeOne merge): grow each center, merge sequentially under the global node budget, accumulate anchors.
 #[napi]
-pub fn grow_centers(repo: String, centers: Vec<CenterDto>, data_coupling: bool, max_steps: Option<u32>, max_nodes: Option<u32>) -> Option<GraphDto> {
-    let opts = seam_grow::orchestrate::WaveOpts {
-        max_steps: max_steps.map(|v| v as usize).unwrap_or(12),
-        max_nodes: max_nodes.map(|v| v as usize).unwrap_or(80),
-    };
+pub fn grow_centers(repo: String, centers: Vec<CenterDto>, data_coupling: bool, opts: GrowOptsDto) -> Option<GraphDto> {
+    let opts = opts.to_wave_opts();
     let cs: Vec<seam_grow::orchestrate::Center> =
         centers.into_iter().map(|c| seam_grow::orchestrate::Center { file: c.file, symbol: c.symbol }).collect();
     seam_grow::orchestrate::grow_centers(&repo, &cs, data_coupling, &opts).map(Into::into)
@@ -986,11 +1110,13 @@ pub fn apply_matchers(repo: String) -> Vec<String> {
 /// The LEARNED matcher store replayed over one file — every persisted rule's key hits, as
 /// `kind|value|line|produces|op` rows (the CACHE replay). Port of loadMatchers + runMatcher.
 #[napi]
-pub fn matcher_keys(repo: String, _file: String, text: String) -> Vec<String> {
+pub fn matcher_keys(repo: String, file: String, text: String) -> Vec<String> {
     let matchers = seam_couple::load_matchers(&repo);
     matchers
         .iter()
-        .flat_map(|m| seam_couple::run_matcher(m, &text))
+        // The path is REQUIRED, not cosmetic: the AST shapes (assign/method/attr) pick a grammar from it, so
+        // dropping it silently degraded every AST rule to zero hits — the parser-less answer. TS passes f.file.
+        .flat_map(|m| seam_couple::run_matcher_at(m, &file, &text))
         .map(|h| format!("{}|{}|{}|{}|{}", h.kind, h.value, h.line, h.produces, h.op.unwrap_or_default()))
         .collect()
 }
@@ -1349,10 +1475,13 @@ pub fn learn_commit(repo: String, sig: String, accepted_json: String) -> String 
     serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
 }
 
-/// Find floor-blind representative files to learn from (repo-wide). Returns [[file,text],…]. key_budget=60 default.
+/// Find floor-blind representative files to learn from. Returns [[file,text],…]. key_budget=60 default.
+/// `scope` = the repo-relative files a floor pre-grow reached (llmKeyIndex's `scopeFiles` contract); omit/empty
+/// for the unscoped whole-repo pass.
 #[napi]
-pub fn find_blind_reps(repo: String, key_budget: i64) -> String {
-    let reps = seam_couple::learn::discover::find_blind_reps(&repo, key_budget.max(0) as usize);
+pub fn find_blind_reps(repo: String, key_budget: i64, scope: Option<Vec<String>>) -> String {
+    let scope: Option<std::collections::HashSet<String>> = scope.filter(|s| !s.is_empty()).map(|s| s.into_iter().collect());
+    let reps = seam_couple::learn::discover::find_blind_reps(&repo, key_budget.max(0) as usize, scope.as_ref());
     let out: Vec<Vec<String>> = reps.into_iter().map(|(f, t)| vec![f, t]).collect();
     serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
 }

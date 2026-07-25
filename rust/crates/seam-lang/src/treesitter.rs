@@ -25,6 +25,17 @@ pub fn language(name: &str) -> Option<Language> {
     }
 }
 
+/// The grammars actually LINKED into this addon — the honest capability list.
+///
+/// This exists because a missing grammar degrades SILENTLY: `Ctx::parse` returns `None`, every AST scan yields
+/// nothing, and the grow returns a well-formed graph that is simply missing the consumers it could not parse
+/// (measured: a two-file Ruby repo where the TS engine reaches both files and this one reaches the anchor
+/// alone). A caller cannot tell that apart from a genuine "nothing found", so the capability has to be
+/// ASKABLE — the router uses it to keep a language this engine cannot read on the TS path.
+pub fn vendored_grammars() -> &'static [&'static str] {
+    &["java", "typescript", "tsx", "javascript"]
+}
+
 /// A parsed file — an immutable AST + its source, with the small read-only query surface the AST scans use
 /// (port of the TS `Ctx`). Owns the tree; nodes borrow from it, so a `Ctx` is self-contained.
 pub struct Ctx {

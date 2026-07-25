@@ -6,7 +6,7 @@
 //! → persist + record. The prompt HEAD/TAIL are the exact TS bytes (extracted from key_matcher.ts).
 
 use crate::learn::key_store::{has_learned_matchers_for, persist_matchers, record_learned_matchers};
-use crate::learn::matchers::{run_matcher, validate_matcher, KeyMatcher};
+use crate::learn::matchers::{run_matcher_at, validate_matcher, KeyMatcher};
 use sha1::{Digest, Sha1};
 
 const PROMPT_HEAD: &str = include_str!("prompt_head.txt");
@@ -29,17 +29,26 @@ pub fn blind_sig(blind_files: &[(String, String)]) -> String {
     sha1_hex(&parts.join("\n"))
 }
 
-/// Find the floor-blind REPRESENTATIVE files to learn matcher rules from (repo-wide, the `rules` axis of
-/// llm_key_index). Walk scannable files → a file is BLIND if it has no floor keys OR is a binding-only BRIDGE →
-/// (skip already-cached ck) → cost-cap at `key_budget` → structurally cluster → keep one SHAPED rep per cluster
+/// Find the floor-blind REPRESENTATIVE files to learn matcher rules from (the `rules` axis of llm_key_index).
+/// Walk scannable files → a file is BLIND if it has no floor keys OR is a binding-only BRIDGE → (skip
+/// already-cached ck) → cost-cap at `key_budget` → structurally cluster → keep one SHAPED rep per cluster
 /// (cluster order, size-desc), capped at `key_budget`. Port of the matcher-flywheel candidate collection.
-pub fn find_blind_reps(repo: &str, key_budget: usize) -> Vec<(String, String)> {
+///
+/// FOOTPRINT SCOPE (`scope`) — the repo-relative files a floor pre-grow reached. `None` = the whole repo (the
+/// warm-adapters / unscoped pass). `Some` mirrors llmKeyIndex's `opts.scopeFiles` contract exactly:
+///  · only in-scope files are candidates (out-of-scope files still ground via the floor + the learned rules);
+///  · the COLLECTION cost cap is LIFTED — a scoped pass is already bounded by its scope, and capping it makes
+///    the flywheel SLIDE (cold caches the first `cap`, warm slides to the next → the epoch never settles).
+pub fn find_blind_reps(repo: &str, key_budget: usize, scope: Option<&std::collections::HashSet<String>>) -> Vec<(String, String)> {
     use crate::adapters::scan_file_keys;
     use crate::ground::floor::scannable_for_keys;
     use crate::mask::MaskCtx;
     let store = crate::learn::key_index::files_cache::store_files(repo);
     let mut blind_candidates: Vec<(String, String)> = Vec::new();
     for rel in seam_fs::source_files(repo, scannable_for_keys) {
+        if scope.is_some_and(|s| !s.contains(&rel)) {
+            continue; // out of the flow's footprint → no per-file LLM (floor + rules still ground it)
+        }
         let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { continue };
         let text = String::from_utf8_lossy(&bytes).into_owned();
         let mask = MaskCtx::new(&text);
@@ -52,7 +61,7 @@ pub fn find_blind_reps(repo: &str, key_budget: usize) -> Vec<(String, String)> {
         if store.contains_key(&ck) {
             continue; // already cached (disk hit) → skip
         }
-        if blind_candidates.len() < key_budget {
+        if scope.is_some() || blind_candidates.len() < key_budget {
             blind_candidates.push((rel, text));
         }
     }
@@ -123,7 +132,7 @@ pub fn parse(answer: &str) -> Vec<KeyMatcher> {
 
 /// A matcher DETECTS if it re-executes to ≥1 key over the candidate files. Port of `_detects`.
 pub fn detects(m: &KeyMatcher, files: &[(String, String)]) -> bool {
-    files.iter().any(|(_, text)| !run_matcher(m, text).is_empty())
+    files.iter().any(|(file, text)| !run_matcher_at(m, file, text).is_empty())
 }
 
 /// The dead-token hint echoed on the retry round. Port of `_feedbackToken`.

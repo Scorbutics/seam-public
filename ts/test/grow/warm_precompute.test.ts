@@ -55,8 +55,11 @@ describe("warmRepo — structural precompute", () => {
     expect(r.covered).toBeGreaterThan(0);                                      // nodes were warmed
     expect(r.hubs.find((h) => h.file === "src/hub.ts")?.fanIn).toBe(3);        // the util ranked as the fan-in-3 hub
     expect(r.hubs.map((h) => h.file)).not.toContain("src/hub.test.ts");        // the test file was not a hub candidate
-    // STRUCTURAL CONTRACT: the precompute wrote per-node footprint shards to disk, so a later PROCESS reuses them.
-    expect(existsSync(join(repo, ".seam", "footprint-v1"))).toBe(true);
+    // STRUCTURAL CONTRACT: the precompute wrote per-node footprint shards to disk, so a later PROCESS reuses
+    // them. Either engine's namespace counts — the TS wave writes `.seam/footprint-v1`, the Rust core
+    // `.seam/rust/footprint-v1` (deliberately separate so the two never read each other's entry format). What
+    // is being guarded is that the warm shards were PERSISTED, not which directory holds them.
+    expect(existsSync(join(repo, ".seam", "footprint-v1")) || existsSync(join(repo, ".seam", "rust", "footprint-v1"))).toBe(true);
   });
 
   test("SEAM_GRAPH_CACHE=0 → no-op (writes nothing, signals cacheOff so the CLI can warn + fail)", async () => {

@@ -4,6 +4,7 @@
 mod imports;
 mod jsonc;
 mod resolve;
+mod table_access;
 
 use crate::provider::{LanguageProvider, ModuleResolver};
 use crate::types::ImportRef;
@@ -50,5 +51,8 @@ impl LanguageProvider for TypeScriptProvider {
     }
     fn entrypoint(&self, ctx: &crate::treesitter::Ctx) -> Option<usize> {
         imports::entrypoint(ctx)
+    }
+    fn table_access(&self, text: &str) -> Vec<crate::types::TableAccess> {
+        table_access::table_access(text)
     }
 }

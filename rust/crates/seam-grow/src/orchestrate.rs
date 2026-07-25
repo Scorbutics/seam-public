@@ -20,22 +20,96 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 const MOVE_CAP: usize = 30; // GROW.moveCap — a move adding more than this non-coupling nodes is "too broad" → skipped
 const UPCLIMB_MIN_DIST: usize = 2; // legacy hop-distance up-climb gate (the fallback when the embedding field is absent)
-const HUB_FAN: usize = 12; // fan width that marks a hub-gate crop
-const HUB_UBIQUITY: usize = 12;
-const HUB_TYPE_FAN: usize = 5;
-const UBIQUITY_FAN: usize = 12;
-const UP_HOP_STRUCTURAL: usize = 2; // structural grow's plain-call up-fan border (SEAM_UP_HOP K=2)
-const COMPLEMENT_UP_HOP: usize = 1; // a coupling complement's dedicated up-climb cap
 
-/// Tuning for the structural wave.
+/// Tuning for the structural wave — the FULLY RESOLVED containment knobs.
+///
+/// Every field is a resolved VALUE, never a "maybe": the caller (TS `resolveStructuralKnobs`) has already
+/// applied the opts→env→default precedence, so this crate holds no defaulting logic of its own. That split is
+/// deliberate. These knobs are configuration, and configuration resolution has to happen in exactly ONE place
+/// or the two engines drift — which is precisely how the Rust core came to hard-code `HUB_FAN`/`UP_HOP` while
+/// the TS path honoured `opts.hubFan`/`opts.upHop`, so the two returned different graphs for the same call.
+/// Reading env HERE would reintroduce that drift a second way, since bun's `process.env` writes never reach
+/// this process's `std::env` (see `sync_seam_env` at the napi boundary).
 pub struct WaveOpts {
     pub max_steps: usize,
     pub max_nodes: usize,
+    /// Crop a wide PURE (non-crossing) consumer fan an UP move added. TS `hubGate` (subsumed by hubCollapse).
+    pub hub_gate: bool,
+    /// Fan width that marks a hub-gate crop. TS `hubFan` / SEAM_HUB_FAN.
+    pub hub_fan: usize,
+    /// Keep the hub in the region with a `hub:` marker instead of silently gating it. TS `hubCollapse`.
+    pub hub_collapse: bool,
+    /// Consumer-module fan-in that marks a ubiquity hub. TS `hubUbiquity` / SEAM_HUB_UBIQUITY.
+    pub hub_ubiquity: usize,
+    /// Lower fan-in for a type-ref-only hub (the `MyString` shape). TS `hubTypeFan` / SEAM_HUB_TYPE_FAN.
+    pub hub_type_fan: usize,
+    /// The cross-module fan-in prior is consulted at all. TS `ubiquity`.
+    pub ubiquity: bool,
+    /// Fan-in marking shared infrastructure when hubCollapse is off. TS `ubiquityFan` / SEAM_UBIQUITY_FAN.
+    pub ubiquity_fan: usize,
+    /// Plain-call up-fan border; 0 = off. TS `upHop` / SEAM_UP_HOP (structural grow defaults K=2).
+    pub up_hop: usize,
+    /// A coupling complement's dedicated up-climb cap. TS SEAM_COMPLEMENT_UP_HOP (default 1; 0 = off).
+    pub complement_up_hop: usize,
+    /// Contain a coupling-revealed db-table sink's up-fan. TS SEAM_COUPLING_HUB_CONTAIN (inert without coupling).
+    pub coupling_hub_contain: bool,
+    /// Footprint exclusion — `--exclude` dirs and whether test files are kept. TS `excludeDirs` / `includeTests`.
+    pub exclude_dirs: Vec<String>,
+    pub include_tests: bool,
 }
 
 impl Default for WaveOpts {
+    /// The STRUCTURAL-grow defaults, matching what `resolveStructuralKnobs` produces for an empty opts object.
+    /// Used by the Rust-only tests and the parity harness; the napi boundary always sends explicit values.
     fn default() -> Self {
-        Self { max_steps: 12, max_nodes: 80 }
+        Self {
+            max_steps: 12,
+            max_nodes: 80,
+            hub_gate: true,
+            hub_fan: 12,
+            hub_collapse: true,
+            hub_ubiquity: 12,
+            hub_type_fan: 5,
+            ubiquity: true,
+            ubiquity_fan: 12,
+            up_hop: 2,
+            complement_up_hop: 1,
+            coupling_hub_contain: true,
+            exclude_dirs: Vec::new(),
+            include_tests: false,
+        }
+    }
+}
+
+impl WaveOpts {
+    /// The exclusion policy this grow's footprint prune uses.
+    pub fn exclusion(&self) -> Exclusion {
+        Exclusion::new(&self.exclude_dirs, self.include_tests)
+    }
+
+    /// EVERY field, for the answer-cache key. All of these change the grown SET, so all of them must be in the
+    /// key — the cache is keyed on "the question", and a knob IS part of the question. When this struct held
+    /// only max_steps/max_nodes the key listed them individually; that shape does not survive adding fields
+    /// (a new knob silently inherits another knob's cached answer), so it is derived from the whole struct.
+    /// Add a field to WaveOpts ⇒ add it here.
+    pub fn fingerprint(&self) -> String {
+        format!(
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            self.max_steps,
+            self.max_nodes,
+            self.hub_gate,
+            self.hub_fan,
+            self.hub_collapse,
+            self.hub_ubiquity,
+            self.hub_type_fan,
+            self.ubiquity,
+            self.ubiquity_fan,
+            self.up_hop,
+            self.complement_up_hop,
+            self.coupling_hub_contain,
+            self.include_tests,
+            self.exclude_dirs.join(","),
+        )
     }
 }
 
@@ -171,10 +245,11 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                 crossing_bearers.insert(e.from.clone());
             }
         }
-        // data-sink hubs (I4 refinement): a db-table crossing's data-MODEL node (class/module/table).
+        // data-sink hubs (I4 refinement): a db-table crossing's data-MODEL node (class/module/table). Gated by
+        // `coupling_hub_contain` (SEAM_COUPLING_HUB_CONTAIN): off → the set stays empty → a no-op (I1).
         let kind_by_id: HashMap<String, String> = data.nodes.iter().map(|n| (n.id.clone(), n.kind.clone())).collect();
         let mut data_sink_nodes: HashSet<String> = HashSet::new();
-        for e in &data.edges {
+        for e in data.edges.iter().filter(|_| opts.coupling_hub_contain) {
             if e.kind != "db-write" && e.kind != "db-read" {
                 continue;
             }
@@ -231,13 +306,13 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             }
         }
         let hub_opts = HubOpts {
-            ubiquity: true,
+            ubiquity: opts.ubiquity,
             crossing_bearers: &crossing_bearers,
-            hub_collapse: true,
-            hub_ubiquity: HUB_UBIQUITY,
-            ubiquity_fan: UBIQUITY_FAN,
+            hub_collapse: opts.hub_collapse,
+            hub_ubiquity: opts.hub_ubiquity,
+            ubiquity_fan: opts.ubiquity_fan,
             type_ref_only: &type_ref_only,
-            hub_type_fan: HUB_TYPE_FAN,
+            hub_type_fan: opts.hub_type_fan,
             ubiq_score: &ubiq,
             data_hub: &data_sink_nodes,
         };
@@ -270,7 +345,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                     continue;
                 }
                 let is_complement = n.coupling && !is_flow_subject(&n.kind);
-                let eff_up_hop = if is_complement { COMPLEMENT_UP_HOP } else if crossing_ward { 0 } else { UP_HOP_STRUCTURAL };
+                let eff_up_hop = if is_complement { opts.complement_up_hop } else if crossing_ward { 0 } else { opts.up_hop };
                 if d == Dir::Up && eff_up_hop > 0 && up_depth_of(&n.id) >= eff_up_hop {
                     parked.insert(n.id.clone(), "decision".to_string());
                     continue;
@@ -314,7 +389,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             let added = apply_move(repo, &mut data, mv, ex, &mut idx);
             wave_added += added;
             // HUB GATE: an UP move that added a wide PURE (non-crossing) consumer fan → crop it, don't seed the next wave.
-            if mv.dir == Dir::Up && added >= HUB_FAN {
+            if opts.hub_gate && mv.dir == Dir::Up && added >= opts.hub_fan {
                 if let Some(before) = before {
                     let added_ids: Vec<String> = data.nodes.iter().filter(|n| !before.contains(&n.id)).map(|n| n.id.clone()).collect();
                     let mut cross_dst: HashSet<String> = HashSet::new();
@@ -493,8 +568,19 @@ pub fn grow_to_terminals(repo: &str, anchor_file: &str, symbol: &str, data_coupl
     // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run skips the wave.
     // The COUPLING epoch guards a coupling grow (folds the learned-matcher state); the SOURCE epoch a structural.
     let epoch = if data_coupling { seam_cache::coupling_epoch_of(repo) } else { seam_cache::epoch_of(repo) };
-    let key = seam_cache::hash(&format!("{symbol}|{data_coupling}|{}|{}|{}", opts.max_steps, opts.max_nodes, seam_cache::seam_env_snapshot()));
-    seam_cache::cached(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts))
+    let key = seam_cache::hash(&format!("{symbol}|{data_coupling}|{}|{}", opts.fingerprint(), seam_cache::seam_env_snapshot()));
+    let (mut out, verdict) =
+        seam_cache::cached_reporting(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts));
+    // REPORT the warm-path decision; do not PRINT it. The TS shell owns I/O (see the crate README), and it is
+    // also the only side that can: the engine's callers capture `process.stderr.write` to assert on this line,
+    // and a Rust `eprintln!` goes straight to fd 2, invisible to that capture. So the verdict rides back across
+    // the boundary and rust_core.ts emits the same line TS's `cachedGrow` does.
+    if let Some(g) = out.as_mut() {
+        g.cache_verdict = verdict.label().to_string();
+        g.cache_key = key;
+        g.cache_epoch = epoch;
+    }
+    out
 }
 
 /// A concern's mechanism center — a (file, symbol) pair.
@@ -544,7 +630,7 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
             r
         }};
     }
-    let ex = Exclusion::new(&[], false);
+    let ex = opts.exclusion();
     let mut data = phase!("phase_seed", crate::seed::phase_seed(repo, anchor_file, symbol, &ex))?;
     let ws = seam_resolve::Workspace::cached(repo);
     let mut coupled: HashSet<String> = HashSet::new();
