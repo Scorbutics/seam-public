@@ -58,6 +58,15 @@ fn is_resolved(p: &str) -> bool {
     p == "RESOLVED_FULL" || p == "RESOLVED_PARTIAL"
 }
 
+// THE LINE CONTRACT — the one place the engine's internal line convention meets the rendered one. EVERY line the
+// scan produces is 0-BASED (`Ctx::span` / `Ctx::ln` count newlines before the offset); a projected member's
+// `line` is what a human/editor jumps to, so it is 1-BASED. Converting per-branch is what produced the systematic
+// off-by-one every projected consumer carried. Route EVERY line through this — a raw `range.0` or `e.line`
+// reaching a member is the bug, by construction. Mirrors `to1` in ts/src/codebase/grow/project_set.ts.
+fn to1(l: Option<usize>) -> usize {
+    l.map_or(0, |v| v + 1)
+}
+
 // Project the anchor's direct edges in ONE direction into a SET. `in` = consumers (edges TO the anchor →
 // the from-node is a member); `out` = dependencies (edges FROM the anchor → the to-node is a member).
 fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> ConsumerSet {
@@ -76,7 +85,9 @@ fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> Consume
         members.push(ConsumerMember {
             symbol: n.symbol.clone(),
             file: n.file.clone(),
-            line: e.line.unwrap_or(n.range.0),
+            // `edge.line` is the USAGE/CALL line in the CONSUMER's file — right for `in` (the member IS the
+            // consumer) but WRONG for `out` (the member is the DEP), so `out` uses the dep's own declaration.
+            line: to1(if dir_in { e.line.or(Some(n.range.0)) } else { Some(n.range.0).or(e.line) }),
             kind: n.kind.clone(),
             enclosing: n.enclosing.clone(),
             edge_kind: e.kind.clone(),
@@ -163,7 +174,7 @@ pub fn attach_recalled(set: &mut ConsumerSet, name_consumers: &[NameConsumer]) {
         recalled.push(ConsumerMember {
             symbol: c.symbol.clone(),
             file: c.file.clone(),
-            line: c.line,
+            line: to1(Some(c.line)),   // NameConsumer.line is 0-based too
             kind: c.kind.clone(),
             enclosing: c.enclosing.clone(),
             edge_kind: if c.call { "name-call" } else { "name-ref" }.to_string(),

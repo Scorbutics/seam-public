@@ -43,7 +43,10 @@ impl GraphBuilder {
 
     /// Add a consumer node (deduped by `key`) with an edge to the anchor. `kind` is already `kind_for`-mapped
     /// by the caller. Returns whether it was newly added.
-    pub fn add_consumer(&mut self, key: String, symbol: &str, kind: &str, file: &str, range: (usize, usize), enclosing: &str, edge_kind: &str, provenance: &str) -> bool {
+    /// `line` = the grounded USAGE/CALL line in the CONSUMER's file (0-based, the internal convention), or None
+    /// when none was grounded (the projection then falls back to the member's declaration). Carrying it is what
+    /// lets a blast-radius answer cite where the edit actually is instead of the consuming unit's `function` line.
+    pub fn add_consumer(&mut self, key: String, symbol: &str, kind: &str, file: &str, range: (usize, usize), enclosing: &str, edge_kind: &str, provenance: &str, line: Option<usize>) -> bool {
         if self.seen.contains_key(&key) {
             return false;
         }
@@ -51,7 +54,7 @@ impl GraphBuilder {
         let id = format!("n{}", self.counter);
         self.seen.insert(key, id.clone());
         self.nodes.push(GraphNode { id: id.clone(), symbol: symbol.into(), kind: kind.into(), file: file.into(), range, enclosing: enclosing.into(), complexity: complexity(range), ..Default::default() });
-        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line: None, ..Default::default() });
+        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line, ..Default::default() });
         true
     }
 

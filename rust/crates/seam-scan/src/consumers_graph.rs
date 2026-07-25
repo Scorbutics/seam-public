@@ -80,7 +80,7 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             if seam_fs::normpath(&file) == anchor_norm {
                 continue;
             }
-            b.add_consumer(format!("{file}#fileref"), &stem(&file), "module", &file, (line, line), "", "file-ref", "RESOLVED_FULL");
+            b.add_consumer(format!("{file}#fileref"), &stem(&file), "module", &file, (line, line), "", "file-ref", "RESOLVED_FULL", None);
         }
     }
     if kind != "symbol" {
@@ -128,7 +128,7 @@ fn add_import_consumers(b: &mut GraphBuilder, repo: &str, anchor_file: &str, sym
                 None => (stem(&con.file), "module".to_string(), ln, ln, String::new()),
             };
             let key = format!("{}#{}#{}", con.file, name, start);
-            b.add_consumer(key, &name, &kind_for(&con.file, &kind), &con.file, (start, end), &cls, "reference", "RESOLVED_FULL");
+            b.add_consumer(key, &name, &kind_for(&con.file, &kind), &con.file, (start, end), &cls, "reference", "RESOLVED_FULL", Some(ln));
         }
     }
 }
@@ -162,7 +162,7 @@ fn add_caller(b: &mut GraphBuilder, anchor_file: &str, symbol: &str, arange: (us
         return;
     }
     let key = format!("{}#{}#{}", anchor_file, enc.name, enc.start);
-    b.add_consumer(key, &enc.name, &kind_for(anchor_file, &enc.kind), anchor_file, (enc.start, enc.end), "", edge_kind, prov);
+    b.add_consumer(key, &enc.name, &kind_for(anchor_file, &enc.kind), anchor_file, (enc.start, enc.end), "", edge_kind, prov, Some(ln));
 }
 
 /// UP / consumers — for a plain function this is `build_resolved_graph`; an INTERFACE/METHOD/CLASS anchor also
@@ -173,7 +173,14 @@ pub fn build_consumers_graph(repo: &str, anchor_file: &str, symbol: &str, opts: 
     let Some(ctx) = Ctx::parse(&text, &lang) else { return Some(base) };
 
     let is_interface = ctx.collect(ctx.root(), nk::is_interface).iter().any(|c| ast::name_of(&ctx, *c).as_deref() == Some(symbol));
-    let is_method = !is_interface && ast::named_units(&ctx).iter().any(|u| u.name == symbol && u.kind == "method");
+    // METHOD-LIKE also covers a class FIELD holding a function — `m = withReporting(this._m.bind(this))`,
+    // `m = (x) => …`. Such a field is NOT a `named_units` unit, so without this the receiver-agnostic call-site
+    // pass never runs and `consumers` returns 0 for a symbol with real callers. Mirrors `isFieldFn` in
+    // consumers_graph.ts (whose absence here was a silent TS/Rust divergence on this anchor shape).
+    let is_field_fn =
+        !is_interface && ctx.collect(ctx.root(), nk::is_class_field).iter().any(|f| ast::name_of(&ctx, *f).as_deref() == Some(symbol));
+    let is_method =
+        !is_interface && (is_field_fn || ast::named_units(&ctx).iter().any(|u| u.name == symbol && u.kind == "method"));
     let is_class = !is_interface && !is_method && ctx.collect(ctx.root(), nk::is_class_kind).iter().any(|c| ast::name_of(&ctx, *c).as_deref() == Some(symbol));
 
     if !opts.skip_callsite && (is_interface || is_method || is_class) {

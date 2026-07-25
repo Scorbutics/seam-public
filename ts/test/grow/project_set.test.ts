@@ -38,6 +38,10 @@ describe("projectConsumerSet", () => {
     expect(set.members[0].provenance).toBe("RESOLVED_FULL");
   });
 
+  // The rendered line is 1-BASED while `range` (what graphOf fills from `line`) is the 0-based internal
+  // convention, so a consumer seeded at range 2 is cited as line 3. This test is about ORDERING; the values
+  // are one higher than the seeds purely because of that conversion, which is the contract the citations rely
+  // on — a 0-based line in output sends a reader to the preceding line, which is the bug this pins against.
   test("within a tier, members sort by file then line", () => {
     const g = graphOf([
       { id: "n2", symbol: "z", file: "src/z.ts", line: 3 },
@@ -45,7 +49,7 @@ describe("projectConsumerSet", () => {
       { id: "n4", symbol: "a1", file: "src/a.ts", line: 2 },
     ]);
     const set = projectConsumerSet(g);
-    expect(set.members.map((m) => `${m.file}:${m.line}`)).toEqual(["src/a.ts:2", "src/a.ts:8", "src/z.ts:3"]);
+    expect(set.members.map((m) => `${m.file}:${m.line}`)).toEqual(["src/a.ts:3", "src/a.ts:9", "src/z.ts:4"]);
   });
 
   test("ignores the anchor's own self-edge and edges not targeting the anchor", () => {

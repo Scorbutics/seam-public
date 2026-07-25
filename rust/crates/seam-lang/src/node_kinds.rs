@@ -94,6 +94,16 @@ pub fn is_instance_binder(k: &str) -> bool {
     )
 }
 
+/// A class-member FIELD declaration that can BIND A FUNCTION as a member — the HOF/telemetry-wrapper idiom
+/// (`m = withReporting(this._m.bind(this))`, `m = (x) => …`). Such a member is CALLED like a method
+/// (`instance.m()`) but is not a method_definition, so `named_units` never yields it and the call-site pass
+/// has no owning class — which silently disables every receiver-grounding check. Kept DISTINCT from
+/// `is_instance_binder` (vars/params are not members) and from Java/C++ `field_declaration` (a DATA field whose
+/// name position holds the TYPE). Mirrors `_CLASS_FIELD` in ts/src/codebase/atoms.ts.
+pub fn is_class_field(k: &str) -> bool {
+    matches!(k, "public_field_definition" | "field_definition")
+}
+
 /// A method-declaration node kind.
 pub fn is_method_kind(k: &str) -> bool {
     matches!(k, "method_definition" | "method_declaration" | "constructor_declaration" | "method" | "singleton_method")

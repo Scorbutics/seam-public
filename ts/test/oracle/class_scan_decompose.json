@@ -117,8 +117,8 @@
             {
               "id": "call:x6:PaymentService",
               "file": "src/untraced.ts",
-              "start": 1,
-              "end": 1,
+              "start": 3,
+              "end": 3,
               "role": "link",
               "confidence": 0.9,
               "label": "make",
@@ -222,7 +222,7 @@
       "to": "PaymentService",
       "kind": "call",
       "provenance": "RESOLVED_PARTIAL",
-      "line": 0
+      "line": 3
     }
   ],
   "seamContracts": [
@@ -242,7 +242,7 @@
           "to": "PaymentService",
           "kind": "call",
           "provenance": "RESOLVED_PARTIAL",
-          "line": 0
+          "line": 3
         }
       ],
       "blurry": true

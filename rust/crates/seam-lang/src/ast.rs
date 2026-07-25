@@ -350,6 +350,25 @@ pub fn enclosing_class(units: &[Unit], start: usize, end: usize) -> String {
         .unwrap_or_default()
 }
 
+/// The class that OWNS a FIELD-bound function member named `symbol` (`m = withReporting(this._m.bind(this))`).
+/// Such a member is dispatched exactly like a method but is NOT a method_definition, so `named_units` yields no
+/// unit and the call-site pass is left with an EMPTY owner — which turns off `family` / `provably_foreign` /
+/// `provably_sibling` / `static_foreign` wholesale and degenerates the pass into a repo-wide NAME match.
+/// Grounded on the parse tree (the field's span inside the class's span). Port of `_field_fn_owner`.
+pub fn field_fn_owner(ctx: &Ctx, symbol: &str, units: &[Unit]) -> String {
+    for f in ctx.collect(ctx.root(), crate::node_kinds::is_class_field) {
+        if name_of(ctx, f).as_deref() != Some(symbol) {
+            continue;
+        }
+        let (s, e) = ctx.span(f);
+        let owner = enclosing_class(units, s, e);
+        if !owner.is_empty() {
+            return owner;
+        }
+    }
+    String::new()
+}
+
 /// The method-precise index: the file's named units + a map of bare-callee name → the lines that call it
 /// (a call node whose first child is an identifier). Feeds the grow's method-precise fan attribution. Port of
 /// `methodPreciseIndex`.

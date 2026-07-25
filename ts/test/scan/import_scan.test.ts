@@ -45,7 +45,7 @@ describe("import-scan vs Python", () => {
     const g = await build_consumers_graph(repoDir, "src/payment/service.ts", "PaymentService", { depth: 1 });
     const make = g.nodes.find((n: any) => n.symbol === "make" && n.file === "src/untraced.ts")!;
     expect(make).toBeDefined();
-    expect(g.edges).toContainEqual({ from: make.id, to: "PaymentService", kind: "call", provenance: "RESOLVED_PARTIAL" });
+    expect(g.edges).toContainEqual(expect.objectContaining({ from: make.id, to: "PaymentService", kind: "call", provenance: "RESOLVED_PARTIAL" }));
     // The candidate-less blind spot the floor emitted for untraced.ts is gone — the call IS attributed now.
     const mechanisms = (g.blindspots ?? []).map((b: any) => b.mechanism);
     expect(mechanisms).not.toContain("method-unattributed-consumers");
@@ -130,7 +130,7 @@ describe("import-scan vs Python", () => {
     const caller = g.nodes.find((n: any) => n.symbol === "enrich")!;
     expect(caller).toBeDefined();
     expect(caller.file).toBe("src/phase.ts");
-    expect(g.edges).toContainEqual({ from: caller.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
+    expect(g.edges).toContainEqual(expect.objectContaining({ from: caller.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" }));
     // And it lands as a `link` (a consumer adjacent to the core), not environment.
     const model = await decompose(from_resolved_graph(g), { repo: repoDir });
     const hunks = model.clusters.flatMap((c: any) => c.seams).flatMap((s: any) => s.hunks);
@@ -145,10 +145,10 @@ describe("import-scan vs Python", () => {
     const g = await build_resolved_graph(repoDir, "src/phase.ts", "fromStripe", { depth: 1 });
     const reg = g.nodes.find((n: any) => n.symbol === "register")!;
     expect(reg).toBeDefined();
-    expect(g.edges).toContainEqual({ from: reg.id, to: "n1", kind: "reference", provenance: "RESOLVED_PARTIAL" });
+    expect(g.edges).toContainEqual(expect.objectContaining({ from: reg.id, to: "n1", kind: "reference", provenance: "RESOLVED_PARTIAL" }));
     // The direct caller stays deterministic (FULL), not downgraded by the weaker reference pass.
     const enrich = g.nodes.find((n: any) => n.symbol === "enrich")!;
-    expect(g.edges).toContainEqual({ from: enrich.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" });
+    expect(g.edges).toContainEqual(expect.objectContaining({ from: enrich.id, to: "n1", kind: "call", provenance: "RESOLVED_FULL" }));
   });
 
   // End-to-end: scan → from_resolved_graph → decompose. The oracle is pinned with PYTHONHASHSEED=0

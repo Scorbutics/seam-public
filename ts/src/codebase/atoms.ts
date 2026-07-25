@@ -48,6 +48,15 @@ export const _NEW = new Set(["new_expression", "object_creation_expression"]);
 export const _TYPE_REF = new Set(["type_identifier"]);
 export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",
   "public_field_definition", "field_definition", "property_signature"]);
+// Class-member FIELD declarations that can BIND A FUNCTION as a member — the HOF/telemetry-wrapper idiom
+// (`m = withReporting(this._m.bind(this))`, `m = (x) => …`). Such a member is CALLED like a method
+// (`instance.m()`) but is not a method_definition, so `_named_units` never yields it and the anchor has no
+// owning class — which silently disables every receiver-grounding check in the call-site pass. Kept DISTINCT
+// from _INSTANCE_BINDER (vars/params are not members) and from Java/C++ `field_declaration` (a DATA field whose
+// `name` position holds the TYPE, so matching it by name would ground the wrong owner) — the closed set of
+// kinds whose `name` field IS the member name. Registry-sourced, so both the field-fn detection and the
+// owner lookup read ONE list.
+export const _CLASS_FIELD = new Set(["public_field_definition", "field_definition"]);
 // Typed DECLARATION nodes that carry a `type` field + a bound NAME — a field / ctor-param / local whose declared
 // type we read to resolve a method call on that receiver (`RoleMapperModel roleMapper` → follow the interface).
 // Java field_declaration/formal_parameter/local_variable_declaration wrap the name in a variable_declarator child;

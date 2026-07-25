@@ -13,8 +13,9 @@
 // (ungrounded) members are leads, not verified consumers, so they do NOT count as structure.
 import type { ResolvedGraph, GraphNode, Provenance } from "../scan/graph.js";
 
-// One resolved (or suggested) consumer of the anchor. `line` is the usage line when the edge carries it,
-// else the consumer's def start — a location to jump to either way.
+// One resolved (or suggested) consumer of the anchor. `line` is 1-BASED (see `to1`) and is the grounded
+// USAGE/CALL site when the edge carries one — the line the engineer must actually edit — falling back to the
+// member's own declaration start only when no call line was grounded.
 export interface ConsumerMember {
   symbol: string;
   file: string;
@@ -58,6 +59,15 @@ export interface ConsumerSet {
 const TIER_RANK: Record<string, number> = { RESOLVED_FULL: 0, RESOLVED_PARTIAL: 1, SUGGESTED: 2 };
 const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p === "RESOLVED_PARTIAL";
 
+// THE LINE CONTRACT — the one place the engine's internal line convention meets the rendered one.
+// EVERY line the scan produces is 0-BASED: node.range comes from `Ctx.span`, edge.line from `Ctx.span(call)` /
+// `_call_lines` / `_usage_lines`, and `Ctx.ln` returns the count of newlines before the offset. A projected
+// member's `line` is what a human/editor jumps to, so it is 1-BASED. Converting per-branch is what produced the
+// systematic off-by-one every projected consumer carried (`getUserAvailability.ts:341` for a symbol on 342, and
+// the same on every fallback path): one branch added 1, the other passed the raw 0-based value through. Route
+// EVERY line through this helper — a raw `range[0]` or `e.line` reaching a member is the bug, by construction.
+const to1 = (l: number | null | undefined): number => (l == null ? 0 : l + 1);
+
 // Project the anchor's direct edges in ONE direction into a SET. `in` = consumers (edges TO the anchor →
 // the from-node is a member); `out` = dependencies (edges FROM the anchor → the to-node is a member).
 // Reads ONLY the anchor's direct edges + the anchor's blindspots — NOT the depth-2 ripple or coupling
@@ -77,14 +87,12 @@ function projectEdgeSet(graph: ResolvedGraph, dir: "in" | "out", shape: Consumer
     members.push({
       symbol: n.symbol,
       file: n.file,
-      // LOCATION must belong to the MEMBER's own file. `edge.line` is the USAGE line recorded in the ANCHOR's
-      // file (_addDep/_usage_lines), so it is right for `in` (the member IS the consumer — its usage sits in its
-      // own file) but WRONG for `out` (the member is the DEP; pairing its file with the anchor's usage line
-      // printed impossible locations like `getCalendar.ts:260` for a 121-line file). For `out`, use the dep's
-      // own declaration range.
-      // (node ranges are 0-based, edge usage-lines are already 1-based → +1 only on the range path so both render
-      // as clickable 1-based locations.)
-      line: (dir === "in" ? e.line ?? n.range?.[0] : (n.range?.[0] != null ? n.range[0] + 1 : e.line)) ?? 0,
+      // LOCATION must belong to the MEMBER's own file. `edge.line` is the USAGE/CALL line recorded in the
+      // CONSUMER's file, so it is right for `in` (the member IS the consumer — its usage sits in its own file)
+      // but WRONG for `out` (the member is the DEP; pairing its file with the anchor's usage line printed
+      // impossible locations like `getCalendar.ts:260` for a 121-line file). For `out`, use the dep's own
+      // declaration range. See `to1` for the 0-based → 1-based contract.
+      line: to1(dir === "in" ? e.line ?? n.range?.[0] : n.range?.[0] ?? e.line),
       kind: n.kind,
       enclosing: n.enclosing ?? "",
       edgeKind: e.kind,
@@ -145,7 +153,7 @@ export function attachRecalled(set: ConsumerSet, nameConsumers: { file: string; 
     const k = `${c.file}#${c.symbol}`;
     if (haveFiles.has(c.file) || seen.has(k)) continue;   // file already covered by the floor, or a duplicate
     seen.add(k);
-    recalled.push({ symbol: c.symbol, file: c.file, line: c.line, kind: c.kind, enclosing: c.enclosing,
+    recalled.push({ symbol: c.symbol, file: c.file, line: to1(c.line), kind: c.kind, enclosing: c.enclosing,   // NameConsumer.line is 0-based too
       edgeKind: c.call ? "name-call" : "name-ref", provenance: "SUGGESTED" });
   }
   recalled.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.symbol.localeCompare(b.symbol));

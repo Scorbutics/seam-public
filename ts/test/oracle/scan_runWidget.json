@@ -1,70 +1,71 @@
 {
+  "version": 1,
   "anchor": {
-    "file": "src/engine.ts",
     "id": "n1",
+    "symbol": "runWidget",
+    "file": "src/engine.ts",
     "range": [
       1,
       1
-    ],
-    "symbol": "runWidget"
+    ]
   },
-  "blindspots": [],
-  "complete": true,
-  "depth": 1,
-  "edges": [
-    {
-      "from": "n2",
-      "kind": "reference",
-      "provenance": "RESOLVED_FULL",
-      "to": "n1"
-    },
-    {
-      "from": "n3",
-      "kind": "reference",
-      "provenance": "RESOLVED_FULL",
-      "to": "n1"
-    }
-  ],
   "language": "typescript",
+  "resolutionQuality": "FULL",
+  "depth": 1,
+  "complete": true,
   "nodes": [
     {
-      "complexity": 1,
-      "enclosing": "",
-      "file": "src/engine.ts",
       "id": "n1",
+      "symbol": "runWidget",
       "kind": "function",
+      "file": "src/engine.ts",
       "range": [
         1,
         1
       ],
-      "symbol": "runWidget"
+      "enclosing": "",
+      "complexity": 1
     },
     {
-      "complexity": 1,
-      "enclosing": "",
-      "file": "src/pkg-consumer.ts",
       "id": "n2",
+      "symbol": "pkg-consumer",
       "kind": "module",
+      "file": "src/pkg-consumer.ts",
       "range": [
         0,
         0
       ],
-      "symbol": "pkg-consumer"
+      "enclosing": "",
+      "complexity": 1
     },
     {
-      "complexity": 1,
-      "enclosing": "",
-      "file": "src/sub/feature.ts",
       "id": "n3",
+      "symbol": "feature",
       "kind": "module",
+      "file": "src/sub/feature.ts",
       "range": [
         1,
         1
       ],
-      "symbol": "feature"
+      "enclosing": "",
+      "complexity": 1
     }
   ],
-  "resolutionQuality": "FULL",
-  "unresolved": [],
-  "version": 1
+  "edges": [
+    {
+      "from": "n2",
+      "to": "n1",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL"
+    },
+    {
+      "from": "n3",
+      "to": "n1",
+      "kind": "reference",
+      "provenance": "RESOLVED_FULL",
+      "line": 1
+    }
+  ],
+  "blindspots": [],
+  "unresolved": []
 }

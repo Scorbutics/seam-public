@@ -4,7 +4,7 @@
 // anchors the import scan is blind to. INTERNAL to the phase — the public entry is footprint.build_footprint.
 import {
   type Ctx, makeCtx, available, lang_for,
-  _INTERFACE, _CLASS_KINDS,
+  _INTERFACE, _CLASS_KINDS, _CLASS_FIELD,
 } from "../../atoms.js";
 import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
 import { timingOn } from "../../../core/progress.js";
@@ -78,6 +78,10 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
     if (!cctx) continue;
     const units = _named_units(cctx);
     let lines = _usage_lines(cctx, units, con.local);
+    // `0` is a SENTINEL for "the import resolved but no usage site was found in the body", used only to place
+    // the consumer node. It must never reach an EDGE as a usage line: 0 is not a valid 1-based line, so it
+    // renders as `file:0` and sends a reader nowhere. An edge carries `line` only when a real site grounded it.
+    const grounded = lines.length > 0;
     if (!lines.length) lines = [0];
     for (const ln of lines) {
       const enc = _enclosing(units, ln);
@@ -92,7 +96,9 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       const cid = `n${counter}`;
       seenKeys.set(key, cid);
       nodes.push({ id: cid, symbol: name, kind: _kind_for(con.file, kind), file: con.file, range: [start, end], enclosing: cls, complexity: Math.max(1, end - start + 1) });
-      edges.push({ from: cid, to: "n1", kind: "reference", provenance: "RESOLVED_FULL" });
+      // carry the USAGE line (0-based, the internal convention) so the SET projection can cite where the symbol
+      // is actually used rather than the consuming unit's declaration — see project_set's line contract.
+      edges.push({ from: cid, to: "n1", kind: "reference", provenance: "RESOLVED_FULL", ...(grounded ? { line: ln } : {}) });
     }
   }
   // REVERSE FILE-PATH REFERENCE — the up/consumers side of file_ref: source files that name THIS file by a
@@ -132,7 +138,9 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       const cid = `n${counter}`;
       seenKeys.set(key, cid);
       nodes.push({ id: cid, symbol: name, kind: _kind_for(anchorFile, ukind), file: anchorFile, range: [start, end], enclosing: "", complexity: Math.max(1, end - start + 1) });
-      edges.push({ from: cid, to: "n1", kind, provenance });
+      // Always grounded here (unlike the import path above): `ln` came from _call_lines/_ref_lines, i.e. an
+      // actual usage site in the anchor's own file — there is no "resolved but unused" case to guard against.
+      edges.push({ from: cid, to: "n1", kind, provenance, line: ln });   // the call/reference line, not the caller's decl
     };
     const callLines = new Set(_call_lines(actx, symbol));
     for (const ln of callLines) addCaller(ln, "call", "RESOLVED_FULL");
@@ -186,7 +194,7 @@ export async function build_consumers_graph(repo: string, anchorFile: string, sy
       // returned 0 for a symbol with real callers. MEASURED cost of that empty answer: an agent refused to accept
       // "0", tried 5 more query shapes hunting for signal, and burned 8 calls on a 1-call question. Callers still
       // write `instance.m(...)`, so the same call-site pass scoped to this NAME recovers them (RESOLVED_PARTIAL).
-      const isFieldFn = !isInterface && ctx.collect(ctx.root, (k) => k === "public_field_definition" || k === "field_definition")
+      const isFieldFn = !isInterface && ctx.collect(ctx.root, (k) => _CLASS_FIELD.has(k))
         .some((f: any) => _name_of(ctx, f) === symbol);
       const isMethod = !isInterface && (isFieldFn || _named_units(ctx).some((u) => u[0] === symbol && u[1] === "method"));
       // A CLASS anchor IS an import binding, so build_class_graph attributes the methods it can tie to a

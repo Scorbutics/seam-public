@@ -19,7 +19,7 @@ import {
 import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "../ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
-  _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names,
+  _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names, _field_fn_owner,
 } from "../ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
 
@@ -82,9 +82,13 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     if (ifc) { akind = "interface"; arange = actx.span(ifc); }
   }
   // For a method anchor, surface its owning class so the seam reads `Engine.generate`, not a bare method.
+  // A FIELD-bound function member (`m = withReporting(this._m.bind(this))`) is dispatched as a method but is
+  // no `_named_units` unit, so `defu` is undefined and the owner would be EMPTY — which silently switches the
+  // whole receiver-grounding block below OFF (family/provablyForeign/staticForeign all no-op on a null owner)
+  // and turns the pass into a repo-wide name match. Ground it from the parse tree instead.
   const aencl = defu && defu[1] === "method"
     ? (aunits.find((u) => u[1] === "class" && u[2] <= defu[2] && defu[3] <= u[3])?.[0] ?? "")
-    : "";
+    : (defu ? "" : _field_fn_owner(actx, symbol, aunits));
   if (opts.anchorLine != null) arange = [opts.anchorLine, Math.max(opts.anchorLine, arange[1])];
   const methods = opts.methodNames ?? new Set(_type_methods(actx, symbol).map((m) => m[0]));
 
@@ -184,7 +188,11 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
-  const byKey = new Map<string, { sym: string; kind: string; start: number; end: number; rel: string; full: boolean; encClass: string }>();
+  // `line` = the CALL line (0-based, the internal convention), kept alongside the enclosing unit's span. A
+  // blast-radius answer must cite WHERE THE EDIT IS — the call site — not the consuming function's `function`
+  // keyword: `_getUserAvailability` declared at :342 calls the anchor at :582, and citing 342 sends the reader
+  // to the wrong place. The lowest call line in the unit is the deterministic representative.
+  const byKey = new Map<string, { sym: string; kind: string; start: number; end: number; rel: string; full: boolean; encClass: string; line: number }>();
   const resolvedMethods = new Set<string>();   // every method name a call site was found for (any provenance)
   for (const pf of pending) {
     for (const s of pf.sites) {
@@ -198,15 +206,15 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
       const key = `${pf.rel}#${sym}#${start}`;
       const full = inFamily(s, pf.instTypes);
       const cur = byKey.get(key);
-      if (cur) cur.full = cur.full || full;
-      else byKey.set(key, { sym, kind, start, end, rel: pf.rel, full, encClass });
+      if (cur) { cur.full = cur.full || full; cur.line = Math.min(cur.line, s.line); }
+      else byKey.set(key, { sym, kind, start, end, rel: pf.rel, full, encClass, line: s.line });
     }
   }
   let counter = 0;
   for (const v of byKey.values()) {
     counter += 1;
     nodes.push({ id: `c${counter}`, symbol: v.sym, kind: _kind_for(v.rel, v.kind), file: v.rel, range: [v.start, v.end], enclosing: v.encClass, complexity: Math.max(1, v.end - v.start + 1) });
-    edges.push({ from: `c${counter}`, to: "n1", kind: "call", provenance: v.full ? "RESOLVED_FULL" : "RESOLVED_PARTIAL" });
+    edges.push({ from: `c${counter}`, to: "n1", kind: "call", provenance: v.full ? "RESOLVED_FULL" : "RESOLVED_PARTIAL", line: v.line });
   }
   // `resolvedMethods` is read by build_consumers_graph BEFORE merge_resolved (which copies only
   // nodes/edges/blindspots/unresolved/anchors), so it never leaks into a merged graph / oracle.

@@ -5,8 +5,27 @@ import {
   type Ctx,
   _CLASS_KINDS, _METHOD_KINDS, _MEMBER, _MEMBER_NAME, _NEW, _INSTANCE_BINDER, _TYPE_REF,
   _INTERFACE, _INTERFACE_MEMBER, _HERITAGE, _BASE_NAME, _NAME_KINDS, _CALL, _CALL_NAME_FIELD, _CALL_RECV_FIELD,
+  _CLASS_FIELD,
 } from "../atoms.js";
-import { _name_of } from "./ast_units.js";
+import { type Unit } from "./graph.js";
+import { _name_of, _enclosingClass } from "./ast_units.js";
+
+// The class that OWNS a FIELD-bound function member named `symbol` (`m = withReporting(this._m.bind(this))`,
+// `m = (x) => …`). Such a member is dispatched exactly like a method (`instance.m()`) but is NOT a
+// method_definition, so `_named_units` yields no unit for it — leaving the call-site pass with an EMPTY owner.
+// An empty owner disables `family` / `provablyForeign` / `provablySibling` / `staticForeign` wholesale, so the
+// pass degenerates to a repo-wide NAME match and every same-named method on an unrelated class is asserted as a
+// verified caller. Recovering the owner here is what re-arms receiver grounding for this anchor shape.
+// Grounded on the parse tree (the field's span inside the class's span), never on a name convention.
+export function _field_fn_owner(ctx: Ctx, symbol: string, units: Unit[]): string {
+  for (const f of ctx.collect(ctx.root, (k) => _CLASS_FIELD.has(k))) {
+    if (_name_of(ctx, f) !== symbol) continue;
+    const [s, e] = ctx.span(f);
+    const owner = _enclosingClass(units, s, e);
+    if (owner) return owner;
+  }
+  return "";
+}
 
 // The (method name + its node + receiver) of a call site, across the two call-grammar shapes. NESTED
 // (JS/TS/Python/C++): the callee is a member node `obj.prop`. FLAT (Java/Ruby/C#): `name`/`object` are

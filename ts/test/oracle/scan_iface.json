@@ -50,7 +50,8 @@
       "from": "c1",
       "to": "IRepo",
       "kind": "call",
-      "provenance": "RESOLVED_PARTIAL"
+      "provenance": "RESOLVED_PARTIAL",
+      "line": 2
     }
   ],
   "blindspots": [

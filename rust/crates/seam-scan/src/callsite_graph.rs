@@ -37,13 +37,17 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         akind = "interface".into();
         arange = actx.span(ifc);
     }
+    // A FIELD-bound function member (`m = withReporting(this._m.bind(this))`) is dispatched as a method but is
+    // no `named_units` unit, so `defu` is None and the owner would be EMPTY — which silently switches the whole
+    // receiver-grounding block below OFF and turns the pass into a repo-wide name match. Ground it from the tree.
     let aencl = match &defu {
         Some(d) if d.kind == "method" => aunits
             .iter()
             .find(|u| u.kind == "class" && u.start <= d.start && d.end <= u.end)
             .map(|u| u.name.clone())
             .unwrap_or_default(),
-        _ => String::new(),
+        Some(_) => String::new(),
+        None => ast::field_fn_owner(&actx, symbol, &aunits),
     };
     if let Some(al) = opts.anchor_line {
         arange = (al, al.max(arange.1));
@@ -185,6 +189,9 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         rel: String,
         full: bool,
         enc_class: String,
+        // the CALL line (0-based, the internal convention). A blast-radius answer must cite WHERE THE EDIT IS —
+        // the call site — not the consuming function's declaration. Lowest call line in the unit = deterministic.
+        line: usize,
     }
     let mut order: Vec<String> = Vec::new();
     let mut by_key: HashMap<String, Entry> = HashMap::new();
@@ -203,10 +210,13 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             let key = format!("{}#{}#{}", pf.rel, sym, start);
             let full = in_family(s, &pf.inst);
             match by_key.get_mut(&key) {
-                Some(cur) => cur.full = cur.full || full,
+                Some(cur) => {
+                    cur.full = cur.full || full;
+                    cur.line = cur.line.min(s.line);
+                }
                 None => {
                     order.push(key.clone());
-                    by_key.insert(key, Entry { sym, kind, start, end, rel: pf.rel.clone(), full, enc_class });
+                    by_key.insert(key, Entry { sym, kind, start, end, rel: pf.rel.clone(), full, enc_class, line: s.line });
                 }
             }
         }
@@ -229,7 +239,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             to: "n1".into(),
             kind: "call".into(),
             provenance: if v.full { "RESOLVED_FULL".into() } else { "RESOLVED_PARTIAL".into() },
-            line: None, ..Default::default() });
+            line: Some(v.line), ..Default::default() });
     }
 
     let mut g = make_graph(anchor, graph_lang, nodes, edges);
