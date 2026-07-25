@@ -192,12 +192,17 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const _mechOn = process.env.SEAM_MECHANISM !== "0" || process.env.SEAM_PIPELINE === "1";
   const _mechDepth = Math.max(1, parseInt(process.env.SEAM_MECHANISM_DEPTH ?? "3", 10) || 3);
   const _PRODUCE_MECH = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert", "db-read", "service-read", "consume", "read"]);
-  const pipeline: { id: string; line: number; depth: number; sink?: string }[] = [];
+  const pipeline: { id: string; line: number; depth: number; sink?: string; caller?: string }[] = [];
   if (_mechOn) {
     const anchorNode = String(model.anchor);
     const edges = (model.edges ?? []) as any[];
     const dep = new Map<string, number>([[anchorNode, 0]]);
     const callLine = new Map<string, number>();   // the call-site line of the FIRST edge that reached each step
+    // PARENT — the step that CALLS this one (the `from` of the reaching edge). Two things need it, and both were
+    // wrong without it: the call site's FILE (a depth-2 step is called from its PARENT's file, not the anchor's —
+    // the render printed `util.ts:193` for a call that lives at getBusyTimes.ts:193, a fabricated location), and
+    // the flow ORDER (below).
+    const parent = new Map<string, string>();
     for (const q = [anchorNode]; q.length; ) {
       const c = q.shift()!; const d = dep.get(c)!;
       if (d >= _mechDepth) continue;
@@ -209,7 +214,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         if (e.kind === "import" && !(Number(e.line) > 0)) continue;
         const to = String(e.to);
         if (dep.has(to) || !label.has(to) || _TYPE_KINDS.has(kindOfId.get(to) ?? "")) continue;   // resolved, non-TYPE, unseen
-        dep.set(to, d + 1); callLine.set(to, Number(e.line) > 0 ? Number(e.line) : 0); q.push(to);
+        dep.set(to, d + 1); callLine.set(to, Number(e.line) > 0 ? Number(e.line) : 0); parent.set(to, c); q.push(to);
       }
     }
     const sinkOf = (id: string): string | undefined => {
@@ -221,14 +226,34 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         // NB: exclude by NODE, not by seam — the anchor's seam is often a merged BLOB holding its own delegations
         // (private-app runPhaseEnrich's seam also contains provisionOrUpdateMember/applyMemberSubscription); a seam-level
         // spine exclusion would drop the very operations that ARE the mechanism.
-      .map((id) => ({ id, line: callLine.get(id) ?? 0, depth: dep.get(id)!, sink: sinkOf(id) }));
-    // FLOW ORDER — the anchor's operations in EXECUTION order (depth, then call-site line): the sequence a reader
-    // reconstructs the flow from (validated by the eval — every BETTER verdict praised the call-order). NB: an
-    // outcome-first sort was tried and REVERTED — it hoisted grounded-sink ops but pushed the key delegation
-    // (private-app provisionOrUpdateMember, no DIRECT sink) below the budget cap, and cal's late side-effects stay hidden
-    // regardless because they are UNGROUNDED (a grounding/attribution gap, not an ordering one).
-    entries.sort((a, b) => (a.depth - b.depth) || (a.line - b.line) || (a.id < b.id ? -1 : 1));
-    pipeline.push(...entries);
+      .map((id) => ({ id, line: callLine.get(id) ?? 0, depth: dep.get(id)!, sink: sinkOf(id), caller: parent.get(id) }));
+    // FLOW ORDER — the anchor's operations in EXECUTION order: at each level, by call-site line; and a step's OWN
+    // callees immediately AFTER it (pre-order), because that is what "in call order" means to a reader — you
+    // follow a call INTO its body, then come back for the next sibling. NB: an outcome-first sort was tried and
+    // REVERTED — it hoisted grounded-sink ops but pushed the key delegation (private-app provisionOrUpdateMember, no
+    // DIRECT sink) below the budget cap.
+    //
+    // DEPTH-MAJOR was the previous order, and it is what hid the deep call the whole mechanism exists to show:
+    // a 1500-line orchestrator has ~50 depth-1 sibling calls, so EVERY depth-2 step sorted below all of them and
+    // fell off the render cap. cal.com `_getAvailableSlots` reached `getBusyCalendarTimes` (depth 2) at position
+    // 59 of 71 — present in the graph, invisible at any realistic token budget. Pre-order puts it directly under
+    // the `BusyTimesService` step that calls into it. Within a level the sort is unchanged (line, then id), so a
+    // FLAT mechanism (every step at depth 1 — the common case) renders byte-identically.
+    const kids = new Map<string, typeof entries>();
+    for (const e of entries.sort((a, b) => (a.line - b.line) || (a.id < b.id ? -1 : 1)))
+      (kids.get(e.caller ?? anchorNode) ?? kids.set(e.caller ?? anchorNode, []).get(e.caller ?? anchorNode)!).push(e);
+    // Iterative pre-order (a deep chain must not risk the JS stack), re-parenting under the nearest KEPT ancestor:
+    // a filtered-out step (a store node) must not orphan the operations it calls.
+    const seen = new Set<string>();
+    for (const stack = [...(kids.get(anchorNode) ?? [])].reverse(); stack.length; ) {
+      const e = stack.pop()!;
+      if (seen.has(e.id)) continue;
+      seen.add(e.id); pipeline.push(e);
+      const ch = kids.get(e.id); if (ch) for (let i = ch.length - 1; i >= 0; i--) stack.push(ch[i]);
+    }
+    // a step whose caller was filtered out of `entries` (a store node) is unreachable from the pre-order walk —
+    // append it rather than lose it, in its own level order.
+    for (const e of entries) if (!seen.has(e.id)) { seen.add(e.id); pipeline.push(e); }
   }
   const showPipeline = pipeline.length >= 2;   // a genuine multi-step mechanism, not a lone delegate the spine shows
 
@@ -528,7 +553,12 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       ...renderCapped(pipeline, EXEMPT_N, (p, i) => {
         const f = fileOfId.get(p.id), where2 = f ? ` (${at(f, startOfId.get(p.id))})` : "";
         const dyn = _dynDispatch.get(p.id);
-        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${_anchorFileBase && p.line ? `   [called at ${_anchorFileBase}:${p.line}]` : ""}`;
+        // CALL SITE — the line lives in the file of the step's CALLER, which is the anchor's file ONLY at depth 1.
+        // Printing `_anchorFileBase` unconditionally fabricated a location for every deeper step (cal.com:
+        // `getBusyCalendarTimes … [called at util.ts:193]`, when the call is at getBusyTimes.ts:193). Fall back to
+        // the anchor's file when the caller has none — depth-1 output is unchanged.
+        const callerBase = (p.caller ? fileOfId.get(String(p.caller)) : undefined)?.split("/").pop() ?? _anchorFileBase;
+        return `  ${i + 1}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`;
       }, "step(s)")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right

@@ -333,9 +333,19 @@ const _MOVE_CAP = GROW.moveCap;   // a single move adding more than this is "too
 // UP to its other consumers and the sibling entry points (e.g. a second UI behind a second route) were starved.
 // Here every reached node may go EITHER way; the explosion that monotonicity prevented is now bounded by two
 // terms the developer's instinct named — CLOSENESS (hop distance from the anchor) and INTENT — so the fan
-// radiates locally and the node budget caps it. Order: connectivity (crossings) first (never prune the spine),
-// then delegation-over-typeref, then NEAREST, then intent, then a node's ORIGINAL direction before its REVERSE
-// hop (take the reverse — the climb-up — only once the near forward frontier is spent), then complexity.
+// radiates locally and the node budget caps it. Order: STRUCTURE before the coupling complement, then
+// connectivity (crossings) (never prune the spine), then delegation-over-typeref, then NEAREST, then intent,
+// then a node's ORIGINAL direction before its REVERSE hop (take the reverse — the climb-up — only once the near
+// forward frontier is spent), then complexity.
+//
+// (0) STRUCTURE BEFORE COMPLEMENT is the fix for a MEASURED starvation, not a preference. P3 seeds its shared-key
+// bridge nodes into the graph BEFORE the wave runs, and every one of them BEARS a crossing — so criterion (1)
+// floated the entire coupling fringe above the anchor's own call spine. On cal.com `_getAvailableSlots` (215
+// bridges) that meant ALL 40 applied moves of the only wave were coupling bridges (authorizeCredentials, jwt,
+// bulkDeleteUsersHandler …) and NONE of the anchor's 41 structural deps: the mechanism could not get past the
+// anchor's file at ANY budget. Coupling is a COMPLEMENT — the boundary the static graph CAN'T follow (CLAUDE.md)
+// — never a REPLACEMENT for the call spine it is meant to extend, so it grows after it. Crossings that are NOT
+// P3 complements (a route/queue marker the flood itself reached) keep their (1) lead untouched.
 // A core node at or beyond this hop-distance from the anchor is treated as a SHARED backend hub (its up-climb
 // reaches sibling entry points), not the central seam (whose up-climb is redundant). Env-tunable.
 const _UPCLIMB_MIN_DIST = 2;   // legacy hop-distance up-climb gate (fallback when the embedding field is absent; tierGrow supersedes it — no longer env-tunable)
@@ -352,7 +362,8 @@ export function _orderMoves(moves: Move[], crossings: Set<string>, iscore: (n: a
   const fwd = (m: Move) => ((m.node.direction === "backward" ? "down" : "up") === m.dir ? 1 : 0);   // the node's tagged direction
   const band = (n: any) => Math.round(iscore(n) * _INTENT_BANDS);                          // coarse intent bucket
   return [...moves].sort((a, b) =>
-    (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))                 // (1) CONNECTIVITY — never prune the spine
+    (Number(!!a.node.coupling) - Number(!!b.node.coupling))                               // (0) STRUCTURE BEFORE COMPLEMENT — the call spine outranks the shared-key fringe
+    || (Number(crossings.has(b.node.id)) - Number(crossings.has(a.node.id)))              // (1) CONNECTIVITY — never prune the spine
     || (Number(!typeRefOnly.has(b.node.id)) - Number(!typeRefOnly.has(a.node.id)))        // (2) DELEGATION over type-ref
     || (Number(isHub(a.node)) - Number(isHub(b.node)))                                    // (2.5) UBIQUITY — a non-crossing shared hub grows LAST (default no-op)
     || (band(b.node) - band(a.node))                                                      // (3) INTENT band — a clearly-relevant node first (incl. a FAR one)
@@ -817,7 +828,18 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
     frontier: (data.nodes as any[]).map((n) => n.id) });
   // WAVEFRONT termination is CONVERGENCE (a wave that adds nothing — region fully flooded / the containment
   // stopped it), NOT a wave count; maxNodes is only a runaway safety backstop.
-  for (let step = 0; data.nodes.length < maxNodes; step++) {
+  //
+  // NODE-BUDGET ACCOUNTING — `maxNodes` bounds the STRUCTURAL FLOOD, not the whole graph. P3-coupling runs
+  // BEFORE this phase and seeds its shared-key bridge nodes straight into `data.nodes`; on a big repo that is
+  // HUNDREDS of them (cal.com `_getAvailableSlots`: 42 seed + 215 bridges = 257 nodes against a 120 cap), so
+  // this loop's entry condition was ALREADY false and the flood ran ZERO steps — the mechanism never got past
+  // the anchor's own 1-hop deps, and the real chain (…→ getUserAvailability → getBusyTimes → getBusyCalendarTimes)
+  // was unreachable at ANY token budget. Coupling bridges are self-bounded by the coupling phase and are ALREADY
+  // exempt from the per-move flood cap (`_MOVE_CAP` in _applyMove: `!n.coupling`); the cap counts the same
+  // population here, so ONE definition of "flood size" serves both. Recomputed (O(N), N≈hundreds) rather than
+  // tracked incrementally: every writer of `data.nodes` would otherwise have to maintain the counter.
+  const floodN = (): number => { let k = 0; for (const n of data.nodes as any[]) if (!n.coupling) k++; return k; };
+  for (let step = 0; floodN() < maxNodes; step++) {
     await densify(); _growCentroid(step);   // embedding field for the tol border + ordering (+ the tier rule's pivot score)
     const g = from_resolved_graph(data);
     assign_roles(g);
@@ -987,7 +1009,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
       const waveBeforeEdgeN = opts.onWave ? (data.edges as any[]).length : 0;
       for (let mi = 0; mi < ordered.length; mi++) {
         const move = ordered[mi];
-        if (data.nodes.length >= maxNodes) {
+        if (floodN() >= maxNodes) {
           // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget (I3).
           if (tierGrow) for (const m of ordered.slice(mi)) if (!parked.has(m.node.id)) parked.set(m.node.id, "budget");
           break;
@@ -1058,7 +1080,7 @@ async function _phaseExpand(repo: string, data: any, opts: any, coStruct: any, p
   // HONEST BACKSTOP — CONVERGENCE (the containment / a nothing-added wave) is the intended terminator; maxNodes is
   // only a runaway safety cap. If the flood hit it (a too-loose / absent border let the flood run to the cap), say
   // so — a silently truncated shape reads as complete.
-  if (data.nodes.length >= maxNodes) {
+  if (floodN() >= maxNodes) {
     (data.blindspots ??= []).push({ node: data.anchor?.id ?? "n1", mechanism: "flood-safety-cap",
       evidence: `the wavefront flood hit the ${maxNodes}-node safety cap before settling at the intent border — the shape may be incomplete. Tighten the border (lower SEAM_GROW_BORDER_TOL) or raise the node cap (--max-nodes).`,
       candidates: [] });

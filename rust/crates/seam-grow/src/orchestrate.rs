@@ -224,8 +224,16 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     let mut hub_mark: HashMap<String, seam_scan::graph::HubMarker> = HashMap::new();
     let mut parked: IndexMap<String, String> = IndexMap::new(); // node id → cutBy (decision/budget)
 
+    // NODE-BUDGET ACCOUNTING — `max_nodes` bounds the STRUCTURAL FLOOD, not the whole graph. P3-coupling runs
+    // BEFORE this phase and seeds its shared-key bridge nodes straight into `data.nodes`; on a big repo that is
+    // HUNDREDS of them (cal.com `_getAvailableSlots`: 42 seed + 215 bridges = 257 nodes against a 120 cap), so
+    // this loop's entry condition was ALREADY false and the flood ran ZERO steps — the mechanism never got past
+    // the anchor's own 1-hop deps. Coupling bridges are self-bounded by the coupling phase and are ALREADY exempt
+    // from the per-move flood cap (MOVE_CAP in apply_move: `!n.coupling`); the cap counts the same population
+    // here. Mirrors the TS `floodN()` in grow/orchestrate.ts — the two engines must agree.
+    let flood_n = |d: &ResolvedGraph| -> usize { d.nodes.iter().filter(|n| !n.coupling).count() };
     let mut step = 0usize;
-    while data.nodes.len() < opts.max_nodes {
+    while flood_n(&data) < opts.max_nodes {
         // ── per-wave derivations ────────────────────────────────────────────────────────────────────────
         let mut g = from_resolved_graph(&data);
         assign_roles(&mut g);
@@ -373,7 +381,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         // ── the wavefront flood: expand EVERY ready head this wave ───────────────────────────────────────
         let mut wave_added = 0usize;
         for (mi, mv) in ordered.iter().enumerate() {
-            if data.nodes.len() >= opts.max_nodes {
+            if flood_n(&data) >= opts.max_nodes {
                 // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget.
                 for m in &ordered[mi..] {
                     parked.entry(m.node.id.clone()).or_insert_with(|| "budget".to_string());
@@ -446,7 +454,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         }
     }
     // HONEST BACKSTOP — if the flood hit the node cap, say so (a silently truncated shape reads as complete).
-    if data.nodes.len() >= opts.max_nodes {
+    if flood_n(&data) >= opts.max_nodes {
         let anchor = if data.anchor_id.is_empty() { "n1".to_string() } else { data.anchor_id.clone() };
         data.blindspots.push(Blindspot {
             node: anchor,
@@ -545,8 +553,11 @@ fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only:
         if tagged == m.dir { 1 } else { 0 }
     };
     moves.sort_by(|a, b| {
-        // (1) CONNECTIVITY — never prune the spine (crossing dst first).
-        (crossings.contains(&b.node.id) as i32).cmp(&(crossings.contains(&a.node.id) as i32))
+        // (0) STRUCTURE BEFORE COMPLEMENT — the call spine outranks the P3 shared-key fringe, every member of
+        // which bears a crossing and would otherwise sweep criterion (1) (mirrors TS `_orderMoves`).
+        (a.node.coupling as i32).cmp(&(b.node.coupling as i32))
+            // (1) CONNECTIVITY — never prune the spine (crossing dst first).
+            .then_with(|| (crossings.contains(&b.node.id) as i32).cmp(&(crossings.contains(&a.node.id) as i32)))
             // (2) DELEGATION over type-ref.
             .then_with(|| (!type_ref_only.contains(&b.node.id) as i32).cmp(&(!type_ref_only.contains(&a.node.id) as i32)))
             // (2.5) UBIQUITY — a non-crossing shared hub grows LAST.
