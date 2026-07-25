@@ -10,7 +10,7 @@
 import { readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { spawnSync } from "node:child_process";
-import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES } from "../atoms.js";
+import { type Ctx, makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _METHOD_KINDS, _NAME_KINDS, _NAME_LEAVES, _VAR_DECLARATOR } from "../atoms.js";
 import { field } from "../../core/treesitter.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { normpath, walkFiles } from "../../core/resolve/walk.js";
@@ -52,14 +52,27 @@ export async function complement_unit(repo: string, file: string, line: number):
   try { const content = readFileSync(join(repo, file), "utf-8"); recordRead(file, content); ctx = await makeCtx(content, lang); } catch { return fallback; }
   if (!ctx) return fallback;
   let best: { symbol: string; kind: string; start: number; end: number } | null = null;
-  for (const n of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k))) {
-    const [s, e] = ctx.span(n);
-    if (s > line || line > e) continue;
-    const nm = _name_of(ctx, n);
-    if (!nm) continue;
-    if (!best || (e - s) < (best.end - best.start)) {
-      best = { symbol: nm, kind: _CLASS_KINDS.has(n.type) ? "class" : _METHOD_KINDS.has(n.type) ? "method" : "function", start: s, end: e };
+  const offer = (nm: string | null, kind: string, s: number, e: number) => {
+    if (!nm || s > line || line > e) return;
+    if (!best || (e - s) < (best.end - best.start)) best = { symbol: nm, kind, start: s, end: e };
+  };
+  for (const n of ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k) || _CLASS_KINDS.has(k) || _VAR_DECLARATOR.has(k))) {
+    // A `const f = (…) => {…}` / `const f = function(){}` funclike carries NO name of its own — the name lives
+    // on the DECLARATOR (exactly the case scan/ast_units._named_units handles with its own _VAR_DECLARATOR
+    // branch; duplicated rather than imported because coupling must not import scan — see _name_of above).
+    // Without it, a complement whose access sits inside a named arrow (a client fetch wrapper:
+    // `export const createBooking = async (d) => post("/api/book/event", d)`) fell back to the MODULE stub,
+    // and a module stub's symbol is the file STEM — not a declared symbol — so the grow's up-climb from that
+    // complement resolved NOTHING and the client's own callers (the React hook that triggers the request)
+    // were unreachable at any budget. Naming the unit is what lets the climb continue past the crossing.
+    if (_VAR_DECLARATOR.has(n.type)) {
+      const ch = ctx.children(n);
+      const fl = ch.find((c: any) => _FUNCLIKE.has(c.type));
+      if (fl && ch.length && _NAME_KINDS.has(ch[0].type)) { const [s, e] = ctx.span(fl); offer(ctx.text(ch[0]), "function", s, e); }
+      continue;
     }
+    const [s, e] = ctx.span(n);
+    offer(_name_of(ctx, n), _CLASS_KINDS.has(n.type) ? "class" : _METHOD_KINDS.has(n.type) ? "method" : "function", s, e);
   }
   return best ?? fallback;
 }

@@ -19,10 +19,31 @@ fn line_at(text: &str, idx: usize) -> u32 {
 }
 
 // Split a named block on `,`, trim, resolve ` as ` aliasing; one ImportRef per binding.
+/// Strip a leading per-specifier `type ` modifier, mirroring TS's `/^type\s+(?!as\b)/` replace.
+fn strip_inline_type(p: &str) -> &str {
+    let Some(rest) = p.strip_prefix("type") else { return p };
+    if !rest.starts_with(|c: char| c.is_whitespace()) {
+        return p;
+    }
+    let rest = rest.trim_start();
+    // `{ type as T }` — a binding literally NAMED `type`, not a modifier (TS's `(?!as\b)` lookahead).
+    if let Some(after) = rest.strip_prefix("as") {
+        if !after.starts_with(|c: char| c.is_alphanumeric() || c == '_' || c == '$') {
+            return p;
+        }
+    }
+    rest
+}
+
 fn emit(text: &str, named: &str, source: &str, idx: usize, reexport: bool, out: &mut Vec<ImportRef>) {
     let line = line_at(text, idx);
     for part in named.split(',') {
-        let p = part.trim();
+        // INLINE type-only specifier — `import { type X, Y } from "m"` / `export { type X } from "m"`. The
+        // clause-level `import type {…}` form is stripped by the regex, but the per-specifier modifier lands
+        // INSIDE the name, binding `X` as the symbol "type X" — so nothing ever matches it (no consumer edge,
+        // no def resolution through that hop; the cal.com DI container re-exports its service type exactly
+        // this way). The `as` guard keeps a binding literally NAMED `type` (`{ type as T }`) intact.
+        let p = strip_inline_type(part.trim());
         if p.is_empty() {
             continue;
         }

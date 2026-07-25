@@ -5,6 +5,7 @@
 //! callsite index; the receiver logic is the same, just assembled here.
 
 use crate::graph::{make_graph, GraphEdge, GraphNode, ResolvedGraph};
+use crate::receiver_types::factory_receiver_type;
 use crate::util::{complexity, kind_for, read};
 use seam_fs::{join, normpath, stem};
 use seam_lang::ast::{self, CallSite, Unit};
@@ -96,6 +97,8 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         units: Vec<Unit>,
         inst: HashMap<String, HashSet<String>>,
         type_names: HashSet<String>,
+        /// receiver name → the type the FACTORY hop narrowed it to (see receiver_types.rs)
+        fac: HashMap<String, String>,
         sites: Vec<CallSite>,
     }
     let mut pending: Vec<Pending> = Vec::new();
@@ -107,11 +110,29 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
         let sites: Vec<CallSite> = ast::call_sites(&cctx).into_iter().filter(|s| methods.contains(&s.method)).collect();
         if !sites.is_empty() {
+            let inst = if owner.is_some() { ast::instance_types(&cctx) } else { HashMap::new() };
+            // FACTORY-NARROWED receivers: a receiver the type pass could NOT resolve, bound from a call whose
+            // callee declares a return type (`const svc = getThingService();`). Resolved only for the receivers
+            // that actually appear at a matched call site and only when an owner is set (the narrowing is off
+            // otherwise), so the two module hops are paid for a handful of binders per file, memoised.
+            let mut fac: HashMap<String, String> = HashMap::new();
+            if owner.is_some() {
+                for st in &sites {
+                    let Some(ri) = &st.recv_id else { continue };
+                    if st.recv_new.is_some() || fac.contains_key(ri) || inst.get(ri).is_some_and(|t| !t.is_empty()) {
+                        continue;
+                    }
+                    if let Some(t) = factory_receiver_type(repo, rel, &cctx, ri, &st.method) {
+                        fac.insert(ri.clone(), t);
+                    }
+                }
+            }
             pending.push(Pending {
                 rel: rel.clone(),
                 units: ast::named_units(&cctx),
-                inst: if owner.is_some() { ast::instance_types(&cctx) } else { HashMap::new() },
+                inst,
                 type_names: if owner.is_some() { ast::type_names(&cctx) } else { HashSet::new() },
+                fac,
                 sites,
             });
         }
@@ -149,6 +170,33 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             return true;
         }
         s.recv_id.as_ref().and_then(|ri| inst.get(ri)).is_some_and(|ts| ts.iter().any(|t| fam.contains(t)))
+    };
+    // FACTORY-narrowed receiver IN THE FAMILY → the SAME promotion `in_family` gives an annotated / `new T()`
+    // receiver. The factory hop has ALREADY proved, structurally, that this receiver's type is written down one
+    // hop away (bound once from one unqualified call whose callee declares a LONE type-reference return type
+    // resolving to a CONCRETE CLASS that DECLARES the method). `const svc = getThingService();` with
+    // `function getThingService(): ThingService` is exactly as grounded as `const svc: ThingService = …` — the
+    // only difference is which declaration carries the type. Leaving it PARTIAL made the edge a bare-name
+    // `call` PARTIAL, which the grow's grounded-reach gate refuses to follow OR to fan coupling from, so a
+    // route handler reaching its service through a container getter was never expanded and never coupled — its
+    // own HTTP route boundary never materialised and the upstream climb stopped at the backend service.
+    let factory_family = |s: &CallSite, fac: &HashMap<String, String>| -> bool {
+        let (Some(fam), Some(ri)) = (&family, &s.recv_id) else { return false };
+        s.recv_new.is_none() && fac.get(ri).is_some_and(|t| fam.contains(t))
+    };
+    // PROVABLY-FOREIGN FACTORY receiver — the same rule as `provably_foreign`, on a receiver whose type came
+    // from the factory hop instead of an annotation. Without it a DI/factory receiver is UNRESOLVED, so every
+    // receiver check no-ops and a same-named method on an unrelated service is ASSERTED as a caller.
+    let factory_foreign = |s: &CallSite, fac: &HashMap<String, String>| -> bool {
+        if owner.is_none() || s.recv_new.is_some() {
+            return false;
+        }
+        let Some(ri) = &s.recv_id else { return false };
+        let Some(t) = fac.get(ri) else { return false };   // unresolved receiver → PARTIAL (the ambiguity is real)
+        Some(t) != owner.as_ref()
+            && !family.as_ref().is_some_and(|f| f.contains(t))
+            && !owner_base_set.contains(t)
+            && !index.subclass_family(t).contains(owner.as_ref().unwrap())
     };
     let provably_sibling = |s: &CallSite, inst: &HashMap<String, HashSet<String>>| -> bool {
         if siblings.is_empty() {
@@ -198,7 +246,11 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
     let mut resolved: HashSet<String> = HashSet::new();
     for pf in &pending {
         for s in &pf.sites {
-            if provably_sibling(s, &pf.inst) || static_foreign(s, &pf.type_names) || provably_foreign(s, &pf.inst) {
+            if provably_sibling(s, &pf.inst)
+                || static_foreign(s, &pf.type_names)
+                || provably_foreign(s, &pf.inst)
+                || factory_foreign(s, &pf.fac)
+            {
                 continue;
             }
             resolved.insert(s.method.clone());
@@ -208,7 +260,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             };
             let enc_class = ast::enclosing_class(&pf.units, start, end);
             let key = format!("{}#{}#{}", pf.rel, sym, start);
-            let full = in_family(s, &pf.inst);
+            let full = in_family(s, &pf.inst) || factory_family(s, &pf.fac);
             match by_key.get_mut(&key) {
                 Some(cur) => {
                     cur.full = cur.full || full;

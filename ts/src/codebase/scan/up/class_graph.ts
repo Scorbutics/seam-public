@@ -157,6 +157,24 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     if (s.recvId) { const ts = instTypes.get(s.recvId); if (ts && [...ts].some((t) => family.has(t))) return true; }
     return false;
   };
+  // FACTORY-narrowed receiver IN THE FAMILY → the SAME promotion `inFamily` gives an annotated / `new T()`
+  // receiver. The factory hop (up/receiver_types.ts) has ALREADY proved, structurally, that this receiver's
+  // type is written down one hop away: the binder is bound ONCE from ONE unqualified call, that callee
+  // declares a LONE type-reference return type, and that type resolves to a CONCRETE CLASS which DECLARES the
+  // called method. `const svc = getThingService();` with `function getThingService(): ThingService` is exactly
+  // as grounded as `const svc: ThingService = …` — the only difference is which declaration carries the type.
+  // Leaving it PARTIAL was an asymmetry with a real cost: the edge is then a bare-name `call` PARTIAL, which
+  // the grow's grounded-reach gate refuses to follow OR to fan coupling from (orchestrate: `nameMatchEdge` /
+  // `_fanCouple`'s `grounded`), so a Next.js/DI route handler that reaches its service through a container
+  // getter (cal.com `apps/web/pages/api/book/event.ts` → `getRegularBookingService().createBooking()`) was
+  // reached but never EXPANDED and never COUPLED — its own HTTP route boundary was never materialised, so the
+  // upstream climb stopped dead at the backend service and never crossed to the client that calls the route.
+  // This only ever PROMOTES a site the factory hop already grounded; an unresolved receiver stays PARTIAL.
+  const factoryFamily = (s: { recvId: string | null; recvNew: string | null }, facTypes: Map<string, string>): boolean => {
+    if (!family || !s.recvId || s.recvNew) return false;
+    const t = facTypes.get(s.recvId);
+    return !!t && family.has(t);
+  };
   // Provably-SIBLING receivers: a concrete class that shares the owner's in-repo base(s) but is not the
   // owner or one of its subclasses dispatches to a DIFFERENT override of the same-named method — it is not
   // a consumer of THIS class. Dropping those sites (vs keeping them PARTIAL) stops a generic method name
@@ -236,7 +254,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
       // `Class.method` not a bare, cross-class-ambiguous name (3 `createBooking` beans on Acme).
       const encClass = _enclosingClass(pf.units, start, end);
       const key = `${pf.rel}#${sym}#${start}`;
-      const full = inFamily(s, pf.instTypes);
+      const full = inFamily(s, pf.instTypes) || factoryFamily(s, pf.facTypes);
       const cur = byKey.get(key);
       if (cur) { cur.full = cur.full || full; cur.line = Math.min(cur.line, s.line); }
       else byKey.set(key, { sym, kind, start, end, rel: pf.rel, full, encClass, line: s.line });

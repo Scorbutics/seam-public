@@ -762,3 +762,87 @@ mod tests {
         assert!(usage.contains_key("getX"), "getX must be recorded");
     }
 }
+
+/// Binder name → the UNQUALIFIED callee its value is bound from (`const svc = getThingService();` →
+/// `svc → getThingService`), or `None` when the same name is bound from two different callees (ambiguous).
+/// A binder bound from anything that is not a bare `f()` call is absent. Port of `_call_bound_binders`.
+pub fn call_bound_binders(ctx: &Ctx) -> HashMap<String, Option<String>> {
+    let mut out: HashMap<String, Option<String>> = HashMap::new();
+    for node in ctx.collect(ctx.root(), nk::is_instance_binder) {
+        let ch = ctx.children(node);
+        let Some(name_node) = ch.iter().copied().find(|c| nk::is_name_kind(c.kind())) else { continue };
+        let name = ctx.text(name_node).to_string();
+        let mut value = ch.iter().copied().filter(|c| c.id() != name_node.id()).next_back();
+        // unwrap `await f()` / `(f())` / `f()!` / `f() as T` down to the call itself
+        while let Some(v) = value {
+            if !nk::is_call_value_unwrap(v.kind()) {
+                break;
+            }
+            value = v.named_child(0);
+        }
+        let bound = value
+            .filter(|v| nk::is_call(v.kind()))
+            .and_then(|v| callee(ctx, v))
+            .and_then(|c| c.obj.is_none().then_some(c.name));
+        let Some(bound) = bound else { continue };
+        match out.get(&name) {
+            Some(prev) if prev.as_deref() != Some(bound.as_str()) => {
+                out.insert(name, None);
+            }
+            Some(_) => {}
+            None => {
+                out.insert(name, Some(bound));
+            }
+        }
+    }
+    out
+}
+
+/// The single DECLARED return-type name of the function-like named `fn_name`, or `None` when it has none or
+/// is not a LONE type reference (`Promise<T>` / a union / a generic — ambiguous, so we refuse to narrow).
+/// Port of `_declared_return_type`.
+pub fn declared_return_type(ctx: &Ctx, fn_name: &str) -> Option<String> {
+    let lone = |rt: Node| -> Option<String> {
+        let names: HashSet<String> = if nk::is_type_ref(rt.kind()) {
+            std::iter::once(ctx.text(rt).to_string()).collect()
+        } else {
+            ctx.collect(rt, nk::is_type_ref).into_iter().map(|t| ctx.text(t).to_string()).collect()
+        };
+        (names.len() == 1).then(|| names.into_iter().next().unwrap())
+    };
+    for f in ctx.collect(ctx.root(), nk::is_funclike) {
+        if name_of(ctx, f).as_deref() != Some(fn_name) {
+            continue;
+        }
+        for field in nk::RETURN_TYPE_FIELD {
+            if let Some(t) = f.child_by_field_name(field).and_then(lone) {
+                return Some(t);
+            }
+        }
+    }
+    // `export const f = (): T => …` — the funclike is the declarator's VALUE, so it carries no name of its own.
+    for d in ctx.collect(ctx.root(), nk::is_var_declarator) {
+        let ch = ctx.children(d);
+        let Some(first) = ch.first().copied() else { continue };
+        if !nk::is_name_kind(first.kind()) || ctx.text(first) != fn_name {
+            continue;
+        }
+        let Some(fl) = ch.iter().copied().find(|c| nk::is_funclike(c.kind())) else { continue };
+        for field in nk::RETURN_TYPE_FIELD {
+            if let Some(t) = fl.child_by_field_name(field).and_then(lone) {
+                return Some(t);
+            }
+        }
+    }
+    None
+}
+
+/// Does the CONCRETE class named `type_name` (never an interface) DECLARE the method `method` itself?
+/// Port of `_class_owns_method`.
+pub fn class_owns_method(ctx: &Ctx, type_name: &str, method: &str) -> bool {
+    let cls = ctx
+        .collect(ctx.root(), |k| nk::is_class_kind(k) && !nk::is_interface(k))
+        .into_iter()
+        .find(|c| name_of(ctx, *c).as_deref() == Some(type_name));
+    cls.is_some() && class_methods(ctx, type_name).iter().any(|m| m.0 == method)
+}

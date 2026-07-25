@@ -590,9 +590,6 @@ use seam_lang::Node;
 
 static LEADING_COLON: L<Rx> = L::new(|| Rx::new(r"^\s*:\s*").unwrap());
 static GENERIC_TAIL: L<Rx> = L::new(|| Rx::new(r"(?s)<.*$").unwrap());
-static EXPORT_DEFAULT_DEF: L<Rx> = L::new(|| Rx::new(r"export\s+default\s+(?:async\s+)?(?:function|class)\s+[A-Za-z_$][\w$]*").unwrap());
-static EXPORT_DEFAULT_NAME: L<Rx> = L::new(|| Rx::new(r"export\s+default\s+([A-Za-z_$][\w$]*)\s*;").unwrap());
-static EXPORT_AS_DEFAULT: L<Rx> = L::new(|| Rx::new(r"export\s*\{[^}]*\b([A-Za-z_$][\w$]*)\s+as\s+default\b").unwrap());
 
 /// The base type name of a declared-type token — strip a leading `:`, generic args, and a package qualifier.
 fn decl_base(t: &str) -> String {
@@ -659,50 +656,9 @@ fn resolve_import_file(repo: &str, importing: &str, source: Option<&str>) -> Opt
     source.and_then(|s| Workspace::cached(repo).resolve(importing, s))
 }
 
-/// Resolve a type NAME to the file DEFINING it (same-file def → named import/re-export → default import → barrel).
-/// Port of `_resolveTypeDefFile`.
+/// Resolve a type NAME to the file DEFINING it — the shared hop ladder (`def_resolve`), narrowed to type kinds.
 fn resolve_type_def_file(repo: &str, from_file: &str, type_name: &str, depth: usize) -> Option<String> {
-    if depth > 6 {
-        return None;
-    }
-    let (text, grammar) = read(repo, from_file)?;
-    let ctx = Ctx::parse(&text, &grammar)?;
-    if ast::named_units(&ctx).iter().any(|u| u.name == type_name && (u.kind == "class" || u.kind == "interface")) {
-        return Some(from_file.to_string());
-    }
-    let provider = provider_for(from_file)?;
-    for r in provider.imports(&text) {
-        if r.local == type_name || r.name == type_name {
-            if let Some(t) = resolve_import_file(repo, from_file, r.source.as_deref()) {
-                if let Some(d) = resolve_type_def_file(repo, &t, &r.name, depth + 1) {
-                    return Some(d);
-                }
-            }
-        }
-    }
-    for di in provider.default_imports(&text) {
-        if di.local == type_name {
-            if let Some(t) = resolve_import_file(repo, from_file, Some(&di.source)) {
-                if let Some(d) = resolve_default_export_def(repo, &t, depth + 1) {
-                    return Some(d);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// The file DEFINING a module's default export. Port of `_resolveDefaultExportDef`.
-fn resolve_default_export_def(repo: &str, module_file: &str, depth: usize) -> Option<String> {
-    if depth > 6 {
-        return None;
-    }
-    let (text, _) = read(repo, module_file)?;
-    if EXPORT_DEFAULT_DEF.is_match(&text) {
-        return Some(module_file.to_string());
-    }
-    let m = EXPORT_DEFAULT_NAME.captures(&text).or_else(|| EXPORT_AS_DEFAULT.captures(&text))?;
-    resolve_type_def_file(repo, module_file, &m[1], depth + 1)
+    crate::def_resolve::resolve_def_file(repo, from_file, type_name, crate::def_resolve::DEF_TYPE_KINDS, depth)
 }
 
 /// A class member (method or arrow/function-valued field) named `member` in `file` → its span. Port of `_classMemberLine`.

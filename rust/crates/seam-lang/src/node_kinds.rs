@@ -194,3 +194,21 @@ pub fn is_export_clause(k: &str) -> bool {
 pub fn is_export_specifier(k: &str) -> bool {
     k == "export_specifier"
 }
+
+/// Node FIELD names carrying a function-like's DECLARED RETURN TYPE (TS `return_type`, Java's `type`).
+/// Mirrors TS `_RETURN_TYPE_FIELD`.
+pub const RETURN_TYPE_FIELD: &[&str] = &["return_type", "type"];
+
+/// A wrapper an initialiser expression may be nested inside before the CALL it is really bound from
+/// (`await f()`, `(f())`, `f()!`, `f() as T`). Mirrors TS `_CALL_VALUE_UNWRAP`.
+pub fn is_call_value_unwrap(k: &str) -> bool {
+    matches!(
+        k,
+        "await_expression"
+            | "parenthesized_expression"
+            | "non_null_expression"
+            | "as_expression"
+            | "type_assertion_expression"
+            | "unary_expression"
+    )
+}

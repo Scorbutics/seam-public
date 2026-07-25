@@ -3,7 +3,7 @@
 //! containing the line; falls back to the file module. Port of `complement_unit` (bridge.ts).
 
 use seam_lang::ast::name_of;
-use seam_lang::node_kinds::{is_class_kind, is_funclike, is_method_kind};
+use seam_lang::node_kinds::{is_class_kind, is_funclike, is_method_kind, is_name_kind, is_var_declarator};
 use seam_lang::{grammar_for, Ctx};
 
 /// The funclike/class candidate units in a file: (name, kind, start, end), in `ctx.collect` order. Cached per
@@ -17,7 +17,23 @@ fn complement_units(repo: &str, file: &str, grammar: &str) -> Vec<(String, Strin
         let content = String::from_utf8_lossy(&bytes).into_owned();
         let Some(ctx) = Ctx::parse(&content, grammar) else { return Vec::new() };
         let mut out: Vec<(String, String, usize, usize)> = Vec::new();
-        for n in ctx.collect(ctx.root(), |k| is_funclike(k) || is_class_kind(k)) {
+        for n in ctx.collect(ctx.root(), |k| is_funclike(k) || is_class_kind(k) || is_var_declarator(k)) {
+            // A `const f = (…) => {…}` funclike carries NO name of its own — the name lives on the DECLARATOR
+            // (the case `named_units` handles with its own var-declarator branch). Without it a complement whose
+            // access sits inside a named arrow (a client fetch wrapper) fell back to the MODULE stub, whose
+            // symbol is the file STEM — not a declared symbol — so the grow's up-climb from that complement
+            // resolved NOTHING and the client's own callers were unreachable at any budget.
+            if is_var_declarator(n.kind()) {
+                let ch = ctx.children(n);
+                let (Some(first), Some(fl)) = (ch.first().copied(), ch.iter().copied().find(|c| is_funclike(c.kind()))) else {
+                    continue;
+                };
+                if is_name_kind(first.kind()) {
+                    let (s, e) = ctx.span(fl);
+                    out.push((ctx.text(first).to_string(), "function".to_string(), s, e));
+                }
+                continue;
+            }
             let (s, e) = ctx.span(n);
             let Some(nm) = name_of(&ctx, n) else { continue };
             let kind = if is_class_kind(n.kind()) {

@@ -19,7 +19,7 @@ use std::sync::Mutex;
 /// ENGINE EPOCH — bump when the grow/footprint/coupling LOGIC changes so a warm `.seam` can't replay a stale
 /// answer computed by the previous binary. (TS auto-derives this from a source-tree hash; the Rust binary's
 /// version is the boundary — a manual constant, bumped per logic change.)
-const ENGINE_EPOCH: &str = "rs3";   // rs3: a SELF-rooted receiver chain (this.<injected>.<svc>.m()) now resolves to the concrete impl
+const ENGINE_EPOCH: &str = "rs5";   // rs5: factory-obtained receivers ground to RESOLVED_FULL + a named-arrow complement is no longer a module stub (the upstream climb crosses the route)
                                     // rs2: the self-member pass (this.m / this.m.bind(this)) adds intra-class call edges
 
 /// FNV-1a → base36, matching the TS `_hash` (so shard file names + epochs are computed the same way; the values
