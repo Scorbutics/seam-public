@@ -7,7 +7,7 @@ import { basename, join } from "node:path";
 import { readFileSync } from "node:fs";
 import type { Provenance } from "../resolution.js";
 import type { ImportRef, NamespaceImport, DefaultImport } from "./languages/base.js";
-import { floor_resolve, endsWithSourceExt, parse_imports, namespace_imports, default_imports, SKIP_DIRS } from "./languages/index.js";
+import { floor_resolve, endsWithSourceExt, parse_imports, namespace_imports, default_imports, default_export, SKIP_DIRS } from "./languages/index.js";
 import { normpath, walkFiles } from "./walk.js";
 import { incrementalScan, indexCacheEnabled } from "./index_cache.js";
 import { recordRead, recordQuery, registerQueryRerun, hashSet } from "./dep_recorder.js";
@@ -82,7 +82,7 @@ export interface Consumer { file: string; local: string; source: string; status:
 type ImportContribution = { refs: ImportRef[]; ns: NamespaceImport[]; defs: DefaultImport[] };
 type ImportEntry = ImportContribution & { rel: string; norm: string };
 const _repoImportsCache = new Map<string, ImportEntry[]>();
-export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); _invImportsCache.clear(); _fileImportersCache.clear(); }
+export function resetRepoImports(): void { _repoImportsCache.clear(); _resolveCache.clear(); _invImportsCache.clear(); _fileImportersCache.clear(); _defaultSlotCache.clear(); }
 
 // INVERTED import index — `symbol → the entries that import a binding of that name`, plus the (small) subsets
 // that have namespace / default imports. `_scan_direct` (finding a symbol's consumers) used to walk the WHOLE
@@ -150,17 +150,56 @@ function _repoImports(repo: string): ImportEntry[] {
   return idx;
 }
 
-// Is `symbol` the DEFAULT export of `anchorFile`? — `export default symbol`, `export default
-// function/class symbol`, or `export { symbol as default }`. Default imports bind the module's default
-// under an arbitrary name, so we only treat them (and `default as` re-exports) as consumers when this
-// holds — recall-safe (no over-matching unrelated default imports). Anonymous `export default () => …`
-// has no symbol name, so it never matches (its importers are unattributable without a name anyway).
+// The DEFAULT export SLOT of `anchorFile` — `{local, expr}` from the file's LANGUAGE provider (the TS/JS
+// `export default …` syntax lives in languages/typescript/resolve.ts, not here; an exportless language has no
+// slot). `local` is the declaration that provably FILLS the slot: named directly (`export default symbol`,
+// `export default function symbol`, `export { symbol as default }`) OR through a WRAPPER call
+// (`export default withReporting(getSlots, "getSlots")`), which the provider unwraps to the first identifier
+// argument naming a funclike of that same file — the same rule the AST-side `_wrappedDefSpan` uses for
+// `const X = withReporting(realFn)`. `local: null` with `expr` set ⇒ the slot exists but is OPAQUE.
+// Memoized per (repo, file): every default-import gate asks the same question of the same file.
+const _defaultSlotCache = new Map<string, { local: string | null; expr: string | null }>();
+export function defaultExportSlot(repo: string, anchorFile: string): { local: string | null; expr: string | null } {
+  const k = `${repo}\0${normpath(anchorFile)}`;
+  const hit = _defaultSlotCache.get(k);
+  if (hit) return hit;
+  let slot: { local: string | null; expr: string | null };
+  try {
+    const text = readFileSync(join(repo, anchorFile), "utf-8"); recordRead(anchorFile, text);
+    slot = default_export(anchorFile, text);
+  } catch { slot = { local: null, expr: null }; }
+  _defaultSlotCache.set(k, slot);
+  return slot;
+}
+
+// Is `symbol` the DEFAULT export of `anchorFile`? Default imports bind the module's default under an arbitrary
+// name, so we only treat them (and `default as` re-exports) as consumers when this holds — recall-safe (no
+// over-matching unrelated default imports). Anonymous `export default () => …` has no symbol name, so it never
+// matches (its importers are unattributable without a name anyway).
 function _isDefaultExport(repo: string, anchorFile: string, symbol: string): boolean {
-  let text: string;
-  try { text = readFileSync(join(repo, anchorFile), "utf-8"); recordRead(anchorFile, text); } catch { return false; }
-  const s = symbol.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`export\\s+default\\s+(?:async\\s+)?(?:function|class)?\\s*${s}\\b`).test(text)
-    || new RegExp(`export\\s*\\{[^}]*\\b${s}\\s+as\\s+default\\b`).test(text);
+  return defaultExportSlot(repo, anchorFile).local === symbol;
+}
+
+// The files that DEFAULT-import `anchorFile` (`import X from "…anchor…"`, `export { default as X } from …`).
+// Used ONLY to state an OPAQUE default slot honestly: when a module's default export is an expression that
+// resolves to no declaration of that file (`export default someUnprovableWrapper(...)`, `export default () =>
+// …`), these importers are REAL consumers that no symbol in the file can carry. Naming them as a blindspot is
+// the honest answer; asserting them against a guessed symbol, or rendering a bare zero, is not.
+export async function default_importers(repo: string, anchorFile: string): Promise<string[]> {
+  const anchorNorm = normpath(anchorFile), anchorAbs = normpath(join(repo, anchorFile));
+  const out: string[] = [];
+  for (const { rel, norm, refs, defs } of _importIndex(repo).defaultEntries) {
+    if (norm === anchorAbs) continue;
+    let hit = false;
+    for (const d of defs) { const t = await _resolve(repo, rel, d.source); if (t && normpath(t) === anchorNorm) { hit = true; break; } }
+    if (!hit) for (const r of refs) {
+      if (r.name !== "default") continue;
+      const t = await _resolve_import(repo, rel, r);
+      if (t?.[0] && normpath(t[0]) === anchorNorm) { hit = true; break; }
+    }
+    if (hit) out.push(rel);
+  }
+  return out.sort();
 }
 
 // A namespace-member consumer: file F binds a module under `local` and uses `local.symbol`. Matches a
@@ -188,7 +227,8 @@ function _member_use(text: string, local: string, symbol: string): Provenance | 
 export async function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): Promise<[string, Record<string, string>][]> {
   const anchorNorm = normpath(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
-  const defaultMember = [...memberNames].sort().find((n) => _isDefaultExport(repo, anchorFile, n)) ?? null;
+  const slotLocal = defaultExportSlot(repo, anchorFile).local;
+  const defaultMember = slotLocal && memberNames.has(slotLocal) ? slotLocal : null;
   const out: [string, Record<string, string>][] = [];
   for (const { rel, norm, refs, defs } of _repoImports(repo)) {
     if (norm === anchorAbs) continue;

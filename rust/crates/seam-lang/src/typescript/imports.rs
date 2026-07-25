@@ -150,16 +150,177 @@ pub fn default_imports(text: &str) -> Vec<DefaultImport> {
         .collect()
 }
 
-/// Is `symbol` the default export of `text`? (`export default …symbol` / `export { symbol as default }`.)
-/// Port of `_isDefaultExport`.
-pub fn is_default_export(text: &str, symbol: &str) -> bool {
-    let s = regex::escape(symbol);
-    let a = Regex::new(&format!(r"export\s+default\s+(?:async\s+)?(?:function|class)?\s*{s}\b")).unwrap();
-    if a.is_match(text) {
-        return true;
+/// The module's DEFAULT export SLOT → the local declaration that FILLS it, plus the raw slot expression.
+/// Port of `defaultExport` (languages/typescript/resolve.ts).
+///
+/// A default import binds the SLOT, never a name, so a default-import consumer can only be attributed by
+/// asking the DEFINING module which of its declarations fills its default slot. `export default X` /
+/// `export default function X` / `export { X as default }` name it directly, but the slot is an EXPRESSION:
+/// the HOC / reporting-wrapper form `export default withReporting(getSlots, "getSlots")` fills it with the
+/// RESULT of wrapping a local declaration. A name-only test finds NO member behind such a slot, drops every
+/// default importer, and renders a live symbol as a confident "No callers" (measured on cal.com
+/// packages/features/schedules/lib/slots.ts). Unwrapping takes the FIRST identifier argument that names a
+/// FUNCTION-like declaration of THIS file — the same rule the AST-side wrapped-def resolution uses — and no
+/// name matching: an imported binding is declared elsewhere, so it is rejected. Unprovable ⇒ `local: None`.
+pub struct DefaultExport {
+    pub local: Option<String>,
+    pub expr: Option<String>,
+}
+
+static AS_DEFAULT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"export\s*\{[^}]*?\b([A-Za-z_$][\w$]*)\s+as\s+default\b").unwrap());
+static SLOT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?:^|[\s;}])export\s+default\s+").unwrap());
+static NAMED_DECL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(?:async\s+)?(?:function\s*\*?|class)\s+([A-Za-z_$][\w$]*)\b").unwrap());
+static ANON_DECL_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^(?:async\s+)?(?:function\s*\*?|class)\s*[({<]").unwrap());
+static BARE_ID_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)^([A-Za-z_$][\w$]*)[^\S\n]*(?:as\s+[A-Za-z_$][\w$]*[^\S\n]*)?(?:;|$)").unwrap());
+static CALLEE_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"^([A-Za-z_$][\w$]*(?:\s*\.\s*[A-Za-z_$][\w$]*)*)\s*\(").unwrap());
+static ID_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r"^[A-Za-z_$][\w$]*$").unwrap());
+const WRAP_DEPTH: usize = 4;
+
+/// Is `n` declared as a FUNCTION-like binding of this file (and not merely an imported binding)?
+fn local_funclike(text: &str, n: &str) -> bool {
+    let e = regex::escape(n);
+    let declared = [
+        format!(r"(?:^|[\s;}}])(?:export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s+{e}\b"),
+        format!(r"(?:^|[\s;}}])(?:export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+{e}\b"),
+        format!(r"(?:^|[\s;}}])(?:export\s+)?(?:const|let|var)\s+{e}\s*(?::[^=;]*)?=\s*(?:async\s*)?(?:function\b|\(|<)"),
+    ]
+    .iter()
+    .any(|r| Regex::new(r).unwrap().is_match(text));
+    if !declared {
+        return false;
     }
-    let b = Regex::new(&format!(r"export\s*\{{[^}}]*\b{s}\s+as\s+default\b")).unwrap();
-    b.is_match(text)
+    if imports(text).iter().any(|r| r.local == n) {
+        return false;
+    }
+    if default_imports(text).iter().any(|d| d.local == n) {
+        return false;
+    }
+    !namespace_imports(text).iter().any(|ns| ns.local == n)
+}
+
+/// The balanced `(...)` argument text starting at the byte index of `(`, string-aware. None if unbalanced.
+fn args_of(s: &str, open: usize) -> Option<&str> {
+    let b = s.as_bytes();
+    let (mut depth, mut quote) = (0i32, 0u8);
+    let mut i = open;
+    while i < b.len() {
+        let c = b[i];
+        if quote != 0 {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = c,
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return s.get(open + 1..i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Top-level (depth-0, string-aware) comma split of an argument list.
+fn split_args(s: &str) -> Vec<&str> {
+    let b = s.as_bytes();
+    let (mut depth, mut quote, mut start) = (0i32, 0u8, 0usize);
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if quote != 0 {
+            if c == b'\\' {
+                i += 2;
+                continue;
+            }
+            if c == quote {
+                quote = 0;
+            }
+            i += 1;
+            continue;
+        }
+        match c {
+            b'"' | b'\'' | b'`' => quote = c,
+            b'(' | b'[' | b'{' => depth += 1,
+            b')' | b']' | b'}' => depth -= 1,
+            b',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    out.push(&s[start..]);
+    out.into_iter().map(|a| a.trim()).filter(|a| !a.is_empty()).collect()
+}
+
+/// `wrapper(impl, …)` (nested: `withReporting(withCache(impl))`) → the wrapped local funclike.
+fn unwrap_wrapper(expr: &str, text: &str, depth: usize) -> Option<String> {
+    if depth > WRAP_DEPTH {
+        return None;
+    }
+    let m = CALLEE_RE.captures(expr)?;
+    let open = m.get(0).unwrap().end() - 1;
+    let args = args_of(expr, open)?;
+    let parts = split_args(args);
+    for a in &parts {
+        if ID_RE.is_match(a) && local_funclike(text, a) {
+            return Some((*a).to_string());
+        }
+    }
+    for a in &parts {
+        if let Some(inner) = unwrap_wrapper(a, text, depth + 1) {
+            return Some(inner);
+        }
+    }
+    None
+}
+
+pub fn default_export(text: &str) -> DefaultExport {
+    if let Some(c) = AS_DEFAULT_RE.captures(text) {
+        return DefaultExport { local: Some(c[1].to_string()), expr: Some(c[0].to_string()) };
+    }
+    let Some(slot) = SLOT_RE.find(text) else {
+        return DefaultExport { local: None, expr: None };
+    };
+    let rest = text[slot.end()..].trim_start();
+    let head = rest.lines().next().unwrap_or("").trim().to_string();
+    if let Some(c) = NAMED_DECL_RE.captures(rest) {
+        return DefaultExport { local: Some(c[1].to_string()), expr: Some(head) };
+    }
+    if ANON_DECL_RE.is_match(rest) {
+        return DefaultExport { local: None, expr: Some(head) };
+    }
+    if let Some(c) = BARE_ID_RE.captures(rest) {
+        let m = c.get(0).unwrap();
+        if m.start() == 0 && !rest[m.end()..].trim_start().starts_with('(') {
+            return DefaultExport { local: Some(c[1].to_string()), expr: Some(head) };
+        }
+    }
+    DefaultExport { local: unwrap_wrapper(rest, text, 0), expr: Some(head) }
+}
+
+/// Is `symbol` the default export of `text`? Port of `_isDefaultExport` — now the slot's proven local.
+pub fn is_default_export(text: &str, symbol: &str) -> bool {
+    default_export(text).local.as_deref() == Some(symbol)
 }
 
 /// Does `text` use `local.symbol` — a call (`local.symbol(` → FULL) or a bare reference (→ PARTIAL)? Port of

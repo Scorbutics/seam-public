@@ -9,6 +9,13 @@
 
 use crate::types::{DefaultImport, ImportRef, NamespaceImport};
 
+/// A module's DEFAULT export slot: the local declaration that fills it (`None` = unprovable/anonymous) and the
+/// raw slot expression (`None` = the module has no default export).
+pub struct DefaultExport {
+    pub local: Option<String>,
+    pub expr: Option<String>,
+}
+
 pub trait LanguageProvider: Send + Sync {
     fn name(&self) -> &'static str;
     /// File extensions this provider owns (lowercase, with the dot).
@@ -77,6 +84,12 @@ pub trait LanguageProvider: Send + Sync {
     fn is_default_export(&self, text: &str, symbol: &str) -> bool {
         let _ = (text, symbol);
         false
+    }
+    /// The module's DEFAULT export SLOT → the local declaration that fills it (`None` when unprovable) and the
+    /// raw slot expression (`None` when there is no default export). Port of the `defaultExport` provider hook.
+    fn default_export(&self, text: &str) -> DefaultExport {
+        let _ = text;
+        DefaultExport { local: None, expr: None }
     }
     /// Does `text` USE a namespace member `local.symbol`? Returns the provenance ("RESOLVED_FULL" for a call
     /// `local.symbol(`, "RESOLVED_PARTIAL" for a bare reference), or `None`. TS/JS namespace-consumer detection.

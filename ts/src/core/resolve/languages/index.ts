@@ -126,6 +126,13 @@ export function default_imports(file: string, text: string): DefaultImport[] {
   return p?.defaultImports ? p.defaultImports(text) : [];
 }
 
+// the module's DEFAULT export slot → {local, expr}, via its provider. A language with no default-export
+// concept has no slot, hence no local.
+export function default_export(file: string, text: string): { local: string | null; expr: string | null } {
+  const p = provider_for(file);
+  return p?.defaultExport ? p.defaultExport(text) : { local: null, expr: null };
+}
+
 // the file's query-builder table accesses (`.from('t').verb`), via its language provider. [] if the
 // language has no such syntax (the framework adapter then classifies the verbs).
 export function table_access(file: string, text: string): TableAccess[] {

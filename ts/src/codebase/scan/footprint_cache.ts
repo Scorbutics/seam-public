@@ -37,7 +37,11 @@ const CACHE = "footprint-v1";
 // fix on warm repos (it changed footprint output but wasn't bumped). 139 files / ~1.4MB, read once, memoised.
 // FALLBACK: a constant used only when the source tree isn't walkable (a bundled .cjs — import.meta/the dir layout
 // is gone); there the RELEASE is the version boundary, so bump the constant per release.
-const _ENGINE_EPOCH_FALLBACK = "5";
+// 6: the default-export SLOT now unwraps a wrapper call (`export default withReporting(getSlots, "getSlots")`),
+//    which changes resolved consumers / contract members. The auto-derived hash covers the TS edit, but the
+//    RUST core carries the same path and lives OUTSIDE the hashed tree — bump so a warm `.seam/rust` can't
+//    replay the pre-fix answer (a stale rust cache has made a fix look like a no-op before).
+const _ENGINE_EPOCH_FALLBACK = "6";
 let _engineEpoch: string | null = null;
 // Content hash of a source tree's `*.ts` under codebase/ core/ languages/ (the footprint-shaping surface). PURE
 // (no memo, srcRoot is a param) so it's testable against a fixture tree. "" when nothing hashable (not walkable).

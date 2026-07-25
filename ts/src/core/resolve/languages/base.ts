@@ -64,6 +64,12 @@ export interface LanguageProvider {
   // the file's DEFAULT imports (`import X from "m"`) → DefaultImport[]. TS/JS only; matched by module
   // (not name) against a default-exported anchor. [] / undefined ⇒ the language has no default exports.
   defaultImports?: (text: string) => DefaultImport[];
+  // the module's DEFAULT export SLOT → `{local, expr}`: the local declaration that FILLS the slot (null when
+  // unprovable) and the raw slot expression (null when the module has no default export). A default import
+  // binds the SLOT, not a name, so this is the only grounded way to attribute default-import consumers to a
+  // member — including the wrapper form `export default withReporting(fn, "fn")`, whose slot resolves to `fn`.
+  // undefined ⇒ the language has no default-export concept (Java/Python/Ruby/C/C++).
+  defaultExport?: (text: string) => { local: string | null; expr: string | null };
   // query-builder table accesses (`.from('t').verb`) in THIS language's syntax → raw {table, verb, line}.
   // The verb classification (write vs read) is the framework adapter's job, not the language's.
   tableAccess?: (text: string) => TableAccess[];

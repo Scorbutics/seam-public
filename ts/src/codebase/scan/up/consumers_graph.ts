@@ -6,7 +6,7 @@ import {
   type Ctx, makeCtx, available, lang_for,
   _INTERFACE, _CLASS_KINDS, _CLASS_FIELD,
 } from "../../atoms.js";
-import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
+import { scan_consumers, _kind_for, defaultExportSlot, default_importers } from "../../../core/resolve/consumers.js";
 import { timingOn } from "../../../core/progress.js";
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
@@ -163,6 +163,23 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
     for (const ln of callLines) addCaller(ln, "call", "RESOLVED_FULL");
     const refLines = importBound ? refs.qualified : [...new Set([...refs.bare, ...refs.qualified])].sort((a, b) => a - b);
     for (const ln of refLines) if (!callLines.has(ln)) addCaller(ln, "reference", "RESOLVED_PARTIAL");
+  }
+  // OPAQUE DEFAULT SLOT — the honest middle answer between asserting and lying. When this file's `export
+  // default` is an EXPRESSION that resolves to no declaration of the file (an anonymous `() => …`, a wrapper
+  // whose impl argument is not a local funclike), its default importers are real consumers that NO symbol here
+  // can carry. Reported only when the anchor otherwise has ZERO edges — i.e. exactly where the render would
+  // otherwise say "Nothing in the repo calls this symbol" — so it can never inflate a non-empty answer. The
+  // provable wrapper form (`export default withReporting(getSlots, "getSlots")`) is resolved upstream by the
+  // default-export slot in core/resolve/consumers.ts and never reaches here.
+  if (!edges.length) {
+    const slot = defaultExportSlot(repo, anchorFile);
+    if (slot.expr && !slot.local) {
+      const imps = await default_importers(repo, anchorFile);
+      if (imps.length) blindspots.push({ node: "n1", mechanism: "opaque-default-export",
+        evidence: `${anchorFile} has \`export default ${slot.expr}\` — an expression this file declares no name for, so its `
+          + `${imps.length} default-import consumer(s) cannot be attributed to ${symbol} or to any other symbol here`,
+        candidates: imps.slice(0, 8).map((f) => ({ symbol: f })) });
+    }
   }
   if (depth >= 2 && available()) {
     const [d2n, d2e, c2] = await _depth2_ripple(repo, nodes.slice(1), counter, seenKeys);

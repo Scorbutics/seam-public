@@ -223,6 +223,44 @@ impl Workspace {
         provider.is_default_export(&text, symbol)
     }
 
+    /// The raw DEFAULT-export slot expression of `anchor_file` when it resolves to NO declaration of that file
+    /// — an anonymous `export default () => …`, an unprovable wrapper. `None` when there is no default export
+    /// or the slot is proven (then it is a normal member and its importers resolve above). Port of
+    /// `defaultExportSlot`'s opaque case.
+    pub fn opaque_default_slot(&self, anchor_file: &str) -> Option<String> {
+        let provider = provider_for(anchor_file)?;
+        let text = read_text(&self.repo, anchor_file)?;
+        let slot = provider.default_export(&text);
+        match (slot.local, slot.expr) {
+            (None, Some(expr)) => Some(expr),
+            _ => None,
+        }
+    }
+
+    /// Files that DEFAULT-import `anchor_file`. Used only to NAME the consumers an opaque default slot hides.
+    /// Port of `default_importers`.
+    pub fn default_importers(&self, anchor_file: &str) -> Vec<String> {
+        let anchor_norm = normpath(anchor_file);
+        let anchor_abs = normpath(&format!("{}/{}", self.repo, anchor_file));
+        let mut out = Vec::new();
+        for entry in self.index.default_entries() {
+            if entry.norm == anchor_abs {
+                continue;
+            }
+            let mut hit = entry.defs.iter().any(|d| self.resolve(&entry.rel, &d.source).is_some_and(|t| normpath(&t) == anchor_norm));
+            if !hit {
+                hit = entry.refs.iter().filter(|r| r.name == "default").any(|r| {
+                    self.resolve(&entry.rel, r.source.as_deref().unwrap_or("")).is_some_and(|t| normpath(&t) == anchor_norm)
+                });
+            }
+            if hit {
+                out.push(entry.rel.clone());
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// Files consuming ANY of `member_names` exported from `anchor_file` → `(rel, [(member, local), …])` in
     /// walk order, the `used` map in first-seen order. The whole-module reverse-import scan behind the module
     /// footprint. Port of `scan_module_consumers`.

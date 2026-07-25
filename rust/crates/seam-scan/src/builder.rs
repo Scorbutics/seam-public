@@ -58,6 +58,12 @@ impl GraphBuilder {
         true
     }
 
+    /// Has any consumer edge been recorded? (The opaque-default-slot report fires only on an otherwise EMPTY
+    /// answer, so it can never inflate a non-empty one.)
+    pub fn has_edges(&self) -> bool {
+        !self.edges.is_empty()
+    }
+
     pub fn add_blindspot(&mut self, mechanism: &str, evidence: String, candidates: Vec<Candidate>) {
         self.blindspots.push(Blindspot { node: "n1".into(), mechanism: mechanism.into(), evidence, candidates, persists: false });
     }

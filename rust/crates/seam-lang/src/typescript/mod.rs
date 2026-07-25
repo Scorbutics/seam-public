@@ -43,6 +43,10 @@ impl LanguageProvider for TypeScriptProvider {
     fn is_default_export(&self, text: &str, symbol: &str) -> bool {
         imports::is_default_export(text, symbol)
     }
+    fn default_export(&self, text: &str) -> crate::provider::DefaultExport {
+        let d = imports::default_export(text);
+        crate::provider::DefaultExport { local: d.local, expr: d.expr }
+    }
     fn member_use(&self, text: &str, local: &str, symbol: &str) -> Option<&'static str> {
         imports::member_use(text, local, symbol)
     }

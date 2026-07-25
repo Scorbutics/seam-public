@@ -88,6 +88,27 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
             add_intra_file_callers(&mut b, c, anchor_file, symbol, range, &aunits);
         }
     }
+    // OPAQUE DEFAULT SLOT — the honest middle answer between asserting and lying. When this file's `export
+    // default` is an EXPRESSION that resolves to no declaration of the file (an anonymous `() => …`, a wrapper
+    // whose impl argument is not a local funclike), its default importers are real consumers that NO symbol
+    // here can carry. Reported only when the anchor otherwise has ZERO edges — exactly where the render would
+    // say "Nothing in the repo calls this symbol". Port of the consumers_graph.ts opaque-default block.
+    if !b.has_edges() {
+        let ws = Workspace::cached(repo);
+        if let Some(expr) = ws.opaque_default_slot(anchor_file) {
+            let imps = ws.default_importers(anchor_file);
+            if !imps.is_empty() {
+                b.add_blindspot(
+                    "opaque-default-export",
+                    format!(
+                        "{anchor_file} has `export default {expr}` — an expression this file declares no name for, so its {} default-import consumer(s) cannot be attributed to {symbol} or to any other symbol here",
+                        imps.len()
+                    ),
+                    imps.iter().take(8).map(|f| Candidate { symbol: f.clone(), ..Default::default() }).collect(),
+                );
+            }
+        }
+    }
     // dataCoupling OVERLAY — the anchor's shared-key boundaries + route-consumer chain (whole-file span when
     // the symbol didn't resolve). Port of the consumers_graph.ts dataCoupling block.
     if opts.data_coupling {
