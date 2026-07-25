@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import {
   type Ctx, lang_for,
   _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _NAME_LEAVES, _CALL, _EXPORT, _VAR_DECL,
-  _EXPORT_CLAUSE, _EXPORT_SPECIFIER,
+  _EXPORT_CLAUSE, _EXPORT_SPECIFIER, _MEMBER, _MEMBER_NAME,
 } from "../atoms.js";
 import { provider_for } from "../../core/resolve/languages/index.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
@@ -150,8 +150,31 @@ export function methodPreciseIndex(ctx: Ctx): MPIndex {
   return { units, calls };
 }
 
+// The occurrences of `local`, split by whether the name is a MODULE-SCOPE binding use or a MEMBER access.
+//  - BARE      — a plain name reference (`f`, `f(…)`): whatever binds `f` in this file (a def, an import) IS
+//                what this occurrence means.
+//  - QUALIFIED — the property side of a member access (`this.f`, `obj.f`): a member of some receiver, never
+//                the file's module-scope binding.
+// The distinction is what lets a caller drop a bare occurrence it can PROVE belongs to another binding while
+// keeping the member calls on the anchor's own class. Structural, off the _MEMBER/_MEMBER_NAME kind registry
+// (JS `member_expression`/`property_identifier`, Java `field_access`, C/C++ `field_expression`/`field_identifier`),
+// never a literal grammar kind — so it degrades to "everything is bare" on a grammar with no member node,
+// which is the conservative side.
+export function _ref_lines_split(ctx: Ctx, local: string): { bare: number[]; qualified: number[] } {
+  const bare = new Set<number>(), qualified = new Set<number>();
+  for (const i of ctx.collect(ctx.root, (k) => k.includes("identifier"))) {
+    if (ctx.text(i) !== local) continue;
+    const p = (i as any).parent;
+    const isProp = _MEMBER_NAME.has(i.type)
+      || (p && _MEMBER.has(p.type) && ctx.children(p)[0]?.startIndex !== (i as any).startIndex);   // grammars with no distinct property kind
+    (isProp ? qualified : bare).add(ctx.span(i)[0]);
+  }
+  return { bare: [...bare].sort((a, b) => a - b), qualified: [...qualified].sort((a, b) => a - b) };
+}
+
 export function _ref_lines(ctx: Ctx, local: string): number[] {
-  return [...new Set(ctx.collect(ctx.root, (k) => k.includes("identifier")).filter((i) => ctx.text(i) === local).map((i) => ctx.span(i)[0]))].sort((a, b) => a - b);
+  const s = _ref_lines_split(ctx, local);
+  return [...new Set([...s.bare, ...s.qualified])].sort((a, b) => a - b);
 }
 
 // The lines where `local` is USED: calls if any (the strongest signal), else references inside a unit,

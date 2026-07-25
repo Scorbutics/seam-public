@@ -7,6 +7,7 @@
 import { _resolve_import } from "../../core/resolve/consumers.js";
 import { parse_imports, default_imports } from "../../core/resolve/languages/index.js";
 import { makeCtx } from "../atoms.js";
+import { normpath } from "../../core/resolve/walk.js";
 import { _read, _named_units } from "./ast_units.js";
 
 // The unit KINDS `_named_units` emits; a caller says which ones count as "the definition" it is after.
@@ -29,6 +30,34 @@ export async function resolveDefFile(repo: string, fromFile: string, name: strin
     if (t && t[0]) { const d = await _resolveDefaultExportDef(repo, t[0], kinds, depth + 1); if (d) return d; }
   }
   return null;
+}
+
+// Is the bare NAME `name`, as used in `file`, PROVABLY bound to a symbol that lives somewhere ELSE?
+// An import declaration creates the file's module-scope binding for that name, so a bare `name(...)` there is
+// the IMPORT — not a same-named METHOD of a class declared in the same file (a method is not a module binding,
+// so the two can coexist and mean different things). Same hop ladder as `resolveDefFile`, so there is ONE
+// import-resolution mechanism (and languages with no import parser — Ruby/C/C++ — simply return false).
+// PROOF-ONLY, never a guess: returns false (⇒ the caller keeps its existing behaviour) when the module does not
+// resolve, and when the ladder resolves the name back to `file` itself (a self re-export barrel).
+export async function importBindsElsewhere(repo: string, file: string, text: string, name: string): Promise<boolean> {
+  const targets: Array<[string, string]> = [];   // [target file, the name to look for THERE]
+  for (const ref of parse_imports(file, text)) {
+    if (ref.local !== name || ref.reexport) continue;   // `export { X } from '…'` is a barrel hop, not a local binding
+    const t = await _resolve_import(repo, file, ref);
+    if (t && t[0]) targets.push([t[0], ref.name]);
+  }
+  for (const di of default_imports(file, text)) {
+    if (di.local !== name) continue;
+    const t = await _resolve_import(repo, file, { name: di.local, local: di.local, source: di.source, line: di.line ?? 0, col: 0 });
+    if (t && t[0]) targets.push([t[0], di.local]);
+  }
+  for (const [tf, tn] of targets) {
+    if (normpath(tf) === normpath(file)) continue;                     // the import resolves to THIS file — not "elsewhere"
+    const d = await resolveDefFile(repo, tf, tn, DEF_FUNC_KINDS);
+    if (d && normpath(d) === normpath(file)) continue;                 // a re-export ring back to us — unprovable, keep it
+    return true;
+  }
+  return false;
 }
 
 // The file that DEFINES a module's DEFAULT export: `export default class X {}` (here) / `export default X` /

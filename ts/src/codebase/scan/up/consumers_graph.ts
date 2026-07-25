@@ -14,8 +14,9 @@ import {
   type Unit, makeGraph,
 } from "../graph.js";
 import {
-  expanduser, stem, _read, _name_of, _named_units, _wrappedDefSpan, _enclosing, _usage_lines, _call_lines, _ref_lines,
+  expanduser, stem, _read, _name_of, _named_units, _wrappedDefSpan, _enclosing, _usage_lines, _call_lines, _ref_lines_split,
 } from "../ast_units.js";
+import { importBindsElsewhere } from "../def_resolve.js";
 import { _class_methods } from "../ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";
 import { fileReferencers } from "../../../core/resolve/file_ref.js";
@@ -142,9 +143,20 @@ export async function build_resolved_graph(repo: string, anchorFile: string, sym
       // actual usage site in the anchor's own file — there is no "resolved but unused" case to guard against.
       edges.push({ from: cid, to: "n1", kind, provenance, line: ln });   // the call/reference line, not the caller's decl
     };
-    const callLines = new Set(_call_lines(actx, symbol));
+    // NAME COLLISION with an IMPORT. The name match above is only sound while the anchor OWNS the bare name in
+    // its own file. When the file also IMPORTS that name, the import is the module-scope binding, so every BARE
+    // `symbol(...)` there is provably the IMPORTED symbol — a different thing that merely shares the name — and
+    // attributing it to the anchor is a false RESOLVED_FULL "verified edge" (cal.com: the METHOD
+    // RegularBookingService.createBooking vs `import { createBooking } from "../handleNewBooking/createBooking"`,
+    // called bare at :1939). Only the BARE sites are dropped: a receiver-qualified `this.symbol()` / `x.symbol()`
+    // is a member access, never the import, so genuine same-file method callers survive. Proof-gated — an
+    // unresolved module leaves the old behaviour intact, so no false positive is traded for a false negative.
+    const refs = _ref_lines_split(actx, symbol);
+    const importBound = ar ? await importBindsElsewhere(repo, anchorFile, ar[0], symbol) : false;
+    const callLines = new Set(importBound ? [] : _call_lines(actx, symbol));   // _call_lines is bare-name only by construction
     for (const ln of callLines) addCaller(ln, "call", "RESOLVED_FULL");
-    for (const ln of _ref_lines(actx, symbol)) if (!callLines.has(ln)) addCaller(ln, "reference", "RESOLVED_PARTIAL");
+    const refLines = importBound ? refs.qualified : [...new Set([...refs.bare, ...refs.qualified])].sort((a, b) => a - b);
+    for (const ln of refLines) if (!callLines.has(ln)) addCaller(ln, "reference", "RESOLVED_PARTIAL");
   }
   if (depth >= 2 && available()) {
     const [d2n, d2e, c2] = await _depth2_ripple(repo, nodes.slice(1), counter, seenKeys);
