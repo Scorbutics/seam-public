@@ -6,7 +6,7 @@
 import { readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { scan_consumers, _kind_for } from "../../../core/resolve/consumers.js";
-import { endsWithSourceExt, SKIP_DIRS } from "../../../core/resolve/languages/index.js";
+import { endsWithSourceExt, SKIP_DIRS, provider_for } from "../../../core/resolve/languages/index.js";
 import { incrementalScanAsync } from "../../../core/resolve/index_cache.js";
 import { normpath, walk } from "../../../core/resolve/walk.js";
 import { recordQuery, registerQueryRerun, hashSet } from "../../../core/resolve/dep_recorder.js";
@@ -124,7 +124,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     recordQuery("callers", [m, anchorLang ?? ""], callers);   // open-set: a NEW caller of a method invalidates
     for (const rel of callers) candidates.add(rel);
   }
-  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; facTypes: Map<string, string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
+  const pending: { rel: string; fn: string; units: Unit[]; instTypes: Map<string, Set<string>>; typeNames: Set<string>; facTypes: Map<string, string>; selfKinds: Set<string>; sites: ReturnType<typeof _method_call_sites> }[] = [];
   for (const rel of candidates) {
     if (normpath(join(repo, rel)) === anchorAbs) continue;
     const rd = _read(repo, rel);
@@ -146,7 +146,8 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
         if (t) facTypes.set(s.recvId, t);
       }
     }
-    pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes, typeNames: owner ? _type_names(cctx) : new Set<string>(), facTypes, sites });
+    pending.push({ rel, fn: rel.split("/").pop()!, units: _named_units(cctx), instTypes, typeNames: owner ? _type_names(cctx) : new Set<string>(), facTypes,
+      selfKinds: new Set(provider_for(rel)?.selfReceiver ?? []), sites });
   }
 
   const family = owner ? _subclass_family(globalBases, owner) : null;
@@ -234,6 +235,21 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
     if (!t) return false;   // unresolved receiver → PARTIAL (keep — the ambiguity is real)
     return t !== owner && !family?.has(t) && !ownerBaseSet.has(t) && !_subclass_family(globalBases, t).has(owner);
   };
+  // PROVABLY-FOREIGN SELF receiver — the UP mirror of the DOWN resolver's self-rooted chain (scan/down/
+  // dependency_graph, commit 2f0abc1): `this.m()` is not an UNRESOLVED receiver, it is a PROVEN one — `this`
+  // IS the enclosing class. So a `this.m()` inside a class that is neither the owner, a subtype, nor a
+  // supertype of it dispatches to THAT class's own same-named method: a NAME COLLISION, not a consumer.
+  // Without it, listing a class's FIELD-BOUND function members (whose names are ordinary verbs —
+  // `getEventType`, `getDynamicEventType`) turned every unrelated service's self-call into a surfaced
+  // RESOLVED_PARTIAL lead. The self-receiver NODE KIND is language-owned (`LanguageProvider.selfReceiver`;
+  // TS/Java/C++ `this`, Ruby `self`, Python declares none → the predicate never fires there, the conservative
+  // side). Only ever DROPS: no enclosing class (a `this` outside a class body) keeps the lead.
+  const selfForeign = (s: { recvKind: string; line: number }, units: Unit[], selfKinds: Set<string>): boolean => {
+    if (!owner || !selfKinds.has(s.recvKind)) return false;
+    const enc = _enclosingClass(units, s.line, s.line);
+    if (!enc) return false;   // `this` outside a class body — unresolvable, keep PARTIAL
+    return enc !== owner && !family?.has(enc) && !ownerBaseSet.has(enc) && !_subclass_family(globalBases, enc).has(owner);
+  };
 
   // Dedup by enclosing unit; a unit holding ANY family-resolved call is FULL (the strongest evidence
   // wins over a sibling ambiguous call in the same function).
@@ -246,7 +262,7 @@ export async function build_callsite_graph(repo: string, anchorFile: string, sym
   for (const pf of pending) {
     for (const s of pf.sites) {
       if (provablySibling(s, pf.instTypes) || staticForeign(s, pf.typeNames) || provablyForeign(s, pf.instTypes)
-          || factoryForeign(s, pf.facTypes)) continue;   // dispatches to a different type — not a consumer of this class
+          || factoryForeign(s, pf.facTypes) || selfForeign(s, pf.units, pf.selfKinds)) continue;   // dispatches to a different type — not a consumer of this class
       resolvedMethods.add(s.method);
       const enc = _enclosing(pf.units, s.line);
       const [sym, kind, start, end] = enc ? enc : [stem(pf.fn), "module", s.line, s.line];

@@ -24,6 +24,10 @@ pub struct CallSite {
     pub line: usize,
     pub recv_id: Option<String>,
     pub recv_new: Option<String>,
+    /// The receiver NODE KIND verbatim, so a caller holding the FILE can ask the language registry whether it is
+    /// the SELF receiver (`LanguageProvider::self_receiver`) — `this.m()` dispatches to the ENCLOSING class, a
+    /// fact neither `recv_id` nor `recv_new` can express.
+    pub recv_kind: String,
 }
 
 /// A declaration's declared name — the `name` field, then the C/C++ `declarator` chain, then a positional
@@ -216,7 +220,7 @@ pub fn call_sites(ctx: &Ctx) -> Vec<CallSite> {
                 }
             }
         }
-        out.push(CallSite { method: c.name, line: ctx.span(call).0, recv_id, recv_new });
+        out.push(CallSite { method: c.name, line: ctx.span(call).0, recv_id, recv_new, recv_kind: ok.to_string() });
     }
     out
 }
@@ -694,17 +698,48 @@ fn dedup_units(units: Vec<Unit>) -> Vec<Unit> {
     units.into_iter().filter(|u| seen.insert(u.name.clone())).collect()
 }
 
-/// The methods of the class named `name` — (name, start, end), constructor excluded, deduped. Port of
-/// `_class_methods`.
+/// The FIELD-BOUND function members of a class node — `m = (x) => …`, `m = withReporting(this._m.bind(this))`.
+/// Dispatched exactly like a method (`instance.m()`) but no `is_method_kind` node, so `class_methods` never
+/// listed it: a CLASS anchor's call-site pass had no such method NAME to hunt, and every consumer reaching the
+/// class ONLY through that member was invisible to the whole UP direction. GROUNDED, never a name guess — the
+/// field counts only when its own value subtree PROVES it holds a callable: it contains a function-like node,
+/// or it NAMES one of the class's OWN declared methods (`this._m.bind(this)`, at any wrapper depth). A data
+/// field (`limit = 5`, `repo = new Repo()`, no initializer) proves neither. Port of `_field_fn_members`.
+fn field_fn_members(ctx: &Ctx, cls: Node, method_names: &HashSet<String>) -> Vec<(String, (usize, usize))> {
+    let mut out = Vec::new();
+    for f in ctx.collect(cls, nk::is_class_field) {
+        let Some(nm) = name_of(ctx, f) else { continue };
+        if method_names.contains(&nm) {
+            continue;
+        }
+        let Some(val) = f.child_by_field_name("value") else { continue }; // no initializer → nothing proves callability
+        let callable = !ctx.collect(val, nk::is_funclike).is_empty()
+            || ctx
+                .collect(val, |k| nk::is_member_name(k) || nk::is_name_kind(k))
+                .into_iter()
+                .any(|n| method_names.contains(ctx.text(n)));
+        if callable {
+            out.push((nm, ctx.span(f)));
+        }
+    }
+    out
+}
+
+/// The methods of the class named `name` — (name, start, end), constructor excluded, deduped. Includes the
+/// FIELD-BOUND function members (see `field_fn_members`): they are dispatched as methods, so a consumer scan
+/// that omits them under-reports the class's callers. Port of `_class_methods`.
 pub fn class_methods(ctx: &Ctx, name: &str) -> Vec<(String, usize, usize)> {
     let Some(cls) = ctx.collect(ctx.root(), nk::is_class_kind).into_iter().find(|c| name_of(ctx, *c).as_deref() == Some(name)) else {
         return Vec::new();
     };
-    dedup_methods(
-        ctx.collect(cls, |k| nk::is_method_kind(k) && k != "constructor_declaration")
-            .into_iter()
-            .filter_map(|m| name_of(ctx, m).filter(|nm| nm != "constructor").map(|nm| (nm, ctx.span(m)))),
-    )
+    let declared: Vec<(String, (usize, usize))> = ctx
+        .collect(cls, |k| nk::is_method_kind(k) && k != "constructor_declaration")
+        .into_iter()
+        .filter_map(|m| name_of(ctx, m).filter(|nm| nm != "constructor").map(|nm| (nm, ctx.span(m))))
+        .collect();
+    let names: HashSet<String> = declared.iter().map(|(n, _)| n.clone()).collect();
+    let fields = field_fn_members(ctx, cls, &names);
+    dedup_methods(declared.into_iter().chain(fields))
 }
 
 fn dedup_methods(it: impl Iterator<Item = (String, (usize, usize))>) -> Vec<(String, usize, usize)> {

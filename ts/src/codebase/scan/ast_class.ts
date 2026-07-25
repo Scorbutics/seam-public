@@ -92,7 +92,35 @@ function _callee(ctx: Ctx, call: any): { nameNode: any; name: string; obj: any |
   return null;
 }
 
+// The FIELD-BOUND function members of a class node — `m = (x) => …`, `m = withReporting(this._m.bind(this))`.
+// Such a member is DISPATCHED exactly like a method (`instance.m()`) but is no `_METHOD_KINDS` node, so
+// `_class_methods` never listed it: a CLASS anchor's call-site pass had no such method NAME to hunt, and every
+// consumer that reaches the class ONLY through that member was invisible to the whole UP direction.
+// GROUNDED, never a name guess — the field counts only when its own value subtree PROVES it holds a callable:
+//   * it contains a FUNCTION-LIKE node (`_FUNCLIKE` — the arrow/function assigned to the field), or
+//   * it NAMES one of the class's OWN declared methods (`this._m.bind(this)`, at any wrapper depth) — the value
+//     is derived from a method of THIS class, so the member dispatches to it.
+// A data field (`limit = 5`, `repo = new Repo()`, a field with no initializer) proves neither and is excluded.
+// Cross-language via the `_CLASS_FIELD` / `_FUNCLIKE` kind sets; a grammar with no class-field kind yields [].
+function _field_fn_members(ctx: Ctx, cls: any, methodNames: Set<string>): [string, number, number][] {
+  const out: [string, number, number][] = [];
+  for (const f of ctx.collect(cls, (k) => _CLASS_FIELD.has(k))) {
+    const nm = _name_of(ctx, f);
+    if (!nm || methodNames.has(nm)) continue;
+    const val = f.childForFieldName?.("value");
+    if (!val) continue;                                   // no initializer → nothing proves callability
+    const callable = ctx.collect(val, (k) => _FUNCLIKE.has(k)).length > 0
+      || ctx.collect(val, (k) => _MEMBER_NAME.has(k) || _NAME_KINDS.has(k)).some((n) => methodNames.has(ctx.text(n)));
+    if (!callable) continue;
+    const [s, e] = ctx.span(f);
+    out.push([nm, s, e]);
+  }
+  return out;
+}
+
 // The methods declared on class `className` (excluding the constructor), deduped → [name, start, end].
+// Includes the FIELD-BOUND function members (see `_field_fn_members`) — they are dispatched as methods, so a
+// consumer scan that omits them under-reports the class's callers.
 export function _class_methods(ctx: Ctx, className: string): [string, number, number][] {
   const cls = ctx.collect(ctx.root, (k) => _CLASS_KINDS.has(k)).find((c) => _name_of(ctx, c) === className);
   if (!cls) return [];
@@ -101,6 +129,7 @@ export function _class_methods(ctx: Ctx, className: string): [string, number, nu
     const nm = _name_of(ctx, m);   // the tree-sitter `name` FIELD — Java method names are `identifier`, which
     if (nm && nm !== "constructor") { const [s, e] = ctx.span(m); out.push([nm, s, e]); }   // `_MEMBER_NAME` (property_identifier) missed entirely
   }
+  out.push(..._field_fn_members(ctx, cls, new Set(out.map((x) => x[0]))));
   const seen = new Set<string>();
   return out.filter((x) => (seen.has(x[0]) ? false : (seen.add(x[0]), true)));
 }
@@ -292,7 +321,11 @@ export function _class_owns_method(ctx: Ctx, typeName: string, method: string): 
 
 // Call sites of one of `methods`, WITH receiver shape so narrowing can resolve the receiver's type:
 // recvId = `x` in `x.m()` (or the trailing field of `this.x.m()`); recvNew = `X` in `new X().m()`.
-type _CallSite = { method: string; line: number; recvId: string | null; recvNew: string | null };
+// recvKind = the receiver NODE KIND verbatim, so a caller holding the FILE can ask the language registry
+// whether it is the SELF receiver (`LanguageProvider.selfReceiver`) — `this.m()` dispatches to the ENCLOSING
+// class, a fact neither recvId nor recvNew can express. Kept as the raw kind (not a boolean) because this
+// memo is per-Ctx and language-agnostic; the registry lookup needs the file and belongs to the caller.
+type _CallSite = { method: string; line: number; recvId: string | null; recvNew: string | null; recvKind: string };
 // PER-Ctx memo of EVERY method call site (method-INDEPENDENT — the expensive `ctx.collect` AST walk). A grow's
 // callsite pass calls _method_call_sites once PER candidate consumer PER up-move, and candidates overlap heavily
 // across moves; the parse (makeCtx) is already cached so the same Ctx object recurs, but the site walk was
@@ -321,7 +354,7 @@ function _all_call_sites(ctx: Ctx): _CallSite[] {
       const rcv = _CALL_RECV_FIELD.map((f) => obj.childForFieldName?.(f)).find(Boolean);
       if (mth && ctx.text(mth) === "new" && rcv && /^[A-Z]/.test(ctx.text(rcv))) recvNew = ctx.text(rcv).split("::").pop() ?? null;
     }
-    out.push({ method: m, line: ctx.span(call)[0], recvId, recvNew });
+    out.push({ method: m, line: ctx.span(call)[0], recvId, recvNew, recvKind: obj.type });
   }
   _allSitesCache.set(ctx, out);
   return out;

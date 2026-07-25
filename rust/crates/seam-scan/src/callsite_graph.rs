@@ -99,6 +99,8 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         type_names: HashSet<String>,
         /// receiver name → the type the FACTORY hop narrowed it to (see receiver_types.rs)
         fac: HashMap<String, String>,
+        /// the language registry's SELF-receiver node kinds for this file (`LanguageProvider::self_receiver`)
+        self_kinds: &'static [&'static str],
         sites: Vec<CallSite>,
     }
     let mut pending: Vec<Pending> = Vec::new();
@@ -133,6 +135,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 inst,
                 type_names: if owner.is_some() { ast::type_names(&cctx) } else { HashSet::new() },
                 fac,
+                self_kinds: seam_lang::provider_for(rel).map(|p| p.self_receiver()).unwrap_or(&[]),
                 sites,
             });
         }
@@ -228,6 +231,26 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 && !owner_base_set.contains(t)
         })
     };
+    // PROVABLY-FOREIGN SELF receiver — the UP mirror of the DOWN resolver's self-rooted chain (dependency_graph):
+    // `this.m()` is not an UNRESOLVED receiver, it is a PROVEN one — `this` IS the enclosing class. So a
+    // `this.m()` inside a class that is neither the owner, a subtype, nor a supertype of it dispatches to THAT
+    // class's own same-named method: a NAME COLLISION, not a consumer. Without it, listing a class's FIELD-BOUND
+    // function members (whose names are ordinary verbs) turned every unrelated service's self-call into a
+    // surfaced RESOLVED_PARTIAL lead. The self-receiver node KIND is language-owned; a language declaring none
+    // (Python) never fires this, the conservative side. Only ever DROPS.
+    let self_foreign = |s: &CallSite, units: &[Unit], self_kinds: &[&str]| -> bool {
+        if owner.is_none() || !self_kinds.contains(&s.recv_kind.as_str()) {
+            return false;
+        }
+        let enc = ast::enclosing_class(units, s.line, s.line);
+        if enc.is_empty() {
+            return false;   // `this` outside a class body — unresolvable, keep PARTIAL
+        }
+        Some(&enc) != owner.as_ref()
+            && !family.as_ref().is_some_and(|f| f.contains(&enc))
+            && !owner_base_set.contains(&enc)
+            && !index.subclass_family(&enc).contains(owner.as_ref().unwrap())
+    };
 
     struct Entry {
         sym: String,
@@ -250,6 +273,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 || static_foreign(s, &pf.type_names)
                 || provably_foreign(s, &pf.inst)
                 || factory_foreign(s, &pf.fac)
+                || self_foreign(s, &pf.units, pf.self_kinds)
             {
                 continue;
             }
