@@ -135,6 +135,42 @@ async function runWarm(a: Args): Promise<number> {
   return 0;
 }
 
+// ADDRESSING GUARD — every caller-supplied `<file>#<symbol>` must actually be DECLARED in that file. An
+// address the file doesn't bind is a caller MISTAKE, and the engine's honest answer for it ("no consumers")
+// is indistinguishable from the true empty answer for a real-but-unused symbol — so it must fail loudly
+// instead. The engine returns the grounded facts (declared? the default export's local name? what IS
+// addressable here); the wording of the fix belongs to the CLI, which knows which flag the caller used.
+// Silent (no error) when the file can't be read/parsed — absence of evidence is not a bad address.
+async function checkAnchorAddressing(a: Args): Promise<void> {
+  const { resolve_anchor_address } = await import("../codebase/scan/index.js");
+  // Every ADDRESS the caller spelled out: each --center, the resolved anchor (--anchor-file + --symbol, the
+  // MCP/legacy spelling), and the second anchor of reaches/compare (--to-file + --to-symbol).
+  const addrs: { flag: string; file: string; symbol: string }[] = [];
+  if (a.center) for (const c of parseCenters(a.center)) if (c.symbol) addrs.push({ flag: "--center", file: c.file, symbol: c.symbol });
+  if (a.anchorFile && a.symbol && !addrs.some((x) => x.file === a.anchorFile && x.symbol === a.symbol))
+    addrs.push({ flag: a.center ? "--center" : "--anchor-file/--symbol", file: a.anchorFile, symbol: a.symbol });
+  if (a.toFile && a.toSymbol) addrs.push({ flag: "--to-file/--to-symbol", file: a.toFile, symbol: a.toSymbol });
+  for (const ad of addrs) {
+    let r: Awaited<ReturnType<typeof resolve_anchor_address>>;
+    try { r = await resolve_anchor_address(a.repo ?? ".", ad.file, ad.symbol); } catch { continue; }
+    if (!r || r.declared) continue;
+    const addr = `${ad.file}#${ad.symbol}`;
+    const flag = ad.flag === "--center" ? `--center "${addr}"` : `${ad.flag} (${addr})`;
+    // The DEFAULT-export hint first: it is the single most likely cause, and it names the symbol the caller
+    // actually wants. Then the addressable surface, so any other mis-spelling is one read away from fixed.
+    const hint = r.defaultExportLocal === null ? ""
+      : `       that file's DEFAULT export is the local symbol '${r.defaultExportLocal}' — importers bind a default export under\n`
+        + `       a name of their own choosing, so '${ad.symbol}' is THEIR local alias, not a symbol of this file.\n`
+        + `       Address it as: --center "${ad.file}#${r.defaultExportLocal}"\n`;
+    const cands = r.candidates.length
+      ? `       addressable symbols here: ${r.candidates.slice(0, 12).join(", ")}${r.candidates.length > 12 ? `, … (+${r.candidates.length - 12})` : ""}\n`
+      : `       that file declares no addressable symbol — anchor the FILE itself (--center "${ad.file}", no #symbol)\n`;
+    err(`${flag}: '${ad.symbol}' is not declared in ${ad.file}\n` + hint + cands
+      + `       (refusing to answer: an undeclared anchor has no consumers/dependencies BY CONSTRUCTION, which would\n`
+      + `        render as a confident "nothing calls this" — a false negative, not a fact about your code)`);
+  }
+}
+
 // Codebase mode — decompose an anchor footprint (or a ResolvedGraph) into seams. Claimed by
 // --scan / --graph (mirrors src/codebase/run.py CodebaseMode.claims).
 async function runCodebase(a: Args): Promise<number> {
@@ -160,6 +196,15 @@ async function runCodebase(a: Args): Promise<number> {
             `       (pass --repo <path-to-repo>, or make the path relative to it)`);
     }
   }
+  // SAME GUARD, ONE LEVEL DEEPER — the path exists but the SYMBOL is not declared in it. Growing from an
+  // undeclared anchor produces the identical authoritative lie ("Nothing in the repo calls this symbol"), and
+  // its most common trigger is a DEFAULT export: importers bind it under a name of their own choosing, so the
+  // name at every call site (and in every grep hit) is not a symbol of the defining file. Enforced HERE, on the
+  // caller-supplied address, and NOT inside build_footprint — that entry is also the grow's per-node engine
+  // (impact/neighborhood/compare/orchestrate expand hundreds of internally-derived nodes through it), where an
+  // unresolvable name is a normal, survivable case. Covers every shape and the --auto grow, since they all
+  // address their node through --center / --anchor-file+--symbol. See scan/anchor_address.ts.
+  await checkAnchorAddressing(a);
   reset_usage();
   resetStages();   // stage-summary buckets (SEAM_TIMING) — detection/probe/structural/coupling/render, printed at the end
   // IMPLY --auto for a MAP request. A codebase map (`--format agent/concern/…`, or any `--intent` grow) is a GROWN

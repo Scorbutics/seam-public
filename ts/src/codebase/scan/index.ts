@@ -15,3 +15,4 @@ export type {
 } from "./graph.js";
 export { oversizedForAnchor, candidate_source_files, defs_in_file, embedString, enumerate_defs, type Def } from "./def_table.js";
 export { defs_in_file_treesitter } from "./def_treesitter.js";
+export { resolve_anchor_address, type AnchorAddress } from "./anchor_address.js";   // `<file>#<symbol>` addressing guard — an undeclared anchor is an error, not an empty answer

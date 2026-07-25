@@ -6,7 +6,7 @@ import { basename, join } from "node:path";
 import {
   type Ctx, lang_for,
   _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _NAME_LEAVES, _CALL, _EXPORT, _VAR_DECL,
-  _EXPORT_CLAUSE, _EXPORT_SPECIFIER, _MEMBER, _MEMBER_NAME,
+  _EXPORT_CLAUSE, _EXPORT_SPECIFIER, _EXPORT_DEFAULT, _MEMBER, _MEMBER_NAME,
 } from "../atoms.js";
 import { provider_for } from "../../core/resolve/languages/index.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
@@ -103,6 +103,68 @@ export function _wrappedDefSpan(ctx: Ctx, symbol: string, units: Unit[]): [numbe
       if (u) return [u[2], u[3]];
     }
     return ctx.span(d);                                                        // wrapped external fn → the declarator span (a real span, not :0)
+  }
+  return null;
+}
+
+// ADDRESSING — every name this file BINDS or DECLARES, i.e. the closed set of symbols a `<file>#<symbol>`
+// address can legitimately name. Deliberately GENEROUS (a superset of the units the footprint builders anchor
+// on): the question it answers is not "can we build a rich anchor node for this?" but "does this file mention
+// this name as a DECLARATION at all?" — so a value const (`export const dynamicEvent = {…}`, a real anchor with
+// real consumers), a type alias, a non-exported local or a re-export specifier all count. Only a name the file
+// NEVER binds — the importer's local alias for a default export, a typo, a name that lives in another file — is
+// absent, and that is an ADDRESSING error, never an empty result.
+//   • _named_units       — functions / methods / classes / interfaces / enums
+//   • _exported_members  — the public surface (adds value consts + barrel re-exports; exportless languages too)
+//   • _VAR_DECLARATOR    — every binder, exported or not
+//   • the `name` FIELD of any non-CALL node — type aliases, namespaces, Ruby modules, … (calls are excluded
+//     because Java's method_invocation/Ruby's call carry a `name`/`method` field too, and a name that is only
+//     CALLED here is not declared here)
+//   • _EXPORT_SPECIFIER  — both sides of `export { local as exported }`
+export function _declared_names(ctx: Ctx, file?: string): Set<string> {
+  const out = new Set<string>();
+  for (const u of _named_units(ctx)) out.add(u[0]);
+  for (const m of _exported_members(ctx, file)) out.add(m[0]);
+  for (const n of ctx.collect(ctx.root, () => true)) {
+    const k = n.type;
+    if (!_CALL.has(k)) {
+      const nf = n.childForFieldName?.("name");
+      if (nf && (_NAME_KINDS.has(nf.type) || _NAME_LEAVES.has(nf.type))) out.add(ctx.text(nf));
+    }
+    if (_VAR_DECLARATOR.has(k)) { const ch = ctx.children(n); if (ch.length && _NAME_KINDS.has(ch[0].type)) out.add(ctx.text(ch[0])); }
+    if (_EXPORT_SPECIFIER.has(k)) for (const c of ctx.children(n)) if (_NAME_KINDS.has(c.type)) out.add(ctx.text(c));
+  }
+  out.delete("default");   // the `default` in `export { x as default }` is the BOUNDARY name, not a declared symbol
+  return out;
+}
+
+// The LOCAL symbol behind this file's `export default` — the missing piece of the most common addressing
+// mistake. Importers bind a default export under a name of THEIR choosing (`import handleCancelBooking from
+// "…/handleCancelBooking"`), so the name a caller sees at the call sites is NOT a symbol of the defining file;
+// the file's own name for it is. Structural: the `default` keyword node marks the export, and the local is the
+// exported declaration's name (`export default function handler`), the exported identifier (`export default
+// handler`), or the local side of `export { handler as default }`. Anonymous (`export default () => …`) → null,
+// there is no local name to point at.
+export function _default_export_local(ctx: Ctx): string | null {
+  for (const es of ctx.collect(ctx.root, (k) => _EXPORT.has(k))) {
+    const kids = ctx.children(es);
+    if (!kids.some((c) => _EXPORT_DEFAULT.has(c.type))) {
+      // `export { handler as default }` — no `default` keyword on the statement; the specifier carries it.
+      for (const cl of kids) {
+        if (!_EXPORT_CLAUSE.has(cl.type)) continue;
+        for (const sp of ctx.children(cl)) {
+          if (!_EXPORT_SPECIFIER.has(sp.type)) continue;
+          const names = ctx.children(sp).filter((c) => _NAME_KINDS.has(c.type));
+          if (names.length >= 2 && ctx.text(names[names.length - 1]) === "default") return ctx.text(names[0]);
+        }
+      }
+      continue;
+    }
+    for (const c of kids) {
+      if (_EXPORT_DEFAULT.has(c.type)) continue;
+      if ((_FUNCLIKE.has(c.type) && !_ANON_FUNC.has(c.type)) || _CLASS_KINDS.has(c.type)) { const nm = _name_of(ctx, c); if (nm) return nm; }
+      else if (_NAME_KINDS.has(c.type)) return ctx.text(c);
+    }
   }
   return null;
 }

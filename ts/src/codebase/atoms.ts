@@ -96,6 +96,12 @@ export const _EXPORT = new Set(["export_statement"]);
 // identifier is the EXPORTED name (`export { a as b }` exports `b`).
 export const _EXPORT_CLAUSE = new Set(["export_clause"]);
 export const _EXPORT_SPECIFIER = new Set(["export_specifier"]);
+// The `default` KEYWORD node inside an export statement (`export default handler`). It is an ANONYMOUS
+// child, so it is invisible to a named-child walk — but its node kind is the grammar's stable marker that
+// this export has NO exported NAME: the module's default binding is bound by IMPORTERS under an arbitrary
+// local name. That is exactly why `<file>#<name-the-importers-use>` is a common — and previously silent —
+// addressing mistake, so the addressing guard reads this to name the real local symbol.
+export const _EXPORT_DEFAULT = new Set(["default"]);
 export const _ANON_FUNC = new Set(["arrow_function", "function_expression", "lambda", "lambda_expression", "closure_expression"]);
 export const _VAR_DECLARATOR = new Set(["variable_declarator", "assignment"]);
 // --- field-level read/write vocabulary (the review-impact relevance floor's AST extraction) --------
