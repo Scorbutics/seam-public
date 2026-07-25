@@ -10,11 +10,17 @@
 // the direction-specific wording. See grow/project_set.ts.
 interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
 
-// CITATION — `file:line`, but NEVER a fabricated line. A projected `line` of 0 means "no real site was
-// grounded" (see project_set's `to1`/`_start` + GraphNode.unlocated): a member with no location is rendered
-// as a bare path. Printing `:0`/`:1` there sends the reader to an unrelated line and destroys the one thing
-// a structural citation is for. Every `file:line` in this module goes through here.
+// CITATION — `file:line`, but NEVER a fabricated line. Every model this module renders carries 1-BASED lines
+// (project_set's `to1` is the ONE conversion point, shared by consumers/dependencies/impact/reaches/writers/
+// coupling), so this renders the value as-is. A projected `line` of 0 means "no real site was grounded" (see
+// `to1`/`_start` + GraphNode.unlocated): that member is rendered as a bare path. Printing `:0`/`:1` there sends
+// the reader to an unrelated line and destroys the one thing a structural citation is for. Every `file:line` in
+// this module goes through here — a shape that formats its own `${file}:${line}` is how the rule gets lost.
 const at = (file: string, line: number | null | undefined): string => (line ? `${file}:${line}` : `${file}`);
+// Same rule where the FILE is already stated by an enclosing group heading (impact's per-file rollup) and only
+// the line is cited: a real line renders as ` (:582)`, a missing one renders as NOTHING. Sharing the falsy test
+// with `at` is the point — one place decides what "no grounded line" looks like.
+const atLine = (line: number | null | undefined): string => (line ? ` (:${line})` : "");
 
 // COUPLING TRUNCATION note (Seam's honesty contract) — the targeted bridge walks a key's candidate files in a
 // TOTAL order and stops at READER_CAP complements (or the run's scan budget). Whenever it stopped before the
@@ -140,7 +146,7 @@ export function renderWritersSet(model: any): string {
     : `## Write sites (repo-wide, deterministic — every method that writes the table(s) the anchor reads)`);
   for (const m of members) {
     const cols = (m.columns?.length) ? `.{${m.columns.join(",")}}` : (colGrain && !m.colVerified ? " col?" : "");
-    out.push(`- ${m.symbol} (${m.file}:${m.line})  [${m.kind}, writes "${m.table}"${cols}]  {${m.provenance}}`);
+    out.push(`- ${m.symbol} (${at(m.file, m.line)})  [${m.kind}, writes "${m.table}"${cols}]  {${m.provenance}}`);
   }
   out.push("", "## How to use",
     "These are the resolved writers of the shared state this anchor reads — the coupling runs through these table",
@@ -173,7 +179,7 @@ export function renderCoupling(model: any): string {
     if (!k.sides.length) out.push(`  (no counterpart — the anchor is the only side of this key in the repo)`);
     for (const s of k.sides) {
       const cols = s.columns?.length ? `.{${s.columns.join(",")}}` : "";   // column grain (subsumes the writers shape)
-      out.push(`  ${s.role === "writes" ? "←" : "→"} ${s.symbol} (${s.file}:${s.line})  [${s.kind}, ${s.role} ${k.value}${cols}]`);
+      out.push(`  ${s.role === "writes" ? "←" : "→"} ${s.symbol} (${at(s.file, s.line)})  [${s.kind}, ${s.role} ${k.value}${cols}]`);
     }
     out.push("");
   }
@@ -257,7 +263,7 @@ export function renderImpact(model: any): string {
     out.push(`- ${f.file}  (${f.count})`);
     const syms = (model.impacted ?? []).filter((x: any) => x.file === f.file).sort(byHop);
     const shown = PER_FILE ? syms.slice(0, PER_FILE) : syms;
-    for (const m of shown) out.push(`    ${m.symbol}${m.line ? ` (:${m.line})` : ""} [${m.kind}, hop ${m.hop}]`);
+    for (const m of shown) out.push(`    ${m.symbol}${atLine(m.line)} [${m.kind}, hop ${m.hop}]`);
     if (syms.length > shown.length) out.push(`    … +${syms.length - shown.length} more in this file (nearest hops shown)`);
   }
   if (files.length > shownFiles.length) {

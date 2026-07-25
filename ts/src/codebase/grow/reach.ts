@@ -12,8 +12,9 @@ import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { anchorCounterparts } from "../coupling/bridge.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { _start } from "./project_set.js";
+import { _start, to1 } from "./project_set.js";
 
+// `line` is 1-BASED (project_set's `to1`); 0 = "no grounded site" → `at()` renders the bare path.
 export interface ReachStep { symbol: string; file: string; line: number; edgeKind: string }
 
 export interface ReachResult {
@@ -73,7 +74,7 @@ export async function findReach(
     try { g = await build_footprint_cached(repo, cur.file, cur.symbol, { direction: "down", depth: 1, dataCoupling: opts.dataCoupling ?? false }); }
     catch { continue; }
     const aid = g.anchor.id;
-    if (!startStep) startStep = { symbol: fromSymbol, file: fromFile, line: _start(g.anchor) ?? 0, edgeKind: "anchor" };
+    if (!startStep) startStep = { symbol: fromSymbol, file: fromFile, line: to1(_start(g.anchor)), edgeKind: "anchor" };
     for (const e of g.edges) {
       if (e.from !== aid) continue;
       const dep = g.nodes.find((n) => n.id === e.to);
@@ -82,7 +83,12 @@ export async function findReach(
       const dk = key(dep.file, dep.symbol);
       if (visited.has(dk)) continue;
       visited.add(dk);
-      const step: ReachStep = { symbol: dep.symbol, file: dep.file, line: e.line ?? _start(dep) ?? 0, edgeKind: e.kind };   // never the unlocated sentinel
+      // 1-BASED via `to1` (the shared line contract); `_start` refuses the unlocated [0,0] sentinel, and
+      // `to1(undefined)` = 0 = "no line", which `at()` renders as a bare path.
+      // The step's FILE is the DEP's, so its LINE must be the dep's own declaration — `e.line` is the CALL line
+      // in the CALLER's file, and pairing the two printed impossible locations (`core.ts:6` for a 5-line file).
+      // Same ordering project_set's `out` direction already uses: declaration first, edge line only as a floor.
+      const step: ReachStep = { symbol: dep.symbol, file: dep.file, line: to1(_start(dep) ?? e.line), edgeKind: e.kind };
       parent.set(dk, { prevKey: key(cur.file, cur.symbol), step });
       if (match(dep.file, dep.symbol)) return { ...base, hops, reachable: true, path: reconstruct(dk), reason: "found" };
       queue.push({ file: dep.file, symbol: dep.symbol });
@@ -109,7 +115,7 @@ export async function findReach(
           const dk = key(hit.file, hit.symbol);
           visited.add(dk);
           parent.set(dk, { prevKey: key(cur.file, cur.symbol),
-            step: { symbol: hit.symbol, file: hit.file, line: hit.line, edgeKind: `${hit.role} · via ${hit.kind} ${hit.value}` } });
+            step: { symbol: hit.symbol, file: hit.file, line: to1(hit.line), edgeKind: `${hit.role} · via ${hit.kind} ${hit.value}` } });   // AnchorCounterpart.line is 0-based (coupling floor)
           return { ...base, hops, reachable: true, path: reconstruct(dk), reason: "found", viaCoupling: true };
         }
         for (const s of sides.slice(0, _COUPLING_FAN)) {   // frontier expansion stays bounded (hub fans are huge)
@@ -117,7 +123,7 @@ export async function findReach(
           const dk = key(s.file, s.symbol);
           if (visited.has(dk)) continue;
           visited.add(dk);
-          const step: ReachStep = { symbol: s.symbol, file: s.file, line: s.line, edgeKind: `${s.role} · via ${s.kind} ${s.value}` };
+          const step: ReachStep = { symbol: s.symbol, file: s.file, line: to1(s.line), edgeKind: `${s.role} · via ${s.kind} ${s.value}` };
           parent.set(dk, { prevKey: key(cur.file, cur.symbol), step });
           queue.push({ file: s.file, symbol: s.symbol });
         }

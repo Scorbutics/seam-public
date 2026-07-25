@@ -4,7 +4,7 @@
 // call-only BFS reported a misleading "no path". Deterministic FLOOR mode so no LLM runs in CI; available()-gated.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,18 @@ describe("--query coupling (data-boundary front door)", () => {
     spawnSync("git", ["-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "p"], { cwd: repo });
     const out = run(["--query", "coupling", "--center", "src/pure.ts#addNums"]);
     expect(out).toContain("No shared key");
+  });
+
+  // CITATION TRUTH — the coupling floor's hits are 0-BASED (`lineOf` counts newlines); a counterpart site is
+  // RENDERED as `file:line`, which is 1-BASED (project_set's `to1`, the one line contract shared by every
+  // shape). This shape printed the raw value. Expected line DERIVED from the fixture, never hardcoded.
+  test("a counterpart site is cited at its REAL 1-based line", () => {
+    if (!available()) return;
+    const src = readFileSync(join(repo, "src", "cancel.ts"), "utf-8").split("\n");
+    const writeLine = src.findIndex((l) => l.includes("prisma.widget.update")) + 1;
+    expect(writeLine).toBeGreaterThan(1);                  // the fixture can expose an off-by-one
+    const out = run(["--query", "coupling", "--center", "src/reader.ts#readWidgets"]);
+    expect(out).toContain(`cancelWidget (src/cancel.ts:${writeLine})`);
   });
 });
 

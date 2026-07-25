@@ -6,7 +6,7 @@
 // Hermetic tmp repo; needs tree-sitter (floor scan + symbol span), so gated on available().
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -77,5 +77,16 @@ describe("--query writers (reverse data-coupling)", () => {
     if (!available()) return;
     const out = writers("src/reader.ts#read", { SEAM_WRITERS_COLUMNS: "0" });
     expect(out).toContain("renameWidget");                       // table-level keeps every writer of `widget`
+  });
+
+  // CITATION TRUTH — the coupling floor's `lineOf` counts newlines, so its hits are 0-BASED; a write site is
+  // RENDERED as `file:line`, which is 1-BASED (project_set's `to1`, the one line contract). This shape printed
+  // the raw value, sending the reader one line ABOVE the write. Expected line DERIVED from the fixture.
+  test("a write site is cited at its REAL 1-based line", () => {
+    if (!available()) return;
+    const src = readFileSync(join(repo, "src", "cancel.ts"), "utf-8").split("\n");
+    const writeLine = src.findIndex((l) => l.includes("prisma.widget.update")) + 1;
+    expect(writeLine).toBeGreaterThan(1);                        // the fixture can expose an off-by-one
+    expect(writers("src/reader.ts#read")).toContain(`cancelWidget (src/cancel.ts:${writeLine})`);
   });
 });

@@ -11,6 +11,10 @@ import { basename } from "node:path";
 import { emit } from "../core/progress.js";
 import { err, stamp } from "./util.js";
 import { type Args } from "./args.js";
+// THE line contract (see grow/project_set.ts): every line the scan/coupling floor produces is 0-BASED; a line
+// that will be RENDERED as `file:line` is 1-BASED. The writers/coupling shapes below project coupling-floor
+// hits (`lineOf` = newline count → 0-based), so they convert HERE, exactly like every other shape.
+import { to1 } from "../codebase/grow/project_set.js";
 
 // Ask query — a natural-language question routed (by the LLM) to the right shape, then run. The honest
 // front-end: it answers structural questions and routes lexical/semantic ones to grep/RAG. Emits whatever
@@ -270,7 +274,7 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
       const dedup = `${w.file}#${unit.symbol}#${table}`;
       if (seen.has(dedup)) continue;                                    // collapse a method's many write-lines to one member
       seen.add(dedup);
-      members.push({ symbol: unit.symbol, file: w.file, line: w.line, kind: unit.kind, enclosing: "", edgeKind: "db-write", provenance: "RESOLVED_PARTIAL", table, columns, colVerified });
+      members.push({ symbol: unit.symbol, file: w.file, line: to1(w.line), kind: unit.kind, enclosing: "", edgeKind: "db-write", provenance: "RESOLVED_PARTIAL", table, columns, colVerified });
     }
   }
   members.sort((x, y) => x.table.localeCompare(y.table) || x.file.localeCompare(y.file) || x.line - y.line);
@@ -346,7 +350,7 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
         // call answers "who writes the state I read, and on which field" — no second query needed.
         const cols = e.kind === "db-table" ? await accessColumns(a.repo, acc.file, acc.line, parseCache) : { writes: [], reads: [] };
         const columns = role === "writes" ? cols.writes : cols.reads;
-        sides.push({ symbol: unit.symbol, file: acc.file, line: acc.line, kind: unit.kind, role, columns });
+        sides.push({ symbol: unit.symbol, file: acc.file, line: to1(acc.line), kind: unit.kind, role, columns });
       }
     }
     sides.sort((x, y) => x.role.localeCompare(y.role) || x.file.localeCompare(y.file) || x.line - y.line);

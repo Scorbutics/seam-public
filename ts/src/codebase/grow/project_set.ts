@@ -66,7 +66,11 @@ const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p === "R
 // systematic off-by-one every projected consumer carried (`getUserAvailability.ts:341` for a symbol on 342, and
 // the same on every fallback path): one branch added 1, the other passed the raw 0-based value through. Route
 // EVERY line through this helper — a raw `range[0]` or `e.line` reaching a member is the bug, by construction.
-const to1 = (l: number | null | undefined): number => (l == null ? 0 : l + 1);
+// EXPORTED because it is the contract for EVERY structural shape, not just this one: impact/reaches/writers/
+// coupling project the SAME 0-based scan values and render them as `file:line`, so they convert HERE too.
+// (impact was the one shape that didn't: it cited `getUserAvailability.ts:581` — the line ABOVE the real call
+// on 582 — while `consumers` on the same anchor said 582. One helper, one convention, no per-shape drift.)
+export const to1 = (l: number | null | undefined): number => (l == null ? 0 : l + 1);
 // A node's declaration start, or `undefined` when the node is UNLOCATED (its `range` is the [0,0] sentinel
 // the up-scan places when no real site was grounded). Shared by every projection that cites a node — see
 // GraphNode.unlocated. A projected `line` of 0 means "no line": renderers must print no location at all.

@@ -7,8 +7,10 @@
 import { build_footprint, build_footprint_cached } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { EngineCtx } from "../engine_ctx.js";
-import { _start } from "./project_set.js";
+import { _start, to1 } from "./project_set.js";
 
+// `line` is 1-BASED (project_set's `to1` — the one line contract every shape shares); 0 = "no grounded site",
+// which the render omits entirely rather than fabricating `:0`/`:1`.
 export interface ImpactedSymbol { symbol: string; file: string; line: number; kind: string; hop: number }
 export interface ImpactFile { file: string; count: number }
 export interface ImpactGap { mechanism: string; evidence: string }
@@ -73,9 +75,11 @@ export async function projectImpact(
         const k = key(n.file, n.symbol);
         if (visited.has(k)) continue;
         visited.add(k);
-        // `_start` refuses an UNLOCATED node's [0,0] sentinel range (see GraphNode.unlocated): `line: 0` here means
-        // "no grounded site", and the render omits it rather than printing a fabricated one.
-        const imp: ImpactedSymbol = { symbol: n.symbol, file: n.file, line: e.line ?? _start(n) ?? 0, kind: n.kind, hop: node.hop + 1 };
+        // `_start` refuses an UNLOCATED node's [0,0] sentinel range (see GraphNode.unlocated) → `to1(undefined)`
+        // = 0 = "no grounded site", which the render omits rather than printing a fabricated one. `to1` is the
+        // SAME 0-based → 1-based conversion the consumers/dependencies projection applies, so the two shapes
+        // cite the identical line for the identical edge (they read the same `e.line`).
+        const imp: ImpactedSymbol = { symbol: n.symbol, file: n.file, line: to1(e.line ?? _start(n)), kind: n.kind, hop: node.hop + 1 };
         impacted.set(k, imp);
         next.push({ file: n.file, symbol: n.symbol, hop: node.hop + 1 });
       }
