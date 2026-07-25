@@ -62,6 +62,25 @@ export type SpineResult = {
 
 const tierOf = (s: Seam) => s.tier ?? "";
 
+// GROUNDED-ONLY SPINE WALK — a `call` edge at RESOLVED_PARTIAL is a NAME-MATCH LEAD, not a proven hop: the
+// call site's RECEIVER never resolved, so all that was matched is the METHOD NAME (up/class_graph.ts: "unresolved
+// receiver → PARTIAL (keep — the ambiguity is real)"), and core/resolution.ts's contract is that a PARTIAL link
+// must not be FOLLOWED. The render already honours this in prose (llm_context's reachSeam says "**possibly**
+// called by"), but the SPINE walk followed the same edge as if it were grounded and rode it into an unrelated
+// mechanism: cal.com `StripePaymentService.create` ← name-matched `prisma.bookingInternalNote.create(...)` at
+// handleInternalNote.ts:38, so the spine climbed out of Stripe payments into the internal-notes subsystem and
+// crowned its db-read. A spine is presented as THE flow, so an ungrounded hop there is a confident lie — far
+// worse than a shorter honest spine (the "inferred / no grounded boundary reached" idiom already covers that).
+// SCOPED to kind `call` on purpose: `interface-impl` / `provider-impl` / `dispatch` are PARTIAL BY DESIGN (a DI
+// binding IS the runtime hop — down/dependency_graph.ts grounds them on the impl index, not on a name), so
+// gating them would cut the DI spine the engine exists to trace. A missing provenance counts as grounded (the
+// hand-built render models in the tests carry none). The lead itself does NOT vanish: it still surfaces as the
+// "possibly called by" reach phrase, in the region, and in the entry surface — it is DEMOTED out of the
+// authoritative path, not dropped from the output. (Opt out: SEAM_SPINE_GROUNDED_ONLY=0.)
+const _groundedOnly = () => process.env.SEAM_SPINE_GROUNDED_ONLY !== "0";
+export const groundedHop = (e: any): boolean =>
+  !(_groundedOnly() && e?.kind === "call" && e?.provenance != null && e.provenance !== "RESOLVED_FULL");
+
 // computeSpine — the anchor-agnostic entry point: `anchorId` is any node in the footprint (renderAgent passes
 // `model.anchor`; renderConcern's "## Spines" section passes each mechanism's own center node). Returns the fully
 // assembled spineSeams (entry-chain + down-spine already combined, matching renderAgent's old inline assembly).
@@ -102,6 +121,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     const _trustGate = process.env.SEAM_SPINE_TRUST_GATE !== "0";
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
+      if (!groundedHop(e)) continue;   // a PARTIAL (name-match) call is a LEAD, never a spine hop — see groundedHop
       const srcN = fwd ? String(e.to) : String(e.from);   // the DOWNSTREAM-source node (fwd = consumers-lead → flow runs to→from)
       const dstN = fwd ? String(e.from) : String(e.to);
       const a = seamOfId.get(srcN), b = seamOfId.get(dstN);
@@ -177,7 +197,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
       for (const e of edges) {
         if (String(e.from) !== c) continue;
         const isCall = _DELEGATE.has(e.kind) || (e.kind === "import" && Number(e.line) > 0);
-        if (!isCall) continue;
+        if (!isCall || !groundedHop(e)) continue;   // the closure that ADMITS sinks must be grounded too (no name-match hop)
         const to = String(e.to);
         if (!label.has(to) || _TYPEREF.has(kindOfId.get(to) ?? "") || callDepth.has(to)) continue;   // resolved, non-type, unseen
         callDepth.set(to, d + 1); q2.push(to);
@@ -205,13 +225,13 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
       for (const e of edges) if (_PRODUCE.has(e.kind)) producer.add(String(e.from));
       const seen = new Set<string>([anchorNode]);
       let frontier = new Set<string>();
-      for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === anchorNode) frontier.add(String(e.to));
+      for (const e of edges) if (_DELEGATE.has(e.kind) && groundedHop(e) && String(e.from) === anchorNode) frontier.add(String(e.to));
       for (let hop = 0; hop < _delegateMax && frontier.size; hop++) {
         const next = new Set<string>();
         for (const c of frontier) {
           if (seen.has(c)) continue; seen.add(c);
           if (producer.has(c)) { for (const e of edges) if (_PRODUCE.has(e.kind) && String(e.from) === c) directIds.add(String(e.to)); }   // a WRITER → borrow + halt this branch
-          else for (const e of edges) if (_DELEGATE.has(e.kind) && String(e.from) === c) next.add(String(e.to));   // pure pass-through → follow one more hop
+          else for (const e of edges) if (_DELEGATE.has(e.kind) && groundedHop(e) && String(e.from) === c) next.add(String(e.to));   // pure pass-through → follow one more hop
         }
         frontier = next;
       }
@@ -413,6 +433,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     const addUp = (callee: string, caller: string, cross: boolean) => { if (callee !== caller && !isStore(caller)) (up.get(callee) ?? up.set(callee, []).get(callee)!).push({ sid: caller, cross }); };
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
+      if (!groundedHop(e)) continue;   // the UPSTREAM climb is where a name-match caller is most misleading (see groundedHop)
       const fromSid = seamOfId.get(String(e.from)), toSid = seamOfId.get(String(e.to));
       if (!fromSid || !toSid) continue;
       // A CALL edge is directional: caller = e.from. A CROSS-STACK crossing (HTTP route) is a PEER relationship —
