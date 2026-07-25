@@ -621,9 +621,11 @@ fn qual_call_parts(ctx: &Ctx, c: Node) -> Option<(String, String)> {
     }
 }
 
-/// The identifier chain `["a","b","c"]` of a member call `a.b.c()` (base, fields…, method); None otherwise.
-/// Port of `_qualCallMemberChain`.
-fn qual_call_member_chain(ctx: &Ctx, c: Node) -> Option<Vec<String>> {
+/// The receiver chain of a member call `a.b.c()` / `this.b.c()` → (base, parts): `base` is the root binder, or
+/// None when the root is the SELF receiver (`this` / `self`), and `parts` = the intermediate FIELDS + the final
+/// METHOD. The SELF root is what makes a DI-INJECTED member call (`this.dependencies.<svc>.<method>()`)
+/// resolvable — `this` IS the enclosing class, so its type is proven. Port of `_qualCallMemberChain`.
+fn qual_call_member_chain(ctx: &Ctx, file: &str, c: Node) -> Option<(Option<String>, Vec<String>)> {
     let callee = c.child_by_field_name("function").or_else(|| ctx.children(c).into_iter().find(|x| nk::is_member(x.kind())))?;
     if !nk::is_member(callee.kind()) {
         return None;
@@ -640,15 +642,17 @@ fn qual_call_member_chain(ctx: &Ctx, c: Node) -> Option<Vec<String>> {
         cur = node.child_by_field_name("object").or_else(|| ctx.children(node).first().copied());
     }
     let base = cur?;
+    // >=2 = at least one intermediate FIELD + the method. A 1-part chain is the plain-qualified case (`a.m()` →
+    // qual_call_parts, `this.m()` → the self-member pass), which already has an owner — never double-claimed here.
+    let selfk: &[&str] = provider_for(file).map(|p| p.self_receiver()).unwrap_or(&[]);
+    if selfk.contains(&base.kind()) {
+        return (parts.len() >= 2).then(|| (None, parts.into_iter().collect()));
+    }
     if !base.kind().contains("identifier") {
         return None;
     }
-    parts.push_front(ctx.text(base).to_string());
-    if parts.len() >= 3 {
-        Some(parts.into_iter().collect())
-    } else {
-        None
-    }
+    let b = ctx.text(base).to_string();
+    (parts.len() >= 2).then(|| (Some(b), parts.into_iter().collect()))
 }
 
 fn resolve_import_file(repo: &str, importing: &str, source: Option<&str>) -> Option<String> {
@@ -713,13 +717,27 @@ fn class_member_line(repo: &str, file: &str, member: &str) -> Option<(usize, usi
     None
 }
 
-/// A field's declared type in `file` → (type name, the file defining it). Port of `_fieldTypeIn`.
-fn field_type_in(repo: &str, file: &str, field: &str) -> Option<(String, Option<String>)> {
+/// A field's declared type in `file` → (type name, the file defining it). `owner` SCOPES the lookup to that
+/// class/interface's declaration (a file can declare several types with same-named members); falls back to
+/// file-wide when the owner isn't declared here. Port of `_fieldTypeIn`.
+fn field_type_in(repo: &str, file: &str, field: &str, owner: Option<&str>) -> Option<(String, Option<String>)> {
     let (text, grammar) = read(repo, file)?;
     let ctx = Ctx::parse(&text, &grammar)?;
+    let (mut lo, mut hi) = (0usize, usize::MAX);
+    if let Some(o) = owner {
+        if let Some(on) = ctx.collect(ctx.root(), |k| nk::is_class_kind(k)).into_iter().find(|n| ast::name_of(&ctx, *n).as_deref() == Some(o)) {
+            let sp = ctx.span(on);
+            lo = sp.0;
+            hi = sp.1;
+        }
+    }
     let mut type_name: Option<String> = None;
     for d in ctx.collect(ctx.root(), nk::is_typed_decl) {
         if ast::name_of(&ctx, d).as_deref() != Some(field) {
+            continue;
+        }
+        let sp = ctx.span(d);
+        if sp.0 < lo || sp.1 > hi {
             continue;
         }
         if let Some(tn) = d.child_by_field_name("type") {
@@ -737,7 +755,7 @@ fn field_type_in(repo: &str, file: &str, field: &str) -> Option<(String, Option<
 
 enum CallKind {
     Qual(String, String),
-    Chain(Vec<String>),
+    Chain(Option<String>, Vec<String>),
 }
 
 impl DepScan {
@@ -790,7 +808,7 @@ impl DepScan {
                 }
             }
             let Some(hf) = hook_file else { continue };
-            if let Some(ft) = field_type_in(&self.repo, &hf, base) {
+            if let Some(ft) = field_type_in(&self.repo, &hf, base, None) {
                 if !ft.0.is_empty() {
                     return Some(ft);
                 }
@@ -845,8 +863,8 @@ impl DepScan {
             }
             if let Some((recv, method)) = qual_call_parts(actx, c) {
                 calls.push((cl, CallKind::Qual(recv, method)));
-            } else if let Some(chain) = qual_call_member_chain(actx, c) {
-                calls.push((cl, CallKind::Chain(chain)));
+            } else if let Some((base, parts)) = qual_call_member_chain(actx, &self.anchor_file, c) {
+                calls.push((cl, CallKind::Chain(base, parts)));
             }
         }
 
@@ -856,20 +874,35 @@ impl DepScan {
 
         for (cl, ck) in calls {
             match ck {
-                CallKind::Chain(chain) => {
-                    let method = chain.last().unwrap().clone();
-                    let recv_chain: Vec<String> = chain[..chain.len() - 1].to_vec();
-                    let mut cur_type: Option<String> = decl_type.get(&recv_chain[0]).cloned().or_else(|| preresolved.contains_key(&recv_chain[0]).then(|| recv_chain[0].clone()));
-                    let mut cur_file: Option<String> = cur_type.as_ref().and_then(|t| self.receiver_class_file(t, &preresolved, &mut recv_memo).or_else(|| preresolved.get(t).cloned()));
-                    if cur_type.is_none() {
-                        if let Some((ty, Some(f))) = self.resolve_hook_base_type(&recv_chain[0]) {
-                            cur_type = Some(ty);
-                            cur_file = Some(f);
+                CallKind::Chain(base, parts) => {
+                    let method = parts.last().unwrap().clone();
+                    let recv_chain: Vec<String> = parts[..parts.len() - 1].to_vec();
+                    let mut cur_type: Option<String>;
+                    let mut cur_file: Option<String>;
+                    match &base {
+                        // SELF-ROOTED chain — `this.<field>.….method()`, the CONSTRUCTOR-INJECTED DEPENDENCY call.
+                        // The root type is the ENCLOSING CLASS (proven from the parse tree), so every hop from
+                        // there is an explicit `field: Type` annotation.
+                        None => {
+                            let cls = ast::enclosing_class(&self.aunits, alo, ahi);
+                            cur_type = (!cls.is_empty()).then_some(cls);
+                            cur_file = cur_type.as_ref().map(|_| self.anchor_file.clone());
+                        }
+                        Some(b) => {
+                            cur_type = decl_type.get(b).cloned().or_else(|| preresolved.contains_key(b).then(|| b.clone()));
+                            cur_file = cur_type.as_ref().and_then(|t| self.receiver_class_file(t, &preresolved, &mut recv_memo).or_else(|| preresolved.get(t).cloned()));
+                            if cur_type.is_none() {
+                                if let Some((ty, Some(f))) = self.resolve_hook_base_type(b) {
+                                    cur_type = Some(ty);
+                                    cur_file = Some(f);
+                                }
+                            }
                         }
                     }
-                    let mut i = 1;
+                    // recv_chain is the FIELD hops only (the root is resolved above), so hop from 0.
+                    let mut i = 0;
                     while i < recv_chain.len() && cur_type.is_some() && cur_file.is_some() {
-                        match field_type_in(&self.repo, cur_file.as_ref().unwrap(), &recv_chain[i]) {
+                        match field_type_in(&self.repo, cur_file.as_ref().unwrap(), &recv_chain[i], cur_type.as_deref()) {
                             Some((ty, f)) => {
                                 cur_file = f.or_else(|| preresolved.get(&ty).cloned());
                                 cur_type = Some(ty);
@@ -881,20 +914,38 @@ impl DepScan {
                         }
                         i += 1;
                     }
-                    if let (Some(_), Some(cf)) = (&cur_type, &cur_file) {
-                        let k = format!("{method} {cf}");
-                        if !self.seen.contains(&k) {
-                            let defu = Self::units_of(&mut self.dep_units, &self.repo, cf).iter().find(|u| u.name == method && (u.kind == "method" || u.kind == "function")).cloned();
-                            let (rng, kind) = match &defu {
-                                Some(d) => (Some((d.start, d.end)), d.kind.clone()),
-                                None => (class_member_line(&self.repo, cf, &method), "method".to_string()),
-                            };
-                            if let Some(rng) = rng {
-                                self.seen.insert(k);
-                                self.counter += 1;
-                                let did = format!("d{}", self.counter);
-                                self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind, file: cf.clone(), range: rng, enclosing: recv_chain.join("."), complexity: complexity(rng), ..Default::default() });
-                                self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: "RESOLVED_PARTIAL".into(), line: Some(cl), ..Default::default() });
+                    // Final receiver type is an INTERFACE (has impls) → the concrete target is the DI binding's,
+                    // not statically pickable: the shared interface hop follows a sole impl and DISCLOSES a
+                    // multi-impl set as a blindspot rather than guessing.
+                    let is_iface = cur_type.as_ref().map(|t| !self.idx.impls_of(t).is_empty()).unwrap_or(false);
+                    if let (Some(ct), Some(cf)) = (cur_type.clone(), cur_file.clone()) {
+                        if is_iface {
+                            let ik = format!("ichain:{ct}.{method}");
+                            let m = vec![method.clone()];
+                            if !self.seen.contains(&ik) && self.follow_interface(&ct, impl_cap(), Some(&m), Some(cl), "interface-impl") {
+                                self.seen.insert(ik);
+                            }
+                        } else {
+                            let k = format!("{method} {cf}");
+                            if !self.seen.contains(&k) {
+                                let defu = Self::units_of(&mut self.dep_units, &self.repo, &cf).iter().find(|u| u.name == method && (u.kind == "method" || u.kind == "function")).cloned();
+                                let (rng, kind) = match &defu {
+                                    Some(d) => (Some((d.start, d.end)), d.kind.clone()),
+                                    None => (class_member_line(&self.repo, &cf, &method), "method".to_string()),
+                                };
+                                if let Some(rng) = rng {
+                                    self.seen.insert(k);
+                                    self.counter += 1;
+                                    let did = format!("d{}", self.counter);
+                                    let mut enc: Vec<String> = vec![base.clone().unwrap_or_else(|| "this".to_string())];
+                                    enc.extend_from_slice(&recv_chain);
+                                    // A SELF-rooted chain is grounded end-to-end ⇒ RESOLVED_FULL, so the grow floods
+                                    // THROUGH to the next hop; an identifier root can come from the weaker
+                                    // hook/untyped inference, so it stays RESOLVED_PARTIAL.
+                                    let prov = if base.is_none() { "RESOLVED_FULL" } else { "RESOLVED_PARTIAL" };
+                                    self.nodes.push(GraphNode { id: did.clone(), symbol: method, kind, file: cf.clone(), range: rng, enclosing: enc.join("."), complexity: complexity(rng), ..Default::default() });
+                                    self.edges.push(GraphEdge { from: "n1".into(), to: did, kind: "call".into(), provenance: prov.into(), line: Some(cl), ..Default::default() });
+                                }
                             }
                         }
                     }

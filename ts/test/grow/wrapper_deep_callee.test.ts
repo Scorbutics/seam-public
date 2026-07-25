@@ -34,7 +34,11 @@ const NOISE = 14;
 // how many repositories the anchor is DI-wired with (cal.com's has 14). Each touches the shared table, so P3
 // bridges every one of them to every noise file — that is what makes the SEED-TIME fringe outgrow the budget.
 const REPOS = 8;
-const MAX_NODES = 16;   // < the bridge count the fringe seeds → pre-fix, the wave ran zero steps
+// < the bridge count the fringe seeds (the test asserts that at runtime) → pre-fix, the wave ran zero steps.
+// It must ALSO exceed the anchor's own 1-hop degree, or the wave has nothing left to spend going deeper: the
+// anchor calls `this.repo{i}.find{i}()` on each injected repository, and those constructor-injected member
+// calls are resolved edges, so the anchor's first hop alone is REPOS + the busy-times service.
+const MAX_NODES = REPOS + 16;
 
 const SRC: Record<string, string> = {
   // the DEEP callee — two wrapper hops below the anchor. This is the assertion's target.

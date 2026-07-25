@@ -163,10 +163,11 @@ describe("spine — a RESOLVED_PARTIAL (name-match) call edge is a LEAD, never a
     // no STEP is the name-matched module, and no HOP claims a call site inside it.
     expect(steps(spine).some((l) => l.includes("src/internalNote.ts"))).toBe(false);
     expect(hops(spine).some((l) => l.includes("src/internalNote.ts"))).toBe(false);
-    // the anchor IS the whole grounded path here, and the render says so honestly (the "inferred" idiom)
-    // instead of inventing a downstream out of the name match.
-    expect(steps(spine).length).toBe(1);
+    // Every step is on the anchor's OWN grounded path: the anchor, then the injected repository it persists
+    // through (`this.paymentRepository.savePayment` — the constructor-injected member call, resolved through
+    // the field's declared type). Nothing from the name-matched module is invented as a downstream.
     expect(steps(spine)[0]).toContain("paymentService.create");
+    for (const l of steps(spine).slice(1)) expect(l).toContain("src/paymentRepository.ts");
   });
 
   test("NON-VACUOUS — the pre-fix walk (SEAM_SPINE_GROUNDED_ONLY=0) DOES ride the name match into it", async () => {

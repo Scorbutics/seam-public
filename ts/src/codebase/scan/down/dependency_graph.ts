@@ -302,12 +302,17 @@ function _qualCallParts(ctx: Ctx, c: any): { recv: string; method: string } | nu
   return { recv: ctx.text(recvNode), method: ctx.text(nameNode) };
 }
 
-// SPIKE (kc_3): flatten a CHAINED member call `a.b.c()` into its identifier chain `["a","b","c"]` (base var,
-// intermediate FIELDS, final METHOD). Returns null for anything but a pure identifier-rooted member chain (a
-// `this.`, computed `a[x]`, or call-in-the-middle `a().b()` receiver is out of scope). The type resolver below
-// walks it: base type → field type → … → the class whose method to follow. GROUNDED — each field hop is an
-// explicit `field: Type` decl or a `new Type()` binding in the receiver class, not a name/type guess.
-function _qualCallMemberChain(ctx: Ctx, c: any): string[] | null {
+// SPIKE (kc_3): flatten a CHAINED member call `a.b.c()` / `this.b.c()` into its receiver chain — `base` (the
+// root binder, or null when the root is the SELF receiver) plus `parts` = the intermediate FIELDS and the final
+// METHOD. Returns null for anything but a pure member chain rooted in an identifier or `this` (a computed `a[x]`
+// or call-in-the-middle `a().b()` receiver is out of scope). The type resolver below walks it: base type →
+// field type → … → the class whose method to follow. GROUNDED — each field hop is an explicit `field: Type`
+// decl or a `new Type()` binding in the receiver class, not a name/type guess.
+// The SELF root is what makes a DI-INJECTED member call resolvable: `this.dependencies.<svc>.<method>(…)` — the
+// constructor-injected dependency bag idiom (cal.com AvailableSlotsService). `this` IS the enclosing class, so
+// its type is PROVEN, not inferred; the base kind is language-owned (LanguageProvider.selfReceiver), never a
+// literal, so C++ `this->` and Ruby `self.` ride the same code with no per-language branch.
+function _qualCallMemberChain(ctx: Ctx, file: string, c: any): { base: string | null; parts: string[] } | null {
   const callee = c.childForFieldName?.("function") ?? ctx.children(c).find((x: any) => _MEMBER.has(x.type));
   if (!callee || !_MEMBER.has(callee.type)) return null;
   const parts: string[] = [];
@@ -319,9 +324,13 @@ function _qualCallMemberChain(ctx: Ctx, c: any): string[] | null {
     parts.unshift(ctx.text(prop));
     cur = cur.childForFieldName?.("object") ?? ctx.children(cur)[0];
   }
-  if (!cur || !cur.type.includes("identifier")) return null;   // base must be a plain identifier (not this/computed/call)
-  parts.unshift(ctx.text(cur));
-  return parts.length >= 3 ? parts : null;   // need base + ≥1 field + method to be a CHAIN (2-part is the plain-qualified case)
+  if (!cur) return null;
+  const self = new Set(provider_for(file)?.selfReceiver ?? []);
+  // ≥1 intermediate FIELD + the method. A 1-part chain is the plain-qualified case: `a.m()` (→ _qualCallParts)
+  // or `this.m()` (→ _selfMemberPass) — both already have an owner, this pass must not double-claim them.
+  if (self.has(cur.type)) return parts.length >= 2 ? { base: null, parts } : null;
+  if (!cur.type.includes("identifier")) return null;            // computed / call-rooted receiver → not a resolvable chain
+  return parts.length >= 2 ? { base: ctx.text(cur), parts } : null;
 }
 
 
@@ -343,13 +352,23 @@ async function _classMemberLine(repo: string, file: string, member: string): Pro
 // bare type NAME and the FILE that type resolves to (same-file def, else an import in this file). Grounded (an
 // explicit annotation + the deterministic import resolver), no inference. The `new Type()` construction path
 // (`this.users = new Users()`) is a TODO fallback; the explicitly-typed field covers the keycloak-admin-client SDK.
-async function _fieldTypeIn(repo: string, file: string, field: string): Promise<{ type: string; file: string | null } | null> {
+// `owner` (optional) SCOPES the lookup to the declaration of that class/interface: a chain hop knows WHICH type
+// declares the field, and a file can declare several types with same-named members (`IFoo.repo` vs `Bar.repo`).
+// Falls back to file-wide when the owner isn't declared here (the pre-existing behaviour), never guesses.
+async function _fieldTypeIn(repo: string, file: string, field: string, owner?: string | null): Promise<{ type: string; file: string | null } | null> {
   const rd = _read(repo, file); if (!rd) return null;
   const ctx = await makeCtx(rd[0], rd[1]); if (!ctx) return null;
   const declBase = (t: string): string => (t.replace(/^\s*:\s*/, "").replace(/<[\s\S]*$/, "").trim().split(".").pop() ?? "").trim();
+  let lo = -Infinity, hi = Infinity;
+  if (owner) {
+    const on = ctx.collect(ctx.root, (k: string) => _CLASS_KINDS.has(k)).find((n: any) => _name_of(ctx, n) === owner);
+    if (on) { const sp = ctx.span(on); lo = sp[0]; hi = sp[1]; }
+  }
   let typeName: string | null = null;
   for (const d of ctx.collect(ctx.root, (k: string) => _TYPED_DECL.has(k))) {
     if (_name_of(ctx, d) !== field) continue;
+    const [ds, de] = ctx.span(d);
+    if (ds < lo || de > hi) continue;                            // outside the owning type's declaration → not this field
     const tn = (d as any).childForFieldName?.("type");
     if (tn) { const t = declBase(ctx.text(tn)); if (t) { typeName = t; break; } }
   }
@@ -447,26 +466,50 @@ async function _qualifiedCalleePass(s: DepScan): Promise<void> {
       // TYPE by walking base-type → field-type → … then follow the method in the final class. Each hop is a grounded
       // `field: Type` annotation. Base type from a typed decl OR the base identifier IS a class; else it BLOCKS (the
       // untyped base — e.g. a var destructured from a hook — is the known limit this spike is measuring).
-      const chain = _qualCallMemberChain(s.actx, c);
+      const chain = _qualCallMemberChain(s.actx, s.anchorFile, c);
       if (chain) {
-        const method = chain[chain.length - 1], recvChain = chain.slice(0, -1);
-        let curType: string | null = declType.get(recvChain[0]) ?? (preresolved.has(recvChain[0]) ? recvChain[0] : null);
-        let curFile: string | null = curType ? (await receiverClassFile(curType) ?? preresolved.get(curType) ?? null) : null;
-        if (!curType) {   // UNTYPED base (e.g. destructured from a provider hook) — resolve it via the hook's module
-          const hb = await _resolveHookBaseType(s, recvChain[0]);
-          if (hb?.type && hb.file) { curType = hb.type; curFile = hb.file; }
+        const method = chain.parts[chain.parts.length - 1], recvChain = chain.parts.slice(0, -1);
+        let curType: string | null = null, curFile: string | null = null;
+        if (chain.base === null) {
+          // SELF-ROOTED chain — `this.<field>.…​.method()`. The root type is the ENCLOSING CLASS, proven from the
+          // parse tree (the anchor's span sits inside that class), so every hop from here is an explicit
+          // annotation: `this.dependencies: IAvailableSlotsService` → `.userAvailabilityService:
+          // UserAvailabilityService` → `getUsersAvailability`. This is the CONSTRUCTOR-INJECTED DEPENDENCY call
+          // — the shape that carried nearly every service call in cal.com's AvailableSlotsService and produced
+          // ZERO edges (the base kind is `this`, which the identifier-only root check rejected), so a flow trace
+          // surfaced the injected repositories instead of the getUsersAvailability → getBusyTimes chain.
+          curType = _enclosingClass(s.aunits, alo, ahi) || null;
+          curFile = curType ? s.anchorFile : null;
+        } else {
+          curType = declType.get(chain.base) ?? (preresolved.has(chain.base) ? chain.base : null);
+          curFile = curType ? (await receiverClassFile(curType) ?? preresolved.get(curType) ?? null) : null;
+          if (!curType) {   // UNTYPED base (e.g. destructured from a provider hook) — resolve it via the hook's module
+            const hb = await _resolveHookBaseType(s, chain.base);
+            if (hb?.type && hb.file) { curType = hb.type; curFile = hb.file; }
+          }
         }
-        for (let i = 1; i < recvChain.length && curType && curFile; i++) {
-          const ft = await _fieldTypeIn(s.repo, curFile, recvChain[i]);
+        // recvChain is the FIELD hops only (the root — identifier or `this` — is resolved above), so hop from 0.
+        for (let i = 0; i < recvChain.length && curType && curFile; i++) {
+          const ft = await _fieldTypeIn(s.repo, curFile, recvChain[i], curType);
           curType = ft?.type ?? null; curFile = ft ? (ft.file ?? preresolved.get(ft.type) ?? null) : null;
         }
-        if (curType && curFile && !s.seen.has(`${method} ${curFile}`)) {
+        // The final receiver type is an INTERFACE (has impls) → the concrete target is the DI binding's, which is
+        // not statically pickable: hand it to the SAME interface hop every other pass uses, so a sole impl is
+        // followed and a multi-impl set is DISCLOSED as an `interface-multiple-impls` blindspot rather than
+        // guessed. Only when the type owns the method itself is a direct edge emitted.
+        if (curType && curFile && (await impls_of(s.repo, curType)).length) {
+          if (!s.seen.has(`ichain:${curType}.${method}`) && await _followInterface(s, curType, _implCap(), method, cl, "interface-impl")) s.seen.add(`ichain:${curType}.${method}`);
+        } else if (curType && curFile && !s.seen.has(`${method} ${curFile}`)) {
           const defu = (await unitsOf(curFile)).find((u) => u[0] === method && (u[1] === "method" || u[1] === "function"));
           const rng = defu ? [defu[2], defu[3]] : (await _classMemberLine(s.repo, curFile, method));   // method decl, else an arrow-valued FIELD
           if (rng) {
             s.seen.add(`${method} ${curFile}`); s.counter += 1; const did = `d${s.counter}`;
-            s.nodes.push({ id: did, symbol: method, kind: defu?.[1] ?? "method", file: curFile, range: [rng[0], rng[1]], enclosing: recvChain.join("."), complexity: Math.max(1, rng[1] - rng[0] + 1) });
-            s.edges.push({ from: "n1", to: did, kind: "call", provenance: "RESOLVED_PARTIAL", line: cl });
+            s.nodes.push({ id: did, symbol: method, kind: defu?.[1] ?? "method", file: curFile, range: [rng[0], rng[1]], enclosing: [chain.base ?? "this", ...recvChain].join("."), complexity: Math.max(1, rng[1] - rng[0] + 1) });
+            // A SELF-rooted chain is grounded end-to-end (`this` = the enclosing class, then explicit `field: Type`
+            // annotations, and the method IS a real unit of that exact concrete class with no impl to override it)
+            // ⇒ RESOLVED_FULL, so the grow floods THROUGH to the next hop. An identifier root can come from the
+            // weaker hook/untyped inference, so it stays RESOLVED_PARTIAL as before.
+            s.edges.push({ from: "n1", to: did, kind: "call", provenance: chain.base === null ? "RESOLVED_FULL" : "RESOLVED_PARTIAL", line: cl });
           }
         }
       }
