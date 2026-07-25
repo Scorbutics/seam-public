@@ -175,18 +175,36 @@ function _member_use(text: string, local: string, symbol: string): Provenance | 
 
 // [consumer_file, {member → local}] for files whose import of one or more `memberNames` resolves to
 // `anchorFile` — member co-occurrence for module mode. Reads the cached import index (no re-walk).
+//
+// DEFAULT-EXPORT PARITY. `export default prisma` puts a DECLARED member in the module's default slot, and a
+// consumer then writes `import prisma from "@calcom/prisma"` — an import that carries NO member name (its ref
+// name is `default`, or it lands in the entry's `defs`). The named loop below tests `memberNames.has(ref.name)`,
+// so EVERY default-import consumer was dropped: on cal.com that silently lost the 439 files that default-import
+// `prisma`, making the module contract report 379 consumers for an export used by 818 files (and the same
+// undercount in fan-in, which is the union of these files). The SYMBOL-anchored path (`_scan_direct`) already
+// resolves them, gated by `_isDefaultExport` — so this reuses that SAME grounded gate to map the module's
+// default slot back to the member that fills it. No name matching: a default import counts only when the anchor
+// really declares that member as its default, and only when its module source resolves to the anchor.
 export async function scan_module_consumers(repo: string, anchorFile: string, memberNames: Set<string>): Promise<[string, Record<string, string>][]> {
   const anchorNorm = normpath(anchorFile);
   const anchorAbs = normpath(join(repo, anchorFile));
+  const defaultMember = [...memberNames].sort().find((n) => _isDefaultExport(repo, anchorFile, n)) ?? null;
   const out: [string, Record<string, string>][] = [];
-  for (const { rel, norm, refs } of _repoImports(repo)) {
+  for (const { rel, norm, refs, defs } of _repoImports(repo)) {
     if (norm === anchorAbs) continue;
     const used: Record<string, string> = {};
     for (const ref of refs) {
-      if (!memberNames.has(ref.name)) continue;
+      // `default` (a default import / `default as X` re-export) names the module's default slot, not a member —
+      // attribute it to the member that FILLS that slot, exactly as the symbol-anchored path does.
+      const member = ref.name === "default" ? defaultMember : (memberNames.has(ref.name) ? ref.name : null);
+      if (!member) continue;
       const target = await _resolve_import(repo, rel, ref);
       if (target === null || target[0] === null || normpath(target[0]) !== anchorNorm) continue;
-      if (!(ref.name in used)) used[ref.name] = ref.local;
+      if (!(member in used)) used[member] = ref.local;
+    }
+    if (defaultMember && !(defaultMember in used)) for (const d of defs) {
+      const t = await _resolve(repo, rel, d.source);
+      if (t && normpath(t) === anchorNorm) { used[defaultMember] = d.local; break; }
     }
     if (Object.keys(used).length) out.push([rel, used]);
   }

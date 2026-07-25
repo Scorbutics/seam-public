@@ -9,8 +9,14 @@
 // bucket is "grep these"; noStructure routes the asker away entirely. The two public renderers below fix
 // the direction-specific wording. See grow/project_set.ts.
 import { type SnippetReader } from "./snippets.js";
+// COUNTING UNITS — one shared derivation for every "how many consumers" figure this module prints, so the
+// edge-grained (`consumers`) and file-grained (`contract`) answers to the SAME relationship are named, not
+// merely numbered. See core/units.ts.
+import { countUnits, plural } from "../../core/units.js";
 
-interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
+// `unit` / `nounSg` name the GRAIN of this shape's entries and of the distinct-symbol rollup (see countUnits) —
+// the render must never print a bare count for a relationship another shape counts differently.
+interface EdgeSetLabels { title: string; nounPl: string; noneText: string; unit: string; nounSg: string }
 
 // CITATION — `file:line`, but NEVER a fabricated line. Every model this module renders carries 1-BASED lines
 // (project_set's `to1` is the ONE conversion point, shared by consumers/dependencies/impact/reaches/writers/
@@ -59,8 +65,14 @@ function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string
   const resolved = members.filter((m) => m.provenance !== "SUGGESTED");
   const suggested = members.filter((m) => m.provenance === "SUGGESTED");
   const out: string[] = [];
+  // UNIT-NAMED counts: this shape is EDGE-grained (one entry per usage site), so say so — and give the file /
+  // symbol rollup in the same breath, because that is the figure the module CONTRACT reports for the same
+  // relationship. See countUnits.
+  const u = countUnits(resolved);
   const head = [`anchor: ${model.anchor?.symbol ?? "?"}`, `shape: ${model.shape}`, `resolution: ${model.resolutionQuality ?? "?"}`,
-    `resolved: ${resolved.length}`, `suggested: ${suggested.length}`, `unresolved: ${unresolved.length}`,
+    `resolved: ${plural(resolved.length, L.unit)}`
+      + (resolved.length ? ` (${plural(u.symbols, L.nounSg)} in ${plural(u.files, "file")})` : ""),
+    `suggested: ${suggested.length}`, `unresolved: ${unresolved.length}`,
     ...(recalled.length ? [`recalled: ${recalled.length}`] : []),
     ...(crossStack.length ? [`cross-stack: ${crossStack.length}`] : [])];
   out.push(`# ${L.title} ${model.anchor?.symbol ?? "?"}`, head.join(" | "), "");
@@ -125,6 +137,9 @@ function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string
   }
   out.push(...crossStackTruncationLines(model.crossStackTruncations));
   out.push("## How to use",
+    `COUNTING UNIT: one entry = one ${L.unit}, so \`resolved\` counts ${L.unit}s, NOT ${L.nounSg}s or files —`,
+    `the ${L.nounSg}/file rollup in the header is the same set counted at those grains. A module CONTRACT`,
+    `(\`--query contract\`) counts the SAME relationship per consuming FILE; the two figures are not interchangeable.`,
     `Resolved ${L.nounPl} are the verified set (correct where grep yields false positives from`,
     `comments/strings/same-name symbols). Suggested ${L.nounPl} are leads the resolver couldn't ground.`,
     `Unresolved ${L.nounPl} are opaque to static analysis — grep is the right tool for those.`,
@@ -211,14 +226,14 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
 // CONSUMERS (`shape:"set"`) — who calls/uses the anchor (in-edges).
 export function renderConsumerSet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "set") return "(not a consumer-set model)";
-  return renderEdgeSet(model, { title: "Consumers of", nounPl: "callers",
+  return renderEdgeSet(model, { title: "Consumers of", nounPl: "callers", unit: "usage site", nounSg: "consuming symbol",
     noneText: "Nothing in the repo calls this symbol — an entry point, dead code, or dispatched-only." }, sr);
 }
 
 // DEPENDENCIES (`shape:"deps"`) — what the anchor calls/uses (out-edges).
 export function renderDependencySet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "deps") return "(not a dependency-set model)";
-  return renderEdgeSet(model, { title: "Dependencies of", nounPl: "dependencies",
+  return renderEdgeSet(model, { title: "Dependencies of", nounPl: "dependencies", unit: "dependency edge", nounSg: "dependency symbol",
     noneText: "This symbol uses nothing resolvable — a leaf (no outgoing dependencies)." }, sr);
 }
 
@@ -375,9 +390,13 @@ export function renderNeighborhood(model: any): string {
 export function renderContract(model: any): string {
   if (!model || model.shape !== "contract") return "(not a contract model)";
   const out: string[] = [];
+  // UNIT-NAMED counts — the module graph materialises ONE consumer node per consuming FILE, so every count in
+  // this shape is FILE-grained. Say it, because `--query consumers` counts the same relationship per usage SITE
+  // (a strictly larger number) and a bare integer in each render read as a contradiction. See countUnits.
   out.push(`# Contract: ${model.module}`,
     [`provides: ${(model.provides ?? []).length}`, `unused exports: ${(model.unusedExports ?? []).length}`,
-     `depends: ${(model.depends ?? []).length}`, `fan-in: ${model.afferent}`, `fan-out: ${model.efferent}`].join(" | "), "");
+     `depends: ${(model.depends ?? []).length}`, `fan-in: ${plural(model.afferent, "consuming file")}`,
+     `fan-out: ${plural(model.efferent, "dependency file")}`].join(" | "), "");
   if (model.noStructure) {
     out.push("## No contract", "This file has no exported members — there is no module boundary to describe.");
     return out.join("\n");
@@ -385,7 +404,7 @@ export function renderContract(model: any): string {
   if ((model.provides ?? []).length) {
     out.push("## Provides (inbound — exports consumed elsewhere)");
     for (const p of model.provides) {
-      out.push(`- ${p.symbol} [${p.kind}] — ${p.consumerCount} consumer(s)`);
+      out.push(`- ${p.symbol} [${p.kind}] — ${plural(countUnits(p.consumers ?? []).files, "consuming file")}`);
       for (const c of p.consumers) out.push(`    ← ${c.symbol} (${c.file})`);
     }
     out.push("");
@@ -401,7 +420,13 @@ export function renderContract(model: any): string {
   out.push("## How to use",
     "Provides is the module's real public surface (declared exports that are ACTUALLY imported), with each",
     "consumer. Unused exports are dead public API — safe-to-narrow candidates. Depends is the outbound cut.",
-    "fan-in (afferent) / fan-out (efferent) are the coupling pair: high fan-in = changing this ripples wide.");
+    "fan-in (afferent) / fan-out (efferent) are the coupling pair: high fan-in = changing this ripples wide.",
+    "COUNTING UNIT: every count here is CONSUMING FILES — one entry per importing file, cited by the enclosing",
+    "symbol of its first usage in that file, NOT one entry per usage site. For every usage site (and every",
+    "distinct consuming symbol) of one export, run `--query consumers --center \"<module>#<export>\"`: that shape",
+    "is edge-grained and reports a strictly larger number for the same relationship.",
+    "SCOPE: only exports DECLARED in this file are members. Symbols this module re-exports from elsewhere",
+    "(`export * from \"./x\"`) belong to their declaring module's contract, so their importers are not counted here.");
   return out.join("\n");
 }
 

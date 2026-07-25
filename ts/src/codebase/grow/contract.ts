@@ -14,7 +14,12 @@ import { build_footprint } from "../scan/index.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { parse_imports, namespace_imports } from "../../core/resolve/languages/index.js";
 import { _resolve, _resolve_import, fileImporters } from "../../core/resolve/consumers.js";
+import { countUnits } from "../../core/units.js";
 
+// `consumerCount` and `afferent` are FILE-grained — the module graph materialises one consumer node per
+// consuming FILE (see scan/module_graph.ts), so both are derived through the shared countUnits contract that
+// the renderers use, and the render NAMES the unit. The edge-grained answer for the same relationship is the
+// `consumers` shape (grow/project_set.ts), which counts usage SITES. See core/units.ts.
 export interface ProvidedSymbol { symbol: string; kind: string; consumers: { file: string; symbol: string }[]; consumerCount: number }
 export interface ExternalDep { symbol: string; source: string; file: string }
 
@@ -48,7 +53,7 @@ export async function projectContract(repo: string, moduleFile: string, opts: { 
   const unusedExports: string[] = [];
   for (const m of members) {
     const cons = consumersOf.get(m.id) ?? [];
-    if (cons.length) provides.push({ symbol: m.symbol, kind: m.kind, consumers: cons.sort((a, b) => a.file.localeCompare(b.file)), consumerCount: cons.length });
+    if (cons.length) provides.push({ symbol: m.symbol, kind: m.kind, consumers: cons.sort((a, b) => a.file.localeCompare(b.file)), consumerCount: countUnits(cons).files });
     else unusedExports.push(m.symbol);
   }
   provides.sort((a, b) => b.consumerCount - a.consumerCount || a.symbol.localeCompare(b.symbol));
@@ -108,14 +113,14 @@ export async function projectContract(repo: string, moduleFile: string, opts: { 
     }
     for (const te of typeExports) {
       const cons = importers.filter((imp) => importsFromModule.get(imp)?.has(te.name)).map((imp) => ({ file: imp, symbol: te.name }));
-      if (cons.length) provides.push({ symbol: te.name, kind: te.kind, consumers: cons.sort((a, b) => a.file.localeCompare(b.file)), consumerCount: cons.length });
+      if (cons.length) provides.push({ symbol: te.name, kind: te.kind, consumers: cons.sort((a, b) => a.file.localeCompare(b.file)), consumerCount: countUnits(cons).files });
       else unusedExports.push(te.name);
     }
     provides.sort((a, b) => b.consumerCount - a.consumerCount || a.symbol.localeCompare(b.symbol));
     unusedExports.sort();
   }
 
-  const afferent = new Set(provides.flatMap((p) => p.consumers.map((c) => normpath(c.file)))).size;
+  const afferent = countUnits(provides.flatMap((p) => p.consumers.map((c) => ({ file: normpath(c.file), symbol: c.symbol })))).files;
   const efferent = new Set(depends.map((d) => normpath(d.file))).size;
 
   const contract: ModuleContract = { shape: "contract", module: moduleFile, provides, unusedExports, depends, afferent, efferent };
