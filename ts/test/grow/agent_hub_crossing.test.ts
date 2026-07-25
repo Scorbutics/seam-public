@@ -1,9 +1,11 @@
-// HUB-KEY CROSSINGS + BUDGET PRIORITY — "the render must spend its budget on what answers the question",
-// measured on cal.com's availability trace: 190 of 358 rendered lines were `sharing a DB table with …`
-// co-accesses of UBIQUITOUS tables (`user`, `team`, `eventType` — read in 60-142 files), while the ## Mechanism
-// — the actual answer to a "trace the flow" question — stopped at step 34 of 84. A NARROW shared key must NOT be
-// damped by the same rule: it is the link a text search structurally cannot follow, and is the highest-value
-// thing this render produces.
+// HUB-KEY CROSSINGS + INTENT-RANKED MECHANISM — the two halves of "the render must spend its budget on what
+// answers the question", both regressions measured on cal.com's availability trace:
+//  (a) 190 of 358 rendered lines were `sharing a DB table with …` co-accesses of UBIQUITOUS tables (`user`,
+//      `team`, `eventType` — read in 60-142 files), while the ## Mechanism — the actual answer to a "trace the
+//      flow" question — stopped at step 34 of 84. A NARROW shared key must NOT be damped by the same rule: it is
+//      the link a text search structurally cannot follow, and is the highest-value thing this render produces.
+//  (b) the two steps that ARE the busy-times leg sat at pre-order 56/57 of 81 and fell inside the truncated tail
+//      at every budget an agent actually uses, because the cap kept the FIRST N steps, not the most relevant N.
 // renderAgent is a PURE function of the emitted model (zero LLM, no repo, no tree-sitter), so — exactly as
 // agent_render.test.ts and agent_subject_fold.test.ts do — this is tested against a hand-crafted model. Hermetic
 // and fully deterministic everywhere, including offline (nothing to guard on).
@@ -114,7 +116,21 @@ describe("agent render — ubiquitous-key co-access is folded, narrow keys and t
     expect((out.match(/^ +adminOp\d \(/gm) ?? []).length).toBe(HUB_CROSSINGS);
   });
 
-  test("deterministic: the same model + budget renders byte-identically, twice", () => {
+  test("(b) under a budget that crops the mechanism, the DEEP intent-relevant step is ranked in — not the pre-order head", () => {
+    const out = renderAgent(makeModel(), { tokenBudget: 400, intent: INTENT });   // → the 6-step floor cap
+    const mech = out.slice(out.indexOf("## Mechanism"), out.indexOf("## Mechanism") + out.slice(out.indexOf("## Mechanism")).indexOf("\n\n"));
+    // pre-order 13 and 14 of 14, and the two most relevant → both survive the cap
+    expect(mech).toContain("quoteShipmentRate (");
+    expect(mech).toContain("computeQuote (");
+    // …while the low-relevance pre-order HEAD, which position alone would have kept, does not
+    expect(mech).not.toContain("step1 (");
+    expect(mech).not.toContain("step2 (");
+    // numbering stays CALL ORDER (so a gap is visibly a cropped step), and the crop is stated with the recipe
+    expect(mech).toMatch(/\n {2}14\. quoteShipmentRate /);
+    expect(mech).toMatch(/\(\+8 more step\(s\) — the shown steps are the most intent-relevant ones/);
+  });
+
+  test("(b) deterministic: the same model + budget renders byte-identically, twice", () => {
     const a = renderAgent(makeModel(), { tokenBudget: 400, intent: INTENT });
     const b = renderAgent(makeModel(), { tokenBudget: 400, intent: INTENT });
     expect(a).toBe(b);

@@ -638,12 +638,43 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`,
       ...renderCapped(_entry.rayList, IN_N, (r) => _entry.entryRow(r), "way(s) in")];
   };
+  // WHICH steps survive the cap — INTENT-RANKED, at RENDER time only (the grow stays intent-free: this reorders
+  // nothing in the model, it only chooses what fits). Pre-order POSITION is not relevance: on cal.com's
+  // availability trace the two steps that ARE the busy-times leg the question asks for
+  // (`_getBusyTimesFromLimitsForUsers`, `_getBusyTimesFromTeamLimitsForUsers`) sit at pre-order 56/57 of 81 and so
+  // fell inside the truncated tail at every budget an agent actually uses — while `getHolidayEmoji` and
+  // `stringToDayjs` were printed in full. A grader gave that round to plain text search.
+  // The score is the DETERMINISTIC intent-relevance the model already carries (grow/intent_rank.ts: cosine of the
+  // def embedding against the intent — cached, offline, no LLM call), read per NODE and falling back to the
+  // node's SEAM. A step with NO score is UNKNOWN, not irrelevant, so it sits at the median (neither promoted nor
+  // demoted). Ties — and the unscored — break on the original pre-order index, so the whole selection is stable:
+  // same model + same budget ⇒ same steps. With no intent and no embeddings NOTHING is scored, the median rule
+  // makes every step equal, and the tie-break reproduces the old head-of-list crop byte for byte.
+  const _nodeRel = new Map<string, number>(), _seamRel = new Map<string, number>();
+  for (const s of seams) for (const h of (s.hunks ?? [])) {
+    const id = String((h as any).id); if (id === "undefined") continue;
+    const hr = (h as any).relevance, sr = (s as any).relevance;
+    if (typeof hr === "number" && !_nodeRel.has(id)) _nodeRel.set(id, hr);
+    if (typeof sr === "number" && !_seamRel.has(id)) _seamRel.set(id, sr);
+  }
+  const _stepRel = (id: string): number | undefined => _nodeRel.get(id) ?? _seamRel.get(id);
+  const rankSteps = <T extends { id: string }>(steps: T[], cap: number): T[] => {
+    if (steps.length <= cap) return steps;
+    const scores = steps.map((p) => _stepRel(p.id)).filter((x): x is number => typeof x === "number").sort((a, b) => a - b);
+    if (!scores.length) return steps.slice(0, cap);                       // no signal at all → the pre-order head, as before
+    const mid = scores.length % 2 ? scores[(scores.length - 1) / 2] : (scores[scores.length / 2 - 1] + scores[scores.length / 2]) / 2;
+    const pos = new Map(steps.map((p, i) => [p.id, i]));
+    const keep = new Set([...steps]
+      .sort((a, b) => ((_stepRel(b.id) ?? mid) - (_stepRel(a.id) ?? mid)) || (pos.get(a.id)! - pos.get(b.id)!))
+      .slice(0, cap).map((p) => p.id));
+    return steps.filter((p) => keep.has(p.id));                            // …rendered back in CALL ORDER
+  };
   const pipelineSection = (mechCap: number): string[] => {
     if (!showPipeline) return [];
     // Numbered by the step's position in the FULL call order (not in the shown subset), so a gap in the numbering
     // is the honest, readable signal that steps between them were cropped — never a silently renumbered sequence.
     const numbered = pipeline.map((p, i) => ({ ...p, n: i + 1 }));
-    const shown = numbered.slice(0, mechCap);
+    const shown = rankSteps(numbered, mechCap);
     const cropped = numbered.length - shown.length;
     return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
       ...renderCapped(shown, mechCap, (p) => {
@@ -655,7 +686,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         // the anchor's file when the caller has none — depth-1 output is unchanged.
         const callerBase = (p.caller ? fileOfId.get(String(p.caller)) : undefined)?.split("/").pop() ?? _anchorFileBase;
         return `  ${p.n}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`;
-      }, "step(s)", cropped, "numbering is call order, so a gap = a cropped step — raise --token-budget for the rest")];
+      }, "step(s)", cropped, "the shown steps are the most intent-relevant ones; numbering is call order, so a gap = a cropped step — raise --token-budget for the rest")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
   // after the spine (not in the region) so the shared-key link a grep can't follow is PROMINENT, per the ask.
