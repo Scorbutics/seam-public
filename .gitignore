@@ -40,3 +40,5 @@ ts/eval/_anchor_runs/
 .seam/
 mcp/dist/
 mcp/node_modules/
+ts/node_modules
+mcp/node_modules
