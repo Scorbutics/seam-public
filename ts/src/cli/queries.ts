@@ -9,7 +9,7 @@
 import { writeFileSync } from "node:fs";
 import { basename } from "node:path";
 import { emit } from "../core/progress.js";
-import { err, stamp } from "./util.js";
+import { err, snippetReaderOf, stamp } from "./util.js";
 import { type Args } from "./args.js";
 // THE line contract (see grow/project_set.ts): every line the scan/coupling floor produces is 0-BASED; a line
 // that will be RENDERED as `file:line` is 1-BASED. The writers/coupling shapes below project coupling-floor
@@ -43,7 +43,7 @@ export async function runAsk(a: Args): Promise<number> {
       : a.format === "waves" ? lc.renderWaves            // flow → wave view (flood order)
       : a.format === "scenarios" ? lc.renderScenarios    // flow → per-scenario sequence diagrams
       : lc.renderLlmContext;                             // flow → the region renderer
-    process.stdout.write(r(model) + "\n");
+    process.stdout.write(r(model, await snippetReaderOf(a)) + "\n");
   }
   if (a.emitSeams) {
     model.routedShape = res.shape; model.routedReason = res.reason;
@@ -124,7 +124,7 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
-  if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model, await snippetReaderOf(a)) + "\n");
   else {
     const resolved = set.members.filter((m) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
@@ -187,7 +187,7 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
   const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
-  if (a.format === "llm-context") process.stdout.write(renderDependencySet(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderDependencySet(model, await snippetReaderOf(a)) + "\n");
   else {
     const resolved = set.members.filter((m) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
@@ -236,7 +236,7 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   if (!readTables.length) {
     const model: any = { mode: "codebase", shape: "writers", anchor, members: [], unresolved: [],
       resolutionQuality: "FULL", tables: [], noStructure: true, reason: "none" };
-    if (a.format === "llm-context") process.stdout.write(renderWritersSet(model) + "\n");
+    if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
     else process.stdout.write(`Writers of what '${anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
     return 0;
   }
@@ -284,7 +284,7 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   for (const [t, s] of readerCols) if (s.size) filterColumns[t] = [...s].sort();
   const model: any = { mode: "codebase", shape: "writers", anchor, members, unresolved: [], resolutionQuality: "FULL",
     tables: readTables, columnGrain: colGrain, filterColumns, ...(members.length ? {} : { noStructure: true, reason: "opaque" }) };
-  if (a.format === "llm-context") process.stdout.write(renderWritersSet(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
   else process.stdout.write(`Writers of ${readTables.map((t) => `"${t}"`).join(", ")} (read by ${anchor.symbol}): ${members.length} write site(s).\n`);
   if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
   return 0;
@@ -324,7 +324,7 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
   const anchor = { symbol: a.symbol ?? basename(a.anchorFile!), file: a.anchorFile! };
   if (!own.size) {
     const model: any = { mode: "codebase", shape: "coupling", anchor, keys: [], noStructure: true, reason: "none" };
-    if (a.format === "llm-context") process.stdout.write(renderCoupling(model) + "\n");
+    if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
     else process.stdout.write(`Coupling of '${anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
     return 0;
   }
@@ -361,7 +361,7 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
   const total = keys.reduce((n, k) => n + k.sides.length, 0);
   const model: any = { mode: "codebase", shape: "coupling", anchor, keys, total,
     ...(total ? {} : { noStructure: true, reason: "opaque" }) };
-  if (a.format === "llm-context") process.stdout.write(renderCoupling(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
   else process.stdout.write(`Coupling of '${anchor.symbol}': ${keys.length} shared key(s), ${total} counterpart site(s).\n`);
   if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
   return 0;
@@ -379,7 +379,7 @@ export async function runRefactorFacts(a: Args): Promise<number> {
   catch (e) { err(`refactor facts failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...rf };
 
-  if (a.format === "llm-context") process.stdout.write(renderRefactorFacts(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderRefactorFacts(model, await snippetReaderOf(a)) + "\n");
   else
     process.stdout.write(`Refactor facts for '${rf.anchor.symbol}': impact ${rf.impact.total} across ${rf.impact.fileCount} file(s)`
       + `${rf.impact.gaps.length ? ` (${rf.impact.gaps.length} opaque gap(s))` : ""}, ${rf.dependencies.members.length} dependency(ies), `
@@ -414,7 +414,7 @@ export async function runImpact(a: Args): Promise<number> {
   catch (e) { err(`impact analysis failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...im };
 
-  if (a.format === "llm-context") process.stdout.write(renderImpact(model) + "\n");
+  if (a.format === "llm-context") process.stdout.write(renderImpact(model, await snippetReaderOf(a)) + "\n");
   else if (im.noStructure)
     process.stdout.write(`Impact of '${im.anchor.symbol}': isolated — no resolved consumers (${im.reason})${im.gaps.length ? `, ${im.gaps.length} opaque caller(s) to grep` : ""}.\n`);
   else

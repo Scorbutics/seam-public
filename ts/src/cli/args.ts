@@ -24,6 +24,10 @@ export interface Args {
   query?: string; recall?: string; toSymbol?: string; toFile?: string; maxHops?: number; ask?: string;
   autoRoute?: boolean;   // --auto-route: on an --auto --intent grow, first route the intent (route.ts) — if it's a NON-flow shape (blast-radius/find-usages/…), answer it as that --query shape instead of a noFlow flow grow. The agent entry (grow_intent) sets it.
   reviewImpact?: boolean; triage?: boolean;
+  // --snippets[=N] / --snippets N: embed the cited SOURCE LINE + N lines of context under each citation
+  // (shape member lists, and the region render's ## Mechanism steps). OPT-IN — undefined = off, which is the
+  // default: --skeleton's whole premise is ~1/3 the tokens, so this may never be spent implicitly.
+  snippets?: number;
   warm?: boolean; warmTop?: number;   // --warm: pre-grow the top-N highest-fan-in hub files to populate the per-node shards (footprint-v1 / coupling-delta-v1), so a later FIRST query on a covered region is served warm. --warm-top N caps the hub set (default 40).
 }
 
@@ -39,15 +43,21 @@ export function resolveEngines(a: Args): { cluster: string; roles: string; wirin
 
 export function parseArgs(argv: string[]): Args {
   const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, includeTests: false };
+  const SNIPPET_CTX = 2;   // default context lines each side of the cited line — small on purpose (5 lines/citation)
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
     const next = () => argv[++i];
+    // `--snippets=N` — the only `=`-form flag, handled here rather than reshaping the whole switch's arity rules.
+    if (v.startsWith("--snippets=")) { const n = parseInt(v.slice("--snippets=".length), 10); a.snippets = Number.isFinite(n) && n >= 0 ? n : SNIPPET_CTX; continue; }
     switch (v) {
       case "--file": a.file = next(); break;
       case "--git": a.git = next(); break;
       case "--submodules": a.submodules = true; break;   // also include each git submodule's diff (paths prefixed by the submodule dir)
       case "--from-classified": a.fromClassified = next(); break;
       case "--repo": a.repo = next(); break;
+      // --snippets [N]: bare = SNIPPET_CTX lines of context; a following BARE INTEGER is consumed as N (a flag
+      // or a positional never is, so `--snippets --format agent` still parses).
+      case "--snippets": { const n = argv[i + 1]; a.snippets = /^\d+$/.test(n ?? "") ? parseInt(argv[++i], 10) : SNIPPET_CTX; break; }
       case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
       case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
       case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | waves | scenarios | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.

@@ -13,3 +13,13 @@ export function stamp<T extends Record<string, any>>(model: T): T {
   if (led.used.length || led.learned.length) (model as any).adapters = led;
   return stampSeamModel(model);
 }
+
+// The `--snippets[=N]` reader (render/snippets.ts) — built ONCE per run from the repo root, or `undefined` when
+// the flag was not given (the default), which is what makes every render byte-identical to the pre-flag output.
+// One factory shared by the --query shape handlers and the codebase view renderers: two builders would be two
+// context defaults to keep in sync.
+export async function snippetReaderOf(a: { repo: string; snippets?: number }) {
+  if (a.snippets === undefined) return undefined;
+  const { makeSnippetReader } = await import("../codebase/render/snippets.js");
+  return makeSnippetReader(a.repo, a.snippets);
+}

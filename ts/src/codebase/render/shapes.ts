@@ -8,6 +8,8 @@
 // Honest about the floor: resolved members are the verified answer; suggested are leads; the unresolved
 // bucket is "grep these"; noStructure routes the asker away entirely. The two public renderers below fix
 // the direction-specific wording. See grow/project_set.ts.
+import { type SnippetReader } from "./snippets.js";
+
 interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
 
 // CITATION — `file:line`, but NEVER a fabricated line. Every model this module renders carries 1-BASED lines
@@ -25,6 +27,15 @@ export const at = (file: string, line: number | null | undefined): string => (li
 // with `at` is the point — one place decides what "no grounded line" looks like.
 const atLine = (line: number | null | undefined): string => (line ? ` (:${line})` : "");
 
+// SNIPPET BLOCK — the cited source text under a member line (opt-in `--snippets[=N]`; see render/snippets.ts).
+// Rides the SAME citation the line above it printed (`at`/`atLine`, both fed by project_set's 1-based `to1`) —
+// there is no second citation path, so a snippet can never disagree with the `file:line` it sits under. No
+// reader (the default) or no grounded line ⇒ nothing at all.
+const snip = (r: SnippetReader | undefined, file: string, line: number | null | undefined, indent?: string): string => {
+  const ls = r ? r(file, line, indent) : [];
+  return ls.length ? "\n" + ls.join("\n") : "";
+};
+
 // COUPLING TRUNCATION note (Seam's honesty contract) — the targeted bridge walks a key's candidate files in a
 // TOTAL order and stops at READER_CAP complements (or the run's scan budget). Whenever it stopped before the
 // list was exhausted the answer is a lower bound, so SAY so per key, with the grep that completes it — never
@@ -40,7 +51,7 @@ function crossStackTruncationLines(truncs: any[] | undefined): string[] {
   return out;
 }
 
-function renderEdgeSet(model: any, L: EdgeSetLabels): string {
+function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string {
   const members: any[] = model.members ?? [];
   const unresolved: any[] = model.unresolved ?? [];
   const recalled: any[] = model.recalled ?? [];
@@ -84,7 +95,7 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
   // provenance (when shown) rides the member's OWN line; the DI-binding block comes UNDER it.
   const member = (m: any, prov?: string): string =>
     `- ${m.symbol} (${at(m.file, m.line)})  [${m.kind}, ${m.edgeKind}]${m.enclosing ? `  in ${m.enclosing}` : ""}`
-    + (prov ? `  {${prov}}` : "") + bindLine(m);
+    + (prov ? `  {${prov}}` : "") + bindLine(m) + snip(sr, m.file, m.line);
   if (resolved.length) {
     out.push(`## Resolved ${L.nounPl} (verified edges)`);
     for (const m of resolved) out.push(member(m, m.provenance));
@@ -126,7 +137,7 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
 // WRITERS (`shape:"writers"`) — REVERSE data-coupling: every repo-wide write site of the DB table(s) the anchor
 // READS. Not an edge-set projection (no call/import edge links a shared-table writer to the reader), so it renders
 // its own block, grouped implicitly by table via the per-member `writes "<table>"` tag. Honest about its grain.
-export function renderWritersSet(model: any): string {
+export function renderWritersSet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "writers") return "(not a writers-set model)";
   const members: any[] = model.members ?? [];
   const tables: string[] = model.tables ?? [];
@@ -149,7 +160,8 @@ export function renderWritersSet(model: any): string {
     : `## Write sites (repo-wide, deterministic — every method that writes the table(s) the anchor reads)`);
   for (const m of members) {
     const cols = (m.columns?.length) ? `.{${m.columns.join(",")}}` : (colGrain && !m.colVerified ? " col?" : "");
-    out.push(`- ${m.symbol} (${at(m.file, m.line)})  [${m.kind}, writes "${m.table}"${cols}]  {${m.provenance}}`);
+    out.push(`- ${m.symbol} (${at(m.file, m.line)})  [${m.kind}, writes "${m.table}"${cols}]  {${m.provenance}}`
+      + snip(sr, m.file, m.line));
   }
   out.push("", "## How to use",
     "These are the resolved writers of the shared state this anchor reads — the coupling runs through these table",
@@ -165,7 +177,7 @@ export function renderWritersSet(model: any): string {
 // COUPLING (`shape:"coupling"`) — the anchor's DATA BOUNDARY: every shared key it reads/writes, and per key the
 // counterpart sites on the other side. The moat's front door: these pairs share no import, no call, and often no
 // literal token — grep and RAG structurally cannot link them; only the resolved key can.
-export function renderCoupling(model: any): string {
+export function renderCoupling(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "coupling") return "(not a coupling model)";
   const keys: any[] = model.keys ?? [];
   const out: string[] = [];
@@ -182,7 +194,8 @@ export function renderCoupling(model: any): string {
     if (!k.sides.length) out.push(`  (no counterpart — the anchor is the only side of this key in the repo)`);
     for (const s of k.sides) {
       const cols = s.columns?.length ? `.{${s.columns.join(",")}}` : "";   // column grain (subsumes the writers shape)
-      out.push(`  ${s.role === "writes" ? "←" : "→"} ${s.symbol} (${at(s.file, s.line)})  [${s.kind}, ${s.role} ${k.value}${cols}]`);
+      out.push(`  ${s.role === "writes" ? "←" : "→"} ${s.symbol} (${at(s.file, s.line)})  [${s.kind}, ${s.role} ${k.value}${cols}]`
+        + snip(sr, s.file, s.line, "        "));
     }
     out.push("");
   }
@@ -196,23 +209,23 @@ export function renderCoupling(model: any): string {
 }
 
 // CONSUMERS (`shape:"set"`) — who calls/uses the anchor (in-edges).
-export function renderConsumerSet(model: any): string {
+export function renderConsumerSet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "set") return "(not a consumer-set model)";
   return renderEdgeSet(model, { title: "Consumers of", nounPl: "callers",
-    noneText: "Nothing in the repo calls this symbol — an entry point, dead code, or dispatched-only." });
+    noneText: "Nothing in the repo calls this symbol — an entry point, dead code, or dispatched-only." }, sr);
 }
 
 // DEPENDENCIES (`shape:"deps"`) — what the anchor calls/uses (out-edges).
-export function renderDependencySet(model: any): string {
+export function renderDependencySet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "deps") return "(not a dependency-set model)";
   return renderEdgeSet(model, { title: "Dependencies of", nounPl: "dependencies",
-    noneText: "This symbol uses nothing resolvable — a leaf (no outgoing dependencies)." });
+    noneText: "This symbol uses nothing resolvable — a leaf (no outgoing dependencies)." }, sr);
 }
 
 // REFACTOR-FACTS bundle — "how to refactor X": the FACTS (impact + dependencies + contract) stitched
 // together so a planner has the whole structural picture. The PLAN itself is NOT here — it's a judgement
 // for the model/human to make over these facts. See grow/refactor_facts.ts.
-export function renderRefactorFacts(model: any): string {
+export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "refactor") return "(not a refactor-facts model)";
   const sym = model.anchor?.symbol ?? "?";
   const im = model.impact ?? {}, dep = model.dependencies ?? {}, ct = model.contract ?? {};
@@ -222,8 +235,8 @@ export function renderRefactorFacts(model: any): string {
      `dependencies: ${(dep.members ?? []).length}`,
      `contract: ${(ct.provides ?? []).length} provided, ${(ct.unusedExports ?? []).length} unused`].join(" | "),
     "", "These are the FACTS to plan a change to " + sym + " — the change PLAN over them is yours to make.", "");
-  out.push("─".repeat(4) + " IMPACT (what breaks if you change it) " + "─".repeat(4), renderImpact(im), "");
-  out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep), "");
+  out.push("─".repeat(4) + " IMPACT (what breaks if you change it) " + "─".repeat(4), renderImpact(im, sr), "");
+  out.push("─".repeat(4) + " DEPENDENCIES (what it uses) " + "─".repeat(4), renderDependencySet(dep, sr), "");
   out.push("─".repeat(4) + " CONTRACT (its boundary) " + "─".repeat(4), renderContract(ct));
   return out.join("\n");
 }
@@ -231,7 +244,7 @@ export function renderRefactorFacts(model: any): string {
 // IMPACT projection — the transitive blast radius: the affected symbols (hop-sorted), a file rollup, the
 // SURFACE (outermost callers — where the change ripples to), and the GAPS (opaque callers where the view
 // is incomplete). The refactoring safety net. See grow/impact.ts.
-export function renderImpact(model: any): string {
+export function renderImpact(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "impact") return "(not an impact model)";
   const sym = model.anchor?.symbol ?? "?";
   const out: string[] = [];
@@ -266,7 +279,7 @@ export function renderImpact(model: any): string {
     out.push(`- ${f.file}  (${f.count})`);
     const syms = (model.impacted ?? []).filter((x: any) => x.file === f.file).sort(byHop);
     const shown = PER_FILE ? syms.slice(0, PER_FILE) : syms;
-    for (const m of shown) out.push(`    ${m.symbol}${atLine(m.line)} [${m.kind}, hop ${m.hop}]`);
+    for (const m of shown) out.push(`    ${m.symbol}${atLine(m.line)} [${m.kind}, hop ${m.hop}]` + snip(sr, f.file, m.line, "        "));
     if (syms.length > shown.length) out.push(`    … +${syms.length - shown.length} more in this file (nearest hops shown)`);
   }
   if (files.length > shownFiles.length) {
@@ -280,7 +293,7 @@ export function renderImpact(model: any): string {
     out.push("## Surface (outermost callers — where the change ripples to; re-verify here)");
     const surf: any[] = model.surface;
     const shownSurf = SURFACE ? surf.slice(0, SURFACE) : surf;
-    for (const m of shownSurf) out.push(`- ${m.symbol} (${at(m.file, m.line)})`);
+    for (const m of shownSurf) out.push(`- ${m.symbol} (${at(m.file, m.line)})` + snip(sr, m.file, m.line));
     if (surf.length > shownSurf.length) out.push(`- … +${surf.length - shownSurf.length} more outermost caller(s) — elided from this render`);
     out.push("");
   }

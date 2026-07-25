@@ -39,7 +39,7 @@ import { emit, emitTimingSummary, timingOn, addStage, resetStages, stageSummary 
 import { readFileSync } from "node:fs";
 
 import { type Args, parseArgs, parseCenters, resolveEngines } from "./args.js";
-import { err, stamp } from "./util.js";
+import { err, snippetReaderOf, stamp } from "./util.js";
 import { runAsk, runConsumerSet, runDependencySet, runWritersSet, runCouplingSet, runRefactorFacts, runImpact, runCompare, runNeighborhood, runContract, runReaches } from "./queries.js";
 
 // The llm_context view-renderer table — the one map both the codebase-mode format switch (runCodebase) and
@@ -54,7 +54,7 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
   // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
   // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
-  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters }); },
+  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters, snippet: await snippetReaderOf(a) }); },
 };
 
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —

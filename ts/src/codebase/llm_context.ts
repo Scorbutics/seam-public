@@ -21,6 +21,7 @@ export { renderConsumerSet, renderDependencySet, renderWritersSet, renderCouplin
 // The seam model this family renders is 1-BASED at its source (core/lines.ts), so the value renders as-is and a
 // missing/unlocated one renders as a bare path — never the `:0` these sites used to print.
 import { at } from "./render/shapes.js";
+import { type SnippetReader } from "./render/snippets.js";
 
 // The region/wave/scenario render family (renderLlmContext/renderWaves/renderScenarios + their shared
 // _floodParents helper) moved to render/region_views.ts — self-contained aside from the vocab/medium_registry
@@ -33,7 +34,7 @@ export { renderLlmContext, renderWaves, renderScenarios } from "./render/region_
 // the spine, the collapsed hubs, the decision-point frontier, the honest gaps — is EXEMPT from budget cropping;
 // only the off-path/supporting region lines (then hub sample-consumer detail) degrade, and WHAT was cropped is
 // stated (I3). Reuses the same where/rolesOf/_WAVE_VERB vocabulary as the other views (one render language).
-export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[] } = {}): string {
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[]; snippet?: SnippetReader } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -670,14 +671,30 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
       .slice(0, cap).map((p) => p.id));
     return steps.filter((p) => keep.has(p.id));                            // …rendered back in CALL ORDER
   };
-  const pipelineSection = (mechCap: number): string[] => {
+  // SNIPPETS in the mechanism (opt-in `--snippets[=N]`) — the cited source text under each step, from the SAME
+  // `at(file, startOfId)` citation the step line prints (render/snippets.ts). BUDGET: snippets are a crop RUNG of
+  // their own, spent BEFORE any mechanism step is cropped (see the degrade ladder below) — a prior defect let a
+  // lower-value section print in full while the mechanism was cropped, and it lost a round. When the budget could
+  // not hold them the section SAYS so instead of silently dropping to the bare lines (the honesty contract).
+  const pipelineSection = (mechCap: number, withSnippets: boolean, overBudget: boolean): string[] => {
     if (!showPipeline) return [];
+    const sr = withSnippets ? opts.snippet : undefined;
+    const snipNote = !opts.snippet ? []
+      : !withSnippets
+        ? ["  (snippets requested but DROPPED — they did not fit the token budget; the mechanism steps are kept in"
+          + " full ahead of them. Raise --token-budget to see the cited source text.)"]
+        : overBudget
+          ? [`  (snippets KEPT although this render EXCEEDS --token-budget ${budget}: every other section is already`
+            + " at its most-cropped rung and the mechanism cap is the same with or without them, so withholding the"
+            + " source text you asked for would not have bought the fit. Drop --snippets, or raise --token-budget.)"]
+          : [];
     // Numbered by the step's position in the FULL call order (not in the shown subset), so a gap in the numbering
     // is the honest, readable signal that steps between them were cropped — never a silently renumbered sequence.
     const numbered = pipeline.map((p, i) => ({ ...p, n: i + 1 }));
     const shown = rankSteps(numbered, mechCap);
     const cropped = numbered.length - shown.length;
     return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
+      ...snipNote,
       ...renderCapped(shown, mechCap, (p) => {
         const f = fileOfId.get(p.id), where2 = f ? ` (${at(f, startOfId.get(p.id))})` : "";
         const dyn = _dynDispatch.get(p.id);
@@ -686,7 +703,9 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
         // `getBusyCalendarTimes … [called at util.ts:193]`, when the call is at getBusyTimes.ts:193). Fall back to
         // the anchor's file when the caller has none — depth-1 output is unchanged.
         const callerBase = (p.caller ? fileOfId.get(String(p.caller)) : undefined)?.split("/").pop() ?? _anchorFileBase;
-        return `  ${p.n}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`;
+        const sn = (sr && f) ? sr(f, startOfId.get(p.id), "       ") : [];
+        return `  ${p.n}. ${label.get(p.id) ?? "?"}${where2}${p.sink ? ` ──▶ ${p.sink}` : ""}${dyn ? ` ⟂ ${dyn}` : ""}${callerBase && p.line ? `   [called at ${callerBase}:${p.line}]` : ""}`
+          + (sn.length ? "\n" + sn.join("\n") : "");
       }, "step(s)", cropped, "the shown steps are the most intent-relevant ones; numbering is call order, so a gap = a cropped step — raise --token-budget for the rest")];
   };
   // CROSS-STACK — the promoted other-side-of-the-boundary code seams, deduped by symbol + capped. Placed right
@@ -845,16 +864,24 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // while the mechanism stopped at step 34 of 84, which is the shape of output a plain text search out-scored.
   // It also keeps the hub-crossing fold HONEST at the whole-render level: folding a hundred `user`/`team`
   // co-accesses must give the budget back to the flow, not simply let the region tail expand to refill it.
-  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, mechCap: number): string[] =>
-    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+  const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean, snippets: boolean, mechCap: number, overBudget = false): string[] =>
+    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(mechCap, snippets, overBudget), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   // MECH_FULL = the whole mechanism; the final rung falls back to the generic EXEMPT_N allowance, where the
   // intent-relevance ranking above decides WHICH steps survive.
   const MECH_FULL = pipeline.length;
-  const steps: [boolean, boolean, boolean, number][] = [
-    [false, false, false, MECH_FULL], [true, false, false, MECH_FULL], [true, true, false, MECH_FULL],
-    [true, true, true, MECH_FULL], [true, true, true, EXEMPT_N]];
-  let out: string[] = [];
-  for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
+  // The SNIPPET rung sits between "everything else is already cropped" and "crop the mechanism": opt-in source
+  // text is worth less than a step that would otherwise disappear, so it yields FIRST and the step count is the
+  // last thing to go — the same priority that put the mechanism last among the sections.
+  const steps: [boolean, boolean, boolean, boolean, number][] = [
+    [false, false, false, true, MECH_FULL], [true, false, false, true, MECH_FULL], [true, true, false, true, MECH_FULL],
+    [true, true, true, true, MECH_FULL], [true, true, true, false, MECH_FULL], [true, true, true, false, EXEMPT_N]];
+  let out: string[] = [], fitted = false;
+  for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) { fitted = true; break; } }   // first fitting crop level, else the most-cropped
+  // NOTHING fits: the sections that are EXEMPT from cropping already exceed the budget on their own. At that
+  // point dropping the caller's EXPLICITLY requested snippets bought no fit — the render overruns either way and
+  // the mechanism cap is EXEMPT_N in both — so withholding them is pure loss, not a saving. Give the caller what
+  // they asked for and let the section SAY the render is over budget (crop stated, never silent).
+  if (!fitted && opts.snippet) out = assemble(true, true, true, true, EXEMPT_N, true);
   return out.join("\n");
 }
 
