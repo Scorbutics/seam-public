@@ -207,7 +207,17 @@ export function grepFiles(repo: string, value: string): string[] {
   return out.sort();
 }
 
-const _TARGETED_CAND_CAP = 200;   // bound the candidate scan for a hot value (a common table name); the relevance floor dampens the rest
+// COST is bounded by the SCAN BUDGET below, never by a cap on the candidate LIST. The old `_TARGETED_CAND_CAP
+// = 200` capped the INPUT (the first 200 grep hits) when its purpose was capping WORK — so on a hot key the
+// answer was decided by where a complement happened to fall in path order, not by what exists. Measured on
+// cal.com `db-table booking` (1147 candidates, 26 real complementary writers): only 2 of the 26 sit inside the
+// first 200, so the capped pipeline stably reported 2 of the READER_CAP=6 it is allowed to materialise. The
+// 6th complement sits at candidate #462 — i.e. the READER_CAP break ALREADY bounds the walk on any key that
+// has complements; the input cap only ever truncated the answer. What genuinely needs a bound is a key with
+// FEW complements over MANY candidates (the loop then walks the whole list), so bound THAT directly: a
+// per-run budget of candidate FILE SCANS, consumed in the grep order (which is total — see grepFiles), so the
+// stopping point is a pure function of the repo. Exhausting it is TRUNCATION and is reported (see
+// `ctx.couplingTruncations` → the renderer's cross-stack note), never a silent drop.
 
 // The OTHER SIDE of each coupling the anchor SYMBOL touches — resolved by targeted value-grep, not a full
 // index. `available()`-gated (needs tree-sitter for the span + complement unit). Degrades to [] on any miss.
@@ -256,15 +266,26 @@ export async function couplingOtherSides(
     // excludes tests everywhere else by default; this path (grep → candidate scan) was the last one that didn't, so
     // an intent's subject write-set got flooded by integration-test writers (cal.com `booking`) and the real
     // producers were crowded out. Structural (path shape), matches the engine-wide default test exclusion.
-    // `grepFiles` is TOTALLY ORDERED (see there), so this cap — and the READER_CAP break below — consume a fixed
-    // prefix of a fixed set: the crossing this resolves is the same on every run.
-    const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f) && !isTestFile(f)).slice(0, _TARGETED_CAND_CAP);
-    let materialised = 0;
+    // `grepFiles` is TOTALLY ORDERED (see there), so the READER_CAP break and the scan budget below consume a
+    // fixed prefix of a fixed set: the crossing this resolves is the same on every run.
+    const candidates = grepFiles(repo, key.value).filter((f) => normpath(f) !== anchorNorm && scannableForKeys(f) && !isTestFile(f));
+    let materialised = 0, walked = 0;
     for (const cand of candidates) {
       if (materialised >= READER_CAP) break;
+      if (ctx.candidateScanBudget <= 0) break;   // budget exhausted → truncation, recorded below
+      walked++;
       let text: string; try { text = readFileSync(join(repo, cand), "utf-8"); } catch { continue; }
-      const candKeys: KeyHit[] = scan_file_keys(cand, text);
-      for (const m of matchers) for (const h of await runMatcher(m, cand, text)) candKeys.push(h);
+      // Per-FILE key scan, memoised on the ctx — the SAME cache the anchor scan uses above. An anchor carries
+      // several keys whose grep hits overlap heavily (cal.com `get.handler.ts`: 4578 candidate scans across 5
+      // keys but only 3140 DISTINCT files), and the bridge is called once per changed symbol, so without this
+      // the uncapped walk re-reads and re-parses the same files many times over.
+      let candKeys = ctx.fileKeyScan.get(cand);
+      if (!candKeys) {
+        candKeys = scan_file_keys(cand, text).slice();
+        for (const m of matchers) for (const h of await runMatcher(m, cand, text)) candKeys.push(h);
+        ctx.fileKeyScan.set(cand, candKeys);
+        ctx.candidateScanBudget--;   // only a FRESH scan costs; a cache hit is free (so the budget bounds WORK, not list length)
+      }
       const match = candKeys.find((h) => h.kind === key.kind && h.value === key.value && h.produces !== key.produces);   // the COMPLEMENTARY role on the same key
       if (!match) continue;
       const unit = await complement_unit(repo, cand, match.line);
@@ -275,6 +296,14 @@ export async function couplingOtherSides(
       const adapter = kindOf(key.kind);
       out.push({ kind: key.kind, value: key.value, file: cand, symbol: unit.symbol,
         edgeKind: match.produces ? adapter.produceEdge : adapter.consumeEdge, provenance: "RESOLVED_PARTIAL" });
+    }
+    // HONESTY — the walk stopped before the candidate list was exhausted, so the repo may hold more counterparts
+    // on this key than we report. Say so (the caller renders it as a cross-stack note) instead of presenting a
+    // truncated set as complete. Two distinct causes, both bounded and deterministic: READER_CAP (this key had
+    // MORE complements than we materialise) and the scan budget (we ran out of work allowance).
+    if (walked < candidates.length) {
+      const reason = materialised >= READER_CAP ? "reader-cap" : "scan-budget";
+      ctx.couplingTruncations.push({ kind: key.kind, value: key.value, scanned: walked, total: candidates.length, reason });
     }
   }
   return out;

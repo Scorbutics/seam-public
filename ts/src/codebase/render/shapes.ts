@@ -10,6 +10,21 @@
 // the direction-specific wording. See grow/project_set.ts.
 interface EdgeSetLabels { title: string; nounPl: string; noneText: string }
 
+// COUPLING TRUNCATION note (Seam's honesty contract) — the targeted bridge walks a key's candidate files in a
+// TOTAL order and stops at READER_CAP complements (or the run's scan budget). Whenever it stopped before the
+// list was exhausted the answer is a lower bound, so SAY so per key, with the grep that completes it — never
+// present a bounded set as the whole truth. Shared by the edge-set and impact renderers (same model field).
+function crossStackTruncationLines(truncs: any[] | undefined): string[] {
+  if (!truncs?.length) return [];
+  const out = [`## Cross-stack coupling is TRUNCATED (lower bound — more counterparts may exist)`];
+  for (const t of truncs)
+    out.push(`- ${t.kind} "${t.value}": scanned ${t.scanned} of ${t.total} candidate file(s)`
+      + ` (${t.reason === "reader-cap" ? "reader cap reached — this key has more counterparts than Seam materialises" : "run scan budget exhausted"})`
+      + `; grep -F "${t.value}" for the full set`);
+  out.push("");
+  return out;
+}
+
 function renderEdgeSet(model: any, L: EdgeSetLabels): string {
   const members: any[] = model.members ?? [];
   const unresolved: any[] = model.unresolved ?? [];
@@ -82,6 +97,7 @@ function renderEdgeSet(model: any, L: EdgeSetLabels): string {
     for (const c of crossStack) out.push(`- ${c.symbol} (${c.file})  [${c.edgeKind} · via ${c.via}]  {RESOLVED_PARTIAL}`);
     out.push("");
   }
+  out.push(...crossStackTruncationLines(model.crossStackTruncations));
   out.push("## How to use",
     `Resolved ${L.nounPl} are the verified set (correct where grep yields false positives from`,
     `comments/strings/same-name symbols). Suggested ${L.nounPl} are leads the resolver couldn't ground.`,
@@ -258,6 +274,7 @@ export function renderImpact(model: any): string {
     for (const c of model.crossStack) out.push(`- ${c.symbol} (${c.file})  [${c.edgeKind} · ${c.via}]`);
     out.push("");
   }
+  out.push(...crossStackTruncationLines(model.crossStackTruncations));
   if ((model.gaps ?? []).length) {
     out.push("## Gaps (opaque callers — the impact set may be INCOMPLETE here; grep these)");
     for (const g of model.gaps) out.push(`- ${g.mechanism} — ${g.evidence}`);

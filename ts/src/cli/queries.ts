@@ -59,8 +59,10 @@ export async function runAsk(a: Args): Promise<number> {
 // keeps the structure-only footprint cache warm, and surfaces the non-textual coupling grep/RAG can't find. ON by
 // default for consumers/dependencies; opt out with --no-data-coupling (a.dataCoupling=false). available()-gated → [].
 export interface CrossStackCrossing { symbol: string; file: string; edgeKind: string; via: string }
-async function couplingOverlay(a: Args, exclude: Set<string>): Promise<CrossStackCrossing[]> {
-  if (a.dataCoupling === false || !a.anchorFile || !a.symbol) return [];
+export interface CouplingTruncation { kind: string; value: string; scanned: number; total: number; reason: string }
+async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossStack: CrossStackCrossing[]; truncations: CouplingTruncation[] }> {
+  const none = { crossStack: [] as CrossStackCrossing[], truncations: [] as CouplingTruncation[] };
+  if (a.dataCoupling === false || !a.anchorFile || !a.symbol) return none;
   try {
     const { couplingOtherSides } = await import("../codebase/coupling/index.js");
     const { EngineCtx } = await import("../codebase/engine_ctx.js");
@@ -69,8 +71,9 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<CrossStac
     // deterministically after), else the deterministic FLOOR. Explicit --data-coupling llm/floor overrides; SEAM_COUPLING=floor
     // forces determinism. Mirrors the grow's auto→llm resolution (decompose.ts) so the overlay's recall matches a grow's.
     const llm = a.dataCouplingLlm || (a.dataCouplingAuto && process.env.SEAM_COUPLING !== "floor" && available(a.claudeBin));
+    const ctx = new EngineCtx();
     const sides = await couplingOtherSides(a.repo, a.anchorFile, a.symbol,
-      { llm, model: a.model, claudeBin: a.claudeBin }, new EngineCtx());
+      { llm, model: a.model, claudeBin: a.claudeBin }, ctx);
     const seen = new Set<string>();
     const out: CrossStackCrossing[] = [];
     for (const s of sides) {
@@ -80,8 +83,8 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<CrossStac
       out.push({ symbol: s.symbol, file: s.file, edgeKind: s.edgeKind, via: `${s.kind} ${s.value}` });
     }
     out.sort((x, y) => x.file.localeCompare(y.file) || x.symbol.localeCompare(y.symbol));
-    return out;
-  } catch { return []; }   // coupling unavailable (no tree-sitter) → the structural set is still complete
+    return { crossStack: out, truncations: ctx.couplingTruncations.slice() };
+  } catch { return none; }   // coupling unavailable (no tree-sitter) → the structural set is still complete
 }
 
 export async function runConsumerSet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
@@ -112,8 +115,8 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
     catch (e) { process.stderr.write(`name recall skipped: ${(e as Error).message}\n`); }
   }
   // CROSS-STACK MOAT — attach the anchor's shared-key readers/writers (the non-textual coupling), on by default.
-  const crossStack = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
-  const model: any = { mode: "codebase", ...set, crossStack };
+  const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
+  const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
   if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model) + "\n");
   else {
@@ -175,8 +178,8 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
     }
   }
   // CROSS-STACK MOAT — the anchor's data-coupling boundary (shared-key producers/readers it depends on), on by default.
-  const crossStack = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
-  const model: any = { mode: "codebase", ...set, crossStack };
+  const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
+  const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
   if (a.format === "llm-context") process.stdout.write(renderDependencySet(model) + "\n");
   else {

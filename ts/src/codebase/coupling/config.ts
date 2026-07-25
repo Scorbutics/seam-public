@@ -21,6 +21,13 @@ export const COUPLING = {
   // unaffected. Structural (degree), not a name match — tunable via env for big monorepos.
   hubFan: Number(process.env.SEAM_COUPLING_HUB_FAN ?? 16),          // fan-in above which a key is treated as an infra hub (distinct from the grow's SEAM_HUB_FAN)
   hubReaderCap: Number(process.env.SEAM_HUB_READER_CAP ?? 1),  // complements materialized for a hub key
+  // TARGETED bridge cost bound (couplingOtherSides): max DISTINCT candidate files key-scanned per run. Replaces
+  // the old per-key 200-candidate input cap, which bounded the INPUT (and so the ANSWER) instead of the cost.
+  // Sized from measurement, not a guess: on cal.com a candidate scan costs ~1.0ms (3140 distinct files in 3.16s)
+  // and the whole repo holds 7421 scannable files, so 4000 is a ~4s absolute worst case for a run in which EVERY
+  // key is a repo-wide hub with fewer complements than READER_CAP — while the real anchors measured stay far
+  // under it (getBusyTimes: 462 scans; the 5-key get.handler: 1334). $SEAM_CAND_SCAN_BUDGET.
+  candidateScanBudget: Number(process.env.SEAM_CAND_SCAN_BUDGET ?? 4000),
   nodeKeyCap: Number(process.env.SEAM_NODE_KEY_CAP ?? 16),  // index: max shared keys ONE node surfaces (caps a hub file emitting dozens of UI events — keeps the most specific; $SEAM_NODE_KEY_CAP)
   complementBudget: Number(process.env.SEAM_COMPLEMENT_BUDGET ?? 250), // grow-wide cap on materialized complement units (tree-sitter parses) — bounds a hub's data-coupling fan so a bad/central anchor can't run for ages; $SEAM_COMPLEMENT_BUDGET
   maxScanBytes: _maxScanBytes, // floor scan: skip files larger than this — OOM backstop, $SEAM_MAX_SCAN_BYTES, 0=off (default: scan all)

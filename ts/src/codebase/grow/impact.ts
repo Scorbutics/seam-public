@@ -14,6 +14,9 @@ export interface ImpactGap { mechanism: string; evidence: string }
 // A cross-stack blast-radius entry: the OTHER side of a shared key (table/route/event) the ANCHOR touches —
 // a reader of what the change writes (or vice versa). Not a call-graph consumer; a data-coupling crossing.
 export interface CrossStackImpact { symbol: string; file: string; edgeKind: string; via: string }
+// A shared key whose candidate walk stopped early (reader cap / scan budget) — surfaced so a truncated
+// cross-stack set is never presented as complete. See coupling/bridge.ts.
+export interface CouplingTruncation { kind: string; value: string; scanned: number; total: number; reason: string }
 
 export interface Impact {
   shape: "impact";
@@ -22,6 +25,7 @@ export interface Impact {
   files: ImpactFile[];          // rollup: affected file → count, descending
   surface: ImpactedSymbol[];    // outermost impacted (no further resolved consumer) — where the change ripples TO
   crossStack: CrossStackImpact[]; // shared-key readers/writers of the anchor's data boundary (one cached overlay)
+  crossStackTruncations: CouplingTruncation[]; // keys whose counterpart walk was bounded (honest lower bound)
   total: number;                // impacted symbols
   fileCount: number;            // distinct affected files
   gaps: ImpactGap[];            // opaque callers seen along the way — the impact set may be INCOMPLETE here
@@ -101,6 +105,7 @@ export async function projectImpact(
   // the count <0.1% at ~500s cost on a hub type) AND it disabled the per-file footprint cache. available()-gated
   // → [] when tree-sitter is absent. Opt out with couplingOverlay:false (e.g. --no-data-coupling).
   let crossStack: CrossStackImpact[] = [];
+  let crossStackTruncations: CouplingTruncation[] = [];
   if (opts.couplingOverlay !== false) {
     try {
       const { couplingOtherSides } = await import("../coupling/index.js");
@@ -116,6 +121,7 @@ export async function projectImpact(
         crossStack.push({ symbol: s.symbol, file: s.file, edgeKind: s.edgeKind, via: `${s.kind} ${s.value}` });
       }
       crossStack.sort((a, b) => a.file.localeCompare(b.file) || a.symbol.localeCompare(b.symbol));
+      crossStackTruncations = cctx.couplingTruncations.slice();
     } catch { /* coupling unavailable → keep [] (structural impact is still complete) */ }
   }
 
@@ -126,6 +132,7 @@ export async function projectImpact(
     files,
     surface,
     crossStack,
+    crossStackTruncations,
     total: members.length,
     fileCount: files.length,
     gaps,
