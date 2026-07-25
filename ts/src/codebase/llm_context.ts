@@ -11,6 +11,7 @@
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, WAVE_RANK as _WAVE_RANK, CROSS_SOURCE as _CROSS_SOURCE, CROSS_SINK as _CROSS_SINK, CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./render/medium_registry.js";
 import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf, buildNodeIndex } from "./render/vocab.js";
 import { buildDerivedIndex, computeSpine } from "./render/spine.js";
+import { buildEntrySurface, INVOKE_KINDS, type EntryRay } from "./render/entry_surface.js";
 export type { Hunk, Seam, Ranked };
 
 // The 8 structural-shape renderers (consumers/deps/refactor/impact/compare/neighborhood/contract/reach)
@@ -32,7 +33,7 @@ export { renderLlmContext, renderWaves, renderScenarios } from "./render/region_
 // the spine, the collapsed hubs, the decision-point frontier, the honest gaps — is EXEMPT from budget cropping;
 // only the off-path/supporting region lines (then hub sample-consumer detail) degrade, and WHAT was cropped is
 // stated (I3). Reuses the same where/rolesOf/_WAVE_VERB vocabulary as the other views (one render language).
-export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string } = {}): string {
+export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: string; centers?: { file: string; symbol: string }[] } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -97,6 +98,12 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // an on-path boundary even where its identifiers embed weakly (a low-tier db-table is still the outcome). Falls
   // back to the tier band ONLY when the flow reaches NO downstream boundary (a same-language call chain / policy
   // fan) — the honest "reaches no boundary" case then renders as region-by-shell (no fabricated spine).
+  // THE UPSTREAM HALF — who TRIGGERS this region, through which crossing (HTTP route / db table / queue). The
+  // SAME computation `renderConcern`'s "## In" section renders (render/entry_surface.ts), not a second one: the
+  // region render used to be DOWNSTREAM-ONLY ("## Mechanism"), so a "trace from X through to Y" question lost its
+  // X half and a plain-text search out-answered it. Seeded from the caller's --center cluster when given, else
+  // from the region ANCHOR (never a fan-in hub — the dev pointed AT the anchor).
+  const _entry = buildEntrySurface(model, seams, { centers: opts.centers, anchorId: String(model.anchor) });
   const _sp = computeSpine(model, String(model.anchor), seams, _idx);
   // Merge entry + down halves (computeSpine keeps them separate so a MULTI-mechanism caller — renderConcern's
   // "## Spines" — can discard the generic entryChain and splice in its own mechanism-scoped one instead; the
@@ -547,6 +554,23 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     const reg = String(b.evidence ?? "").match(/`([^`]+)`/)?.[1];
     _dynDispatch.set(String(b.node), reg ? `runtime dispatch (${reg})` : "runtime dispatch");
   }
+  // IN — the upstream entry surface. BUDGET: this section is EXEMPT from the degrade loop (like the spine and the
+  // mechanism — a caller must be able to trust it), but it is capped at HALF the exempt-section allowance so it can
+  // never crowd out the downstream mechanism steps, which keep the full EXEMPT_N: the entry surface is a FAN (a
+  // shared mechanism has dozens of ways in) whereas the mechanism is a PATH, and the path is what the question asks
+  // to trace. Whatever the cap drops is stated, never silently folded (the honesty contract). NO FABRICATION: only
+  // entries the resolver actually grounded; if the walk found none, that is what it says.
+  const inSection = (): string[] => {
+    if (!_entry) return [];
+    const IN_N = Math.max(4, Math.floor(EXEMPT_N / 2));
+    const head = "## In (what TRIGGERS this region — the upstream entry surface; entry ──crossing──▶ ●)";
+    if (!_entry.rayList.length)
+      return ["", head, "  (none grounded — nothing in this region calls into the anchor and no shared-key crossing reaches it:",
+        "   a framework/DI-mounted or top-level entry, or the entry is outside the grown region — widen with --max-nodes)"];
+    return ["", head,
+      `  deepen any: seam --grow-from <file>#<symbol>${opts.intent ? ` --intent "${opts.intent}"` : ""}`,
+      ...renderCapped(_entry.rayList, IN_N, (r) => _entry.entryRow(r), "way(s) in")];
+  };
   const pipelineSection = (): string[] => {
     if (!showPipeline) return [];
     return ["", "## Mechanism (the anchor's downstream operations, in call order — ` ──▶ sink` = what a step persists/reads; ` ⟂` = the flow continues into a runtime-chosen impl)",
@@ -702,7 +726,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 
   // ---- assemble; degrade OFF → supporting → hub samples, never the exempt sections (I3) ----
   const assemble = (dropOff: boolean, dropSupporting: boolean, dropSamples: boolean): string[] =>
-    [...header(), ...spineSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
+    [...header(), ...spineSection(), ...inSection(), ...pipelineSection(), ...alsoReachesSection(), ...alsoWritesSection(), ...alsoReadSection(), ...crossStackSection(), ...regionSection(dropOff, dropSupporting), ...hubsSection(dropSamples), ...frontierSection(), ...gapsSection()];
   const steps: [boolean, boolean, boolean][] = [[false, false, false], [true, false, false], [true, true, false], [true, true, true]];
   let out: string[] = [];
   for (const step of steps) { out = assemble(...step); if (tok(out) <= budget) break; }   // first fitting crop level, else the most-cropped
@@ -723,90 +747,25 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
   const seams: Seam[] = cl.seams ?? [];
-  const _nodeIndex = buildNodeIndex(seams);
-  const hunkById = new Map<string, any>([..._nodeIndex].map(([k, v]) => [k, v.hunk]));
-  const seamOf = new Map<string, Seam>([..._nodeIndex].map(([k, v]) => [k, v.seam]));
   // Same derived index `computeSpine` (render/spine.ts) needs — reused here so a per-mechanism "## Spines" line can
   // trace ITS OWN entry→…→boundary path (the same oracle-tuned walk renderAgent uses for its single anchor).
   const _spineIdx = buildDerivedIndex(seams);
   const edges = (model.edges ?? []) as any[];
-  // fan-in (consumers) ignoring containment. `callIn` = only CALL/reference/import in-edges (NOT crossings) — the
-  // entry walk climbs those, so a data-READ edge (boundary → reader) is never mistaken for a caller (which would
-  // climb a coupling interaction UP into the boundary node).
-  const inEdges = new Map<string, Set<string>>();     // node → all its consumers (for center fan-in)
-  const callIn = new Map<string, Set<string>>();      // node → its CALL-graph callers only (for the entry walk)
-  // invokeIn = callers via a real INVOCATION edge only (call/dispatch/interface-impl), NOT a weak reference/import.
-  // The resolver over-attributes siblings: a REST `updateBooking` that calls `bean.updateBooking()` also gets a
-  // spurious `reference` edge to the bean's `createBooking` (same receiver type), so `callIn[createBooking]` lists
-  // BOTH REST methods and the per-mechanism entry climb picks the wrong one (createBooking's Spine mislabelled with
-  // updateBooking's REST entry + its front-end). The entry attribution must follow who INVOKES a method, so it uses
-  // invokeIn and only falls back to callIn when a method has no resolved invoker (a framework/DI entry).
-  const _INVOKE_KINDS = new Set(["call", "invokes", "dispatch", "interface-impl", "provider-impl"]);
-  const invokeIn = new Map<string, Set<string>>();
-  for (const e of edges) { if (e.kind === "contains") continue; const f = String(e.from), t = String(e.to);
-    (inEdges.get(t) ?? inEdges.set(t, new Set()).get(t)!).add(f);
-    if (!_CROSS_KINDS.has(e.kind)) (callIn.get(t) ?? callIn.set(t, new Set()).get(t)!).add(f);
-    if (_INVOKE_KINDS.has(e.kind)) (invokeIn.get(t) ?? invokeIn.set(t, new Set()).get(t)!).add(f); }
-  // CENTER CLUSTER — a broad concern's shared MECHANISMS (a cluster of beans, not one). Honour the caller's cluster
-  // (opts.centers); else detect one intent-weighted center as a fallback. Interactions are the consumers of ANY
-  // mechanism + their coupling counterparts, so the star spans the whole cluster.
-  const nodes = [...hunkById.keys()];
-  if (!nodes.length) return "(empty region)";
-  const fanIn = (id: string) => inEdges.get(id)?.size ?? 0;
-  const centerRel = (id: string) => (hunkById.get(id)?.relevance ?? -1);
-  const haveRel = nodes.some((id) => centerRel(id) >= 0);
-  const onIntent = (id: string) => !haveRel || centerRel(id) >= 0.18;
-  const byFan = (a: string, b: string) => (fanIn(b) - fanIn(a)) || (Number(!!hunkById.get(b).hub) - Number(!!hunkById.get(a).hub)) || ((hunkById.get(b).complexity ?? 0) - (hunkById.get(a).complexity ?? 0));
-  const matchNode = (c: { file: string; symbol: string }) => nodes.find((id) => { const h = hunkById.get(id); return h?.file && String(h.file).replace(/^\.\//, "").endsWith(c.file.replace(/^\.\//, "")) && h?.label === c.symbol; });
-  let centerIds: string[] = (opts.centers?.length ? [...new Set(opts.centers.map(matchNode).filter((x): x is string => !!x))] : [])
-    .length ? [...new Set(opts.centers!.map(matchNode).filter((x): x is string => !!x))]
-    : [(nodes.filter(onIntent).sort(byFan)[0]) ?? nodes.slice().sort(byFan)[0]];
-  centerIds = centerIds.filter(Boolean).sort(byFan);
-  const centerSet = new Set(centerIds);
-  // The mechanism INCLUDES its own method nodes: a consumer that calls `bean.createBooking()` reaches the
-  // mechanism through the METHOD node (`BookingsBean.createBooking`), not the class the center pick named — and
-  // may never reference the class directly (an injected / parameter-passed bean), so scanning consumers of the
-  // class alone MISSES it (Acme: `AcmeCheckBookingsService.createBooking` grown but not an interaction).
-  // centerSet stays the DISPLAY set (the mechanism lines); mechNodes is the interaction boundary (a method is
-  // never its own interaction, and the entry walk halts at any mechanism node).
-  const centerLabels = new Set([...centerSet].map((c) => hunkById.get(c)?.label).filter(Boolean));
-  const mechNodes = new Set<string>(centerSet);
-  for (const id of nodes) { const h = hunkById.get(id); if (h?.enclosing && centerLabels.has(h.enclosing)) mechNodes.add(id); }
-  const primary = hunkById.get(centerIds[0]);
-  // INTERACTIONS = consumers of ANY mechanism (its class OR its methods), each walked UP to its entry point
-  // (stopping at any mechanism), so a ray is named by its interaction. Deduped by entry.
-  const entryOf = (start: string): string => {
-    let cur = start; const seen = new Set<string>(mechNodes);
-    for (let hop = 0; hop < 8; hop++) {
-      if (seen.has(cur)) break; seen.add(cur);
-      const callers = [...(callIn.get(cur) ?? [])].filter((c) => !seen.has(c));   // CALL-graph callers only (skip crossings)
-      if (!callers.length) return cur;                 // no caller → an entry point (a coupling reader is its own entry)
-      cur = callers.sort((a, b) => (fanIn(a) - fanIn(b)))[0];   // climb the least-shared caller (toward a specific entry)
-    }
-    return cur;
-  };
-  // PER-MECHANISM ENTRY CHAIN (for "## Spines") — the SAME climb `entryOf` runs (least-shared caller, halting at
-  // a mechanism node or a no-caller node), but returning the FULL path instead of only the final id, and seeded
-  // from `cid`'s own DIRECT callers — so it can never wander into a sibling mechanism's territory. This is
-  // deliberately NOT `computeSpine`'s generic entry-chain (SEAM_SPINE_ENTRY): that walk explores upward over ALL
-  // edges and prefers the FARTHEST caller, so run once per fanned method through a SHARED dispatcher/gateway
-  // (Acme: AcmeJsonSchemaBean, called by many independent REST methods), it converges on
-  // whichever sibling happens to have the deepest onward caller — the SAME wrong entry for every mechanism,
-  // contradicting "## In" (which already attributes each mechanism to its own real trigger via `entryOf`).
-  // Reusing that exact climb here means a Spines line can never disagree with the In section for the same method.
-  // callers of `id` via a real INVOCATION (invokeIn), falling back to the broader callIn only when nothing invokes
-  // it (a framework/DI-mounted entry has no in-repo invoker) — so the climb never rides a spurious sibling reference.
-  const invokersOf = (id: string): string[] => { const inv = [...(invokeIn.get(id) ?? [])]; return inv.length ? inv : [...(callIn.get(id) ?? [])]; };
-  // ALL distinct entry flows into a mechanism — NOT one. A shared bean is genuinely reached by MANY independent
-  // flows (Acme BookingsBean: the adviser portal, the member portal, the login-setup that creates a
-  // booking business, the XPlan sync — each a separate way in). Which one MATTERS is a semantic call that belongs
-  // to the consuming agent, not the engine (CLAUDE.md: structure ENUMERATES, the model JUDGES) — so picking "the
-  // least-shared caller" was a heuristic standing in for a judgment, and it dropped every other flow (and often
-  // picked an internal path over the real portals). Instead: reverse-walk the INVOCATION graph up from the
-  // mechanism, node-scoped, HALTING at another mechanism (a sibling bean method is its own entry in the star) and
-  // at a root (a node nothing in-repo invokes — a REST endpoint / a framework/DI mount). Each root is one entry
-  // flow; return the path root → … → (direct caller of the mechanism) for each. Deterministic, complete; the agent
-  // reads the fan and decides which to dig into.
+  // THE ENTRY SURFACE (render/entry_surface.ts) — the node index, the call/invoke/crossing adjacency, the center
+  // cluster, the entry climb and the ranked "ways in" (rays). Extracted so `renderAgent`'s "## In" section renders
+  // the SAME grounded upstream facts from the SAME computation (one implementation, two renders) — a "trace from X
+  // through to Y" question needs both directions, and the region render used to carry only the downstream half.
+  const _es = buildEntrySurface(model, seams, { centers: opts.centers });
+  if (!_es) return "(empty region)";
+  const { hunkById, seamOf, nodes, callIn, crossAdj, fanIn, centerRel, tierRank, isBoundaryNode, crossingEdge,
+    qual, where, fileClass, symLike, entryOf, invokersOf, centerIds, centerSet, mechNodes, primary, matchNode,
+    rayList, viasStr, entryRow } = _es;
+  // ALL distinct entry flows into a mechanism — NOT one (the "## Flows" fan; concern-only, so it stays here).
+  // A shared bean is genuinely reached by MANY independent flows, and WHICH one matters is a semantic call that
+  // belongs to the consuming agent, not the engine (CLAUDE.md: structure ENUMERATES, the model JUDGES). Reverse-walk
+  // the INVOCATION graph up from the mechanism, node-scoped, HALTING at another mechanism (a sibling bean method is
+  // its own entry in the star) and at a root (a node nothing in-repo invokes — a REST endpoint / a framework/DI
+  // mount). Each root is one entry flow; return the path root → … → (direct caller of the mechanism) for each.
   const entryFlowsOf = (cid: string): string[][] => {
     const parent = new Map<string, string>();   // node → the node it invokes toward the mechanism
     const visited = new Set<string>([cid]);
@@ -825,99 +784,9 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       || (tierRank(seamOf.get(a[a.length - 1])) - tierRank(seamOf.get(b[b.length - 1])))
       || (String(hunkById.get(a[0])?.label) < String(hunkById.get(b[0])?.label) ? -1 : 1));
   };
-  const tierRank = (s?: Seam) => (s?.tier === "spine" ? 0 : s?.tier === "off" ? 2 : 1);
-  // QUALIFY a node for display with its owning class (`Class.method`) — DISPLAY only; the raw `label` stays bare
-  // for the --grow-from handle + center-matching. Disambiguates a bare `createBooking` across sibling beans.
-  // FALLBACK: an UNCONSUMED method center's anchor node carries no `enclosing` (only the class_graph up-pass sets
-  // it, and that only fires for methods with a traced consumer), so a fanned class would render 3 of 4 methods as
-  // `Class.method` and the consumer-less one bare — inconsistent. Learn each file's class from the `enclosing` its
-  // OTHER method nodes DO carry (a grounded, parser-set fact) and apply it, so EVERY fanned method reads `Class.method`.
-  const fileClass = new Map<string, string>();
-  // learn each file's class from a PascalCase enclosing (a class name) — NOT a lowercase one (a receiver variable
-  // from a qualified call). Fallback: the file's BASENAME when it's PascalCase (the class-per-file convention:
-  // Java/C#/TS `MicrosoftBookingsBean.java` → `MicrosoftBookingsBean`), so a file whose only method carries a
-  // receiver-variable enclosing still qualifies to its real class.
-  for (const id of nodes) { const h = hunkById.get(id); if (h?.file && h.enclosing && /^[A-Z]/.test(h.enclosing) && !fileClass.has(h.file)) fileClass.set(h.file, h.enclosing); }
-  for (const id of nodes) { const h = hunkById.get(id); if (!h?.file || fileClass.has(h.file)) continue; const base = String(h.file).split("/").pop()?.replace(/\.\w+$/, "") ?? ""; if (/^[A-Z]\w*$/.test(base)) fileClass.set(h.file, base); }
-  // enclosing class for display. Prefer the node's own `enclosing`, BUT a resolved qualified call can record the
-  // RECEIVER VARIABLE (`mBookingsBean`) as the enclosing instead of the class — a class name is PascalCase, so an
-  // enclosing that starts lowercase is a variable; fall back to the file's learned class then (BookingsBean).
-  const enclOf = (h: any): string => { const e = h?.enclosing; if (e && /^[A-Z]/.test(e)) return e; const fc = h?.file ? fileClass.get(h.file) : ""; return fc || e || ""; };
-  const qual = (h: any): string => { const e = enclOf(h); return (e && e !== h?.label) ? `${e}.${h.label}` : (h?.label ?? "?"); };
-  // a BOUNDARY node (a route/table/queue/… crossing site) is the medium, never an interaction ENTRY — it renders
-  // as `/route (file:0)`, a fake entry. Identified by the `kind` the hunk now carries for boundary nodes only.
-  const isBoundaryNode = (id: string): boolean => _BOUND_KINDS.has(hunkById.get(id)?.kind ?? "");
-  // A boundary rendered as a flow EDGE label — the MEDIUM (from the boundary node's structural kind, the registry's
-  // closed set) + the shared key/route — so the coupling shows AS a link in the chain
-  // (acmeBooking.js ──HTTP /booking/*──▶ ●) instead of being buried in a separate "Blindspots" list. THIS is the
-  // agent's ask: the crossing is a first-class edge in the flow, not prose.
-  const _MEDIUM_LABEL: Record<string, string> = {
-    route: "HTTP", "http-route": "HTTP", annotation: "HTTP", "db-table": "db", table: "db",
-    queue: "queue", topic: "topic", event: "event", cache: "cache", key: "key", binding: "binds", file: "file", egress: "external",
-  };
   // the produce VERB for an outcome, by boundary kind — publishes to a queue/topic/event, calls out to an egress,
   // writes to a store (db/cache/file). Keeps the co-equal culmination fan reading naturally per medium.
   const _outcomeVerb = (bid: string): string => { const k = hunkById.get(bid)?.kind ?? ""; return k === "egress" ? "calls out" : (k === "queue" || k === "event" || k === "topic") ? "publishes" : "writes"; };
-  const crossingEdge = (bid: string): string => {
-    const h = hunkById.get(bid); const med = _MEDIUM_LABEL[h?.kind ?? ""] ?? "crosses"; const key = h?.label ?? "?";
-    return med === "db" ? `${med} "${key}"` : `${med} ${key}`;
-  };
-  const rayCross = new Map<string, Set<string>>();   // interaction entry → the boundary id(s) its ray crosses (for the inline edge)
-  // COUPLING interactions — a node sharing a data-key BOUNDARY with a mechanism (the bean writes a table a reporting
-  // job READS → that job is an interaction though it never CALLS the bean). 2 hops over crossings; boundary skipped.
-  const crossAdj = new Map<string, Set<string>>();
-  for (const e of edges) { if (!_CROSS_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
-    (crossAdj.get(f) ?? crossAdj.set(f, new Set()).get(f)!).add(t); (crossAdj.get(t) ?? crossAdj.set(t, new Set()).get(t)!).add(f); }
-  // Rays are keyed by ENTRY (the least-shared caller a consumer climbs to), but MANY operations climb to the
-  // same entry (createBooking/updateBooking/cancelBooking → an orchestrator `book`). Keeping ONE `via` per entry
-  // hid all but the first — the dev saw `book` but not `createBooking` (Acme). ACCUMULATE the distinct
-  // vias so the entry lists every operation reaching it: `via book, createBooking, updateBooking, …`.
-  const rays = new Map<string, { entry: string; vias: Set<string> }>();   // entry id → {entry, the operations reaching a mechanism through it}
-  const addRay = (entry: string, via: string) => { if (mechNodes.has(entry)) return; const r = rays.get(entry) ?? { entry, vias: new Set<string>() }; r.vias.add(via); rays.set(entry, r); };
-  for (const cid of mechNodes)   // consumers of the mechanism's CLASS or any of its METHODS
-    for (const consumer of (callIn.get(cid) ?? [])) { if (mechNodes.has(consumer)) continue; addRay(entryOf(consumer), qual(hunkById.get(consumer))); }
-  // CROSS-STACK interactions — the boundary (a route/table/queue) can sit on an INTERMEDIATE that reaches the
-  // mechanism (a REST endpoint the bean sits BEHIND), NOT on the center itself: a Java bean's JS front-end
-  // consumer crosses the route to the ENDPOINT, never to the bean, so a center-only crossing scan hides it (the
-  // cross-stack half is grown but invisible on the map — the whole point of Seam). Walk the mechanism's call-
-  // UPSTREAM closure (every node that reaches a center through calls) and surface the crossing counterpart of ANY
-  // of them. The boundary node (b) is skipped; the counterpart (y) is the interaction, walked up to its OWN
-  // (front-end) entry — and if that entry climbed out of the grown region, surface the counterpart itself.
-  const upstream = new Set<string>(mechNodes);
-  const ust = [...mechNodes];
-  while (ust.length) { const n = ust.pop()!; for (const c of (callIn.get(n) ?? [])) if (!upstream.has(c)) { upstream.add(c); ust.push(c); } }
-  // the BOUNDARY nodes the mechanism sits on (the route/table/key sites, crossing-adjacent to the upstream); their
-  // OTHER neighbours are the cross-stack counterparts (code sharing the boundary). Skip a boundary itself as a
-  // counterpart — it's the medium, not an interaction (a `/route` or `table` node would render as a fake entry).
-  const boundaries = new Set<string>();
-  for (const n of upstream) for (const b of (crossAdj.get(n) ?? [])) boundaries.add(b);
-  const _isSym = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
-  for (const b of boundaries) for (const y of (crossAdj.get(b) ?? [])) {
-    if (upstream.has(y) || boundaries.has(y) || isBoundaryNode(y) || !hunkById.has(y)) continue;   // Java call-side / a boundary node (route/…) / non-region → not a counterpart
-    let e = entryOf(y); const eh = hunkById.get(e); if (!eh?.file || !eh?.label) e = y;   // entry left the region → surface the counterpart node itself
-    if (mechNodes.has(e) || upstream.has(e) || boundaries.has(e)) continue;
-    // OPERATION-named boundaries: a DECLARATIVE endpoint-map client names each OP as a route node's label
-    // (`createBooking`/`getBookings`/`updateBooking`) instead of a raw `/path`, and they fold into one code entry
-    // (`install`). The ops CHAIN as route nodes off one another (install → updateBooking → createBooking → …),
-    // so collect every op-labelled route boundary reachable from the counterpart THROUGH the route-node chain
-    // (hopping only route→route, ≤ a small cap) → the map shows `via createBooking, getBookings, updateBooking`.
-    const ops = new Set<string>();
-    const seenR = new Set<string>([y]); const stack = [...(crossAdj.get(y) ?? [])];
-    while (stack.length && seenR.size < 64) { const r = stack.pop()!; if (seenR.has(r)) continue; seenR.add(r);
-      const rh = hunkById.get(r); if (rh?.kind !== "route") continue;   // hop ONLY through route boundary nodes (stops at code/producers)
-      if (_isSym(rh.label)) ops.add(rh.label);
-      for (const nx of (crossAdj.get(r) ?? [])) if (!seenR.has(nx)) stack.push(nx);
-    }
-    if (ops.size) for (const op of ops) addRay(e, op);
-    else addRay(e, `the ${hunkById.get(b)?.label ?? "shared key"} boundary`);
-    if (!mechNodes.has(e)) (rayCross.get(e) ?? rayCross.set(e, new Set()).get(e)!).add(b);   // this ray crosses boundary b → thread it as an edge
-  }
-  // DROP dead entries — a ray whose entry node has no location (a synthetic boundary/blindspot node that leaked
-  // in) would render as `? (?:0)` with a `--grow-from undefined#undefined` handle. Never emit those.
-  const rayList = [...rays.values()].filter((r) => { const h = hunkById.get(r.entry); return h?.file && h?.label && !isBoundaryNode(r.entry); }).sort((a, b) =>
-    (tierRank(seamOf.get(a.entry)) - tierRank(seamOf.get(b.entry))) ||   // spine interactions first
-    (centerRel(b.entry) - centerRel(a.entry)) ||                         // then most intent-relevant
-    (String(hunkById.get(a.entry)?.label) < String(hunkById.get(b.entry)?.label) ? -1 : 1));
   // OUT crossings — the boundaries the MECHANISM itself produces to / consumes: the db table it writes, the queue it
   // publishes — the "what a booking DOES" half of the star. Direction from the crossing edge (_CROSS_SOURCE =
   // code→boundary = writes; _CROSS_SINK = boundary→code = reads). Rendered as `● ──writes──▶ db "Booking"`.
@@ -931,23 +800,8 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     if (mechNodes.has(f) && isBoundaryNode(t)) outCross.push({ mech: f, verb: _CROSS_SOURCE.has(e.kind) ? "writes" : "reads", bid: t });
     else if (mechNodes.has(t) && isBoundaryNode(f)) outCross.push({ mech: t, verb: _CROSS_SINK.has(e.kind) ? "reads" : "writes", bid: f });
   }
-  // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
-  // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
-  const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "50", 10) || 50);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
-  const where = (h: any) => `${qual(h)} (${at(h?.file ?? "?", h?.start)})`;
-  // the operations reaching a mechanism through this entry, distinct, capped + counted (a fat orchestrator stays
-  // scannable). The entry's OWN name (when it is itself a direct consumer) sorts first; other operations follow.
-  const _VIA_CAP = Math.max(1, parseInt(process.env.SEAM_CONCERN_VIAS ?? "8", 10) || 8);
-  const viasStr = (r: { entry: string; vias: Set<string> }): string => {
-    const self = qual(hunkById.get(r.entry));
-    // DROP the raw "the /X boundary" vias — the crossing is now rendered as the flow EDGE (──HTTP /X──▶), so
-    // repeating it in the via list is noise. Operation-named vias (createBooking, getBookings) stay: they say
-    // WHICH ops reach the mechanism, which the edge (the path) doesn't.
-    const v = [...r.vias].filter((x) => !/^the .+ boundary$/.test(x)).sort((a, b) => (Number(b === self) - Number(a === self)) || (a < b ? -1 : 1));
-    return v.slice(0, _VIA_CAP).join(", ") + (v.length > _VIA_CAP ? `, … (+${v.length - _VIA_CAP})` : "");
-  };
   // DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT. "Why is X missing":
   // absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; in a `via` list =
   // it reaches the mechanism through that entry (now shown, not silently folded away).
@@ -1076,7 +930,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // edges from the mechanism to the nearest node that produces into a store boundary, so the bean is on the line.
   const _PRODUCE_KINDS_C = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert"]);
   const invokeFwd = new Map<string, Set<string>>();
-  for (const e of edges) { if (!_INVOKE_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
+  for (const e of edges) { if (!INVOKE_KINDS.has(e.kind)) continue; const f = String(e.from), t = String(e.to);
     (invokeFwd.get(f) ?? invokeFwd.set(f, new Set()).get(f)!).add(t); }
   const isStoreBid = (id: string): boolean => _STORE_KINDS.has(hunkById.get(id)?.kind ?? "");
   const writersTo = (bid: string): string[] => edges.filter((e) => (_PRODUCE_KINDS_C.has(e.kind) || _CROSS_SOURCE.has(e.kind)) && String(e.to) === bid).map((e) => String(e.from));
@@ -1222,13 +1076,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // (entry ──HTTP /route──▶ ●), so the coupling edge is part of the flow, not a footnote. Deepen recipe stated ONCE.
   out.push("", `## In — what triggers ${dot}  (entry ──crossing──▶ ●)`);
   if (rayList.length) out.push(`  deepen any: seam --grow-from <file>#<symbol>${q}`);
-  for (const r of rayList.slice(0, cap)) { const eh = hunkById.get(r.entry);
-    const rel = seamOf.get(r.entry)?.tier ? ` [${seamOf.get(r.entry)!.tier}]` : "";
-    const xs = [...new Set([...(rayCross.get(r.entry) ?? [])].map(crossingEdge))].slice(0, 2);
-    const edge = xs.length ? ` ──${xs.join(" / ")}──▶ ●` : " ──▶ ●";   // the boundary crossing as the flow edge
-    const via = viasStr(r); const viaStr = via ? `  (via ${via})` : "";
-    const handle = symLike(eh?.label) ? `   grow: ${eh.file}#${eh.label}` : "";   // bare handle; the recipe above is the full command
-    out.push(`  ${where(eh)}${rel}${edge}${viaStr}${handle}`); }
+  for (const r of rayList.slice(0, cap)) out.push(entryRow(r));   // the SHARED row (render/entry_surface.ts)
   if (rayList.length > cap) out.push(`  (+${rayList.length - cap} more interaction(s) — raise SEAM_CONCERN_CAP)`);
   // OUT — what the mechanism itself does: the boundaries it writes/reads (db table, queue), threaded as edges off ●.
   if (outCross.length) {

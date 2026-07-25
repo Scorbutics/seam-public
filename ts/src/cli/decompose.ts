@@ -52,7 +52,9 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
   waves: async (m) => { const { renderWaves } = await import("../codebase/llm_context.js"); return renderWaves(m); },
   scenarios: async (m) => { const { renderScenarios } = await import("../codebase/llm_context.js"); return renderScenarios(m); },
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
-  agent: async (m, a) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent }); },
+  // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
+  // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
+  agent: async (m, a, concernCenters) => { const { renderAgent } = await import("../codebase/llm_context.js"); return renderAgent(m, { tokenBudget: a.tokenBudget, intent: a.intent, centers: concernCenters }); },
 };
 
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
