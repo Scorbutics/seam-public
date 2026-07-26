@@ -148,10 +148,8 @@ TWO THINGS TO KNOW BEFORE STEP 4:
   and bought nothing) and the CLI composes set + overlay. The Rust side mirrors that separation, so the
   `data_coupling` parameter on `project_consumer_set` still means "build the footprint with the coupling
   overlay", NOT "attach cross-stack".
-- **`data_coupling: true` LOSES a resolved structural member** on
-  `apps/api/v2/.../organization-attributes.repository.ts#createOrganizationAttribute` — 1 member → `noStructure`
-  — on TS and Rust ALIKE. Not a port defect (the comparator now pins the two engines agreeing on it), but it is
-  a real product smell: the flag should never delete a verified edge. See §7.
+- ~~`data_coupling: true` LOSES a resolved structural member~~ — FIXED (the `merge_resolved` last-wins identity
+  bug; see §7). The comparator that found it stays: it pins the two engines agreeing at the same flag setting.
 - The LLM anchor-key proposal (`--data-coupling llm` → `anchorProposedKeys`) has NO Rust counterpart, so the
   Rust bridge is the `SEAM_COUPLING=floor` answer. Wiring must keep an LLM-requested overlay on TS.
 
@@ -262,13 +260,19 @@ the scratchpad is gone; the fixture alone is NOT sufficient, it passed throughou
 
 ## 7. Open, separate from this migration
 
-- **`--data-coupling` can DELETE a verified structural member from the consumers shape.** Found by the Step-2
-  comparator, on BOTH engines (so it is not a port artefact):
-  `--query consumers --center apps/api/v2/src/modules/organizations/attributes/index/organization-attributes.repository.ts#createOrganizationAttribute`
-  reports 1 RESOLVED_FULL member with the flag off and `noStructure: none` ("nothing calls this") with it on.
-  That is the "capability gap rendered as an empty answer" failure mode §4 forbids, reachable today by an
-  explicit flag. The shape is structural by default so the default path is safe — but the flag should be
-  additive or refused, never subtractive. Diagnose in the dataCoupling footprint path (whole-file span?).
+- ~~**`--data-coupling` can DELETE a verified structural member from the consumers shape.**~~ **FIXED.** Found
+  by the Step-2 comparator, on BOTH engines. Root cause was NOT the coupling scan: `merge_resolved` dedups
+  nodes by content key (`file#startLine#kind`) and built that index LAST-wins, while the overlay legitimately
+  mints a TWIN of a unit the structural pass already has — including the ANCHOR itself, when the anchor's own
+  method is a complement of a key reached through another file. So the anchor's key resolved to the twin and
+  every merged-in edge was re-pointed at it (`c1 -> n1` became `c1 -> dc6`); the projection reads edges to
+  `anchor.id`, found none, and printed "## No callers". Fix: build the index FIRST-wins (the anchor is
+  nodes[0], and the structural pass precedes the overlay, so the survivor is always the structural node).
+  Measured on the reported anchor: `resolved: 0 usage sites / ## No callers` → `resolved: 1 usage site`, with
+  cross-stack 10 unchanged. `ts/test/scan/coupling_twin_edge_capture.test.ts`.
+  Still open, lower severity: the overlay mints that twin at all instead of reusing the existing node id, so a
+  `--data-coupling` graph carries a redundant duplicate of any unit it re-materialises. Harmless now that
+  identity is stable, but it is why the collision exists.
 
 - **`--format concern` vs `--concern` diverge.** `isConcern` (gating `SEAM_GROW_STRUCTURAL`) reads
   `a.concern` only, so `--format concern` forces a structural grow then switches the star on afterwards —

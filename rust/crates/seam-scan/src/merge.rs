@@ -16,7 +16,18 @@ fn key(n: &GraphNode) -> String {
 /// the multi-center merge to accumulate every center's anchor.
 pub fn merge_resolved(base: &ResolvedGraph, add: &ResolvedGraph, expand_anchor: Option<&str>) -> ResolvedGraph {
     let mut merged = base.clone();
-    let mut by_key: HashMap<String, String> = merged.nodes.iter().map(|n| (key(n), n.id.clone())).collect();
+    // FIRST-WINS, and this is load-bearing. `base` can legitimately hold two nodes with the SAME content key:
+    // the coupling overlay materialises a complement UNIT, and when that unit is one the structural pass
+    // already has — including THE ANCHOR ITSELF — it mints a twin (identical file/range/kind, `coupling`).
+    // Collecting into a HashMap is LAST-wins, so the anchor's key resolved to that twin and every incoming
+    // edge was re-pointed at it (`c1 -> n1` became `c1 -> dc6`); the consumers projection reads edges to
+    // `anchor_id`, found none, and reported "nothing calls this" for a symbol with a verified caller.
+    // First-wins keeps the CANONICAL node: the anchor is nodes[0] and the structural pass precedes the
+    // overlay, so the survivor is always the structural node. Mirrors `merge_resolved` in scan/expand.ts.
+    let mut by_key: HashMap<String, String> = HashMap::new();
+    for n in &merged.nodes {
+        by_key.entry(key(n)).or_insert_with(|| n.id.clone());
+    }
     let mut used_ids: HashSet<String> = merged.nodes.iter().map(|n| n.id.clone()).collect();
 
     let mut idmap: HashMap<String, String> = HashMap::new(); // add id → merged id
