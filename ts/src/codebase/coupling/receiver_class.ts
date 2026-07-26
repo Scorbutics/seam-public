@@ -199,6 +199,12 @@ function _parse(out: Map<string, any>): Map<string, string> {
 // Classify the recurring receivers (LLM) and PERSIST `repository` matchers for the database ones. Idempotent
 // per run (ctx cache) and per repo (the candidate-set signature gates the LLM, so a warm `.seam` replays the
 // persisted matchers with no call). No-op without opts.llm/backend → degrades to member_access (3-part) only.
+// PARITY HOOKS — the candidate set and its prompt line, exposed so rust/parity/receiverclass.ts can compare
+// the Rust port against this one WITHOUT spending a model call. The candidate set decides what the classifier
+// is ever asked about, so it is the half worth comparing; the classification itself is the model's.
+export function _candidatesForParity(repo: string): Profile[] { return _candidates(_inventory(repo, SKIP_DIRS)); }
+export const _profileLineForParity = _profileLine;
+
 export async function classifyAndPersistRepositories(
   repo: string, opts: { llm?: boolean; model?: string; claudeBin?: string | null }, ctx: EngineCtx,
 ): Promise<KeyMatcher[]> {

@@ -1788,3 +1788,35 @@ pub fn compose_learn(repo: String, scope_files: Option<Vec<String>>, model: Opti
     let o = seam_couple::learn::compose_learn(&repo, scope.as_ref(), model.as_deref(), claude_bin.as_deref());
     ComposeOutcomeDto { detected: o.detected as u32, demanded: o.demanded as u32, composed: o.composed as u32 }
 }
+
+/// A recurring receiver candidate: its name, the verbs called on it, and how many files it appears in.
+#[napi(object)]
+pub struct ProfileDto {
+    pub receiver: String,
+    pub line: String,
+    pub files: u32,
+}
+
+/// receiverCandidates — the EXTERNAL recurring receivers the classifier would ask about, as their prompt lines.
+/// Detection only (no model call); exposed so a comparator can pin the candidate set, which decides what the
+/// classifier is ever asked and therefore what can be learned at all.
+#[napi]
+pub fn receiver_candidates(repo: String) -> Vec<ProfileDto> {
+    seam_couple::learn::receiver_class::candidate_profiles(&repo)
+        .into_iter()
+        .map(|p| ProfileDto { line: seam_couple::learn::receiver_class::profile_line(&p), receiver: p.receiver, files: p.files as u32 })
+        .collect()
+}
+
+/// classifyReceivers — classify the recurring receivers and persist the rules they compile to. Gated on the
+/// candidate-set signature, so an unchanged codebase replays with no model call. Returns the rules learned.
+#[napi]
+pub fn classify_receivers(repo: String, model: Option<String>, claude_bin: Option<String>) -> u32 {
+    seam_couple::learn::classify_receivers(&repo, model.as_deref(), claude_bin.as_deref()).len() as u32
+}
+
+/// classifyAnnotations — the same ladder for `@Name("literal")` decorators (custom route/queue/event).
+#[napi]
+pub fn classify_annotations(repo: String, model: Option<String>, claude_bin: Option<String>) -> u32 {
+    seam_couple::learn::classify_annotations(&repo, model.as_deref(), claude_bin.as_deref()).len() as u32
+}
