@@ -16,6 +16,38 @@ import { type Args } from "./args.js";
 // hits (`lineOf` = newline count → 0-based), so they convert HERE, exactly like every other shape.
 import { to1 } from "../codebase/grow/project_set.js";
 
+// ── STEP 4: ROUTING A SHAPE TO THE RUST CORE ───────────────────────────────────────────────────────────────
+// The guard is the GROW's guard (orchestrate.ts), minus its intent condition — a `--query` shape is structural
+// by definition, so the "an intent-shaped grow returns a different region there" hazard cannot arise. What DOES
+// carry over verbatim is the language pair: the addon links only a subset of the grammars and an unparseable
+// file degrades SILENTLY (empty scans, a well-formed answer that is simply missing things), so `rustCanParse`
+// fences the ANCHOR and `rustCanServeRepo` fences everything the shape could REACH.
+//
+// A shape flips ONLY when its comparator is byte-identical, and the TS implementation stays as the oracle —
+// this is a router, not a replacement. Any failure inside the addon falls through to TS rather than surfacing:
+// a shape that cannot answer is worse than one that answers a little slower.
+async function rustShapeOk(a: Args): Promise<any | null> {
+  if (!a.anchorFile) return null;
+  try {
+    const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/grow/rust_core.js");
+    if (!rustCoreEnabled() || !rustCanParse(a.anchorFile) || !rustCanServeRepo(a.repo)) return null;
+    return loadAddon();
+  } catch { return null; }
+}
+
+// The Rust SET dto → the TS model shape. The members are already byte-identical (pinned by
+// rust/parity/shapes_set.ts); only the anchor is spelled differently, and TS omits `noStructure`/`recalled`
+// when they are absent rather than emitting falsy ones, which the renderers rely on.
+const rustSetToModel = (r: any): any => ({
+  shape: r.shape,
+  anchor: { symbol: r.anchorSymbol, file: r.anchorFile },
+  members: r.members,
+  unresolved: r.unresolved,
+  resolutionQuality: r.resolutionQuality,
+  ...(r.recalled?.length ? { recalled: r.recalled } : {}),
+  ...(r.noStructure ? { noStructure: true, reason: r.reason } : {}),
+});
+
 // Ask query — a natural-language question routed (by the LLM) to the right shape, then run. The honest
 // front-end: it answers structural questions and routes lexical/semantic ones to grep/RAG. Emits whatever
 // model the chosen shape produces (with the routing decision attached).
@@ -96,8 +128,16 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   const { projectConsumerSet } = await import("../codebase/grow/project_set.js");
   const { renderConsumerSet } = await import("../codebase/llm_context.js");
   emit(`Resolving consumers of ${a.symbol}…`);
+  // RUST FIRST when the guard allows it — the projection is byte-identical (rust/parity/shapes_set.ts) and the
+  // addon builds the footprint itself, so this skips the TS scan entirely rather than just the projection.
+  const rustAddon = await rustShapeOk(a);
+  let set: any = null;
+  if (rustAddon) {
+    try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false)); }
+    catch { set = null; }   // any addon failure → the TS path below, never a failed query
+  }
   let graph: any;
-  try {
+  if (!set) try {
     // STRUCTURAL + CACHED, exactly like impact/reaches. A consumer SET is the anchor's resolved callers —
     // projectConsumerSet reads only the anchor's direct edges + blindspots, never the coupling overlay — so
     // running per-node data-coupling here was pure cost AND it disabled build_footprint_cached (which only
@@ -107,7 +147,7 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
     graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
       { direction: "up", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
   } catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
-  const set = projectConsumerSet(graph);
+  if (!set) set = projectConsumerSet(graph);
   // Opt-in name-grounded recall — adds UNVERIFIED leads (kept separate from verified members). The floor
   // is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers still use the
   // exact symbol name; this recovers them deterministically. See codebase/scan/name_consumers.ts.
@@ -118,12 +158,12 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
     catch (e) { process.stderr.write(`name recall skipped: ${(e as Error).message}\n`); }
   }
   // CROSS-STACK MOAT — attach the anchor's shared-key readers/writers (the non-textual coupling), on by default.
-  const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
+  const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
   if (a.format === "llm-context") process.stdout.write(renderConsumerSet(model, await snippetReaderOf(a)) + "\n");
   else {
-    const resolved = set.members.filter((m) => m.provenance !== "SUGGESTED").length;
+    const resolved = set.members.filter((m: any) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
     const nRecalled = set.recalled?.length ?? 0;
     const recalled = nRecalled ? `, ${nRecalled} recalled (name-grounded, unverified)` : "";
@@ -152,14 +192,21 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
   const { projectDependencySet } = await import("../codebase/grow/project_set.js");
   const { renderDependencySet } = await import("../codebase/llm_context.js");
   emit(`Resolving dependencies of ${a.symbol}…`);
+  // RUST FIRST — the symmetric peer of the consumers routing above; same guard, same byte-identical projection.
+  const rustAddonD = await rustShapeOk(a);
+  let set: any = null;
+  if (rustAddonD) {
+    try { set = rustSetToModel(rustAddonD.projectDependencySet(a.repo, a.anchorFile!, a.symbol!, false)); }
+    catch { set = null; }
+  }
   let graph: any;
-  try {
+  if (!set) try {
     // Same structural+cached treatment as consumers above — projectDependencySet reads the anchor's own
     // resolved out-edges, not the coupling overlay.
     graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
       { direction: "down", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
   } catch (e) { err(`dependency scan failed: ${(e as Error).message}`); }
-  const set = projectDependencySet(graph);
+  if (!set) set = projectDependencySet(graph);
   // DI-BINDING ENRICHMENT (opt-in SEAM_DI_RESOLVE; TS/ioctopus): the deps graph already resolves interface→impl
   // edges but not WHICH impl a DI container binds, nor the runtime condition. Attach that binding to each member
   // that is a container-bound concrete impl, so the answer is complete in one query (no follow-up grep).
@@ -181,12 +228,12 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
     }
   }
   // CROSS-STACK MOAT — the anchor's data-coupling boundary (shared-key producers/readers it depends on), on by default.
-  const overlay = await couplingOverlay(a, new Set(set.members.map((m) => `${m.file}#${m.symbol}`)));
+  const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
 
   if (a.format === "llm-context") process.stdout.write(renderDependencySet(model, await snippetReaderOf(a)) + "\n");
   else {
-    const resolved = set.members.filter((m) => m.provenance !== "SUGGESTED").length;
+    const resolved = set.members.filter((m: any) => m.provenance !== "SUGGESTED").length;
     const suggested = set.members.length - resolved;
     if (set.noStructure)
       process.stdout.write(`Dependencies of '${set.anchor.symbol}': none resolved (${set.reason}). `

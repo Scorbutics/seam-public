@@ -217,7 +217,25 @@ expectations were verified against the TS engine on the SAME fixture, so it pins
 a Rust quirk: writer found across files nothing links; column grain drops a writer that touches only
 un-filtered columns and KEEPS an opaque one flagged unverified; both roles; and the honest empty.
 
-### Step 4 — wire, one shape at a time.
+### Step 4 — wire, one shape at a time. 🔶 IN PROGRESS — `consumers` + `dependencies` flipped.
+
+`rustShapeOk` in `ts/src/cli/queries.ts` is the grow's guard minus its intent condition (a `--query` shape is
+structural by definition, so the "an intent-shaped grow returns a different region" hazard cannot arise); the
+language pair carries over verbatim, because an unparseable file degrades SILENTLY in the addon.
+`rustSetToModel` adapts the DTO — the members are already byte-identical, only the anchor is spelled
+differently and TS omits absent `noStructure`/`recalled` rather than emitting falsy ones.
+Any addon failure falls through to TS: a shape that cannot answer is worse than one that answers slower.
+
+**Gate: `rust/parity/wired_shapes.ts` — 16/16 renders byte-identical** over 8 anchors × 2 shapes (10 with a
+resolved member; it refuses to pass on all-empty). This one pins the RENDERED answer, not the projection: the
+projection being identical is necessary but not sufficient, since the model→render adapter is exactly where a
+wired shape breaks (a missing `anchor`, an emitted falsy `noStructure`, a dropped `recalled`). §5 collateral
+through the wired path: getBusyTimes 4, createBooking 8, getSlots 45 — unchanged.
+
+REMAINING to wire: `impact`, `contract`, `neighborhood`, `compare`, `reaches`, `refactor`, `writers`,
+`coupling`. Each needs its own DTO→model adapter and must be added to `WIRED` in the harness before flipping.
+
+Original plan:
 Reuse the grow's guard verbatim — `rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)`
 — in `ts/src/cli/queries.ts`. Each shape flips only when its comparator is byte-identical. Keep the TS
 implementation until every shape is green: it is the parity oracle.
