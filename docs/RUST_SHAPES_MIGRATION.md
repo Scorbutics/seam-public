@@ -1,0 +1,209 @@
+# Migrating the SHAPES + coupling overlay to the Rust core
+
+Working plan. Written 2026-07-26 at commit `077215d`. Everything below was measured, not assumed —
+re-measure before trusting it, the commands are given so you can.
+
+---
+
+## 1. Where the strangler actually stands
+
+**Rust serves exactly ONE runtime path: the deterministic structural grow.**
+
+```
+ts/src/codebase/grow/orchestrate.ts:1227
+if (rustCoreEnabled() && deterministic && !intentShapesGrow
+    && rustCanParse(anchorFile) && rustCanServeRepo(repo))
+  return growViaRust(repo, anchorFile, symbol, opts);
+```
+
+Four gates, each load-bearing (the comment above it explains why): the addon has no embedding field, so an
+intent-shaped grow routed there silently returns a different region; streaming grows stay in TS; and an
+unparseable anchor or repo degrades *silently* rather than erroring, so `rustCanParse` / `rustCanServeRepo`
+fence it.
+
+Everything else is TS: all 10 `--query` shapes, the render layer, diff mode, the CLI.
+
+| Path | Engine today |
+|---|---|
+| `--auto` grow (structural, parseable, non-streaming) | **Rust** |
+| all `--query` shapes | TS |
+| shape cross-stack overlay (`coupling/bridge.ts`) | TS |
+| intent-shaped / streaming / unparseable grow | TS |
+| diff mode, render, CLI | TS |
+
+Sizes: TS engine 30,817 lines / 186 files. Rust 17,500 lines across 9 crates.
+
+**Coupling IS ported** — `seam-couple` is 5,777 lines (46 files: `adapters/`, `frameworks/`, `ground/`,
+`learn/`) against TS coupling's 6,358 (44 files). `seam-grow` calls `resolve_coupling_scoped`, and napi
+exposes `scan_file_keys`, `adapter_keys`, `floor_base_index`, `mask_comments`, `builtin_adapters`,
+`other_side`. So when a grow routes to Rust, coupling runs in Rust including the flywheel replay.
+(An earlier assessment in-session said coupling had "no Rust counterpart" — that was wrong, from listing
+TS dirs without checking the crates. Don't repeat it.)
+
+**Shapes in Rust**: `seam-shapes` is 1,027 lines — `project_set.rs`, `impact.rs`, `contract.rs`,
+`neighborhood.rs`, `compare.rs`, `reach.rs`, `refactor_facts.rs`, `collate.rs`.
+napi exposes 6: `project_impact`, `project_contract`, `project_consumer_set`, `project_dependency_set`,
+`project_neighborhood`, `project_compare`. **No napi for `reaches` or `refactor`** (crate code exists).
+**`writers` and `coupling` shapes have no Rust at all.**
+
+---
+
+## 2. THE GATE — run this first, every time
+
+```bash
+cd /home/scorbutics/seam-phase0
+bun rust/parity/shapes_set.ts /home/scorbutics/dev/cal.com 40 "*.ts"
+```
+
+Measured at `077215d`: **90 ok / 4 bad**. It must reach **94/0 before anything is wired.**
+
+There are ~50 more harnesses in `rust/parity/` (`otherside.ts`, `consumersgraph_ts.ts`, `impact.ts`,
+`contract.ts`, `reach.ts`, `neighborhood.ts`, `compare.ts`, `resolvecoupling.ts`, `growfull.ts`, …).
+They are byte-identical comparators, not smoke tests — use them as the acceptance criteria.
+
+**Cache trap:** a warm `.seam/rust` replays a pre-fix grow and makes a fix look like a no-op. This cost real
+time twice. Bump `ENGINE_EPOCH` in the Rust core whenever addon behaviour changes (the auto-derived hash
+covers `ts/src` only, not the addon), and `rm -rf <repo>/.seam` when measuring cold.
+
+---
+
+## 3. Order of work — this order is not optional
+
+### Step 1 — mirror the TS fixes Rust is behind on. **Prerequisite for everything.**
+
+The 4 parity failures are exactly today's TS fixes not yet ported. Wiring shapes to Rust *before* this
+would REGRESS the product — it reintroduces defects that cost graded benchmark rounds.
+
+1. **Barrel re-export cited at `:1`.**
+   `consumers useBooking.ts#useBooking` → TS `platform/atoms/index.ts|25`, Rust `|1`.
+   Line 25 really is `export { useBooking } from "./hooks/bookings/useBooking";`; line 1 is unrelated.
+   TS fix: `8dccfbf` — the `0` sentinel leaked from the edge into the *node range* and rendered as `:1`.
+   Also relevant: `86c503f` (one 0→1-based conversion point, `to1`), `2e4aebd` (grow renders).
+2. **`contract.provides` undercounts** (3 anchors: `getAllPossibleWebsiteValuesFromEmailDomain` 1 vs 0,
+   `getDynamicEventName` 4 vs 3, `processWorkingHours` 9 vs 6).
+   TS fix: `7184ecb` (module contract dropped EVERY default-import consumer — the reported set was
+   *disjoint* from the real one) and `fd61636` (`export default wrapper(fn)` reported "No callers"; the old
+   test was a name regex, which is the brittle-proxy antipattern CLAUDE.md warns about).
+
+Other TS fixes to check for Rust drift while you are in there — all landed today, all in scan/consumers:
+`572db9c` (call-line grounding), `a4addc2` (factory/DI receiver narrowing), `72df701` (bare same-name call
+vs imported free function), `45f7f5e` (bound self-member `this._m.bind(this)`), `2f0abc1` (DI-injected
+member calls — already mirrored, epoch rs3), `71ec09b` (field-bound function members in the class method
+set — already mirrored, epoch rs6).
+
+**Exit criterion:** `shapes_set.ts` → 94/0, and `consumersgraph_ts.ts` stays 39/39.
+
+### Step 2 — port the cross-stack overlay to the Rust shapes.
+
+Confirmed missing. Probe:
+
+```ts
+addon.projectConsumerSet(repo, "packages/features/busyTimes/services/getBusyTimes.ts",
+                         "getBusyTimes", /*data_coupling*/ true)
+```
+returns the **same 4 structural members** as `false`. TS returns `resolved: 4 | cross-stack: 6` — the six
+real `prisma.booking.update` writers. The flag is accepted and ignored.
+
+Rust has the *primitive* (`seam_couple::other_side`, floor-index key→counterparts) but not the TS
+*strategy*: `couplingOtherSides` in `ts/src/codebase/coupling/bridge.ts` finds the anchor's keys, targeted-
+greps candidates, then materialises counterparts. Port that, and carry BOTH of today's fixes with it or you
+will reintroduce them:
+
+- `9dade09` — `grepFiles` must return **path-sorted** output. `rg -l` emits in thread-completion order, and
+  a bounded scan over an unordered list is a lottery (the same query answered 1–6 crossings run to run).
+- `45f7b7e` — `_TARGETED_CAND_CAP = 200` capped the *input* when it meant to bound *cost*; removed, with a
+  per-run scan budget and a stated truncation line. Recall on `db-table booking` went 2 → 6.
+- `READER_CAP = 6` still bounds materialisation; 20 of 26 writers remain unlisted **by design**, and the
+  truncation must stay stated (honesty contract).
+
+Gate: `rust/parity/otherside.ts` and `rust/parity/resolvecoupling.ts`, plus a new shapes-with-coupling
+comparator (extend `shapes_set.ts` to run each anchor with `data_coupling` on and off).
+
+### Step 3 — fill the missing shapes.
+napi entries for `reaches` + `refactor` (crate code exists: `reach.rs`, `refactor_facts.rs`).
+Port `writers` + `coupling` shapes (no Rust at all).
+Gate: `rust/parity/reach.ts`, and new harnesses for writers/coupling.
+
+### Step 4 — wire, one shape at a time.
+Reuse the grow's guard verbatim — `rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)`
+— in `ts/src/cli/queries.ts`. Each shape flips only when its comparator is byte-identical. Keep the TS
+implementation until every shape is green: it is the parity oracle.
+
+---
+
+## 4. Invariants — violating any of these has already cost a graded round
+
+- **Never fabricate a line.** Internal values are 0-based; anything rendered `file:line` is 1-based via the
+  single `to1` (`ts/src/core/lines.ts`). An unlocated node renders with NO line, never `:0`/`:1`.
+- **Never turn a capability gap into an empty answer.** A parser outage, an undeclared anchor, or an
+  unresolvable default export must FAIL LOUDLY (exit 2), not render "nothing calls this". Guards:
+  `2c8b996`, `51f8189`, `fd61636`. But *preserve* the honest empty: a declared, genuinely-uncalled symbol
+  must still report "No callers" — that proof-of-absence won a benchmark round.
+- **No repo-wide name fallback.** Only emit an edge when the receiver/type genuinely resolves. Five pinned
+  tests guard removed false positives: `callsite_factory_receiver`, `intrafile_name_collision`,
+  `spine_partial_edge`, `injected_member_call`, `field_fn_member_consumers`.
+- **Suppress by hub-ness, never coupling in general.** A narrow shared key is the highest-value thing Seam
+  produces (it is what text search cannot find, and it won B2 by surfacing a Postgres denormalization
+  trigger). Only ubiquity gets demoted.
+- **State every bound.** Truncation/suppression must say so and how to raise it.
+- **Determinism.** 3 cold runs (`rm -rf <repo>/.seam`) byte-identical, or it is not done.
+
+---
+
+## 5. Standing collateral checks (run after every change)
+
+```bash
+cd /home/scorbutics/seam-phase0/ts
+# 36 grammars, or the engine silently returns zero for everything
+ls node_modules/tree-sitter-wasms/out/ | wc -l
+
+R=/home/scorbutics/dev/cal.com
+bun src/cli/decompose.ts --scan --repo $R --query consumers \
+  --center "packages/features/busyTimes/services/getBusyTimes.ts#getBusyTimes" --format llm-context
+#   → 4 usage sites (2 consuming symbols in 2 files) | cross-stack: 6, at lines 582/66/94/116
+
+bun src/cli/decompose.ts --scan --repo $R --query consumers \
+  --center "packages/features/bookings/lib/service/RegularBookingService.ts#createBooking" --format llm-context
+#   → 8 usage sites   (MORE than 8 = new false positives)
+
+bun src/cli/decompose.ts --scan --repo $R --query impact \
+  --center "packages/trpc/server/routers/viewer/slots/util.ts#_getAvailableSlots" --format llm-context
+#   → impacted: 30 | files: 28, with 15 apps/api/v2 lines incl. both slots controllers
+
+bun src/cli/decompose.ts --scan --repo $R --query consumers \
+  --center "packages/features/schedules/lib/slots.ts#getSlots" --format llm-context
+#   → 45 usage sites in 3 files  (wrapped default export; was "No callers")
+
+bun test        # 1304 pass / 2 skip / 0 fail at 077215d
+```
+
+Env canary (a broken `node_modules` symlink once made every query silently return zero for an hour):
+`/tmp/.../scratchpad/eval/canary.sh` — grammars + fixture + a real cal.com alias resolution. Rebuild it if
+the scratchpad is gone; the fixture alone is NOT sufficient, it passed throughout that outage.
+
+---
+
+## 6. Do NOT
+
+- **Do not remove the TS engine.** It is not superseded — one routing site, and the shapes/render/diff/CLI
+  are TS-only. Removing it deletes the product.
+- **Do not bulk-regenerate parity oracles** to make a change pass. Verify each changed value by hand against
+  the fixture and say you did. Two fixtures today had encoded a bug as expected behaviour; both were
+  corrected *and tightened*, not loosened.
+- **Do not `git stash`** with concurrent work in the tree — it silently reverted another worker's in-flight
+  edits once.
+- **Do not trust a green repro after an addon change** without bumping `ENGINE_EPOCH`.
+
+---
+
+## 7. Open, separate from this migration
+
+- **`--format concern` vs `--concern` diverge.** `isConcern` (gating `SEAM_GROW_STRUCTURAL`) reads
+  `a.concern` only, so `--format concern` forces a structural grow then switches the star on afterwards —
+  the two spellings grow differently for the same question. Normalising it in `parseArgs` fails 6 existing
+  behavioural tests. Settle by grading a concern-shaped intent both ways BEFORE landing; do not just update
+  the oracles. See memory `seam-format-cleanup`.
+- **Rust↔TS depgraph parity on keycloak: 170 identical / 57 mismatches**, pre-existing and unexplained.
+  Worth understanding before trusting Rust on Java.
+- **The eval is 18/30 graded** (5 wins, 5 ties, 8 losses contested). A9/B9 have both answers written and
+  need only graders. Blocked on the 200-subagent session cap.
