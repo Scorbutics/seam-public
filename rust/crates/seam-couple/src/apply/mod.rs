@@ -10,6 +10,7 @@
 //!   GROUND — the grounding index (`ground/`), already byte-identical.
 //!   APPLY  — run_pipeline over the anchor (collect → ground-lookup → draw → wire near + cross far + chain).
 
+pub mod bridge;
 pub mod collect;
 pub mod complement_unit;
 pub mod graph;

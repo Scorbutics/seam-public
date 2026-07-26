@@ -119,9 +119,46 @@ set — already mirrored, epoch rs6).
 **Exit criterion:** `shapes_set.ts` → 94/0, and `consumersgraph_ts.ts` stays green (it reports 22/22 on its
 default keycloak args, not the 39/39 quoted above — re-measure, don't chase the number).
 
-### Step 2 — port the cross-stack overlay to the Rust shapes.
+### Step 2 — port the cross-stack overlay to the Rust shapes. ✅ DONE
 
-Confirmed missing. Probe:
+`seam_couple::coupling_other_sides` (`crates/seam-couple/src/apply/bridge.rs`) + `grep_files` + a `BridgeCtx`
+carrying the three per-run pieces TS keeps on `EngineCtx` (file→keys memo, candidate scan budget,
+truncations). napi: `couplingOtherSides(repo, file, symbol) -> { sides, truncations }`.
+
+**Measured: `shapes_set` 214 ok / 0 bad** (was 94 checks, now 214 — each anchor also runs `data_coupling` ON
+and the overlay + its truncations), `couplingsides` 50/50, `otherside` 2594/0, `resolvecoupling` 119/0, suite
+1313 pass / 2 skip / 0 fail. On the flagship anchor the two engines agree exactly, truncation included:
+
+```
+getBusyTimes → 6 crossings (db-table booking, all db-write), identical files/symbols/edge kinds
+              trunc: db-table booking, scanned 462 of 1147, reason reader-cap
+```
+
+Both of the fixes the plan said to carry ARE carried, and both were verified NON-VACUOUSLY:
+- `9dade09` (path-sorted `grep_files`) — with the sort removed, 3 identical runs of that anchor gave scanned
+  276 / 518 / 346 and DIFFERENT crossing sets; restored, 462 every time. The lottery is real, and the sort is
+  the whole fix.
+- `45f7b7e` (bound COST, not input) — no candidate cap; the budget is charged only on a cache MISS, so it
+  bounds work, not list length. `READER_CAP=6` stands, and the truncation is emitted with kind/value/scanned/
+  total/reason.
+
+TWO THINGS TO KNOW BEFORE STEP 4:
+- The overlay is NOT part of `project_consumer_set`, on either engine, and should not become part of it. The
+  structural set is coupling-free BY CONTRACT (queries.ts: per-node coupling there disabled the footprint cache
+  and bought nothing) and the CLI composes set + overlay. The Rust side mirrors that separation, so the
+  `data_coupling` parameter on `project_consumer_set` still means "build the footprint with the coupling
+  overlay", NOT "attach cross-stack".
+- **`data_coupling: true` LOSES a resolved structural member** on
+  `apps/api/v2/.../organization-attributes.repository.ts#createOrganizationAttribute` — 1 member → `noStructure`
+  — on TS and Rust ALIKE. Not a port defect (the comparator now pins the two engines agreeing on it), but it is
+  a real product smell: the flag should never delete a verified edge. See §7.
+- The LLM anchor-key proposal (`--data-coupling llm` → `anchorProposedKeys`) has NO Rust counterpart, so the
+  Rust bridge is the `SEAM_COUPLING=floor` answer. Wiring must keep an LLM-requested overlay on TS.
+
+Regression test: `ts/test/coupling/rust_bridge_cross_stack.test.ts` (hermetic, addon-guarded) — finds the
+crossing nothing links, byte-identical to TS, states its bound, and is identical across repeated runs.
+
+Original analysis, kept for the record:
 
 ```ts
 addon.projectConsumerSet(repo, "packages/features/busyTimes/services/getBusyTimes.ts",
@@ -224,6 +261,14 @@ the scratchpad is gone; the fixture alone is NOT sufficient, it passed throughou
 ---
 
 ## 7. Open, separate from this migration
+
+- **`--data-coupling` can DELETE a verified structural member from the consumers shape.** Found by the Step-2
+  comparator, on BOTH engines (so it is not a port artefact):
+  `--query consumers --center apps/api/v2/src/modules/organizations/attributes/index/organization-attributes.repository.ts#createOrganizationAttribute`
+  reports 1 RESOLVED_FULL member with the flag off and `noStructure: none` ("nothing calls this") with it on.
+  That is the "capability gap rendered as an empty answer" failure mode §4 forbids, reachable today by an
+  explicit flag. The shape is structural by default so the default path is safe — but the flag should be
+  additive or refused, never subtractive. Diagnose in the dataCoupling footprint path (whole-file span?).
 
 - **`--format concern` vs `--concern` diverge.** `isConcern` (gating `SEAM_GROW_STRUCTURAL`) reads
   `a.concern` only, so `--format concern` forces a structural grow then switches the star on afterwards —

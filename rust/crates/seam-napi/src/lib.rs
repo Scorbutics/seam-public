@@ -1490,3 +1490,54 @@ pub fn find_blind_reps(repo: String, key_budget: i64, scope: Option<Vec<String>>
     let out: Vec<Vec<String>> = reps.into_iter().map(|(f, t)| vec![f, t]).collect();
     serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
 }
+
+/// One resolved cross-stack crossing (the TARGETED bridge's output). Wire form of
+/// `seam_couple::CouplingOtherSide`.
+#[napi(object)]
+pub struct CouplingOtherSideDto {
+    pub kind: String,
+    pub value: String,
+    pub file: String,
+    pub symbol: String,
+    pub edge_kind: String,
+    pub provenance: String,
+}
+
+/// A stated BOUND: `scanned` of `total` candidates were walked for this key before `reason` stopped the walk.
+/// Wire form of `seam_couple::Truncation` — the caller renders it as the cross-stack truncation note.
+#[napi(object)]
+pub struct CouplingTruncationDto {
+    pub kind: String,
+    pub value: String,
+    pub scanned: u32,
+    pub total: u32,
+    pub reason: String,
+}
+
+/// The bridge's full answer: the crossings plus every bound that bit while finding them. Returned together
+/// because reporting the crossings WITHOUT the truncations would present a bounded walk as an exhaustive one.
+#[napi(object)]
+pub struct CouplingSidesDto {
+    pub sides: Vec<CouplingOtherSideDto>,
+    pub truncations: Vec<CouplingTruncationDto>,
+}
+
+/// couplingOtherSides — the CROSS-STACK overlay for one anchor SYMBOL, by targeted value-grep. Deterministic
+/// (floor + already-learned matchers); the LLM anchor-key proposal pass is TS-only, so this is the
+/// `SEAM_COUPLING=floor` answer. A fresh per-call budget/cache, matching the CLI's fresh-EngineCtx-per-query.
+#[napi]
+pub fn coupling_other_sides(repo: String, anchor_file: String, symbol: String) -> CouplingSidesDto {
+    let mut ctx = seam_couple::BridgeCtx::default();
+    let sides = seam_couple::coupling_other_sides(&repo, &anchor_file, &symbol, &mut ctx);
+    CouplingSidesDto {
+        sides: sides
+            .into_iter()
+            .map(|s| CouplingOtherSideDto { kind: s.kind, value: s.value, file: s.file, symbol: s.symbol, edge_kind: s.edge_kind, provenance: s.provenance })
+            .collect(),
+        truncations: ctx
+            .truncations
+            .into_iter()
+            .map(|t| CouplingTruncationDto { kind: t.kind, value: t.value, scanned: t.scanned as u32, total: t.total as u32, reason: t.reason })
+            .collect(),
+    }
+}

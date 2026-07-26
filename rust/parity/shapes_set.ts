@@ -4,6 +4,7 @@ import { projectConsumerSet, projectDependencySet } from "../../ts/src/codebase/
 import { gatherRefactorFacts } from "../../ts/src/codebase/grow/refactor_facts.js";
 import { build_footprint } from "../../ts/src/codebase/scan/footprint.js";
 import { EngineCtx } from "../../ts/src/codebase/engine_ctx.js";
+import { couplingOtherSides } from "../../ts/src/codebase/coupling/index.js";
 process.env.SEAM_GRAPH_CACHE = "0"; // TS cache conflates same-name symbols — compare pure compute
 const require = createRequire(import.meta.url);
 const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
@@ -37,14 +38,39 @@ const cmp = (tag: string, rel: string, sym: string, a: string, b: string) => {
   }
 };
 
+// CROSS-STACK OVERLAY — the shapes' data-coupling half, compared the way the CLI composes it: the STRUCTURAL
+// set is coupling-free by contract (see queries.ts — running per-node coupling there disabled the footprint
+// cache and bought nothing), and the overlay is a SEPARATE targeted pass whose crossings are deduped against
+// the structural members. So `data_coupling` is exercised where it actually lives, on the bridge, and both
+// halves are compared per anchor: the set with the flag ON and OFF (it must not perturb the structural answer)
+// and the overlay's crossings + its stated truncations.
+const serSides = (xs: any[]) =>
+  xs.map((s) => `${s.kind}|${s.value}|${s.file}|${s.symbol}|${s.edgeKind ?? s.edge_kind}|${s.provenance}`).join("\n");
+const serTrunc = (xs: any[]) =>
+  xs.map((t) => `${t.kind}|${t.value}|${t.scanned}|${t.total}|${t.reason}`).join("\n");
+
 for (const d of anchors) {
   const { file, name } = d;
   // consumers (up)
   const upG = await build_footprint(repo, file, name, { direction: "up", dataCoupling: false, llm: false, ctx });
-  cmp("consumers", file, name, serSet(projectConsumerSet(upG as any)), serSet(addon.projectConsumerSet(repo, file, name, false)));
+  const tsUp = serSet(projectConsumerSet(upG as any));
+  cmp("consumers", file, name, tsUp, serSet(addon.projectConsumerSet(repo, file, name, false)));
   // dependencies (down)
   const downG = await build_footprint(repo, file, name, { direction: "down", dataCoupling: false, llm: false, ctx });
   cmp("deps", file, name, serSet(projectDependencySet(downG as any)), serSet(addon.projectDependencySet(repo, file, name, false)));
+  // the same flag on BOTH engines. NOT "the flag changes nothing": it genuinely does — a dataCoupling
+  // footprint takes the whole-file/overlay path, and on
+  // organization-attributes.repository.ts#createOrganizationAttribute the one RESOLVED structural member
+  // disappears (1 member → noStructure) on TS and Rust ALIKE. That is why the consumers shape is structural by
+  // contract in queries.ts. What this pins is that the two engines answer the flag IDENTICALLY.
+  const upDcG = await build_footprint(repo, file, name, { direction: "up", dataCoupling: true, llm: false, ctx });
+  cmp("consumers[dc]", file, name, serSet(projectConsumerSet(upDcG as any)), serSet(addon.projectConsumerSet(repo, file, name, true)));
+  // the OVERLAY itself: crossings, and the bounds that bit while finding them.
+  const bctx = new EngineCtx();
+  const tsSides = await couplingOtherSides(repo, file, name, { llm: false }, bctx);
+  const rsSides = addon.couplingOtherSides(repo, file, name);
+  cmp("crossStack", file, name, serSides(tsSides), serSides(rsSides.sides));
+  cmp("crossStack.trunc", file, name, serTrunc(bctx.couplingTruncations), serTrunc(rsSides.truncations));
 }
 
 // refactor_facts — heavier (impact+contract); sample a smaller subset
