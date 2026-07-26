@@ -1541,3 +1541,115 @@ pub fn coupling_other_sides(repo: String, anchor_file: String, symbol: String) -
             .collect(),
     }
 }
+
+/// Wire form of a `seam_shapes::WriterMember`.
+#[napi(object)]
+pub struct WriterMemberDto {
+    pub symbol: String,
+    pub file: String,
+    pub line: u32,
+    pub kind: String,
+    pub enclosing: String,
+    pub edge_kind: String,
+    pub provenance: String,
+    pub table: String,
+    pub columns: Vec<String>,
+    pub col_verified: bool,
+}
+
+/// Wire form of a `seam_shapes::WritersSet` (the REVERSE data-coupling shape). `filter_columns` is
+/// `[[table, [column,…]],…]` — napi has no map type, and the pair list keeps the sorted order.
+#[napi(object)]
+pub struct WritersSetDto {
+    pub shape: String,
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub members: Vec<WriterMemberDto>,
+    pub tables: Vec<String>,
+    pub column_grain: bool,
+    pub filter_columns: Vec<Vec<String>>,
+    pub no_structure: bool,
+    pub reason: Option<String>,
+    pub resolution_quality: String,
+}
+
+/// projectWriters — every WRITE site of the table(s) the center READS. `symbol` scopes the read hits to that
+/// symbol's span; omit for the whole file.
+#[napi]
+pub fn project_writers(repo: String, anchor_file: String, symbol: Option<String>) -> WritersSetDto {
+    let w = seam_shapes::project_writers(&repo, &anchor_file, symbol.as_deref());
+    WritersSetDto {
+        shape: w.shape,
+        anchor_symbol: w.anchor_symbol,
+        anchor_file: w.anchor_file,
+        members: w
+            .members
+            .into_iter()
+            .map(|m| WriterMemberDto {
+                symbol: m.symbol, file: m.file, line: m.line as u32, kind: m.kind, enclosing: m.enclosing,
+                edge_kind: m.edge_kind, provenance: m.provenance, table: m.table, columns: m.columns, col_verified: m.col_verified,
+            })
+            .collect(),
+        tables: w.tables,
+        column_grain: w.column_grain,
+        filter_columns: w.filter_columns.into_iter().map(|(t, cols)| { let mut v = vec![t]; v.extend(cols); v }).collect(),
+        no_structure: w.no_structure,
+        reason: w.reason,
+        resolution_quality: w.resolution_quality,
+    }
+}
+
+/// Wire form of a `seam_shapes::CouplingSide`.
+#[napi(object)]
+pub struct CouplingSideDto {
+    pub symbol: String,
+    pub file: String,
+    pub line: u32,
+    pub kind: String,
+    pub role: String,
+    pub columns: Vec<String>,
+}
+
+/// Wire form of a `seam_shapes::CouplingKey` — one shared key of the anchor's boundary + its counterparts.
+#[napi(object)]
+pub struct CouplingKeyDto {
+    pub kind: String,
+    pub value: String,
+    pub anchor_role: String,
+    pub sides: Vec<CouplingSideDto>,
+}
+
+/// Wire form of a `seam_shapes::CouplingSet` (the anchor's whole DATA BOUNDARY).
+#[napi(object)]
+pub struct CouplingSetDto {
+    pub shape: String,
+    pub anchor_symbol: String,
+    pub anchor_file: String,
+    pub keys: Vec<CouplingKeyDto>,
+    pub total: u32,
+    pub no_structure: bool,
+    pub reason: Option<String>,
+}
+
+/// projectCoupling — the anchor's data boundary: every shared key it reads/writes, each with the counterpart
+/// sites on the other side. `symbol` scopes the key scan to that symbol's span; omit for the whole file.
+#[napi]
+pub fn project_coupling(repo: String, anchor_file: String, symbol: Option<String>) -> CouplingSetDto {
+    let c = seam_shapes::project_coupling(&repo, &anchor_file, symbol.as_deref());
+    CouplingSetDto {
+        shape: c.shape,
+        anchor_symbol: c.anchor_symbol,
+        anchor_file: c.anchor_file,
+        keys: c
+            .keys
+            .into_iter()
+            .map(|k| CouplingKeyDto {
+                kind: k.kind, value: k.value, anchor_role: k.anchor_role,
+                sides: k.sides.into_iter().map(|s| CouplingSideDto { symbol: s.symbol, file: s.file, line: s.line as u32, kind: s.kind, role: s.role, columns: s.columns }).collect(),
+            })
+            .collect(),
+        total: c.total as u32,
+        no_structure: c.no_structure,
+        reason: c.reason,
+    }
+}

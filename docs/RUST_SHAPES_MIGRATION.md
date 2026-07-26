@@ -43,8 +43,14 @@ TS dirs without checking the crates. Don't repeat it.)
 **Shapes in Rust**: `seam-shapes` is 1,027 lines — `project_set.rs`, `impact.rs`, `contract.rs`,
 `neighborhood.rs`, `compare.rs`, `reach.rs`, `refactor_facts.rs`, `collate.rs`.
 napi exposes 6: `project_impact`, `project_contract`, `project_consumer_set`, `project_dependency_set`,
-`project_neighborhood`, `project_compare`. **No napi for `reaches` or `refactor`** (crate code exists).
-**`writers` and `coupling` shapes have no Rust at all.**
+`project_neighborhood`, `project_compare`. ~~**No napi for `reaches` or `refactor`**~~ — WRONG when written:
+`find_reach` and `gather_refactor_facts` were already exported (that is how `rust/parity/reach.ts` and
+`shapes_set.ts`'s refactor block run at all). Verify with `node -e "console.log(Object.keys(require('./rust/seam_core.node')))"`
+before believing any list here. ~~**`writers` and `coupling` shapes have no Rust at all.**~~ — ported in
+Step 3 (`seam-shapes/src/writers.rs`, `coupling_shape.rs`).
+
+**As of Step 3 every shape has a Rust implementation AND a napi entry.** What remains before wiring is Step 4
+(flip one shape at a time behind the grow's guard) — plus the LLM-side gaps named below, which stay on TS.
 
 ---
 
@@ -180,10 +186,35 @@ will reintroduce them:
 Gate: `rust/parity/otherside.ts` and `rust/parity/resolvecoupling.ts`, plus a new shapes-with-coupling
 comparator (extend `shapes_set.ts` to run each anchor with `data_coupling` on and off).
 
-### Step 3 — fill the missing shapes.
-napi entries for `reaches` + `refactor` (crate code exists: `reach.rs`, `refactor_facts.rs`).
-Port `writers` + `coupling` shapes (no Rust at all).
-Gate: `rust/parity/reach.ts`, and new harnesses for writers/coupling.
+### Step 3 — fill the missing shapes. ✅ DONE
+
+**Step 3a was already done before this session started** — `find_reach` and `gather_refactor_facts` have had
+napi entries all along; §1's "no napi for reaches or refactor" was simply wrong (`rust/parity/reach.ts` calls
+`addon.findReach`, and it reports 72/72). Nothing to do; §1 corrected.
+
+**Step 3b — `writers` + `coupling` ported.** They live in the CLI on the TS side (`runWritersSet` /
+`runCouplingSet` in `ts/src/cli/queries.ts`), so the Rust port is the MODEL half only (render stays TS):
+`seam-shapes/src/writers.rs`, `seam-shapes/src/coupling_shape.rs`, napi `projectWriters` / `projectCoupling`.
+Two primitives had to come with them — `symbol_span` and `accessColumns` — now in
+`seam-couple/src/apply/columns.rs`.
+
+**Measured: `rust/parity/writers_coupling.ts` 60 ok / 0 bad over 30 anchors** (29 non-trivial, 9 exercising
+COLUMN grain — the harness reports that count, because a sample that never reaches the column intersection
+would otherwise read green while proving nothing). Also cold: `shapes_set` 214/0, `reach` 72/72,
+`couplingsides` 24/0, suite 1323 pass / 2 skip / 0 fail.
+
+The harness's ORACLE is the CLI itself (`--emit-seams`), since these shapes have no importable model module —
+stricter than importing a helper, because it pins the whole answer a user receives. Two CLI bugs fell out of
+building it, both fixed here:
+- `--emit-seams` was SILENTLY IGNORED on both shapes' empty path (`return 0` before the emit), so a
+  programmatic caller could not tell "reads no table" from "the query crashed" — no file either way.
+- the `writers` empty model omitted `columnGrain`/`filterColumns`, which the non-empty one carries and the
+  renderer reads unconditionally. A consumer should not have to special-case the shape of an empty answer.
+
+Regression test: `ts/test/coupling/rust_writers_coupling_shapes.test.ts` (hermetic, addon-guarded). Its
+expectations were verified against the TS engine on the SAME fixture, so it pins shared behaviour rather than
+a Rust quirk: writer found across files nothing links; column grain drops a writer that touches only
+un-filtered columns and KEEPS an opaque one flagged unverified; both roles; and the honest empty.
 
 ### Step 4 — wire, one shape at a time.
 Reuse the grow's guard verbatim — `rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)`

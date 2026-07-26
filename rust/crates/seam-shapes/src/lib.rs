@@ -3,6 +3,7 @@
 //! itself, so this stays a thin layer on top of the scan crate.
 
 pub mod collate;
+pub mod coupling_shape;
 pub mod compare;
 pub mod contract;
 pub mod impact;
@@ -10,6 +11,7 @@ pub mod project_set;
 pub mod reach;
 pub mod refactor_facts;
 pub mod neighborhood;
+pub mod writers;
 
 pub use collate::locale_compare;
 pub use compare::{project_compare, Comparison, CompareOpts, Dep};
@@ -22,3 +24,5 @@ pub use project_set::{
 pub use reach::{find_reach, ReachOpts, ReachResult, ReachStep};
 pub use refactor_facts::{gather_refactor_facts, RefactorFacts};
 pub use neighborhood::{project_neighborhood, Neighborhood, NeighborFile, NeighborhoodOpts};
+pub use writers::{project_writers, WriterMember, WritersSet};
+pub use coupling_shape::{project_coupling, CouplingKey, CouplingSet, CouplingSide};

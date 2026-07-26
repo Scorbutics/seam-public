@@ -230,18 +230,25 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   const readTables = [...new Set(readHits.map((h) => h.value))];
 
   const anchor = { symbol: a.symbol ?? basename(a.anchorFile!), file: a.anchorFile! };
+  // COLUMN-GRAIN (default on; SEAM_WRITERS_COLUMNS=0 = table-level). Read BEFORE the empty early-return so the
+  // model carries the same fields whether or not the answer is empty — a consumer should not have to special-case
+  // the shape of an empty answer (the renderer reads `columnGrain`/`filterColumns` unconditionally).
+  const colGrain = process.env.SEAM_WRITERS_COLUMNS !== "0";
   if (!readTables.length) {
     const model: any = { mode: "codebase", shape: "writers", anchor, members: [], unresolved: [],
-      resolutionQuality: "FULL", tables: [], noStructure: true, reason: "none" };
+      resolutionQuality: "FULL", tables: [], columnGrain: colGrain, filterColumns: {}, noStructure: true, reason: "none" };
     if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
     else process.stdout.write(`Writers of what '${anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
+    // An EMPTY answer is still an ANSWER, and `--emit-seams` is the programmatic caller's only channel: skipping
+    // the write here left it unable to tell "this symbol reads no table" from "the query crashed" — no file
+    // either way. Same honest-empty contract the shapes themselves keep.
+    if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
     return 0;
   }
 
   // 1b) COLUMN-GRAIN (default on; SEAM_WRITERS_COLUMNS=0 = table-level): the COLUMNS the center FILTERS on per table
   // (its `where` keys). A writer is kept only if it writes a column the reader filters on (that's what changes the
   // read's result); a writer whose columns we can't parse is KEPT but flagged unverified (never drop a real write).
-  const colGrain = process.env.SEAM_WRITERS_COLUMNS !== "0";
   const parseCache = new Map<string, any>();
   const readerCols = new Map<string, Set<string>>();   // table -> columns the center's where-clauses filter on
   if (colGrain) for (const h of readHits) {
@@ -323,6 +330,8 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
     const model: any = { mode: "codebase", shape: "coupling", anchor, keys: [], noStructure: true, reason: "none" };
     if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
     else process.stdout.write(`Coupling of '${anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
+    // see the same note on the `writers` empty path — an empty answer still owes the caller its model.
+    if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
     return 0;
   }
 
