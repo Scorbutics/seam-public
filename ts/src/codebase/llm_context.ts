@@ -26,7 +26,7 @@ import { type SnippetReader } from "./render/snippets.js";
 // The region/wave/scenario render family (renderLlmContext/renderWaves/renderScenarios + their shared
 // _floodParents helper) moved to render/region_views.ts — self-contained aside from the vocab/medium_registry
 // imports they (and the agent/concern renderers below) all share.
-export { renderLlmContext, renderWaves, renderScenarios } from "./render/region_views.js";
+export { renderLlmContext } from "./render/region_views.js";
 
 // AGENT RENDER (Phase 3) — the ONE token-budgeted projection a coding agent reads instead of reconstructing a
 // flow with a grep loop. Pure (reads only the emitted model, zero LLM, skeleton-compatible). Sections, in order:

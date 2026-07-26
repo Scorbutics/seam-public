@@ -45,12 +45,10 @@ import { runAsk, runConsumerSet, runDependencySet, runWritersSet, runCouplingSet
 // The llm_context view-renderer table — the one map both the codebase-mode format switch (runCodebase) and
 // the --from-seams switch look up into, instead of each hand-writing its own `if (a.format === "…") { const
 // {renderX} = await import(...); ... }` branch (the two had partially drifted copies of the same llm-context/
-// agent cases). --from-seams still only ALLOWS a subset of keys (it has no `concernCenters`, no live graph for
-// waves/scenarios to reconsider) — that restriction stays at its own call site, not in this table.
+// agent cases). --from-seams still only ALLOWS a subset of keys (it has no `concernCenters`) — that
+// restriction stays at its own call site, not in this table.
 const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { file: string; symbol: string }[]) => Promise<string>> = {
   "llm-context": async (m) => { const { renderLlmContext } = await import("../codebase/llm_context.js"); return renderLlmContext(m); },
-  waves: async (m) => { const { renderWaves } = await import("../codebase/llm_context.js"); return renderWaves(m); },
-  scenarios: async (m) => { const { renderScenarios } = await import("../codebase/llm_context.js"); return renderScenarios(m); },
   concern: async (m, a, concernCenters) => { const { renderConcern } = await import("../codebase/llm_context.js"); return renderConcern(m, { intent: a.intent, centers: concernCenters }); },
   // The agent (region) render now carries the UPSTREAM entry surface too, so it honours the same picked centers as
   // `concern` when the caller named them (`--center`); without them it seeds the surface from the region anchor.
@@ -186,6 +184,17 @@ async function runCodebase(a: Args): Promise<number> {
   // library/MCP consumer that bypasses the CLI still gets the throw instead of a silent zero.
   const { requireAvailable } = await import("../core/treesitter.js");
   try { requireAvailable("a codebase query"); } catch (e) { err((e as Error).message); }
+
+  // An UNKNOWN --format is a caller mistake, and silence is the wrong answer: an unrecognised value used to fall
+  // through to whichever branch happened to be last, so `--format waves` (a view that no longer exists) still
+  // printed a DIFFERENT render with exit 0. The caller cannot tell that from the view they asked for. Same rule
+  // as the undeclared-anchor guard: refuse, and name what IS addressable. Sourced from the renderer table plus
+  // the two non-view sinks, so it can never drift from what the dispatch actually supports.
+  const _CODEBASE_FORMATS = [...Object.keys(VIEW_RENDERERS), "json"].sort();
+  // "none" is the parser's default sentinel (no view asked for — e.g. --stream / --emit-seams), not a view name.
+  if (a.format && a.format !== "none" && !_CODEBASE_FORMATS.includes(a.format))
+    err(`--format "${a.format}" is not a codebase view. Available: ${_CODEBASE_FORMATS.join(", ")}\n`
+      + `       (refusing to answer: an unrecognised format used to silently render a DIFFERENT view with exit 0)`);
   // A --center that does not EXIST under --repo is a caller mistake (nearly always a forgotten --repo, so the paths
   // resolve against the wrong tree). Growing from a nonexistent anchor produced the WORST possible output: a
   // confident, well-formed `## No callers — Nothing in the repo calls this symbol`. An authoritative-looking empty
@@ -214,7 +223,7 @@ async function runCodebase(a: Args): Promise<number> {
   // WITHOUT `--auto`; without this it silently falls through to the diff-style decompose (the confusing
   // `Decomposed anchor 'mod'` line) instead of the map. The legacy `--scan --anchor-file --symbol` plain-footprint
   // path (no --center, no --intent, no map format) is untouched.
-  const _MAP_FMT = new Set(["agent", "concern", "llm-context", "waves", "scenarios", "json"]);
+  const _MAP_FMT = new Set(["agent", "concern", "llm-context", "json"]);
   if (a.scan && !a.auto && !a.growFrom && (a.intent || _MAP_FMT.has(a.format))) a.auto = true;
   // SINGLE-DEF FILE CENTER → resolve it STRUCTURALLY (don't fall into the SEMANTIC concern center-first, whose
   // intent-relevance ranking can crown an off-subject shared-key cluster — the `/member/v1/survey` route out-
@@ -636,7 +645,7 @@ async function runCodebase(a: Args): Promise<number> {
       } else if (a.format === "json") {               // EXPLICIT raw model to stdout (the machine escape — `seam … > out.json`)
         process.stderr.write(`Decomposed ${nSeams} seam(s) across ${model2.clusters?.length ?? 0} cluster(s) from ${g2.nodes.size} symbol(s) → JSON on stdout.\n`);
         process.stdout.write(payload + "\n");
-      } else {                                        // llm-context/waves/scenarios/concern, or the DEFAULT+fallback agent surface
+      } else {                                        // llm-context/concern, or the DEFAULT+fallback agent surface
         const render = VIEW_RENDERERS[a.format] ?? VIEW_RENDERERS.agent;
         process.stdout.write(await render(stamped, a, concernCenters) + "\n");
       }
@@ -817,7 +826,7 @@ async function main(argv: string[]): Promise<number> {
   // `llm-context` format is a token-economical, no-collapse, confidence-ranked view for a downstream agent.
   if (a.fromSeams) {
     const m = JSON.parse(readFileSync(a.fromSeams, "utf-8"));
-    // Only these two — --from-seams has no live graph to re-derive waves/scenarios/concern's centers from.
+    // Only these two — --from-seams has no live graph to re-derive concern's centers from.
     if (a.format !== "llm-context" && a.format !== "agent") err("--from-seams supports --format llm-context | agent");
     process.stdout.write(await VIEW_RENDERERS[a.format](m, a) + "\n");
     return 0;

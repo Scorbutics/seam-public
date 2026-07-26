@@ -60,7 +60,7 @@ export function parseArgs(argv: string[]): Args {
       case "--snippets": { const n = argv[i + 1]; a.snippets = /^\d+$/.test(n ?? "") ? parseInt(argv[++i], 10) : SNIPPET_CTX; break; }
       case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
       case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
-      case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | waves | scenarios | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
+      case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
       case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
       case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout
       case "--classifier": a.classifier = next(); break;
@@ -148,7 +148,7 @@ export function parseArgs(argv: string[]): Args {
   // LLM seam-intent (ranking/tiering) + refine passes are redundant latency/cost (and the pass that can stall a
   // whole run on a slow backend). Default them OFF (the det skeleton: spine + structural labels + blindspots).
   // `--rank` / `--no-skeleton` forces them back on.
-  if ((a.format === "llm-context" || a.format === "waves" || a.format === "scenarios") && a.skeleton === undefined) a.skeleton = true;
+  if (a.format === "llm-context" && a.skeleton === undefined) a.skeleton = true;
   // --center is the UNIVERSAL node address (supersedes --anchor-file/--symbol). Expand the FIRST center into the
   // internal anchor so EVERY mode — static footprint (§B), structural shapes (§D), single-anchor + concern grow
   // (§C) — accepts --center. A bare `file` is a MODULE anchor (no symbol); `file#symbol` pins one node. An

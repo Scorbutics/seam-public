@@ -53,7 +53,7 @@ export const _shellOf = (s: Seam): number => ((s as any).region?.shell ?? -1);
 
 // The per-NODE (hunk-id) index every render view rebuilds by hand: id -> its owning seam, its raw hunk, and
 // its display label (the hunk's own label, falling back to the seam's when a hunk carries none — a seam-level
-// synthetic node). renderAgent/renderConcern/region_views's _floodParents/renderScenarios each used to walk
+// synthetic node). renderAgent and renderConcern each used to walk
 // `for (const s of seams) for (const h of s.hunks ?? [])` independently to build their own shape of this same
 // index; this is the one shared traversal, callers derive whatever narrower shape (hunkById/seamOfId/label
 // maps, …) they want from it.

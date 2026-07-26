@@ -29,9 +29,8 @@ export async function runAsk(a: Args): Promise<number> {
   if (res.routedAway || !res.result) { process.stdout.write((res.guidance ?? "") + "\n"); return 0; }
 
   const model: any = res.result.mode ? res.result : { mode: "codebase", ...res.result };
-  if (a.format === "llm-context" || a.format === "waves" || a.format === "scenarios") {
+  if (a.format === "llm-context") {
     const lc = await import("../codebase/llm_context.js");
-    // the SET/deps/reaches/… shapes have no flood-wave structure, so `--format waves` only changes the flow view.
     const r = res.result.shape === "set" ? lc.renderConsumerSet
       : res.result.shape === "deps" ? lc.renderDependencySet
       : res.result.shape === "reaches" ? lc.renderReach
@@ -40,8 +39,6 @@ export async function runAsk(a: Args): Promise<number> {
       : res.result.shape === "refactor" ? lc.renderRefactorFacts
       : res.result.shape === "neighborhood" ? lc.renderNeighborhood
       : res.result.shape === "comparison" ? lc.renderComparison
-      : a.format === "waves" ? lc.renderWaves            // flow → wave view (flood order)
-      : a.format === "scenarios" ? lc.renderScenarios    // flow → per-scenario sequence diagrams
       : lc.renderLlmContext;                             // flow → the region renderer
     process.stdout.write(r(model, await snippetReaderOf(a)) + "\n");
   }
