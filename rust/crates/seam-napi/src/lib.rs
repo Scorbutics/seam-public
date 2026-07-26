@@ -1820,3 +1820,64 @@ pub fn classify_receivers(repo: String, model: Option<String>, claude_bin: Optio
 pub fn classify_annotations(repo: String, model: Option<String>, claude_bin: Option<String>) -> u32 {
     seam_couple::learn::classify_annotations(&repo, model.as_deref(), claude_bin.as_deref()).len() as u32
 }
+
+/// A learned carrier adapter (wire form of `seam_couple::CarrierSignature`).
+#[napi(object)]
+pub struct CarrierSignatureDto {
+    pub direction: String,
+    pub medium: String,
+    pub key_arg: Option<i64>,
+    pub name: String,
+    pub description: String,
+}
+
+/// prefetchCarrierSignatures — learn signatures for OPAQUE carrier methods in batched calls and persist every
+/// verdict (including the NON-carrier ones, so they are never re-asked). `methods` = [[class, method, source],…].
+/// Returns `[asked, carriers, nonCarriers]`. Degrades to zeros with no backend.
+#[napi]
+pub fn prefetch_carrier_signatures(repo: String, lang: String, methods: Vec<Vec<String>>, synth_budget: Option<i64>, model: Option<String>, claude_bin: Option<String>) -> Vec<u32> {
+    let ms: Vec<(String, String, String)> = methods
+        .into_iter()
+        .filter(|m| m.len() >= 3)
+        .map(|m| (m[0].clone(), m[1].clone(), m[2].clone()))
+        .collect();
+    let o = seam_couple::learn::prefetch_carrier_signatures(&repo, &lang, &ms, synth_budget.unwrap_or(16), model.as_deref(), claude_bin.as_deref());
+    vec![o.asked as u32, o.carriers as u32, o.non_carriers as u32]
+}
+
+/// resolveCarrierSignature — the learned signature for an opaque method, from the cache only (never a call).
+#[napi]
+pub fn resolve_carrier_signature(repo: String, class_name: String, method: String, src: String) -> Option<CarrierSignatureDto> {
+    seam_couple::learn::resolve_carrier_signature(&repo, &class_name, &method, &src).map(|s| CarrierSignatureDto {
+        direction: s.direction, medium: s.medium, key_arg: s.key_arg, name: s.name, description: s.description,
+    })
+}
+
+/// hasLearnedCarrier — does this repo hold any learned carrier? The gate that lets the carrier engine run warm.
+#[napi]
+pub fn has_learned_carrier(repo: String) -> bool {
+    seam_couple::learn::has_learned_carrier(&repo)
+}
+
+/// carrierMethodSource — the brace-balanced source of `method` in `text` (the payload the synth judges).
+#[napi]
+pub fn carrier_method_source(text: String, method: String) -> Option<String> {
+    seam_couple::learn::carrier::method_source(&text, &method)
+}
+
+/// persistCarrierSignature — write a verdict into the repo store. Exposed so the cross-engine store-compat
+/// comparator can have RUST write and TS read (a store only one engine can read is not a shared cache).
+#[napi]
+pub fn persist_carrier_signature(repo: String, key: String, sig: Option<CarrierSignatureDto>) {
+    seam_couple::learn::carrier::persist_signature(
+        &repo,
+        &key,
+        sig.map(|s| seam_couple::CarrierSignature { direction: s.direction, medium: s.medium, key_arg: s.key_arg, name: s.name, description: s.description }),
+    );
+}
+
+/// carrierContentKey — `Class#method <sha1(src)>`, the content-hash cache key both engines must agree on.
+#[napi]
+pub fn carrier_content_key(class_name: String, method: String, src: String) -> String {
+    seam_couple::learn::carrier::content_key(&class_name, &method, &src)
+}

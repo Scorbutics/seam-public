@@ -12,6 +12,7 @@ pub mod key_store;
 pub mod per_file_keys;
 pub mod compose_learn;
 pub mod receiver_class;
+pub mod carrier;
 
 pub use matchers::{load_matchers, run_matcher, run_matcher_at, KeyMatcher};
 pub use effect_inference::{infer_http_clients, http_client_matchers, resolve_http_call_sites};
@@ -20,4 +21,5 @@ pub use discover::{collect_blind, learn_matchers, BlindCollection, LearnOutcome}
 pub use per_file_keys::{anchor_proposed_keys, batch_synthesize, candidate_passages, content_key};
 pub use compose_learn::{compose_learn, ComposeOutcome};
 pub use receiver_class::{classify_annotations, classify_receivers};
+pub use carrier::{has_learned_carrier, prefetch_carrier_signatures, resolve_carrier_signature, CarrierSignature, SynthOutcome};
 pub use key_store::{cached_file_keys, has_key_cache, persist_file_keys, persist_file_keys_batch, KeyAdapter};

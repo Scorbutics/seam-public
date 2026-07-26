@@ -338,7 +338,28 @@ claudeBin)` — **so the Step-2 caveat is GONE, the LLM overlay is Rust-native.*
 `db-table`, which NEITHER engine does (`route|endpoint|http|url|path` are the only aliases) — the test was
 wrong, not the code.
 
-**B3 `route_composer` LLM branch · B4 `receiver_class` · B5 `carrier/synth` — still TS.**
+**B3 ✅** the composed-route axis (`learn/compose_learn.rs`): demand gate, mount-chain evidence, compose,
+one retry, persist. Its harness (`composeroutes.ts`) found FOUR real porting bugs on first run — the class
+regex missed `interface`/`record` (so every keycloak admin-client sub-resource was invisible), per-class vs
+file-wide attribution, an anchored control-keyword filter, and locators emitting the raw literal instead of one
+pair per normalised segment. After the rewrite: 7678/0 over 4000 files (87 sub-resources, 48 locators).
+
+**B4 ✅** receiver + annotation classification (`learn/receiver_class.rs`): the externality gate, nested
+sub-handles, both-sides-or-nothing for a `service` handle, custom route annotations only. Gate compares the
+CANDIDATE SET — which decides what the classifier is ever asked, and whose prompt lines ARE the learn-once
+signature: cal.com 80=80, keycloak 80=80, order identical.
+
+**B5 ✅** the carrier axis (`learn/carrier.rs`) — the one with no Rust at all: the constrained signature IR
+(direction + medium + key argument), validated against a closed vocabulary, batched synthesis, and the
+content-hash store. A `null` verdict is cached TOO (a known non-carrier must not be re-asked) but only when the
+pass actually ANSWERED — caching a null from a failed call would permanently blind the engine to a real carrier.
+Gate: `carrierstore.ts` proves the store is cross-engine readable BOTH ways (Rust writes → TS reads, TS writes →
+Rust reads, same content key, same schema) — 9/0. That matters because `.seam/carrier-signatures.json` is a
+shared, committed cache: if the engines disagreed about its shape, a warm run would silently re-learn forever.
+
+**THE FLYWHEEL IS NOW ENTIRELY IN RUST.** Every axis — matcher rules, per-file keys, composed routes, receiver
+and annotation classification, carrier signatures — collects, prompts, parses, validates, persists and replays
+inside the core, serving its own model calls. What remains in TS is render, CLI and diff.
 
 ---
 
