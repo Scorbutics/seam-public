@@ -394,6 +394,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "seam-llm"
+version = "0.0.0"
+dependencies = [
+ "once_cell",
+ "regex",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "seam-napi"
 version = "0.0.0"
 dependencies = [
@@ -406,6 +416,7 @@ dependencies = [
  "seam-fs",
  "seam-grow",
  "seam-lang",
+ "seam-llm",
  "seam-resolve",
  "seam-scan",
  "seam-shapes",

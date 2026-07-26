@@ -156,8 +156,9 @@ TWO THINGS TO KNOW BEFORE STEP 4:
   overlay", NOT "attach cross-stack".
 - ~~`data_coupling: true` LOSES a resolved structural member~~ — FIXED (the `merge_resolved` last-wins identity
   bug; see §7). The comparator that found it stays: it pins the two engines agreeing at the same flag setting.
-- The LLM anchor-key proposal (`--data-coupling llm` → `anchorProposedKeys`) has NO Rust counterpart, so the
-  Rust bridge is the `SEAM_COUPLING=floor` answer. Wiring must keep an LLM-requested overlay on TS.
+- The LLM anchor-key proposal (`--data-coupling llm` → `anchorProposedKeys`) has NO Rust counterpart YET, so
+  the Rust bridge is the `SEAM_COUPLING=floor` answer. Wiring must keep an LLM-requested overlay on TS until
+  §6b/B2 lands — that is scheduled, not permanent.
 
 Regression test: `ts/test/coupling/rust_bridge_cross_stack.test.ts` (hermetic, addon-guarded) — finds the
 crossing nothing links, byte-identical to TS, states its bound, and is identical across repeated runs.
@@ -286,6 +287,45 @@ the scratchpad is gone; the fixture alone is NOT sufficient, it passed throughou
 - **Do not `git stash`** with concurrent work in the tree — it silently reverted another worker's in-flight
   edits once.
 - **Do not trust a green repro after an addon change** without bumping `ENGINE_EPOCH`.
+
+---
+
+## 6b. THE FLYWHEEL MOVES TO RUST (decided 2026-07-26)
+
+**Target: the Rust core is SELF-CONTAINED — it holds the whole flywheel, and no flywheel logic stays in TS.**
+The core spawns the model ITSELF (decided explicitly; the alternative — keeping a thin JS driver, which is
+what `discover.rs` was built for — was rejected). TS keeps render + CLI + diff only.
+
+Where the flywheel actually lives, measured (do not trust a summary — `ls` the crates):
+
+| axis | LEARN (cold, LLM) | REPLAY (warm, deterministic) |
+|---|---|---|
+| matcher rules | **Rust** `learn/discover.rs` (state machine) | **Rust** `learn/matchers.rs` |
+| per-file keys | TS `llm_key_index.ts` | **Rust** `learn/key_index/files_cache.rs` |
+| anchor-proposed keys | TS `anchorProposedKeys` | n/a (per-query) |
+| composed routes | TS `route_composer.ts` | **Rust** `learn/key_index/compose_routes.rs` |
+| receiver classification | TS `receiver_class.ts` | via the matcher store → Rust |
+| carrier synth | TS `carrier/synth.ts` | — none |
+| effect inference | **Rust** | **Rust** |
+
+So every REPLAY path is already Rust; what remains is the COLD half of four axes (~1,000–1,200 lines of TS).
+
+**A — the transport. ✅ DONE.** `crates/seam-llm` ports `ts/src/core/llm.ts`: backend resolution
+(`CLAUDE_BIN` → PATH → newest VS Code extension binary → `COPILOT_BIN`/PATH, with a bad `--claude-bin` an
+ERROR not a silent fallback), claude arg/env building + envelope parse + usage metering, copilot's
+prompt-file + MCP-config isolation, the hang-guard timeout, upgrade-only tier routing, and
+`extract_json_array`. napi: `llmResolveBackend`, `llmAvailable`, `llmRouteModel`, `llmExtractJsonArray`,
+`llmRunPass`, `llmUsage`. Gate: `rust/parity/llm_transport.ts` 17/0 (resolution, routing, and 10 reply-parse
+cases incl. the ones that MUST fail), plus `--live` (one real pass through both transports; it compares that
+both SUCCEED, not that the text matches — the model is not deterministic). Measured live: both OK, usage
+metered. 5 Rust unit tests.
+
+**Order for the rest** (each: port the cold half as Rust-owned logic calling `seam-llm`, add a comparator,
+keep the TS path until its comparator is green):
+B1 per-file keys (`llmKeyIndex` llm-on) — the biggest recall lever.
+B2 `anchorProposedKeys` — small, and it is what makes the Step-2 bridge's LLM mode Rust-native.
+B3 `route_composer` LLM branch. B4 `receiver_class`. B5 `carrier/synth`.
+Only after B1–B5 does the Step-2 caveat "an LLM-requested overlay must stay on TS" disappear.
 
 ---
 

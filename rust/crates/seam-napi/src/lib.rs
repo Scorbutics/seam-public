@@ -1653,3 +1653,55 @@ pub fn project_coupling(repo: String, anchor_file: String, symbol: Option<String
         reason: c.reason,
     }
 }
+
+// ── LLM TRANSPORT (seam-llm) ─────────────────────────────────────────────────────────────────────────────
+// The core resolves its own backend and runs its own passes, so the flywheel needs no JS. These entries exist
+// so the TS shell can DELEGATE to the same client (one transport, one set of semantics) and so a harness can
+// compare the pure halves — resolution and reply parsing — against the TS implementation without spending a
+// real model call.
+
+/// The backend the core would use: `[kind, path]` (kind = "claude" | "copilot"), or throws with the same
+/// message the TS resolver produces. Port of `resolve_backend`.
+#[napi]
+pub fn llm_resolve_backend(claude_bin: Option<String>) -> napi::Result<Vec<String>> {
+    match seam_llm::resolve_backend(claude_bin.as_deref()) {
+        Ok((kind, path)) => Ok(vec![kind.as_str().to_string(), path]),
+        Err(e) => Err(napi::Error::from_reason(e.0)),
+    }
+}
+
+/// Is any LLM backend reachable? The gate every flywheel axis checks before spending a cold pass.
+#[napi]
+pub fn llm_available(claude_bin: Option<String>) -> bool {
+    seam_llm::available(claude_bin.as_deref())
+}
+
+/// The tier-routed model for `(tag, base)` — upgrade-only, never a downgrade.
+#[napi]
+pub fn llm_route_model(tag: Option<String>, base: String) -> String {
+    seam_llm::route_model(tag.as_deref(), &base)
+}
+
+/// A model reply → the JSON array it contains, as a JSON string. Throws when the reply holds none (an
+/// unparseable reply is a FAILED pass that degrades to the floor, never an empty answer).
+#[napi]
+pub fn llm_extract_json_array(text: String) -> napi::Result<String> {
+    match seam_llm::extract_json_array(&text) {
+        Ok(v) => Ok(serde_json::to_string(&v).unwrap_or_else(|_| "[]".into())),
+        Err(e) => Err(napi::Error::from_reason(e.0)),
+    }
+}
+
+/// Run ONE pass through the core's own transport and return the model's raw text.
+#[napi]
+pub fn llm_run_pass(prompt: String, model: Option<String>, tag: Option<String>, thinking: Option<i64>, claude_bin: Option<String>) -> napi::Result<String> {
+    let opts = seam_llm::PassOpts { model, tag, thinking, claude_bin };
+    seam_llm::run_pass(&prompt, &opts).map_err(|e| napi::Error::from_reason(e.0))
+}
+
+/// What the core's passes have SPENT this process: `[calls, input_tokens, output_tokens, cost_usd_milli, duration_ms]`.
+#[napi]
+pub fn llm_usage() -> Vec<f64> {
+    let u = seam_llm::get_usage();
+    vec![u.calls as f64, u.input_tokens as f64, u.output_tokens as f64, u.cost_usd, u.duration_ms as f64]
+}

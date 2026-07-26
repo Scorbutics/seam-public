@@ -9,7 +9,7 @@
 #   seam-napi     thin napi binding (DTOs + entry points)  — deps: all
 [workspace]
 resolver = "2"
-members = ["crates/seam-fs", "crates/seam-lang", "crates/seam-resolve", "crates/seam-scan", "crates/seam-shapes", "crates/seam-couple", "crates/seam-grow", "crates/seam-cache", "crates/seam-napi"]
+members = ["crates/seam-llm", "crates/seam-fs", "crates/seam-lang", "crates/seam-resolve", "crates/seam-scan", "crates/seam-shapes", "crates/seam-couple", "crates/seam-grow", "crates/seam-cache", "crates/seam-napi"]
 
 [workspace.package]
 version = "0.0.0"
