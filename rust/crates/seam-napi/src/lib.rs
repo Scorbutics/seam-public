@@ -1736,3 +1736,55 @@ pub fn discover_learn(repo: String, key_budget: Option<i64>, scope_files: Option
         note: o.note,
     }
 }
+
+/// One mount-blind handler of a sub-resource class.
+#[napi(object)]
+pub struct HandlerDto {
+    pub name: String,
+    pub verb: String,
+    pub line: u32,
+    pub own: Option<String>,
+}
+
+/// A class MOUNTED as a sub-resource: no class-level route, so its handlers' paths come from the mount chain.
+#[napi(object)]
+pub struct SubResourceDto {
+    pub class_name: String,
+    pub handlers: Vec<HandlerDto>,
+}
+
+/// subResources — the mount-blind handler classes declared in `text`. Detection only (no model call).
+#[napi]
+pub fn sub_resources(text: String) -> Vec<SubResourceDto> {
+    seam_couple::learn::compose_learn::sub_resources(&text)
+        .into_iter()
+        .map(|s| SubResourceDto {
+            class_name: s.class_name,
+            handlers: s.handlers.into_iter().map(|h| HandlerDto { name: h.name, verb: h.verb, line: h.line as u32, own: h.own }).collect(),
+        })
+        .collect()
+}
+
+/// routeLocators — the `(mounted class, segment)` pairs `text` declares. Detection only (no model call).
+#[napi]
+pub fn route_locators(text: String) -> Vec<Vec<String>> {
+    seam_couple::learn::compose_learn::locators(&text).into_iter().map(|(rt, seg)| vec![rt, seg]).collect()
+}
+
+/// What one composition run did.
+#[napi(object)]
+pub struct ComposeOutcomeDto {
+    pub detected: u32,
+    pub demanded: u32,
+    pub composed: u32,
+}
+
+/// composeLearn — compose the DEMANDED sub-resource classes' full HTTP paths inside the core and persist them,
+/// so every later run replays with no model call. `scopeFiles` bounds the DEMAND to a flow's files; omit for
+/// repo-wide. Degrades to zeros (never throws) with no backend.
+#[napi]
+pub fn compose_learn(repo: String, scope_files: Option<Vec<String>>, model: Option<String>, claude_bin: Option<String>) -> ComposeOutcomeDto {
+    let scope: Option<std::collections::HashSet<String>> = scope_files.filter(|s| !s.is_empty()).map(|s| s.into_iter().collect());
+    let o = seam_couple::learn::compose_learn(&repo, scope.as_ref(), model.as_deref(), claude_bin.as_deref());
+    ComposeOutcomeDto { detected: o.detected as u32, demanded: o.demanded as u32, composed: o.composed as u32 }
+}
