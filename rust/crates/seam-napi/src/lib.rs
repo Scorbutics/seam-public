@@ -1522,12 +1522,13 @@ pub struct CouplingSidesDto {
     pub truncations: Vec<CouplingTruncationDto>,
 }
 
-/// couplingOtherSides — the CROSS-STACK overlay for one anchor SYMBOL, by targeted value-grep. Deterministic
-/// (floor + already-learned matchers); the LLM anchor-key proposal pass is TS-only, so this is the
-/// `SEAM_COUPLING=floor` answer. A fresh per-call budget/cache, matching the CLI's fresh-EngineCtx-per-query.
+/// couplingOtherSides — the CROSS-STACK overlay for one anchor SYMBOL, by targeted value-grep. `llm` opts into
+/// the anchor-key PROPOSAL pass (`--data-coupling llm`), which is now served by the core itself; omitted/false
+/// gives the deterministic `SEAM_COUPLING=floor` answer. A fresh per-call budget/cache, matching the CLI's
+/// fresh-EngineCtx-per-query.
 #[napi]
-pub fn coupling_other_sides(repo: String, anchor_file: String, symbol: String) -> CouplingSidesDto {
-    let mut ctx = seam_couple::BridgeCtx::default();
+pub fn coupling_other_sides(repo: String, anchor_file: String, symbol: String, llm: Option<bool>, model: Option<String>, claude_bin: Option<String>) -> CouplingSidesDto {
+    let mut ctx = seam_couple::BridgeCtx { llm: llm.unwrap_or(false), model, claude_bin, ..Default::default() };
     let sides = seam_couple::coupling_other_sides(&repo, &anchor_file, &symbol, &mut ctx);
     CouplingSidesDto {
         sides: sides

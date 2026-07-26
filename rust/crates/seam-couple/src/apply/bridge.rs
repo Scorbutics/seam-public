@@ -76,11 +76,23 @@ pub struct BridgeCtx {
     pub file_key_scan: HashMap<String, Vec<KeyHit>>,
     pub candidate_scan_budget: i64,
     pub truncations: Vec<Truncation>,
+    /// LLM key PROPOSAL for the anchor (`--data-coupling llm`). Off ⇒ the deterministic floor answer. The
+    /// proposal only ADDS keys the floor could not read; it can never remove or override a grounded one.
+    pub llm: bool,
+    pub model: Option<String>,
+    pub claude_bin: Option<String>,
 }
 
 impl Default for BridgeCtx {
     fn default() -> Self {
-        Self { file_key_scan: HashMap::new(), candidate_scan_budget: candidate_scan_budget(), truncations: Vec::new() }
+        Self {
+            file_key_scan: HashMap::new(),
+            candidate_scan_budget: candidate_scan_budget(),
+            truncations: Vec::new(),
+            llm: false,
+            model: None,
+            claude_bin: None,
+        }
     }
 }
 
@@ -172,6 +184,18 @@ pub fn coupling_other_sides(repo: &str, anchor_file: &str, symbol: &str, ctx: &m
     for h in ctx.file_key_scan.get(anchor_file).cloned().unwrap_or_default() {
         if h.line >= lo && h.line <= hi && plausible_key_value(&h.value) {
             anchor_keys.insert(format!("{} {} {}", h.kind, h.value, h.produces), (h.kind, h.value, h.produces));
+        }
+    }
+    // LLM-PROPOSED anchor keys (`--data-coupling llm`): what the model can read that the floor cannot — a
+    // templated route, a config-indirected table. Stamped at the symbol's own line so the span filter keeps
+    // them, and ADDITIVE by construction: `anchor_proposed_keys` already subtracts everything the floor found,
+    // so a proposal can only widen the boundary, never contradict a grounded key. Cached per file content, so
+    // it costs a model call once and replays free. Port of the `opts.llm` branch of couplingOtherSides.
+    if ctx.llm {
+        for h in crate::learn::anchor_proposed_keys(repo, anchor_file, &anchor_text, true, ctx.model.as_deref(), ctx.claude_bin.as_deref()) {
+            if plausible_key_value(&h.value) {
+                anchor_keys.insert(format!("{} {} {}", h.kind, h.value, h.produces), (h.kind, h.value, h.produces));
+            }
         }
     }
     if anchor_keys.is_empty() {

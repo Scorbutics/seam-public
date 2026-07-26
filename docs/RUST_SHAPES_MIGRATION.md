@@ -322,10 +322,23 @@ metered. 5 Rust unit tests.
 
 **Order for the rest** (each: port the cold half as Rust-owned logic calling `seam-llm`, add a comparator,
 keep the TS path until its comparator is green):
-B1 per-file keys (`llmKeyIndex` llm-on) — the biggest recall lever.
-B2 `anchorProposedKeys` — small, and it is what makes the Step-2 bridge's LLM mode Rust-native.
-B3 `route_composer` LLM branch. B4 `receiver_class`. B5 `carrier/synth`.
-Only after B1–B5 does the Step-2 caveat "an LLM-requested overlay must stay on TS" disappear.
+**B1 ✅** the matcher axis drives ITSELF (`learn_matchers`), and the SETTLING MARKS — which were never ported —
+now persist (`no-boundary-shape` always, `cluster-covered` only on a run that learned). Without them a warm run
+re-learns every blind file, the store grows, the epoch bumps and the answer cache never settles. The JS driver
+is gone. Found while measuring: `rust_discover_scoped`'s cost-parity case failed 4-vs-2 because its fake backend
+echoed a bare `[]` instead of a claude ENVELOPE, so it measured the malformed-reply degrade path; with a
+faithful stub both engines take 2 calls. Fixed the stub, kept the assertion.
+
+**B2 ✅** the per-file key axis (`learn/per_file_keys.rs`): `candidate_passages` (head ⊕ deep string-key
+windows), the batch prompt/parse, the DEFINED-NAMES guard (the model echoes a class/method name back as a
+"key", and echoes ground against each other), the file-derived adapter meta, and `anchor_proposed_keys`
+(floor-diffed, content-cached). Wired into the bridge: `couplingOtherSides(repo, file, symbol, llm, model,
+claudeBin)` — **so the Step-2 caveat is GONE, the LLM overlay is Rust-native.** Gates unchanged: shapes_set
+214/0, couplingsides 16/0, suite 1323/0. 4 Rust unit tests; one of them initially asserted `table` →
+`db-table`, which NEITHER engine does (`route|endpoint|http|url|path` are the only aliases) — the test was
+wrong, not the code.
+
+**B3 `route_composer` LLM branch · B4 `receiver_class` · B5 `carrier/synth` — still TS.**
 
 ---
 
