@@ -47,7 +47,7 @@ fn to_delta(r: seam_couple::CouplingResult) -> Delta {
         nodes: r
             .nodes
             .into_iter()
-            .map(|n| GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None })
+            .map(|n| GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None, unlocated: false })
             .collect(),
         edges: r
             .edges
@@ -496,6 +496,7 @@ fn rehydrate_fan_delta_method_precise(delta: Delta, src_id: &str, src_range: Opt
             coupling: true,
             direction: None,
             hub: None,
+            unlocated: false,   // a minted unit node carries its real declaration range
         });
         mint_edges.push(GraphEdge { from: src_id.to_string(), to: id.clone(), kind: "call".to_string(), provenance: "RESOLVED_PARTIAL".to_string(), line: Some(unit.start), op: None });
         minted.insert(u, id.clone());

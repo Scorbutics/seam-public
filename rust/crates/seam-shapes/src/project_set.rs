@@ -63,8 +63,20 @@ fn is_resolved(p: &str) -> bool {
 // `line` is what a human/editor jumps to, so it is 1-BASED. Converting per-branch is what produced the systematic
 // off-by-one every projected consumer carried. Route EVERY line through this — a raw `range.0` or `e.line`
 // reaching a member is the bug, by construction. Mirrors `to1` in ts/src/codebase/grow/project_set.ts.
-fn to1(l: Option<usize>) -> usize {
+pub(crate) fn to1(l: Option<usize>) -> usize {
     l.map_or(0, |v| v + 1)
+}
+
+/// A node's declaration start, or `None` when the node is UNLOCATED (its `range` is the (0,0) sentinel the
+/// up-scan places when no real site was grounded). Shared by every projection that cites a node — see
+/// `GraphNode::unlocated`. A projected `line` of 0 means "no line": renderers print no location at all.
+/// Mirrors `_start` in ts/src/codebase/grow/project_set.ts.
+pub fn start_of(n: &seam_scan::graph::GraphNode) -> Option<usize> {
+    if n.unlocated {
+        None
+    } else {
+        Some(n.range.0)
+    }
 }
 
 // Project the anchor's direct edges in ONE direction into a SET. `in` = consumers (edges TO the anchor →
@@ -87,7 +99,9 @@ fn project_edge_set(graph: &ResolvedGraph, dir_in: bool, shape: &str) -> Consume
             file: n.file.clone(),
             // `edge.line` is the USAGE/CALL line in the CONSUMER's file — right for `in` (the member IS the
             // consumer) but WRONG for `out` (the member is the DEP), so `out` uses the dep's own declaration.
-            line: to1(if dir_in { e.line.or(Some(n.range.0)) } else { Some(n.range.0).or(e.line) }),
+            // `unlocated` nodes carry the (0,0) SENTINEL, not a range — never fall back to it (that is how a
+            // bare barrel re-export got cited as `index.ts:1`). `to1(None)` → 0 = "no line", omitted by the render.
+            line: to1(if dir_in { e.line.or_else(|| start_of(n)) } else { start_of(n).or(e.line) }),
             kind: n.kind.clone(),
             enclosing: n.enclosing.clone(),
             edge_kind: e.kind.clone(),

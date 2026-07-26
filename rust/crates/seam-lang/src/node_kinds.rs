@@ -195,6 +195,11 @@ pub fn is_export_specifier(k: &str) -> bool {
     k == "export_specifier"
 }
 
+/// The `default` KEYWORD node marking an `export default …` statement. Mirrors TS `_EXPORT_DEFAULT`.
+pub fn is_export_default(k: &str) -> bool {
+    k == "default"
+}
+
 /// Node FIELD names carrying a function-like's DECLARED RETURN TYPE (TS `return_type`, Java's `type`).
 /// Mirrors TS `_RETURN_TYPE_FIELD`.
 pub const RETURN_TYPE_FIELD: &[&str] = &["return_type", "type"];

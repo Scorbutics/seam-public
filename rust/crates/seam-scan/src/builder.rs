@@ -47,14 +47,22 @@ impl GraphBuilder {
     /// when none was grounded (the projection then falls back to the member's declaration). Carrying it is what
     /// lets a blast-radius answer cite where the edit actually is instead of the consuming unit's `function` line.
     pub fn add_consumer(&mut self, key: String, symbol: &str, kind: &str, file: &str, range: (usize, usize), enclosing: &str, edge_kind: &str, provenance: &str, line: Option<usize>) -> bool {
+        self.add_consumer_located(key, symbol, kind, file, range, enclosing, edge_kind, provenance, line, true)
+    }
+
+    /// As `add_consumer`, but the caller states whether the node is GROUNDED. An ungrounded node carries the
+    /// (0,0) sentinel range instead of a location, is marked `unlocated`, and gets NO edge line — every
+    /// projection must then omit the citation rather than invent one. See `GraphNode::unlocated`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn add_consumer_located(&mut self, key: String, symbol: &str, kind: &str, file: &str, range: (usize, usize), enclosing: &str, edge_kind: &str, provenance: &str, line: Option<usize>, grounded: bool) -> bool {
         if self.seen.contains_key(&key) {
             return false;
         }
         self.counter += 1;
         let id = format!("n{}", self.counter);
         self.seen.insert(key, id.clone());
-        self.nodes.push(GraphNode { id: id.clone(), symbol: symbol.into(), kind: kind.into(), file: file.into(), range, enclosing: enclosing.into(), complexity: complexity(range), ..Default::default() });
-        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line, ..Default::default() });
+        self.nodes.push(GraphNode { id: id.clone(), symbol: symbol.into(), kind: kind.into(), file: file.into(), range, enclosing: enclosing.into(), complexity: complexity(range), unlocated: !grounded, ..Default::default() });
+        self.edges.push(GraphEdge { from: id, to: "n1".into(), kind: edge_kind.into(), provenance: provenance.into(), line: if grounded { line } else { None }, ..Default::default() });
         true
     }
 
@@ -81,7 +89,7 @@ impl GraphBuilder {
         let key_hi = if resolved { arange.1 } else { anchor_src.matches('\n').count() };
         let delta = seam_couple::resolve_coupling(repo, "n1", anchor_file, anchor_src, key_lo, key_hi, self.counter as u64, false);
         for n in delta.nodes {
-            self.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None });
+            self.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None, unlocated: false });
         }
         for e in delta.edges {
             self.edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });

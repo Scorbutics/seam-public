@@ -85,7 +85,8 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
     }
     if kind != "symbol" {
         if let Some(c) = &actx {
-            add_intra_file_callers(&mut b, c, anchor_file, symbol, range, &aunits);
+            let text = src.as_ref().map(|(t, _)| t.as_str()).unwrap_or("");
+            add_intra_file_callers(&mut b, repo, c, anchor_file, text, symbol, range, &aunits);
         }
     }
     // OPAQUE DEFAULT SLOT — the honest middle answer between asserting and lying. When this file's `export
@@ -135,9 +136,22 @@ fn add_import_consumers(b: &mut GraphBuilder, repo: &str, anchor_file: &str, sym
         let Some((ctext, clang)) = read(repo, &con.file) else { continue };
         let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
         let units = ast::named_units(&cctx);
+        // NO USAGE IN A BODY — the bare BARREL / re-export case (`export { X } from "./x"`), and the plain
+        // "imported but only re-bound" one. The import statement IS a real, locatable site in the consumer's
+        // own file, and the resolver already grounded its 0-based line (`Consumer::line`), so cite THAT. `0`
+        // remains a SENTINEL for "no site at all": it must never reach an EDGE nor be rendered — 0 is not a
+        // valid line, and after the 0-based→1-based conversion it reads as `file:1`, a FABRICATED citation
+        // pointing at an unrelated first line. Nodes placed on the sentinel are marked `unlocated` so every
+        // projection can omit the location instead of inventing one. Port of 8dccfbf.
         let mut lines = ast::usage_lines(&cctx, &units, &con.local);
+        let mut grounded = !lines.is_empty();
         if lines.is_empty() {
-            lines = vec![0];
+            if let Some(l) = con.line {
+                lines = vec![l];
+                grounded = true;
+            } else {
+                lines = vec![0];
+            }
         }
         for ln in lines {
             let (name, kind, start, end, cls) = match ast::enclosing(&units, ln) {
@@ -149,25 +163,48 @@ fn add_import_consumers(b: &mut GraphBuilder, repo: &str, anchor_file: &str, sym
                 None => (stem(&con.file), "module".to_string(), ln, ln, String::new()),
             };
             let key = format!("{}#{}#{}", con.file, name, start);
-            b.add_consumer(key, &name, &kind_for(&con.file, &kind), &con.file, (start, end), &cls, "reference", "RESOLVED_FULL", Some(ln));
+            b.add_consumer_located(key, &name, &kind_for(&con.file, &kind), &con.file, (start, end), &cls, "reference", "RESOLVED_FULL", Some(ln), grounded);
         }
     }
 }
 
 /// Same-file callers: a function in the anchor file that CALLS `symbol` (FULL) or otherwise references it
 /// (PARTIAL) — a real consumer the import scan can't see. Definition-body lines are skipped.
-fn add_intra_file_callers(b: &mut GraphBuilder, actx: &Ctx, anchor_file: &str, symbol: &str, arange: (usize, usize), aunits: &[Unit]) {
+#[allow(clippy::too_many_arguments)]
+fn add_intra_file_callers(b: &mut GraphBuilder, repo: &str, actx: &Ctx, anchor_file: &str, anchor_src: &str, symbol: &str, arange: (usize, usize), aunits: &[Unit]) {
+    // NAME COLLISION with an IMPORT. The name match here is only sound while the anchor OWNS the bare name in
+    // its own file. When the file also IMPORTS that name, the import is the module-scope binding, so every BARE
+    // `symbol(...)` there is provably the IMPORTED symbol — a different thing that merely shares the name — and
+    // attributing it to the anchor is a false RESOLVED_FULL "verified edge" (cal.com: the METHOD
+    // RegularBookingService.createBooking vs `import { createBooking } from "../handleNewBooking/createBooking"`,
+    // called bare at :1939). Only the BARE sites are dropped: a receiver-qualified `this.symbol()` / `x.symbol()`
+    // is a member access, never the import, so genuine same-file method callers survive. Proof-gated — an
+    // unresolved module leaves the old behaviour intact, so no false positive is traded for a false negative.
+    // Port of 72df701.
+    let (bare, qualified) = ast::ref_lines_split(actx, symbol);
+    let import_bound = crate::def_resolve::import_binds_elsewhere(repo, anchor_file, anchor_src, symbol);
     let mut call_seen: HashSet<usize> = HashSet::new();
     let mut call_order: Vec<usize> = Vec::new();
-    for ln in ast::call_lines(actx, symbol) {
-        if call_seen.insert(ln) {
-            call_order.push(ln);
+    if !import_bound {
+        for ln in ast::call_lines(actx, symbol) {
+            // `call_lines` is bare-name only by construction
+            if call_seen.insert(ln) {
+                call_order.push(ln);
+            }
         }
     }
     for ln in &call_order {
         add_caller(b, anchor_file, symbol, arange, aunits, *ln, "call", "RESOLVED_FULL");
     }
-    for ln in ast::ref_lines(actx, symbol) {
+    let ref_lines: Vec<usize> = if import_bound {
+        qualified
+    } else {
+        let mut v: Vec<usize> = bare.into_iter().chain(qualified).collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    for ln in ref_lines {
         if !call_seen.contains(&ln) {
             add_caller(b, anchor_file, symbol, arange, aunits, ln, "reference", "RESOLVED_PARTIAL");
         }

@@ -23,6 +23,11 @@ impl Status {
 }
 
 /// A file that consumes the anchor symbol (imports/uses it).
+///
+/// `line` is the 0-BASED line of the IMPORT / RE-EXPORT statement that binds the symbol in `file`. It is the
+/// only REAL site a bare barrel (`export { X } from "./x"`, no body usage) has, so the graph can cite it
+/// instead of inventing one — the import index already grounded it, so nothing is re-parsed to obtain it.
+/// Mirrors `Consumer.line` in ts/src/core/resolve/consumers.ts (8dccfbf).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Consumer {
     pub file: String,
@@ -30,4 +35,5 @@ pub struct Consumer {
     pub source: String,
     pub status: Status,
     pub reexport: bool,
+    pub line: Option<usize>,
 }

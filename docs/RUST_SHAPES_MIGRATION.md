@@ -69,7 +69,32 @@ covers `ts/src` only, not the addon), and `rm -rf <repo>/.seam` when measuring c
 
 ## 3. Order of work — this order is not optional
 
-### Step 1 — mirror the TS fixes Rust is behind on. **Prerequisite for everything.**
+### Step 1 — mirror the TS fixes Rust is behind on. **Prerequisite for everything.** ✅ DONE
+
+**Measured at the Step-1 commit: `shapes_set.ts` 94 ok / 0 bad, `consumersgraph_ts` 22/22, `contract` 200/200,
+`impact` 23/23, `reach` 72/72, `compare` 34/34, `neighborhood` 5/5, full-grow parity nodes+edges+order OK,
+suite 1309 pass / 2 skip / 0 fail.** What was actually behind, which is NOT quite what §1 predicted:
+
+- The barrel `:1` (8dccfbf) was as described — `Consumer.line`, `GraphNode.unlocated`, `start_of` in the three
+  projections that fall back to a node range.
+- The `contract.provides` undercount was TWO gaps, only one of them 7184ecb: the default-slot mapping in
+  `scan_module_consumers` **and the default slot as an exported member** (fd61636's module-grain half,
+  which needed `wrapped_impl` + `default_export_local` in `seam-lang::ast`). The remaining 2 anchors were a
+  THIRD, older gap the doc did not predict: **type-level exports** (`export type|interface|enum`) had no Rust
+  counterpart at all, so `provides`/`unused_exports`/`afferent` all undercounted. `consumer_count` was also
+  edge-grained, not file-grained (`countUnits(cons).files`).
+- Of the "check for drift" list: `a4addc2` was already ported; `572db9c`/`45f7f5e`/`2f0abc1`/`71ec09b` ported.
+  **`72df701` (bare same-name call vs imported free function) was NOT** — ported here (`ref_lines_split`,
+  `import_binds_elsewhere`); non-vacuous: RegularBookingService#createBooking was 9 in Rust, 8 in TS.
+  **`86c503f` (the 0→1-based line contract for impact/reaches) was NOT** — ported here; impact cited every line
+  one short (`633` vs TS `634`), and `reach` also had the pre-86c503f edge-line-first ordering.
+- `ENGINE_EPOCH` → `rs7`. Regression test: `ts/test/grow/rust_shape_fixes.test.ts` (hermetic, addon-guarded,
+  pins all four ports against the addon; verified non-vacuous — 5/5 fail against the pre-port addon).
+- Still TS-only in `reach`: the COUPLING steps (`to1(hit.line)` / `to1(s.line)`) — Rust `find_reach` has no
+  coupling branch at all. That belongs to Step 2/3, not to a `reaches` wiring.
+
+Original analysis, kept for the record:
+
 
 The 4 parity failures are exactly today's TS fixes not yet ported. Wiring shapes to Rust *before* this
 would REGRESS the product — it reintroduces defects that cost graded benchmark rounds.
@@ -91,7 +116,8 @@ vs imported free function), `45f7f5e` (bound self-member `this._m.bind(this)`), 
 member calls — already mirrored, epoch rs3), `71ec09b` (field-bound function members in the class method
 set — already mirrored, epoch rs6).
 
-**Exit criterion:** `shapes_set.ts` → 94/0, and `consumersgraph_ts.ts` stays 39/39.
+**Exit criterion:** `shapes_set.ts` → 94/0, and `consumersgraph_ts.ts` stays green (it reports 22/22 on its
+default keycloak args, not the 39/39 quoted above — re-measure, don't chase the number).
 
 ### Step 2 — port the cross-stack overlay to the Rust shapes.
 
@@ -168,7 +194,8 @@ bun src/cli/decompose.ts --scan --repo $R --query consumers \
 
 bun src/cli/decompose.ts --scan --repo $R --query impact \
   --center "packages/trpc/server/routers/viewer/slots/util.ts#_getAvailableSlots" --format llm-context
-#   → impacted: 30 | files: 28, with 15 apps/api/v2 lines incl. both slots controllers
+#   → impacted: 31 | files: 29, with 15 apps/api/v2 lines incl. both slots controllers
+#     (30|28 above was pre-fd61636; that commit documents 31|29 as a TRUE POSITIVE — re-measured, it holds)
 
 bun src/cli/decompose.ts --scan --repo $R --query consumers \
   --center "packages/features/schedules/lib/slots.ts#getSlots" --format llm-context

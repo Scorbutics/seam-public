@@ -506,25 +506,106 @@ pub fn wrapped_def_span(ctx: &Ctx, symbol: &str, units: &[Unit]) -> Option<(usiz
         if !ch.first().is_some_and(|c0| nk::is_name_kind(c0.kind()) && ctx.text(*c0) == symbol) {
             continue;
         }
-        let Some(&call) = ch.iter().find(|c| nk::is_call(c.kind())) else { continue };
-        let args_node = call
-            .child_by_field_name("arguments")
-            .or_else(|| ctx.children(call).into_iter().find(|c| c.kind().contains("arguments") || c.kind().contains("argument_list")));
-        let args: Vec<Node> = match args_node {
-            Some(an) => ctx.children(an),
-            None => ctx.children(call).into_iter().skip(1).collect(),
-        };
-        if let Some(&inline) = args.iter().find(|a| nk::is_funclike(a.kind())) {
-            return Some(ctx.span(inline)); // `memo(() => {…})` — the arrow IS the body
+        let Some(&call) = ch.iter().find(|c| nk::is_call(c.kind())) else { continue }; // `const X = <non-call>` — not a wrapped def
+        return Some(match wrapped_impl(ctx, call, units, 0) {
+            Some(Wrapped::Inline(n)) => ctx.span(n),                 // `memo(() => {…})` — the arrow IS the body
+            Some(Wrapped::Named(i)) => (units[i].start, units[i].end), // `withReporting(_impl, …)` — the named impl
+            None => ctx.span(d), // wrapped external fn → the declarator span (a real span, not :0)
+        });
+    }
+    None
+}
+
+/// Which argument of a wrapper CALL is the real implementation.
+enum Wrapped<'t> {
+    Inline(Node<'t>), // an inline funclike argument IS the body
+    Named(usize),     // index into the `units` passed to `wrapped_impl` — the named impl
+}
+
+/// THE wrapper-unwrapping RULE, in one place: given a wrapper CALL node, which of its arguments is the real
+/// implementation? An inline funclike argument IS the body (`memo(() => {…})`); otherwise the FIRST identifier
+/// argument that names a function/method unit of this same file (`withReporting(_impl, "name")`). A nested
+/// wrapper (`withReporting(withCache(fn))`) descends into the argument call. `None` = opaque (an externally
+/// defined wrapped fn, an unnameable expression). Shared by `wrapped_def_span` and `default_export_local`, so
+/// both read a wrapper the SAME way. Port of `_wrappedImpl`.
+fn wrapped_impl<'t>(ctx: &Ctx, call: Node<'t>, units: &[Unit], depth: usize) -> Option<Wrapped<'t>> {
+    if depth > 4 {
+        return None; // runaway guard on `a(b(c(d(…))))`
+    }
+    let args_node = call
+        .child_by_field_name("arguments")
+        .or_else(|| ctx.children(call).into_iter().find(|c| c.kind().contains("arguments") || c.kind().contains("argument_list")));
+    let args: Vec<Node> = match args_node {
+        Some(an) => ctx.children(an),
+        None => ctx.children(call).into_iter().skip(1).collect(),
+    };
+    if let Some(&inline) = args.iter().find(|a| nk::is_funclike(a.kind())) {
+        return Some(Wrapped::Inline(inline));
+    }
+    for a in &args {
+        if a.kind().contains("identifier") {
+            if let Some(i) = units.iter().position(|x| x.name == ctx.text(*a) && (x.kind == "function" || x.kind == "method")) {
+                return Some(Wrapped::Named(i));
+            }
         }
-        for a in &args {
-            if a.kind().contains("identifier") {
-                if let Some(u) = units.iter().find(|x| x.name == ctx.text(*a) && (x.kind == "function" || x.kind == "method")) {
-                    return Some((u.start, u.end)); // `withReporting(_impl, …)` — the named impl
+    }
+    for a in &args {
+        if nk::is_call(a.kind()) {
+            if let Some(inner) = wrapped_impl(ctx, *a, units, depth + 1) {
+                return Some(inner);
+            }
+        }
+    }
+    None
+}
+
+/// The LOCAL symbol behind this file's `export default` — the missing piece of the most common addressing
+/// mistake. Importers bind a default export under a name of THEIR choosing, so the name a caller sees at the
+/// call sites is NOT a symbol of the defining file; the file's own name for it is. Structural: the `default`
+/// keyword node marks the export, and the local is the exported declaration's name (`export default function
+/// handler`), the exported identifier (`export default handler`), the local side of `export { handler as
+/// default }`, or — for a HOC / reporting WRAPPER call (`export default withReporting(handler, "handler")`) —
+/// the local behind it, via the SAME `wrapped_impl` rule as `wrapped_def_span`. Anonymous (`export default ()
+/// => …`) → `None`: there is no local name to point at. Port of `_default_export_local`.
+pub fn default_export_local(ctx: &Ctx, units: &[Unit]) -> Option<String> {
+    for es in ctx.collect(ctx.root(), nk::is_export) {
+        let kids = ctx.children(es);
+        if !kids.iter().any(|c| nk::is_export_default(c.kind())) {
+            // `export { handler as default }` — no `default` keyword on the statement; the specifier carries it.
+            for cl in &kids {
+                if !nk::is_export_clause(cl.kind()) {
+                    continue;
+                }
+                for sp in ctx.children(*cl) {
+                    if !nk::is_export_specifier(sp.kind()) {
+                        continue;
+                    }
+                    let names: Vec<Node> = ctx.children(sp).into_iter().filter(|c| nk::is_name_kind(c.kind())).collect();
+                    if names.len() >= 2 && ctx.text(names[names.len() - 1]) == "default" {
+                        return Some(ctx.text(names[0]).to_string());
+                    }
+                }
+            }
+            continue;
+        }
+        for c in &kids {
+            let k = c.kind();
+            if nk::is_export_default(k) {
+                continue;
+            }
+            if (nk::is_funclike(k) && !nk::is_anon_func(k)) || nk::is_class_kind(k) {
+                if let Some(nm) = name_of(ctx, *c) {
+                    return Some(nm);
+                }
+            } else if nk::is_name_kind(k) {
+                return Some(ctx.text(*c).to_string());
+            } else if nk::is_call(k) {
+                // an inline arrow ⇒ anonymous, no local name to point at
+                if let Some(Wrapped::Named(i)) = wrapped_impl(ctx, *c, units, 0) {
+                    return Some(units[i].name.clone());
                 }
             }
         }
-        return Some(ctx.span(d)); // wrapped external fn → the declarator span (a real span, not :0)
     }
     None
 }
@@ -598,14 +679,38 @@ pub fn call_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
     lines
 }
 
+/// The occurrences of `local`, split by whether the name is a MODULE-SCOPE binding use or a MEMBER access.
+///  - `bare`      — a plain name reference (`f`, `f(…)`): whatever binds `f` in this file (a def, an import) IS
+///                  what this occurrence means.
+///  - `qualified` — the property side of a member access (`this.f`, `obj.f`): a member of some receiver, never
+///                  the file's module-scope binding.
+///
+/// The distinction is what lets a caller drop a bare occurrence it can PROVE belongs to another binding while
+/// keeping the member calls on the anchor's own class. Structural, off the member kind registry, never a literal
+/// grammar kind — so it degrades to "everything is bare" on a grammar with no member node, the conservative
+/// side. Port of `_ref_lines_split`.
+pub fn ref_lines_split(ctx: &Ctx, local: &str) -> (Vec<usize>, Vec<usize>) {
+    let (mut bare, mut qualified): (Vec<usize>, Vec<usize>) = (Vec::new(), Vec::new());
+    for i in ctx.collect(ctx.root(), |k| k.contains("identifier")) {
+        if ctx.text(i) != local {
+            continue;
+        }
+        // grammars with no distinct property kind: a member access's FIRST child is the receiver, the rest is the property
+        let is_prop = nk::is_member_name(i.kind())
+            || i.parent().is_some_and(|p| nk::is_member(p.kind()) && ctx.children(p).first().is_some_and(|c0| c0.start_byte() != i.start_byte()));
+        (if is_prop { &mut qualified } else { &mut bare }).push(ctx.span(i).0);
+    }
+    for v in [&mut bare, &mut qualified] {
+        v.sort_unstable();
+        v.dedup();
+    }
+    (bare, qualified)
+}
+
 /// Sorted unique lines of every identifier-kind node whose text is `local` (port of `_ref_lines`).
 pub fn ref_lines(ctx: &Ctx, local: &str) -> Vec<usize> {
-    let mut v: Vec<usize> = ctx
-        .collect(ctx.root(), |k| k.contains("identifier"))
-        .into_iter()
-        .filter(|i| ctx.text(*i) == local)
-        .map(|i| ctx.span(i).0)
-        .collect();
+    let (bare, qualified) = ref_lines_split(ctx, local);
+    let mut v: Vec<usize> = bare.into_iter().chain(qualified).collect();
     v.sort_unstable();
     v.dedup();
     v
@@ -660,6 +765,17 @@ pub fn exported_members(ctx: &Ctx, file: &str) -> Vec<Unit> {
                 }
             }
         }
+    }
+    // THE DEFAULT SLOT IS PUBLIC SURFACE TOO. `export default handler` / `export default withReporting(handler,
+    // "handler")` puts a declaration on the module boundary WITHOUT naming it in any declaration or specifier the
+    // loop above reads — its child is a bare identifier or a CALL. So a module whose entire public API is its
+    // default export reported ZERO exported members, hence `fan-in: 0 consuming files` for a module with real
+    // importers. Grounded, not name-matched: the local must be a DECLARED unit of this file (that is where the
+    // span comes from); an anonymous `export default () => …` or an opaque wrapper adds nothing. No double
+    // count — a default whose local is ALSO a named export dedupes below. Port of fd61636.
+    let dunits = named_units(ctx);
+    if let Some(du) = default_export_local(ctx, &dunits).and_then(|d| dunits.iter().find(|u| u.name == d)) {
+        out.push(du.clone());
     }
     dedup_units(out)
 }

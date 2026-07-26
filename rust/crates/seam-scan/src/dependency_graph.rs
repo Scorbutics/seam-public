@@ -481,7 +481,7 @@ fn data_coupling_pass(s: &mut DepScan, anchor_src: &str, arange: (usize, usize))
     let key_lo = crate::attach::annotation_lo(anchor_src, arange.0); // include a route/entry annotation above the def
     let delta = seam_couple::resolve_coupling(&s.repo, "n1", &s.anchor_file, anchor_src, key_lo, arange.1, s.counter as u64, false);
     for n in delta.nodes {
-        s.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None });
+        s.nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, hub: None, unlocated: false });
     }
     for e in delta.edges {
         s.edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });

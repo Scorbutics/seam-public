@@ -445,6 +445,7 @@ name = "seam-shapes"
 version = "0.0.0"
 dependencies = [
  "once_cell",
+ "regex",
  "seam-fs",
  "seam-lang",
  "seam-resolve",

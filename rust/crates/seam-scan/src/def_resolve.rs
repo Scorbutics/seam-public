@@ -57,6 +57,46 @@ pub fn resolve_def_file(repo: &str, from_file: &str, name: &str, kinds: &[&str],
     None
 }
 
+/// Is the bare NAME `name`, as used in `file`, PROVABLY bound to a symbol that lives somewhere ELSE?
+/// An import declaration creates the file's module-scope binding for that name, so a bare `name(...)` there is
+/// the IMPORT — not a same-named METHOD of a class declared in the same file (a method is not a module binding,
+/// so the two can coexist and mean different things). Same hop ladder as `resolve_def_file`, so there is ONE
+/// import-resolution mechanism (and languages with no import parser simply return false).
+/// PROOF-ONLY, never a guess: returns false (⇒ the caller keeps its existing behaviour) when the module does not
+/// resolve, and when the ladder resolves the name back to `file` itself (a self re-export barrel).
+/// Port of `importBindsElsewhere`.
+pub fn import_binds_elsewhere(repo: &str, file: &str, text: &str, name: &str) -> bool {
+    let Some(provider) = provider_for(file) else { return false };
+    let mut targets: Vec<(String, String)> = Vec::new(); // (target file, the name to look for THERE)
+    for r in provider.imports(text) {
+        if r.local != name || r.reexport {
+            continue; // `export { X } from '…'` is a barrel hop, not a local binding
+        }
+        if let Some(t) = resolve_import_file(repo, file, r.source.as_deref()) {
+            targets.push((t, r.name.clone()));
+        }
+    }
+    for di in provider.default_imports(text) {
+        if di.local != name {
+            continue;
+        }
+        if let Some(t) = resolve_import_file(repo, file, Some(&di.source)) {
+            targets.push((t, di.local.clone()));
+        }
+    }
+    let file_norm = seam_fs::normpath(file);
+    for (tf, tn) in targets {
+        if seam_fs::normpath(&tf) == file_norm {
+            continue; // the import resolves to THIS file — not "elsewhere"
+        }
+        match resolve_def_file(repo, &tf, &tn, DEF_FUNC_KINDS, 0) {
+            Some(d) if seam_fs::normpath(&d) == file_norm => continue, // a re-export ring back to us — unprovable, keep it
+            _ => return true,
+        }
+    }
+    false
+}
+
 /// The file DEFINING a module's default export. Port of `_resolveDefaultExportDef`.
 pub fn resolve_default_export_def(repo: &str, module_file: &str, kinds: &[&str], depth: usize) -> Option<String> {
     if depth > 6 {

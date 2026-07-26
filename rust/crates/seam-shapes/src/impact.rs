@@ -103,7 +103,11 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
                     continue;
                 }
                 visited.insert(k.clone());
-                let line = e.line.unwrap_or(n.range.0);
+                // `start_of` refuses an UNLOCATED node's (0,0) sentinel range → `to1(None)` = 0 = "no grounded
+                // site", which the render omits rather than printing a fabricated one. `to1` is the SAME
+                // 0-based → 1-based conversion the consumers/dependencies projection applies, so the two shapes
+                // cite the identical line for the identical edge (they read the same `e.line`).
+                let line = crate::project_set::to1(e.line.or_else(|| crate::project_set::start_of(n)));
                 impacted.insert(k, ImpactedSymbol { symbol: n.symbol.clone(), file: n.file.clone(), line, kind: n.kind.clone(), hop: node.2 + 1 });
                 next.push((n.file.clone(), n.symbol.clone(), node.2 + 1));
             }

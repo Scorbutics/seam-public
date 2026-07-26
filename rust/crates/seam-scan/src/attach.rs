@@ -78,6 +78,7 @@ pub fn chain_route_consumers(repo: &str, nodes: &mut Vec<GraphNode>, edges: &mut
                     coupling: true,
                     direction: None,
                     hub: None,
+                    unlocated: false,   // a coupling UI node keeps its real range (TS marks `unlocated` only in the consumers loop)
                 });
                 edges.push(GraphEdge { from: pid, to: cid.clone(), kind: "reference".into(), provenance: "RESOLVED_FULL".into(), line: None, op: None });
                 added += 1;

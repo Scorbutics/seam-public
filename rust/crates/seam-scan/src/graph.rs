@@ -27,6 +27,11 @@ pub struct GraphNode {
     pub direction: Option<String>,
     /// A COLLAPSED hub (the wave's hub-collapse mark) — None for a plain node.
     pub hub: Option<HubMarker>,
+    /// NO real site was grounded for this node — `range` is the (0,0) SENTINEL, not a location. A projection
+    /// MUST omit the line rather than render it (0-based 0 → `:1` is a fabricated citation pointing at an
+    /// unrelated first line). Mirrors `GraphNode.unlocated` in ts/src/codebase/scan/graph.ts (8dccfbf).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlocated: bool,
 }
 
 /// An edge wiring two nodes.

@@ -155,6 +155,7 @@ impl Workspace {
                     source: r.source.clone().unwrap_or_default(),
                     status: Status::ResolvedFull,
                     reexport: r.reexport,
+                    line: Some(r.line as usize),
                 }),
                 Some(_) => {} // resolved, but to a different file → not a consumer of this anchor
                 None => {
@@ -167,6 +168,7 @@ impl Workspace {
                                 source: src.clone(),
                                 status: Status::Suggested,
                                 reexport: r.reexport,
+                                line: Some(r.line as usize),
                             });
                         }
                     }
@@ -186,7 +188,7 @@ impl Workspace {
                     _ => continue,
                 }
                 if let Some(status) = provider.and_then(|p| p.member_use(&text, &n.local, symbol)) {
-                    out.push(Consumer { file: entry.rel.clone(), local: symbol.to_string(), source: n.source.clone(), status: status_of(status), reexport: false });
+                    out.push(Consumer { file: entry.rel.clone(), local: symbol.to_string(), source: n.source.clone(), status: status_of(status), reexport: false, line: Some(n.line as usize) });
                     break;
                 }
             }
@@ -201,13 +203,13 @@ impl Workspace {
                 for r in entry.refs.iter().filter(|r| r.name == "default" && r.reexport) {
                     let source = r.source.as_deref().unwrap_or("");
                     if self.resolve(&entry.rel, source).is_some_and(|t| normpath(&t) == anchor_norm) {
-                        out.push(Consumer { file: entry.rel.clone(), local: r.local.clone(), source: r.source.clone().unwrap_or_default(), status: Status::ResolvedFull, reexport: true });
+                        out.push(Consumer { file: entry.rel.clone(), local: r.local.clone(), source: r.source.clone().unwrap_or_default(), status: Status::ResolvedFull, reexport: true, line: Some(r.line as usize) });
                         break;
                     }
                 }
                 for d in &entry.defs {
                     if self.resolve(&entry.rel, &d.source).is_some_and(|t| normpath(&t) == anchor_norm) {
-                        out.push(Consumer { file: entry.rel.clone(), local: d.local.clone(), source: d.source.clone(), status: Status::ResolvedFull, reexport: false });
+                        out.push(Consumer { file: entry.rel.clone(), local: d.local.clone(), source: d.source.clone(), status: Status::ResolvedFull, reexport: false, line: Some(d.line as usize) });
                         break;
                     }
                 }
@@ -221,6 +223,16 @@ impl Workspace {
         let Some(provider) = provider_for(anchor_file) else { return false };
         let Some(text) = read_text(&self.repo, anchor_file) else { return false };
         provider.is_default_export(&text, symbol)
+    }
+
+    /// The local declaration that provably FILLS `anchor_file`'s DEFAULT-export slot — `export default sym`,
+    /// `export default function sym`, `export { sym as default }`, or the impl behind a wrapper call. `None`
+    /// when there is no default export or the slot is opaque. Port of `defaultExportSlot(...).local`; the
+    /// grounded gate every default-import path shares (`is_default_export` is this === symbol).
+    pub fn default_export_slot_local(&self, anchor_file: &str) -> Option<String> {
+        let provider = provider_for(anchor_file)?;
+        let text = read_text(&self.repo, anchor_file)?;
+        provider.default_export(&text).local
     }
 
     /// The raw DEFAULT-export slot expression of `anchor_file` when it resolves to NO declaration of that file
@@ -267,6 +279,19 @@ impl Workspace {
     pub fn scan_module_consumers(&self, anchor_file: &str, member_names: &HashSet<String>) -> Vec<(String, Vec<(String, String)>)> {
         let anchor_norm = normpath(anchor_file);
         let anchor_abs = normpath(&format!("{}/{}", self.repo, anchor_file));
+        // DEFAULT-EXPORT PARITY. `export default prisma` puts a DECLARED member in the module's default slot, and
+        // a consumer then writes `import prisma from "@calcom/prisma"` — an import that carries NO member name
+        // (its ref name is `default`, or it lands in the entry's `defs`). The named loop below tests
+        // `member_names.contains(&r.name)`, so EVERY default-import consumer was dropped: on cal.com that
+        // silently lost the 439 files that default-import `prisma`, making the module contract report 379
+        // consumers for an export used by 818 files (and the same undercount in fan-in, the union of these
+        // files). The SYMBOL-anchored path (`scan_direct`) already resolves them via the default SLOT — so this
+        // reuses that SAME grounded gate to map the slot back to the member that fills it. No name matching: a
+        // default import counts only when the anchor really declares that member as its default, and only when
+        // its module source resolves to the anchor. Port of 7184ecb + fd61636's slot.
+        let default_member = self
+            .default_export_slot_local(anchor_file)
+            .filter(|l| member_names.contains(l));
         let mut out = Vec::new();
         for fi in self.index.files() {
             if fi.norm == anchor_abs {
@@ -275,20 +300,39 @@ impl Workspace {
             let mut used_names: HashSet<String> = HashSet::new();
             let mut used: Vec<(String, String)> = Vec::new();
             for r in &fi.refs {
-                if !member_names.contains(&r.name) {
+                // `default` (a default import / `default as X` re-export) names the module's default SLOT, not a
+                // member — attribute it to the member that FILLS that slot, exactly as the symbol-anchored path does.
+                let Some(member) = (if r.name == "default" {
+                    default_member.clone()
+                } else if member_names.contains(&r.name) {
+                    Some(r.name.clone())
+                } else {
+                    None
+                }) else {
                     continue;
-                }
+                };
                 // _resolve_import: a source-less ref resolves via LSP (no active resolver here) → skip.
                 let Some(source) = &r.source else { continue };
                 let Some(target) = self.resolve(&fi.rel, source) else { continue };
                 if normpath(&target) != anchor_norm {
                     continue;
                 }
-                // `used[name] = local` guarded by `!(name in used)` — skip an already-seen name OR a JS
+                // `used[member] = local` guarded by `!(member in used)` — skip an already-seen name OR a JS
                 // Object.prototype property name (the `in`-on-`{}` quirk).
-                if !used_names.contains(&r.name) && !seam_lang::ast::is_js_object_proto_prop(&r.name) {
-                    used_names.insert(r.name.clone());
-                    used.push((r.name.clone(), r.local.clone()));
+                if !used_names.contains(&member) && !seam_lang::ast::is_js_object_proto_prop(&member) {
+                    used_names.insert(member.clone());
+                    used.push((member, r.local.clone()));
+                }
+            }
+            // A plain `import X from "…anchor…"` carries no ref at all — it lands in the entry's `defs`.
+            if let Some(dm) = &default_member {
+                if !used_names.contains(dm) && !seam_lang::ast::is_js_object_proto_prop(dm) {
+                    for d in &fi.defs {
+                        if self.resolve(&fi.rel, &d.source).is_some_and(|t| normpath(&t) == anchor_norm) {
+                            used.push((dm.clone(), d.local.clone()));
+                            break;
+                        }
+                    }
                 }
             }
             if !used.is_empty() {

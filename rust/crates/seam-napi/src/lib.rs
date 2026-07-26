@@ -292,6 +292,9 @@ pub struct GraphNodeDto {
     pub coupling: bool,
     pub direction: Option<String>,
     pub hub: Option<HubMarkerDto>,
+    /// NO real site was grounded for this node — `range` is the (0,0) sentinel. Optional (never `false`) so
+    /// the wire form matches TS's `unlocated?: true`. See `GraphNode::unlocated`.
+    pub unlocated: Option<bool>,
 }
 
 /// Wire form of a `seam_scan::GraphEdge`.
@@ -386,6 +389,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
                     coupling: n.coupling,
                     direction: n.direction,
                     hub: n.hub.map(|h| HubMarkerDto { reason: h.reason, fan: h.fan as u32, sample_consumers: h.sample_consumers }),
+                    unlocated: n.unlocated.then_some(true),
                 })
                 .collect(),
             edges: g
@@ -439,6 +443,7 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
                 coupling: n.coupling,
                 direction: n.direction,
                 hub: n.hub.map(|h| seam_scan::graph::HubMarker { reason: h.reason, fan: h.fan as usize, sample_consumers: h.sample_consumers }),
+                unlocated: n.unlocated.unwrap_or(false),
             })
             .collect(),
         edges: g
