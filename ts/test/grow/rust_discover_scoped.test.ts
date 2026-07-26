@@ -51,11 +51,18 @@ describe("the Rust flywheel is scoped to the grown footprint", () => {
     wg("svc/dbRepo.ts", `import { Repo } from "./repo";\nexport class DbRepo implements Repo { save(x: string) { console.log("db", x); } }\n`);
     wg("controllers/handler.ts", `import { Repo } from "./../svc/repo";\nexport function handle(r: Repo, x: string) { r.save(x); }\n`);
     try { execFileSync("git", ["init", "-q"], { cwd: gated }); } catch { /* git optional */ }
-    // A fake LLM backend that RECORDS every invocation's ARGV (answering with an empty rule set, the degrade
-    // path). ARGV carries `--model`, which is what the pass-tier routing produces — so the same log serves both
-    // "how many calls" and "on which tier". It must DRAIN stdin — the engine writes the prompt there, and a
-    // backend that exits first kills the run with EPIPE, which would make "no call recorded" vacuously true.
-    writeFileSync(fakeClaude, `#!/bin/sh\ncat > /dev/null\necho "$@" >> ${JSON.stringify(claudeLog)}\necho '[]'\n`);
+    // A fake LLM backend that RECORDS every invocation's ARGV. ARGV carries `--model`, which is what the
+    // pass-tier routing produces — so the same log serves both "how many calls" and "on which tier". It must
+    // DRAIN stdin — the engine writes the prompt there, and a backend that exits first kills the run with
+    // EPIPE, which would make "no call recorded" vacuously true.
+    //
+    // It answers with a well-formed claude ENVELOPE holding an empty rule set. That shape matters: this stub
+    // used to echo a bare `[]`, which is NOT what `claude --output-format json` returns, so every pass went
+    // down the MALFORMED-REPLY degrade path and the call counts below measured retry behaviour rather than the
+    // real one. Measured: with the bare `[]` the two engines took 4 vs 2 calls; with a faithful envelope both
+    // take 2. A stub that does not answer the way the real backend does turns a cost assertion into a fiction.
+    const reply = JSON.stringify(JSON.stringify({ result: "[]", is_error: false }));
+    writeFileSync(fakeClaude, `#!/bin/sh\ncat > /dev/null\necho "$@" >> ${JSON.stringify(claudeLog)}\necho ${reply}\n`);
     chmodSync(fakeClaude, 0o755);
   });
   afterAll(() => {

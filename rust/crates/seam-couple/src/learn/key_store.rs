@@ -123,3 +123,56 @@ pub fn record_learned_matchers(repo: &str, sig: &str) {
 pub fn has_learned_matchers_for(repo: &str, sig: &str) -> bool {
     load_store(&repo_dir(repo)).learned_sigs.iter().any(|s| s == sig)
 }
+
+/// A per-FILE key adapter — what the flywheel learned about one file's content. An EMPTY `keys` list is a
+/// COVERED MARKER, not an absence: it records "this file was examined and needs no per-file synth" (its keys
+/// come from a learned rule, or it has no data-access shape at all). That distinction is what lets the
+/// flywheel SETTLE — a warm run sees the marker, skips the file, writes nothing, and the coupling epoch holds.
+/// Port of `KeyAdapter`.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct KeyAdapter {
+    pub name: String,
+    pub description: String,
+    pub keys: Vec<crate::types::KeyHit>,
+}
+
+/// Does the repo (or the shared store) hold ANY per-file adapter? Port of `hasKeyCache`.
+pub fn has_key_cache(repo: &str) -> bool {
+    [repo_dir(repo), crate::learn::matchers::shared_dir()].iter().any(|d| !load_store(d).files.is_empty())
+}
+
+/// The cached keys for a content key (`<rel> <sha1(text)>`) — repo store FIRST, then shared. `hit` is true for
+/// a COVERED MARKER too (empty keys): the file was examined, so a warm run must skip it rather than re-pay it.
+/// Port of `cachedFileKeys`.
+pub fn cached_file_keys(repo: &str, key: &str) -> (bool, Vec<crate::types::KeyHit>) {
+    for dir in [repo_dir(repo), crate::learn::matchers::shared_dir()] {
+        if let Some(v) = load_store(&dir).files.get(key) {
+            let keys = v.get("keys").and_then(|k| serde_json::from_value::<Vec<crate::types::KeyHit>>(k.clone()).ok()).unwrap_or_default();
+            return (true, keys);
+        }
+    }
+    (false, Vec::new())
+}
+
+/// Record one file's adapter (or its covered marker) and persist. Port of `persistFileKeys`.
+pub fn persist_file_keys(repo: &str, key: &str, adapter: &KeyAdapter) {
+    let dir = repo_dir(repo);
+    let mut store = load_store(&dir);
+    store.files.insert(key.to_string(), serde_json::to_value(adapter).unwrap_or(serde_json::Value::Null));
+    write_store(&dir, &store);
+}
+
+/// Record MANY adapters in ONE store read+write. `persist_file_keys` per file re-reads and re-serialises the
+/// whole store each time; a cold discovery run marks every clustered member, so doing that per file turned a
+/// settling pass into O(files²) JSON work on a big repo.
+pub fn persist_file_keys_batch(repo: &str, entries: &[(String, KeyAdapter)]) {
+    if entries.is_empty() {
+        return;
+    }
+    let dir = repo_dir(repo);
+    let mut store = load_store(&dir);
+    for (key, adapter) in entries {
+        store.files.insert(key.clone(), serde_json::to_value(adapter).unwrap_or(serde_json::Value::Null));
+    }
+    write_store(&dir, &store);
+}

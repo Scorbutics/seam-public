@@ -23,6 +23,7 @@ pub use apply::columns::{access_columns, access_columns_in, symbol_span, AccessC
 pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};
 pub use grounding::file_store_write_count;
 pub use learn::{load_matchers, run_matcher, run_matcher_at, KeyMatcher};
+pub use learn::{learn_matchers, LearnOutcome};
 pub use types::{Access, KeySides};
 pub use key_ir::{line_of, plausible_key_value};
 pub use mask::{mask_comments, string_literals_only, MaskCtx};

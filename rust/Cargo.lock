@@ -351,6 +351,7 @@ dependencies = [
  "seam-cache",
  "seam-fs",
  "seam-lang",
+ "seam-llm",
  "serde",
  "serde_json",
  "sha1",

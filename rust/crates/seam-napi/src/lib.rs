@@ -1705,3 +1705,33 @@ pub fn llm_usage() -> Vec<f64> {
     let u = seam_llm::get_usage();
     vec![u.calls as f64, u.input_tokens as f64, u.output_tokens as f64, u.cost_usd, u.duration_ms as f64]
 }
+
+/// What one self-driven flywheel run did. `replayed` = the signature was already learned, so NO model call was
+/// spent and the count is what `.seam` already held.
+#[napi(object)]
+pub struct LearnOutcomeDto {
+    pub learned: u32,
+    pub replayed: bool,
+    pub reps: u32,
+    pub covered_marked: u32,
+    pub shapeless_marked: u32,
+    pub note: String,
+}
+
+/// discoverLearn — turn the matcher flywheel END TO END inside the core: collect floor-blind reps → gate/replay
+/// → synth → ingest → one conditional retry → persist + settle. The core serves its own LLM passes, so this
+/// needs no JS driver. Degrades to 0 learned (never throws) when there is no backend or the reply is unusable.
+/// `scopeFiles` = the repo-relative files the flow reaches; omit for the unscoped whole-repo warm-up.
+#[napi]
+pub fn discover_learn(repo: String, key_budget: Option<i64>, scope_files: Option<Vec<String>>, model: Option<String>, claude_bin: Option<String>) -> LearnOutcomeDto {
+    let scope: Option<std::collections::HashSet<String>> = scope_files.filter(|s| !s.is_empty()).map(|s| s.into_iter().collect());
+    let o = seam_couple::learn_matchers(&repo, key_budget.unwrap_or(60), scope.as_ref(), model.as_deref(), claude_bin.as_deref());
+    LearnOutcomeDto {
+        learned: o.learned as u32,
+        replayed: o.replayed,
+        reps: o.reps as u32,
+        covered_marked: o.covered_marked as u32,
+        shapeless_marked: o.shapeless_marked as u32,
+        note: o.note,
+    }
+}

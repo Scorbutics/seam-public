@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 seam-lang = { path = "../seam-lang" }
+seam-llm = { path = "../seam-llm" }
 seam-fs = { path = "../seam-fs" }
 seam-cache = { path = "../seam-cache" }
 once_cell = { workspace = true }

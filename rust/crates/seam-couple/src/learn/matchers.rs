@@ -410,7 +410,7 @@ fn load_store_rules(dir: &str) -> Vec<KeyMatcher> {
     rules
 }
 
-fn shared_dir() -> String {
+pub(crate) fn shared_dir() -> String {
     std::env::var("SEAM_ADAPTERS_DIR").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/.config/seam/adapters")

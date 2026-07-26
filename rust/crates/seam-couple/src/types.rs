@@ -5,15 +5,23 @@
 /// a file channel), and whether this site PRODUCES it (a write / a route the server serves) or CONSUMES it (a
 /// read / a call the client makes). The far side (the other producers/consumers of the same key) is what the
 /// grounding index pairs it with. Port of `KeyHit`.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+// Serde field order + the `skip_serializing_if` on every optional mirror TS's object-literal key order and
+// `JSON.stringify`'s dropping of `undefined`, so a KeyHit the RUST flywheel persists into
+// `.seam/key-adapters.json` is byte-identical to one TS wrote. A store that differs by a null field would
+// change the coupling epoch and invalidate every cached answer for no behavioural reason.
+#[derive(Clone, Debug, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct KeyHit {
     pub kind: String,
     pub value: String,
     pub line: usize,
     pub produces: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub method: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub op: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recv: Option<String>,
 }
 
