@@ -260,7 +260,7 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
 
 /// The structural wavefront. Port of `_phaseExpand` (structural path). Returns the grown graph (mutated in
 /// place; `data` is consumed and returned).
-pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &WaveOpts) -> ResolvedGraph {
+pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &WaveOpts, on_wave: Option<OnWave<'_>>) -> ResolvedGraph {
     let mut idx = mk_index(&data);
     let anchor_ids: Vec<String> = vec![if data.anchor_id.is_empty() { "n1".to_string() } else { data.anchor_id.clone() }];
     let anchor_set: HashSet<String> = anchor_ids.iter().cloned().collect();
@@ -281,6 +281,16 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     // here. Mirrors the TS `floodN()` in grow/orchestrate.ts — the two engines must agree.
     let flood_n = |d: &ResolvedGraph| -> usize { d.nodes.iter().filter(|n| !n.coupling).count() };
     let mut step = 0usize;
+    // STREAM wave 0 — the SEED. Emitted before the flood so the union of every record's `added` is the final
+    // region; a consumer rebuilding the graph from the stream alone would otherwise never see the seed.
+    if let Some(cb) = on_wave {
+        cb(WaveRecord {
+            wave: 0,
+            added: data.nodes.iter().map(|n| (n.id.clone(), n.symbol.clone(), if n.file.is_empty() { String::new() } else { normpath(&n.file) }, n.kind.clone())).collect(),
+            edges: data.edges.iter().map(|e| (e.from.clone(), e.to.clone(), e.kind.clone())).collect(),
+            frontier: data.nodes.iter().map(|n| n.id.clone()).collect(),
+        });
+    }
     // THE INTENT FIELD, built once and DENSIFIED per wave (the flood reaches new files as it grows). Inert on a
     // structural / intent-free grow, in which case every read below returns 0 and each decision degrades to the
     // structural rule it had before the field existed.
@@ -497,6 +507,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
 
         // ── the wavefront flood: expand EVERY ready head this wave ───────────────────────────────────────
         let mut wave_added = 0usize;
+        // snapshot BEFORE the wave so the record reports exactly this wave's new nodes + edges
+        let wave_before_ids: Option<HashSet<String>> = on_wave.map(|_| data.nodes.iter().map(|n| n.id.clone()).collect());
+        let wave_before_edges = data.edges.len();
         for (mi, mv) in ordered.iter().enumerate() {
             if flood_n(&data) >= opts.max_nodes {
                 // BUDGET backstop hit — the ready moves we won't apply are decision points cut by the node budget.
@@ -554,6 +567,22 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                     }
                 }
             }
+        }
+        // STREAM: ONE record per SETTLED wave — its new nodes, the edges drawn, and the ring they form (the
+        // next frontier). Raw flood order; the final model, emitted after every crop, stays authoritative.
+        if let (Some(cb), Some(before)) = (on_wave, wave_before_ids) {
+            let added: Vec<(String, String, String, String)> = data
+                .nodes
+                .iter()
+                .filter(|n| !before.contains(&n.id))
+                .map(|n| (n.id.clone(), n.symbol.clone(), if n.file.is_empty() { String::new() } else { normpath(&n.file) }, n.kind.clone()))
+                .collect();
+            let edges: Vec<(String, String, String)> = data.edges[wave_before_edges.min(data.edges.len())..]
+                .iter()
+                .map(|e| (e.from.clone(), e.to.clone(), e.kind.clone()))
+                .collect();
+            let frontier = added.iter().map(|a| a.0.clone()).collect();
+            cb(WaveRecord { wave: step + 1, added, edges, frontier });
         }
         if wave_added == 0 {
             break; // the region is fully flooded
@@ -719,12 +748,22 @@ fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only:
 /// only (intent/embeddings are render-time). Port of `_growToTerminalsImpl` (the structuralGrow, dataCoupling
 /// path — no border-coupling-det [needs intent], no P5 answer-cache [a perf memo]). Returns the grown footprint.
 pub fn grow_to_terminals(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
+    grow_to_terminals_streaming(repo, anchor_file, symbol, data_coupling, opts, None)
+}
+
+/// As `grow_to_terminals`, with a per-wave sink (`--stream`). A STREAMING grow is never answer-cached: the
+/// records ARE the product, and replaying a settled graph would emit none of them — the same reason the TS
+/// path excludes `onWave` from its cache key rather than serving a cached answer with no stream.
+pub fn grow_to_terminals_streaming(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts, on_wave: Option<OnWave<'_>>) -> Option<ResolvedGraph> {
+    if on_wave.is_some() {
+        return grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts, on_wave);
+    }
     // Phase 5 (docs/GRAPH_CACHE.md): memoize the WHOLE settled grow per query so a warm run skips the wave.
     // The COUPLING epoch guards a coupling grow (folds the learned-matcher state); the SOURCE epoch a structural.
     let epoch = if data_coupling { seam_cache::coupling_epoch_of(repo) } else { seam_cache::epoch_of(repo) };
     let key = seam_cache::hash(&format!("{symbol}|{data_coupling}|{}|{}", opts.fingerprint(), seam_cache::seam_env_snapshot()));
     let (mut out, verdict) =
-        seam_cache::cached_reporting(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts));
+        seam_cache::cached_reporting(repo, "grow-v1", anchor_file, &key, &epoch, || grow_to_terminals_impl(repo, anchor_file, symbol, data_coupling, opts, None));
     // REPORT the warm-path decision; do not PRINT it. The TS shell owns I/O (see the crate README), and it is
     // also the only side that can: the engine's callers capture `process.stderr.write` to assert on this line,
     // and a Rust `eprintln!` goes straight to fd 2, invisible to that capture. So the verdict rides back across
@@ -736,6 +775,24 @@ pub fn grow_to_terminals(repo: &str, anchor_file: &str, symbol: &str, data_coupl
     }
     out
 }
+
+/// ONE SETTLED WAVE, as `--stream` emits it: the nodes this wave added, the edges it drew, and the ring they
+/// form (the next frontier). Port of the TS `onWave` record. Wave 0 is the SEED — the P1 + P3-coupling nodes
+/// that exist BEFORE the flood — so the union of every record's `added` equals the final region; without it a
+/// consumer reconstructing the graph from the stream is missing everything the seed contributed.
+#[derive(Clone, Debug, Default)]
+pub struct WaveRecord {
+    pub wave: usize,
+    /// (id, symbol, normalised file, kind)
+    pub added: Vec<(String, String, String, String)>,
+    /// (from, to, kind)
+    pub edges: Vec<(String, String, String)>,
+    pub frontier: Vec<String>,
+}
+
+/// The per-wave sink. Borrowed rather than owned so the napi layer can hand in a closure over a JS function;
+/// the wave is synchronous and single-threaded, so no thread-safety machinery is needed.
+pub type OnWave<'a> = &'a dyn Fn(WaveRecord);
 
 /// A concern's mechanism center — a (file, symbol) pair.
 pub struct Center {
@@ -772,7 +829,7 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
     data
 }
 
-fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
+fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts, on_wave: Option<OnWave<'_>>) -> Option<ResolvedGraph> {
     let perf = std::env::var("SEAM_PERF").is_ok();
     macro_rules! phase {
         ($label:expr, $body:expr) => {{
@@ -794,7 +851,7 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     if std::env::var("SEAM_WAVE_WHY").is_ok() {
         eprintln!("[phase] after seed+phase_coupling: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }
-    data = phase!("phase_expand", phase_expand(repo, data, &ex, opts)); // P2 structural wave
+    data = phase!("phase_expand", phase_expand(repo, data, &ex, opts, on_wave)); // P2 structural wave
     if std::env::var("SEAM_WAVE_WHY").is_ok() {
         eprintln!("[phase] after phase_expand: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }

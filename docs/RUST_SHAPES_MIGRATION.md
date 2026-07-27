@@ -594,6 +594,33 @@ the tier rule was only relevant because it POPULATES the frontier that failed to
 `[concern]`/`[merge]` stderr as those branches not running, when the CLI intercepts `process.stderr.write` —
 a file-based trace is what surfaced the exception.
 
+## THE FALLBACK INVENTORY — what still routes to `ts/src/codebase`
+
+Asked and answered, gate by gate. `growViaRust` is reached when:
+
+```
+rustCoreEnabled() && SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)
+```
+
+| gate | status |
+|---|---|
+| `rustCanParse(anchorFile)` | **closed.** Every extension `_LANG_BY_EXT` maps parses natively. |
+| `rustCanServeRepo(repo)` | **closed.** `unparseableLanguages` can no longer return anything: `mapped ⊆ linked` is asserted by `grammarCoverage()` in rust_language_routing.test.ts, so adding an extension without vendoring its grammar fails by NAME instead of surfacing as a grow that silently parsed nothing. |
+| `!deterministic` (`--stream`) | **closed.** The addon emits a record per settled wave through a synchronous callback. Pinned by `rust/parity/stream.ts` — same record SEQUENCE, not merely the same final region. |
+| `SEAM_METHOD_PRECISE=0` | Legacy escape hatch restoring the pre-fix whole-file fan bleed. Deliberately unported (porting it = porting a bug). Deleted WITH the flag, not a blocker. |
+| `SEAM_RUST_CORE=0` | The kill switch. Goes with the TS engine it switches to. |
+
+THE GRAMMAR GAP WAS TWO, NOT TWENTY-FOUR. I first reported it as "PHP, Rust, Swift, Scala, Bash, CSS…" by
+reading the count of `.wasm` files tree-sitter-wasms SHIPS (36). The engine's own `_LANG_BY_EXT` maps 12, of
+which 11 were vendored — the real gap was `.rs` and `.vue`. Not trivial, though: without the rust grammar
+`canServeRepo` refused every repo containing Rust, including this repo's own core.
+
+STREAMING, on the design choice. The callback runs SYNCHRONOUSLY on the wave's thread, so a consumer sees wave
+N while N+1 computes. The cheap alternative — collect records during the wave, hand them back at the end, let
+TS replay them — passes the existing test and the union check while deleting the entire point of the feature.
+A streaming grow is also never answer-cached on either engine: the records ARE the product, and a cached graph
+replays none of them.
+
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
 decided above, the harnesses' TS side is worth keeping under a `parity/` fixture even after the runtime path

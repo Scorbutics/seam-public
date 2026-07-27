@@ -1249,6 +1249,9 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // with the grow routed here — the concern grows, deepening, the tier/border tests, the cache-invalidation
   // contracts — 1323 pass / 0 fail. The structural path is separately pinned by growfull (427/427).
   //
+  // STREAMING grows route here too now: the addon emits a record per settled wave through a synchronous
+  // callback (`growToTerminalsStreaming`), so `--stream` no longer pins a query to the TS engine.
+  //
   // SEAM_RUST_CORE=0 falls back to the TS wave.
   // SEAM_METHOD_PRECISE=0 is a LEGACY ESCAPE HATCH the addon does not implement. The Rust coupling fan is
   // always method-precise; the opt-out restores the pre-fix whole-file bleed (every write in a boundary file
@@ -1256,7 +1259,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // strictly worse. Porting it to the core would be porting a bug on purpose, so a grow that ASKS for the
   // bleed stays on TS — the same shape as `rustCanParse` / `rustCanServeRepo`: a question the addon cannot
   // answer routes to the engine that can, rather than being answered differently.
-  if (rustCoreEnabled() && deterministic && process.env.SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+  if (rustCoreEnabled() && process.env.SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
     return growViaRust(repo, anchorFile, symbol, opts);
   }
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());

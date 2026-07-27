@@ -1,6 +1,7 @@
 //! The napi boundary — the ONLY crate with napi-derive. It converts pure domain types to wire DTOs and
 //! exposes a small set of entry points; all logic lives in the seam-lang / seam-resolve crates.
 
+use napi::Env;
 use napi_derive::napi;
 
 /// syncSeamEnv — mirror the HOST's `SEAM_*` environment into this process's `std::env`.
@@ -556,6 +557,54 @@ impl GrowOptsDto {
 #[napi]
 pub fn grow_to_terminals(repo: String, anchor_file: String, symbol: String, data_coupling: bool, opts: GrowOptsDto) -> Option<GraphDto> {
     seam_grow::orchestrate::grow_to_terminals(&repo, &anchor_file, &symbol, data_coupling, &opts.to_wave_opts()).map(Into::into)
+}
+
+/// growToTerminals with a per-wave callback — the `--stream` path. The callback runs SYNCHRONOUSLY on this
+/// thread as each wave settles, which is what makes it a stream rather than a replay: the consumer sees wave N
+/// while wave N+1 is still being computed. The wave is single-threaded, so a plain JS function called in place
+/// is correct and no threadsafe-function machinery is needed.
+///
+/// The record crosses as ONE JSON string rather than a napi object graph. Building nested arrays of objects by
+/// hand per wave is a lot of ceremony for a payload the consumer immediately re-serialises to stdout anyway,
+/// and the shape then has exactly one definition (here) instead of one per layer.
+///
+/// A callback that THROWS stops the grow. That is the TS contract and the one that matters: `--stream` writes
+/// to stdout, so a reader hanging up must end the walk rather than let it run to completion unread. The error
+/// is captured and re-raised after the wave unwinds, because the sink cannot return one through `Fn`.
+#[napi]
+pub fn grow_to_terminals_streaming(
+    env: Env,
+    repo: String,
+    anchor_file: String,
+    symbol: String,
+    data_coupling: bool,
+    opts: GrowOptsDto,
+    on_wave: napi::JsFunction,
+) -> napi::Result<Option<GraphDto>> {
+    let err: std::cell::RefCell<Option<napi::Error>> = std::cell::RefCell::new(None);
+    let sink = |r: seam_grow::orchestrate::WaveRecord| {
+        if err.borrow().is_some() {
+            return; // an earlier wave's callback threw — stop feeding it
+        }
+        let payload = serde_json::json!({
+            "wave": r.wave,
+            "added": r.added.iter().map(|(id, symbol, file, kind)| serde_json::json!({ "id": id, "symbol": symbol, "file": file, "kind": kind })).collect::<Vec<_>>(),
+            "edges": r.edges.iter().map(|(from, to, kind)| serde_json::json!({ "from": from, "to": to, "kind": kind })).collect::<Vec<_>>(),
+            "frontier": r.frontier,
+        });
+        let res = env
+            .create_string(&payload.to_string())
+            .and_then(|js| on_wave.call(None, &[js]))
+            .map(|_| ());
+        if let Err(e) = res {
+            *err.borrow_mut() = Some(e);
+        }
+    };
+    let out = seam_grow::orchestrate::grow_to_terminals_streaming(&repo, &anchor_file, &symbol, data_coupling, &opts.to_wave_opts(), Some(&sink));
+    if let Some(e) = err.into_inner() {
+        return Err(e);
+    }
+    Ok(out.map(Into::into))
 }
 
 /// A concern center — `[file, symbol]`.

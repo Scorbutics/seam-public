@@ -154,7 +154,13 @@ export function growViaRust(repo: string, anchorFile: string, symbol: string, op
   // The containment knobs are resolved on THIS side (opts → env → default) and handed over as finished values;
   // the Rust core holds no defaulting logic, so the two engines cannot disagree about what a knob means.
   const k = resolveStructuralKnobs(opts, !!opts.ctx?.stableFloor, false);
-  const dto = addon.growToTerminals(repo, anchorFile, symbol, opts.dataCoupling !== false, k);
+  // STREAMING (`--stream`): the addon calls back per settled wave, synchronously, so the consumer sees wave N
+  // while wave N+1 is still computing. The record crosses as JSON — one definition of the shape, in Rust — and
+  // is handed to the caller's `onWave` unchanged. A streaming grow is never answer-cached on either engine:
+  // the records ARE the product, and a cached graph would replay none of them.
+  const dto = opts.onWave
+    ? addon.growToTerminalsStreaming(repo, anchorFile, symbol, opts.dataCoupling !== false, k, (json: string) => opts.onWave(JSON.parse(json)))
+    : addon.growToTerminals(repo, anchorFile, symbol, opts.dataCoupling !== false, k);
   // The addon answer-caches internally (grow-v1 shards) instead of going through the TS `cachedGrow`, so it
   // reports its warm-path verdict back and we emit the SAME line cachedGrow does — through process.stderr, which
   // is both the TS shell's job and the only stream a caller intercepting process.stderr.write can observe.
