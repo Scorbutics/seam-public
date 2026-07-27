@@ -116,7 +116,10 @@ fn base_type_name(t: &str) -> String {
 
 /// The base names of an `implements`/heritage clause on `node` — direct clause children, or nested under a TS
 /// `class_heritage` wrapper (filtered to implements clauses). `pred` selects which clause kinds count.
-fn heritage_bases(ctx: &Ctx, node: Node, pred: fn(&str) -> bool) -> Vec<String> {
+/// The base names a heritage clause matching `pred` introduces on `node` — the extraction the interface
+/// index, the class-bases scan and the `implements` reads all share. Public because the framework-entry
+/// detector needs the same `implements` read on a single anchor file.
+pub fn heritage_bases(ctx: &Ctx, node: Node, pred: fn(&str) -> bool) -> Vec<String> {
     let mut out = Vec::new();
     for h in ctx.children(node) {
         if pred(h.kind()) {

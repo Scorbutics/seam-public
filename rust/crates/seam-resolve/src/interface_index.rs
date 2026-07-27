@@ -210,3 +210,88 @@ fn close_to_concrete(interfaces: &HashSet<String>, impls: &HashMap<String, Vec<I
 fn read_text(repo: &str, rel: &str) -> Option<String> {
     std::fs::read(format!("{repo}/{rel}")).ok().map(|b| String::from_utf8_lossy(&b).into_owned())
 }
+
+/// The interface names a class `symbol` (in `anchor_file`) IMPLEMENTS. Used to reach the facade-style
+/// upstream entries a bidirectional grow misses: DI/CDI consumers import the INTERFACE, not the impl, so
+/// growing consumers of the impl finds nothing — growing consumers of its interfaces does (deterministic).
+/// Port of `implemented_interfaces`.
+pub fn implemented_interfaces(repo: &str, anchor_file: &str, symbol: &str) -> Vec<String> {
+    let Some(ctx) = parse_file(repo, anchor_file) else { return Vec::new() };
+    let Some(cls) = ctx.collect(ctx.root(), seam_lang::node_kinds::is_class_kind).into_iter().find(|c| ast::name_of(&ctx, *c).as_deref() == Some(symbol)) else {
+        return Vec::new();
+    };
+    let mut out: Vec<String> = Vec::new();
+    for b in ast::heritage_bases(&ctx, cls, seam_lang::node_kinds::is_implements) {
+        if !out.contains(&b) {
+            out.push(b);   // the TS side dedups with a Set, which preserves first-seen order
+        }
+    }
+    out
+}
+
+/// FRAMEWORK-ENTRY detection — generalized, NO per-framework annotation list. A `symbol` (method or class) is
+/// a framework/external entry when it's wired declaratively: (a) it carries a METHOD-LEVEL
+/// annotation/decorator (any — `@GET`/`@Schedule`/`@PostConstruct`/`@Observes`/a TS `@Get()`…; presence is the
+/// signal, not the name), or (b) its enclosing class implements an EXTERNAL interface (one not declared in
+/// this repo, e.g. `MessageListener` → `onMessage` is the framework callback). Combined by the caller with
+/// "no in-repo caller", this distinguishes a framework ROOT (flow enters here from outside the repo) from
+/// genuinely-isolated/dead code — across any annotation/decorator framework. Port of `is_framework_entry`.
+pub fn is_framework_entry(repo: &str, file: &str, symbol: &str) -> bool {
+    use seam_lang::node_kinds as nk;
+    let Some(ctx) = parse_file(repo, file) else { return false };
+    // (a) a method-LEVEL annotation/decorator (in `modifiers`, or a sibling decorator) — NOT param/return ones.
+    // NB: a method's NAME is the identifier right before its parameter list — NOT `name_of` (which returns the
+    // first name-kind child = the RETURN TYPE for `String foo()`; fine for classes, wrong for typed methods).
+    let mname = |m: seam_lang::Node| -> String {
+        let ch = ctx.children(m);
+        if let Some(fp) = ch.iter().position(|c| c.kind().starts_with("formal_param")) {
+            if fp > 0 {
+                for i in (0..fp).rev() {
+                    if ch[i].kind() == "identifier" || ch[i].kind() == "property_identifier" {
+                        return ctx.text(ch[i]).to_string();
+                    }
+                }
+            }
+        }
+        ast::name_of(&ctx, m).unwrap_or_default()
+    };
+    let method = ctx.collect(ctx.root(), nk::is_method_kind).into_iter().find(|m| mname(*m) == symbol);
+    if let Some(m) = method {
+        let ch = ctx.children(m);
+        if let Some(mods) = ch.iter().find(|c| c.kind() == "modifiers") {
+            if ctx.children(*mods).iter().any(|c| nk::is_annotation(c.kind())) {
+                return true;
+            }
+        }
+        if ch.iter().any(|c| nk::is_annotation(c.kind())) {
+            return true; // TS decorator sibling
+        }
+    }
+    // (b) enclosing class implements an interface NOT declared in-repo → framework callback impl.
+    let idx = InterfaceIndex::cached(repo);
+    for cls in ctx.collect(ctx.root(), nk::is_class_kind) {
+        let impls = ast::heritage_bases(&ctx, cls, nk::is_implements);
+        if !impls.iter().any(|i| !idx.interfaces.contains(i)) {
+            continue; // no external interface here
+        }
+        if ast::name_of(&ctx, cls).as_deref() == Some(symbol) {
+            return true;
+        }
+        if let Some(m) = method {
+            let (ms, _) = ctx.span(m);
+            let (cs, ce) = ctx.span(cls);
+            if ms >= cs && ms <= ce {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+// Read + parse one file, or None (unknown extension / unreadable / unparseable) — the shared prelude of both
+// per-anchor scans above.
+fn parse_file(repo: &str, rel: &str) -> Option<Ctx> {
+    let grammar = grammar_for(rel)?;
+    let text = read_text(repo, rel)?;
+    Ctx::parse(&text, grammar)
+}

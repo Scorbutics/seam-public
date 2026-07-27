@@ -2177,3 +2177,29 @@ pub struct NameConsumerDto {
     pub line: u32,
     pub call: bool,
 }
+
+/// mergeResolved — fold `add` into `base`, content-keyed and idempotent. `expandAnchor` is the node the added
+/// footprint attaches at (the anchor whose fan `add` is), so a re-grow of the same anchor dedups rather than
+/// duplicating. The CLI's `--expand-graph`, the bidirectional merge and the interface-consumers enrichment all
+/// go through this one function.
+#[napi]
+pub fn merge_resolved(base: GraphDto, add: GraphDto, expand_anchor: Option<String>) -> GraphDto {
+    let b = dto_to_resolved(base);
+    let a = dto_to_resolved(add);
+    seam_scan::merge_resolved(&b, &a, expand_anchor.as_deref()).into()
+}
+
+/// implementedInterfaces — the interface names a class `symbol` IMPLEMENTS, for the interface-consumers
+/// enrichment (DI/CDI consumers import the INTERFACE, so consumers-of-the-impl finds nothing).
+#[napi]
+pub fn implemented_interfaces(repo: String, anchor_file: String, symbol: String) -> Vec<String> {
+    seam_resolve::interface_index::implemented_interfaces(&repo, &anchor_file, &symbol)
+}
+
+/// isFrameworkEntry — is `symbol` wired declaratively (a method-level annotation/decorator, or an enclosing
+/// class implementing an interface not declared in-repo)? Combined with "no in-repo caller", this is what
+/// separates a framework ROOT from genuinely-dead code — with no per-framework annotation list.
+#[napi]
+pub fn is_framework_entry(repo: String, file: String, symbol: String) -> bool {
+    seam_resolve::interface_index::is_framework_entry(&repo, &file, &symbol)
+}

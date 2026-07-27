@@ -679,15 +679,15 @@ async function runCodebase(a: Args): Promise<number> {
   // disables. Bounded: only the anchor's own interfaces.
   if (a.interfaceConsumers !== false && a.symbol && a.anchorFile && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
-      const ifaces = await scan.implemented_interfaces(a.repo, a.anchorFile, a.symbol);
-      const { merge_resolved } = await import("../codebase/scan/index.js");
+      const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+      const ifaces: string[] = core.implementedInterfaces(a.repo, a.anchorFile, a.symbol);
       let added = 0;
       for (const iface of ifaces) {
         const node = (data.nodes as any[]).find((n) => n.symbol === iface);
         if (!node?.file) continue;   // the interface must already be a resolved node (a dep of the anchor)
         const before = (data.nodes as any[]).length;
-        const cons = await scan.build_footprint(a.repo, node.file, iface, { dataCoupling: false });
-        data = merge_resolved(data, cons, node.id);   // attach the interface's consumers at the interface node
+        const cons = core.buildFootprint(a.repo, node.file, iface, "up", false);
+        data = core.mergeResolved(data, cons, node.id);   // attach the interface's consumers at the interface node
         added += (data.nodes as any[]).length - before;
       }
       if (added) emit(`interface-consumers: +${added} upstream seam(s) via ${ifaces.length} interface(s) (deterministic)`);
@@ -723,10 +723,11 @@ async function runCodebase(a: Args): Promise<number> {
   // agnostic (annotation-PRESENCE or external-interface callback — no per-framework list).
   if (a.symbol && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
+      const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
       const hasIncoming = new Set((data.edges ?? []).map((e: any) => e.to));
       for (const n of data.nodes as any[]) {
         if (hasIncoming.has(n.id) || !n.file || !n.symbol) continue;   // only roots (nothing in the footprint calls them)
-        if (await scan.is_framework_entry(a.repo, n.file, n.symbol)) n.entry = true;
+        if (core.isFrameworkEntry(a.repo, n.file, n.symbol)) n.entry = true;
       }
     } catch (e) { process.stderr.write(`entry tagging skipped: ${(e as Error).message}\n`); }
   }
