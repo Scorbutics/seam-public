@@ -193,23 +193,10 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   // RUST FIRST when the guard allows it — the projection is byte-identical (rust/parity/shapes_set.ts) and the
   // addon builds the footprint itself, so this skips the TS scan entirely rather than just the projection.
   const rustAddon = await rustShapeOk(a);
-  let set: any = null;
-  if (rustAddon) {
-    try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false)); }
-    catch { set = null; }   // any addon failure → the TS path below, never a failed query
-  }
-  let graph: any;
-  if (!set) try {
-    // STRUCTURAL + CACHED, exactly like impact/reaches. A consumer SET is the anchor's resolved callers —
-    // projectConsumerSet reads only the anchor's direct edges + blindspots, never the coupling overlay — so
-    // running per-node data-coupling here was pure cost AND it disabled build_footprint_cached (which only
-    // memoizes dataCoupling===false). That is why `consumers` was the one shape with NO warm benefit at all
-    // (cal.com getBooking 14.9→12.8s, Keycloak UserStorageProvider 11.8→10.6s, flat over four passes, while
-    // impact went 26s→0.7s). Coupling stays opt-in via an explicit --data-coupling.
-    graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
-      { direction: "up", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
-  } catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
-  if (!set) set = projectConsumerSet(graph);
+  // No catch-to-null: the TypeScript scan it fell back to is gone, so an addon failure IS the answer.
+  let set: any;
+  try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false)); }
+  catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
   // Opt-in name-grounded recall — adds UNVERIFIED leads (kept separate from verified members). The floor
   // is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers still use the
   // exact symbol name; this recovers them deterministically. See codebase/scan/name_consumers.ts.
@@ -256,19 +243,10 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
   emit(`Resolving dependencies of ${a.symbol}…`);
   // RUST FIRST — the symmetric peer of the consumers routing above; same guard, same byte-identical projection.
   const rustAddonD = await rustShapeOk(a);
-  let set: any = null;
-  if (rustAddonD) {
-    try { set = rustSetToModel(rustAddonD.projectDependencySet(a.repo, a.anchorFile!, a.symbol!, false)); }
-    catch { set = null; }
-  }
-  let graph: any;
-  if (!set) try {
-    // Same structural+cached treatment as consumers above — projectDependencySet reads the anchor's own
-    // resolved out-edges, not the coupling overlay.
-    graph = await scan.build_footprint_cached(a.repo, a.anchorFile!, a.symbol!,
-      { direction: "down", depth: a.depth, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin });
-  } catch (e) { err(`dependency scan failed: ${(e as Error).message}`); }
-  if (!set) set = projectDependencySet(graph);
+  // No catch-to-null: the TypeScript scan it fell back to is gone, so an addon failure IS the answer.
+  let set: any;
+  try { set = rustSetToModel(rustAddonD.projectDependencySet(a.repo, a.anchorFile!, a.symbol!, false)); }
+  catch (e) { err(`dependency scan failed: ${(e as Error).message}`); }
   // DI-BINDING ENRICHMENT (opt-in SEAM_DI_RESOLVE; TS/ioctopus): the deps graph already resolves interface→impl
   // edges but not WHICH impl a DI container binds, nor the runtime condition. Attach that binding to each member
   // that is a container-bound concrete impl, so the answer is complete in one query (no follow-up grep).
