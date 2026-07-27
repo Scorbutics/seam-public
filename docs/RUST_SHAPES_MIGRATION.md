@@ -541,20 +541,22 @@ getting there, both fixed and both found by measurement rather than review:
    one field from two sets of weights. The tell was that forcing fp32 on both engines moved the comparison the
    WRONG way (only-TS 3 -> 4, frontier diff back) instead of closing it.
 
-STILL OPEN — 4 coupling complements and node ORDER. All four are `apps/api/v1/pages/api/...` complements that
-TS KEEPS and Rust DROPS via `border_coupling_det`, in one direction, on both weight settings. It is NOT
-explained by the score: measured directly, `_auth-middleware.ts` scores 0.2726 in the Rust field against the
-0.25 margin, i.e. Rust should keep it, and an unscored file is kept anyway (I3). And it is not the phase order
-(TS runs the border after the deep fan-couple, as Rust does — orchestrate.ts:1275 then :1286). So the next
-diagnostic is CANDIDACY, not scoring: instrument `border_coupling_det` to report, for those four ids, whether
-each was a `fan_comps` candidate, the fan width of every marker that reached it, and the file score actually
-looked up. The suspect is the marker->complement mapping the deep fan-couple produces, which growfull already
-records as a known open divergence (~34/1269 edges, different representative producers for shared boundaries)
-— a difference in `marker_comps` sizes flips `wide()` and so flips candidacy without any score being wrong.
+CLOSED, and the cause was a third defect — this one MINE, in the Rust embedder. `tokenizer.json` carries
+`truncation.max_length = 128` and `padding = Fixed(128)`; the Rust `tokenizers` crate honours both, and
+transformers.js ignores that section entirely, truncating at `model_max_length` (512) and padding to
+batch-longest. So every input past 128 tokens was silently cut on one side only, and both engines looked
+healthy. `embed.ts` could not see it: it compares symbol NAMES, far under 128 tokens, and read 3.7e-7. The
+grow embeds `embedString` — signature + enclosing + path + doc + BODY — which routinely exceeds it. Against
+the 0.25 coupling margin: `_auth-middleware.ts` TS 0.2769 / Rust 0.2498 → **0.2783**; `_patch.ts` TS 0.2741 /
+Rust 0.2410 → **0.2633**. Both then land on the same side of the margin as TS.
 
-NOT YET DONE, and blocked on the above: flipping `intentShapesGrow`, and the 14 behavioural tests run with
-the grow routed to Rust. Routing with a known containment difference is exactly what those tests exist to
-catch, so the router stays as it is until the four are explained.
+What located it was not re-reading the port but tracing the border's actual decision (`SEAM_BORDER_WHY`, now
+permanent): it printed `score=0.24982528` against `margin=0.25`. A 0.00017 gap is too knife-edge to be a logic
+difference, which killed the candidacy hypothesis I had been favouring and pointed at the score itself.
+`embed.ts` now carries LONG passages alongside the names, so this class of bug is catchable there too.
+
+FINAL: **nodes 257/257, only-TS 0, only-Rust 0, node ORDER identical, parked frontier 61/61.** The Rust wave
+contains the same region and parks the same decision points as the TS wave, under an intent.
 
 GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
 output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both

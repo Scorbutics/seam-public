@@ -42,7 +42,18 @@ const defs: string[] = (() => {
     return [...new Set(out.map((d) => d.name as string))].filter(Boolean).slice(0, 200);
   } catch { return []; }
 })();
-const VALUES = defs.length >= 50 ? defs : [
+// LONG passages, deliberately over 128 tokens. The grow does not embed symbol names — it embeds `embedString`
+// (signature + enclosing + path + doc + BODY). A sequence-length difference between the two tokenizers is
+// invisible on short input and shifts every long score, so the sample has to contain both. This is the bug this
+// harness missed once already: Rust honoured tokenizer.json's `truncation.max_length = 128`, transformers.js
+// uses `model_max_length` (512), and the field disagreed by ~3e-2 on real def strings while this harness read
+// 3.7e-7 on names.
+const LONG: string[] = [
+  `method patchHandler(req: NextApiRequest, res: NextApiResponse) in AttendeeHandler — apps/api/v1/pages/api/attendees/[id]/_patch.ts :: Edit an existing attendee { const { userId, isSystemWideAdmin, query, body } = req; const { id } = schemaQueryIdParseInt.parse(query); const data = schemaAttendeeEditBodyParams.parse(body); const attendee = await prisma.attendee.findUnique({ where: { id }, select: { booking: { select: { userId: true } } } }); if (!attendee) throw new HttpError({ statusCode: 404, message: "Attendee not found" }); if (!isSystemWideAdmin && attendee.booking.userId !== userId) throw new HttpError({ statusCode: 403, message: "Forbidden" }); const updated = await prisma.attendee.update({ where: { id }, data }); return { attendee: schemaAttendeeReadPublic.parse(updated) }; }`,
+  `function saveBookingToDatabase(input: BookingCreateInput, tx: PrismaTransaction) — packages/features/bookings/lib/handleNewBooking/createBooking.ts :: Persist a confirmed booking and its attendees { const booking = await tx.booking.create({ data: { uid, title, startTime, endTime, eventTypeId, userId, status: BookingStatus.ACCEPTED, attendees: { createMany: { data: attendees } }, references: { createMany: { data: references } } }, include: { attendees: true, references: true } }); await tx.bookingSeat.createMany({ data: seats }); logger.info("booking persisted", { uid: booking.uid }); return booking; }`,
+  `function renderCalendarHeaderRow(props: CalendarHeaderProps) — packages/ui/components/calendar/CalendarHeader.tsx :: Presentational header for the month grid { const { month, year, onPrev, onNext, locale } = props; const label = useMemo(() => new Intl.DateTimeFormat(locale, { month: "long", year: "numeric" }).format(new Date(year, month)), [month, year, locale]); return (<div className="flex items-center justify-between px-4 py-2"><Button onClick={onPrev} aria-label="previous month" /><span className="text-sm font-medium">{label}</span><Button onClick={onNext} aria-label="next month" /></div>); }`,
+];
+const VALUES = defs.length >= 50 ? [...defs, ...LONG] : [
   "saveBooking", "createBooking", "bookingRepository.insert", "db.booking.update",
   "renderCalendarHeader", "formatDateLabel", "parseTimezoneOffset",
   "sendConfirmationEmail", "logger.debug", "cssVariablesForTheme",
