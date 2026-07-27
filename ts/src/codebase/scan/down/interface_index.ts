@@ -10,7 +10,7 @@ import {
   makeCtx, available, lang_for,
   _CLASS_KINDS, _METHOD_KINDS, _INTERFACE, _IMPLEMENTS, _BASE_NAME, _HERITAGE, _ANNOTATION,
 } from "../../atoms.js";
-import { _name_of, _read } from "../ast_units.js";
+import { _name_of, _read } from "../../ast_units.js";
 import { incrementalScanAsync, indexCacheEnabled } from "../../coupling/index_cache.js";
 
 // {interface name → the concrete in-repo CLASSES that `implement` it} + the set of names declared as

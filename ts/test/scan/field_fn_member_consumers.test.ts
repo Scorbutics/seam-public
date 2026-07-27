@@ -109,7 +109,7 @@ describe("field-bound function members are part of a class's method set", () => 
   test("a DATA field is not admitted as a method (no `retries` consumer hunt)", async () => {
     if (!available()) return;
     const { makeCtx } = await import("../../src/codebase/atoms.js");
-    const { _read } = await import("../../src/codebase/scan/ast_units.js");
+    const { _read } = await import("../../src/codebase/ast_units.js");
     const { _class_methods } = await import("../../src/codebase/scan/ast_class.js");
     const rd = _read(REPO, "src/SlotsService.ts")!;
     const names = _class_methods((await makeCtx(rd[0], rd[1]))!, "SlotsService").map((m) => m[0]);

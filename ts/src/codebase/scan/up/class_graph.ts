@@ -16,7 +16,7 @@ import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Unit, type ResolvedGraph, makeGraph,
 } from "../graph.js";
-import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "../ast_units.js";
+import { expanduser, stem, _read, _name_of, _named_units, _enclosing, _enclosingClass, _usage_lines } from "../../ast_units.js";
 import {
   _class_methods, _class_method_usage, _class_call_sites, _type_methods, _class_bases,
   _instance_types, _method_call_sites, _subclass_family, _called_method_names, _type_names, _field_fn_owner,

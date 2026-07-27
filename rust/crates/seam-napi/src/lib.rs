@@ -2295,3 +2295,20 @@ pub fn lexical_pre_filter(repo: String, terms: Vec<String>, m: u32) -> Vec<Strin
 pub fn embed_vecs(values: Vec<String>) -> std::collections::HashMap<String, Vec<f64>> {
     seam_embed::embed_vecs(&values).into_iter().map(|(k, v)| (k, v.into_iter().map(|x| x as f64).collect())).collect()
 }
+
+/// candidateSourceFiles — the repo's anchorable source files, sorted and deduped (oversized files dropped).
+/// The enumeration the def table and the subject-affinity recall both walk.
+#[napi]
+pub fn candidate_source_files(repo: String) -> Vec<String> {
+    seam_scan::def_table::candidate_source_files(&repo)
+}
+
+/// defsInFileTreesitter — the tree-sitter def extraction alone (no regex fallback), or null when the file has
+/// no vendored grammar. `defsInFile` picks between the two; this exposes the tree-sitter half on its own,
+/// which is what a caller wanting "the precise read, else my own fallback" asks for.
+#[napi]
+pub fn defs_in_file_treesitter(rel: String, text: String) -> Option<Vec<DefDto>> {
+    seam_scan::def_table::defs_in_file_treesitter(&rel, &text).map(|defs| {
+        defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
+    })
+}

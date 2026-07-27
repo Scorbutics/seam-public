@@ -7,7 +7,10 @@
 // repo. ADDITIVE: it only ANNOTATES seams with a `relevance` score (and a rank-banded `tier`) — it never
 // drops or reorders them. The consumer (the agent, or the concern/agent render) ranks; the engine doesn't.
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
-import { embedScoreDefs, embedScoreStrings } from "../scan/def_embed.js";
+import { loadAddon as _loadAddon } from "./rust_core.js";
+// The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
+// they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
+const _core = (): any => _loadAddon();
 
 // Data-store boundary kinds — a sink of these is a table/queue the flow persists into. Their LABEL (the table
 // name) is the semantic signal, but a `member_access` table (`bookingRepository`) has no matching DEF, so a
@@ -88,7 +91,7 @@ export async function annotateIntentRelevance(repo: string, intent: string | und
     if (s.primary?.file) files.add(s.primary.file);
     for (const h of (s.hunks ?? [])) if (h.file) files.add(h.file);
   }
-  const scored = await embedScoreDefs(repo, intent, files.size ? files : undefined);
+  const scored = _core().embedScoreDefs(repo, intent, files.size ? [...files] : null) as { def: any; score: number }[];
   if (!scored.length) return false;   // transformers absent / no defs → leave seams unannotated (graceful)
 
   const byKey = new Map<string, number>();   // file::name → best score
@@ -123,7 +126,7 @@ export async function annotateIntentRelevance(repo: string, intent: string | und
   }
   if (need.size) {
     try {
-      const ls = await embedScoreStrings(intent, [...need]);
+      const ls = new Map<string, number>(Object.entries(_core().embedScoreStrings(intent, [...need]) as Record<string, number>));
       for (const cl of clusters) for (const s of (cl.seams ?? [])) {
         if (typeof s.relevance === "number" || !_isStoreSeam(s)) continue;
         const sc = ls.get(_storeLabel(s) ?? "");

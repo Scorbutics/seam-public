@@ -7,9 +7,12 @@
 // upstream entry points). Off by default (a flag gates the pipeline integration).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { candidate_source_files } from "../scan/def_table.js";
+import { loadAddon as _loadAddon } from "./rust_core.js";
+// The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
+// they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
+import { toResolvedGraph as _toResolvedGraph } from "./rust_core.js";
+const _core = (): any => _loadAddon();
 import { run_pass_async, registerPass } from "../../core/llm.js";
-import { build_footprint } from "../scan/index.js";
 
 const PASS = registerPass({ tag: "affinity", tier: "cheap", note: "intent-affinity scoring of shared-subject candidates (SUGGESTED)" });
 import { normpath } from "../../core/resolve/walk.js";
@@ -45,7 +48,7 @@ function _gist(text: string): string {
 function _candidates(repo: string, subjects: string[], exclude: Set<string>, cap: number): { file: string; symbol: string; shared: string[]; gist: string }[] {
   const pats = subjects.filter(Boolean).map((s) => ({ s, re: new RegExp(`\\b${s.replace(/[^\w]/g, "")}\\b`) }));
   const out: { file: string; symbol: string; shared: string[]; gist: string }[] = [];
-  for (const rel of candidate_source_files(repo)) {
+  for (const rel of _core().candidateSourceFiles(repo) as string[]) {
     if (exclude.has(rel)) continue;
     let text: string;
     try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
@@ -117,7 +120,7 @@ export async function affinity_grow(repo: string, subjects: string[], intent: st
     let connected = false, via: string | undefined;
     if (h.symbol) {
       try {
-        const probe = await build_footprint(repo, h.file, h.symbol, { direction: "down", dataCoupling: false });
+        const probe = _toResolvedGraph(_core().buildFootprint(repo, h.file, h.symbol, "down", false, null, null, null));
         const back = (probe.nodes ?? []).find((n: any) => n.id !== "n1" && n.file && fset.has(normpath(n.file)));
         if (back) { connected = true; via = back.symbol; }
       } catch { /* probe failed → stays SUGGESTED, honest */ }

@@ -9,7 +9,7 @@ import {
 } from "../atoms.js";
 import { provider_for } from "../../core/resolve/languages/index.js";
 import { type Unit } from "./graph.js";
-import { _name_of, _enclosingClass } from "./ast_units.js";
+import { _name_of, _enclosingClass } from "../ast_units.js";
 
 // The class that OWNS a FIELD-bound function member named `symbol` (`m = withReporting(this._m.bind(this))`,
 // `m = (x) => …`). Such a member is dispatched exactly like a method (`instance.m()`) but is NOT a

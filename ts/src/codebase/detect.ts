@@ -5,11 +5,11 @@
 // assembly, matching the anchor/scan/grow/coupling phase-folder split the rest of codebase/ already uses.
 import { readFileSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
-import { type Edge, type Graph, connected_components } from "../../core/graph_ir.js";
-import { walk as repoWalk } from "../../core/resolve/walk.js";
-import * as atoms from "../atoms.js";
-import { RENDER } from "../config.js";
-import { EXTENSIONS as _TS_EXT } from "../../languages/typescript/dispatch.js";
+import { type Edge, type Graph, connected_components } from "../core/graph_ir.js";
+import { walk as repoWalk } from "../core/resolve/walk.js";
+import * as atoms from "./atoms.js";
+import { RENDER } from "./config.js";
+import { EXTENSIONS as _TS_EXT } from "../languages/typescript/dispatch.js";
 
 const stemOf = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 

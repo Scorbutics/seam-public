@@ -19,7 +19,7 @@ R="test/fixtures/route-repo"
 A="backend/persist.ts"; S="persistPayment"
 run() { # run <name> <args...>
   local name="$1"; shift
-  SEAM_GRAPH_CACHE=0 timeout 300 bun src/cli/decompose.ts "$@" >"$OUT/$name.out" 2>"$OUT/$name.err"
+  SEAM_GRAPH_CACHE=0 SEAM_EMBED_QUANTIZED="${SEAM_EMBED_QUANTIZED:-}" timeout 300 bun src/cli/decompose.ts "$@" >"$OUT/$name.out" 2>"$OUT/$name.err"
   echo "$?" >"$OUT/$name.code"
   # the .seam cache path and timings vary per run; strip them so the diff is about ANSWERS
   sed -i -E 's|/tmp/[a-zA-Z0-9_.-]+||g; s/[0-9]+(\.[0-9]+)?(ms|s)\b/T/g; s/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.]+/D/g' "$OUT/$name.out" "$OUT/$name.err"

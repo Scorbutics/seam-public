@@ -9,7 +9,7 @@ import { endsWithSourceExt, parse_imports, SKIP_DIRS } from "../../core/resolve/
 import { normpath, walk } from "../../core/resolve/walk.js";
 import { recordRead, recordQuery, taint } from "../../core/resolve/dep_recorder.js";
 import { makeCtx, available } from "../atoms.js";
-import { _read, _named_units, _usage_lines, _enclosing, _enclosingClass, _exported_members, stem } from "./ast_units.js";
+import { _read, _named_units, _usage_lines, _enclosing, _enclosingClass, _exported_members, stem } from "../ast_units.js";
 import { SCAN } from "./config.js";
 import type { GraphNode, GraphEdge } from "./graph.js";
 

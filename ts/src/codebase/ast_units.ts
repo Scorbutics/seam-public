@@ -7,10 +7,12 @@ import {
   type Ctx, lang_for,
   _FUNCLIKE, _ANON_FUNC, _METHOD_KINDS, _CLASS_KINDS, _VAR_DECLARATOR, _NAME_KINDS, _NAME_LEAVES, _CALL, _EXPORT, _VAR_DECL,
   _EXPORT_CLAUSE, _EXPORT_SPECIFIER, _EXPORT_DEFAULT, _MEMBER, _MEMBER_NAME,
-} from "../atoms.js";
-import { provider_for } from "../../core/resolve/languages/index.js";
-import { recordRead } from "../../core/resolve/dep_recorder.js";
-import type { Unit } from "./graph.js";
+} from "./atoms.js";
+import { provider_for } from "../core/resolve/languages/index.js";
+import { recordRead } from "../core/resolve/dep_recorder.js";
+// A named unit: [name, kind, startLine, endLine]. Was imported from the scan graph; inlined so these
+// generic AST helpers carry no dependency on the import-scan layer.
+export type Unit = [name: string, kind: string, start: number, end: number];
 
 export const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
 export const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };

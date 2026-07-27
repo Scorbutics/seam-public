@@ -7,7 +7,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { Graph, mkNode } from "../../src/core/graph_ir.js";
-import { detect_dynamic_import_blindspots } from "../../src/codebase/scan/detect.js";
+import { detect_dynamic_import_blindspots } from "../../src/codebase/detect.js";
 
 const repo = join(tmpdir(), "seam-detect-dynimport-" + process.pid);
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };

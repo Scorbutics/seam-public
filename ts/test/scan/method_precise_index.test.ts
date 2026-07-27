@@ -6,7 +6,7 @@
 // fix is a null-prototype `calls` object here + an Array.isArray guard on the read side. Gated on tree-sitter.
 import { describe, expect, test } from "bun:test";
 import { makeCtx, available } from "../../src/codebase/atoms.js";
-import { methodPreciseIndex } from "../../src/codebase/scan/ast_units.js";
+import { methodPreciseIndex } from "../../src/codebase/ast_units.js";
 
 describe("methodPreciseIndex", () => {
   test("a callee named toString/hashCode (Object.prototype collision) doesn't crash the call-site index", async () => {

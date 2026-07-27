@@ -15,7 +15,7 @@
 // The distinction this draws is DECLARED-BUT-UNUSED (a true, useful empty answer — still reported) vs
 // NOT-DECLARED-AT-ALL (an addressing error). Deduced from grounded structure only: the file's own bindings.
 import { makeCtx, available } from "../atoms.js";
-import { _read, _named_units, _exported_members, _declared_names, _default_export_local } from "./ast_units.js";
+import { _read, _named_units, _exported_members, _declared_names, _default_export_local } from "../ast_units.js";
 
 export type AnchorAddress = {
   declared: boolean;            // the file binds/declares this name somewhere

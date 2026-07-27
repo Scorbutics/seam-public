@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { makeCtx, available } from "../../src/codebase/atoms.js";
-import { _read } from "../../src/codebase/scan/ast_units.js";
+import { _read } from "../../src/codebase/ast_units.js";
 import { _class_methods, _type_methods } from "../../src/codebase/scan/ast_class.js";
 import { build_footprint } from "../../src/codebase/scan/footprint.js";
 

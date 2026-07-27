@@ -16,15 +16,16 @@ import { from_resolved_graph, undirected_adjacency } from "../../core/graph_ir.j
 import { emit, timingOn } from "../../core/progress.js";
 import { run_pass, available, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
-import { defs_in_file } from "../scan/def_table.js";
+import { loadAddon as _loadAddon } from "../grow/rust_core.js";
+// The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
+// they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
+const _core = (): any => _loadAddon();
 
 const PASS = registerPass({ tag: "anchor-judge", tier: "strong", note: "pick the entry-point anchor among grown footprints (semantic)" });
-import { defs_in_file_treesitter } from "../scan/def_treesitter.js";
 import { grow_to_terminals } from "../grow/orchestrate.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { find_anchor_candidates, rank_anchors, _content_words } from "./anchor_rank.js";
 import { expand_intent_terms } from "./intent_expand.js";
-import { embedScoreDefs } from "../scan/def_embed.js";
 
 // Round-robin merge of two ranked pools — take one from each, alternately. Used to fold the EMBED-recalled
 // candidates into the lexical pool BEFORE the probe-budget slice, so the semantically-recalled symbols a
@@ -157,8 +158,8 @@ async function _candidate_identity(repo: string, file: string, name: string): Pr
     const root = repo.startsWith("~") ? (process.env.HOME ?? "") + repo.slice(1) : repo;
     const abs = file.startsWith("/") ? file : join(root, file);
     const text = readFileSync(abs, "utf-8");
-    const defs = (await defs_in_file_treesitter(file, text)) ?? defs_in_file(file, text);
-    const d = defs.find((x) => x.name === name) ?? defs.find((x) => x.enclosing === name);
+    const defs = _core().defsInFileTreesitter(file, text) ?? _core().defsInFile(file, text, false);
+    const d = defs.find((x: any) => x.name === name) ?? defs.find((x: any) => x.enclosing === name);
     return d ? { signature: d.signature, doc: d.doc } : null;
   } catch { return null; }
 }
@@ -251,7 +252,7 @@ export async function select_anchor(repo: string, intent: string,
   const embedCands: ProbedCand[] = [];
   if (opts.anchorRecall === "embed") {
     try {
-      const scored = await embedScoreDefs(repo, intent);
+      const scored = _core().embedScoreDefs(repo, intent, null) as { def: any; score: number }[];
       for (const { def, score } of scored) {
         const k = `${def.file}::${def.name}`;
         if (!relByKey.has(k)) relByKey.set(k, score);

@@ -18,7 +18,7 @@
 //     that declares the called METHOD ITSELF, so the call has a real target that is not the anchor.
 // Anything short of that returns null and the lead survives as RESOLVED_PARTIAL.
 import { type Ctx, makeCtx } from "../../atoms.js";
-import { _read } from "../ast_units.js";
+import { _read } from "../../ast_units.js";
 import { _call_bound_binders, _declared_return_type, _class_owns_method } from "../ast_class.js";
 import { resolveDefFile, DEF_FUNC_KINDS } from "../def_resolve.js";
 

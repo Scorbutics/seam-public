@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { makeCtx, lang_for, available } from "../../src/codebase/atoms.js";
-import { _named_units, _wrappedDefSpan } from "../../src/codebase/scan/ast_units.js";
+import { _named_units, _wrappedDefSpan } from "../../src/codebase/ast_units.js";
 import { build_footprint } from "../../src/codebase/scan/index.js";
 
 const ctxUnits = async (text: string) => { const ctx = (await makeCtx(text, lang_for("x.ts")!))!; return { ctx, units: _named_units(ctx) }; };

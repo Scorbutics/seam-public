@@ -15,7 +15,7 @@ import {
 } from "../graph.js";
 import {
   expanduser, stem, _read, _name_of, _named_units, _wrappedDefSpan, _enclosing, _usage_lines, _call_lines, _ref_lines_split,
-} from "../ast_units.js";
+} from "../../ast_units.js";
 import { importBindsElsewhere } from "../def_resolve.js";
 import { _class_methods } from "../ast_class.js";
 import { _annotationLo, _depth2_ripple, _chain_route_consumers } from "../attach.js";

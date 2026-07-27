@@ -8,7 +8,7 @@ import { _resolve_import } from "../../core/resolve/consumers.js";
 import { parse_imports, default_imports } from "../../core/resolve/languages/index.js";
 import { makeCtx } from "../atoms.js";
 import { normpath } from "../../core/resolve/walk.js";
-import { _read, _named_units } from "./ast_units.js";
+import { _read, _named_units } from "../ast_units.js";
 
 // The unit KINDS `_named_units` emits; a caller says which ones count as "the definition" it is after.
 // (`_named_units` labels every `_CLASS_KINDS` node — incl. interfaces/enums — "class".)

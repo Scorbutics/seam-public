@@ -8,7 +8,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { Graph, mkNode } from "../../src/core/graph_ir.js";
 import { available } from "../../src/codebase/atoms.js";
-import { detect_consumer_feeds } from "../../src/codebase/scan/detect.js";
+import { detect_consumer_feeds } from "../../src/codebase/detect.js";
 
 const repo = join(tmpdir(), "seam-detect-consumer-feeds-" + process.pid);
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };

@@ -7,7 +7,7 @@ import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index
 import { recordQuery, registerQueryRerun, hashSet } from "../../core/resolve/dep_recorder.js";
 import { walk } from "../../core/resolve/walk.js";
 import { makeCtx, available, lang_for } from "../atoms.js";
-import { _read } from "../scan/ast_units.js";
+import { _read } from "../ast_units.js";
 import { incrementalScanAsync, indexCacheEnabled } from "../coupling/index_cache.js";
 import { DI_MARKERS, scanDiBindings, bare, type DiBinding, type DiContribution } from "../../languages/typescript/di_bindings.js";
 import { relative, join } from "node:path";

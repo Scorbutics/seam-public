@@ -49,14 +49,21 @@ function _scopeMemoSet(key: string, files: Set<string>): void {
   _SCOPE_MEMO.set(key, files);
 }
 import type { HubMarker } from "../../core/graph_ir.js";
-import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
+
 import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "./rust_core.js";
 import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling, couplingEnvHash } from "../coupling/index.js";
 import { resolveResourceRoutes } from "../coupling/resource_routes.js";
-import { _read, _enclosing, methodPreciseIndex } from "../scan/ast_units.js";
+import { _read, _enclosing, methodPreciseIndex } from "../ast_units.js";
+
+// EMBEDDINGS-AVAILABLE, from the core. This used to ask the TypeScript transformers.js runtime; the intent
+// field and every def score run in the addon now, so asking the old runtime could answer "yes" for an engine
+// that no longer computes anything (or "no" while the core happily embeds). One source, one answer.
+const transformersAvailable = async (): Promise<boolean> => {
+  try { return !!(await import("./rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
+};
 import { makeCtx, available, type Ctx } from "../atoms.js";
 import type { Unit } from "../scan/graph.js";
 import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";

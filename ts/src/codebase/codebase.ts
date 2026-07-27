@@ -26,7 +26,7 @@ import { emit_seams } from "./seams/emit.js";
 // --------------------------------------------------------------------------- detect_* (C3)
 // Moved to scan/detect.ts (scan-phase work over source text/AST — matches the anchor/scan/grow/coupling
 // phase-folder split the rest of codebase/ uses; this file stays the anchor-relative assembly core).
-import { detect_dynamic_import_blindspots, detect_dynamic_dispatch_blindspots, detect_subcores, detect_contract, detect_consumer_feeds } from "./scan/detect.js";
+import { detect_dynamic_import_blindspots, detect_dynamic_dispatch_blindspots, detect_subcores, detect_contract, detect_consumer_feeds } from "./detect.js";
 export { detect_dynamic_import_blindspots, detect_dynamic_dispatch_blindspots, detect_subcores, detect_contract, detect_consumer_feeds };
 
 export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolean; intent?: string;
