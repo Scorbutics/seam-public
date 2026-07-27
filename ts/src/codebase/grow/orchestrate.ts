@@ -35,7 +35,6 @@ import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPI
 import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { epochOf } from "../scan/footprint_cache.js";
 import { getCouplePool, couplePoolMin, serializeCtxIndices } from "./couple_pool.js";
-import { loadMap, mergeGrowIntoMap, expandedKey } from "./map_store.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
 // its file scope before the real grow (the "second grow"). That scope is STRUCTURAL — it depends only on source
@@ -50,11 +49,7 @@ function _scopeMemoSet(key: string, files: Set<string>): void {
   if (_SCOPE_MEMO.size >= _SCOPE_CAP) _SCOPE_MEMO.delete(_SCOPE_MEMO.keys().next().value as string);   // evict oldest
   _SCOPE_MEMO.set(key, files);
 }
-import { makeIntentKeyRanker } from "./key_ranker.js";
-import { ubiquityIndex, ubiquityConsumers } from "./ubiquity.js";
-import { makeHubClassifier } from "./border_policies.js";
 import type { HubMarker } from "../../core/graph_ir.js";
-import { RegionCentroid } from "./field.js";
 import { embedScoreDefs, transformersAvailable } from "../scan/def_embed.js";
 import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "./rust_core.js";
 import { resolveStructuralKnobs } from "./structural_knobs.js";
