@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../../src/codebase/scan/down/dependency_graph.js";
+import { build_dependency_graph } from "../helpers/scan.js";
 import { scan_file_keys } from "../../src/codebase/coupling/index.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { _is_crossing } from "../../src/codebase/codebase.js";
@@ -200,21 +200,10 @@ describe("shared-key (data-flow) coupling", () => {
     expect(callerFiles).toContain("web/services.ts");
   });
 
-  // Rails is the STRONGEST case for LLM-over-adapter: `resources :payments` spells the path NOWHERE in
-  // the backend (no literal to grep, like Next's file-routing) — only the LLM's routing-convention
-  // knowledge recovers `/api/admin/payments` from the namespaced controller + RESTful action.
-  test("LLM-proposed route on a Rails controller action (implicit `resources` path) couples to the JS fetch", async () => {
-    const prepo = join(__dir, "..", "fixtures", "polyroute-repo");
-    set_host_bus(new HostBus({ "discover": "[]", "discover-keys-batch": '[{"id":"k1","file":"app/controllers/api/admin/payments_controller.rb","kind":"route","value":"/api/admin/payments","role":"produces"}]' }));
-    let g: any;
-    try { g = await build_dependency_graph(freshCopy("polyroute-repo"), "app/controllers/api/admin/payments_controller.rb", "index", { dataCouplingLlm: true }); }
-    finally { set_host_bus(null); }
-    const route = g.nodes.find((n: any) => n.kind === "route" && n.symbol === "/api/admin/payments");
-    expect(route).toBeDefined();   // inferred by the LLM from convention, grounded on the indexed JS fetch
-    const callerFiles = g.edges.filter((e: any) => e.from === route.id && e.kind === "route-fetch")
-      .map((e: any) => g.nodes.find((n: any) => n.id === e.to).file);
-    expect(callerFiles).toContain("web/services.ts");
-  });
+  // REMOVED with the TypeScript scan layer: this drove the key flywheel through a TypeScript HostBus, which
+  // the core cannot see — it resolves its own LLM backend. The DETERMINISTIC Rails route coupling is still
+  // covered above; what is lost is the LLM-proposed variant of it, which needs the flywheel warmed via
+  // rustDiscover and the fixture primed, not a canned in-process reply.
 
   test("normPath canonicalises dynamic segments across stacks (`:id`/`{id}`/`[id]`/`${id}` → `*`)", () => {
     // handler conventions and the JS caller meet on one normalised key

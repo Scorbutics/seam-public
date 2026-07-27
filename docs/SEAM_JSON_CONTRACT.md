@@ -8,7 +8,7 @@ to it only through this JSON. Treat the shape here as a product surface, not an 
   `SEAM_SCHEMA_VERSION`, stamped onto every model by `stampSeamModel`.
 - **Producer:** `seam … --emit-seams <path>` (diff mode and codebase mode both write this shape).
 - **Consumers:** [`vscode-extension/src/extension.ts`](../vscode-extension/src/extension.ts) (mirrors
-  these interfaces), the MCP server in [`mcp/`](../mcp), any future plugin.
+  these interfaces), any future plugin.
 
 ## Versioning rule
 

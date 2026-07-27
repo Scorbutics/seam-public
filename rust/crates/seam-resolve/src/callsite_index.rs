@@ -118,6 +118,11 @@ impl CallsiteIndex {
         Self { callers, bases }
     }
 
+    /// The whole `method → calling files` map (the centre-detection prior reads all of it, not one method).
+    pub fn callers_map(&self) -> HashMap<String, Vec<String>> {
+        self.callers.clone()
+    }
+
     /// Files that call a method named `method`, in walk order.
     pub fn callers(&self, method: &str) -> &[String] {
         self.callers.get(method).map(Vec::as_slice).unwrap_or(&[])

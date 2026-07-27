@@ -31,6 +31,11 @@ const g = (dto: any, what: string): any => {
 };
 
 export async function build_footprint(repo: string, anchorFile: string, symbol: string | null, opts: any = {}): Promise<any> {
+  // GUARD THE ENTRY, as the TypeScript `build_footprint` did with `requireAvailable`. The core does NOT: an
+  // anchor in a file it cannot parse still yields a well-formed graph containing only the anchor, which
+  // renders as a confident "nothing calls this". The CLI is fenced by `rustShapeOk`/`rustCanParse`; a library
+  // caller reaching the builder directly is not, so the fence is repeated here.
+  if (!core().canParse(anchorFile)) throw new Error(`the footprint of ${symbol ?? anchorFile} could not be built (no vendored grammar for ${anchorFile})`);
   return g(core().buildFootprint(repo, anchorFile, symbol, opts.direction ?? "up", dc(opts),
     opts.depth ?? null, opts.anchorLine ?? null, null), symbol ?? anchorFile);
 }

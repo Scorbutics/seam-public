@@ -69,7 +69,7 @@ const QUERY_HANDLERS: Record<string, (a: Args) => Promise<number>> = {
 // (route.ts) decides over the CLOSED SHAPES registry; a genuine flow intent stays 'flow' and falls through to
 // the grow untouched. Opt-in (--auto-route, set by the agent entry) so the deterministic CLI flow path is
 // unchanged; needs a backend (routing is semantic). Reuses the existing shape handlers, which emit the SAME
-// shape model the MCP + CLI already render — so this is pure routing, no new render path. Returns the handler's
+// shape model the CLI already renders — so this is pure routing, no new render path. Returns the handler's
 // exit code when it rerouted, or null to fall through to the flow grow.
 async function maybeAutoRoute(a: Args): Promise<number | null> {
   const { available } = await import("../core/llm.js");

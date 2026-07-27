@@ -855,8 +855,8 @@ function runStreaming(file: string, args: string[], cwd: string,
 interface RecordedPass { tag: string; prompt: string; model: string; thinking: number | null; }
 
 // Decompose by serving the engine's LLM passes from VS Code's own language model (the `copilot`
-// backend), instead of shelling a `claude`/`copilot` CLI. Same two-phase host-bus handshake the MCP
-// server uses (mcp/src/sampling.ts): emit-prompts → call the model per pass → inject-llm → emit-seams.
+// backend), instead of shelling a `claude`/`copilot` CLI. The engine's two-phase
+// host-bus handshake: emit-prompts → call the model per pass → inject-llm → emit-seams.
 // `baseArgs` select the input + engine (e.g. --git RANGE --repo R --cluster llm --roles det …) WITHOUT
 // any --emit-prompts/--inject-llm/--emit-seams. Throws an actionable error when no model is available
 // or a single pass exceeds the model's input window (the big-PR ceiling).

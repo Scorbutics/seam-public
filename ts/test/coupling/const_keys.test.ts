@@ -10,7 +10,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveParamKeys } from "../../src/codebase/coupling/const_keys.js";
-import { build_module_graph } from "../../src/codebase/scan/module_graph.js";
+import { build_module_graph } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(tmpdir(), "seam-constkeys-test-" + process.pid);
@@ -102,23 +102,13 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
 // The floor index must be built on the THREADED ctx, not a fresh one — the perf bug was build_class_graph
 // dropping opts.ctx, so every class re-anchor during a grow rebuilt the ~1s floor (4–5× per run).
 describe("ctx threading through build_class_graph (floor built once)", () => {
-  test("build_class_graph populates the PASSED ctx's floor caches (didn't spin up its own)", async () => {
-    if (!available()) return;   // tree-sitter required
-    const { build_class_graph } = await import("../../src/codebase/scan/up/class_graph.js");
-    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
-    const ctx = new EngineCtx();
-    // Anchor on a COUPLING-BEARING class (Provider.addParameter — a param/const boundary). The repo-wide floor
-    // index only builds when the anchor actually touches a boundary (the local gate skips it otherwise, BY
-    // DESIGN), so the ctx-threading is observable here. If the ctx were dropped (the bug this guards), a
-    // throwaway ctx would absorb the build and these stay empty.
-    await build_class_graph(REPO, "Provider.java", "Provider", { depth: 1, dataCoupling: true, ctx });
-    expect(ctx.sharedKey.size).toBeGreaterThan(0);
-    expect(ctx.floorBase.size).toBeGreaterThan(0);
-  });
+  // REMOVED with the TypeScript scan layer: this asserted that the SCAN BUILDERS thread an EngineCtx
+  // (shared floor caches / complement budget / intent ranker) — plumbing internal to the TypeScript
+  // engine, not a property of the answer. The core owns those budgets itself, keyed on SEAM_* env.
 
   test("LOCAL GATE — a coupling-free anchor SKIPS the repo-wide floor scan (grow from the diff, not scan-all)", async () => {
     if (!available()) return;
-    const { build_class_graph } = await import("../../src/codebase/scan/up/class_graph.js");
+    const { build_class_graph } = await import("../helpers/scan.js");
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const __dir = new URL(".", import.meta.url).pathname;
     const repoDir = join(__dir, "..", "fixtures", "class-repo");

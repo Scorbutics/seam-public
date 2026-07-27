@@ -73,14 +73,15 @@ describe("a tree-sitter outage fails loudly instead of asserting 'nothing calls 
     expect(r.stderr).toContain("tree-sitter grammars unavailable");
   }, 60000);
 
-  test("the ENGINE entry (build_footprint) throws too — a library/MCP consumer can't get a silent zero", () => {
-    // Run in a child process: WASM_DIR is resolved at module load, so the override must precede the import.
-    const r = spawnSync("bun",
-      ["-e", "const { build_footprint } = await import('./src/codebase/scan/index.ts');" +
-             "try { await build_footprint(process.argv[1], 'src/busy.ts', 'getBusyTimes', { direction: 'up' });" +
-             "  console.log('NO-THROW'); } catch (e) { console.log('THREW: ' + e.message); }", REPO],
-      { cwd: TS_DIR, env: { ...process.env, SEAM_WASM_DIR: EMPTY_WASM }, encoding: "utf-8" });
-    expect(r.stdout).toContain("THREW:");
-    expect(r.stdout).toContain("tree-sitter grammars unavailable");
+  // THE OUTAGE THIS FILE GUARDS AGAINST NO LONGER EXISTS for a vendored language: the core LINKS its
+  // grammars instead of loading them from a wasm dir, so emptying SEAM_WASM_DIR cannot blind it. What
+  // survives is the claim that mattered — a file the engine CANNOT parse must ERROR, never come back as a
+  // well-formed graph with no callers. That is why test/helpers/scan.ts throws on a null DTO.
+  test("a file the core cannot parse ERRORS — it never reads as 'nothing calls this'", async () => {
+    const { build_footprint } = await import("../helpers/scan.js");
+    let threw = "";
+    try { await build_footprint(REPO, "README.md", "anything", { direction: "up" }); }
+    catch (e) { threw = (e as Error).message; }
+    expect(threw).toContain("could not be built");
   }, 60000);
 });

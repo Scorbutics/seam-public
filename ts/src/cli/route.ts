@@ -6,10 +6,10 @@
 // definition (rust/crates/seam-shapes/src/route.rs) and `resolveName` is the core's deterministic def lookup.
 // Byte-identical to the engine it replaced — pinned by rust/parity/route_recall.ts.
 //
-// What stays HERE is the LLM CALL and the DISPATCH. The call, because only this side can reach the MCP host
-// bus (sampling): routing over pure sampling with no local binary is a supported path, and pushing the spawn
-// into the addon would silently kill it. The dispatch, because it is CLI wiring — each branch is one addon
-// shape call, except `flow`, which runs a grow and hands the graph to decompose().
+// What stays HERE is the LLM CALL and the DISPATCH. The call, because only this side can reach the HOST BUS
+// (the VS Code extension injects the editor's own model through it), and pushing the spawn into the addon
+// would silently kill that path. The dispatch, because it is CLI wiring — each branch is one addon shape
+// call, except `flow`, which runs a grow and hands the graph to decompose().
 import { run_pass_async, registerPass, ClassifierError as LLMError, available, get_host_bus } from "../core/llm.js";
 
 const PASS = registerPass({ tag: "shape-route", tier: "strong", note: "route an NL question to the right Seam shape — semantic" });
@@ -53,8 +53,8 @@ export interface AskResult {
 // END-TO-END: route the question, resolve names, run the chosen shape. Requires an LLM (the routing is
 // semantic). grep/rag → an honest route-away. A name that won't resolve → guidance, not a wrong answer.
 export async function ask(repo: string, question: string, opts: { model?: string; claudeBin?: string | null; skeleton?: boolean } = {}): Promise<AskResult> {
-  // Routing is semantic → needs a way to serve LLM passes: a host bus (the MCP sampling/inject bridge) OR
-  // a local binary. available() alone misses the bus, which would wrongly reject the pure-sampling path.
+  // Routing is semantic → needs a way to serve LLM passes: a host bus (the editor/inject bridge) OR a local
+  // binary. available() alone misses the bus, which would wrongly reject the host-served path.
   if (!get_host_bus() && !available(opts.claudeBin)) throw new Error("the shape router needs an LLM backend (routing is semantic); none available");
   const decision = await routeQuestion(repo, question, opts);
   if (!decision) return { question, shape: "rag", reason: "router could not classify", routedAway: true, guidance: "Couldn't route this question to a shape — try grep or rephrase." };

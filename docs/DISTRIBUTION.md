@@ -25,7 +25,7 @@ SEAM_WASM_DIR="$PWD/dist/wasm" bun dist/seam.cjs --file change.patch --classifie
 ```
 
 `dist/` is gitignored (reproducible). Build it in CI and ship it alongside each client. The MCP
-locator runs it with `SEAM_WASM_DIR` set automatically (see [`mcp/README.md`](../mcp/README.md)).
+locator runs it with `SEAM_WASM_DIR` set automatically.
 
 ### Why not `bun build --compile`?
 
@@ -53,9 +53,8 @@ seam … --classifier hybrid --emit-prompts prompts.json     # phase 1: record p
 seam … --classifier hybrid --inject-llm answers.json --emit-seams seams.json   # phase 2: replay
 ```
 
-This is how the `seam` skill borrows the live session's model, and how the MCP server maps
-LLM passes onto MCP **sampling** — no second model, no API key, uses the caller's LLM. See
-[`mcp/README.md`](../mcp/README.md).
+This is how the `seam` skill borrows the live session's model — no second model, no API key, uses the
+caller's LLM. The VS Code extension uses the same two-phase host-bus handshake.
 
 ## Which engine for which client
 

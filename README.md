@@ -264,9 +264,9 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 
 ```
             Seam engine (ts/) — stateless; emits the versioned --emit-seams JSON
-   ▲             ▲               ▲                ▲                    ▲
- CLI         VS Code ext     MCP server     Claude skill        IntelliJ (planned)
-(ts/src/cli) (native render) (mcp/ any LLM) (.claude/skills/seam)
+   ▲             ▲                    ▲                    ▲
+ CLI         VS Code ext          Claude skill        IntelliJ (planned)
+(ts/src/cli) (native render) (.claude/skills/seam)
 ```
 
 - **Contract** — `ts/src/core/contract.ts` stamps `schemaVersion`; the full shape is in
@@ -583,31 +583,6 @@ in-repo blast radius that a bare `--file <patch>` run can't supply.
 > Claude Code extension provides). With no `claude` available, switch to **`det`** for a fully offline
 > run — Settings → search "Seam" → **Seam: Engine**.
 
-## The MCP server (any LLM can consult Seam)
-
-[`mcp/`](mcp/) exposes Seam to any MCP-capable agent as **twelve tools** over the same JSON contract — a
-thin stdio adapter over the engine (no daemon). Diff/flow: `decompose_diff`, `intent_footprint`,
-`grow_intent` (LLM-directed auto-grow). Structural shapes (offline/deterministic): `find_consumers`,
-`find_dependencies`, `impact_of`, `refactor_facts`, `can_reach`, `module_contract`, `subsystem`,
-`compare_symbols`. And `ask` — the natural-language front door that **routes** a question to the right shape (or away to grep/RAG). Engines:
-
-- **`engine="det"`** (default) — fully offline, instant; most agents want the *structure* (seams,
-  roles, wiring), not prose.
-- **`engine="hybrid"/"llm"`** — adds product-intent labels. Its LLM passes are served one of two ways,
-  auto-chosen (override with `SEAM_MCP_LLM=binary|sampling`): a **local `claude`/`copilot` binary** if
-  one is on PATH (cheap dedicated tier — so a client *without* MCP sampling, e.g. GitHub Copilot, still
-  works), else the **calling client's model via MCP sampling**. No API key either way.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash -s -- --mcp
-#   …auto-registers with the `claude` and/or `copilot` CLI when on PATH (Copilot CLI has no MCP
-#   sampling, so it's registered with SEAM_MCP_LLM=binary — LLM passes run via the copilot binary).
-
-bun mcp/src/server.ts          # …or run the stdio server directly from a checkout
-```
-
-See [`mcp/README.md`](mcp/README.md) for the tool schemas and `.mcp.json` registration.
-
 ## The Claude skill (run Seam inside Claude Code)
 
 [`.claude/skills/seam/`](.claude/skills/seam/SKILL.md) bundles Seam as a Claude Code **skill** so you
@@ -705,8 +680,7 @@ opposite**:
 | **Confidence** | a similarity score | **provenance** (`RESOLVED` / `PARTIAL` / `SUGGESTED`) + named **blindspots** |
 | **Surface** | a full assistant + hosted infra + non-code sources (commits, tickets, docs) | a focused decomposition tool, code-only |
 
-They **converge** on the mission, on building a dependency graph, and on exposing context over
-**MCP** (Augment shipped a Context-Engine MCP server in 2026; Seam [already has one](mcp/)).
+They **converge** on the mission and on building a dependency graph.
 
 **Seam-distinct:** an **intent region** (a ranked, readable flood-fill map dimmed by intent — not retrieved snippets);
 **provenance + blindspots** (it states what it *can't* statically see, where a similarity engine

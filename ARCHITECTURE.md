@@ -75,7 +75,7 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
 ```
         Seam engine (ts/) — stateless; emits the --emit-seams JSON (versioned)
    ▲                  ▲                    ▲
- CLI (ts/src/cli)   VS Code ext       MCP server (mcp/)   … IntelliJ (future)
+ CLI (ts/src/cli)   VS Code ext       … IntelliJ (future)
 ```
 
 - **Contract:** `ts/src/core/contract.ts` stamps `schemaVersion`; the shape is documented in
@@ -84,17 +84,6 @@ through the `--emit-seams` JSON — that JSON, not the code, is the product boun
 - **Distribution:** [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) — bun-from-source vs the esbuilt
   `ts/dist/seam.cjs` bundle (`bun run build`; web-tree-sitter kept external so it loads its own wasm —
   **not** `bun build --compile`, which drops the core wasm and aborts), the grammar caveat, the host-bus seam.
-- **MCP:** [`mcp/`](mcp/) exposes **12 tools** to any agent — `decompose_diff` / `intent_footprint` /
-  `grow_intent`, the structural shapes (`find_consumers` / `find_dependencies` / `impact_of` /
-  `refactor_facts` / `can_reach` / `module_contract` / `subsystem` / `compare_symbols`, §8.6), and
-  `ask` (the NL router).
-  `det` is offline. `hybrid`/`llm` serve their LLM passes one of two ways, auto-chosen per call
-  (override with `SEAM_MCP_LLM=binary|sampling`): **binary** — the engine makes its own `claude`/`copilot`
-  calls (cheap dedicated tier, no sampling needed — so clients *without* MCP sampling, e.g. GitHub
-  Copilot, still work as long as a CLI is on PATH); **sampling** — borrow the **caller's** model via MCP
-  sampling (over the `--llm-bridge` host bus, the same seam the `seam` skill uses). `auto` prefers a
-  local binary, falls back to sampling. The MCP server picks via the engine's own `--check-backend`
-  probe, so backend resolution stays the engine's source-of-truth. **No daemon.**
 
 ---
 

@@ -2312,3 +2312,10 @@ pub fn defs_in_file_treesitter(rel: String, text: String) -> Option<Vec<DefDto>>
         defs.into_iter().map(|d| DefDto { name: d.name, kind: d.kind, file: d.file, signature: d.signature, enclosing: d.enclosing, doc: d.doc, body: d.body }).collect()
     })
 }
+
+/// symbolCallers — the repo-wide `method name → the files that call it` map (the call index, built once).
+/// The centre-detection prior: a symbol many files call is a candidate mechanism.
+#[napi]
+pub fn symbol_callers(repo: String) -> std::collections::HashMap<String, Vec<String>> {
+    seam_resolve::CallsiteIndex::cached(&repo).callers_map()
+}

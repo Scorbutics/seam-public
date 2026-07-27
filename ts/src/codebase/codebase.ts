@@ -47,7 +47,7 @@ export async function decompose(g: Graph, opts: { repo?: string; useLlm?: boolea
     await detect_consumer_feeds(g, opts.repo);
   }
   let seams = assign_intent_seams(g);
-  // SKELETON mode (LLM consumers — skill / MCP): skip the LLM seam-labeling passes entirely. The det
+  // SKELETON mode (LLM consumers — the skill): skip the LLM seam-labeling passes entirely. The det
   // structure is already complete by here (spine, structural labels, blindspots — steps above), and a
   // consuming LLM re-derives the tiers + prose labels itself from the symbols/paths (validated A/B:
   // equal-or-better answer at ~⅓ the tokens, and it skips the ~18s seam-intent pass). The full passes

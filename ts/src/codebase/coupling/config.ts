@@ -3,7 +3,7 @@
 // SEAM_KEY_BUDGET caps cold LLM key/matcher synthesis per run (a warm `.seam/` then costs nothing). The
 // CLI default (60) suits a one-shot warm-up; an INTERACTIVE caller on a slow binary + large repo wants it
 // LOW so a single grow doesn't fire dozens of serialized LLM subprocesses and blow the host's request
-// deadline (the MCP server sets a modest default — see mcp/src/server.ts). 0 = apply cached adapters only.
+// deadline (a host with a request timeout wants a modest one). 0 = apply cached adapters only.
 const _keyBudget = process.env.SEAM_KEY_BUDGET !== undefined ? Math.max(0, Math.floor(Number(process.env.SEAM_KEY_BUDGET) || 0)) : 60;
 // Floor-scan size guard — an OPT-IN OOM backstop, OFF by default. It WAS a 1 MB skip (a stopgap for the
 // `split("")` blow-up on a webapp's minified bundles), but skipping loses real couplings: a large generated

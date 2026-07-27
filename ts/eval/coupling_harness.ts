@@ -15,7 +15,8 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, mkdtem
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { build_footprint } from "../src/codebase/scan/index.js";
+import { loadAddon, toResolvedGraph } from "../src/codebase/grow/rust_core.js";
+import { rustDiscover } from "../src/codebase/grow/rust_discover.js";
 import { isFlowSubject } from "../src/codebase/coupling/index.js";
 import { _resetKeyCacheMem } from "../src/codebase/coupling/key_store.js";
 import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
@@ -48,7 +49,16 @@ export async function scoreCouplingCase(repo: string, c: CouplingCase, opts: { n
   const prev = process.env.SEAM_NO_ADAPTERS;
   if (opts.noAdapters) process.env.SEAM_NO_ADAPTERS = "1"; else delete process.env.SEAM_NO_ADAPTERS;
   try {
-    const g = await build_footprint(repo, c.anchorFile, c.symbol, { dataCoupling: true, dataCouplingLlm: !!opts.llm });
+    const core = loadAddon();
+    // `process.env` does not cross the napi boundary — SEAM_NO_ADAPTERS above is set for THIS process, so the
+    // addon has to be told about it or the "unlink the adapters" arm measures the linked floor.
+    core.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
+    core.resetCaches(repo);
+    // The core REPLAYS the flywheel from `.seam` rather than learning inside the overlay, so an LLM arm has to
+    // warm it FIRST. On the TypeScript path this was driven lazily from resolveCoupling, which is why the
+    // option could simply be passed down and forgotten about.
+    if (opts.llm) await rustDiscover(repo, { scopeFiles: [c.anchorFile] });
+    const g = toResolvedGraph(core.buildFootprint(repo, c.anchorFile, c.symbol, "up", true, null, null, null));
     const coupling = g.nodes.filter((n: any) => n.coupling);
     const recovered = coupling.map((n: any) => String(n.symbol));
     const boundaries = coupling.filter((n: any) => isFlowSubject(n.kind)).map((n: any) => String(n.symbol));   // the key boundaries (table/route/data-file/…)

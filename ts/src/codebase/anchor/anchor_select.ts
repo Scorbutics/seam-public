@@ -225,7 +225,7 @@ export async function select_anchor(repo: string, intent: string,
   // drops the right symbols at the content pre-filter. The LLM proposing domain vocabulary is the
   // sanctioned meaning-bridge (grounded by the scan: junk terms find nothing); graceful [] offline.
   // expand keywords: use the caller's PRE-COMPUTED terms when given (the CLI runs `expand` concurrently
-  // with `entrypoint-select`), else run the pass here (other callers — harness/MCP — stay unchanged).
+  // with `entrypoint-select`), else run the pass here (other callers — the harness — stay unchanged).
   const extra = opts.expandTerms ?? ((opts.llmExpand ?? true) ? expand_intent_terms(intent, { model: opts.model, claudeBin: opts.claudeBin }) : []);
   const keywords = [...new Set([..._content_words(intent), ...extra])].sort();
   const cands = find_anchor_candidates(repo, keywords);
