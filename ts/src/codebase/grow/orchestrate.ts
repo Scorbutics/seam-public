@@ -1199,6 +1199,12 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // embeddings: up-hop (default K=2) + hub + ubiquity do ALL the containment, the intent field is not built, so
   // the grown SET is identical for every intent and the answer cache REUSES across intents (the warm graph-node
   // reuse). Intent then only CROPS/RANKS at render. Off (default) → the intent field shapes the grow as before.
+  // DEFAULT OFF, and this is MEASURED, not conservatism. Defaulting it ON would make every grow structural, so
+  // the Rust core could serve all of them and the TS engine would be deletable — but it fails 14 committed
+  // behavioural tests: the soft intent-border halting at the relevance cliff, the tier rule parking an
+  // off-intent fan, the decision-point frontier, the concern grows. Those ARE the intent field's product value,
+  // so turning it off by flag is not a migration, it is a silent capability deletion. Removing the TS engine
+  // needs the embedding field PORTED (an ONNX runtime in the core), not this switch flipped.
   const structuralGrow = opts.structuralGrow ?? _envFlag(process.env.SEAM_GROW_STRUCTURAL) ?? false;
   opts = { ...opts, structuralGrow };
   // Whether the intent SHAPES this grow (embeddings ON and NOT structural → intent-dependent, keyed per-intent)

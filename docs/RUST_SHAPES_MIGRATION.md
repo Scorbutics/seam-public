@@ -465,13 +465,26 @@ installed, an intent-shaped grow builds an EMBEDDING FIELD that shapes the walk;
 field, so the router keeps those grows on TS. Everything else — every shape, the whole flywheel, every
 structural grow, every language — is Rust.
 
-Removing the TS core therefore forces a decision, and it is a product one:
-- **(a) Drop the intent-shaped grow.** `SEAM_GROW_STRUCTURAL=1` already makes grows intent-INDEPENDENT (intent
-  then only crops/ranks at render, and the answer cache reuses across intents). Make that the only mode and TS
-  goes. Cost: the intent no longer steers containment.
-- **(b) Port the embedding field to Rust.** An ONNX/transformer runtime in the core — a large piece of work
-  whose payoff is keeping one ranking behaviour, not a correctness property.
-- **(c) Keep a thin TS embedding layer** and delete the rest of the engine.
+Removing the TS core therefore needs the EMBEDDING FIELD ported. That is the last item, and it is real work,
+not a switch — MEASURED:
+
+**(a) "Just default to structural" does NOT work.** Flipping `structuralGrow`'s default to true makes every
+grow structural, so the Rust core serves all of them and TS becomes deletable. It fails **14 committed
+behavioural tests**: the soft intent-border halting at the relevance cliff, the tier rule parking an off-intent
+fan, the decision-point frontier + `cutBy` provenance, the concern grows, the guided-detection re-grow. Those
+tests ARE the intent field's product value, so the flag flip is a silent capability deletion dressed as a
+migration. Tried, measured, reverted.
+
+**(b) PORT IT — the actual remaining work.** `ts/src/codebase/scan/def_embed.ts` is 205 lines and the surface is
+small: `lexicalPreFilter` (pure), `embedScoreStrings(intent, values)`, `embedScoreDefs(repo, intent, files)`,
+`transformersAvailable`, plus a per-(repo, model) disk cache of `hash → vector`. What is NOT small is the
+runtime underneath: transformers.js + a ~23 MB model, lazily fetched. In Rust that means the `ort` (ONNX
+Runtime) crate + a tokenizer + a model-distribution decision (bundle vs fetch-and-cache), and the
+cosine-scoring/caching logic on top. The scoring and cache are a straight port; the runtime is a new
+dependency with real distribution cost for the `.vsix`.
+
+**(c) Keep a thin TS embedding layer** and delete the rest of the engine — viable today, and the only option
+that needs no new work, but it leaves a JS dependency in the product.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
