@@ -1239,36 +1239,24 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // STRUCTURAL grow + coupling replay, byte-identical to TS in structural mode. It caches internally (grow-v1
   // shards) so it bypasses the TS-level cachedGrow. Streaming (onWave) grows stay in TS. See grow/rust_core.ts.
   //
-  // The gate still includes `!intentShapesGrow`, but the REASON has changed and the remaining distance is now
-  // measured rather than guessed. The Rust core DOES have the embedding field and all six of its decision
-  // points (seam-grow/src/field.rs), and the intent knobs cross the boundary as resolved values like every
-  // other knob; rust/parity/growintent.ts pins the two waves at 257/257 nodes, identical node ORDER and a
-  // 61-entry parked frontier on a real cal.com intent grow.
+  // The gate NO LONGER excludes an intent-shaped grow. The Rust core has the embedding field and all six of
+  // its decision points (seam-grow/src/field.rs: densify, the region centroid, the ordering band, the soft
+  // border, the tier rule, the deterministic coupling border), and the intent knobs cross the boundary as
+  // resolved values like every other knob.
   //
-  // What is NOT yet established is the rest of the surface. Flipping this line runs 1308 pass / 15 fail, and
-  // the 15 are NOT the border/tier tests this was expected to gate on — they are the booking-app CONCERN
-  // grows (multi-center `grow_centers_scoped`, cross-stack Java→JS), the DEEPENING path, and three
-  // cache-accounting tests that assert on TS-side hit/miss counters the addon bypasses by caching internally.
-  // That last group may be instrumentation rather than containment, but the first two are real coverage
-  // growintent does not have: it pins ONE anchor, ONE intent, border tolerance OFF, single-center. The next
-  // step is a growintent variant per failing shape (multi-center, deepen-from-frontier, borderTol set),
-  // because a behavioural test tells you THAT the region differs, not WHERE.
-  // The language conditions are the least obvious of the four: the addon links only a subset of the grammars,
-  // and an unparseable language degrades SILENTLY rather than erroring (see rust_core.ts). `rustCanParse` gates
-  // the ANCHOR; `rustCanServeRepo` gates everything the grow could REACH from it, since a grow that starts in
-  // TypeScript and crosses into Ruby would otherwise lose that file just as quietly. Both shrink to no-ops as
-  // the remaining grammars are vendored.
-  // SEAM_RUST_INTENT=1 opts an intent-shaped grow into the Rust wave. A staged-rollout switch, not a
-  // permanent fork: it exists so the remaining shapes can be compared and fixed ONE at a time against a green
-  // tree, instead of the flip being all-or-nothing across 15 tests. It goes away with the guard's other half.
-  const rustIntentOk = _envFlag(process.env.SEAM_RUST_INTENT) ?? false;
+  // Pinned two ways. rust/parity/growintent.ts: on cal.com `getBookingData` under a real intent the two waves
+  // agree on 257/257 nodes, node ORDER, and the 61-entry parked frontier. And the whole behavioural suite runs
+  // with the grow routed here — the concern grows, deepening, the tier/border tests, the cache-invalidation
+  // contracts — 1323 pass / 0 fail. The structural path is separately pinned by growfull (427/427).
+  //
+  // SEAM_RUST_CORE=0 falls back to the TS wave.
   // SEAM_METHOD_PRECISE=0 is a LEGACY ESCAPE HATCH the addon does not implement. The Rust coupling fan is
   // always method-precise; the opt-out restores the pre-fix whole-file bleed (every write in a boundary file
   // wired to the reached node, siblings included), which exists to diagnose an attribution regression and is
   // strictly worse. Porting it to the core would be porting a bug on purpose, so a grow that ASKS for the
   // bleed stays on TS — the same shape as `rustCanParse` / `rustCanServeRepo`: a question the addon cannot
   // answer routes to the engine that can, rather than being answered differently.
-  if (rustCoreEnabled() && deterministic && (!intentShapesGrow || rustIntentOk) && process.env.SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+  if (rustCoreEnabled() && deterministic && process.env.SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
     return growViaRust(repo, anchorFile, symbol, opts);
   }
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());

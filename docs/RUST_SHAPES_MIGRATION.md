@@ -564,51 +564,35 @@ sides on the SAME weights via `SEAM_EMBED_QUANTIZED`, which `def_embed.ts` now h
 `tierMargin` decided by which runtime loaded which artifact is noise the harness would otherwise report as a
 porting defect.
 
-THE ROUTER FLIP — attempted, MEASURED, reverted. With `!intentShapesGrow` removed from the guard the suite
-runs **1308 pass / 15 fail** (green again with it restored: 1323 / 2 skip / 0 fail). The 15 are NOT the
-border/tier tests this item was expected to gate on:
+THE ROUTER FLIP — DONE. `!intentShapesGrow` is gone from the guard; intent-shaped grows run on the Rust core.
+Suite: **1323 pass / 2 skip / 0 fail** with the grow routed there.
 
-  · **booking-app CONCERN grows (6)** — multi-center `grow_centers_scoped`, cross-stack Java→JS: both route
-    families' front-ends, the endpoint-map client's OPERATION name, the >1-center mechanism cluster.
-  · **DEEPENING (1)** — grow FROM a parked frontier node, merging by content identity.
-  · **concern-map method-level consumers (1)**, the **AngularJS learned-adapter widen (1)**, the deterministic
-    **UI-terminal grow (1)**, **method-precise fan attribution (1)**.
-  · **cache accounting (3)** — "chit>0, cmiss=0", "served from the cache (no re-resolve)", per-delta granular
-    invalidation. These assert on TS-side hit/miss counters, and the addon caches INTERNALLY (grow-v1 shards)
-    rather than through `cachedGrow`, so the counters stay 0 by construction. Likely instrumentation rather
-    than containment — but that has to be SHOWN, not assumed.
+The flip initially ran 1308/15, and none of the 15 were the border/tier tests this item predicted. Every one
+was the addon UNDER-REPORTING something the TS engine returns, not the ported wave computing a different
+region — worth recording, because the failures all LOOKED like containment bugs:
 
-**Group 1 traced (booking-app concern, 6 tests).** Not the field, and not what the failure looked like:
+| what failed | actual cause |
+|---|---|
+| 6 booking-app concern grows, deepening, concern-map (9) | `toResolvedGraph` handed `anchors`/`frontier`/`unresolved` back as napi values; `merge_resolved` starts with `structuredClone`, which throws on them. The concern path swallows it in a `catch` and keeps the un-merged region. Latent since the addon landed — the frontier is EMPTY on a structural grow, and the tier rule is what fills it. |
+| deterministic UI-terminal grow (1) | the grow returned an EMPTY move history; `growViaRust` synthesized one only from build-failed frontier points under `flagTruncation`. A grow that applied 40 moves reported none. |
+| AngularJS adapter widen (1) | no html grammar was vendored, so the learned `attr` matcher (`ng-click` = how a front-end CONSUMES a binding) parsed nothing. Every template complement was invisible while the js→java route still resolved. |
+| method-precise fan attribution (1) | `SEAM_METHOD_PRECISE=0` restores a legacy whole-file bleed the Rust fan does not implement. Porting it would be porting a bug on purpose — that grow now routes to TS. |
+| per-file coupling cache (1) | `_fileCouplingStats` counted only TS's cache; the addon's reuse read as zero. |
+| depsig granular invalidation (2) | REAL: the fan keyed deltas under the repo-wide COUPLING EPOCH, so any edit invalidated all of them. Ported per-delta dependency signatures. |
 
-  · `SEAM_TIER_GROW=0` and `SEAM_TIER_MARGIN=0` EACH restore the TS answer exactly (33 nodes / 22 coupling vs
-    Rust's 11 / 0), which points at the tier gate.
-  · But the SCORES are right. `SEAM_TIER_WHY` (added) prints them at the decision point — `paginate` 0.4257,
-    `createBooking` 0.4269, `persist` 0.4713 — against TS's independently measured 0.4454 / 0.4440, all far
-    above the 0.20 margin, so the gate is ADMITTING them. Def enumeration on the fixture is identical (32/32).
-  · And `SEAM_WAVE_WHY` (added) shows the two waves apply nearly the SAME move sequence (49 vs 48 applied
-    moves, all `+0` past the start) and both end at **28 nodes**. So the wave is not where they diverge.
-  · The phase trace then showed the real shape: the CLI runs **two grows** — one 8→11 with ZERO coupling, one
-    25→33 with 22 — and both appear identically under either tier setting. What changes is WHICH ONE the
-    caller emits. With the tier gate on, the emitted concern graph is the coupling-free one.
+Two of those deserve their own note. The depsig one was the only genuine behavioural gap, and it was a
+PERFORMANCE regression (identical answers, lost warm reuse) — the counters added for the previous item are
+what made it visible. And its second half was subtler than its first: with signatures in place the
+unrelated-edit case passed while the complement-edit case still reported `cnew` instead of `cmiss`, because
+the cache KEY carried the file's content hash, so an edit minted a NEW key instead of invalidating the old
+one. Key is identity, content belongs in the signature — the same split TS uses.
 
-So the remaining work is in the CALLER's grow selection (detection grow vs final grow in decompose /
-`grow_centers_scoped`), not in the wave. NEXT: instrument which of the two grows `--emit-graph` writes and why
-the tier setting changes that choice — the two grows differ in `dataCoupling`, so the selection is reading
-something the Rust path reports differently.
-
-Fixed along the way (correct on its own merits, did not move this test): `stable_floor` is now part of
-`WaveOpts` and the answer-cache fingerprint. The scoping PRE-GROW runs the same (repo, anchor, symbol, knobs)
-as the real grow and differs only in staying inclusive, so the two hashed to ONE key and the probe's
-deliberately-narrow answer could be served to the real grow.
-
-The first two groups are real coverage `growintent` does not have: it pins ONE anchor, ONE intent, border
-tolerance OFF, SINGLE center, on a TS/JS repo. So the next step is a growintent VARIANT per failing shape —
-multi-center, deepen-from-frontier, `borderTol` set, and a Java→JS cross-stack anchor — because a behavioural
-test tells you THAT the region differs, not WHERE, and the comparator already reports node set, node order and
-the parked frontier, which is the right output for all four.
-
-Everything else in this item is done: the field, its six decision points, and the intent knobs crossing the
-napi boundary as resolved values (`resolveStructuralKnobs`) exactly like every other knob.
+DEAD ENDS, recorded so they are not re-run: I attributed the concern-grow divergence to the tier branch's
+control flow (SEAM_TIER_GROW=0 and SEAM_TIER_MARGIN=0 each restored the TS answer) — the wave traces then
+showed both configurations applying nearly the same moves and ending at the SAME 28 nodes, which ruled it out;
+the tier rule was only relevant because it POPULATES the frontier that failed to clone. And I read missing
+`[concern]`/`[merge]` stderr as those branches not running, when the CLI intercepts `process.stderr.write` —
+a file-based trace is what surfaced the exception.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is

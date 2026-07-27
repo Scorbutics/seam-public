@@ -85,7 +85,7 @@ describe("anchor coupling overlay cache — Phase 4 (via CLI subprocesses, --dat
   test("WARM REUSE — a floor-coupling run is identical warm, and the overlay cache is written", () => {
     if (!available()) return;
     const f1 = growFiles("floor");
-    expect(shardWritten("coupling-delta-v1", "coupling-fan-v1")).toBe(true);   // overlay memoized to disk
+    expect(shardWritten("coupling-delta-v1", "coupling-fan-v2")).toBe(true);   // overlay memoized to disk (TS name, or the Rust fan's — v2 = per-delta signatures)
     const f2 = growFiles("floor");                                            // fresh process → overlay hydrated from disk
     expect(f2).toEqual(f1);
     expect(f1).toContain("svc/dbRepo.ts");
