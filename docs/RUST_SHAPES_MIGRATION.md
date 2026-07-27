@@ -465,26 +465,38 @@ installed, an intent-shaped grow builds an EMBEDDING FIELD that shapes the walk;
 field, so the router keeps those grows on TS. Everything else — every shape, the whole flywheel, every
 structural grow, every language — is Rust.
 
-Removing the TS core therefore needs the EMBEDDING FIELD ported. That is the last item, and it is real work,
-not a switch — MEASURED:
+### The embedding field is PORTED and decision-equivalent (`crates/seam-embed`)
 
-**(a) "Just default to structural" does NOT work.** Flipping `structuralGrow`'s default to true makes every
-grow structural, so the Rust core serves all of them and TS becomes deletable. It fails **14 committed
-behavioural tests**: the soft intent-border halting at the relevance cliff, the tier rule parking an off-intent
-fan, the decision-point frontier + `cutBy` provenance, the concern grows, the guided-detection re-grow. Those
-tests ARE the intent field's product value, so the flag flip is a silent capability deletion dressed as a
-migration. Tried, measured, reverted.
+`ort` + `tokenizers` running the SAME all-MiniLM-L6-v2 artifact, same masked mean-pooling, same L2
+normalisation, same cosine. napi: `embedAvailable` / `embedScoreStrings` / `embedVector`.
 
-**(b) PORT IT — the actual remaining work.** `ts/src/codebase/scan/def_embed.ts` is 205 lines and the surface is
-small: `lexicalPreFilter` (pure), `embedScoreStrings(intent, values)`, `embedScoreDefs(repo, intent, files)`,
-`transformersAvailable`, plus a per-(repo, model) disk cache of `hash → vector`. What is NOT small is the
-runtime underneath: transformers.js + a ~23 MB model, lazily fetched. In Rust that means the `ort` (ONNX
-Runtime) crate + a tokenizer + a model-distribution decision (bundle vs fetch-and-cache), and the
-cosine-scoring/caching logic on top. The scoring and cache are a straight port; the runtime is a new
-dependency with real distribution cost for the `.vsix`.
+MEASURED over 162 real cal.com symbol names, one intent (`rust/parity/embed.ts`):
 
-**(c) Keep a thin TS embedding layer** and delete the rest of the engine — viable today, and the only option
-that needs no new work, but it leaves a JS dependency in the product.
+| weights | max Δcosine | ranking |
+|---|---|---|
+| int8 (TS) vs int8 (Rust) | 3.4e-2 | DIFFERS |
+| fp32 (TS) vs int8 (Rust) | 3.4e-2 | DIFFERS |
+| **fp32 both** | **3.7e-7** | **identical, top-K identical at 5/10/20/50** |
+
+The port was never wrong — the engines were on DIFFERENT WEIGHTS. int8 kernels differ between
+onnxruntime-web/WASM and native ORT by ~1e-2 on a cosine, which swaps near-ties, and ordering is the only
+thing the grow reads. So the requirement is "both engines load the same precision":
+`SEAM_EMBED_QUANTIZED=0` in the core, `{ quantized: false }` in transformers.js. Once TS is gone that is just
+the engine's choice. Note `process.env` does NOT reach the addon — use `syncSeamEnv`, or the harness measures
+a divergence it created.
+
+### THE LAST ITEM — the field's CONSUMPTION in the wave
+
+An equivalent field is not an intent-shaped GROW. `densify` (orchestrate.ts:708), the soft border, the tier
+gate and the growing centroid read the field and live in the TS wave; the Rust wave has none of them
+(`border_policies.rs` says so explicitly: "tier-grow/up-hop/soft-border stay" on TS). `growViaRust` therefore
+still serves STRUCTURAL grows only, and `intentShapesGrow` keeps the rest on TS.
+
+Scope: `intent_rank.ts` (136 lines) + `key_ranker.ts` (35) + the densify/centroid/soft-border/tier-gate
+sites in `orchestrate.ts`. The field it needs now exists in the core, so this is a port of the WALK logic, not
+of any ML. Its gate is not a new harness — it is the 14 behavioural tests that already pin these behaviours
+(the soft border halting at the relevance cliff, the tier rule parking an off-intent fan, the decision-point
+frontier, the concern grows), run with the grow routed to Rust.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
