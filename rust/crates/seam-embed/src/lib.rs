@@ -66,8 +66,17 @@ fn model_dir() -> Option<PathBuf> {
 }
 
 fn onnx_path(dir: &PathBuf) -> Option<PathBuf> {
-    // the quantized file is what transformers.js loads by default — matching it matters for score parity
-    for p in ["onnx/model_quantized.onnx", "onnx/model.onnx", "model_quantized.onnx", "model.onnx"] {
+    // WHICH WEIGHTS decides whether the two engines agree. transformers.js loads the INT8-quantized file by
+    // default, and int8 kernels differ between execution providers (onnxruntime-web/WASM vs native ORT) by
+    // ~1e-2 on a cosine — enough to swap near-ties in the ranking, which is the only thing the grow reads.
+    // `SEAM_EMBED_QUANTIZED=0` selects the fp32 weights; both engines must make the SAME choice.
+    let quantized = std::env::var("SEAM_EMBED_QUANTIZED").map(|v| v != "0").unwrap_or(true);
+    let order: &[&str] = if quantized {
+        &["onnx/model_quantized.onnx", "onnx/model.onnx", "model_quantized.onnx", "model.onnx"]
+    } else {
+        &["onnx/model.onnx", "model.onnx", "onnx/model_quantized.onnx", "model_quantized.onnx"]
+    };
+    for p in order {
         let c = dir.join(p);
         if c.is_file() {
             return Some(c);

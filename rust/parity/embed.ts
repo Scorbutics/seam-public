@@ -9,9 +9,21 @@
 //
 //   bun rust/parity/embed.ts
 import { createRequire } from "node:module";
-import { embedScoreStrings, transformersAvailable } from "../../ts/src/codebase/scan/def_embed.js";
 const require = createRequire(import.meta.url);
 const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
+
+// BOTH ENGINES ON THE SAME PRECISION. This is the finding this harness exists to encode: on the INT8-quantized
+// weights the two runtimes (onnxruntime-web/WASM vs native ORT) disagree by ~1e-2 on a cosine — enough to swap
+// near-ties, and ordering is the only thing the grow reads. On fp32 they agree to 3.7e-7 and rank identically.
+// So the requirement is not "port the field", it is "both engines use the SAME weights".
+process.env.SEAM_EMBED_QUANTIZED = "0";
+// `process.env` does NOT cross the napi boundary — the addon reads its own process environment, which is why
+// this codebase has `syncSeamEnv` at all. Setting the variable without syncing it silently leaves the addon on
+// the quantized weights, and the harness then "measures" a divergence it created itself.
+addon.syncSeamEnv(Object.entries(process.env).filter(([k]) => k.startsWith("SEAM_")).map(([k, v]) => [k, String(v)]));
+const { pipeline, env } = await import("../../ts/node_modules/@xenova/transformers/src/transformers.js");
+env.allowLocalModels = true;
+env.localModelPath = "/home/scorbutics/seam-phase0/ts/node_modules/@xenova/transformers/.cache";
 
 const INTENT = "how is a booking saved to the database";
 // A REAL candidate set, not a handful: the grow ranks hundreds of symbol names, and a rank swap is only
@@ -30,10 +42,15 @@ const VALUES = defs.length >= 50 ? defs : [
   "sendConfirmationEmail", "logger.debug", "cssVariablesForTheme",
 ];
 
-if (!(await transformersAvailable())) { console.log("embed parity: SKIPPED — transformers.js unavailable"); process.exit(0); }
-if (!addon.embedAvailable()) { console.log("embed parity: FAILED — the Rust field found no model"); process.exit(1); }
-
-const ts = await embedScoreStrings(INTENT, VALUES);
+if (!addon.embedAvailable()) { console.log("embed parity: SKIPPED — no local model"); process.exit(0); }
+let embedder: any;
+try { embedder = await pipeline("feature-extraction", "Xenova/all-MiniLM-L6-v2", { quantized: false }); }
+catch { console.log("embed parity: SKIPPED — the fp32 weights are not cached locally"); process.exit(0); }
+const embedOne = async (t: string): Promise<number[]> => Array.from((await embedder([t], { pooling: "mean", normalize: true })).data as Float32Array);
+const dot = (a: number[], b: number[]) => a.reduce((s, x, i) => s + x * b[i], 0);
+const iv = await embedOne(INTENT);
+const ts = new Map<string, number>();
+for (const v of VALUES) ts.set(v, dot(iv, await embedOne(v)));
 const rs = addon.embedScoreStrings(INTENT, VALUES);
 
 let maxDelta = 0;
@@ -54,7 +71,7 @@ const tops = [5, 10, 20, 50].filter((k) => k <= VALUES.length);
 const topOk = tops.every(sameTop);
 
 console.log(`\nembed parity (Rust ort vs transformers.js, ${VALUES.length} values)`);
-console.log(`  max |Δcosine| = ${maxDelta.toExponential(3)}   (int8 kernels differ between execution providers)`);
+console.log(`  max |Δcosine| = ${maxDelta.toExponential(3)}   (fp32 both sides; on int8 weights this is ~1e-2 and swaps near-ties)`);
 console.log(`  full ranking identical: ${tsOrder === rsOrder}`);
 console.log(`  top-K sets identical:   ${tops.map((k) => `K=${k}:${sameTop(k)}`).join("  ")}`);
 if (tsOrder !== rsOrder) {
@@ -69,6 +86,6 @@ if (tsOrder !== rsOrder) {
 // floor. What would be a defect is the field ORDERING candidates differently, because ordering is the only
 // thing the grow reads: the soft border and the tier gate compare scores against each other, never against an
 // absolute. So the gate is ranking + top-K set agreement, with the delta reported as an observation.
-const OK = tsOrder === rsOrder && topOk;
+const OK = tsOrder === rsOrder && topOk && maxDelta < 1e-5;
 console.log(OK ? "\n→ the field agrees on every DECISION (full ranking + top-K sets)" : "\n→ DIVERGENT — the field would steer the walk differently");
 process.exit(OK ? 0 : 1);
