@@ -446,11 +446,37 @@ are provider-light by design.
 SUPPLY CHAIN: this adds third-party C sources to the repo. That is a deliberate act with review implications,
 so it wants an explicit go-ahead per grammar rather than a silent `curl` from a build script.
 
-### Order
-ruby (grammar only) → python → go → csharp → kotlin → c/cpp. After each: `rustCanParse` flips for it,
-`rustCanServeRepo` stops refusing repos containing it, and the language's own parity harnesses become
-runnable. Only once ALL of them are vendored is the TS engine redundant as an ENGINE — and even then, keep it
-as the oracle until there is something else that can play that role.
+### ✅ DONE — all 11 grammars vendored, all providers ported
+
+ruby · python · go · csharp · kotlin · c · cpp are vendored at their `tree-sitter-wasms@0.1.13` pins and
+`canParse` answers true for all eleven, so `rustCanServeRepo` no longer refuses a mixed repo. Providers:
+python (a real one — imports, no resolver, because Python's import graph is not path-derivable) and minimal
+registrations for kotlin/c/cpp mirroring the TS `minimal(...)` entries.
+
+`rust/parity/grammars.ts` compares the native and wasm parse trees per language and CAUGHT a real mismatch:
+kotlin's wasm emits `string_content` where native 0.3.1 did not (the pin is `^0.3.1`, so the wasm came from a
+later 0.3.x). Re-vendored at 0.3.8 → 7/7 identical. That harness is the thing that makes vendoring safe;
+without it a version drift is silent and total.
+
+### WHAT STILL RUNS ON TS — one path, and it is a CHOICE, not a gap
+
+`intentShapesGrow = embeddings-available && !structuralGrow` (orchestrate.ts:1206). With `@xenova/transformers`
+installed, an intent-shaped grow builds an EMBEDDING FIELD that shapes the walk; the Rust core has no embedding
+field, so the router keeps those grows on TS. Everything else — every shape, the whole flywheel, every
+structural grow, every language — is Rust.
+
+Removing the TS core therefore forces a decision, and it is a product one:
+- **(a) Drop the intent-shaped grow.** `SEAM_GROW_STRUCTURAL=1` already makes grows intent-INDEPENDENT (intent
+  then only crops/ranks at render, and the answer cache reuses across intents). Make that the only mode and TS
+  goes. Cost: the intent no longer steers containment.
+- **(b) Port the embedding field to Rust.** An ONNX/transformer runtime in the core — a large piece of work
+  whose payoff is keeping one ranking behaviour, not a correctness property.
+- **(c) Keep a thin TS embedding layer** and delete the rest of the engine.
+
+And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
+ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
+decided above, the harnesses' TS side is worth keeping under a `parity/` fixture even after the runtime path
+goes.
 
 ---
 
