@@ -23,6 +23,8 @@ export type StructuralKnobs = {
   upHop: number; complementUpHop: number;
   couplingHubContain: boolean;
   excludeDirs: string[]; includeTests: boolean;
+  intent?: string; structuralGrow: boolean;
+  borderTol?: number; borderField: string; tierGrow: boolean; tierMargin?: number;
 };
 
 export type KnobOpts = {
@@ -31,6 +33,7 @@ export type KnobOpts = {
   ubiquity?: boolean; ubiquityFan?: number; upHop?: number;
   excludeDirs?: string[]; includeTests?: boolean;
   dataCoupling?: boolean; structuralGrow?: boolean;
+  intent?: string; borderTol?: number | null; borderField?: string; tierGrow?: boolean; tierMargin?: number;
 };
 
 // `stableFloor` is the footprint-scoping PROBE (grow_footprint_scoped), which discards its footprint and only
@@ -57,5 +60,14 @@ export function resolveStructuralKnobs(opts: KnobOpts = {}, stableFloor = false,
     couplingHubContain: process.env.SEAM_COUPLING_HUB_CONTAIN !== "0" && opts.dataCoupling !== false,
     excludeDirs: opts.excludeDirs ?? [],
     includeTests: !!opts.includeTests,
+    // THE INTENT KNOBS. Resolved HERE like every other knob so the two engines cannot disagree about what one
+    // means — the Rust core holds no defaulting logic. Absent intent (or a structural grow) makes the addon's
+    // field inert, which is the same degradation the TS wave has when embeddings are unavailable.
+    intent: opts.structuralGrow ? undefined : opts.intent,
+    structuralGrow: !!opts.structuralGrow,
+    borderTol: opts.borderTol ?? (process.env.SEAM_GROW_BORDER_TOL ? parseFloat(process.env.SEAM_GROW_BORDER_TOL) : undefined),
+    borderField: opts.borderField ?? process.env.SEAM_GROW_BORDER_FIELD ?? "",
+    tierGrow: (opts.tierGrow ?? _flag(process.env.SEAM_TIER_GROW) ?? true) && !stableFloor,
+    tierMargin: opts.tierMargin ?? (process.env.SEAM_TIER_MARGIN ? parseFloat(process.env.SEAM_TIER_MARGIN) : undefined),
   };
 }

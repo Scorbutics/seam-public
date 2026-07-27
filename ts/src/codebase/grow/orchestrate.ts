@@ -1218,13 +1218,20 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // STRUCTURAL grow + coupling replay, byte-identical to TS in structural mode. It caches internally (grow-v1
   // shards) so it bypasses the TS-level cachedGrow. Streaming (onWave) grows stay in TS. See grow/rust_core.ts.
   //
-  // The gate is `!intentShapesGrow`, NOT merely `rustCoreEnabled()`: the Rust core implements ONLY the
-  // structural wave — it has no embedding field, so densify/soft-border/tier-gate do not exist there. Routing an
-  // intent-SHAPED grow to it therefore returns a different region while looking like the same call. This used to
-  // read `{ ...opts, structuralGrow: true }`, which silently REWROTE the caller's request to the one thing the
-  // addon can do; a DETECTION grow (which must stay intent-shaped so center-detection reads the right fan-in)
-  // came back with a fraction of its mechanisms. When embeddings are absent the TS grow is intent-free anyway,
-  // so the two engines agree and the addon is used — that is the common case, not a fallback.
+  // The gate still includes `!intentShapesGrow`, but the REASON has changed and the remaining distance is now
+  // measured rather than guessed. The Rust core DOES have the embedding field and all six of its decision
+  // points (seam-grow/src/field.rs), and the intent knobs cross the boundary as resolved values like every
+  // other knob; rust/parity/growintent.ts pins the two waves at 257/257 nodes, identical node ORDER and a
+  // 61-entry parked frontier on a real cal.com intent grow.
+  //
+  // What is NOT yet established is the rest of the surface. Flipping this line runs 1308 pass / 15 fail, and
+  // the 15 are NOT the border/tier tests this was expected to gate on — they are the booking-app CONCERN
+  // grows (multi-center `grow_centers_scoped`, cross-stack Java→JS), the DEEPENING path, and three
+  // cache-accounting tests that assert on TS-side hit/miss counters the addon bypasses by caching internally.
+  // That last group may be instrumentation rather than containment, but the first two are real coverage
+  // growintent does not have: it pins ONE anchor, ONE intent, border tolerance OFF, single-center. The next
+  // step is a growintent variant per failing shape (multi-center, deepen-from-frontier, borderTol set),
+  // because a behavioural test tells you THAT the region differs, not WHERE.
   // The language conditions are the least obvious of the four: the addon links only a subset of the grammars,
   // and an unparseable language degrades SILENTLY rather than erroring (see rust_core.ts). `rustCanParse` gates
   // the ANCHOR; `rustCanServeRepo` gates everything the grow could REACH from it, since a grow that starts in

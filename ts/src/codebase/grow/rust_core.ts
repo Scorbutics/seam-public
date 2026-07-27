@@ -146,7 +146,7 @@ export function growViaRust(repo: string, anchorFile: string, symbol: string, op
   syncEnv(addon);
   // The containment knobs are resolved on THIS side (opts → env → default) and handed over as finished values;
   // the Rust core holds no defaulting logic, so the two engines cannot disagree about what a knob means.
-  const k = resolveStructuralKnobs(opts, false, false);
+  const k = resolveStructuralKnobs(opts, !!opts.ctx?.stableFloor, false);
   const dto = addon.growToTerminals(repo, anchorFile, symbol, opts.dataCoupling !== false, k);
   // The addon answer-caches internally (grow-v1 shards) instead of going through the TS `cachedGrow`, so it
   // reports its warm-path verdict back and we emit the SAME line cachedGrow does — through process.stderr, which
