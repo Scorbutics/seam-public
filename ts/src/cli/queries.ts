@@ -300,8 +300,6 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   if (!a.anchorFile) err("--query writers requires --center <file>[#symbol] (a read site whose table's writers you want)");
   const { readFileSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { floor_base_index, otherSide, scan_file_keys } = await import("../codebase/coupling/index.js");
-  const { symbol_span, complement_unit, accessColumns } = await import("../codebase/coupling/bridge.js");
   const { EngineCtx } = await import("../codebase/engine_ctx.js");
   const { SKIP_DIRS } = await import("../core/resolve/languages/index.js");
   const { renderWritersSet } = await import("../codebase/llm_context.js");
@@ -333,8 +331,6 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
   if (!a.anchorFile) err("--query coupling requires --center <file>[#symbol]");
   const { readFileSync } = await import("node:fs");
   const { join } = await import("node:path");
-  const { floor_base_index, otherSide, scan_file_keys } = await import("../codebase/coupling/index.js");
-  const { symbol_span, complement_unit, accessColumns } = await import("../codebase/coupling/bridge.js");
   const { EngineCtx } = await import("../codebase/engine_ctx.js");
   const { SKIP_DIRS } = await import("../core/resolve/languages/index.js");
   const { renderCoupling } = await import("../codebase/llm_context.js");
