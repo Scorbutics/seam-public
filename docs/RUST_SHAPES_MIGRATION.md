@@ -560,8 +560,32 @@ contains the same region and parks the same decision points as the TS wave, unde
 
 GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
 output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both
-sides forced to fp32 weights, because `embed.ts` pins that int8 kernels differ ~1e-2 between the two runtimes
-— enough to swap a near-tie across `tierMargin`, which is a runtime artifact, not a porting defect.
+sides on the SAME weights via `SEAM_EMBED_QUANTIZED`, which `def_embed.ts` now honours — a near-tie across
+`tierMargin` decided by which runtime loaded which artifact is noise the harness would otherwise report as a
+porting defect.
+
+THE ROUTER FLIP — attempted, MEASURED, reverted. With `!intentShapesGrow` removed from the guard the suite
+runs **1308 pass / 15 fail** (green again with it restored: 1323 / 2 skip / 0 fail). The 15 are NOT the
+border/tier tests this item was expected to gate on:
+
+  · **booking-app CONCERN grows (6)** — multi-center `grow_centers_scoped`, cross-stack Java→JS: both route
+    families' front-ends, the endpoint-map client's OPERATION name, the >1-center mechanism cluster.
+  · **DEEPENING (1)** — grow FROM a parked frontier node, merging by content identity.
+  · **concern-map method-level consumers (1)**, the **AngularJS learned-adapter widen (1)**, the deterministic
+    **UI-terminal grow (1)**, **method-precise fan attribution (1)**.
+  · **cache accounting (3)** — "chit>0, cmiss=0", "served from the cache (no re-resolve)", per-delta granular
+    invalidation. These assert on TS-side hit/miss counters, and the addon caches INTERNALLY (grow-v1 shards)
+    rather than through `cachedGrow`, so the counters stay 0 by construction. Likely instrumentation rather
+    than containment — but that has to be SHOWN, not assumed.
+
+The first two groups are real coverage `growintent` does not have: it pins ONE anchor, ONE intent, border
+tolerance OFF, SINGLE center, on a TS/JS repo. So the next step is a growintent VARIANT per failing shape —
+multi-center, deepen-from-frontier, `borderTol` set, and a Java→JS cross-stack anchor — because a behavioural
+test tells you THAT the region differs, not WHERE, and the comparator already reports node set, node order and
+the parked frontier, which is the right output for all four.
+
+Everything else in this item is done: the field, its six decision points, and the intent knobs crossing the
+napi boundary as resolved values (`resolveStructuralKnobs`) exactly like every other knob.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
