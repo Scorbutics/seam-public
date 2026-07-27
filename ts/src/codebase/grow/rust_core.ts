@@ -161,14 +161,14 @@ export function growViaRust(repo: string, anchorFile: string, symbol: string, op
   if (process.env.SEAM_FP_DEBUG && dto?.cacheVerdict)
     process.stderr.write(`[grow] ${anchorFile} ${dto.cacheKey} epoch=${dto.cacheEpoch} ${dto.cacheVerdict}\n`);
   const data = toResolvedGraph(dto);
-  const history: any[] = [];
-  if (opts.flagTruncation) {
-    const fps = (dto.frontier ?? []) as any[];
-    for (const fp of fps) {
-      if (fp.cutBy === "build-failed" || fp.cutBy === "build_failed") {
-        history.push({ node: fp.id, added: 0, skipped: "build failed" });
-      }
-    }
-  }
+  // THE MOVE HISTORY, from the addon rather than reconstructed. It used to be synthesized here from the
+  // build-failed frontier points under `flagTruncation`, which meant an ordinary grow returned an EMPTY
+  // history — so a grow that expanded 40 moves looked, to a caller reading `hist.length`, like one that never
+  // ran. Plain objects (not the napi values) because callers merge these into cloneable structures.
+  const history: any[] = ((dto.history ?? []) as any[]).map((h) => {
+    const rec: any = { node: h.node, added: h.added };
+    if (h.skipped) rec.skipped = h.skipped;
+    return rec;
+  });
   return [data, history];
 }

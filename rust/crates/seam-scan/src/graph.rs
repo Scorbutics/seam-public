@@ -89,6 +89,19 @@ pub struct FrontierPoint {
     pub cut_by: String, // "decision" | "hub" | "border" | "budget"
 }
 
+/// One APPLIED move in the wave, as the TS grow reports it.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+pub struct MoveRecord {
+    /// the node id the move expanded
+    pub node: String,
+    /// how many nodes it added
+    pub added: usize,
+    /// why it added nothing, when that was a REFUSAL rather than an empty fan ("build failed" / "too broad")
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub skipped: String,
+}
+
+
 /// The footprint contract (the fields a footprint builder populates; scalars are constant here).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedGraph {
@@ -107,6 +120,12 @@ pub struct ResolvedGraph {
     pub resolved_methods: Vec<String>,
     /// The wave's decision-point frontier (tier-3 residue). Empty on a plain footprint build.
     pub frontier: Vec<FrontierPoint>,
+    /// THE MOVE HISTORY — one record per APPLIED move, in order. The TS grow returns this alongside the graph
+    /// (`[data, history]`) and callers read it: `flagTruncation` turns a `build failed` record into an honest
+    /// blindspot, and the deterministic-grow test asserts the wave actually expanded. The Rust path used to
+    /// return an empty array, so a grow that worked looked like a grow that never ran.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub history: Vec<MoveRecord>,
     /// WARM-PATH DIAGNOSTICS (not part of the footprint contract — empty on every path but the answer-cached
     /// grow): how the P5 answer cache resolved, and the key/epoch it resolved under. Carried here so the TS
     /// shell can emit the same `[grow] … HIT (skip wave)` line its own cache does; see grow::grow_to_terminals.
@@ -138,6 +157,7 @@ pub fn make_graph(
         anchors: Vec::new(),
         resolved_methods: Vec::new(),
         frontier: Vec::new(),
+        history: Vec::new(),
         cache_verdict: String::new(),
         cache_key: String::new(),
         cache_epoch: String::new(),

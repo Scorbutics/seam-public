@@ -213,7 +213,7 @@ fn caller_files_for(data: &ResolvedGraph, next: &GraphNode, down: bool) -> Optio
 
 /// Apply ONE (node, direction) expansion: build that node's directional footprint (structural), reject a flood,
 /// and merge in place. Port of `_applyMove`.
-fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, idx: &mut GrowIndex) -> usize {
+fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, idx: &mut GrowIndex, why: &mut String) -> usize {
     let next = &mv.node;
     let down = mv.dir == Dir::Down;
     let caller_files = caller_files_for(data, next, down);
@@ -238,11 +238,13 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
         })
     };
     let Some(mut add) = built else {
-        return 0; // build failed (unsupported file / parse) — a frontier miss
+        *why = "build failed".into(); // unsupported file / parse — a frontier miss, and flagTruncation says so
+        return 0;
     };
     // a move that floods the footprint with non-coupling structure (a widely-used util) doesn't advance the answer.
     let flood = add.nodes.iter().filter(|n| !idx.by_key.contains_key(&key(n)) && !n.coupling).count();
     if flood > MOVE_CAP {
+        *why = "too broad".into(); // a widely-used util floods the footprint without advancing the answer
         return 0;
     }
     // carry the move direction outward as the new nodes' default direction.
@@ -266,6 +268,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     // The (node,direction) expansions already done — file#symbol#dir. Anchors are excluded from moves, so no seed.
     let mut expanded: HashSet<String> = HashSet::new();
     let mut hub_fanned: HashSet<String> = HashSet::new();
+    let mut history: Vec<seam_scan::graph::MoveRecord> = Vec::new();
     let mut hub_mark: HashMap<String, seam_scan::graph::HubMarker> = HashMap::new();
     let mut parked: IndexMap<String, String> = IndexMap::new(); // node id → cutBy (decision/budget)
 
@@ -508,7 +511,10 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             }
             expanded.insert(k);
             let before: Option<HashSet<String>> = Some(data.nodes.iter().map(|n| n.id.clone()).collect());
-            let added = apply_move(repo, &mut data, mv, ex, &mut idx);
+            let mut why = String::new();
+            let added = apply_move(repo, &mut data, mv, ex, &mut idx, &mut why);
+            // THE MOVE HISTORY, one record per applied move — what the TS grow returns alongside the graph.
+            history.push(seam_scan::graph::MoveRecord { node: mv.node.id.clone(), added, skipped: why });
             // WAVE TRACE — `SEAM_WAVE_WHY=1` reports every APPLIED move and what it added. The move LIST is
             // easy to reason about; the sequence the flood actually runs, under a budget that the ordering
             // itself perturbs, is not — and a containment difference lives in the sequence.
@@ -617,6 +623,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         // sort: score desc (all 0) → cutRank → symbol.
         front.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal).then_with(|| cut_rank(&a.cut_by).cmp(&cut_rank(&b.cut_by))).then_with(|| a.symbol.cmp(&b.symbol)));
         data.frontier = front;
+    }
+    {
+        data.history = history;
     }
     data
 }

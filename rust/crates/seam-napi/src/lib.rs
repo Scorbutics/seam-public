@@ -347,6 +347,15 @@ pub struct FrontierPointDto {
 }
 
 /// Wire form of a resolved graph (the fields build_consumers_graph consumes).
+/// One applied move: the node it expanded, how many nodes it added, and why it added none when that was a
+/// refusal ("build failed" / "too broad") rather than an empty fan.
+#[napi(object)]
+pub struct MoveRecordDto {
+    pub node: String,
+    pub added: u32,
+    pub skipped: String,
+}
+
 #[napi(object)]
 pub struct GraphDto {
     pub anchor_id: String,
@@ -361,6 +370,8 @@ pub struct GraphDto {
     pub anchors: Vec<String>,
     pub resolved_methods: Vec<String>,
     pub frontier: Vec<FrontierPointDto>,
+    /// The wave's APPLIED-move history, in order — what the TS grow returns as its second tuple element.
+    pub history: Vec<MoveRecordDto>,
     /// Warm-path diagnostics from the P5 answer cache (empty on every other path) — the TS shell prints them.
     pub cache_verdict: String,
     pub cache_key: String,
@@ -370,6 +381,7 @@ pub struct GraphDto {
 impl From<seam_scan::ResolvedGraph> for GraphDto {
     fn from(g: seam_scan::ResolvedGraph) -> Self {
         Self {
+            history: g.history.into_iter().map(|h| MoveRecordDto { node: h.node, added: h.added as u32, skipped: h.skipped }).collect(),
             anchor_id: g.anchor_id,
             anchor_symbol: g.anchor_symbol,
             anchor_file: g.anchor_file,
@@ -424,6 +436,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
 /// surface for graph-level ports (grow roles/crossings) that consume a footprint the JS side already has.
 fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
     seam_scan::ResolvedGraph {
+        history: Vec::new(), // the DTO->graph direction is an INPUT conversion; the history only flows outward
         anchor_id: g.anchor_id,
         anchor_symbol: g.anchor_symbol,
         anchor_file: g.anchor_file,
