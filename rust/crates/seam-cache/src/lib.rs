@@ -54,6 +54,13 @@ fn to_base36(mut n: u32) -> String {
 }
 
 /// Is `SEAM_GRAPH_CACHE` enabled (on by default; `=0` kill switch → recompute live, byte-identical)?
+/// The engine identity, for a caller building its OWN cache signature (the fan's per-delta depsig). Exposed
+/// because a signature that omits it replays the PREVIOUS binary's answer after an engine change — the exact
+/// trap ENGINE_EPOCH exists to close.
+pub fn engine_epoch() -> &'static str {
+    ENGINE_EPOCH
+}
+
 pub fn cache_enabled() -> bool {
     std::env::var("SEAM_GRAPH_CACHE").as_deref() != Ok("0")
 }

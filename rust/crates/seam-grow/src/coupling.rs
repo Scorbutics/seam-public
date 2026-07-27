@@ -82,6 +82,95 @@ fn to_delta(r: seam_couple::CouplingResult) -> Delta {
 }
 
 /// resolve_coupling (scoped) + chain_route_consumers — the shared per-span compute for the anchor + the fan.
+
+// ── PER-DELTA DEPENDENCY SIGNATURES ────────────────────────────────────────────────────────────────────────
+// The fan's per-file delta was cached under the COUPLING EPOCH, which hashes the whole repo — so ANY edit
+// anywhere invalidated EVERY delta and the warm fan recomputed from scratch on an edit loop. Answers were
+// never wrong; the reuse was. TS solved this with a per-delta signature (`sigStillValid`), and the contract is
+// asserted: an UNRELATED key-less file must reuse every delta, editing a COMPLEMENT's body must re-resolve
+// exactly that one. This is that mechanism for the Rust fan.
+//
+// A delta's dependencies are the files it actually READ: the boundary file itself plus every file its
+// crossings resolved into. Validating those content hashes is strictly more precise than a repo-wide epoch
+// and strictly cheaper than recomputing — a stat+hash per dep against a full resolve_coupling pass.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FanSig {
+    /// engine identity ⊕ the SEAM_* environment — the two things that change the delta without any file moving
+    env: String,
+    /// the LEARNED matcher state; a newly learned rule changes what every delta sees
+    store: String,
+    /// rel path → content hash, for every file this delta read
+    reads: std::collections::BTreeMap<String, String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct FanEntry {
+    sig: FanSig,
+    d: Delta,
+}
+
+type FanShard = HashMap<String, FanEntry>;
+
+fn file_content_hash(repo: &str, rel: &str) -> Option<String> {
+    std::fs::read(format!("{repo}/{rel}")).ok().map(|b| seam_cache::hash(&String::from_utf8_lossy(&b)))
+}
+
+/// The files a computed delta READ — itself, plus every distinct file it reached. Sorted+deduped by BTreeMap.
+fn delta_reads(repo: &str, file: &str, d: &Delta) -> std::collections::BTreeMap<String, String> {
+    let mut out = std::collections::BTreeMap::new();
+    let mut add = |rel: &str, out: &mut std::collections::BTreeMap<String, String>| {
+        if rel.is_empty() || out.contains_key(rel) {
+            return;
+        }
+        if let Some(h) = file_content_hash(repo, rel) {
+            out.insert(rel.to_string(), h);
+        }
+    };
+    add(&normpath(file), &mut out);
+    for n in &d.nodes {
+        add(&normpath(&n.file), &mut out);
+    }
+    out
+}
+
+fn fan_sig_env(repo: &str) -> (String, String) {
+    // The learned store is read as a CONTENT hash rather than through the coupling epoch, so a source edit
+    // alone (which moves the coupling epoch) does not invalidate a delta whose own inputs are untouched.
+    let store = ["key-adapters.json", "key-matchers.json"]
+        .iter()
+        .filter_map(|f| std::fs::read_to_string(format!("{repo}/.seam/{f}")).ok())
+        .collect::<Vec<_>>()
+        .join("\u{0}");
+    (seam_cache::hash(&format!("{}|{}", seam_cache::engine_epoch(), seam_cache::seam_env_snapshot())), seam_cache::hash(&store))
+}
+
+/// The delta cache with per-dependency validation. Returns the delta and the same three verdicts the TS depsig
+/// cache counts (hit / stale / new), so `fan_stats` reports reuse the way `_fpStat` does.
+fn cached_delta_depsig(repo: &str, file: &str, key: &str, compute: impl FnOnce() -> Delta) -> (Delta, seam_cache::Verdict) {
+    if !seam_cache::cache_enabled() {
+        return (compute(), seam_cache::Verdict::Off);
+    }
+    let (env, store) = fan_sig_env(repo);
+    let mut shard: FanShard = seam_cache::load_shard(repo, FAN_CACHE, file).unwrap_or_default();
+    let mut verdict = seam_cache::Verdict::MissNew;
+    if let Some(e) = shard.get(key) {
+        verdict = seam_cache::Verdict::MissStale;
+        let fresh = e.sig.env == env
+            && e.sig.store == store
+            && e.sig.reads.iter().all(|(rel, h)| file_content_hash(repo, rel).as_deref() == Some(h.as_str()));
+        if fresh {
+            return (e.d.clone(), seam_cache::Verdict::Hit);
+        }
+    }
+    let d = compute();
+    let sig = FanSig { env, store, reads: delta_reads(repo, file, &d) };
+    shard.insert(key.to_string(), FanEntry { sig, d: d.clone() });
+    seam_cache::save_shard(repo, FAN_CACHE, file, &shard);
+    (d, verdict)
+}
+
+const FAN_CACHE: &str = "coupling-fan-v2"; // v2: per-delta signatures, not the repo-wide coupling epoch
+
 fn compute_delta(repo: &str, src_id: &str, file: &str, text: &str, lo: usize, hi: usize, counter: usize, stable_floor: bool, fp_ranges: &HashMap<String, Vec<(usize, usize)>>, ws: &Workspace) -> Delta {
     let perf = std::env::var("SEAM_PERF").is_ok();
     let t0 = std::time::Instant::now();
@@ -312,18 +401,21 @@ fn fan_compute(repo: &str, file: &str, src_range: (usize, usize), file_nodes: &[
     // under the COUPLING epoch (source ⊕ learned matchers → any edit invalidates). Keying on the fp-hash is
     // exactly option-b: distinct footprints get distinct entries, so there is NO first-fp-wins bias. A NEAR
     // center reuses every file whose reached-node set matches → the ~35s fan compute becomes a disk load.
+    // IDENTITY, not content. The file's bytes are validated by the SIGNATURE (`FanSig.reads`), not baked into
+    // the key — otherwise editing the file mints a NEW key instead of invalidating the existing one, the old
+    // entry lingers, and the cache reports "new" where it should report "stale". Same split TS uses, and the
+    // reason its counters distinguish cmiss from cnew at all.
     let fp_key = {
         let mut ranges = fp.clone();
         ranges.sort_unstable(); // order-independent: the same reached-node SET → the same key
-        let mut s = format!("{}|sf={}", seam_cache::hash(&text), stable_floor);
+        let mut s = format!("sf={stable_floor}");
         for (a, b) in &ranges {
             s.push_str(&format!(";{a},{b}"));
         }
         seam_cache::hash(&s)
     };
-    let cepoch = seam_cache::coupling_epoch_of(repo);
     let _tc = std::time::Instant::now();
-    let (cached, verdict) = seam_cache::cached_reporting(repo, "coupling-fan-v1", file, &fp_key, &cepoch, || {
+    let (cached, verdict) = cached_delta_depsig(repo, file, &fp_key, || {
         compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws)
     });
     match verdict {
