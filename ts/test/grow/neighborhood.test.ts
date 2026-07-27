@@ -3,7 +3,7 @@
 // membership, the parameter-free cut, and run-to-run stability (the reliability the shape was chosen for).
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { projectNeighborhood } from "../../src/codebase/grow/neighborhood.js";
+import { projectNeighborhood } from "../helpers/shapes.js";
 
 const repo = join("test", "fixtures", "class-repo");
 

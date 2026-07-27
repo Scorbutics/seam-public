@@ -26,7 +26,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../../src/codebase/scan/footprint.js";
-import { projectContract } from "../../src/codebase/grow/contract.js";
+import { projectContract } from "../helpers/shapes.js";
 import { projectConsumerSet } from "../../src/codebase/grow/project_set.js";
 import { renderContract, renderConsumerSet } from "../../src/codebase/render/shapes.js";
 import { countUnits } from "../../src/core/units.js";

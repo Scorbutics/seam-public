@@ -3,7 +3,7 @@
 // are pinnable.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { findReach } from "../../src/codebase/grow/reach.js";
+import { findReach } from "../helpers/shapes.js";
 
 const repo = join("test", "fixtures", "class-repo");
 

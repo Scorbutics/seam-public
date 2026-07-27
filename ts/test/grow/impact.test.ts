@@ -3,7 +3,7 @@
 // TRANSITIVITY (the lift over direct find_consumers), the file rollup, the surface, and the isolated case.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { projectImpact } from "../../src/codebase/grow/impact.js";
+import { projectImpact } from "../helpers/shapes.js";
 
 const repo = join("test", "fixtures", "class-repo");
 
@@ -29,7 +29,7 @@ describe("projectImpact", () => {
     const im = await projectImpact(repo, "src/checkout.ts", "checkout");
     expect(im.impacted.map((m) => m.symbol)).toEqual(["Page"]);
     expect(im.surface.map((m) => m.symbol)).toEqual(["Page"]);
-    expect(im.truncated).toBeUndefined();
+    expect(im.truncated).toBeFalsy();   // the core spells a drained walk `false`; TS omitted the key
   });
 
   test("isolated: a top-level symbol with no consumers → noStructure", async () => {

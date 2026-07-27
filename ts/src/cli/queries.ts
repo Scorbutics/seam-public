@@ -187,7 +187,6 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   // `--center <file>` lands here, and pointing at a flag the docs call obsolete leaves the caller stuck.
   if (!a.symbol) err("--query consumers requires a SYMBOL: --center <file>#<symbol> (the callee whose callers you want)");
   if (!a.anchorFile) err("--query consumers requires --center <file>#<symbol>");
-  const { projectConsumerSet } = await import("../codebase/grow/project_set.js");
   const { renderConsumerSet } = await import("../codebase/llm_context.js");
   emit(`Resolving consumers of ${a.symbol}…`);
   // RUST FIRST when the guard allows it — the projection is byte-identical (rust/parity/shapes_set.ts) and the
@@ -232,7 +231,6 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
 export async function runDependencySet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
   if (!a.symbol) err("--query dependencies requires a SYMBOL: --center <file>#<symbol> (whose dependencies you want)");
   if (!a.anchorFile) err("--query dependencies requires --center <file>#<symbol>");
-  const { projectDependencySet } = await import("../codebase/grow/project_set.js");
   const { renderDependencySet } = await import("../codebase/llm_context.js");
   emit(`Resolving dependencies of ${a.symbol}…`);
   // RUST FIRST — the symmetric peer of the consumers routing above; same guard, same byte-identical projection.
@@ -359,7 +357,6 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
 // run. A composition; emits a `shape: "refactor"` model. The change PLAN over the facts stays the caller's.
 export async function runRefactorFacts(a: Args): Promise<number> {
   if (!(a.symbol && a.anchorFile)) err("--query refactor requires --center <file>#<symbol>");
-  const { gatherRefactorFacts } = await import("../codebase/grow/refactor_facts.js");
   const { renderRefactorFacts } = await import("../codebase/llm_context.js");
   emit(`Gathering refactor facts for ${a.symbol}…`);
   // RUST FIRST — `gatherRefactorFacts` embeds the impact facts, which now carry the overlay in the core too.
@@ -388,7 +385,6 @@ export async function runRefactorFacts(a: Args): Promise<number> {
 // shape; emits a `shape: "impact"` model. The refactoring safety net.
 export async function runImpact(a: Args): Promise<number> {
   if (!(a.symbol && a.anchorFile)) err("--query impact requires --center <file>#<symbol>");
-  const { projectImpact } = await import("../codebase/grow/impact.js");
   const { renderImpact } = await import("../codebase/llm_context.js");
   emit(`Computing the impact of ${a.symbol}…`);
   // The shared --depth defaults to 1 (a direct-consumer hop); impact is TRANSITIVE, so treat the default
@@ -423,7 +419,6 @@ export async function runImpact(a: Args): Promise<number> {
 export async function runCompare(a: Args): Promise<number> {
   if (!(a.symbol && a.anchorFile)) err("--query compare requires --center <file>#<symbol> (side A) + --to-file/--to-symbol (side B)");
   if (!(a.toSymbol && a.toFile)) err("--query compare requires --to-symbol and --to-file (anchor B)");
-  const { projectCompare } = await import("../codebase/grow/compare.js");
   const { renderComparison } = await import("../codebase/llm_context.js");
   emit(`Comparing dependencies: ${a.symbol} vs ${a.toSymbol}…`);
   // RUST FIRST (see rustShapeOk). Both sides must be parseable, so the guard is asked for the TARGET too.
@@ -451,7 +446,6 @@ export async function runCompare(a: Args): Promise<number> {
 // core/periphery partition (file grain). A non-grow shape; emits a `shape: "neighborhood"` model.
 export async function runNeighborhood(a: Args): Promise<number> {
   if (!(a.symbol && a.anchorFile)) err("--query neighborhood requires --center <file>#<symbol>");
-  const { projectNeighborhood } = await import("../codebase/grow/neighborhood.js");
   const { renderNeighborhood } = await import("../codebase/llm_context.js");
   emit(`Mapping the subsystem around ${a.symbol}…`);
   // RUST FIRST — ungated. The last reported difference (a boundary-crossing coupling edge on
@@ -485,13 +479,12 @@ export async function runNeighborhood(a: Args): Promise<number> {
 // imports), plus fan-in/out. A non-grow shape; emits a `shape: "contract"` model.
 export async function runContract(a: Args): Promise<number> {
   if (!a.anchorFile) err("--query contract requires --center <file> (the module)");
-  const { projectContract } = await import("../codebase/grow/contract.js");
   const { renderContract } = await import("../codebase/llm_context.js");
   emit(`Mapping the contract of ${basename(a.anchorFile!)}…`);
   const rustA2 = await rustShapeOk(a);
-  let c: any = null;
-  if (rustA2) { try { c = rustContractToModel(rustA2.projectContract(a.repo, a.anchorFile!)); } catch { c = null; } }
-  if (!c) try { c = await projectContract(a.repo, a.anchorFile!, { model: a.model, claudeBin: a.claudeBin }); }
+  // No catch-to-null: the TypeScript projector it fell back to is gone, so an addon failure IS the answer.
+  let c: any;
+  try { c = rustContractToModel(rustA2.projectContract(a.repo, a.anchorFile!)); }
   catch (e) { err(`contract mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
@@ -513,24 +506,16 @@ export async function runContract(a: Args): Promise<number> {
 export async function runReaches(a: Args): Promise<number> {
   if (!(a.symbol && a.anchorFile)) err("--query reaches requires --center <file>#<symbol> (the FROM) + --to-symbol (the TO)");
   if (!a.toSymbol) err("--query reaches requires --to-symbol (the TARGET)");
-  const { findReach } = await import("../codebase/grow/reach.js");
   const { renderReach } = await import("../codebase/llm_context.js");
   emit(`Searching for a path ${a.symbol} → ${a.toSymbol}…`);
   // RUST FIRST — the BFS now expands through COUPLING hops too, so a pair joined only through shared state is
   // found there as well and the gate is gone.
   const rustA5 = await rustShapeOk(a);
-  let res: any = null;
-  if (rustA5) {
-    try { res = rustReachToModel(rustA5.findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, a.toFile ?? null, a.maxHops ?? null, a.dataCoupling !== false)); }
-    catch { res = null; }
-  }
-  // Reachability is purely structural (a path of resolved edges). Coupling is irrelevant to it and only
-  // disables the footprint cache — traverse structure-only unless explicitly opted in.
-  // couplingHops ON by default (the moat): a pair connected through SHARED STATE (a table one writes and the other
-  // reads) is genuinely reachable — a call-only BFS reports a misleading "no path". --no-data-coupling → call-only.
-  if (!res) try { res = await findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, {
-    toFile: a.toFile, maxHops: a.maxHops, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false,
-    couplingHops: a.dataCoupling !== false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin }); }
+  // couplingHops ON by default (the moat): a pair connected through SHARED STATE (a table one writes and the
+  // other reads) is genuinely reachable — a call-only BFS reports a misleading "no path". --no-data-coupling
+  // → call-only. No catch-to-null: the TypeScript BFS it fell back to is gone.
+  let res: any;
+  try { res = rustReachToModel(rustA5.findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, a.toFile ?? null, a.maxHops ?? null, a.dataCoupling !== false)); }
   catch (e) { err(`reachability search failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...res };
 

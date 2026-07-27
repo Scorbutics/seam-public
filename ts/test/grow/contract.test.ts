@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { projectContract } from "../../src/codebase/grow/contract.js";
+import { projectContract } from "../helpers/shapes.js";
 import { resetRepoImports } from "../../src/core/resolve/consumers.js";
 import { available } from "../../src/codebase/atoms.js";
 

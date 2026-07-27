@@ -10,7 +10,7 @@ import { execSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { projectImpact } from "../../src/codebase/grow/impact.js";
+import { projectImpact } from "../helpers/shapes.js";
 import { available } from "../../src/core/treesitter.js";
 
 let repo: string;

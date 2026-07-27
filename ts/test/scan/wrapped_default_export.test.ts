@@ -28,7 +28,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../../src/codebase/scan/footprint.js";
 import { projectConsumerSet } from "../../src/codebase/grow/project_set.js";
-import { projectContract } from "../../src/codebase/grow/contract.js";
+import { projectContract } from "../helpers/shapes.js";
 import { resetRepoImports } from "../../src/core/resolve/consumers.js";
 import { available } from "../../src/codebase/atoms.js";
 

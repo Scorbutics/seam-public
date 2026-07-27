@@ -3,7 +3,7 @@
 // contract that provides `checkout`. Deterministic, no LLM. The bundle is FACTS only — no plan field.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { gatherRefactorFacts } from "../../src/codebase/grow/refactor_facts.js";
+import { gatherRefactorFacts } from "../helpers/shapes.js";
 
 const repo = join("test", "fixtures", "class-repo");
 

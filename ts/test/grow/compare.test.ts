@@ -2,7 +2,7 @@
 // outcomes: overlap (shared dep), divergence (A-only/B-only), and nothing-to-compare (two leaf symbols).
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { projectCompare } from "../../src/codebase/grow/compare.js";
+import { projectCompare } from "../helpers/shapes.js";
 
 const repo = join("test", "fixtures", "class-repo");
 
