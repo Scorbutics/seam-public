@@ -138,7 +138,13 @@ export async function embedScoreStrings(intent: string, values: string[]): Promi
 // spaces). Under the OS cache dir (never written into the target repo). Incremental — only new/changed def
 // strings are embedded; the rest are reused.
 function cachePath(repo: string): string {
-  return join(homedir(), ".cache", "seam", "embed", `${h(repo + "|" + MODEL)}.json`);
+  // KEYED BY THE WEIGHTS, not just the model. The cache maps md5(embedString) → vector, so without the
+  // quantization in the key a run on fp32 silently REUSES int8 vectors for every string a previous run saw and
+  // computes fp32 ones only for the new strings — a single field built from two different sets of weights,
+  // which is worse than either. Measured: forcing fp32 on both engines moved the intent-grow comparison the
+  // WRONG way until this was fixed, because the TS side was serving a mixed cache.
+  const weights = process.env.SEAM_EMBED_QUANTIZED === "0" ? "fp32" : "int8";
+  return join(homedir(), ".cache", "seam", "embed", `${h(repo + "|" + MODEL + "|" + weights)}.json`);
 }
 function loadCache(p: string): Record<string, number[]> {
   try { return existsSync(p) ? JSON.parse(readFileSync(p, "utf-8")) : {}; } catch { return {}; }
