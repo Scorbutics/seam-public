@@ -516,10 +516,12 @@ export async function runRefactorFacts(a: Args): Promise<number> {
   const { renderRefactorFacts } = await import("../codebase/llm_context.js");
   emit(`Gathering refactor facts for ${a.symbol}…`);
   // RUST FIRST — `gatherRefactorFacts` embeds the impact facts, which now carry the overlay in the core too.
+  // NO catch-to-null. That `catch { rf = null }` existed to hand the shape to the TypeScript implementation,
+  // which is gone — keeping it would swallow a real core failure into a fallback that no longer exists and
+  // then crash on `rf.anchor` a few lines down with nothing pointing at the cause.
   const rustA6 = await rustShapeOk(a);
-  let rf: any = null;
-  if (rustA6) { try { rf = rustRefactorToModel(rustA6.gatherRefactorFacts(a.repo, a.anchorFile!, a.symbol!)); } catch { rf = null; } }
-  if (!rf) try { rf = await gatherRefactorFacts(a.repo, a.anchorFile!, a.symbol!, { model: a.model, claudeBin: a.claudeBin }); }
+  let rf: any;
+  try { rf = rustRefactorToModel(rustA6.gatherRefactorFacts(a.repo, a.anchorFile!, a.symbol!)); }
   catch (e) { err(`refactor facts failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...rf };
 
@@ -551,17 +553,8 @@ export async function runImpact(a: Args): Promise<number> {
   // RUST FIRST — the cross-stack overlay now lives in the core (`coupling_overlay`), so the gate this shape
   // carried is gone: the addon returns the SAME structural closure AND the same crossings.
   const rustA1 = await rustShapeOk(a);
-  let im: any = null;
-  if (rustA1) {
-    try { im = rustImpactToModel(rustA1.projectImpact(a.repo, a.anchorFile!, a.symbol!, a.depth > 1 ? a.depth : null, null, a.dataCoupling, a.dataCouplingLlm, a.model, a.claudeBin ?? undefined)); }
-    catch { im = null; }
-  }
-  if (!im) try { im = await projectImpact(a.repo, a.anchorFile!, a.symbol!, {
-    depth: a.depth > 1 ? a.depth : undefined,
-    dataCoupling: false,
-    couplingOverlay: a.dataCoupling,
-    dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin,
-  }); }
+  let im: any;
+  try { im = rustImpactToModel(rustA1.projectImpact(a.repo, a.anchorFile!, a.symbol!, a.depth > 1 ? a.depth : null, null, a.dataCoupling, a.dataCouplingLlm, a.model, a.claudeBin ?? undefined)); }
   catch (e) { err(`impact analysis failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...im };
 
@@ -587,10 +580,10 @@ export async function runCompare(a: Args): Promise<number> {
   const { renderComparison } = await import("../codebase/llm_context.js");
   emit(`Comparing dependencies: ${a.symbol} vs ${a.toSymbol}…`);
   // RUST FIRST (see rustShapeOk). Both sides must be parseable, so the guard is asked for the TARGET too.
-  const rustA4 = (a.toFile && await rustShapeOk({ ...a, anchorFile: a.toFile } as Args)) ? await rustShapeOk(a) : null;
-  let c: any = null;
-  if (rustA4) { try { c = rustCompareToModel(rustA4.projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!)); } catch { c = null; } }
-  if (!c) try { c = await projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
+  if (a.toFile) await rustShapeOk({ ...a, anchorFile: a.toFile } as Args);   // the TARGET must be readable too
+  const rustA4 = await rustShapeOk(a);
+  let c: any;
+  try { c = rustCompareToModel(rustA4.projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!)); }
   catch (e) { err(`comparison failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
@@ -620,11 +613,10 @@ export async function runNeighborhood(a: Args): Promise<number> {
   // STORE DRIFT inside the comparator — the flywheel writes `.seam` during the first of its two CLI runs, so
   // the second engine reads a store the first one changed. The harness now settles the store before comparing.
   const rustA3 = await rustShapeOk(a);
-  let n: any = null;
+  let n: any;
   // `a.depth` verbatim, NOT `> 1 ? … : null` like impact: this shape passes --depth straight through (default
   // 1) while the addon's own default is 2, so gating it would silently widen the ball on every default query.
-  if (rustA3) { try { n = rustNeighborhoodToModel(rustA3.projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, a.depth, null, a.dataCoupling)); } catch { n = null; } }
-  if (!n) try { n = await projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
+  try { n = rustNeighborhoodToModel(rustA3.projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, a.depth, null, a.dataCoupling)); }
   catch (e) { err(`neighborhood mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...n };
 
