@@ -114,8 +114,29 @@ async function _anchorCouplingDelta(repo: string, anchorFile: string, data: any,
 // MEASUREMENT (SEAM_TIMING): count per-file coupling calls and how many RE-COUPLE a file already resolved earlier
 // this process (across grows) — quantifies the "skip coupling on previously-grown nodes" opportunity.
 const _fcSeen = new Set<string>(); let _fcCalls = 0, _fcRepeats = 0, _fcRepeatMs = 0;
-export function _fileCouplingStats() { return { calls: _fcCalls, repeats: _fcRepeats, repeatMs: _fcRepeatMs }; }
-export function _resetFileCouplingStats() { _fcSeen.clear(); _fcCalls = 0; _fcRepeats = 0; _fcRepeatMs = 0; }
+// BOTH ENGINES' COUNTERS, summed. The addon runs the same per-file fan behind its own cache, so a grow it
+// served incremented nothing here and the reuse looked like zero — for a cache that was working. Callers ask
+// this question about the ENGINE, not about one implementation of it, so the answer has to come from whichever
+// one ran. (The addon's are process-global, like these; `_resetFileCouplingStats` zeroes both.)
+function _rustFanStats(): { calls: number; repeats: number; repeatMs: number } {
+  try {
+    const { rustCoreEnabled, loadAddon } = require("./rust_core.js");
+    if (!rustCoreEnabled()) return { calls: 0, repeats: 0, repeatMs: 0 };
+    const [calls, repeats, repeatMs] = loadAddon().fanStats() as number[];
+    return { calls, repeats, repeatMs };
+  } catch { return { calls: 0, repeats: 0, repeatMs: 0 }; }
+}
+export function _fileCouplingStats() {
+  const r = _rustFanStats();
+  return { calls: _fcCalls + r.calls, repeats: _fcRepeats + r.repeats, repeatMs: _fcRepeatMs + r.repeatMs };
+}
+export function _resetFileCouplingStats() {
+  _fcSeen.clear(); _fcCalls = 0; _fcRepeats = 0; _fcRepeatMs = 0;
+  try {
+    const { rustCoreEnabled, loadAddon } = require("./rust_core.js");
+    if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
+  } catch { /* addon absent — nothing else to zero */ }
+}
 // PER-FILE COUPLING CACHE (SEAM_COUPLING_FILE_CACHE, default ON): the fan couples EACH reached boundary file's
 // whole-file crossings, and re-ran `resolveCoupling` (floor deduce + grounding + flywheel) for that file on EVERY
 // grow that reaches it — the "re-couple a node we already grew" cost Brice named (measured: ~43% of fan calls are

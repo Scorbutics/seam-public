@@ -1971,3 +1971,18 @@ pub fn embed_score_strings(intent: String, values: Vec<String>) -> std::collecti
 pub fn embed_vector(text: String) -> Vec<f64> {
     seam_embed::embed_many(&[text]).into_iter().next().unwrap_or_default().into_iter().map(|x| x as f64).collect()
 }
+
+
+/// The per-file coupling fan's reuse counters — `[files, repeats, repeatMs]`. TS merges these into
+/// `_fileCouplingStats()` so a grow served by the addon reports ITS cache's reuse rather than zero.
+#[napi]
+pub fn fan_stats() -> Vec<f64> {
+    let (files, repeats, ms, cmiss, cnew) = seam_grow::coupling::fan_stats();
+    vec![files as f64, repeats as f64, ms, cmiss as f64, cnew as f64]
+}
+
+/// Zero the fan counters WITHOUT dropping the caches they measure.
+#[napi]
+pub fn reset_fan_stats() {
+    seam_grow::coupling::reset_fan_stats();
+}

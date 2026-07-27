@@ -25,6 +25,18 @@ static COMPUTE_NS: AtomicU64 = AtomicU64::new(0);
 static MP_NS: AtomicU64 = AtomicU64::new(0);
 static REHYD_NS: AtomicU64 = AtomicU64::new(0);
 static FILES: AtomicU64 = AtomicU64::new(0);
+// PER-FILE COUPLING REUSE — how often the fan's per-file delta was served from cache instead of recomputed,
+// and the wall-clock those hits took. The TS engine tracks the same pair (`_fileCouplingStats`) and callers
+// ASSERT on it: "a different grow reaching the same boundary file is served from the cache". Without the
+// counter on this side, routing a grow to the addon reports zero reuse for a cache that is in fact working.
+static REPEATS: AtomicU64 = AtomicU64::new(0);
+static REPEAT_NS: AtomicU64 = AtomicU64::new(0);
+// The same three verdicts TS's depsig cache counts as chit / cmiss / cnew: served from cache, had an entry
+// that no longer validated, no entry at all. The granular-invalidation contract is asserted on these — an
+// UNRELATED edit must rebuild nothing, a dependency edit must rebuild something — and that contract is about
+// the ENGINE, so it has to hold for whichever one ran the fan.
+static CMISS: AtomicU64 = AtomicU64::new(0);
+static CNEW: AtomicU64 = AtomicU64::new(0);
 
 /// A coupling overlay increment — the delta the merge folds onto the settled footprint.
 #[derive(Clone, serde::Serialize, serde::Deserialize)]
@@ -180,6 +192,10 @@ pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled:
     let perf = std::env::var("SEAM_PERF").is_ok();
     if perf {
         COMPUTE_NS.store(0, Ordering::Relaxed);
+        REPEATS.store(0, Ordering::Relaxed);
+        REPEAT_NS.store(0, Ordering::Relaxed);
+        CMISS.store(0, Ordering::Relaxed);
+        CNEW.store(0, Ordering::Relaxed);
         MP_NS.store(0, Ordering::Relaxed);
         REHYD_NS.store(0, Ordering::Relaxed);
         FILES.store(0, Ordering::Relaxed);
@@ -307,9 +323,22 @@ fn fan_compute(repo: &str, file: &str, src_range: (usize, usize), file_nodes: &[
     };
     let cepoch = seam_cache::coupling_epoch_of(repo);
     let _tc = std::time::Instant::now();
-    let cached = seam_cache::cached(repo, "coupling-fan-v1", file, &fp_key, &cepoch, || {
+    let (cached, verdict) = seam_cache::cached_reporting(repo, "coupling-fan-v1", file, &fp_key, &cepoch, || {
         compute_delta(repo, FAN_SRC, file, &text, 0, hi, 0, stable_floor, &fp_map, ws)
     });
+    match verdict {
+        seam_cache::Verdict::Hit => {
+            REPEATS.fetch_add(1, Ordering::Relaxed);
+            REPEAT_NS.fetch_add(_tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
+        }
+        seam_cache::Verdict::MissStale => {
+            CMISS.fetch_add(1, Ordering::Relaxed);
+        }
+        seam_cache::Verdict::MissNew => {
+            CNEW.fetch_add(1, Ordering::Relaxed);
+        }
+        seam_cache::Verdict::Off => {}
+    }
     COMPUTE_NS.fetch_add(_tc.elapsed().as_nanos() as u64, Ordering::Relaxed);
     FILES.fetch_add(1, Ordering::Relaxed);
     // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the enclosing method within
@@ -566,4 +595,28 @@ fn rehydrate_fan_delta_method_precise(delta: Delta, src_id: &str, src_range: Opt
         })
         .collect();
     Delta { nodes, edges: out_edges, blindspots, counter: ctr }
+}
+
+
+/// The per-file coupling fan's reuse counters — `(files, repeats, repeat_ms)`. The addon surfaces these so
+/// `_fileCouplingStats()` reports the engine that actually did the work; see the REPEATS comment above.
+pub fn fan_stats() -> (u64, u64, f64, u64, u64) {
+    (
+        FILES.load(Ordering::Relaxed),
+        REPEATS.load(Ordering::Relaxed),
+        REPEAT_NS.load(Ordering::Relaxed) as f64 / 1e6,
+        CMISS.load(Ordering::Relaxed),
+        CNEW.load(Ordering::Relaxed),
+    )
+}
+
+/// Zero the fan's counters — the addon-side half of `_resetFileCouplingStats` / `_resetFpStat`. Separate from
+/// `reset(repo)`, which drops CACHES: a test that resets counters between runs must not also throw away the
+/// cache whose reuse it is about to measure.
+pub fn reset_fan_stats() {
+    FILES.store(0, Ordering::Relaxed);
+    REPEATS.store(0, Ordering::Relaxed);
+    REPEAT_NS.store(0, Ordering::Relaxed);
+    CMISS.store(0, Ordering::Relaxed);
+    CNEW.store(0, Ordering::Relaxed);
 }

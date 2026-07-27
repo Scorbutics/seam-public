@@ -166,8 +166,32 @@ function shardOf(repo: string, file: string): Shard {
 // Per-run depsig cache counters — a structural contract the granular-invalidation test asserts (an unrelated edit
 // must cause 0 rebuilds; a dependency edit must cause >0). Always counted (negligible); optionally exit-flushed.
 const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0, chit: 0, cmiss: 0, cnew: 0, ctaint: 0, cwhole: 0 };
-export function _fpStat(): Readonly<typeof _fpstat> { return { ..._fpstat }; }
-export function _resetFpStat(): void { for (const k of Object.keys(_fpstat) as (keyof typeof _fpstat)[]) _fpstat[k] = 0; }
+// The COUPLING counters (chit/cmiss/cnew) must include the addon's, for the same reason the TS ones exist: the
+// granular-invalidation contract — an unrelated edit rebuilds nothing, a dependency edit rebuilds something —
+// is a property of the ENGINE, and the Rust fan runs the same per-file deltas behind its own cache. A grow it
+// served incremented nothing here, so the contract read as "no reuse and no rebuild", which is not a weaker
+// signal than a violation — it is indistinguishable from one.
+function _rustCouplingStat(): { chit: number; cmiss: number; cnew: number } {
+  try {
+    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    if (!rustCoreEnabled()) return { chit: 0, cmiss: 0, cnew: 0 };
+    const [, repeats, , cmiss, cnew] = loadAddon().fanStats() as number[];
+    return { chit: repeats, cmiss, cnew };
+  } catch { return { chit: 0, cmiss: 0, cnew: 0 }; }
+}
+export function _fpStat(): Readonly<typeof _fpstat> {
+  const r = _rustCouplingStat();
+  return { ..._fpstat, chit: _fpstat.chit + r.chit, cmiss: _fpstat.cmiss + r.cmiss, cnew: _fpstat.cnew + r.cnew };
+}
+export function _resetFpStat(): void {
+  for (const k of Object.keys(_fpstat) as (keyof typeof _fpstat)[]) _fpstat[k] = 0;
+  // COUNTERS ONLY — never the caches. A test resets between runs precisely so it can measure the reuse of the
+  // cache the previous run filled; dropping it here would make every run report a cold miss.
+  try {
+    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    if (rustCoreEnabled()) loadAddon().resetFanStats();
+  } catch { /* addon absent */ }
+}
 if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
 
 const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));
@@ -382,4 +406,14 @@ export async function cachedGrow<T>(
 }
 
 // test seam: drop the in-process mirrors so a hermetic test can prove a genuine DISK reuse across "runs".
-export function _resetFootprintMirror(): void { _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); _fhMem.clear(); }
+// IN-MEMORY MIRRORS ONLY, on BOTH engines — the disk shards survive, which is the point: a caller resets these
+// to force the next query to re-derive from cache rather than replay a memoized answer. The addon holds the
+// same mirrors (answer cache + epoch memos), so resetting only this side left it replaying a settled grow and
+// skipping the per-file fan entirely — which reads as "the delta cache was neither reused nor rebuilt".
+export function _resetFootprintMirror(): void {
+  _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); _fhMem.clear();
+  try {
+    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
+  } catch { /* addon absent */ }
+}
