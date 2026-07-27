@@ -604,12 +604,12 @@ export async function runNeighborhood(a: Args): Promise<number> {
   const { projectNeighborhood } = await import("../codebase/grow/neighborhood.js");
   const { renderNeighborhood } = await import("../codebase/llm_context.js");
   emit(`Mapping the subsystem around ${a.symbol}…`);
-  // RUST FIRST, but STILL ONLY with coupling OFF — the one gate the overlay port did not lift. The addon's
-  // bidirectional builder DOES take the flag now (build_bidirectional_graph threads it into both halves), yet
-  // on apps/web/app/api/teams/api/create/route.ts#getCheckoutSessionMetadata the EGRESS member (`stripe`) is
-  // still absent from the Rust ball while TS grounds it, so the gap is in the coupling resolution for that key
-  // shape, not in this wiring. Measured, not assumed — the render comparator catches it every run. Lifts when
-  // that key grounds in the core; until then a subsystem map keeps its external boundary.
+  // RUST FIRST, still ONLY with coupling OFF — the egress gap this gate was opened for is FIXED (the core now
+  // grounds the anchor's learned per-file keys, so `stripe` is in the Rust ball), but a SECOND, narrower
+  // difference remains: on apps/web/modules/settings/my-account/profile-view.tsx#onConfirmButton the Rust ball
+  // carries one extra boundary-crossing coupling edge (cohesion 100% → 94%, boundary cut 0 → 1). One edge is
+  // enough to change the core/periphery partition, which is the whole output of this shape, so it keeps the
+  // gate until that edge is accounted for. Every other shape routes unconditionally.
   const rustA3 = a.dataCoupling === false ? await rustShapeOk(a) : null;
   let n: any = null;
   // `a.depth` verbatim, NOT `> 1 ? … : null` like impact: this shape passes --depth straight through (default

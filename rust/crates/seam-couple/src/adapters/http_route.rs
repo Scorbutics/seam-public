@@ -5,7 +5,7 @@
 //! path (or `functions.invoke('slug')`). Both normalise dynamic segments to `*`. JS/TS only. Port of
 //! HTTP_ROUTE_META + normPath + the HTTP_ROUTE adapter (http_route.ts).
 
-use crate::frameworks::http_clients::HTTP_CLIENT_CALL_RE;
+use crate::frameworks::http_clients::http_client_call_re;
 use crate::key_ir::line_of;
 use crate::mask::MaskCtx;
 use crate::regex_util::captures_not_word_before;
@@ -172,7 +172,8 @@ impl CouplingAdapter for HttpRoute {
             }
         }
         // CALLER side — fetch/axios/ky("/path") string-literal calls.
-        for c in captures_not_word_before(&HTTP_CLIENT_CALL_RE, text) {
+        let call_re = http_client_call_re();   // rebuilt with the inferred clients — see http_clients
+        for c in captures_not_word_before(&call_re, text) {
             let whole = c.get(0).unwrap();
             let raw = &c[1];
             if !raw.starts_with('/') {

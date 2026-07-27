@@ -65,6 +65,11 @@ fn effect_clients(repo: &str) -> Arc<Vec<String>> {
         .filter_map(|rel| std::fs::read(format!("{repo}/{rel}")).ok().map(|b| (rel, String::from_utf8_lossy(&b).into_owned())))
         .collect();
     let clients = Arc::new(infer_http_clients(&files));
+    // NOT registered with the framework registry — checked against the TS source rather than assumed. TS feeds
+    // that registry from PLUGINS only (frameworks/plugins.ts); the effect-INFERRED clients are used for the
+    // matcher axis alone (`http_client_matchers`). Registering them here widened the egress/route adapters'
+    // alternation and moved resolvecoupling from 119/0 to 112/7 on keycloak — inferred clients are a weaker
+    // signal than a declared plugin, and the two are not interchangeable.
     HTTP_CLIENTS_CACHE.lock().unwrap().insert(repo.to_string(), clients.clone());
     clients
 }
@@ -178,8 +183,14 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     };
     let mut state = PipelineState { graph: graph::CouplingGraph::new(counter), complement_budget: complement_budget(), same_side_drawn: HashSet::new() };
     let node = PipelineNode { id: anchor_id.to_string(), file: anchor_file.to_string(), text: anchor_text.to_string(), lo, hi };
+    // THE ANCHOR'S LEARNED PER-FILE KEYS. The floor scan reads only what the built-in adapters can see; what the
+    // FLYWHEEL learned about this file lives in `.seam` and is replayed from the content-keyed store, exactly as
+    // TS's `probe` path does. Without it a boundary the flywheel discovered is absent from the graph — measured:
+    // `egress stripe` on cal.com's teams/api/create/route.ts (learned as `route-egress`) was in the TS ball and
+    // not in Rust's. `llm: false` = CACHE ONLY: this is the warm replay path and must never spend a call.
+    let proposed = crate::learn::anchor_proposed_keys(repo, anchor_file, anchor_text, false, None, None);
     // CHAIN_DEPTH = 1 (chain the data-flow boundary one hop past the anchor: reader → its http-route).
-    run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &[], &[]);
+    run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &[], &proposed);
     if _perf {
         eprintln!("[perf]           resolve: merge_grounding(floor∪learned)={:.2}s run_pipeline={:.2}s", merge_s, _tp.elapsed().as_secs_f64());
     }

@@ -16,15 +16,14 @@ const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 const repo = process.argv[2] ?? "/home/scorbutics/dev/cal.com";
 const maxAnchors = parseInt(process.argv[3] ?? "8", 10);
 const CLI = "/home/scorbutics/seam-phase0/ts/src/cli/decompose.ts";
-// Every shape that routes to Rust, in the configuration it is ROUTED in. All but `neighborhood` now run in
-// their DEFAULT (coupling ON) configuration, since the coupling overlay and the reach hops live in the core.
-// `reaches` is covered by rust/parity/reach.ts instead: this harness drives the CLI, which needs a --to-symbol
-// pair rather than a single anchor.
+// Every shape that routes to Rust, in the configuration it is ROUTED in. All but `neighborhood` run in their
+// DEFAULT (coupling ON) configuration, since the coupling overlay, the reach hops and the learned per-file keys
+// all live in the core now. `reaches` is covered by rust/parity/reach.ts instead: this harness drives the CLI,
+// which needs a --to-symbol pair.
 const WIRED: { q: string; extra?: string[] }[] = [
   { q: "consumers" }, { q: "dependencies" }, { q: "contract" }, { q: "writers" }, { q: "coupling" },
   { q: "impact" }, { q: "refactor" },
-  // the last gated shape: routed only with coupling off (an egress member the core does not yet ground), so the
-  // harness must exercise THAT configuration or it would compare TS against TS
+  // the one shape still gated (a residual coupling edge in the ball) — exercised in its ROUTED configuration
   { q: "neighborhood", extra: ["--no-data-coupling"] },
 ];
 

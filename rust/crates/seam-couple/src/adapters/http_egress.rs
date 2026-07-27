@@ -2,7 +2,7 @@
 //! Framework-agnostic + cross-language: an absolute-URL literal in call-argument position, keyed by HOST; plus
 //! a variable-URL call whose callee is a known HTTP client (http_clients registry). Port of http_egress.ts.
 
-use crate::frameworks::http_clients::HTTP_CLIENT_VAR_ARG_RE;
+use crate::frameworks::http_clients::http_client_var_arg_re;
 use crate::key_ir::line_of;
 use crate::mask::MaskCtx;
 use crate::regex_util::captures_not_word_before;
@@ -41,7 +41,10 @@ impl CouplingAdapter for HttpEgress {
             }
             out.push(KeyHit { kind: "egress".into(), value: host.clone(), line: line_of(text, m.get(0).unwrap().start()), produces: true, label: Some(host), ..Default::default() });
         }
-        for m in captures_not_word_before(&HTTP_CLIENT_VAR_ARG_RE, text) {
+        // REBUILT per call, not a static: the client set grows when `effect_inference` registers a project's own
+        // wrapper, and an egress keyed off a stale alternation silently misses that boundary.
+        let var_re = http_client_var_arg_re();
+        for m in captures_not_word_before(&var_re, text) {
             let expr = &m[1];
             let seg = &expr[expr.rfind('.').map(|i| i + 1).unwrap_or(0)..];
             if seg.is_empty() {
