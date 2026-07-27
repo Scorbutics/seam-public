@@ -6,6 +6,7 @@ publish = false
 
 [dependencies]
 seam-lang = { path = "../seam-lang" }
+tree-sitter = { workspace = true }
 seam-llm = { path = "../seam-llm" }
 seam-fs = { path = "../seam-fs" }
 seam-cache = { path = "../seam-cache" }

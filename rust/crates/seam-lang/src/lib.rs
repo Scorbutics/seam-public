@@ -3,13 +3,14 @@
 //! `provider_for` registry — it never names a language.
 
 pub mod ast;
+pub mod dispatch;
 pub mod node_kinds;
 pub mod provider;
 pub mod treesitter;
 pub mod types;
 
 mod java;
-mod ruby;
+pub mod ruby;
 pub mod python;
 pub mod minimal;
 mod typescript;

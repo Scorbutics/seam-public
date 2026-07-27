@@ -2,6 +2,7 @@
 //! no-op resolver applies.
 
 mod imports;
+pub mod dispatch;
 
 use crate::provider::LanguageProvider;
 use crate::types::ImportRef;

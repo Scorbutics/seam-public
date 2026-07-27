@@ -6,6 +6,7 @@
 pub mod adapters;
 pub mod apply;
 pub mod grounding;
+pub mod carrier;
 pub mod ground;
 pub mod learn;
 pub mod frameworks;
@@ -41,4 +42,7 @@ pub fn reset(repo: Option<&str>) {
     apply::reset_effect_clients(repo);
     apply::reset_compiled_matchers(repo);
     learn::key_index::reset(repo);
+    // The carrier memos (per-repo language index + channel index) are keyed by repo but cleared wholesale —
+    // they hold parsed-index state, and a stale one serves grounding from before the edit.
+    carrier::reset_carrier_indexes();
 }

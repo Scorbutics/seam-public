@@ -998,6 +998,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha1",
+ "tree-sitter",
 ]
 
 [[package]]
@@ -1044,6 +1045,7 @@ name = "seam-lang"
 version = "0.0.0"
 dependencies = [
  "cc",
+ "indexmap",
  "once_cell",
  "regex",
  "seam-fs",

@@ -45,6 +45,13 @@ static ADAPTERS: &[&dyn CouplingAdapter] =
 /// Every adapter's shared-key accesses in one file (the deterministic floor scan), filtered by the universal
 /// plausibility guard. Port of `scan_file_keys`.
 pub fn scan_file_keys(file: &str, text: &str, mask: &MaskCtx) -> Vec<KeyHit> {
+    // SEAM_NO_ADAPTERS=1 UNLINKS the hand-written adapters — the framework-agnostic scaffold: whatever the
+    // engine still recovers with the floor empty is what it recovers WITHOUT per-framework knowledge (the
+    // carrier axis, the learned matchers). Without this the "unlink" arm silently measures the linked floor
+    // and the agnosticism claim is untested. Port of the `SEAM_NO_ADAPTERS` early return in `scanFileKeys`.
+    if std::env::var("SEAM_NO_ADAPTERS").as_deref() == Ok("1") {
+        return Vec::new();
+    }
     ADAPTERS
         .iter()
         .flat_map(|a| a.scan(file, text, mask))

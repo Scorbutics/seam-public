@@ -6,8 +6,24 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { carrierChannelIndex, anchorCarrierAccs } from "../../src/codebase/coupling/carrier/engine.js";
+import { loadAddon } from "../../src/codebase/grow/rust_core.js";
 import { build_consumers_graph } from "../helpers/scan.js";
+
+// The carrier axis lives in the CORE (seam-couple::carrier). These drive it through the addon, the way the
+// product does — the TypeScript engine this file used to import is gone.
+const core = () => { const a = loadAddon(); if (!a) throw new Error("the Seam core (Rust addon) is not available — build it with `cargo build --release` in rust/"); return a; };
+// The addon returns flat string rows (`[key, side, file, line]` / `[kind, value, produces, line]`) — the
+// napi boundary carries no Maps. Rehydrate to the shapes these assertions read.
+const carrierChannelIndex = (repo: string) => {
+  const idx = new Map<string, { producers: { file: string; line: number }[]; consumers: { file: string; line: number }[] }>();
+  for (const [key, side, file, line] of core().carrierChannelIndex(repo)) {
+    if (!idx.has(key)) idx.set(key, { producers: [], consumers: [] });
+    (side === "p" ? idx.get(key)!.producers : idx.get(key)!.consumers).push({ file, line: Number(line) });
+  }
+  return idx;
+};
+const anchorCarrierAccs = (repo: string, file: string, text: string, lo: number, hi: number) =>
+  core().anchorCarrierAccs(repo, file, text, lo, hi).map(([kind, value, produces, line]: string[]) => ({ kind, value, produces: produces === "true", line: Number(line) }));
 
 const REPO = join(tmpdir(), "seam-carrier-channel-" + process.pid);
 const write = (rel: string, text: string) => { mkdirSync(dirname(join(REPO, rel)), { recursive: true }); writeFileSync(join(REPO, rel), text); };
@@ -34,7 +50,7 @@ afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
 describe("carrier-channel index", () => {
   test("couples the writer and reader across the shared data-file key", async () => {
-    const idx = await carrierChannelIndex(REPO);
+    const idx = carrierChannelIndex(REPO);
     const entry = idx.get("data-file Data/Save.rxdata");
     expect(entry).toBeTruthy();
     expect(entry!.producers.some((p) => p.file === "lib/saver.rb")).toBe(true);
@@ -42,27 +58,27 @@ describe("carrier-channel index", () => {
   });
 
   test("anchorCarrierAccs reports the writer's produced key", async () => {
-    const accs = await anchorCarrierAccs(REPO, "lib/saver.rb", "class Saver\n  def snapshot(state)\n    save_data(state, 'Data/Save.rxdata')\n  end\nend\n", 0, 99);
+    const accs = anchorCarrierAccs(REPO, "lib/saver.rb", "class Saver\n  def snapshot(state)\n    save_data(state, 'Data/Save.rxdata')\n  end\nend\n", 0, 99);
     expect(accs).toEqual([{ kind: "data-file", value: "Data/Save.rxdata", produces: true, line: 2 }]);
   });
 
   test("teacher 2: an interpolated path becomes a partial family pattern key", async () => {
-    const accs = await anchorCarrierAccs(REPO, "x.rb", "def go(lang)\n  load_data(\"Data/Text/#{lang}.dat\")\nend\n", 0, 9);
+    const accs = anchorCarrierAccs(REPO, "x.rb", "def go(lang)\n  load_data(\"Data/Text/#{lang}.dat\")\nend\n", 0, 9);
     expect(accs).toEqual([{ kind: "data-file", value: "Data/Text/*.dat", produces: false, line: 1 }]);
   });
 
   test("a fully-dynamic key (no literal content) yields no key", async () => {
-    const accs = await anchorCarrierAccs(REPO, "x.rb", "def go(p)\n  load_data(\"#{p}\")\nend\n", 0, 9);
+    const accs = anchorCarrierAccs(REPO, "x.rb", "def go(p)\n  load_data(\"#{p}\")\nend\n", 0, 9);
     expect(accs).toEqual([]);
   });
 
   test("a code-loader (reads a .rb to eval it) is NOT a data-file key", async () => {
-    const idx = await carrierChannelIndex(REPO);
+    const idx = carrierChannelIndex(REPO);
     expect(idx.has("data-file rbconfig")).toBe(false);   // 'rbconfig' loads code, not data
   });
 
   test("teacher 2: an interpolated reader couples to a literal writer via the family pattern", async () => {
-    const idx = await carrierChannelIndex(REPO);
+    const idx = carrierChannelIndex(REPO);
     // the literal writer grounds on the recovered family pattern key…
     const fam = idx.get("data-file Data/Text/*.dat");
     expect(fam?.producers.some((p) => p.file === "lib/text_writer.rb")).toBe(true);
@@ -75,9 +91,13 @@ describe("carrier-channel index", () => {
 });
 
 describe("live build_consumers_graph surfaces the data-file boundary", () => {
-  // KNOWN GAP, kept as a todo rather than deleted — the claim is still the one we want.
-  // The learned file-channel adapter DOES ground the pair (asserted above, via the floor index), but the
-  // Rust consumers overlay does not surface it as a boundary node on a Ruby METHOD anchor the way the
-  // TypeScript one did. So this is a real hole in the core's overlay, not an obsolete assertion.
-  test.todo("the writer anchor grows to a data-file boundary node + reader crossing");
+  test("the writer anchor grows to a data-file boundary node + reader crossing", async () => {
+    const g = await build_consumers_graph(REPO, "lib/saver.rb", "snapshot");
+    const boundary = g.nodes.find((n: any) => n.kind === "data-file" && n.symbol === "Data/Save.rxdata")!;
+    expect(boundary).toBeTruthy();
+    const writeEdge = g.edges.find((e: any) => e.kind === "file-write" && e.to === boundary.id);
+    expect(writeEdge).toBeTruthy();
+    // the reader (lib/boot.rb) is surfaced on the other side of the boundary
+    expect(g.nodes.some((n: any) => n.file === "lib/boot.rb" && n.coupling)).toBe(true);
+  });
 });

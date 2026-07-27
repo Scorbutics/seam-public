@@ -1169,6 +1169,35 @@ pub fn floor_index(repo: String) -> Vec<Vec<String>> {
     rows
 }
 
+/// The repo-wide CARRIER-CHANNEL grounding index, flattened exactly like `floor_index` — one row per access,
+/// `[key, side, file, line]`. This is the homemade-framework axis: a `save_data(x, path)` writer and a
+/// `load_data(path)` reader coupled through the project's OWN wrappers, traced to a stdlib sink. Cache-only
+/// for opaque carriers (never spends a model call). Port of `carrierChannelIndex`.
+#[napi]
+pub fn carrier_channel_index(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_couple::carrier::carrier_channel_index(&repo, &seam_couple::carrier::CarrierOpts::default());
+    let mut rows = Vec::new();
+    for (key, sides) in idx.iter() {
+        for a in &sides.producers {
+            rows.push(vec![key.clone(), "p".into(), a.file.clone(), a.line.to_string()]);
+        }
+        for a in &sides.consumers {
+            rows.push(vec![key.clone(), "c".into(), a.file.clone(), a.line.to_string()]);
+        }
+    }
+    rows
+}
+
+/// The anchor span's own carrier-channel keys — `[kind, value, produces, line]` per hit, in scan order.
+/// Port of `anchorCarrierAccs`.
+#[napi]
+pub fn anchor_carrier_accs(repo: String, file: String, text: String, lo: u32, hi: u32) -> Vec<Vec<String>> {
+    seam_couple::carrier::anchor_carrier_accs(&repo, &file, &text, lo as usize, hi as usize)
+        .into_iter()
+        .map(|h| vec![h.kind, h.value, h.produces.to_string(), h.line.to_string()])
+        .collect()
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]

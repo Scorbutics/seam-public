@@ -167,9 +167,35 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     // The rules' regexes compiled ONCE PER REPO (memoized) — not per matcher per pipeline node, and not per
     // resolve_coupling call. The pipeline STEP-1c masks the span once and runs the pre-compiled rules over it.
     let compiled = compiled_matchers_cached(repo, &matchers);
-    // GROUND — index = mergeGrounding(floor, learned) when there's learned grounding; else the cached floor.
+    // THE CARRIER AXIS — a homemade-framework data channel (`save_data(x,'Data/Bill.rxdata')` ⇄
+    // `load_data('Data/Bill.rxdata')`) has no adapter to find it and no import/call edge to follow, so it is
+    // grounded by tracing the project's OWN wrappers to a stdlib sink. GATED to languages that register a
+    // carrier provider (Ruby): the walk parses every file it handles, and for JS/TS that cost bought nothing —
+    // those cross-stack couplings ride the matcher flywheel instead. Skipped on the stable-floor probe, which
+    // is deterministic-floor-only by contract (mirrors TS `_anchorGrounding`'s `ctx.stableFloor` early return).
+    let (carrier_index, carrier_accs) = if !stable_floor && crate::carrier::engine::carrier_provider_for(anchor_file).is_some() {
+        let (i, a) = crate::carrier::resolve_anchor_carrier(repo, anchor_file, anchor_text, lo, hi, &crate::carrier::CarrierOpts::default());
+        (Some(i), a)
+    } else {
+        (None, Vec::new())
+    };
+
+    // GROUND — index = mergeGrounding(floor, learned, carrier) over whichever parts are non-empty; else the
+    // cached floor (no copy).
     let _tg = std::time::Instant::now();
-    let index: GroundingIndex = if learned.is_empty() { idx.floor_base.clone() } else { merge_grounding(&[&idx.floor_base, &learned]) };
+    let carrier_ref = carrier_index.as_deref().filter(|c| !c.is_empty());
+    let index: GroundingIndex = if learned.is_empty() && carrier_ref.is_none() {
+        idx.floor_base.clone()
+    } else {
+        let mut parts: Vec<&GroundingIndex> = vec![&idx.floor_base];
+        if !learned.is_empty() {
+            parts.push(&learned);
+        }
+        if let Some(c) = carrier_ref {
+            parts.push(c);
+        }
+        merge_grounding(&parts)
+    };
     let merge_s = _tg.elapsed().as_secs_f64();
     let _tp = std::time::Instant::now();
     let ctx = PipelineCtx {
@@ -190,7 +216,7 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     // not in Rust's. `llm: false` = CACHE ONLY: this is the warm replay path and must never spend a call.
     let proposed = crate::learn::anchor_proposed_keys(repo, anchor_file, anchor_text, false, None, None);
     // CHAIN_DEPTH = 1 (chain the data-flow boundary one hop past the anchor: reader → its http-route).
-    run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &[], &proposed);
+    run_pipeline(&ctx, &mut state, &node, 1, &HashSet::new(), &carrier_accs, &proposed);
     if _perf {
         eprintln!("[perf]           resolve: merge_grounding(floor∪learned)={:.2}s run_pipeline={:.2}s", merge_s, _tp.elapsed().as_secs_f64());
     }
