@@ -74,6 +74,15 @@ pub fn table_access(file: &str, text: &str) -> Vec<TableAccess> {
     provider_for(file).map(|p| p.table_access(text)).unwrap_or_default()
 }
 
+/// Every grammar name the extension map refers to. The counterpart of `vendored_grammars()`: the two must be
+/// the same SET, or some extension parses to nothing without saying so.
+pub fn mapped_grammars() -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = GRAMMAR_BY_EXT.iter().map(|(_, g)| *g).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
+
 pub fn grammar_for(path: &str) -> Option<&'static str> {
     let f = path.to_ascii_lowercase();
     GRAMMAR_BY_EXT.iter().find(|(ext, _)| f.ends_with(ext)).map(|(_, g)| *g)

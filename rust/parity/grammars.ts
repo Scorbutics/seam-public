@@ -30,6 +30,10 @@ const SAMPLES: { lang: string; file: string; src: string }[] = [
   // TEMPLATE grammar, not a source language — the learned `attr` matcher's input. The sample carries an
   // AngularJS `ng-*` and a Vue-style `@click`, which is the construct the coupling floor keys off here.
   { lang: "html", file: "a.html", src: `<!-- c -->\n<div class="row">\n  <button ng-click="refreshSection()">Refresh</button>\n  <a @click="save(id)">Save</a>\n</div>\n` },
+  { lang: "rust", file: "a.rs", src: `use std::collections::HashMap;\n// c\npub struct Repo { db: Db }\nimpl Repo {\n    pub fn save(&self, id: &str) -> Result<()> {\n        self.db.execute("INSERT INTO widgets VALUES (?)", id)\n    }\n}\n` },
+  // the TEMPLATE pair — a Vue `directive_attribute` (@click / v-on:) is what `run_attr` reads, the same role
+  // `ng-*` plays in the html sample above.
+  { lang: "vue", file: "a.vue", src: `<template>\n  <button @click="save(id)">Save</button>\n  <a v-on:click="remove(id)">Remove</a>\n</template>\n<script>\nexport default { methods: { save(id) { return api.put("/widgets/" + id); } } };\n</script>\n` },
   { lang: "cpp", file: "a.cpp", src: `#include <string>\n// c\nclass Repo {\npublic:\n  int save(const std::string &id) { return db_insert("widgets", id); }\n};\n` },
 ];
 

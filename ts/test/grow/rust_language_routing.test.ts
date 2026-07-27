@@ -62,11 +62,28 @@ describe("Rust core — a language it cannot parse stays on the TS engine", () =
     expect(rustCanParse("src/Core.kt")).toBe(true);
     expect(rustCanParse("src/core.c")).toBe(true);
     expect(rustCanParse("src/core.cpp")).toBe(true);
-    // Still NOT vendored — `.rs`/`.php` have an entry in GRAMMAR_BY_EXT but no linked `language()` arm, so the
-    // capability must still report false for them; `.md` has no grammar at all.
-    expect(rustCanParse("src/core.rs")).toBe(false);
+    expect(rustCanParse("src/core.rs")).toBe(true);       // the last mapped source language to be vendored
+    // NOT a mapped language at all — no GRAMMAR_BY_EXT entry, so no grammar and no claim to one. `.vue`/`.html`
+    // are deliberately here too: they are TEMPLATE extensions the coupling floor SCANS, never anchors, so the
+    // per-file ANCHOR gate must keep saying no to them even though their grammars are linked.
     expect(rustCanParse("src/core.php")).toBe(false);
     expect(rustCanParse("README.md")).toBe(false);
+    expect(rustCanParse("web/app.vue")).toBe(false);
+  });
+
+  // THE INVARIANT THAT RETIRED THE "unvendored" LIST. Every grammar the extension map refers to is linked, so
+  // there is no longer any file that makes `unparseableLanguages` non-empty — which is why the wholesale-refusal
+  // test below can no longer be triggered with real source. Assert the sets directly instead: adding
+  // `.php -> php` to the map without vendoring the grammar fails HERE, naming the language, rather than surfacing
+  // later as a grow that silently parsed nothing.
+  test("every grammar the extension map refers to is actually linked", () => {
+    if (!addonPresent()) return;
+    const cov = loadAddon().grammarCoverage() as string[];
+    const cut = cov.indexOf("|");
+    const linked = new Set(cov.slice(0, cut));
+    const mapped = cov.slice(cut + 1);
+    expect(mapped.length).toBeGreaterThan(0);
+    expect(mapped.filter((g) => !linked.has(g))).toEqual([]);
   });
 
   // The per-file gate settles the ANCHOR; this settles everything the grow could REACH. A repo holding ANY
@@ -75,7 +92,10 @@ describe("Rust core — a language it cannot parse stays on the TS engine", () =
   test("a repo containing an unvendored language is refused wholesale", () => {
     if (!addonPresent()) return;
     _resetRustRepoCapability();
-    expect(rustCanServeRepo(repo)).toBe(false);           // this fixture now holds an unvendored .rs file
+    // The fixture's `.rs` file is VENDORED now, so nothing in it is unparseable — the refusal mechanism is
+    // intact (and pinned by the coverage test above), it simply has no trigger left. Asserting `false` here
+    // would mean re-introducing an unvendored language purely to keep a test red-capable, which is backwards.
+    expect(rustCanServeRepo(repo)).toBe(true);
     const tsOnly = join(tmpdir(), "seam-rustlang-ok-" + process.pid);
     try {
       mkdirSync(join(tsOnly, "src"), { recursive: true });

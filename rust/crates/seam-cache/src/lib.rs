@@ -19,7 +19,8 @@ use std::sync::Mutex;
 /// ENGINE EPOCH — bump when the grow/footprint/coupling LOGIC changes so a warm `.seam` can't replay a stale
 /// answer computed by the previous binary. (TS auto-derives this from a source-tree hash; the Rust binary's
 /// version is the boundary — a manual constant, bumped per logic change.)
-const ENGINE_EPOCH: &str = "rs11";  // rs11: the html TEMPLATE grammar is vendored, so the learned attr matcher sees .html/.vue consumers it silently missed before
+const ENGINE_EPOCH: &str = "rs12";  // rs12: the rust + vue grammars are vendored — the core now reads every language _LANG_BY_EXT maps, so no repo falls back for an unvendored grammar
+// rs11: the html TEMPLATE grammar is vendored, so the learned attr matcher sees .html/.vue consumers it silently missed before
 // rs10: the grow reports its APPLIED-MOVE HISTORY (cached answers predate the field and would replay an empty one)
 // rs9: the embedder truncates at model_max_length (512) like transformers.js, not at tokenizer.json's 128 — every long def string scored differently before, so cached intent grows are stale
 // rs8: the wave carries an INTENT FIELD — densify, the region-centroid, the soft border, the tier rule and the frontier score are all live (inert on a structural grow, so a structural answer is unchanged)

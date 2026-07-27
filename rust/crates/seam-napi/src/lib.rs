@@ -1986,3 +1986,20 @@ pub fn fan_stats() -> Vec<f64> {
 pub fn reset_fan_stats() {
     seam_grow::coupling::reset_fan_stats();
 }
+
+
+/// The grammars this addon LINKS, and the grammars its extension map REFERS to. Equal sets is the invariant
+/// that makes `unparseableLanguages` unnecessary: a language in the map with no linked grammar parses to
+/// nothing SILENTLY, so the gap has to be assertable rather than discovered by a wrong answer. Returned as
+/// `[linked…, "|", mapped…]` — one call, so the two can never be read from different addon builds.
+#[napi]
+pub fn grammar_coverage() -> Vec<String> {
+    let mut out: Vec<String> = seam_lang::treesitter::vendored_grammars().iter().map(|s| s.to_string()).collect();
+    out.sort();
+    out.push("|".into());
+    let mut mapped: Vec<String> = seam_lang::mapped_grammars().iter().map(|s| s.to_string()).collect();
+    mapped.sort();
+    mapped.dedup();
+    out.extend(mapped);
+    out
+}

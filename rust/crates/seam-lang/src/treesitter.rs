@@ -17,6 +17,8 @@ mod grammar_c {
         pub fn tree_sitter_c() -> *const tree_sitter::ffi::TSLanguage;
         pub fn tree_sitter_cpp() -> *const tree_sitter::ffi::TSLanguage;
         pub fn tree_sitter_html() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_rust() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_vue() -> *const tree_sitter::ffi::TSLanguage;
     }
 }
 
@@ -42,6 +44,8 @@ pub fn language(name: &str) -> Option<Language> {
         // Vue `@click` attribute is how a front-end CONSUMES a binding), so without it every .html complement
         // is invisible while the rest of the coupling still resolves.
         "html" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_html()) }),
+        "rust" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_rust()) }),
+        "vue" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_vue()) }),
         _ => None,
     }
 }
@@ -57,7 +61,7 @@ pub fn vendored_grammars() -> &'static [&'static str] {
     // Derived from `language()` — the ONE place a grammar is linked. Keeping a hand-written list next to it is
     // how the capability drifts from the truth, and a capability that overstates is worse than none: the router
     // would send a language here that parses to nothing and the answer would look complete.
-    &["java", "typescript", "tsx", "javascript", "ruby", "python", "go", "csharp", "kotlin", "c", "cpp", "html"]
+    &["java", "typescript", "tsx", "javascript", "ruby", "python", "go", "csharp", "kotlin", "c", "cpp", "html", "rust", "vue"]
 }
 
 /// A parsed file — an immutable AST + its source, with the small read-only query surface the AST scans use

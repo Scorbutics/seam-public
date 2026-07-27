@@ -127,4 +127,29 @@ fn main() {
         .compile("tree_sitter_html_grammar");
     println!("cargo:rerun-if-changed=vendor/html/src/parser.c");
     println!("cargo:rerun-if-changed=vendor/html/src/scanner.c");
+
+    // rust — vendored at the tree-sitter-wasms@0.1.13 pin (tree-sitter-rust ^0.20.4 → 0.20.4). `.rs` is a
+    // SOURCE language in `_LANG_BY_EXT`, so without it `rustCanServeRepo` refused every repo containing Rust
+    // and the whole grow fell back to TS — including, absurdly, this repo's own core.
+    cc::Build::new()
+        .include("vendor/rust/src")
+        .file("vendor/rust/src/parser.c")
+        .file("vendor/rust/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_rust_grammar");
+    println!("cargo:rerun-if-changed=vendor/rust/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/rust/src/scanner.c");
+
+    // vue — vendored at the tree-sitter-wasms@0.1.13 pin (the tree-sitter-vue commit that package builds from,
+    // 7e48557). The TEMPLATE counterpart to html: `run_attr` reads a Vue `directive_attribute` (@click / v-on:)
+    // exactly as it reads an AngularJS `ng-*`, and the coupling floor scans `.vue` via EXTRA_EXTS. Without it
+    // a Vue front-end's half of every binding crossing is invisible.
+    cc::Build::new()
+        .include("vendor/vue/src")
+        .file("vendor/vue/src/parser.c")
+        .file("vendor/vue/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_vue_grammar");
+    println!("cargo:rerun-if-changed=vendor/vue/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/vue/src/scanner.c");
 }
