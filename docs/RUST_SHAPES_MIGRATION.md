@@ -594,6 +594,41 @@ the tier rule was only relevant because it POPULATES the frontier that failed to
 `[concern]`/`[merge]` stderr as those branches not running, when the CLI intercepts `process.stderr.write` —
 a file-based trace is what surfaced the exception.
 
+## HOW MUCH TS ACTUALLY RUNS — measure execution, not imports
+
+I twice reported this wrong, in opposite directions, and both errors came from the same mistake: using a
+static metric for a runtime question.
+
+  · "118 of 119 files are still reachable from the CLI" — REACHABILITY IS IMPORTS. A module links if anything
+    references one constant or type from it; its functions can still never run. This made a bypassed engine
+    look live.
+  · "so the deletion is only ~950 lines" — the correction to the first error, scoped to what static analysis
+    said was EXCLUSIVELY the wave's. Also wrong: the whole coupling and scan layer is bypassed too.
+
+FUNCTION-LEVEL COVERAGE, from PRODUCT paths only (`bun test --coverage` driving the CLI in-process — grow, the
+8 shapes, a concern grow; NOT the unit tests, which cover the engine because they test it directly):
+
+  **13% of `ts/src/codebase` functions execute. 34 of 47 loaded files run ZERO.**
+
+And what remains is mostly WIRING, not porting — Rust already has the equivalent, the call site just does not
+use it:
+
+| still executing | Rust equivalent | call site |
+|---|---|---|
+| `scan_file_keys` | `seam-couple` + napi `scanFileKeys` | cli/queries.ts:315,341,419,445 |
+| `scannableForKeys` | `seam-couple/ground/floor` | via the same import |
+| `embedScoreDefs` | `seam-embed::embed_score_strings` | anchor/anchor_select.ts:254 |
+| `_named_units` | `seam-lang/ast` + napi `namedUnits` | scan/ast_units.ts |
+| `resolve_anchor_address` | **absent** | cli/decompose.ts:145 |
+| `lexicalPreFilter` / `transformersAvailable` | **absent** | def_embed internals |
+
+The rest of the live files are DATA registries whose top level runs but whose functions do not (plugins,
+archetypes, orm_methods, route_annotations, the configs, the barrels).
+
+THE EXIT CRITERION, stated so it cannot be fudged: point those call sites at the addon, port the three absent
+functions, then re-run the product-path coverage. Every `ts/src/codebase` file reading 0.00% FUNCTIONS is the
+green light to delete — a claim that is measured rather than argued.
+
 ## THE FALLBACK INVENTORY — what still routes to `ts/src/codebase`
 
 Asked and answered, gate by gate. `growViaRust` is reached when:
