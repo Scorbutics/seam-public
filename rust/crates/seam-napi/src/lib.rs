@@ -1915,3 +1915,28 @@ pub fn persist_carrier_signature(repo: String, key: String, sig: Option<CarrierS
 pub fn carrier_content_key(class_name: String, method: String, src: String) -> String {
     seam_couple::learn::carrier::content_key(&class_name, &method, &src)
 }
+
+// ── THE INTENT FIELD (seam-embed) ────────────────────────────────────────────────────────────────────────
+// The last capability the core lacked. Exposed so the shell can DELEGATE to it (one field, one implementation)
+// and so a score-parity harness can compare it against transformers.js — the grow's containment depends on
+// these numbers, so "close enough" is not a standard that can be asserted without measuring it.
+
+/// embedAvailable — is the intent field usable (model present)? The counterpart of `transformersAvailable()`.
+#[napi]
+pub fn embed_available() -> bool {
+    seam_embed::available()
+}
+
+/// embedScoreStrings — value → cosine(intent, value). Empty when no field is available, so the caller falls
+/// back to the deterministic fanout rather than to fabricated scores.
+#[napi]
+pub fn embed_score_strings(intent: String, values: Vec<String>) -> std::collections::HashMap<String, f64> {
+    seam_embed::embed_score_strings(&intent, &values).into_iter().map(|(k, v)| (k, v as f64)).collect()
+}
+
+/// embedVector — the raw embedding of one string, for the parity harness (the vectors, not just their cosines,
+/// are what a pooling or tokenizer drift shows up in first).
+#[napi]
+pub fn embed_vector(text: String) -> Vec<f64> {
+    seam_embed::embed_many(&[text]).into_iter().next().unwrap_or_default().into_iter().map(|x| x as f64).collect()
+}

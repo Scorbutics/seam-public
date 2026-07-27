@@ -18,6 +18,7 @@ seam-cache = { path = "../seam-cache" }
 seam-shapes = { path = "../seam-shapes" }
 seam-couple = { path = "../seam-couple" }
 seam-llm = { path = "../seam-llm" }
+seam-embed = { path = "../seam-embed" }
 seam-fs = { path = "../seam-fs" }
 serde_json = { workspace = true }
 indexmap = { workspace = true }

@@ -1,0 +1,18 @@
+[package]
+name = "seam-embed"
+version = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+once_cell = { workspace = true }
+sha1 = { workspace = true }
+# PINNED EXACTLY. rc.12's `ort-sys` build script fails to compile (its vendored downloader calls a `ureq`
+# API that moved), so an open range breaks the build on a fresh lockfile. The runtime is fetched by that build
+# script, which is precisely why the version must not float.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["download-binaries", "ndarray"] }
+ort-sys = "=2.0.0-rc.10"
+tokenizers = { version = "0.20", default-features = false, features = ["onig"] }
+ndarray = "0.16"
