@@ -34,7 +34,6 @@ import { _key, merge_resolved } from "../scan/expand.js";
 import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { epochOf } from "../scan/footprint_cache.js";
-import { getCouplePool, couplePoolMin, serializeCtxIndices } from "./couple_pool.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
 // its file scope before the real grow (the "second grow"). That scope is STRUCTURAL — it depends only on source
@@ -211,52 +210,6 @@ function _rehydrateFanDeltaMethodPrecise(
   const nodes = outNodes.filter((n) => referenced.has(n.id) || !n.coupling);
   const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: map(b.node) }));
   return { nodes, edges: outEdges, blindspots, counter: ctr };
-}
-export async function _fileCouplingDelta(repo: string, file: string, anchorId: string, srcRange: [number, number] | undefined, fileNodes: { id: string; range: [number, number] }[], counter: number, opts: any, ctx: EngineCtx): Promise<{ nodes: any[]; edges: any[]; blindspots: any[]; counter: number }> {
-  const empty = { nodes: [], edges: [], blindspots: [], counter };
-  const ar = _read(repo, file);
-  if (!ar) return empty;
-  const hi = (ar[0].match(/\n/g) ?? []).length;
-  const _repeat = _fcSeen.has(normpath(file)); _fcSeen.add(normpath(file)); _fcCalls++; const _t0 = timingOn() ? Date.now() : 0;
-  // Cache the fan delta for BOTH floor AND llm. `cachedCouplingDelta` keys on the COUPLING epoch, which folds the
-  // learned-matcher state — so an LLM delta MISSES while the flywheel is still learning (the epoch keeps changing →
-  // correct, re-resolve) and HITS once it settles (epoch stable → skip resolveCoupling entirely). This kills the
-  // "resolveCoupling per file every run" repetition on the LLM path (Acme): the fan couples hundreds of beans, most
-  // `GATE: no boundary → skipped`, and each was re-parsed every grow.
-  const cacheOn = (_envFlag(process.env.SEAM_COUPLING_FILE_CACHE) ?? true);
-  // FOOTPRINT-MEMBERSHIP prioritisation: expose the reached method ranges in THIS file so the per-node key cap
-  // (which scans the WHOLE file and would otherwise demote a reached method's key among dozens of unreached
-  // siblings — a resource file with 79 routes) keeps the ones the grow actually landed on. The reached node's own
-  // range is always in-footprint. NB: this biases the cached "fan|whole" delta toward the footprint that first
-  // computes it — correct on the (cache-bypassing) stableFloor path; a benign recall bias on the shared cache.
-  const fpRanges: [number, number][] = fileNodes.map((fn) => fn.range);
-  if (srcRange) fpRanges.push(srcRange);
-  ctx.footprintNodeRanges.set(normpath(file), fpRanges);
-  const compute = async (srcId: string, ctr: number) => {
-    recordRead(file, ar[0]);   // the coupled file's own content (its keys/routes) is a coupling dependency
-    const delta = await resolveCoupling(repo, srcId, file, ar[0], 0, hi, ctr, { dataCoupling: true, llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx);
-    delta.counter = await _chain_route_consumers(repo, delta.nodes, delta.edges, delta.counter);
-    return delta;
-  };
-  let out: { nodes: any[]; edges: any[]; blindspots: any[]; counter: number };
-  if (!cacheOn || ctx.stableFloor) out = await compute(anchorId, counter);   // stableFloor probe: floor-only, transient — never read/write the shared delta cache (else it poisons the real LLM grow), see _anchorCouplingDelta
-  else {
-    // compute the placeholder-sourced, zero-based delta ONCE per (file, coupling-epoch); rehydrate per reach.
-    const envHash = process.env.SEAM_FP_DEPSIG !== "0" && !opts.dataCouplingLlm ? await couplingEnvHash(repo, ctx) : undefined;
-    const cached = await cachedCouplingDelta(repo, file, "fan|whole", !!opts.dataCouplingLlm, () => compute(_FAN_SRC, 0), envHash);
-    // METHOD-PRECISE rehydration (default): re-attribute the whole-file crossings to the ENCLOSING method within the
-    // reached node's same-file call closure (drops the sibling/class-wide bleed). Needs a parse — degrade to the flat
-    // rehydrate offline (no tree-sitter) or when opted out.
-    const mp = process.env.SEAM_METHOD_PRECISE !== "0" && available();
-    // DISK-CACHED per content-hash → a warm grow skips the tree-sitter parse that otherwise re-ran for every
-    // boundary file every run (the O(footprint) warm coupling cost). Miss → parse once + derive; hit → JSON read.
-    const mpIdx = mp ? await cachedMPIndex(repo, file, ar[0], async () => { const p = await makeCtx(ar[0], ar[1]); return p ? methodPreciseIndex(p) : null; }) : null;
-    out = mpIdx
-      ? _rehydrateFanDeltaMethodPrecise(cached, anchorId, srcRange, fileNodes, file, mpIdx.units, mpIdx.calls, counter)
-      : _rehydrateFanDelta(cached, anchorId, counter);
-  }
-  if (_repeat) { _fcRepeats++; if (_t0) { _fcRepeatMs += Date.now() - _t0; if (timingOn()) process.stderr.write(`[time] ${cacheOn ? "RE-COUPLE(cached)" : "RE-COUPLE"} ${normpath(file)}: ${Date.now() - _t0}ms\n`); } }
-  return out;
 }
 
 // Merge the coupling overlay onto the settled footprint. DEDUP BY CONTENT (`_key` = file#line#kind), like
