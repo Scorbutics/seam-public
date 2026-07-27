@@ -465,8 +465,22 @@ fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
             .into_iter()
             .map(|e| seam_scan::graph::GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: e.provenance, line: e.line.map(|l| l as usize), op: e.op })
             .collect(),
-        blindspots: Vec::new(),
-        unresolved: Vec::new(),
+        // BLINDSPOTS AND UNRESOLVED CROSS THE BOUNDARY BOTH WAYS. This conversion was written for `growRoles`,
+        // which reads nodes and edges only, and dropped them — which is silent and total: a merge through the
+        // core returned a region whose boundary/opaque sites had simply vanished, and the render then said
+        // "blindspots: 0" for a footprint that had one. Caught by the CLI snapshot on the concern path.
+        blindspots: g
+            .blindspots
+            .into_iter()
+            .map(|b| seam_scan::graph::Blindspot {
+                node: b.node,
+                mechanism: b.mechanism,
+                evidence: b.evidence,
+                candidates: b.candidates.into_iter().map(|c| seam_scan::graph::Candidate { symbol: c.symbol, file: c.file, provenance: c.provenance }).collect(),
+                persists: b.persists,
+            })
+            .collect(),
+        unresolved: g.unresolved.into_iter().map(|u| seam_scan::graph::Unresolved { node: u.node, query: u.query, reason: u.reason }).collect(),
         anchors: g.anchors,
         resolved_methods: g.resolved_methods,
         frontier: g.frontier.into_iter().map(|f| seam_scan::graph::FrontierPoint { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),

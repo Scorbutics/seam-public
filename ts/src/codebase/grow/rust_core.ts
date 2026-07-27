@@ -136,6 +136,7 @@ export function toResolvedGraph(dto: any): any {
   // ported wave. Spread each entry into a plain object like nodes/edges/blindspots already are.
   const frontier = dto.frontier;
   if (frontier && frontier.length) data.frontier = frontier.map((f: any) => ({ ...f }));
+  if (dto.history && dto.history.length) data.history = dto.history.map((h: any) => ({ ...h }));
   return data;
 }
 
@@ -166,7 +167,15 @@ export function toGraphDto(g: any): any {
       persists: !!b.persists,
     })),
     unresolved: (g.unresolved ?? []).map((u: any) => ({ node: u.node ?? "", query: u.query ?? "", reason: u.reason ?? "" })),
-    anchors: g.anchors ?? [], resolvedMethods: g.resolvedMethods ?? [], frontier: [], history: [],
+    anchors: g.anchors ?? [], resolvedMethods: g.resolvedMethods ?? [],
+    // The FRONTIER survives the round trip. `merge_resolved` keeps the base's, and a grow's frontier is the
+    // wave's tier-3 residue — dropping it here would silently empty the decision points a merged region
+    // carries, on exactly the multi-anchor path that has one.
+    frontier: (g.frontier ?? []).map((f: any) => ({
+      id: f.id ?? "", symbol: f.symbol ?? "", file: f.file ?? "", kind: f.kind ?? "",
+      reachedVia: f.reachedVia ?? "", score: f.score ?? 0, cutBy: f.cutBy ?? "",
+    })),
+    history: (g.history ?? []).map((h: any) => ({ node: h.node ?? "", added: h.added ?? 0, skipped: h.skipped ?? "" })),
     cacheVerdict: "", cacheKey: "", cacheEpoch: "",
   };
 }

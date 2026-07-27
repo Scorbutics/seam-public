@@ -182,7 +182,7 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossSt
   } catch { return none; }   // coupling unavailable (no tree-sitter) → the structural set is still complete
 }
 
-export async function runConsumerSet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
+export async function runConsumerSet(a: Args): Promise<number> {
   // Name the CURRENT address spelling (`--center <file>#<symbol>`), not the superseded --symbol: a bare
   // `--center <file>` lands here, and pointing at a flag the docs call obsolete leaves the caller stuck.
   if (!a.symbol) err("--query consumers requires a SYMBOL: --center <file>#<symbol> (the callee whose callers you want)");
@@ -228,7 +228,7 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
 // Dependencies query — the symmetric peer of consumers: the resolved OUT-edges of a symbol (what it
 // uses), from a DOWN footprint, rendered as a `shape: "deps"` SET. Same honest `noStructure` (reason
 // `none` = a leaf with no deps). No name-recall — dependencies are the anchor's own resolved out-edges.
-export async function runDependencySet(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number> {
+export async function runDependencySet(a: Args): Promise<number> {
   if (!a.symbol) err("--query dependencies requires a SYMBOL: --center <file>#<symbol> (whose dependencies you want)");
   if (!a.anchorFile) err("--query dependencies requires --center <file>#<symbol>");
   const { renderDependencySet } = await import("../codebase/llm_context.js");
@@ -297,7 +297,7 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
 // (otherSide, uncapped) — NOT the coupling star, which caps the fan and blindspots repository-mediated writers.
 // Table-grained (the floor keys tables, not columns), so it returns every writer of the table; the LLM crops to
 // the intent-relevant ones (which is the LLM's job — Seam supplies the complete deterministic fact set).
-export async function runWritersSet(a: Args, _scan: typeof import("../codebase/scan/index.js")): Promise<number> {
+export async function runWritersSet(a: Args): Promise<number> {
   if (!a.anchorFile) err("--query writers requires --center <file>[#symbol] (a read site whose table's writers you want)");
   const { readFileSync } = await import("node:fs");
   const { join } = await import("node:path");
@@ -328,7 +328,7 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
 // the two sides share no import, no call, and often no literal token; they meet only through the key.
 // Composes the two halves already proven separately: the anchor's own keys (scan_file_keys, span-scoped) and the
 // repo-wide floor counterparts (otherSide, uncapped) — grouped BY KEY so the answer reads as a boundary, not a list.
-export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/scan/index.js")): Promise<number> {
+export async function runCouplingSet(a: Args): Promise<number> {
   if (!a.anchorFile) err("--query coupling requires --center <file>[#symbol]");
   const { readFileSync } = await import("node:fs");
   const { join } = await import("node:path");

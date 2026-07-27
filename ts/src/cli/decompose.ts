@@ -57,7 +57,7 @@ const VIEW_RENDERERS: Record<string, (model: any, a: Args, concernCenters?: { fi
 
 // The --query STRUCTURAL SHAPE dispatch table (cli/queries.ts's handlers). A lookup instead of an if-chain —
 // consumers/dependencies additionally need the `scan` module (a footprint build), the rest just `a`.
-const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/scan/index.js")) => Promise<number>> = {
+const QUERY_HANDLERS: Record<string, (a: Args) => Promise<number>> = {
   consumers: runConsumerSet, dependencies: runDependencySet, writers: runWritersSet, coupling: runCouplingSet, impact: runImpact, refactor: runRefactorFacts,
   reaches: runReaches, contract: runContract, neighborhood: runNeighborhood, compare: runCompare,
 };
@@ -71,7 +71,7 @@ const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/
 // unchanged; needs a backend (routing is semantic). Reuses the existing shape handlers, which emit the SAME
 // shape model the MCP + CLI already render — so this is pure routing, no new render path. Returns the handler's
 // exit code when it rerouted, or null to fall through to the flow grow.
-async function maybeAutoRoute(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number | null> {
+async function maybeAutoRoute(a: Args): Promise<number | null> {
   const { available } = await import("../core/llm.js");
   if (!available(a.claudeBin)) return null;                       // routing is semantic — offline stays a flow grow
   const { routeQuestion, resolveName } = await import("./route.js");
@@ -103,7 +103,7 @@ async function maybeAutoRoute(a: Args, scan: typeof import("../codebase/scan/ind
   // model by shape regardless; this only affects a direct CLI user's stdout).
   if (a.format !== "llm-context") a.format = "llm-context";
   process.stderr.write(`[auto-route] "${a.intent}" is a ${shape} question, not a flow → --query ${shape} (${d.reason})\n`);
-  return handler(a, scan);
+  return handler(a);
 }
 
 // The shared field set both decompose() call sites (runCodebase's codebase-graph path, main()'s diff-mode
@@ -245,9 +245,10 @@ async function runCodebase(a: Args): Promise<number> {
     const centers = parseCenters(a.center);
     if (centers.length === 1 && !centers[0].symbol) {
       try {
-        const { enumerate_defs } = await import("../codebase/scan/index.js");
+        const enumerate_defs = async (repo: string, limit?: number, files?: Set<string>, o?: any) =>
+          (await import("../codebase/grow/rust_core.js")).loadAddon().enumerateDefs(repo, limit ?? null, files ? [...files] : null, o?.moduleDefs ?? false);
         const defs = await enumerate_defs(a.repo, 4000, new Set([a.anchorFile]));
-        const primary = defs.filter((d) => d.enclosing === "" && d.kind !== "method");
+        const primary = defs.filter((d: any) => d.enclosing === "" && d.kind !== "method");
         if (primary.length === 1) {
           // The single top-level def is a CLASS/interface with its own METHODS → each method is its OWN flow
           // (createBooking → write, cancelBooking → delete, …). Anchoring the CLASS collapses them all onto one
@@ -258,7 +259,7 @@ async function runCodebase(a: Args): Promise<number> {
           // exported fn/component) has no fan → keep the single structural pin. Cap so a fat bean stays scannable.
           const owner = primary[0].name;
           const _METHOD_FAN_CAP = Math.max(2, parseInt(process.env.SEAM_CLASS_FAN_CAP ?? "24", 10) || 24);
-          const methods = defs.filter((d) => d.kind === "method" && d.enclosing === owner).map((d) => d.name);
+          const methods = defs.filter((d: any) => d.kind === "method" && d.enclosing === owner).map((d: any) => d.name);
           const uniq = [...new Set(methods)];
           if (uniq.length >= 2) {
             const chosen = uniq.slice(0, _METHOD_FAN_CAP);
@@ -311,7 +312,6 @@ async function runCodebase(a: Args): Promise<number> {
     const { set_resolver } = await import("../core/resolve/consumers.js");
     try { set_resolver(await make_resolver(a.resolver)); } catch (e) { err((e as Error).message); }
   }
-  const scan = await import("../codebase/scan/index.js");
   const { from_resolved_graph } = await import("../core/graph_ir.js");
   const { decompose } = await import("../codebase/codebase.js");
 
@@ -320,11 +320,11 @@ async function runCodebase(a: Args): Promise<number> {
   // flow, and forcing it through the spine machinery over-structures it. Offline/deterministic; reuses the
   // consumers footprint build_consumers_graph already produces. See codebase/grow/project_set.ts.
   if (a.ask) return runAsk(a);
-  if (a.query && QUERY_HANDLERS[a.query]) return QUERY_HANDLERS[a.query](a, scan);
+  if (a.query && QUERY_HANDLERS[a.query]) return QUERY_HANDLERS[a.query](a);
   // A blast-radius/find-usages intent handed to the FLOW grow → route it to its structural shape instead (opt-in;
   // the agent entry sets --auto-route). A genuine flow intent (or no backend) falls through to the grow below.
   if (a.autoRoute && a.scan && a.auto && a.intent && !a.query && !a.concern && !a.growFrom && !a.stream) {
-    const routed = await maybeAutoRoute(a, scan);
+    const routed = await maybeAutoRoute(a);
     if (routed !== null) return routed;
   }
 
@@ -481,7 +481,10 @@ async function runCodebase(a: Args): Promise<number> {
       const gOptsFor = (ctx: any, overrides: Record<string, any> = {}) => ({ ...gOpts, ctx, ...overrides });
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
-      const { merge_resolved: mergeFootprints } = await import("../codebase/scan/index.js");
+      const rcM = await import("../codebase/grow/rust_core.js");
+      const coreM = rcM.loadAddon();
+      const mergeFootprints = (base: any, add: any, at?: string): any =>
+        rcM.toResolvedGraph(coreM.mergeResolved(rcM.toGraphDto(base), rcM.toGraphDto(add), at ?? null));
       // Grow ONE anchor; ctx is SHARED across the multi-anchor set so the repo-wide indices build once (not K×).
       // `structural` forces the intent-FREE grow (cache reuses across intents) — set when growing FROM a CONFIRMED
       // center (the mechanism was already picked semantically); left off (env-driven) for a DETECTION grow whose
@@ -841,7 +844,6 @@ async function main(argv: string[]): Promise<number> {
     await Promise.all([
       import("../diff/engine.js"), import("../codebase/anchor/index.js"), import("../codebase/grow/index.js"),
       import("../codebase/coupling/llm_key_index.js"), import("../codebase/coupling/carrier/synth.js"),
-      import("../codebase/scan/down/llm_discovery.js"),
     ]);
     const { allPasses } = await import("../core/llm.js");
     const passes = allPasses();
