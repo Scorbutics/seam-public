@@ -29,14 +29,14 @@ const borderTol = tolA && tolA !== "-" ? parseFloat(tolA) : null;
 const maxSteps = parseInt(stepsA ?? "12", 10);
 const maxNodes = parseInt(nodesA ?? "80", 10);
 
-// BOTH ENGINES ON THE SAME WEIGHTS — which here means the QUANTIZED ones, NOT fp32. embed.ts forces fp32 on
-// both sides because it builds its own transformers.js pipeline and can pass `{quantized: false}`; the GROW
-// path cannot. `def_embed.ts:73` is `pipeline("feature-extraction", MODEL)` with no options, so the TS engine
-// is HARD-WIRED to transformers.js's int8 default and honours no knob. Setting SEAM_EMBED_QUANTIZED=0 here
-// therefore puts Rust on fp32 against a TS oracle still on int8 — a ~1e-2 delta that flips exactly the
-// near-ties `tierMargin` (0.20) and `couplingMargin` (0.25) compare against, and the harness then "measures" a
-// divergence it created itself. MEASURED: with fp32 forced, `_auth-middleware.ts` scored 0.277 on TS and below
-// 0.25 on Rust, and three complements diverged for that reason alone. Leave the engine default in place.
+// BOTH ENGINES ON THE SAME WEIGHTS, and specifically on fp32. The int8 kernels differ between
+// onnxruntime-web (transformers.js) and native ORT by up to ~3e-2 on a cosine over real def strings —
+// MEASURED on identical input, `_patch.ts` = 0.2741 vs 0.2452 against a 0.25 coupling margin. That is the same
+// order as the distance between a real score and the margins the grow compares against, so on int8 a
+// borderline complement flips while BOTH engines are working correctly, and this harness cannot tell that
+// apart from a porting defect. On fp32 the two agree to 3.7e-7 (rust/parity/embed.ts). `def_embed.ts` reads
+// the same knob, so one variable puts both sides on one artifact.
+process.env.SEAM_EMBED_QUANTIZED = "0";
 // `process.env` does not cross the napi boundary — the addon reads its own process environment.
 addon.syncSeamEnv(Object.entries(process.env).filter(([k]) => k.startsWith("SEAM_")).map(([k, v]) => [k, String(v)]));
 

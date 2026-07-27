@@ -519,16 +519,35 @@ construction — no densify, `have()` false, every score 0 — so the tier gate 
 hop-distance rule, the border floods, and the band collapses. Verified, not asserted: `growfull` on cal.com
 `getBookingData` is 427/427 nodes, 937/937 edges, order-identical after the wiring.
 
-MEASURED, first run with the six pieces in: TS=256 nodes / Rust=253, only-Rust=0, only-TS=3 — plus one
-frontier entry. All four traced to ONE cause, and it was the harness, not the port: I had forced
-`SEAM_EMBED_QUANTIZED=0` (copying embed.ts) so Rust ran fp32 weights while the TS oracle ran int8, because
-`def_embed.ts:73` is a bare `pipeline("feature-extraction", MODEL)` — the TS engine is HARD-WIRED to
-transformers.js's int8 default and honours no knob. embed.ts can force fp32 because it builds its own
-pipeline; the grow path cannot. The ~1e-2 int8-vs-fp32 delta then flips exactly the near-ties the two margins
-compare against: `_auth-middleware.ts` scored 0.277 on TS against a 0.25 coupling margin, and
-`handleCustomInputs` 0.2175 against a 0.20 tier margin. Both sides now run the engine default.
+MEASURED — `growintent` on cal.com `getBookingData`, intent "how is a booking saved to the database":
 
-(That `def_embed.ts` cannot select its weights is worth fixing on its own — §7.)
+| | first run (5 pieces) | + coupling border | + matched weights |
+|---|---|---|---|
+| nodes | TS 256 / Rust 386 | 256 / 253 | 256 / 254 |
+| only-Rust | 130 (all `#C`) | 0 | 1 |
+| only-TS | 0 | 3 | 3 |
+| parked frontier | 1 diff | 1 diff | **0 diff (62/62)** |
+
+Two corrections came out of this, both from measurement rather than reading:
+
+1. I had forced `SEAM_EMBED_QUANTIZED=0` in the harness, copying embed.ts. Wrong here: embed.ts can force
+   fp32 because it builds its own transformers.js pipeline; the grow path cannot, because `def_embed.ts:73` is
+   a bare `pipeline("feature-extraction", MODEL)` — the TS engine takes transformers.js's int8 default and
+   honours no knob. So the harness had Rust on fp32 against an int8 oracle. Fixing it closed the frontier gap
+   exactly (62/62), which is the tier rule's own output.
+
+2. The 4 remaining node differences are all coupling COMPLEMENTS scoring within ~0.03 of the 0.25 coupling
+   margin, and the two int8 runtimes disagree by about that much on the same input. Measured on the SAME def
+   strings (verified identical — same defs, same `embedString` output): `_patch.ts` scores **0.2741 under
+   transformers.js and 0.2452 under native ORT**, straddling the margin. That is the int8 kernel divergence
+   `embed.ts` already documents, except the real figure on def strings is ~3e-2, not the ~1e-2 that harness
+   reports on short symbol names. This is NOT closable by porting: it is two ONNX runtimes over the same
+   quantized weights. It IS closable by giving `def_embed.ts` an option object so both engines can run fp32
+   (§7), where the same harness measures 3.7e-7.
+
+STILL OPEN: node ORDER is not yet identical. With 4 of 256 nodes differing the order diff cannot be read
+cleanly — re-measure once the weights item above is settled, since a score straddling a margin also reorders
+the band it lands in.
 
 GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
 output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both

@@ -70,7 +70,14 @@ async function embedder(): Promise<any> {
   if (_embedder) return _embedder;
   const { pipeline, env } = await import("@xenova/transformers");
   env.allowLocalModels = false;                 // pull the small model from the hub, cache in HOME
-  _embedder = await pipeline("feature-extraction", MODEL);
+  // WHICH WEIGHTS. transformers.js defaults to the INT8-quantized file, and int8 kernels differ between
+  // execution providers — onnxruntime-web here vs native ORT in the Rust core — by up to ~3e-2 on a cosine.
+  // That is the same order as the distance between a real def score and `tierMargin`/`couplingMargin`, so the
+  // two engines' fields can flip a borderline complement while both are working correctly (measured:
+  // `_patch.ts` = 0.2741 here, 0.2452 there, against a 0.25 margin). On fp32 they agree to 3.7e-7. The DEFAULT
+  // is unchanged (int8 — the cached artifact most machines already have); SEAM_EMBED_QUANTIZED=0 selects fp32,
+  // the same knob and the same spelling the Rust side reads, so both engines can be put on one set of weights.
+  _embedder = await pipeline("feature-extraction", MODEL, { quantized: process.env.SEAM_EMBED_QUANTIZED !== "0" });
   return _embedder;
 }
 
