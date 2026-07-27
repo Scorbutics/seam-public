@@ -40,4 +40,77 @@ fn main() {
         .compile("tree_sitter_javascript_grammar");
     println!("cargo:rerun-if-changed=vendor/javascript/src/parser.c");
     println!("cargo:rerun-if-changed=vendor/javascript/src/scanner.c");
+
+    // ruby — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/ruby/src")
+        .file("vendor/ruby/src/parser.c")
+        .file("vendor/ruby/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_ruby_grammar");
+    println!("cargo:rerun-if-changed=vendor/ruby/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/ruby/src/scanner.c");
+
+    // python — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/python/src")
+        .file("vendor/python/src/parser.c")
+        .file("vendor/python/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_python_grammar");
+    println!("cargo:rerun-if-changed=vendor/python/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/python/src/scanner.c");
+
+    // go — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/go/src")
+        .file("vendor/go/src/parser.c")
+        .warnings(false)
+        .compile("tree_sitter_go_grammar");
+    println!("cargo:rerun-if-changed=vendor/go/src/parser.c");
+
+    // csharp — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/csharp/src")
+        .file("vendor/csharp/src/parser.c")
+        .file("vendor/csharp/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_csharp_grammar");
+    println!("cargo:rerun-if-changed=vendor/csharp/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/csharp/src/scanner.c");
+
+    // kotlin — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/kotlin/src")
+        .file("vendor/kotlin/src/parser.c")
+        .file("vendor/kotlin/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_kotlin_grammar");
+    println!("cargo:rerun-if-changed=vendor/kotlin/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/kotlin/src/scanner.c");
+
+    // c — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/c/src")
+        .file("vendor/c/src/parser.c")
+        .warnings(false)
+        .compile("tree_sitter_c_grammar");
+    println!("cargo:rerun-if-changed=vendor/c/src/parser.c");
+
+    // cpp — vendored at the tree-sitter-wasms@0.1.13 pin (see rust/README.md): the wasm the TS engine loads
+    // and this native parser MUST be the same grammar version, or the two engines disagree about the AST.
+    cc::Build::new()
+        .include("vendor/cpp/src")
+        .file("vendor/cpp/src/parser.c")
+        .file("vendor/cpp/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_cpp_grammar");
+    println!("cargo:rerun-if-changed=vendor/cpp/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/cpp/src/scanner.c");
 }

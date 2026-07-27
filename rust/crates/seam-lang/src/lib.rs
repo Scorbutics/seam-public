@@ -10,6 +10,8 @@ pub mod types;
 
 mod java;
 mod ruby;
+pub mod python;
+pub mod minimal;
 mod typescript;
 
 pub use provider::{LanguageProvider, ModuleResolver, NullResolver};
@@ -17,7 +19,18 @@ pub use treesitter::Ctx;
 pub use tree_sitter::Node;
 pub use types::{DefaultImport, ImportRef, NamespaceImport, TableAccess};
 
-static PROVIDERS: &[&dyn LanguageProvider] = &[&java::JAVA, &typescript::TYPESCRIPT, &ruby::RUBY];
+static PROVIDERS: &[&dyn LanguageProvider] = &[
+    &java::JAVA,
+    &typescript::TYPESCRIPT,
+    &ruby::RUBY,
+    &python::PYTHON,
+    // MINIMAL registrations (extensions + self-receiver, no import parser) — mirrors the TS `minimal(...)`
+    // entries. Their value is that `provider_for` gates file enumeration, module scope and the self-receiver,
+    // not just imports: without an entry these files are invisible to the whole engine.
+    &minimal::KOTLIN,
+    &minimal::C,
+    &minimal::CPP,
+];
 
 /// The provider owning `path`'s extension, or `None`. (Extensions are disjoint across providers, so order is
 /// irrelevant — mirrors TS `provider_for`.)

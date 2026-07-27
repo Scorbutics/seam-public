@@ -25,9 +25,12 @@ const files = (data: any): string[] => [...new Set((data?.nodes ?? []).map((n: a
 
 beforeAll(() => {
   w("package.json", `{"name":"rl","version":"1.0.0"}\n`);
-  // Ruby: an UNVENDORED grammar. `Caller#run` calls `Core#save`, so a correct grow spans both files.
+  // Ruby is VENDORED now, so it can no longer play the "unparseable" role — but the flow stays, because the
+  // OTHER half of this file still needs a real cross-file Ruby grow to compare the engines on.
   w("app/core.rb", `class Core\n  def save(id)\n    id\n  end\nend\n`);
   w("app/caller.rb", `require_relative 'core'\nclass Caller\n  def run(id)\n    Core.new.save(id)\n  end\nend\n`);
+  // A language with an extension the engine KNOWS but no linked grammar — what a repo-wide refusal is about.
+  w("app/util.rs", `pub fn helper(id: u32) -> u32 { id }\n`);
 });
 afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 
@@ -49,11 +52,21 @@ describe("Rust core — a language it cannot parse stays on the TS engine", () =
     expect(rustCanParse("src/foo.ts")).toBe(true);
     expect(rustCanParse("src/foo.tsx")).toBe(true);
     expect(rustCanParse("src/foo.js")).toBe(true);
-    // Not vendored — each of these must report false until its grammar is actually linked in.
-    expect(rustCanParse("app/core.rb")).toBe(false);
-    expect(rustCanParse("src/core.cpp")).toBe(false);
-    expect(rustCanParse("src/core.py")).toBe(false);
-    expect(rustCanParse("README.md")).toBe(false);   // no grammar at all
+    // VENDORED since the grammar port — each of these deleted a case from the "unvendored" list below, which is
+    // the only honest way to widen the addon's reach (the list must shrink because a grammar was linked, never
+    // because the assertion was relaxed).
+    expect(rustCanParse("app/core.rb")).toBe(true);
+    expect(rustCanParse("src/core.py")).toBe(true);
+    expect(rustCanParse("src/core.go")).toBe(true);
+    expect(rustCanParse("src/Core.cs")).toBe(true);
+    expect(rustCanParse("src/Core.kt")).toBe(true);
+    expect(rustCanParse("src/core.c")).toBe(true);
+    expect(rustCanParse("src/core.cpp")).toBe(true);
+    // Still NOT vendored — `.rs`/`.php` have an entry in GRAMMAR_BY_EXT but no linked `language()` arm, so the
+    // capability must still report false for them; `.md` has no grammar at all.
+    expect(rustCanParse("src/core.rs")).toBe(false);
+    expect(rustCanParse("src/core.php")).toBe(false);
+    expect(rustCanParse("README.md")).toBe(false);
   });
 
   // The per-file gate settles the ANCHOR; this settles everything the grow could REACH. A repo holding ANY
@@ -62,7 +75,7 @@ describe("Rust core — a language it cannot parse stays on the TS engine", () =
   test("a repo containing an unvendored language is refused wholesale", () => {
     if (!addonPresent()) return;
     _resetRustRepoCapability();
-    expect(rustCanServeRepo(repo)).toBe(false);           // this fixture is Ruby
+    expect(rustCanServeRepo(repo)).toBe(false);           // this fixture now holds an unvendored .rs file
     const tsOnly = join(tmpdir(), "seam-rustlang-ok-" + process.pid);
     try {
       mkdirSync(join(tsOnly, "src"), { recursive: true });

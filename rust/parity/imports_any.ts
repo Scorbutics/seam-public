@@ -8,9 +8,17 @@ import { parse_imports } from "../../ts/src/core/resolve/languages/index.js";
 const require = createRequire(import.meta.url);
 const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 
-const SRC_EXT = [".java", ".rb", ".rake", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+// Every extension a provider now OWNS. `.py`/`.pyi` joined when the python provider was ported; the minimal
+// providers (kotlin/c/cpp) own their extensions too and must parse to NO imports on both engines — that
+// "reads nothing" agreement is worth pinning, because a provider that silently started inventing imports
+// would look like recall rather than the regression it is.
+const SRC_EXT = [".java", ".rb", ".rake", ".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs",
+  ".py", ".pyi", ".kt", ".kts", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".hxx"];
 const isSrc = (f: string) => SRC_EXT.some((e) => f.toLowerCase().endsWith(e));
-const key = (r: any) => `${r.name}${r.local}${r.line}${r.col}${r.source}${r.reexport ? 1 : 0}`;
+// `source ?? null` — TS emits `null` for "no resolvable module", napi maps Rust's `None` to `undefined`. Same
+// meaning, same truthiness at every consumer; only this harness's string interpolation could tell them apart,
+// and reporting that as a divergence would be reporting the harness.
+const key = (r: any) => `${r.name}${r.local}${r.line}${r.col}${r.source ?? null}${r.reexport ? 1 : 0}`;
 const dump = (refs: any[]) => refs.map(key).join("\n");
 
 let ok = 0;

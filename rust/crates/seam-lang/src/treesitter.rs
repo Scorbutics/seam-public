@@ -9,6 +9,13 @@ mod grammar_c {
         pub fn tree_sitter_typescript() -> *const tree_sitter::ffi::TSLanguage;
         pub fn tree_sitter_tsx() -> *const tree_sitter::ffi::TSLanguage;
         pub fn tree_sitter_javascript() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_ruby() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_python() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_go() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_c_sharp() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_kotlin() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_c() -> *const tree_sitter::ffi::TSLanguage;
+        pub fn tree_sitter_cpp() -> *const tree_sitter::ffi::TSLanguage;
     }
 }
 
@@ -21,6 +28,15 @@ pub fn language(name: &str) -> Option<Language> {
         "typescript" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_typescript()) }),
         "tsx" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_tsx()) }),
         "javascript" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_javascript()) }),
+        "ruby" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_ruby()) }),
+        "python" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_python()) }),
+        "go" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_go()) }),
+        // the npm package is `tree-sitter-c-sharp`, so the symbol is `tree_sitter_c_sharp`; the GRAMMAR name
+        // this engine uses is `csharp` (see GRAMMAR_BY_EXT), and the two must not be conflated
+        "csharp" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_c_sharp()) }),
+        "kotlin" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_kotlin()) }),
+        "c" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_c()) }),
+        "cpp" => Some(unsafe { Language::from_raw(grammar_c::tree_sitter_cpp()) }),
         _ => None,
     }
 }
@@ -33,7 +49,10 @@ pub fn language(name: &str) -> Option<Language> {
 /// alone). A caller cannot tell that apart from a genuine "nothing found", so the capability has to be
 /// ASKABLE — the router uses it to keep a language this engine cannot read on the TS path.
 pub fn vendored_grammars() -> &'static [&'static str] {
-    &["java", "typescript", "tsx", "javascript"]
+    // Derived from `language()` — the ONE place a grammar is linked. Keeping a hand-written list next to it is
+    // how the capability drifts from the truth, and a capability that overstates is worse than none: the router
+    // would send a language here that parses to nothing and the answer would look complete.
+    &["java", "typescript", "tsx", "javascript", "ruby", "python", "go", "csharp", "kotlin", "c", "cpp"]
 }
 
 /// A parsed file — an immutable AST + its source, with the small read-only query surface the AST scans use
