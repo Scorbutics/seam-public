@@ -1104,10 +1104,13 @@ dependencies = [
  "once_cell",
  "regex",
  "seam-couple",
+ "seam-embed",
  "seam-fs",
  "seam-lang",
  "seam-resolve",
  "serde",
+ "serde_json",
+ "sha1",
  "tree-sitter",
 ]
 

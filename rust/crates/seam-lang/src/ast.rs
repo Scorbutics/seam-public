@@ -52,6 +52,9 @@ pub fn name_of(ctx: &Ctx, node: Node) -> Option<String> {
 
 struct Callee<'a> {
     name: String,
+    /// The NAME node itself — the call-site candidate's own position (a call's span starts at the receiver,
+    /// so the method token has to be located separately). TS `_callee().nameNode`.
+    name_node: Node<'a>,
     obj: Option<Node<'a>>,
 }
 
@@ -61,7 +64,7 @@ fn callee<'a>(ctx: &Ctx, call: Node<'a>) -> Option<Callee<'a>> {
     for nf in nk::CALL_NAME_FIELD {
         if let Some(n) = call.child_by_field_name(nf) {
             let obj = nk::CALL_RECV_FIELD.iter().find_map(|of| call.child_by_field_name(of));
-            return Some(Callee { name: ctx.text(n).to_string(), obj });
+            return Some(Callee { name: ctx.text(n).to_string(), name_node: n, obj });
         }
     }
     let children = ctx.children(call);
@@ -69,11 +72,11 @@ fn callee<'a>(ctx: &Ctx, call: Node<'a>) -> Option<Callee<'a>> {
     if nk::is_member(fn_node.kind()) {
         let mch = ctx.children(fn_node);
         if let Some(&prop) = mch.iter().find(|c| nk::is_member_name(c.kind())) {
-            return Some(Callee { name: ctx.text(prop).to_string(), obj: mch.first().copied() });
+            return Some(Callee { name: ctx.text(prop).to_string(), name_node: prop, obj: mch.first().copied() });
         }
     }
     if nk::is_name_kind(fn_node.kind()) {
-        return Some(Callee { name: ctx.text(fn_node).to_string(), obj: None });
+        return Some(Callee { name: ctx.text(fn_node).to_string(), name_node: fn_node, obj: None });
     }
     None
 }
@@ -1044,5 +1047,20 @@ pub fn declared_names(ctx: &Ctx, file: Option<&str>) -> std::collections::HashSe
     }
     // the `default` in `export { x as default }` is the BOUNDARY name, not a declared symbol
     out.remove("default");
+    out
+}
+
+/// Every call site of one of `methods` (RECEIVER-AGNOSTIC — the name is enough) → (method, line, col). The
+/// LSP-candidate input: the extension resolves each of these against a language server, then hands the
+/// verified subset back as the class anchor's attribution. Port of `_class_call_sites`.
+pub fn class_call_sites(ctx: &Ctx, methods: &std::collections::HashSet<String>) -> Vec<(String, usize, usize)> {
+    let mut out = Vec::new();
+    for call in ctx.collect(ctx.root(), nk::is_call) {
+        if let Some(c) = callee(ctx, call) {
+            if methods.contains(&c.name) {
+                out.push((c.name, ctx.span(c.name_node).0, ctx.col(c.name_node.start_byte())));
+            }
+        }
+    }
     out
 }

@@ -76,7 +76,7 @@ describe("impact cites the REAL 1-based line of each affected site", () => {
   test("the hop-1 site is the call line, not the line above it", async () => {
     if (!available()) return;
     const m = await impact();
-    const mid = m.impacted.find((i) => i.file === "src/mid.ts");
+    const mid = m.impacted.find((i: any) => i.file === "src/mid.ts");
     expect(mid).toBeDefined();
     expect(MID_CALL).toBeGreaterThan(1);            // the fixture must be able to expose an off-by-one
     expect(mid!.line).toBe(MID_CALL);
@@ -86,7 +86,7 @@ describe("impact cites the REAL 1-based line of each affected site", () => {
   test("a transitive (hop-2) site is cited on its own real line", async () => {
     if (!available()) return;
     const m = await impact();
-    const top = m.impacted.find((i) => i.file === "src/top.ts");
+    const top = m.impacted.find((i: any) => i.file === "src/top.ts");
     expect(top).toBeDefined();
     expect(top!.line).toBe(TOP_CALL);
   });
@@ -95,7 +95,7 @@ describe("impact cites the REAL 1-based line of each affected site", () => {
     if (!available()) return;
     const set = projectConsumerSet(await build_footprint(REPO, "src/core.ts", "target", { direction: "up", depth: 1, dataCoupling: false }));
     const viaConsumers = set.members.find((m) => m.file === "src/mid.ts");
-    const viaImpact = (await impact()).impacted.find((i) => i.file === "src/mid.ts");
+    const viaImpact = (await impact()).impacted.find((i: any) => i.file === "src/mid.ts");
     expect(viaConsumers).toBeDefined();
     expect(viaImpact!.line).toBe(viaConsumers!.line);
   });
@@ -114,7 +114,7 @@ describe("a reachability witness path cites each step in ITS OWN file", () => {
     if (!available()) return;
     const r = await findReach(REPO, "src/top.ts", "top", "target");
     expect(r.reachable).toBe(true);
-    const at = (f: string) => r.path.find((s) => s.file === f)!;
+    const at = (f: string) => r.path.find((s: any) => s.file === f)!;
     expect(at("src/top.ts").line).toBe(TOP_DECL);
     expect(at("src/mid.ts").line).toBe(MIDDLE_DECL);
     expect(at("src/core.ts").line).toBe(TARGET_DECL);

@@ -185,7 +185,10 @@ pub fn embed_string(d: &Def) -> String {
     let encl = if d.enclosing.is_empty() { String::new() } else { format!(" in {}", d.enclosing) };
     let prefix = if d.kind == "method" { "method " } else { "" };
     let doc = if d.doc.is_empty() { String::new() } else { format!(" :: {}", d.doc) };
-    let body = d.body.as_ref().map(|b| format!(" {{ {} }}", b)).unwrap_or_default();
+    // An EMPTY body is ABSENT, not an empty brace pair. TS tests `d.body ?` — a `""` is falsy there and the
+    // clause is omitted, so `Some("")` here appended a bare " {  }" and embedded a DIFFERENT string than the
+    // TS side for every def whose body extraction came back empty. Same def, same file, different vector.
+    let body = d.body.as_deref().filter(|b| !b.is_empty()).map(|b| format!(" {{ {b} }}")).unwrap_or_default();
     let sig = if d.signature.is_empty() { &d.name } else { &d.signature };
     format!("{prefix}{sig}{encl} — {}{doc}{body}", d.file)
 }

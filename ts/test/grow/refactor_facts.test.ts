@@ -18,9 +18,9 @@ describe("gatherRefactorFacts", () => {
 
   test("the facts are the real per-shape results (impact=Page, dep=PaymentService, contract provides checkout)", async () => {
     const rf = await gatherRefactorFacts(repo, "src/checkout.ts", "checkout");
-    expect(rf.impact.impacted.map((m) => m.symbol)).toEqual(["Page"]);
-    expect(rf.dependencies.members.map((m) => m.symbol)).toEqual(["PaymentService"]);
-    expect(rf.contract.provides.map((p) => p.symbol)).toEqual(["checkout"]);
+    expect(rf.impact.impacted.map((m: any) => m.symbol)).toEqual(["Page"]);
+    expect(rf.dependencies.members.map((m: any) => m.symbol)).toEqual(["PaymentService"]);
+    expect(rf.contract.provides.map((p: any) => p.symbol)).toEqual(["checkout"]);
   });
 
   test("it is FACTS only — there is no plan field (the plan is the model's judgement)", async () => {

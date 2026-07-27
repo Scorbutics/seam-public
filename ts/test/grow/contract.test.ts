@@ -16,9 +16,9 @@ describe("projectContract", () => {
   test("checkout.ts: one used export (consumed by Page) + one outbound dep (PaymentService)", async () => {
     const c = await projectContract(repo, "src/checkout.ts");
     expect(c.shape).toBe("contract");
-    expect(c.provides.map((p) => p.symbol)).toEqual(["checkout"]);
-    expect(c.provides[0].consumers.map((x) => x.symbol)).toEqual(["Page"]);
-    expect(c.depends.map((d) => d.symbol)).toEqual(["PaymentService"]);
+    expect(c.provides.map((p: any) => p.symbol)).toEqual(["checkout"]);
+    expect(c.provides[0].consumers.map((x: any) => x.symbol)).toEqual(["Page"]);
+    expect(c.depends.map((d: any) => d.symbol)).toEqual(["PaymentService"]);
     expect(c.afferent).toBe(1);
     expect(c.efferent).toBe(1);
     expect(c.unusedExports).toHaveLength(0);
@@ -61,10 +61,10 @@ describe("projectContract — type-level exports", () => {
   test("a USED type export appears in provides; a DEAD type export appears in unusedExports", async () => {
     if (!available()) return;
     const c = await projectContract(tr, "src/model.ts");
-    const provided = c.provides.map((p) => p.symbol);
+    const provided = c.provides.map((p: any) => p.symbol);
     expect(provided).toContain("makeThing");                       // the value export (footprint)
     expect(provided).toContain("UsedType");                        // the USED type export — was invisible before
-    expect(c.provides.find((p) => p.symbol === "UsedType")?.kind).toBe("type");
+    expect(c.provides.find((p: any) => p.symbol === "UsedType")?.kind).toBe("type");
     expect(c.unusedExports).toContain("DeadType");                 // the DEAD type export — was silently dropped before
     expect(c.unusedExports).toContain("DeadIface");                // dead interface too
   });

@@ -11,5 +11,8 @@ seam-lang = { path = "../seam-lang" }
 seam-resolve = { path = "../seam-resolve" }
 seam-couple = { path = "../seam-couple" }
 seam-fs = { path = "../seam-fs" }
+seam-embed = { path = "../seam-embed" }
 serde = { workspace = true }
+serde_json = { workspace = true }
+sha1 = { workspace = true }
 tree-sitter = { workspace = true }

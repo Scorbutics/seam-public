@@ -8,6 +8,7 @@ pub mod callsite_graph;
 pub mod class_graph;
 pub mod consumers_graph;
 pub mod attach;
+pub mod def_embed;
 pub mod def_table;
 pub mod dependency_graph;
 pub mod footprint;

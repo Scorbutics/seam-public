@@ -70,9 +70,9 @@ describe("contract (file grain) and consumers (site grain) — both correct, bot
   test("the module CONTRACT counts every consuming file, including the default-import ones", async () => {
     if (!available()) return;
     const c = await projectContract(REPO, "src/db.ts");
-    const db = c.provides.find((p) => p.symbol === "db");
+    const db = c.provides.find((p: any) => p.symbol === "db");
     expect(db).toBeDefined();
-    const files = db!.consumers.map((x) => x.file);
+    const files = db!.consumers.map((x: any) => x.file);
     // the regression: the two DEFAULT-import files were dropped entirely
     for (const rel of DEFAULT_ONLY) expect(files).toContain(rel);
     expect(new Set(files).size).toBe(FILES);
@@ -94,7 +94,7 @@ describe("contract (file grain) and consumers (site grain) — both correct, bot
     expect(u.symbols).toBeGreaterThan(u.files);
     // …and the file rollup is exactly what the module CONTRACT reports for the same relationship
     const c = await projectContract(REPO, "src/db.ts");
-    expect(c.provides.find((p) => p.symbol === "db")!.consumerCount).toBe(u.files);
+    expect(c.provides.find((p: any) => p.symbol === "db")!.consumerCount).toBe(u.files);
   });
 
   test("each render NAMES its counting unit, and never the other shape's", async () => {

@@ -23,7 +23,7 @@ pub fn model_id() -> String {
 
 /// BGE-family retrieval models want an instruction prefix on the QUERY (never the passages); a generic model
 /// (MiniLM/mpnet) wants none. Applied to the intent only. Port of `QUERY_PREFIX`.
-fn query_prefix() -> &'static str {
+pub fn query_prefix() -> &'static str {
     if model_id().to_lowercase().contains("bge") {
         "Represent this sentence for searching relevant passages: "
     } else {

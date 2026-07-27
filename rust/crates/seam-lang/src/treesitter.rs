@@ -119,6 +119,16 @@ impl Ctx {
         self.source.as_bytes()[..byte_off].iter().filter(|&&b| b == b'\n').count()
     }
 
+    /// The 0-based COLUMN of a byte offset, counted in UTF-16 code units from the line start — the unit the
+    /// TS side counts in (`Ctx.col`) and the unit an LSP position is expressed in. Counting bytes instead
+    /// would drift by one per non-ASCII character earlier on the line, which is how a verification candidate
+    /// lands on the wrong token in a file with an accented identifier or an emoji in a string.
+    pub fn col(&self, byte_off: usize) -> usize {
+        let head = &self.source[..byte_off.min(self.source.len())];
+        let line_start = head.rfind('\n').map(|i| i + 1).unwrap_or(0);
+        self.source[line_start..byte_off.min(self.source.len())].encode_utf16().count()
+    }
+
     /// [start line, end line] of a node — TS `Ctx.span`.
     pub fn span(&self, n: Node) -> (usize, usize) {
         (self.line_of(n.start_byte()), self.line_of(n.end_byte()))

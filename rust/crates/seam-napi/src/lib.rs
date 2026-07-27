@@ -2221,3 +2221,63 @@ pub fn implemented_interfaces(repo: String, anchor_file: String, symbol: String)
 pub fn is_framework_entry(repo: String, file: String, symbol: String) -> bool {
     seam_resolve::interface_index::is_framework_entry(&repo, &file, &symbol)
 }
+
+#[napi(object)]
+pub struct CallCandidateDto {
+    pub file: String,
+    pub line: u32,
+    pub col: u32,
+    pub method: String,
+}
+
+/// classCallCandidates — the LSP-verification candidates for a CLASS anchor (`--emit-candidates`): every call
+/// site of one of the class's methods, in a resolved consumer. Receiver-agnostic, so it OVER-collects by
+/// design; the extension resolves each against a language server and returns the survivors as `verified`.
+#[napi]
+pub fn class_call_candidates(repo: String, anchor_file: String, class_name: String) -> Vec<CallCandidateDto> {
+    seam_scan::class_graph::class_call_candidates(&repo, &anchor_file, &class_name)
+        .into_iter()
+        .map(|(file, line, col, method)| CallCandidateDto { file, line: line as u32, col: col as u32, method })
+        .collect()
+}
+
+#[napi(object)]
+pub struct ScoredDefDto {
+    pub def: DefDto,
+    pub score: f64,
+    pub vec: Vec<f64>,
+}
+
+/// embedScoreDefs — every repo def (or just `files`' defs) scored by cosine similarity of its embed string to
+/// `intent`, DESC. `[]` when the embedding runtime is absent, so callers degrade to their lexical path. The
+/// `vec` rides along so a caller can build a region centroid without a second embed pass.
+#[napi]
+pub fn embed_score_defs(repo: String, intent: String, files: Option<Vec<String>>) -> Vec<ScoredDefDto> {
+    seam_scan::def_embed::embed_score_defs(&repo, &intent, files.as_deref())
+        .into_iter()
+        .map(|s| ScoredDefDto {
+            def: DefDto { name: s.def.name, kind: s.def.kind, file: s.def.file, signature: s.def.signature, enclosing: s.def.enclosing, doc: s.def.doc, body: s.def.body },
+            score: s.score as f64,
+            vec: s.vec.into_iter().map(|v| v as f64).collect(),
+        })
+        .collect()
+}
+
+/// lexicalPreFilter — the deterministic retrieve stage that runs BEFORE any embedding: the top-`m` repo defs
+/// by lexical overlap with `terms`, as `"name file"` rows. Validation surface (a def dropped here can never
+/// rank, so it is compared exactly where the scores are compared to a tolerance).
+#[napi]
+pub fn lexical_pre_filter(repo: String, terms: Vec<String>, m: u32) -> Vec<String> {
+    let defs = seam_scan::def_table::enumerate_defs(&repo, 15000, None, true);
+    seam_scan::def_embed::lexical_pre_filter(defs, &terms, m as usize)
+        .into_iter()
+        .map(|d| format!("{} {}", d.name, d.file))
+        .collect()
+}
+
+/// embedVecs — value → its embedding vector. Validation surface: the BATCH is the variable to isolate, so a
+/// harness can embed the same string alone and alongside others and compare.
+#[napi]
+pub fn embed_vecs(values: Vec<String>) -> std::collections::HashMap<String, Vec<f64>> {
+    seam_embed::embed_vecs(&values).into_iter().map(|(k, v)| (k, v.into_iter().map(|x| x as f64).collect())).collect()
+}

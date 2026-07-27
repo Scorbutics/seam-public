@@ -12,7 +12,7 @@ describe("findReach", () => {
     const r = await findReach(repo, "src/page.ts", "Page", "PaymentService");
     expect(r.reachable).toBe(true);
     expect(r.reason).toBe("found");
-    expect(r.path.map((s) => s.symbol)).toEqual(["Page", "checkout", "PaymentService"]);
+    expect(r.path.map((s: any) => s.symbol)).toEqual(["Page", "checkout", "PaymentService"]);
     expect(r.path[0].edgeKind).toBe("anchor");
   });
 

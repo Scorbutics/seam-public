@@ -11,7 +11,7 @@ describe("projectImpact", () => {
   test("transitive: charge reaches Page at hop 2 (through checkout), not just direct callers", async () => {
     const im = await projectImpact(repo, "src/payment/service.ts", "charge");
     expect(im.shape).toBe("impact");
-    const byHop = Object.fromEntries(im.impacted.map((m) => [m.symbol, m.hop]));
+    const byHop = Object.fromEntries(im.impacted.map((m: any) => [m.symbol, m.hop]));
     expect(byHop.checkout).toBe(1);     // direct caller
     expect(byHop.Page).toBe(2);         // transitive: Page → checkout → charge
     expect(im.total).toBeGreaterThanOrEqual(4);
@@ -20,15 +20,15 @@ describe("projectImpact", () => {
 
   test("surface = the outermost callers (no further consumer)", async () => {
     const im = await projectImpact(repo, "src/payment/service.ts", "charge");
-    const surface = new Set(im.surface.map((m) => m.symbol));
+    const surface = new Set(im.surface.map((m: any) => m.symbol));
     expect(surface.has("Page")).toBe(true);    // Page has no callers → a leaf of the closure
     expect(surface.has("checkout")).toBe(false); // checkout has a caller (Page) → not the surface
   });
 
   test("a single direct hop: checkout's impact is just Page, fully drained (not truncated)", async () => {
     const im = await projectImpact(repo, "src/checkout.ts", "checkout");
-    expect(im.impacted.map((m) => m.symbol)).toEqual(["Page"]);
-    expect(im.surface.map((m) => m.symbol)).toEqual(["Page"]);
+    expect(im.impacted.map((m: any) => m.symbol)).toEqual(["Page"]);
+    expect(im.surface.map((m: any) => m.symbol)).toEqual(["Page"]);
     expect(im.truncated).toBeFalsy();   // the core spells a drained walk `false`; TS omitted the key
   });
 

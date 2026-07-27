@@ -104,9 +104,9 @@ describe("a WRAPPED default export links its default-importers to the local decl
   test("the module CONTRACT sees the default slot as public surface", async () => {
     if (!available()) return;
     const c = await projectContract(REPO, "src/slots.ts");
-    const p = c.provides.find((x) => x.symbol === "getSlots");
+    const p = c.provides.find((x: any) => x.symbol === "getSlots");
     expect(p).toBeDefined();
-    expect(new Set(p!.consumers.map((x) => x.file))).toEqual(new Set(WRAPPED_IMPORTERS));
+    expect(new Set(p!.consumers.map((x: any) => x.file))).toEqual(new Set(WRAPPED_IMPORTERS));
     expect(c.afferent).toBe(WRAPPED_IMPORTERS.length);   // fan-in was 0 for a module with real importers
   });
 });

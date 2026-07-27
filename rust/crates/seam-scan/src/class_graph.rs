@@ -312,3 +312,28 @@ pub fn reconcile_class_attribution(g: &mut ResolvedGraph, callsite: &ResolvedGra
 fn join_refs(v: &[&String]) -> String {
     v.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
 }
+
+/// The LSP-VERIFICATION CANDIDATES for a class anchor: every call site, in a RESOLVED_FULL consumer, of a
+/// method the class declares — receiver-agnostic, so it OVER-collects on purpose. The extension resolves each
+/// against a language server and hands the surviving subset back via `--attribution` (see `Verified`), which
+/// is what turns a name match into a proven edge. Port of `class_call_candidates`.
+pub fn class_call_candidates(repo: &str, anchor_file: &str, class_name: &str) -> Vec<(String, usize, usize, String)> {
+    let Some((atext, alang)) = read(repo, anchor_file) else { return Vec::new() };
+    let Some(actx) = Ctx::parse(&atext, &alang) else { return Vec::new() };
+    let methods: HashSet<String> = ast::class_methods(&actx, class_name).into_iter().map(|(n, _, _)| n).collect();
+    if methods.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for con in Workspace::cached(repo).scan_consumers(anchor_file, class_name) {
+        if con.status != Status::ResolvedFull {
+            continue;
+        }
+        let Some((ctext, clang)) = read(repo, &con.file) else { continue };
+        let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
+        for (method, line, col) in ast::class_call_sites(&cctx, &methods) {
+            out.push((con.file.clone(), line, col, method));
+        }
+    }
+    out
+}

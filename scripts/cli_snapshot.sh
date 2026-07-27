@@ -29,6 +29,9 @@ run grow        --repo "$R" --scan --auto --intent "how is a payment persisted" 
 run concern     --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --concern --data-coupling floor --format concern
 run growfrom    --repo "$R" --scan --auto --intent "how is a payment persisted" --grow-from "$A#$S" --data-coupling floor
 run diff        --repo "$R" --file ../sample.patch
+# CENTER-FIRST concern (no --center): the ONE path that runs the intent-weighted center pick, and therefore
+# the only one that exercises embedScoreDefs. Every other case pins the anchor, which skips it entirely.
+run centerfirst --repo "$R" --scan --auto --concern --intent "how is a payment persisted" --data-coupling floor --format concern
 for q in set impact contract neighborhood compare reach refactor writers coupling dependencies; do
   run "q_$q" --repo "$R" --scan --query "$q" --anchor-file "$A" --symbol "$S" --data-coupling floor
 done
@@ -45,6 +48,13 @@ SEAM_GRAPH_CACHE=0 timeout 300 bun src/cli/decompose.ts --repo "$R" --scan --anc
   --emit-graph "$OUT/graph.json" --data-coupling floor >/dev/null 2>&1
 run expand      --repo "$R" --scan --expand-graph "$OUT/graph.json" --expand-file "$A" --expand-symbol "$S" --data-coupling floor
 rm -f "$OUT/graph.json"
+# --emit-candidates: the CLASS-anchor LSP hand-off. It writes a JSON file rather than stdout, so cat it into
+# the snapshot — the candidate list IS the answer here.
+SEAM_GRAPH_CACHE=0 timeout 300 bun src/cli/decompose.ts --repo test/fixtures/method-repo --scan \
+  --anchor-file src/engine.ts --symbol Engine --emit-candidates "$OUT/cand.json" >"$OUT/candidates.out" 2>"$OUT/candidates.err"
+echo "$?" >"$OUT/candidates.code"
+cat "$OUT/cand.json" >>"$OUT/candidates.out" 2>/dev/null; rm -f "$OUT/cand.json"
+sed -i -E 's|/tmp/[a-zA-Z0-9_./-]+||g' "$OUT/candidates.out" "$OUT/candidates.err"   # the emit path names $OUT
 run q_recall    --repo "$R" --scan --query consumers --anchor-file "$A" --symbol "$S" --recall name --data-coupling floor
 run q_ask       --repo "$R" --scan --query ask --ask "who calls $S" --data-coupling floor
 echo "snapshot: $OUT ($(ls "$OUT" | wc -l) files)"

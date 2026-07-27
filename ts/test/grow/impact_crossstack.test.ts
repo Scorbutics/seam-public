@@ -34,23 +34,23 @@ afterAll(() => { try { rmSync(repo, { recursive: true, force: true }); } catch {
 describe("projectImpact — cross-stack overlay", () => {
   test("structural closure is the call-graph consumer; crossStack is always an array", async () => {
     const im = await projectImpact(repo, "src/writer.ts", "writeMember");
-    expect(im.impacted.map((m) => m.symbol)).toContain("register");   // call-graph consumer
+    expect(im.impacted.map((m: any) => m.symbol)).toContain("register");   // call-graph consumer
     expect(Array.isArray(im.crossStack)).toBe(true);                   // contract: field always present
   });
 
   test.skipIf(!available())("crossStack = the shared-key reader, NOT a member of the structural closure", async () => {
     const im = await projectImpact(repo, "src/writer.ts", "writeMember");
-    const side = im.crossStack.find((c) => c.symbol === "readMembers");
+    const side = im.crossStack.find((c: any) => c.symbol === "readMembers");
     expect(side).toBeTruthy();                                         // the reader of the table the anchor writes
     expect(side!.file).toBe("src/reader.ts");
     expect(side!.edgeKind).toBe("db-read");
     expect(side!.via).toContain("members");
-    expect(im.impacted.map((m) => m.symbol)).not.toContain("readMembers");  // a data crossing, not a caller
+    expect(im.impacted.map((m: any) => m.symbol)).not.toContain("readMembers");  // a data crossing, not a caller
   });
 
   test("couplingOverlay:false opts out — crossStack empty, structural closure unchanged", async () => {
     const im = await projectImpact(repo, "src/writer.ts", "writeMember", { couplingOverlay: false });
     expect(im.crossStack).toEqual([]);
-    expect(im.impacted.map((m) => m.symbol)).toContain("register");
+    expect(im.impacted.map((m: any) => m.symbol)).toContain("register");
   });
 });

@@ -436,7 +436,9 @@ async function runCodebase(a: Args): Promise<number> {
     // them, then re-invokes with --attribution).
     if (a.emitCandidates) {
       if (!a.symbol) err("--emit-candidates needs --symbol (a class anchor)");
-      const cands = await scan.class_call_candidates(a.repo, a.anchorFile!, a.symbol!);
+      const cands = (await import("../codebase/grow/rust_core.js")).loadAddon()
+        .classCallCandidates(a.repo, a.anchorFile!, a.symbol!)
+        .map((c: any) => ({ file: c.file, line: c.line, col: c.col, method: c.method }));   // plain objects: napi values are not JSON-stable
       writeFileSync(a.emitCandidates, JSON.stringify(cands));
       process.stdout.write(`Candidates: ${a.emitCandidates}  (${cands.length} call-site(s))\n`);
       return 0;
@@ -576,12 +578,12 @@ async function runCodebase(a: Args): Promise<number> {
         let relevance: ((n: { symbol: string; file: string }) => number) | undefined;
         if (!explicit && a.intent) {
           try {
-            const { embedScoreDefs } = await import("../codebase/scan/def_embed.js");
+            const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
             const { normpath } = await import("../core/resolve/walk.js");
-            const files = new Set<string>((data.nodes as any[]).map((n) => n.file ? normpath(n.file) : "").filter(Boolean));
+            const files = [...new Set<string>((data.nodes as any[]).map((n) => n.file ? normpath(n.file) : "").filter(Boolean))];
             const bySym = new Map<string, number>();    // per-SYMBOL score (`name file`) — sharper than file-max
             const byFile = new Map<string, number>();    // file-max fallback for a symbol embeddings didn't score
-            for (const { def, score } of await embedScoreDefs(a.repo, a.intent, files)) { const f = normpath(def.file); bySym.set(`${def.name} ${f}`, score); byFile.set(f, Math.max(byFile.get(f) ?? -1, score)); }
+            for (const { def, score } of core.embedScoreDefs(a.repo, a.intent, files) as any[]) { const f = normpath(def.file); bySym.set(`${def.name} ${f}`, score); byFile.set(f, Math.max(byFile.get(f) ?? -1, score)); }
             if (bySym.size) relevance = (n) => bySym.get(`${n.symbol} ${normpath(n.file)}`) ?? byFile.get(normpath(n.file)) ?? 0;
             else process.stderr.write(`[concern] no def embeddings for the region — centers fall back to raw fan-in (may pick a ubiquitous entity)\n`);
           } catch { process.stderr.write(`[concern] embeddings unavailable — centers fall back to raw fan-in\n`); }
