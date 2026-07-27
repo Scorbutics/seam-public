@@ -414,6 +414,46 @@ inside the core, serving its own model calls. What remains in TS is render, CLI 
 
 ---
 
+## 6c. REMOVING THE TS ENGINE — the real blocker is GRAMMAR COVERAGE, not shape parity
+
+Decided: vendor the remaining grammars FIRST, then remove. Because today the TS engine is still doing three
+jobs, and only one of them is "a slower copy of Rust":
+
+1. **It is the ORACLE.** 62 of the 64 harnesses in `rust/parity` import `ts/src` to compare against. Every
+   regression this migration caught came from that: four porting bugs in B3, the `filterColumns` ordering, the
+   `viaCoupling` flag, the `--data-coupling` member deletion. Delete TS and the Rust engine can never be
+   parity-checked again — including on the day someone changes it.
+2. **It is the ONLY engine for most languages.** `canParse` is true for `java/ts/tsx/js` and FALSE for
+   `rb/py/go/cs/cpp/kt`; `rustCanServeRepo` refuses a repo containing ANY unvendored language, so a TypeScript
+   repo with one Python script routes entirely to TS. The 10 fallback sites in `queries.ts` are load-bearing.
+3. **Render, CLI and diff mode were never ported** and are not in scope for the core.
+
+### The vendoring recipe (measured from the four already done)
+
+Per grammar, in `crates/seam-lang`:
+- `vendor/<lang>/src/parser.c` (+ `scanner.c` when the grammar has an external scanner), at the version
+  `tree-sitter-wasms` bundles — the wasm and the native parser MUST agree or the two engines disagree on the
+  AST, which is worse than not vendoring at all (`rust/README.md` states this pin);
+- a `cc::Build` block in `build.rs`;
+- an `extern "C" { pub fn tree_sitter_<lang>() -> *const TSLanguage; }` decl + a `language()` arm in
+  `treesitter.rs`. `GRAMMAR_BY_EXT` already lists every extension, so nothing changes there.
+
+A grammar alone gets PARSING. Full parity also needs a `LanguageProvider` (imports + module resolution) per
+language: **ruby already has one** (`src/ruby`) and is therefore the cheapest first slice — grammar only.
+python/go/csharp/kotlin need a provider; C/C++ are LSP-only on the TS side too (no imports parser), so they
+are provider-light by design.
+
+SUPPLY CHAIN: this adds third-party C sources to the repo. That is a deliberate act with review implications,
+so it wants an explicit go-ahead per grammar rather than a silent `curl` from a build script.
+
+### Order
+ruby (grammar only) → python → go → csharp → kotlin → c/cpp. After each: `rustCanParse` flips for it,
+`rustCanServeRepo` stops refusing repos containing it, and the language's own parity harnesses become
+runnable. Only once ALL of them are vendored is the TS engine redundant as an ENGINE — and even then, keep it
+as the oracle until there is something else that can play that role.
+
+---
+
 ## 7. Open, separate from this migration
 
 - ~~**`--data-coupling` can DELETE a verified structural member from the consumers shape.**~~ **FIXED.** Found
