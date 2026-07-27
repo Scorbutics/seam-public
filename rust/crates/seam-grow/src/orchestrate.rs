@@ -76,6 +76,10 @@ pub struct WaveOpts {
     pub tier_grow: bool,
     /// The tier-2 on-intent pivot floor. TS `opts.tierMargin` / SEAM_TIER_MARGIN. NaN = read the env.
     pub tier_margin: f32,
+    /// The footprint-scoping PRE-GROW (`grow_footprint_scoped`), which DISCARDS its footprint and keeps only
+    /// the files it reached. It differs from the real grow in containment (the probe stays inclusive), so it is
+    /// a DIFFERENT QUESTION and must key the answer cache differently — see `fingerprint`.
+    pub stable_floor: bool,
 }
 
 impl Default for WaveOpts {
@@ -103,6 +107,7 @@ impl Default for WaveOpts {
             border_field: String::new(),
             tier_grow: true,
             tier_margin: f32::NAN,
+            stable_floor: false,
         }
     }
 }
@@ -120,7 +125,7 @@ impl WaveOpts {
     /// Add a field to WaveOpts ⇒ add it here.
     pub fn fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}|{}",
             self.max_steps,
             self.max_nodes,
             self.hub_gate,
@@ -143,6 +148,12 @@ impl WaveOpts {
             self.border_field,
             self.tier_grow,
             self.tier_margin,
+            // THE PROBE IS A DIFFERENT QUESTION. `grow_footprint_scoped` runs the SAME (repo, anchor, symbol,
+            // knobs) as the real grow and differs only in staying inclusive — so without this the two hash to
+            // one key, the probe stores its deliberately-narrow answer first, and the REAL grow is served the
+            // probe's. Measured on the booking-app concern: the probe's 11-node / 0-coupling footprint came
+            // back as the answer while the real 33-node / 22-coupling grow ran and was discarded.
+            self.stable_floor,
         )
     }
 }
@@ -498,6 +509,12 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             expanded.insert(k);
             let before: Option<HashSet<String>> = Some(data.nodes.iter().map(|n| n.id.clone()).collect());
             let added = apply_move(repo, &mut data, mv, ex, &mut idx);
+            // WAVE TRACE — `SEAM_WAVE_WHY=1` reports every APPLIED move and what it added. The move LIST is
+            // easy to reason about; the sequence the flood actually runs, under a budget that the ordering
+            // itself perturbs, is not — and a containment difference lives in the sequence.
+            if std::env::var("SEAM_WAVE_WHY").is_ok() {
+                eprintln!("[wave-why] step={step} {} {} {} +{added} (total {})", if mv.dir == Dir::Up { "up" } else { "down" }, mv.node.symbol, mv.node.file, data.nodes.len());
+            }
             wave_added += added;
             // HUB GATE: an UP move that added a wide PURE (non-crossing) consumer fan → crop it, don't seed the next wave.
             if opts.hub_gate && mv.dir == Dir::Up && added >= opts.hub_fan {
@@ -765,13 +782,22 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     if data_coupling {
         phase!("phase_coupling", crate::coupling::phase_coupling(repo, &mut data, &ws, &mut coupled, false)); // P3 seed coupling
     }
+    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+        eprintln!("[phase] after seed+phase_coupling: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
+    }
     data = phase!("phase_expand", phase_expand(repo, data, &ex, opts)); // P2 structural wave
+    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+        eprintln!("[phase] after phase_expand: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
+    }
     if data_coupling {
         phase!("fan_couple", crate::coupling::fan_couple(repo, &mut data, &ws, &mut coupled, false)); // P3 deep couple (post-wave)
     }
     // DETERMINISTIC COUPLING BORDER — crop the off-intent shared-key fan the overlay auto-kept. Runs after the
     // deep couple (it judges the complements that phase materialised) and only on an intent-shaped grow; the
     // structural path skips it entirely, so a structural answer is untouched. SEAM_COUPLING_BORDER_DET=0 opts out.
+    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+        eprintln!("[phase] after wave+fan_couple: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
+    }
     let border_det = std::env::var("SEAM_COUPLING_BORDER_DET").map(|v| v != "0").unwrap_or(true);
     if data_coupling && border_det && !opts.structural_grow {
         if let Some(intent) = opts.intent.as_deref().filter(|s| !s.is_empty()) {

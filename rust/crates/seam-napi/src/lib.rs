@@ -504,6 +504,9 @@ pub struct GrowOptsDto {
     pub border_field: Option<String>,
     pub tier_grow: Option<bool>,
     pub tier_margin: Option<f64>,
+    /// The scoping PRE-GROW. Part of the answer-cache key: the probe is a different question, not a cheaper
+    /// spelling of the same one.
+    pub stable_floor: Option<bool>,
 }
 
 impl GrowOptsDto {
@@ -530,6 +533,7 @@ impl GrowOptsDto {
             border_field: self.border_field.unwrap_or(d.border_field),
             tier_grow: self.tier_grow.unwrap_or(d.tier_grow),
             tier_margin: self.tier_margin.map(|v| v as f32).unwrap_or(d.tier_margin),
+            stable_floor: self.stable_floor.unwrap_or(d.stable_floor),
         }
     }
 }

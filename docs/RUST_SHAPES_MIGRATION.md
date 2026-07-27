@@ -578,6 +578,29 @@ border/tier tests this item was expected to gate on:
     rather than through `cachedGrow`, so the counters stay 0 by construction. Likely instrumentation rather
     than containment — but that has to be SHOWN, not assumed.
 
+**Group 1 traced (booking-app concern, 6 tests).** Not the field, and not what the failure looked like:
+
+  · `SEAM_TIER_GROW=0` and `SEAM_TIER_MARGIN=0` EACH restore the TS answer exactly (33 nodes / 22 coupling vs
+    Rust's 11 / 0), which points at the tier gate.
+  · But the SCORES are right. `SEAM_TIER_WHY` (added) prints them at the decision point — `paginate` 0.4257,
+    `createBooking` 0.4269, `persist` 0.4713 — against TS's independently measured 0.4454 / 0.4440, all far
+    above the 0.20 margin, so the gate is ADMITTING them. Def enumeration on the fixture is identical (32/32).
+  · And `SEAM_WAVE_WHY` (added) shows the two waves apply nearly the SAME move sequence (49 vs 48 applied
+    moves, all `+0` past the start) and both end at **28 nodes**. So the wave is not where they diverge.
+  · The phase trace then showed the real shape: the CLI runs **two grows** — one 8→11 with ZERO coupling, one
+    25→33 with 22 — and both appear identically under either tier setting. What changes is WHICH ONE the
+    caller emits. With the tier gate on, the emitted concern graph is the coupling-free one.
+
+So the remaining work is in the CALLER's grow selection (detection grow vs final grow in decompose /
+`grow_centers_scoped`), not in the wave. NEXT: instrument which of the two grows `--emit-graph` writes and why
+the tier setting changes that choice — the two grows differ in `dataCoupling`, so the selection is reading
+something the Rust path reports differently.
+
+Fixed along the way (correct on its own merits, did not move this test): `stable_floor` is now part of
+`WaveOpts` and the answer-cache fingerprint. The scoping PRE-GROW runs the same (repo, anchor, symbol, knobs)
+as the real grow and differs only in staying inclusive, so the two hashed to ONE key and the probe's
+deliberately-narrow answer could be served to the real grow.
+
 The first two groups are real coverage `growintent` does not have: it pins ONE anchor, ONE intent, border
 tolerance OFF, SINGLE center, on a TS/JS repo. So the next step is a growintent VARIANT per failing shape —
 multi-center, deepen-from-frontier, `borderTol` set, and a Java→JS cross-stack anchor — because a behavioural

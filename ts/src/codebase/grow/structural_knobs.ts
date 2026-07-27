@@ -25,6 +25,7 @@ export type StructuralKnobs = {
   excludeDirs: string[]; includeTests: boolean;
   intent?: string; structuralGrow: boolean;
   borderTol?: number; borderField: string; tierGrow: boolean; tierMargin?: number;
+  stableFloor: boolean;
 };
 
 export type KnobOpts = {
@@ -69,5 +70,7 @@ export function resolveStructuralKnobs(opts: KnobOpts = {}, stableFloor = false,
     borderField: opts.borderField ?? process.env.SEAM_GROW_BORDER_FIELD ?? "",
     tierGrow: (opts.tierGrow ?? _flag(process.env.SEAM_TIER_GROW) ?? true) && !stableFloor,
     tierMargin: opts.tierMargin ?? (process.env.SEAM_TIER_MARGIN ? parseFloat(process.env.SEAM_TIER_MARGIN) : undefined),
+    // The PROBE is a different question, so it must key the addon's answer cache differently.
+    stableFloor,
   };
 }
