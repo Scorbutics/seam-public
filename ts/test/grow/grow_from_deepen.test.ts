@@ -11,9 +11,9 @@ import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { decompose } from "../../src/codebase/codebase.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
-import { merge_resolved } from "../../src/codebase/scan/index.js";
+import { merge_resolved } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
-import { transformersAvailable } from "../../src/codebase/scan/def_embed.js";
+import { transformersAvailable } from "../helpers/scan.js";
 
 // createBooking → manageBooking → record (a telemetry util the base grow PARKS as off-intent). record's OTHER
 // consumers (weather / currency / pdf widgets) are the fan it guards — what a deepen from record should reach.

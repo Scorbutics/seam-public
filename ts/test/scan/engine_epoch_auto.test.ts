@@ -7,7 +7,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { _hashEngineSource } from "../../src/codebase/scan/footprint_cache.js";
+import { _hashEngineSource } from "../../src/codebase/footprint_cache.js";
 
 let ROOT: string;
 const w = (rel: string, t: string) => { mkdirSync(join(ROOT, dirname(rel)), { recursive: true }); writeFileSync(join(ROOT, rel), t); };

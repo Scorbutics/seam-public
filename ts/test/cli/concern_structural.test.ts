@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { available } from "../../src/codebase/atoms.js";
-import { transformersAvailable } from "../../src/codebase/scan/def_embed.js";
+import { transformersAvailable } from "../helpers/scan.js";
 
 const TS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const REPO = join(TS_DIR, "test", "fixtures", "booking-app");

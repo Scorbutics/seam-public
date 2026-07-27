@@ -6,7 +6,7 @@
 // as the same sequence through `merge_resolved` — so the O(n²)→O(n) rewrite can never silently drift the footprint.
 import { describe, expect, test } from "bun:test";
 import { _mkIndex, _mergeInto } from "../../src/codebase/grow/orchestrate.js";
-import { merge_resolved } from "../../src/codebase/scan/expand.js";
+import { merge_resolved } from "../helpers/scan.js";
 
 const g = (nodes: [string, string][], edges: [string, string, string?][], anchor = "n1") => ({
   nodes: nodes.map(([id, sym], i) => ({ id, symbol: sym, file: `f${i % 3}.ts`, kind: "function" })),

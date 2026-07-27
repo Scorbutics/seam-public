@@ -4,7 +4,7 @@
 // across the orchestrator and the CLI.
 import { merge_resolved } from "./expand.js";
 import { requireAvailable } from "../../core/treesitter.js";
-import type { FootprintOpts, ResolvedGraph } from "./graph.js";
+import type { FootprintOpts, ResolvedGraph } from "../graph.js";
 import { build_consumers_graph } from "./up/consumers_graph.js";
 import { build_dependency_graph } from "./down/dependency_graph.js";
 import { build_module_graph } from "./module_graph.js";

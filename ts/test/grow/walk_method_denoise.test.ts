@@ -8,7 +8,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { build_footprint } from "../../src/codebase/scan/footprint.js";
+import { build_footprint } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const repo = join(tmpdir(), "seam-walk-denoise-" + process.pid);

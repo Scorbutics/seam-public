@@ -11,7 +11,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { execSync } from "node:child_process";
 import { diBindingForClass, diBindingForToken, _resetDiIndex } from "../../src/codebase/di/index.js";
-import { impls_of, _resetImplIndexMem } from "../../src/codebase/scan/down/interface_index.js";
+import { impls_of, _resetImplIndexMem } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
 
 let repo: string;

@@ -11,7 +11,7 @@
 // `noStructure` is the dual of anchor_select's `noFlow`: when no caller resolves structurally, Seam says
 // so and routes the asker to grep/RAG — owning that boundary honestly is what earns the redirect. SUGGESTED
 // (ungrounded) members are leads, not verified consumers, so they do NOT count as structure.
-import type { ResolvedGraph, GraphNode, Provenance } from "../scan/graph.js";
+import type { ResolvedGraph, GraphNode, Provenance } from "../graph.js";
 
 // One resolved (or suggested) consumer of the anchor. `line` is 1-BASED (see `to1`) and is the grounded
 // USAGE/CALL site when the edge carries one — the line the engineer must actually edit — falling back to the

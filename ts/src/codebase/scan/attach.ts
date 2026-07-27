@@ -11,7 +11,7 @@ import { recordRead, recordQuery, taint } from "../../core/resolve/dep_recorder.
 import { makeCtx, available } from "../atoms.js";
 import { _read, _named_units, _usage_lines, _enclosing, _enclosingClass, _exported_members, stem } from "../ast_units.js";
 import { SCAN } from "./config.js";
-import type { GraphNode, GraphEdge } from "./graph.js";
+import type { GraphNode, GraphEdge } from "../graph.js";
 
 // A route/entry annotation (`@WebServlet("/x")`, `@GetMapping("/x")`, a decorator) sits on the line(s)
 // ABOVE the class/method it decorates — often outside the def's own range, so an anchored handler's

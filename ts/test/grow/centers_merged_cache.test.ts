@@ -9,7 +9,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_centers_scoped } from "../../src/codebase/grow/orchestrate.js";
-import { _resetFootprintMirror } from "../../src/codebase/scan/footprint_cache.js";
+import { _resetFootprintMirror } from "../helpers/scan.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
 

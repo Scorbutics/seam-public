@@ -9,7 +9,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { annotateIntentRelevance } from "../../src/codebase/grow/intent_rank.js";
-import { embedScoreStrings } from "../../src/codebase/scan/def_embed.js";
+import { embedScoreStrings } from "../helpers/scan.js";
 
 let REPO: string;
 beforeAll(() => {

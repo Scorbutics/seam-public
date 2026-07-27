@@ -13,7 +13,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { build_footprint } from "../../src/codebase/scan/footprint.js";
+import { build_footprint } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("coupling fans from grounded reach only, not a bare-name call match", () => {

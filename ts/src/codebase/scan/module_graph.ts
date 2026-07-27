@@ -5,7 +5,7 @@
 import { scan_module_consumers, _kind_for } from "../../core/resolve/consumers.js";
 import { makeCtx, available, lang_for } from "../atoms.js";
 import type { EngineCtx } from "../engine_ctx.js";
-import { type GraphNode, type GraphEdge, type Blindspot, type ResolvedGraph, makeGraph } from "./graph.js";
+import { type GraphNode, type GraphEdge, type Blindspot, type ResolvedGraph, makeGraph } from "../graph.js";
 import { expanduser, stem, _read, _named_units, _enclosing, _exported_members, _usage_lines } from "../ast_units.js";
 import { _chain_route_consumers } from "./attach.js";
 

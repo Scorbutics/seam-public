@@ -31,9 +31,9 @@ import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 
-import { cachedGrow, seamEnvSnapshot } from "../scan/footprint_cache.js";
+import { cachedGrow, seamEnvSnapshot } from "../footprint_cache.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
-import { epochOf } from "../scan/footprint_cache.js";
+import { epochOf } from "../footprint_cache.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
 // its file scope before the real grow (the "second grow"). That scope is STRUCTURAL — it depends only on source

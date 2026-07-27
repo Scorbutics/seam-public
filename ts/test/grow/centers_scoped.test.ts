@@ -11,7 +11,7 @@ import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
 import { grow_centers_scoped, grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { merge_resolved } from "../../src/codebase/scan/expand.js";
+import { merge_resolved } from "../helpers/scan.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
 

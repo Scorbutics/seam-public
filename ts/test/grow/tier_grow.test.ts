@@ -15,7 +15,7 @@ import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { decompose } from "../../src/codebase/codebase.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { available } from "../../src/codebase/atoms.js";
-import { transformersAvailable } from "../../src/codebase/scan/def_embed.js";
+import { transformersAvailable } from "../helpers/scan.js";
 
 // Two entry points (create + cancel) share an ON-INTENT bean (manageBooking). The bean depends on an OFF-INTENT
 // telemetry util whose OTHER consumers are unrelated features (weather / currency / pdf) — the fan the tier rule parks.

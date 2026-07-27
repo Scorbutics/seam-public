@@ -1,28 +1,18 @@
-// PER-NODE FOOTPRINT CACHE (docs/GRAPH_CACHE.md, Phase 3). The profile showed the warm grow cost is 448×
-// build_footprint (~15ms/node re-deriving each node's one-hop neighbourhood) — NOT resolution/index-build,
-// which are already cached. So we memoize build_footprint per (anchor file, symbol, direction), sharded per
-// file via the Phase-1 store, so a warm grow READS a node's adjacency instead of re-deriving it.
+// THE GRAPH CACHE (docs/GRAPH_CACHE.md) — what survives of it now that the per-node footprint memo, the
+// anchor-coupling delta memo and the method-precise index memo have gone with the TypeScript scan they existed
+// to make cheap. The Rust core caches all three itself (seam-cache), keyed on its own engine epoch.
 //
-// CORRECTNESS — a stale adjacency is a WRONG answer, so v1 is deliberately narrow and provable:
-//   • STRUCTURAL ONLY. We cache only when opts.dataCoupling === false, i.e. the pure call/dependency
-//     footprint. It reads solely SOURCE FILES + the resolution indices — no LLM, no learned-matcher state,
-//     no `.seam` mutation. (The coupling-inclusive footprint is Phase 4; it needs matcher-version keying.)
-//   • EPOCH INVALIDATION. build_footprint(node) is CROSS-FILE sensitive (a new impl, a moved callee changes
-//     what a call resolves to). So the key carries a repo content EPOCH = a hash of the impl-index sharded
-//     manifest (rel→{mtime,size} for every source file). ANY source change bumps the epoch and invalidates
-//     every entry — coarse, but correct, and it closes the alias / new-impl hole by construction. v2 refines
-//     this to per-footprint dependency tracking (invalidate only the affected nodes) via reverse.json.
-//   • CALLER-FILES CASES stay live (a class/interface DOWN footprint varies by the files that reached it).
-// Gated by SEAM_GRAPH_CACHE (graphCacheEnabled). Off → build_footprint runs live, byte-identical to today.
+// What remains is the half that is about IDENTITY rather than memoization: the source and coupling EPOCHS (a
+// content fingerprint of the engine, the repo, and the learned key-adapter state), the SEAM_* env snapshot
+// those epochs are keyed with, and the P5 settled-grow answer cache the merged-centers path wraps itself in.
 import { statSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { join, relative, dirname } from "node:path";
-import { loadShard, saveShard, graphCacheEnabled } from "../../core/resolve/index_cache.js";
-import { walk } from "../../core/resolve/walk.js";
-import { SKIP_DIRS, endsWithSourceExt } from "../../core/resolve/languages/index.js";
-import { build_footprint } from "./footprint.js";
-import { withRecorder, getQueryRerun, type DepSig } from "../../core/resolve/dep_recorder.js";
-import type { FootprintOpts, ResolvedGraph } from "./graph.js";
+import { loadShard, saveShard, graphCacheEnabled } from "../core/resolve/index_cache.js";
+import { walk } from "../core/resolve/walk.js";
+import { SKIP_DIRS, endsWithSourceExt } from "../core/resolve/languages/index.js";
+import { withRecorder, getQueryRerun, type DepSig } from "../core/resolve/dep_recorder.js";
+import type { ResolvedGraph } from "./graph.js";
 
 const CACHE = "footprint-v1";
 // ENGINE EPOCH — folded into every cache key so a seam UPDATE auto-invalidates stale answers. The graph cache
@@ -60,7 +50,7 @@ function engineEpoch(): string {
   if (_engineEpoch != null) return _engineEpoch;
   _engineEpoch = _ENGINE_EPOCH_FALLBACK;
   try {
-    const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");   // ts/src (this file is ts/src/codebase/scan/footprint_cache.ts)
+    const srcRoot = join(dirname(fileURLToPath(import.meta.url)), "..");   // ts/src (this file is ts/src/codebase/footprint_cache.ts)
     const h = _hashEngineSource(srcRoot);
     if (h) _engineEpoch = h;
   } catch { /* source tree not walkable (bundled) → keep the fallback constant */ }
@@ -195,8 +185,6 @@ export function _resetFpStat(): void {
 if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
 
 const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));
-const _key = (symbol: string, opts: FootprintOpts) =>
-  `${symbol}|${opts.direction ?? "up"}|${opts.depth ?? 1}|${opts.verified ? 1 : 0}`;
 
 // The CURRENT content-hash of one source file — the per-footprint sig's read side. Memoised by (mtime,size) so a
 // warm lookup re-reads a file ONLY when it moved (mirrors CONTENT_MEMO's re-read trigger). A deleted/unreadable
@@ -231,45 +219,6 @@ async function sigStillValid(repo: string, sig: DepSig, coupling = false, curEnv
   return true;
 }
 
-// build_footprint with the per-node cache in front. The grow TRAVERSAL is purely structural (coupling is a
-// separate overlay — see orchestrate.ts _anchorCouplingDelta), so build_footprint here is a deterministic
-// function of the SOURCE. Two invalidation modes: the DEFAULT per-footprint dependency signature (so an edit
-// invalidates ONLY the footprints it actually touches) and the legacy whole-repo epoch key (SEAM_FP_DEPSIG=0
-// kill-switch). Cached whenever there's a real symbol and no caller-files de-noise (which varies by the callers).
-export async function build_footprint_cached(
-  repo: string, anchorFile: string, symbol: string | null, opts: FootprintOpts = {},
-): Promise<ResolvedGraph> {
-  const cacheable = graphCacheEnabled() && !!symbol && opts.dataCoupling === false && !opts.callerFiles?.length;
-  if (!cacheable) return build_footprint(repo, anchorFile, symbol, opts);
-
-  if (process.env.SEAM_FP_DEPSIG !== "0") {
-    const key = _key(symbol!, opts);
-    const shard = shardOf(repo, anchorFile);
-    const hit = shard[key];
-    if (hit?.sig && await sigStillValid(repo, hit.sig)) { _fpstat.hit++; return _clone(hit.g); }
-    const { result: g, sig } = await withRecorder(engineEpoch(), () => build_footprint(repo, anchorFile, symbol, opts));
-    const whole = sig.queries.some((q) => q.whole);
-    if (sig.tainted || whole) sig.epoch = epochOf(repo);   // coarse fallback for uncovered inputs
-    if (hit?.sig) _fpstat.miss++; else _fpstat.new++; if (sig.tainted) _fpstat.taint++; if (whole) _fpstat.whole++;
-    shard[key] = { sig, g };
-    saveShard(repo, CACHE, anchorFile, shard);
-    return _clone(g);
-  }
-
-  const epoch = epochOf(repo);
-  if (!epoch) return build_footprint(repo, anchorFile, symbol, opts);   // no fingerprint → never risk a stale hit
-
-  const key = _key(symbol!, opts);
-  const shard = shardOf(repo, anchorFile);
-  const hit = shard[key];
-  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[fp] ${anchorFile} ${key} epoch=${epoch} ${hit ? (hit.e === epoch ? "HIT" : `MISS(stale ${hit.e})`) : "MISS(new)"}\n`);
-  if (hit && hit.e === epoch) return _clone(hit.g);                     // clone: the orchestrator MUTATES the result
-
-  const g = await build_footprint(repo, anchorFile, symbol, opts);
-  shard[key] = { e: epoch, g };                                        // store the pristine result…
-  saveShard(repo, CACHE, anchorFile, shard);                           // …write-through (cold only; warm is all hits)
-  return _clone(g);                                                     // …and hand the caller its own copy to mutate
-}
 
 // ── Phase 4: the ANCHOR COUPLING OVERLAY cache ─────────────────────────────────────────────────────────────
 // Coupling is computed ONCE per anchor and merged onto the settled footprint (orchestrate.ts _anchorCouplingDelta),
@@ -291,45 +240,6 @@ function cShardOf(repo: string, file: string): CShard<unknown> {
   return s;
 }
 
-// Memoize the anchor coupling overlay across runs. `compute` runs on a miss; the cached delta is deep-cloned on
-// a hit (the caller merges/mutates it). `anchorKey` identifies the anchor within its file (symbol/id).
-export async function cachedCouplingDelta<T>(
-  repo: string, anchorFile: string, anchorKey: string, dataCouplingLlm: boolean, compute: () => Promise<T>,
-  envHash?: string,
-): Promise<T> {
-  if (!graphCacheEnabled()) return compute();
-
-  // v2 — per-delta dependency signature (SEAM_FP_DEPSIG). ONLY for deterministic FLOOR coupling (the LLM flywheel
-  // learns/replays matchers via the coupling epoch, so it stays on the coarse key) AND only when the caller supplies
-  // the coupling-environment fingerprint. The recorder captures the anchor + complement file reads (content) and the
-  // route-chain structural queries; `envHash` (floor⊕http⊕matchers) captures the whole-repo MEMBERSHIP/env changes a
-  // per-file read-set can't see. A delta reused iff engine + env + every read's content-hash + every query re-run
-  // match → an edit invalidates only the deltas whose complements/anchor changed, not every delta on every save.
-  if (process.env.SEAM_FP_DEPSIG !== "0" && !dataCouplingLlm && envHash !== undefined) {
-    const shard = cShardOf(repo, anchorFile);
-    const hit = shard[anchorKey];
-    if (hit?.sig && await sigStillValid(repo, hit.sig, true, envHash)) { _fpstat.chit++; return _clone(hit.d) as T; }
-    const { result: d, sig } = await withRecorder(engineEpoch(), () => compute());
-    sig.env = envHash;
-    const whole = sig.queries.some((q) => q.whole);
-    if (sig.tainted || whole) sig.epoch = couplingEpochOf(repo);   // coarse fallback folds the matcher state
-    if (hit?.sig) _fpstat.cmiss++; else _fpstat.cnew++; if (sig.tainted) _fpstat.ctaint++; if (whole) _fpstat.cwhole++;
-    shard[anchorKey] = { sig, d };
-    saveShard(repo, CDELTA, anchorFile, shard);
-    return _clone(d) as T;
-  }
-
-  const epoch = couplingEpochOf(repo);        // captures the learned-matcher state → an LLM overlay replays safely once settled
-  if (!epoch) return compute();
-  const shard = cShardOf(repo, anchorFile);
-  const hit = shard[anchorKey];
-  if (process.env.SEAM_FP_DEBUG) process.stderr.write(`[cd] ${anchorFile} ${anchorKey} epoch=${epoch} ${hit ? (hit.e === epoch ? "HIT" : "MISS(stale)") : "MISS(new)"}\n`);
-  if (hit && hit.e === epoch) return _clone(hit.d) as T;
-  const d = await compute();
-  shard[anchorKey] = { e: epoch, d };
-  saveShard(repo, CDELTA, anchorFile, shard);
-  return _clone(d) as T;
-}
 
 // METHOD-PRECISE INDEX cache (Phase 3½) — the fan's method-precise rehydration parses EVERY boundary file with
 // tree-sitter (`makeCtx`) to re-attribute whole-file crossings to their enclosing method, EVEN on a coupling-delta
@@ -345,18 +255,6 @@ function mpShardOf(repo: string, file: string): Record<string, MPEntry<unknown>>
   let s = byFile.get(file);
   if (!s) { s = loadShard<Record<string, MPEntry<unknown>>>(repo, MPIDX, file) ?? {}; byFile.set(file, s); }
   return s;
-}
-// `content` keys the cache by its hash; `compute` (the parse) runs ONLY on a miss. Returns null iff compute does
-// (unparseable / no tree-sitter). The value is shared by reference (rehydration reads it, never mutates).
-export async function cachedMPIndex<T>(repo: string, file: string, content: string, compute: () => Promise<T | null>): Promise<T | null> {
-  if (!graphCacheEnabled()) return compute();
-  const h = _hash(content);
-  const shard = mpShardOf(repo, file);
-  const hit = shard[h];
-  if (hit) return hit.d as T;
-  const d = await compute();
-  if (d != null) { shard[h] = { h, d }; saveShard(repo, MPIDX, file, shard); }
-  return d;
 }
 
 // ── Phase 5: the SETTLED-FOOTPRINT (answer) cache ──────────────────────────────────────────────────────────

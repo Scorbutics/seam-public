@@ -16,7 +16,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
-import { transformersAvailable } from "../../src/codebase/scan/def_embed.js";
+import { transformersAvailable } from "../helpers/scan.js";
 
 // `core` is climbed by two intent-themed 2-hop chains: pivotPay ← {bill,invoice,refund} and
 // pivotAv ← {crop,upload,filter}. Non-structural + embeddings: the tier-gate parks the OFF-intent pivot's

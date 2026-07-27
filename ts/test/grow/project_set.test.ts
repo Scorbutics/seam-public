@@ -3,9 +3,9 @@
 // deterministically and fast.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import { makeGraph, type ResolvedGraph } from "../../src/codebase/scan/graph.js";
+import { makeGraph, type ResolvedGraph } from "../../src/codebase/graph.js";
 import { projectConsumerSet, projectDependencySet } from "../../src/codebase/grow/project_set.js";
-import { build_footprint } from "../../src/codebase/scan/index.js";
+import { build_footprint } from "../helpers/scan.js";
 
 const repo = join("test", "fixtures", "class-repo");
 

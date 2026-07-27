@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const TS_DIR = join(import.meta.dir, "..", "..");
-const FPC = join(TS_DIR, "src/codebase/scan/footprint_cache.ts");
+const FPC = join(TS_DIR, "src/codebase/footprint_cache.ts");
 let repo: string;
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, t); };
 

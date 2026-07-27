@@ -12,7 +12,7 @@ import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Unresolved, type Provenance, type ResolvedGraph,
   type Unit, makeGraph,
-} from "../graph.js";
+} from "../../graph.js";
 import {
   expanduser, stem, _read, _name_of, _named_units, _wrappedDefSpan, _enclosing, _usage_lines, _call_lines, _ref_lines_split,
 } from "../../ast_units.js";

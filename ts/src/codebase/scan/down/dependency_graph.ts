@@ -13,7 +13,7 @@ import { type Ctx, makeCtx, available, lang_for, _TYPE_REF, _CLASS_KINDS, _CLASS
 import type { EngineCtx } from "../../engine_ctx.js";
 import {
   type GraphNode, type GraphEdge, type Blindspot, type Provenance, type Unit, type ResolvedGraph, makeGraph,
-} from "../graph.js";
+} from "../../graph.js";
 import { expanduser, _read, _name_of, _named_units, _wrappedDefSpan, _usage_lines, _call_lines, _enclosingClass } from "../../ast_units.js";
 import { _type_methods, _class_method_usage, _called_types, _self_member_refs } from "../ast_class.js";
 import { impls_of, provider_accessors, is_provider_interface } from "./interface_index.js";

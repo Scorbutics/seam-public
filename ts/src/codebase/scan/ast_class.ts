@@ -8,7 +8,7 @@ import {
   _CLASS_FIELD, _FUNCLIKE, _VAR_DECLARATOR, _RETURN_TYPE_FIELD, _CALL_VALUE_UNWRAP,
 } from "../atoms.js";
 import { provider_for } from "../../core/resolve/languages/index.js";
-import { type Unit } from "./graph.js";
+import { type Unit } from "../graph.js";
 import { _name_of, _enclosingClass } from "../ast_units.js";
 
 // The class that OWNS a FIELD-bound function member named `symbol` (`m = withReporting(this._m.bind(this))`,

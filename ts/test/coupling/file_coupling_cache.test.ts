@@ -13,7 +13,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals, _fileCouplingStats, _resetFileCouplingStats } from "../../src/codebase/grow/orchestrate.js";
-import { _resetFootprintMirror } from "../../src/codebase/scan/footprint_cache.js";
+import { _resetFootprintMirror } from "../helpers/scan.js";
 import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { available } from "../../src/codebase/atoms.js";
 

@@ -3,8 +3,8 @@
 // as `any`. coupling/ emits CouplingNode/Crossing/Blindspot (coupling/types.ts) which are STRUCTURALLY
 // assignable to GraphNode/GraphEdge/Blindspot here — we deliberately do NOT cross-import (coupling is the
 // DAG leaf and must not depend on scan), so the shapes are kept compatible by hand, not by a shared type.
-import type { EngineCtx } from "../engine_ctx.js";
-import type { Provenance } from "../../core/resolution.js";
+import type { EngineCtx } from "./engine_ctx.js";
+import type { Provenance } from "../core/resolution.js";
 
 // A named def found in a file: [name, kind, startLine, endLine]. The unit of enclosing-symbol attribution.
 export type Unit = [name: string, kind: string, start: number, end: number];

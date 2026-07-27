@@ -13,7 +13,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { build_footprint } from "../../src/codebase/scan/footprint.js";
+import { build_footprint } from "../helpers/scan.js";
 import { projectConsumerSet, type ConsumerSet } from "../../src/codebase/grow/project_set.js";
 import { renderConsumerSet } from "../../src/codebase/render/shapes.js";
 import { resetRepoImports } from "../../src/core/resolve/consumers.js";
