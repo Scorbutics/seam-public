@@ -142,7 +142,12 @@ async function runWarm(a: Args): Promise<number> {
 // addressable here); the wording of the fix belongs to the CLI, which knows which flag the caller used.
 // Silent (no error) when the file can't be read/parsed — absence of evidence is not a bad address.
 async function checkAnchorAddressing(a: Args): Promise<void> {
-  const { resolve_anchor_address } = await import("../codebase/scan/index.js");
+  // ADDRESS CHECK from the core. The TS implementation and this one are pinned byte-identical by
+  // rust/parity/anchoraddress.ts across all three verdicts — declared, not-declared, and unparseable-so-null.
+  // The null case is the one that must not drift: absence of evidence is not evidence of a bad address.
+  const { loadAddon } = await import("../codebase/grow/rust_core.js");
+  const resolve_anchor_address = async (repo: string, file: string, symbol: string) =>
+    loadAddon().resolveAnchorAddress(repo, file, symbol) ?? null;
   // Every ADDRESS the caller spelled out: each --center, the resolved anchor (--anchor-file + --symbol, the
   // MCP/legacy spelling), and the second anchor of reaches/compare (--to-file + --to-symbol).
   const addrs: { flag: string; file: string; symbol: string }[] = [];

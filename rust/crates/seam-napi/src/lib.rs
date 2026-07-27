@@ -2052,3 +2052,38 @@ pub fn grammar_coverage() -> Vec<String> {
     out.extend(mapped);
     out
 }
+
+/// The `<file>#<symbol>` ADDRESS check: is the symbol actually declared in the file the caller addressed?
+/// Port of `resolve_anchor_address`.
+#[napi(object)]
+pub struct AnchorAddressDto {
+    pub declared: bool,
+    pub default_export_local: Option<String>,
+    pub candidates: Vec<String>,
+}
+
+/// `None` when the file cannot be READ or PARSED (unknown language, missing grammar, parse failure). That
+/// distinction is the whole point: absence of evidence is not evidence of a bad address, so the caller degrades
+/// to its previous behaviour instead of reporting an addressing error it cannot support.
+#[napi]
+pub fn resolve_anchor_address(repo: String, anchor_file: String, symbol: String) -> Option<AnchorAddressDto> {
+    let (text, lang) = seam_scan::read(&repo, &anchor_file)?;
+    let ctx = seam_lang::Ctx::parse(&text, &lang)?;
+    let declared = seam_lang::ast::declared_names(&ctx, Some(&anchor_file));
+    // CANDIDATE ORDER = what an outside caller can actually address: the module's public surface first (that is
+    // what importers of this file see), then the file's other named defs. Deduped, order-stable.
+    let units = seam_lang::ast::named_units(&ctx);
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut candidates: Vec<String> = Vec::new();
+    let exported = seam_lang::ast::exported_members(&ctx, &anchor_file);
+    for nm in exported.into_iter().map(|m| m.name).chain(units.iter().map(|u| u.name.clone())) {
+        if !nm.is_empty() && nm != "default" && seen.insert(nm.clone()) {
+            candidates.push(nm);
+        }
+    }
+    Some(AnchorAddressDto {
+        declared: declared.contains(&symbol),
+        default_export_local: seam_lang::ast::default_export_local(&ctx, &units),
+        candidates,
+    })
+}

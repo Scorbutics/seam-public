@@ -997,3 +997,49 @@ pub fn class_owns_method(ctx: &Ctx, type_name: &str, method: &str) -> bool {
         .find(|c| name_of(ctx, *c).as_deref() == Some(type_name));
     cls.is_some() && class_methods(ctx, type_name).iter().any(|m| m.0 == method)
 }
+
+/// Every name this file BINDS — named units, exported members, and any node carrying a `name` field or a
+/// declarator/export-specifier identifier. Port of `_declared_names`.
+///
+/// It answers one question the engine cannot afford to get wrong: is the symbol a caller addressed actually
+/// DECLARED here? A footprint builder that cannot find the symbol falls back to a bare node and asks who
+/// imports THAT name FROM THIS FILE; nobody does, and the answer renders as an authoritative "nothing calls
+/// this" — telling someone their live code is dead. The common trigger is routine: a DEFAULT export is bound
+/// by importers under a name of their own choosing, so the name at every call site is not a symbol of the
+/// defining file at all.
+pub fn declared_names(ctx: &Ctx, file: Option<&str>) -> std::collections::HashSet<String> {
+    let mut out: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for u in named_units(ctx) {
+        out.insert(u.name);
+    }
+    for m in exported_members(ctx, file.unwrap_or("")) {
+        out.insert(m.name);
+    }
+    for n in ctx.collect(ctx.root(), |_| true) {
+        let k = n.kind();
+        if !crate::node_kinds::is_call(k) {
+            if let Some(nf) = n.child_by_field_name("name") {
+                let nk = nf.kind();
+                if crate::node_kinds::is_name_kind(nk) || crate::node_kinds::is_name_leaf(nk) {
+                    out.insert(ctx.text(nf).to_string());
+                }
+            }
+        }
+        if crate::node_kinds::is_var_declarator(k) {
+            let ch = ctx.children(n);
+            if ch.first().is_some_and(|c| crate::node_kinds::is_name_kind(c.kind())) {
+                out.insert(ctx.text(ch[0]).to_string());
+            }
+        }
+        if crate::node_kinds::is_export_specifier(k) {
+            for c in ctx.children(n) {
+                if crate::node_kinds::is_name_kind(c.kind()) {
+                    out.insert(ctx.text(c).to_string());
+                }
+            }
+        }
+    }
+    // the `default` in `export { x as default }` is the BOUNDARY name, not a declared symbol
+    out.remove("default");
+    out
+}
