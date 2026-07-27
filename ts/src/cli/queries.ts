@@ -56,25 +56,25 @@ async function rustShapeOk(a: Args): Promise<any> {
 const nz = (r: any): any => (r?.noStructure ? { noStructure: true, ...(r.reason ? { reason: r.reason } : {}) } : {});
 const anchorOf = (r: any) => ({ symbol: r.anchorSymbol, file: r.anchorFile });
 
-const rustImpactToModel = (r: any): any => ({
+export const rustImpactToModel = (r: any): any => ({
   shape: "impact", anchor: anchorOf(r), impacted: r.impacted, files: r.files, surface: r.surface,
   total: r.total, fileCount: r.fileCount, gaps: r.gaps, hops: r.hops, truncated: r.truncated,
   crossStack: r.crossStack ?? [], crossStackTruncations: r.crossStackTruncations ?? [], ...nz(r),
 });
-const rustContractToModel = (r: any): any => ({
+export const rustContractToModel = (r: any): any => ({
   shape: "contract", module: r.module, provides: r.provides, unusedExports: r.unusedExports,
   depends: r.depends, afferent: r.afferent, efferent: r.efferent, ...nz(r),
 });
-const rustNeighborhoodToModel = (r: any): any => ({
+export const rustNeighborhoodToModel = (r: any): any => ({
   shape: "neighborhood", anchor: anchorOf(r), members: r.members, coreFiles: r.coreFiles,
   peripheryFiles: r.peripheryFiles, boundaryCut: r.boundaryCut, cohesion: r.cohesion, depth: r.depth,
   hops: r.hops, ...nz(r),
 });
-const rustCompareToModel = (r: any): any => ({
+export const rustCompareToModel = (r: any): any => ({
   shape: "comparison", a: { symbol: r.aSymbol, file: r.aFile }, b: { symbol: r.bSymbol, file: r.bFile },
   shared: r.shared, aOnly: r.aOnly, bOnly: r.bOnly, similarity: r.similarity, depth: r.depth, ...nz(r),
 });
-const rustReachToModel = (r: any): any => ({
+export const rustReachToModel = (r: any): any => ({
   shape: "reaches", from: { symbol: r.fromSymbol, file: r.fromFile },
   // the TS model omits `file` on the TARGET when the caller named only a symbol — an absent file is "any file
   // with this symbol", and emitting `file: undefined` would render as a located target that was never asked for
@@ -84,7 +84,7 @@ const rustReachToModel = (r: any): any => ({
   // "this was a call path" — the two claims are not interchangeable
   ...(r.viaCoupling ? { viaCoupling: true } : {}), ...nz(r),
 });
-const rustRefactorToModel = (r: any): any => ({
+export const rustRefactorToModel = (r: any): any => ({
   shape: "refactor", anchor: anchorOf(r),
   impact: rustImpactToModel(r.impact), dependencies: rustSetToModel(r.dependencies), contract: rustContractToModel(r.contract),
 });
@@ -100,7 +100,7 @@ const rustCouplingToModel = (r: any): any => ({
   shape: "coupling", anchor: anchorOf(r), keys: r.keys, total: r.total, ...nz(r),
 });
 
-const rustSetToModel = (r: any): any => ({
+export const rustSetToModel = (r: any): any => ({
   shape: r.shape,
   anchor: { symbol: r.anchorSymbol, file: r.anchorFile },
   members: r.members,
@@ -114,7 +114,7 @@ const rustSetToModel = (r: any): any => ({
 // front-end: it answers structural questions and routes lexical/semantic ones to grep/RAG. Emits whatever
 // model the chosen shape produces (with the routing decision attached).
 export async function runAsk(a: Args): Promise<number> {
-  const { ask } = await import("../codebase/grow/route.js");
+  const { ask } = await import("./route.js");
   emit(`Routing: "${a.ask}"…`);
   let res: any;
   try { res = await ask(a.repo, a.ask!, { model: a.model, claudeBin: a.claudeBin, skeleton: a.skeleton }); }
@@ -195,17 +195,11 @@ export async function runConsumerSet(a: Args, scan: typeof import("../codebase/s
   const rustAddon = await rustShapeOk(a);
   // No catch-to-null: the TypeScript scan it fell back to is gone, so an addon failure IS the answer.
   let set: any;
-  try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false)); }
+  // Opt-in name-grounded recall (--recall name) — UNVERIFIED leads folded in as the separate `recalled` list.
+  // The import floor is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers
+  // still use the exact symbol name; the core recovers them deterministically in the same pass.
+  try { set = rustSetToModel(rustAddon.projectConsumerSet(a.repo, a.anchorFile!, a.symbol!, false, a.recall === "name")); }
   catch (e) { err(`consumer scan failed: ${(e as Error).message}`); }
-  // Opt-in name-grounded recall — adds UNVERIFIED leads (kept separate from verified members). The floor
-  // is thin/absent for Ruby (global constants) and C/C++ (no #include parser), where callers still use the
-  // exact symbol name; this recovers them deterministically. See codebase/scan/name_consumers.ts.
-  if (a.recall === "name") {
-    const { scan_name_consumers } = await import("../codebase/scan/up/name_consumers.js");
-    const { attachRecalled } = await import("../codebase/grow/project_set.js");
-    try { attachRecalled(set, await scan_name_consumers(a.repo, a.anchorFile!, a.symbol!)); }
-    catch (e) { process.stderr.write(`name recall skipped: ${(e as Error).message}\n`); }
-  }
   // CROSS-STACK MOAT — attach the anchor's shared-key readers/writers (the non-textual coupling), on by default.
   const overlay = await couplingOverlay(a, new Set(set.members.map((m: any) => `${m.file}#${m.symbol}`)));
   const model: any = { mode: "codebase", ...set, crossStack: overlay.crossStack, crossStackTruncations: overlay.truncations };
@@ -252,14 +246,23 @@ export async function runDependencySet(a: Args, scan: typeof import("../codebase
   // that is a container-bound concrete impl, so the answer is complete in one query (no follow-up grep).
   if (process.env.SEAM_DI_RESOLVE !== "0") {   // DEFAULT-ON: agents never knew to set the flag, so the DI resolution silently never ran (observed: an agent reported "Seam did not print the selection condition" and read the module by hand). =0 kills it.
     const { diBindingForClass } = await import("../codebase/di/index.js");
-    const { impls_of } = await import("../codebase/scan/down/interface_index.js");
+    // The core's interface→impl (DI) index, batched — but built LAZILY, on the first member that actually
+    // needs it. Most sets are plain classes the container binds directly, and forcing the whole-repo interface
+    // parse for them would put a cold index build on every `--query dependencies`.
+    let implsOf: Map<string, { cls: string; file: string }[]> | null = null;
+    const implsOfSet = (): Map<string, { cls: string; file: string }[]> => {
+      if (implsOf) return implsOf;
+      const names: string[] = set.members.map((m: any) => m.symbol);
+      const rows = rustAddonD.implsOfBatch(a.repo, names) as string[][][];
+      return (implsOf = new Map(names.map((n, i) => [n, rows[i].map(([cls, file]) => ({ cls, file }))])));
+    };
     for (const m of set.members) {
       let b = await diBindingForClass(a.repo, m.symbol);   // member IS a container-bound concrete impl
       if (!b) {
         // …or member is an INTERFACE type-ref: chain the impl-index → its impl's binding, so the answer is
         // complete even when the concrete impls don't surface as their own members. impls_of is empty unless
         // `m.symbol` is a genuine in-repo interface, so this never fabricates a binding on a plain class.
-        for (const im of await impls_of(a.repo, m.symbol)) {
+        for (const im of implsOfSet().get(m.symbol) ?? []) {
           const ib = await diBindingForClass(a.repo, im.cls);
           if (ib) { b = ib; break; }
         }

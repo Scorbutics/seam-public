@@ -1122,6 +1122,7 @@ dependencies = [
  "seam-lang",
  "seam-resolve",
  "seam-scan",
+ "serde_json",
 ]
 
 [[package]]

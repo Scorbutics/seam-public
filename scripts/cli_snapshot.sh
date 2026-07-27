@@ -23,12 +23,18 @@ run() { # run <name> <args...>
   echo "$?" >"$OUT/$name.code"
   # the .seam cache path and timings vary per run; strip them so the diff is about ANSWERS
   sed -i -E 's|/tmp/[a-zA-Z0-9_.-]+||g; s/[0-9]+(\.[0-9]+)?(ms|s)\b/T/g; s/[0-9]{4}-[0-9]{2}-[0-9]{2}[T ][0-9:.]+/D/g' "$OUT/$name.out" "$OUT/$name.err"
+  sed -i -E 's/^(\[route:[a-z]+\]).*/\1/' "$OUT/$name.out"
 }
 run grow        --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --data-coupling floor
 run concern     --repo "$R" --scan --auto --intent "how is a payment persisted" --anchor-file "$A" --symbol "$S" --concern --data-coupling floor --format concern
 run growfrom    --repo "$R" --scan --auto --intent "how is a payment persisted" --grow-from "$A#$S" --data-coupling floor
 run diff        --repo "$R" --file ../sample.patch
-for q in set impact contract neighborhood compare reach refactor writers coupling; do
+for q in set impact contract neighborhood compare reach refactor writers coupling dependencies; do
   run "q_$q" --repo "$R" --scan --query "$q" --anchor-file "$A" --symbol "$S" --data-coupling floor
 done
+# The two paths a shape-only sweep MISSES, and the reason a deletion once looked safe when it wasn't:
+# name-grounded recall (--recall name) and the NL router (--query ask). Offline, `ask` takes the no-backend
+# branch — which still exercises the routing entry point, so a broken wire shows up as a changed message.
+run q_recall    --repo "$R" --scan --query consumers --anchor-file "$A" --symbol "$S" --recall name --data-coupling floor
+run q_ask       --repo "$R" --scan --query ask --ask "who calls $S" --data-coupling floor
 echo "snapshot: $OUT ($(ls "$OUT" | wc -l) files)"

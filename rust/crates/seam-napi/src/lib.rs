@@ -971,22 +971,33 @@ impl From<seam_shapes::ConsumerSet> for ConsumerSetDto {
 
 /// projectConsumerSet — the anchor's resolved IN-edges (who calls/uses it), as a SET (built from an UP footprint).
 #[napi]
-pub fn project_consumer_set(repo: String, anchor_file: String, symbol: String, data_coupling: Option<bool>) -> ConsumerSetDto {
-    match seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "up", data_coupling.unwrap_or(false)) {
-        Some(g) => seam_shapes::project_consumer_set(&g).into(),
+/// `recall` opts INTO name-grounded recall — UNVERIFIED leads folded in as the separate `recalled` list (never
+/// `members`). The import-based floor is thin/absent for Ruby (global constants) and C/C++ (no #include
+/// parser), where callers still use the exact symbol name; this recovers them deterministically.
+pub fn project_consumer_set(repo: String, anchor_file: String, symbol: String, data_coupling: Option<bool>, recall: Option<bool>) -> ConsumerSetDto {
+    let mut set = match seam_scan::build_footprint(&repo, &anchor_file, Some(&symbol), "up", data_coupling.unwrap_or(false)) {
+        Some(g) => seam_shapes::project_consumer_set(&g),
         None => seam_shapes::ConsumerSet {
             shape: "set".to_string(),
-            anchor_symbol: symbol,
-            anchor_file,
+            anchor_symbol: symbol.clone(),
+            anchor_file: anchor_file.clone(),
             members: Vec::new(),
             unresolved: Vec::new(),
             recalled: Vec::new(),
             no_structure: true,
             reason: Some("none".to_string()),
             resolution_quality: "FULL".to_string(),
-        }
-        .into(),
+        },
+    };
+    if recall.unwrap_or(false) {
+        let raw = seam_scan::name_consumers::scan_name_consumers(&repo, &anchor_file, &symbol);
+        let cs: Vec<seam_shapes::NameConsumer> = raw
+            .into_iter()
+            .map(|c| seam_shapes::NameConsumer { file: c.file, symbol: c.symbol, kind: c.kind, enclosing: c.enclosing, line: c.line, call: c.call })
+            .collect();
+        seam_shapes::attach_recalled(&mut set, &cs);
     }
+    set.into()
 }
 
 /// projectDependencySet — the anchor's resolved OUT-edges (what it uses), as a SET (built from a DOWN footprint).
@@ -2086,4 +2097,83 @@ pub fn resolve_anchor_address(repo: String, anchor_file: String, symbol: String)
         default_export_local: seam_lang::ast::default_export_local(&ctx, &units),
         candidates,
     })
+}
+
+// ── the SHAPE ROUTER (grow/route.ts) ──────────────────────────────────────────────────────────────────────
+// The routing JUDGEMENT is an LLM pass, so it is split: `routePrompt` builds the prompt from the SHAPES
+// registry, `routeParse` validates the reply against that same registry. The pass itself stays with the
+// caller, because only the TypeScript side can reach the MCP host bus (sampling) — routing over pure sampling
+// with no local binary is a supported path, and folding the spawn in here would silently kill it.
+
+/// The registered shape ids, in registry order — the closed set a router answer must name.
+#[napi]
+pub fn shape_ids() -> Vec<String> {
+    seam_shapes::SHAPES.iter().map(|s| s.id.to_string()).collect()
+}
+
+/// The routing prompt for `question`, built from the SHAPES registry (adding a shape updates it automatically).
+#[napi]
+pub fn route_prompt(question: String) -> String {
+    seam_shapes::route_prompt(&question)
+}
+
+#[napi(object)]
+pub struct RouteDecisionDto {
+    pub shape: String,
+    pub target: Option<String>,
+    pub target2: Option<String>,
+    pub reason: String,
+}
+
+/// A model reply (raw text, or a JSON array) → the routing decision, or null when it names no registered
+/// shape. Null is a ROUTE FAILURE the caller reports as such — never a silent fallback to a wrong shape.
+#[napi]
+pub fn route_parse(reply: String) -> Option<RouteDecisionDto> {
+    let values = seam_llm::extract_json_array(&reply).ok()?;
+    seam_shapes::parse_route(&values).map(|d| RouteDecisionDto {
+        shape: d.shape,
+        target: d.target,
+        target2: d.target2,
+        reason: d.reason,
+    })
+}
+
+#[napi(object)]
+pub struct ResolvedNameDto {
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+    pub ambiguous: bool,
+}
+
+/// Resolve an extracted NAME to its definition — deterministic (a def lookup), test files demoted, ties broken
+/// by file. Null when the name is neither a def nor a recognisable module/file name in this repo.
+#[napi]
+pub fn resolve_name(repo: String, name: String) -> Option<ResolvedNameDto> {
+    seam_shapes::resolve_name(&repo, &name).map(|r| ResolvedNameDto {
+        symbol: r.symbol,
+        file: r.file,
+        kind: r.kind,
+        ambiguous: r.ambiguous,
+    })
+}
+
+/// scanNameConsumers — the name-grounded recall candidates for an anchor symbol (UNVERIFIED leads). Exposed on
+/// its own so the recall scan is inspectable; `projectConsumerSet(recall)` is the wired path.
+#[napi]
+pub fn scan_name_consumers(repo: String, anchor_file: String, symbol: String) -> Vec<NameConsumerDto> {
+    seam_scan::name_consumers::scan_name_consumers(&repo, &anchor_file, &symbol)
+        .into_iter()
+        .map(|c| NameConsumerDto { file: c.file, symbol: c.symbol, kind: c.kind, enclosing: c.enclosing, line: c.line as u32, call: c.call })
+        .collect()
+}
+
+#[napi(object)]
+pub struct NameConsumerDto {
+    pub file: String,
+    pub symbol: String,
+    pub kind: String,
+    pub enclosing: String,
+    pub line: u32,
+    pub call: bool,
 }

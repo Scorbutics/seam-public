@@ -149,22 +149,3 @@ export function projectDependencySet(graph: ResolvedGraph): ConsumerSet {
   return projectEdgeSet(graph, "out", "deps");
 }
 
-// Fold name-grounded recall candidates into a SET as the SEPARATE `recalled` list (never `members`).
-// Recall is for files the structural floor missed ENTIRELY: dedupe by FILE against the verified members,
-// so a file the floor already resolved is not re-listed (this also drops the symbol's own import-binding
-// line, which the floor handled via the real usage). `nameConsumers` is the raw NameConsumer scan output.
-export function attachRecalled(set: ConsumerSet, nameConsumers: { file: string; symbol: string; kind: string; enclosing: string; line: number; call: boolean }[]): ConsumerSet {
-  const haveFiles = new Set(set.members.map((m) => m.file));
-  const recalled: ConsumerMember[] = [];
-  const seen = new Set<string>();
-  for (const c of nameConsumers) {
-    const k = `${c.file}#${c.symbol}`;
-    if (haveFiles.has(c.file) || seen.has(k)) continue;   // file already covered by the floor, or a duplicate
-    seen.add(k);
-    recalled.push({ symbol: c.symbol, file: c.file, line: to1(c.line), kind: c.kind, enclosing: c.enclosing,   // NameConsumer.line is 0-based too
-      edgeKind: c.call ? "name-call" : "name-ref", provenance: "SUGGESTED" });
-  }
-  recalled.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.symbol.localeCompare(b.symbol));
-  if (recalled.length) set.recalled = recalled;
-  return set;
-}

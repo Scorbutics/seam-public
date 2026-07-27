@@ -74,7 +74,7 @@ const QUERY_HANDLERS: Record<string, (a: Args, scan: typeof import("../codebase/
 async function maybeAutoRoute(a: Args, scan: typeof import("../codebase/scan/index.js")): Promise<number | null> {
   const { available } = await import("../core/llm.js");
   if (!available(a.claudeBin)) return null;                       // routing is semantic — offline stays a flow grow
-  const { routeQuestion, resolveName } = await import("../codebase/grow/route.js");
+  const { routeQuestion, resolveName } = await import("./route.js");
   let d: Awaited<ReturnType<typeof routeQuestion>>;
   try { d = await routeQuestion(a.repo, a.intent!, { model: a.model, claudeBin: a.claudeBin }); }
   catch { return null; }                                          // router failure → fall through to the flow grow

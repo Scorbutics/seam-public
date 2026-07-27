@@ -1,10 +1,10 @@
-// Shape router (grow/route.ts) — the semantic front-end. The routing JUDGEMENT is an LLM pass, pinned here
+// Shape router (cli/route.ts + the core's SHAPES registry) — the semantic front-end. The routing JUDGEMENT is an LLM pass, pinned here
 // with a host-bus canned reply (keyed by the "shape-route" tag) so dispatch + name-resolution + the
 // route-aways are deterministic and testable without a live model.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { HostBus, set_host_bus } from "../../src/core/llm.js";
-import { ask, routeQuestion, resolveName, SHAPES } from "../../src/codebase/grow/route.js";
+import { ask, routeQuestion, resolveName, shapeIds } from "../../src/cli/route.js";
 
 const repo = join("test", "fixtures", "class-repo");
 const withReply = async <T>(reply: string, fn: () => Promise<T>): Promise<T> => {
@@ -75,8 +75,9 @@ describe("ask: route → resolve → run", () => {
 });
 
 describe("registry is the source of truth", () => {
-  test("every structural shape the router can pick has a needs spec", () => {
+  test("every structural shape the router can pick is in the core registry", async () => {
+    const ids = await shapeIds();
     for (const id of ["consumers", "dependencies", "reaches", "contract", "neighborhood", "compare", "flow"])
-      expect(SHAPES.some((s) => s.id === id)).toBe(true);
+      expect(ids).toContain(id);
   });
 });

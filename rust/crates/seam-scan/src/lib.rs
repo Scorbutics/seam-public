@@ -14,6 +14,7 @@ pub mod footprint;
 pub mod graph;
 pub mod merge;
 pub mod module_graph;
+pub mod name_consumers;
 pub mod string_coupling;
 mod util;
 
