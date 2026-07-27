@@ -26,13 +26,23 @@ import { to1 } from "../codebase/grow/project_set.js";
 // A shape flips ONLY when its comparator is byte-identical, and the TS implementation stays as the oracle —
 // this is a router, not a replacement. Any failure inside the addon falls through to TS rather than surfacing:
 // a shape that cannot answer is worse than one that answers a little slower.
-async function rustShapeOk(a: Args): Promise<any | null> {
-  if (!a.anchorFile) return null;
-  try {
-    const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/grow/rust_core.js");
-    if (!rustCoreEnabled() || !rustCanParse(a.anchorFile) || !rustCanServeRepo(a.repo)) return null;
-    return loadAddon();
-  } catch { return null; }
+// THE SHAPES REQUIRE THE CORE, exactly as the grow does. This returned null to mean "compute it in TypeScript
+// instead", and every caller carried a second implementation for that branch — the TS coupling floor, which is
+// what kept 13 adapter modules and the scan layer alive long after the Rust core was serving every real query.
+// Returning null now means the core cannot answer, and the caller says so rather than answering differently.
+//
+// The conditions are all satisfiable: every language `_LANG_BY_EXT` maps has a vendored grammar (pinned by
+// rust_language_routing.test.ts's mapped ⊆ linked assertion), so reaching the throw means the addon is missing
+// or was disabled, not that the repo is unusual.
+async function rustShapeOk(a: Args): Promise<any> {
+  if (!a.anchorFile) err("this shape requires --center <file>[#symbol]");
+  const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/grow/rust_core.js");
+  const why = !rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
+    : !rustCanParse(a.anchorFile!) ? `no vendored grammar for ${a.anchorFile}`
+    : !rustCanServeRepo(a.repo) ? "the repo holds a language the core cannot parse"
+    : null;
+  if (why) err(`the Seam core (Rust addon) cannot serve this shape: ${why}. Build it with \`make -C rust\` — there is no TypeScript engine to fall back to.`);
+  return loadAddon();
 }
 
 // The Rust SET dto → the TS model shape. The members are already byte-identical (pinned by
