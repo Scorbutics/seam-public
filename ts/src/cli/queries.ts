@@ -604,13 +604,12 @@ export async function runNeighborhood(a: Args): Promise<number> {
   const { projectNeighborhood } = await import("../codebase/grow/neighborhood.js");
   const { renderNeighborhood } = await import("../codebase/llm_context.js");
   emit(`Mapping the subsystem around ${a.symbol}…`);
-  // RUST FIRST, still ONLY with coupling OFF — the egress gap this gate was opened for is FIXED (the core now
-  // grounds the anchor's learned per-file keys, so `stripe` is in the Rust ball), but a SECOND, narrower
-  // difference remains: on apps/web/modules/settings/my-account/profile-view.tsx#onConfirmButton the Rust ball
-  // carries one extra boundary-crossing coupling edge (cohesion 100% → 94%, boundary cut 0 → 1). One edge is
-  // enough to change the core/periphery partition, which is the whole output of this shape, so it keeps the
-  // gate until that edge is accounted for. Every other shape routes unconditionally.
-  const rustA3 = a.dataCoupling === false ? await rustShapeOk(a) : null;
+  // RUST FIRST — ungated. The last reported difference (a boundary-crossing coupling edge on
+  // profile-view.tsx#onConfirmButton) did NOT reproduce engine-to-engine: called directly, in one process
+  // against one store, the two projections are identical member-for-member with the same boundary cut. It was
+  // STORE DRIFT inside the comparator — the flywheel writes `.seam` during the first of its two CLI runs, so
+  // the second engine reads a store the first one changed. The harness now settles the store before comparing.
+  const rustA3 = await rustShapeOk(a);
   let n: any = null;
   // `a.depth` verbatim, NOT `> 1 ? … : null` like impact: this shape passes --depth straight through (default
   // 1) while the addon's own default is 2, so gating it would silently widen the ball on every default query.

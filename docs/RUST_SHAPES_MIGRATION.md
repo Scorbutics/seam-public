@@ -224,8 +224,7 @@ DTO→model adapter. Any addon failure falls through to TS.
 
 | shape | routed |
 |---|---|
-| consumers, dependencies, contract, writers, coupling, **impact**, **reaches**, **refactor** | **always** |
-| neighborhood | **only with `--no-data-coupling`** |
+| consumers, dependencies, contract, writers, coupling, impact, reaches, refactor, neighborhood | **always** |
 
 THE COUPLING OVERLAY IS NOW IN THE CORE, which is what lifted three of the four gates:
 - `seam_couple::anchor_counterparts` — the UNCAPPED floor counterparts (the targeted bridge is bounded by
@@ -237,26 +236,29 @@ THE COUPLING OVERLAY IS NOW IN THE CORE, which is what lifted three of the four 
   from "reachable by calls".
 - `refactor` routes, since its impact half now carries the crossings.
 
-`neighborhood` STAYS GATED, but the reason has CHANGED and narrowed. The egress gap is FIXED: the core now
-grounds the anchor's LEARNED per-file keys (the flywheel's own output, replayed from `.seam`), so the `stripe`
-boundary is in the Rust ball. What remains is one extra boundary-crossing coupling EDGE on
-`apps/web/modules/settings/my-account/profile-view.tsx#onConfirmButton` (cohesion 100% → 94%, boundary cut
-0 → 1). One edge moves the core/periphery partition, which IS this shape's output, so the gate holds.
+**ALL EIGHT SHAPES NOW ROUTE UNGATED**, in their default (coupling ON) configuration.
 
-THE EGRESS FIX, and two dead ends worth recording so they are not retried:
+The last reported difference — a boundary-crossing coupling edge on
+`apps/web/modules/settings/my-account/profile-view.tsx#onConfirmButton` (cohesion 100% → 94%) — was NOT an
+engine divergence. Called directly, in ONE process against ONE store, the two projections are identical
+member-for-member with the same boundary cut. It was STORE DRIFT INSIDE THE COMPARATOR: the flywheel WRITES
+`.seam` as it learns, so in a "run TS, run Rust, diff" harness the second engine reads a store the first one
+just changed. `wired_shapes.ts` now settles the store with a warm-up run before comparing. Worth remembering
+for every future comparator over a LEARNING engine — the harness must settle what it measures.
+
+THE EGRESS FIX that preceded it, and two dead ends worth recording so they are not retried:
 - ROOT CAUSE: the anchor's own keys came from the FLOOR only. TS's `probe` path also admits the per-file keys
   the flywheel learned (`route-egress` → `egress stripe`). `resolve_coupling` now passes
   `anchor_proposed_keys(..., llm: false)` — cache only, never a model call inside a grow.
 - DEAD END 1: registering the effect-INFERRED http clients into the framework registry. TS feeds that registry
   from PLUGINS only; inferred clients are a weaker signal used for the matcher axis alone. Registering them
-  widened the egress/route alternation and moved `resolvecoupling` 119/0 → 112/7. Reverted; the registry
-  mechanism stays (it is the correct home for plugin clients) but nothing auto-registers into it.
-- DEAD END 2: gating the per-file keys on the scoped/unscoped signal. It changed nothing — the 7 mismatches
-  were the registration, not the keys. Measure before attributing.
-- A REAL CRASH, found on the way: the client alternation is compiled at runtime, and keycloak's 143 inferred
-  names blew the regex program-size limit — an `unwrap` that ABORTED the host process (`CompiledTooBig` across
-  the napi boundary). JS has no such limit, so TS never hit it. Now built with a raised limit and a fallback to
-  the built-ins: fewer inferred clients is a degraded answer, killing the caller is not an answer.
+  moved `resolvecoupling` 119/0 → 112/7. Reverted.
+- DEAD END 2: gating the per-file keys on the scoped/unscoped signal — it changed nothing, because the 7
+  mismatches were the registration. I attributed the regression to the wrong change; isolating them one at a
+  time is what settled it.
+- A REAL CRASH found on the way: the client alternation is compiled at runtime, and keycloak's 143 inferred
+  names blew the regex program-size limit through an `unwrap` that ABORTED the host process. Now built with a
+  raised limit and a fallback to the built-ins.
 
 **Gates: `wired_shapes.ts` 96/96 renders byte-identical** (12 anchors × 8 shapes, 50 non-trivial),
 `reach` 72/72 with hops ON, `writers_coupling` 24/24, `shapes_set` 214/0, suite 1323/0.

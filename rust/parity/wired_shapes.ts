@@ -22,9 +22,7 @@ const CLI = "/home/scorbutics/seam-phase0/ts/src/cli/decompose.ts";
 // which needs a --to-symbol pair.
 const WIRED: { q: string; extra?: string[] }[] = [
   { q: "consumers" }, { q: "dependencies" }, { q: "contract" }, { q: "writers" }, { q: "coupling" },
-  { q: "impact" }, { q: "refactor" },
-  // the one shape still gated (a residual coupling edge in the ball) — exercised in its ROUTED configuration
-  { q: "neighborhood", extra: ["--no-data-coupling"] },
+  { q: "impact" }, { q: "refactor" }, { q: "neighborhood" },
 ];
 
 const defs = (addon.enumerateDefs(repo, 200000, undefined, false) as any[])
@@ -32,7 +30,12 @@ const defs = (addon.enumerateDefs(repo, 200000, undefined, false) as any[])
 const step = Math.max(1, Math.floor(defs.length / maxAnchors));
 const anchors = defs.filter((_, i) => i % step === 0).slice(0, maxAnchors);
 
-const run = (query: string, center: string, engine: "0" | "1", extra: string[] = []): string => {
+// SETTLE THE STORE FIRST. The flywheel WRITES `.seam` as it learns, so a naive "run TS, run Rust, diff" makes
+// the second engine read a store the first one changed and reports a divergence that no engine actually has
+// (measured: a neighborhood boundary-cut difference that vanished when both were called in one process). One
+// warm-up run per (query, center) settles the learning; only the two runs after it are compared.
+const settle = (query: string, center: string, extra: string[] = []) => { runOnce(query, center, "1", extra); };
+const runOnce = (query: string, center: string, engine: "0" | "1", extra: string[] = []): string => {
   try {
     return execFileSync("bun", [CLI, "--scan", "--repo", repo, "--query", query, "--center", center, "--format", "llm-context", ...extra],
       { env: { ...process.env, SEAM_RUST_CORE: engine }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28 });
@@ -45,7 +48,8 @@ const t0 = Date.now();
 for (const [i, d] of anchors.entries()) {
   const center = `${d.file}#${d.name}`;
   for (const { q, extra } of WIRED) {
-    const ts = run(q, center, "0", extra), rust = run(q, center, "1", extra);
+    settle(q, center, extra);
+    const ts = runOnce(q, center, "0", extra), rust = runOnce(q, center, "1", extra);
     if (/resolved: [1-9]|impacted: [1-9]|provides: [1-9]|members: [1-9]|shared key/.test(ts)) nonTrivial++;
     if (ts === rust) { ok++; continue; }
     bad++;
