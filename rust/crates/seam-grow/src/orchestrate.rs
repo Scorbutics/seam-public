@@ -1,9 +1,12 @@
 //! P2 STRUCTURAL EXPANSION — the deterministic wavefront flood: each wave recomputes the frontier once and
 //! expands EVERY ready head; the nodes it adds become the next wave's frontier (BFS region-growing), bounded by
 //! the DETERMINISTIC containment (hub-collapse / ubiquity / up-hop / legacy distance gate). Port of
-//! `_phaseExpand` + `_applyMove` + `_callerFilesFor`, restricted to the STRUCTURAL path (CLAUDE.md invariant:
-//! intent/embeddings never steer the grow — so `densify`/centroid/soft-border/tier are all DEAD here:
-//! `haveField()` is false, the tier gate falls back to the legacy hop-distance gate, and iscore/fieldScore = 0).
+//! `_phaseExpand` + `_applyMove` + `_callerFilesFor`, INCLUDING the intent-shaped path: `densify`, the
+//! region-centroid field, the soft border, the tier rule and the decision-point frontier all live here now
+//! (`field.rs`). The CLAUDE.md invariant is unchanged and is enforced by construction rather than by omission:
+//! a STRUCTURAL grow builds no field (`IntentField::new(.., structural_grow=true, ..)` is inert), so
+//! `have()` is false, the tier gate falls back to the legacy hop-distance gate, iscore/fieldScore are 0 and
+//! the border floods — i.e. the structural answer is bit-for-bit what it was before the field existed.
 
 use crate::border_policies::{classify_hub, HubNode, HubOpts};
 use crate::exclude::Exclusion;
@@ -56,6 +59,23 @@ pub struct WaveOpts {
     /// Footprint exclusion — `--exclude` dirs and whether test files are kept. TS `excludeDirs` / `includeTests`.
     pub exclude_dirs: Vec<String>,
     pub include_tests: bool,
+    /// The INTENT text. None/empty (or `structural_grow`) → no field, and every intent-shaped decision below
+    /// degrades to its structural form. TS `opts.intent`.
+    pub intent: Option<String>,
+    /// STRUCTURAL grow: never build the field even with an intent — no tier gate, no intent ordering, no
+    /// border. TS `opts.structuralGrow`.
+    pub structural_grow: bool,
+    /// Soft intent-border tolerance. None → border OFF (flood every reachable node). TS `opts.borderTol` /
+    /// SEAM_GROW_BORDER_TOL.
+    pub border_tol: Option<f32>,
+    /// Which field the border reads: `intent` (default) | `centroid` | `blend`. Empty = read the env. TS
+    /// `opts.borderField` / SEAM_GROW_BORDER_FIELD.
+    pub border_field: String,
+    /// The tier rule governs the up-climb (pivot relevance instead of hop distance). TS `opts.tierGrow` /
+    /// SEAM_TIER_GROW, default ON — inert without a field.
+    pub tier_grow: bool,
+    /// The tier-2 on-intent pivot floor. TS `opts.tierMargin` / SEAM_TIER_MARGIN. NaN = read the env.
+    pub tier_margin: f32,
 }
 
 impl Default for WaveOpts {
@@ -77,6 +97,12 @@ impl Default for WaveOpts {
             coupling_hub_contain: true,
             exclude_dirs: Vec::new(),
             include_tests: false,
+            intent: None,
+            structural_grow: false,
+            border_tol: None,
+            border_field: String::new(),
+            tier_grow: true,
+            tier_margin: f32::NAN,
         }
     }
 }
@@ -94,7 +120,7 @@ impl WaveOpts {
     /// Add a field to WaveOpts ⇒ add it here.
     pub fn fingerprint(&self) -> String {
         format!(
-            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}",
+            "{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{}|{:?}|{}|{}|{}",
             self.max_steps,
             self.max_nodes,
             self.hub_gate,
@@ -109,6 +135,14 @@ impl WaveOpts {
             self.coupling_hub_contain,
             self.include_tests,
             self.exclude_dirs.join(","),
+            // the INTENT knobs are part of the question too: the same anchor under a different intent is a
+            // different grow, and serving one's cached answer for the other is the exact bug this doc warns about
+            self.intent.as_deref().unwrap_or(""),
+            self.structural_grow,
+            self.border_tol,
+            self.border_field,
+            self.tier_grow,
+            self.tier_margin,
         )
     }
 }
@@ -233,7 +267,15 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
     // here. Mirrors the TS `floodN()` in grow/orchestrate.ts — the two engines must agree.
     let flood_n = |d: &ResolvedGraph| -> usize { d.nodes.iter().filter(|n| !n.coupling).count() };
     let mut step = 0usize;
+    // THE INTENT FIELD, built once and DENSIFIED per wave (the flood reaches new files as it grows). Inert on a
+    // structural / intent-free grow, in which case every read below returns 0 and each decision degrades to the
+    // structural rule it had before the field existed.
+    let mut field = crate::field::IntentField::new(opts.intent.as_deref(), opts.structural_grow, &opts.border_field);
+    let tier_margin = if opts.tier_margin.is_nan() { crate::field::tier_margin() } else { opts.tier_margin };
     while flood_n(&data) < opts.max_nodes {
+        // densify BEFORE the frontier is ordered — this wave's candidates must be scored to be ranked or cut
+        field.densify(repo, &data.nodes);
+        field.grow_centroid(step, &data.nodes);
         // ── per-wave derivations ────────────────────────────────────────────────────────────────────────
         let mut g = from_resolved_graph(&data);
         assign_roles(&mut g);
@@ -326,6 +368,38 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
         };
         let is_hub = |n: &GraphNode| -> bool { classify_hub(&hub_opts, &HubNode { id: &n.id, kind: &n.kind, file: &n.file, coupling: n.coupling }).is_some() };
 
+        // ── SOFT INTENT-BORDER ──────────────────────────────────────────────────────────────────────────
+        // The SHAPE: nodes reachable from an anchor along a path whose relevance never falls more than
+        // `border_tol` below that path's HIGH-WATER MARK. Flood freely toward more-relevant nodes, tolerate a
+        // shallow dip (a low-scoring bridge that recovers), HALT at a relevance cliff. A FIXPOINT relaxation, not
+        // a walk, so the result is order-independent — which is what makes it deterministic under a frontier
+        // whose order the field itself perturbs. No tol / no field → `None` → every node is in-shape.
+        let in_shape: Option<HashSet<String>> = opts.border_tol.map(|tol| {
+            let score_by_id: HashMap<&str, f32> = data.nodes.iter().map(|n| (n.id.as_str(), field.field_score(n))).collect();
+            let sc = |id: &str| -> f32 { score_by_id.get(id).copied().unwrap_or(0.0) };
+            let mut peak: HashMap<String, f32> = anchor_ids.iter().map(|a| (a.clone(), sc(a))).collect();
+            let mut pass = 0usize;
+            let mut changed = true;
+            while changed && pass <= data.nodes.len() {
+                changed = false;
+                pass += 1;
+                for (u, nbrs) in &adj {
+                    let Some(pu) = peak.get(u).copied() else { continue };
+                    for v in nbrs {
+                        if pu - sc(v) > tol {
+                            continue; // a cliff DOWN from the high-water mark — the border cuts here
+                        }
+                        let np = sc(v).max(pu); // carry the high-water mark forward
+                        if np > peak.get(v).copied().unwrap_or(f32::NEG_INFINITY) {
+                            peak.insert(v.clone(), np);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+            peak.into_keys().collect()
+        });
+
         // ── build the move list ─────────────────────────────────────────────────────────────────────────
         let mut moves: Vec<Move> = Vec::new();
         for n in &data.nodes {
@@ -334,6 +408,9 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             }
             if !grounded.contains(&n.id) {
                 continue; // reached only by a bare-name call match → surface it, don't flood through it
+            }
+            if in_shape.as_ref().is_some_and(|s| !s.contains(&n.id)) {
+                continue; // beyond the soft border → KEEP the node, but don't flood THROUGH it
             }
             let is_core = role_by_id.get(&n.id).map(String::as_str) == Some("core");
             let hinfo = classify_hub(&hub_opts, &HubNode { id: &n.id, kind: &n.kind, file: &n.file, coupling: n.coupling });
@@ -358,8 +435,26 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                     parked.insert(n.id.clone(), "decision".to_string());
                     continue;
                 }
-                // tierUp is always false without an embedding field → the legacy hop-distance gate governs the up-climb.
-                if d == Dir::Up {
+                // TIER RULE — pivot RELEVANCE discriminates the up-climb, replacing the distance gate. The
+                // up-climb is the FAN direction (a dependency climbing back to its OTHER consumers — the sibling
+                // entry points). A move is admitted when it is spine-ward (bears a grounded crossing /
+                // flow-subject / coupling — tier 1) or fans through an ON-INTENT, non-ubiquitous pivot (tier 2);
+                // otherwise it is PARKED as a decision point (tier 3). Without a field `tier_up` is false and the
+                // LEGACY distance+hub gate governs instead — degrade to order-by-structure, never park the whole
+                // frontier.
+                let tier_up = opts.tier_grow && field.have() && !crossing_ward;
+                if d == Dir::Up && tier_up {
+                    // tier 3 — a ubiquitous/type hub, or an off-intent pivot: KEEP the node, PARK its fan.
+                    if hub {
+                        parked.insert(n.id.clone(), if opts.hub_collapse { "hub".to_string() } else { "decision".to_string() });
+                        continue;
+                    }
+                    if field.field_score(n) < tier_margin {
+                        parked.insert(n.id.clone(), "decision".to_string());
+                        continue;
+                    }
+                    // else tier 2 — an on-intent, non-ubiquitous pivot: follow the whole fan (no distance gate).
+                } else if d == Dir::Up {
                     if is_core && dist_of(&n.id) < UPCLIMB_MIN_DIST {
                         continue;
                     }
@@ -373,7 +468,11 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                 moves.push(Move { node: n.clone(), dir: d });
             }
         }
-        let ordered = order_moves(moves, &crossings, &type_ref_only, &dist, &is_hub);
+        // ORDERING reads the RAW intent cosine (`_iscore`), not the border's `field_score`: the centroid is a
+        // BORDER field, and letting it steer the frontier order would make the ranking depend on what the flood
+        // happened to keep first. Empty field → every band is 0 → the structural order is exactly unchanged.
+        let iscore = |n: &GraphNode| -> f32 { field.iscore(n) };
+        let ordered = order_moves(moves, &crossings, &type_ref_only, &dist, &is_hub, &iscore);
         if ordered.is_empty() {
             break;
         }
@@ -491,7 +590,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             .map(|(id, cut_by)| {
                 let n = by_id[id.as_str()];
                 let reached_via = reach_phrases(n, &data.edges, |x| x != n.id && present.contains(x), |x| node_sym.get(x).cloned().unwrap_or_else(|| x.to_string()));
-                seam_scan::graph::FrontierPoint { id: id.clone(), symbol: n.symbol.clone(), file: normpath(&n.file), kind: n.kind.clone(), reached_via, score: 0.0, cut_by: cut_by.clone() }
+                seam_scan::graph::FrontierPoint { id: id.clone(), symbol: n.symbol.clone(), file: normpath(&n.file), kind: n.kind.clone(), reached_via, score: (field.field_score(n) as f64 * 1000.0).round() / 1000.0, cut_by: cut_by.clone() }
             })
             .collect();
         // sort: score desc (all 0) → cutRank → symbol.
@@ -546,7 +645,16 @@ fn reach_phrases(n: &GraphNode, edges: &[GraphEdge], is_reacher: impl Fn(&str) -
 
 /// ORDER the whole frontier best-first. Port of `_orderMoves` (structural: iscore/band are 0, so the effective
 /// order is crossing → delegation-over-typeref → non-hub → closeness → original-direction → complexity).
-fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only: &HashSet<String>, dist: &IndexMap<String, usize>, is_hub: &impl Fn(&GraphNode) -> bool) -> Vec<Move> {
+// COARSE INTENT BUCKET. Banding, not raw score: a hair-more-relevant FAR node would otherwise thrash the
+// budget and undo the closeness bound, so only a CLEARLY-relevant node is promoted. 8 buckets covers typical
+// MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent). Mirrors TS `_INTENT_BANDS` / `band`.
+fn intent_bands() -> f32 {
+    std::env::var("SEAM_INTENT_BANDS").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v > 0.0).unwrap_or(8.0)
+}
+
+fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only: &HashSet<String>, dist: &IndexMap<String, usize>, is_hub: &impl Fn(&GraphNode) -> bool, iscore: &impl Fn(&GraphNode) -> f32) -> Vec<Move> {
+    let bands = intent_bands();
+    let band = |n: &GraphNode| -> i64 { (iscore(n) * bands).round() as i64 };
     let dist_of = |id: &str| -> usize { dist.get(id).copied().unwrap_or(999) };
     let fwd = |m: &Move| -> i32 {
         let tagged = if m.node.direction.as_deref() == Some("backward") { Dir::Down } else { Dir::Up };
@@ -562,8 +670,13 @@ fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only:
             .then_with(|| (!type_ref_only.contains(&b.node.id) as i32).cmp(&(!type_ref_only.contains(&a.node.id) as i32)))
             // (2.5) UBIQUITY — a non-crossing shared hub grows LAST.
             .then_with(|| (is_hub(&a.node) as i32).cmp(&(is_hub(&b.node) as i32)))
-            // (3) INTENT band — 0 (no field). (4) CLOSENESS — nearest first.
+            // (3) INTENT band — a clearly-relevant node first, including a FAR one. Zero without a field, so
+            // this collapses to the structural order exactly as before.
+            .then_with(|| band(&b.node).cmp(&band(&a.node)))
+            // (4) CLOSENESS — nearest among similar-relevance (the bound).
             .then_with(|| dist_of(&a.node.id).cmp(&dist_of(&b.node.id)))
+            // (5) fine intent — orders within a band.
+            .then_with(|| iscore(&b.node).partial_cmp(&iscore(&a.node)).unwrap_or(std::cmp::Ordering::Equal))
             // (6) original direction before the reverse hop.
             .then_with(|| fwd(b).cmp(&fwd(a)))
             // (7) complexity.
@@ -651,6 +764,18 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     data = phase!("phase_expand", phase_expand(repo, data, &ex, opts)); // P2 structural wave
     if data_coupling {
         phase!("fan_couple", crate::coupling::fan_couple(repo, &mut data, &ws, &mut coupled, false)); // P3 deep couple (post-wave)
+    }
+    // DETERMINISTIC COUPLING BORDER — crop the off-intent shared-key fan the overlay auto-kept. Runs after the
+    // deep couple (it judges the complements that phase materialised) and only on an intent-shaped grow; the
+    // structural path skips it entirely, so a structural answer is untouched. SEAM_COUPLING_BORDER_DET=0 opts out.
+    let border_det = std::env::var("SEAM_COUPLING_BORDER_DET").map(|v| v != "0").unwrap_or(true);
+    if data_coupling && border_det && !opts.structural_grow {
+        if let Some(intent) = opts.intent.as_deref().filter(|s| !s.is_empty()) {
+            // Complements need a HIGHER bar than call-graph pivots: they are sibling consumers of a shared key,
+            // topically near the intent (embeddings are generous), so a dedicated margin cuts the fan while the
+            // on-intent flow — which the CALL graph reached — is unaffected.
+            phase!("border_coupling_det", crate::field::border_coupling_det(repo, &mut data, intent, crate::field::coupling_margin(), crate::field::coupling_fan()));
+        }
     }
     Some(data)
 }

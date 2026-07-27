@@ -496,6 +496,14 @@ pub struct GrowOptsDto {
     pub coupling_hub_contain: Option<bool>,
     pub exclude_dirs: Option<Vec<String>>,
     pub include_tests: Option<bool>,
+    /// The INTENT-SHAPED knobs. Omitted (the structural caller) ⇒ no field ⇒ the wave is bit-for-bit the
+    /// structural grow it was before the field existed — see WaveOpts.
+    pub intent: Option<String>,
+    pub structural_grow: Option<bool>,
+    pub border_tol: Option<f64>,
+    pub border_field: Option<String>,
+    pub tier_grow: Option<bool>,
+    pub tier_margin: Option<f64>,
 }
 
 impl GrowOptsDto {
@@ -516,6 +524,12 @@ impl GrowOptsDto {
             coupling_hub_contain: self.coupling_hub_contain.unwrap_or(d.coupling_hub_contain),
             exclude_dirs: self.exclude_dirs.unwrap_or(d.exclude_dirs),
             include_tests: self.include_tests.unwrap_or(d.include_tests),
+            intent: self.intent.filter(|s| !s.is_empty()),
+            structural_grow: self.structural_grow.unwrap_or(d.structural_grow),
+            border_tol: self.border_tol.map(|v| v as f32),
+            border_field: self.border_field.unwrap_or(d.border_field),
+            tier_grow: self.tier_grow.unwrap_or(d.tier_grow),
+            tier_margin: self.tier_margin.map(|v| v as f32).unwrap_or(d.tier_margin),
         }
     }
 }

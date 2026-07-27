@@ -227,6 +227,36 @@ pub fn embed_score_strings(intent: &str, values: &[String]) -> HashMap<String, f
     out
 }
 
+/// value → its embedding VECTOR. The vector half of `embed_score_strings`, sharing the same `STR_VEC` cache:
+/// the region-centroid border needs the vectors themselves, and re-embedding for that would double the cold
+/// cost of every intent grow. Values already scored come back free; only genuinely new ones are embedded.
+/// Counterpart of the `vec` field TS's `embedScoreDefs` returns alongside the score.
+pub fn embed_vecs(values: &[String]) -> HashMap<String, Vec<f32>> {
+    let mut out = HashMap::new();
+    if values.is_empty() || !available() {
+        return out;
+    }
+    let missing: Vec<String> = {
+        let cache = STR_VEC.lock().unwrap();
+        let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        values.iter().filter(|v| seen.insert(v.as_str()) && !cache.contains_key(*v)).cloned().collect()
+    };
+    if !missing.is_empty() {
+        let vecs = embed_many(&missing);
+        let mut cache = STR_VEC.lock().unwrap();
+        for (v, vec) in missing.iter().zip(vecs) {
+            cache.insert(v.clone(), vec);
+        }
+    }
+    let cache = STR_VEC.lock().unwrap();
+    for v in values {
+        if let Some(vec) = cache.get(v) {
+            out.insert(v.clone(), vec.clone());
+        }
+    }
+    out
+}
+
 /// The per-(repo, model) vector cache path — the same shape TS uses, so the two engines can share a warm cache
 /// on the same machine rather than each paying the embedding cost once.
 pub fn cache_path(repo: &str) -> PathBuf {

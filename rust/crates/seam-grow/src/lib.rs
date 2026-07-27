@@ -8,6 +8,7 @@
 pub mod border_policies;
 pub mod coupling;
 pub mod exclude;
+pub mod field;
 pub mod graph_ir;
 pub mod grow_index;
 pub mod orchestrate;

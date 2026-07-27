@@ -1031,6 +1031,7 @@ dependencies = [
  "rayon",
  "seam-cache",
  "seam-couple",
+ "seam-embed",
  "seam-fs",
  "seam-lang",
  "seam-resolve",

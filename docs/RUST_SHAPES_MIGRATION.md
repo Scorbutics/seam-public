@@ -485,32 +485,44 @@ thing the grow reads. So the requirement is "both engines load the same precisio
 the engine's choice. Note `process.env` does NOT reach the addon — use `syncSeamEnv`, or the harness measures
 a divergence it created.
 
-### THE LAST ITEM — the field's CONSUMPTION in the wave
+### THE LAST ITEM — the field's CONSUMPTION in the wave  ✅ PORTED (2026-07-27)
 
-An equivalent field is not an intent-shaped GROW. `densify` (orchestrate.ts:708), the soft border, the tier
-gate and the growing centroid read the field and live in the TS wave; the Rust wave has none of them
-(`border_policies.rs` says so explicitly: "tier-grow/up-hop/soft-border stay" on TS). `growViaRust` therefore
-still serves STRUCTURAL grows only, and `intentShapesGrow` keeps the rest on TS.
+An equivalent field was not an intent-shaped GROW. `densify`, the soft border, the tier gate and the growing
+centroid read the field and lived in the TS wave; the Rust wave had none of them. That is now ported —
+`rust/crates/seam-grow/src/field.rs` plus the decision points threaded through `orchestrate.rs`.
 
 SCOPE — I first wrote this as "171 lines" (`intent_rank.ts` + `key_ranker.ts`). That was wrong and the
 correction matters: those two files are the RENDER-side ranking. The wave-side consumption is inside
-`_growToTerminalsImpl` itself and is not extractable as a list of helpers —
-  · `densify` (:708) — embed the newly reached files each step, incrementally
-  · `_growCentroid` / `RegionCentroid` / `_fieldScore` (:731-745) — the region-centroid field, with the
-    `intent | centroid | blend` modes
-  · the FRONTIER ORDERING (:353-370) — relevance first, closeness as the tiebreak
-  · the SOFT BORDER (:917+, ~84 lines) — a FIXPOINT over path high-water marks that tolerates a shallow dip
-    and halts at a relevance cliff
-  · the TIER RULE — pivot score, parking the off-intent fan, and the decision-point frontier it emits
-These are threaded through the wave loop that Rust re-implements independently (`seam-grow`, 1826 lines), so
-the port is "add an intent field to the Rust wave and make its five decision points agree", not a file copy.
+`_growToTerminalsImpl` itself and is not extractable as a list of helpers. What was actually ported:
+  · `densify` (:708) — embed the newly reached files each wave, incrementally → `IntentField::densify`
+  · `_growCentroid` / `RegionCentroid` / `_fieldScore` (:731-745) — the region-centroid field with the
+    `intent | centroid | blend` modes → `RegionCentroid` + `IntentField::field_score`
+  · the FRONTIER ORDERING (:353-370) — the INTENT BAND (criterion 3) then closeness, then fine intent (5).
+    The Rust `order_moves` already had the slot, commented "0 (no field)"; it now reads the field.
+  · the SOFT BORDER (:917+) — the FIXPOINT over path high-water marks: flood toward relevance, tolerate a
+    shallow dip, halt at a cliff. A relaxation, not a walk, so it is order-independent — which is what keeps
+    it deterministic under a frontier the field itself perturbs.
+  · the TIER RULE — pivot score, parking the off-intent fan, and the decision-point frontier's `score`
+    (previously hard-coded `0.0` in Rust).
 
-The FIELD it needs now exists in the core and is decision-equivalent, so no ML work remains — but this is the
-largest single item left in the migration, not the smallest. Its gate already exists and is strict: the 14
-behavioural tests that pin these exact behaviours (the soft border halting at the relevance cliff, the tier
-rule parking an off-intent fan, the decision-point frontier with `cutBy`, the concern grows), run with the
-grow routed to Rust. A partial port cannot be routed at all — flipping the router with only some of the five
-decision points ported changes containment, which is what those tests exist to catch.
+THE SIXTH PIECE, which the five-item list above MISSED: `_borderCouplingDet` (:1137). The measurement found
+it. With the five ported, the first `growintent` run read TS=256 nodes / Rust=386, only-TS=0 — Rust a strict
+SUPERSET, and every one of the 130 extras was a coupling node (`#C`). The coupling overlay fans every shared
+key the flow touches out to ALL its consumers and AUTO-KEEPS them; TS crops the off-intent ones with a
+dedicated margin (0.25, higher than the call-graph pivots' 0.20 — complements are sibling consumers of a
+shared key and embeddings score them generously). The Rust orchestrator had deliberately omitted this, its
+header noting "no border-coupling-det [needs intent]" — true when written, and exactly the kind of omission
+that only surfaces once the thing it needed exists. Ported to `field::border_coupling_det`.
+
+WHAT THE STRUCTURAL PATH SEES: nothing. `IntentField::new(.., structural_grow=true, ..)` is inert by
+construction — no densify, `have()` false, every score 0 — so the tier gate falls back to the legacy
+hop-distance rule, the border floods, and the band collapses. Verified, not asserted: `growfull` on cal.com
+`getBookingData` is 427/427 nodes, 937/937 edges, order-identical after the wiring.
+
+GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
+output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both
+sides forced to fp32 weights, because `embed.ts` pins that int8 kernels differ ~1e-2 between the two runtimes
+— enough to swap a near-tie across `tierMargin`, which is a runtime artifact, not a porting defect.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
