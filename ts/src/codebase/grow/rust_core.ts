@@ -119,12 +119,19 @@ function toResolvedGraph(dto: any): any {
     depth: 1,
     complete: true,
     nodes, edges, blindspots,
-    unresolved: dto.unresolved ?? [],
+    // PLAIN OBJECTS, never the napi values themselves. `merge_resolved` starts with `structuredClone(base)`,
+    // and a value handed straight back from the addon is not cloneable — it throws "The object can not be
+    // cloned", which the concern path swallows in a `catch` and silently keeps the un-merged region.
+    unresolved: (dto.unresolved ?? []).map((u: any) => ({ ...u })),
   };
   const anchors = dto.anchors;
-  if (anchors && anchors.length) data.anchors = anchors;
+  if (anchors && anchors.length) data.anchors = anchors.map((x: any) => (x && typeof x === "object" ? { ...x } : x));
+  // The FRONTIER is the case that actually bit: it is empty on a structural grow (the tier rule is what fills
+  // it), so every Rust grow cloned fine until the intent wave landed — then the booking-app concern re-anchor
+  // threw, kept its 11-node point region instead of the merged 33, and looked like a containment bug in the
+  // ported wave. Spread each entry into a plain object like nodes/edges/blindspots already are.
   const frontier = dto.frontier;
-  if (frontier && frontier.length) data.frontier = frontier;
+  if (frontier && frontier.length) data.frontier = frontier.map((f: any) => ({ ...f }));
   return data;
 }
 
