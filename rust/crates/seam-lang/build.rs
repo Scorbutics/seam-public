@@ -113,4 +113,18 @@ fn main() {
         .compile("tree_sitter_cpp_grammar");
     println!("cargo:rerun-if-changed=vendor/cpp/src/parser.c");
     println!("cargo:rerun-if-changed=vendor/cpp/src/scanner.c");
+
+    // html — vendored at the tree-sitter-wasms@0.1.13 pin (tree-sitter-html ^0.20). The TEMPLATE grammar the
+    // learned `attr` matcher needs: an AngularJS `ng-click="refreshSection()"` or a Vue `@click` is how a
+    // front-end consumes a binding the controller produces, and without this grammar `run_attr` parses nothing
+    // and the whole template side of the coupling is invisible — the js→java route still resolves, so the grow
+    // looks healthy while silently missing every .html complement.
+    cc::Build::new()
+        .include("vendor/html/src")
+        .file("vendor/html/src/parser.c")
+        .file("vendor/html/src/scanner.c")
+        .warnings(false)
+        .compile("tree_sitter_html_grammar");
+    println!("cargo:rerun-if-changed=vendor/html/src/parser.c");
+    println!("cargo:rerun-if-changed=vendor/html/src/scanner.c");
 }

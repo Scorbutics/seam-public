@@ -180,7 +180,19 @@ export function promoteKeyAdapter(repo: string, name: string): { ok: boolean; ad
 }
 
 // Test/CI hooks — one in-memory store, two historical reset names kept for callers.
-export function _resetKeyStoreMem(): void { _mem.clear(); }
+//
+// ONE RESET MUST MEAN BOTH ENGINES. The learned-matcher store is read by the Rust core too, and the addon
+// holds its OWN per-repo caches (floor index, compiled matchers, effect clients, the answer cache). Clearing
+// only the TS side left a caller that rewrote `.seam` and reset being served the addon's pre-reset state —
+// which looks like the store not being replayed rather than a cache not being dropped. Lazily required so
+// this module keeps no static dependency on the addon loader.
+export function _resetKeyStoreMem(): void {
+  _mem.clear();
+  try {
+    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
+  } catch { /* addon absent or not built — the TS store is the only one there is */ }
+}
 export const _resetMatcherCacheMem = _resetKeyStoreMem;
 export const _resetKeyCacheMem = _resetKeyStoreMem;
 export { _rel as KEY_STORE_REL };

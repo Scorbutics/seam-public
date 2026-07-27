@@ -1241,7 +1241,13 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // permanent fork: it exists so the remaining shapes can be compared and fixed ONE at a time against a green
   // tree, instead of the flip being all-or-nothing across 15 tests. It goes away with the guard's other half.
   const rustIntentOk = _envFlag(process.env.SEAM_RUST_INTENT) ?? false;
-  if (rustCoreEnabled() && deterministic && (!intentShapesGrow || rustIntentOk) && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+  // SEAM_METHOD_PRECISE=0 is a LEGACY ESCAPE HATCH the addon does not implement. The Rust coupling fan is
+  // always method-precise; the opt-out restores the pre-fix whole-file bleed (every write in a boundary file
+  // wired to the reached node, siblings included), which exists to diagnose an attribution regression and is
+  // strictly worse. Porting it to the core would be porting a bug on purpose, so a grow that ASKS for the
+  // bleed stays on TS — the same shape as `rustCanParse` / `rustCanServeRepo`: a question the addon cannot
+  // answer routes to the engine that can, rather than being answered differently.
+  if (rustCoreEnabled() && deterministic && (!intentShapesGrow || rustIntentOk) && process.env.SEAM_METHOD_PRECISE !== "0" && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
     return growViaRust(repo, anchorFile, symbol, opts);
   }
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());

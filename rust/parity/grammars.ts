@@ -27,6 +27,9 @@ const SAMPLES: { lang: string; file: string; src: string }[] = [
   { lang: "csharp", file: "a.cs", src: `using System;\n\n// c\nnamespace App {\n  public class Repo {\n    public void Save(string id) { Db.Insert("widgets", id); }\n  }\n}\n` },
   { lang: "kotlin", file: "a.kt", src: `package app\n\nimport java.util.List\n\n// c\nclass Repo {\n  fun save(id: String) { db.insert("widgets", id) }\n}\n` },
   { lang: "c", file: "a.c", src: `#include <stdio.h>\n/* c */\nint save(const char *id) {\n  return db_insert("widgets", id);\n}\n` },
+  // TEMPLATE grammar, not a source language — the learned `attr` matcher's input. The sample carries an
+  // AngularJS `ng-*` and a Vue-style `@click`, which is the construct the coupling floor keys off here.
+  { lang: "html", file: "a.html", src: `<!-- c -->\n<div class="row">\n  <button ng-click="refreshSection()">Refresh</button>\n  <a @click="save(id)">Save</a>\n</div>\n` },
   { lang: "cpp", file: "a.cpp", src: `#include <string>\n// c\nclass Repo {\npublic:\n  int save(const std::string &id) { return db_insert("widgets", id); }\n};\n` },
 ];
 
