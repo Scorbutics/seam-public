@@ -105,7 +105,7 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
                 break;
             }
             hops += 1;
-            let cons_opts = ConsumersOpts { anchor_line: None, skip_callsite: opts.skip_callsite, data_coupling: false };
+            let cons_opts = ConsumersOpts { anchor_line: None, skip_callsite: opts.skip_callsite, data_coupling: false, ..Default::default() };
             let Some(g) = build_consumers_graph(repo, &node.0, &node.1, &cons_opts) else { continue };
             let aid = &g.anchor_id;
             let mut any = false;

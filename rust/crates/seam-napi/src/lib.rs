@@ -690,7 +690,7 @@ pub fn build_callsite_graph(
 /// `dataCoupling:false`, depth-1 graph.
 #[napi]
 pub fn build_class_graph(repo: String, anchor_file: String, class_name: String) -> Option<GraphDto> {
-    seam_scan::build_class_graph(&repo, &anchor_file, &class_name, false).map(Into::into)
+    seam_scan::build_class_graph(&repo, &anchor_file, &class_name, false, None).map(Into::into)
 }
 
 /// build_consumers_graph — the UP/consumers footprint completing `--query consumers`: routes a class anchor to
@@ -698,7 +698,7 @@ pub fn build_class_graph(repo: String, anchor_file: String, class_name: String) 
 /// (dataCoupling off, depth 1).
 #[napi]
 pub fn build_consumers_graph(repo: String, anchor_file: String, symbol: String, anchor_line: Option<u32>) -> Option<GraphDto> {
-    let opts = seam_scan::ConsumersOpts { anchor_line: anchor_line.map(|l| l as usize), skip_callsite: false, data_coupling: false };
+    let opts = seam_scan::ConsumersOpts { anchor_line: anchor_line.map(|l| l as usize), skip_callsite: false, data_coupling: false, ..Default::default() };
     seam_scan::build_consumers_graph(&repo, &anchor_file, &symbol, &opts).map(Into::into)
 }
 
@@ -812,8 +812,26 @@ pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: 
 /// build_footprint — the direction-selected footprint (up|down|both) with an optional dataCoupling overlay.
 /// `None` symbol → the whole-module footprint. Port of build_footprint.
 #[napi]
-pub fn build_footprint(repo: String, anchor_file: String, symbol: Option<String>, direction: String, data_coupling: Option<bool>) -> Option<GraphDto> {
-    seam_scan::build_footprint(&repo, &anchor_file, symbol.as_deref(), &direction, data_coupling.unwrap_or(false)).map(Into::into)
+/// `depth` 2+ additionally runs the environment ripple (each exported depth-1 consumer's own importers);
+/// `verified` is the extension's LSP method attribution for a CLASS anchor, as `[file, method, line]` rows —
+/// where present it REPLACES the receiver-agnostic AST read for that file.
+pub fn build_footprint(repo: String, anchor_file: String, symbol: Option<String>, direction: String, data_coupling: Option<bool>, depth: Option<u32>, anchor_line: Option<u32>, verified: Option<Vec<Vec<String>>>) -> Option<GraphDto> {
+    let verified = verified.map(|rows| {
+        let mut m: seam_scan::class_graph::Verified = Default::default();
+        for r in rows {
+            if let [file, method, line] = r.as_slice() {
+                m.entry(file.clone()).or_default().insert(method.clone(), line.parse().unwrap_or(0));
+            }
+        }
+        m
+    });
+    let opts = seam_scan::FootprintOpts {
+        data_coupling: data_coupling.unwrap_or(false),
+        anchor_line: anchor_line.map(|l| l as usize),
+        depth: depth.map(|d| d as usize).unwrap_or(1),
+        verified,
+    };
+    seam_scan::build_footprint_opts(&repo, &anchor_file, symbol.as_deref(), &direction, &opts).map(Into::into)
 }
 
 #[napi]

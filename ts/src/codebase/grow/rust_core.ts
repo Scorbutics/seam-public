@@ -90,7 +90,11 @@ export function loadAddon(): any {
 // Convert the addon's GraphDto → the TS ResolvedGraph `data`. Fields mirror scan/graph.ts:ResolvedGraph and the
 // per-node/edge shapes from_resolved_graph reads (id/symbol/kind/file/range/enclosing/complexity/direction/hub;
 // from/to/kind/provenance/line/op). `coupling` is preserved (raw-data consumers read it) though the IR drops it.
-function toResolvedGraph(dto: any): any {
+// The addon's GraphDto → the TS ResolvedGraph model. Exported because every caller that hands a core-built
+// graph to `from_resolved_graph`/`decompose` needs it: the DTO spells the anchor FLAT (`anchorId`/
+// `anchorSymbol`) where the model NESTS it, and a graph whose `anchor` is undefined decomposes to
+// "anchor '' … resolution=?" — a well-formed answer with the anchor silently missing.
+export function toResolvedGraph(dto: any): any {
   const nodes = (dto.nodes ?? []).map((n: any) => {
     const node: any = {
       id: n.id, symbol: n.symbol, kind: n.kind, file: n.file,
@@ -116,7 +120,7 @@ function toResolvedGraph(dto: any): any {
     anchor: { id: dto.anchorId ?? dto.anchor_id, symbol: dto.anchorSymbol ?? dto.anchor_symbol, file: dto.anchorFile ?? dto.anchor_file, range: dto.anchorRange ?? dto.anchor_range },
     language: dto.language,
     resolutionQuality: "FULL",
-    depth: 1,
+    depth: dto.depth ?? 1,
     complete: true,
     nodes, edges, blindspots,
     // PLAIN OBJECTS, never the napi values themselves. `merge_resolved` starts with `structuredClone(base)`,
@@ -133,6 +137,38 @@ function toResolvedGraph(dto: any): any {
   const frontier = dto.frontier;
   if (frontier && frontier.length) data.frontier = frontier.map((f: any) => ({ ...f }));
   return data;
+}
+
+
+// The INVERSE of toResolvedGraph — the TS model → the addon's GraphDto. Needed by every core call that takes a
+// graph BACK (mergeResolved), and by `--expand-graph`, whose `base` is a model read from a file the engine
+// wrote earlier. napi objects are strict: an absent required field is a THROW at the boundary, not a default,
+// so every one is filled here rather than left to the caller's spread.
+export function toGraphDto(g: any): any {
+  const r = (x: any): number[] => (Array.isArray(x) && x.length >= 2 ? [x[0] ?? 0, x[1] ?? 0] : [0, 0]);
+  return {
+    anchorId: g.anchor?.id ?? "", anchorSymbol: g.anchor?.symbol ?? "", anchorFile: g.anchor?.file ?? "",
+    anchorRange: r(g.anchor?.range), language: g.language ?? "",
+    nodes: (g.nodes ?? []).map((n: any) => ({
+      id: n.id, symbol: n.symbol ?? "", kind: n.kind ?? "", file: n.file ?? "", range: r(n.range),
+      enclosing: n.enclosing ?? "", complexity: n.complexity ?? 1, coupling: !!n.coupling,
+      direction: n.direction ?? undefined,
+      hub: n.hub ? { reason: n.hub.reason ?? "", fan: n.hub.fan ?? 0, sampleConsumers: n.hub.sampleConsumers ?? [] } : undefined,
+      unlocated: n.unlocated ? true : undefined,
+    })),
+    edges: (g.edges ?? []).map((e: any) => ({
+      from: e.from, to: e.to, kind: e.kind ?? "", provenance: e.provenance ?? "",
+      line: e.line ?? undefined, op: e.op ?? undefined,
+    })),
+    blindspots: (g.blindspots ?? []).map((b: any) => ({
+      node: b.node ?? "", mechanism: b.mechanism ?? "", evidence: b.evidence ?? "",
+      candidates: (b.candidates ?? []).map((c: any) => ({ symbol: c.symbol ?? "", file: c.file ?? undefined, provenance: c.provenance ?? undefined })),
+      persists: !!b.persists,
+    })),
+    unresolved: (g.unresolved ?? []).map((u: any) => ({ node: u.node ?? "", query: u.query ?? "", reason: u.reason ?? "" })),
+    anchors: g.anchors ?? [], resolvedMethods: g.resolvedMethods ?? [], frontier: [], history: [],
+    cacheVerdict: "", cacheKey: "", cacheEpoch: "",
+  };
 }
 
 // Mirror the host's SEAM_* env into the addon's process env before every call. bun's `process.env` is a JS-side

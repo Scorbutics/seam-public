@@ -18,7 +18,12 @@ use std::collections::{HashMap, HashSet};
 
 const CLASS_CONSUMER_PARSE_CAP: usize = 120;
 
-pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str, data_coupling: bool) -> Option<ResolvedGraph> {
+/// LSP-VERIFIED method attribution: `file → { method → line }`, supplied by the extension's
+/// `--attribution` hand-off. Where present it REPLACES the AST's own usage read for that file, because a
+/// language server resolved the receiver and the receiver-agnostic scan only guessed it.
+pub type Verified = std::collections::HashMap<String, std::collections::HashMap<String, usize>>;
+
+pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str, data_coupling: bool, verified: Option<&Verified>) -> Option<ResolvedGraph> {
     let (text, lang) = read(repo, anchor_file)?;
     let ctx = Ctx::parse(&text, &lang)?;
 
@@ -71,7 +76,14 @@ pub fn build_class_graph(repo: &str, anchor_file: &str, class_name: &str, data_c
         let Some((ctext, clang)) = read(repo, &con.file) else { continue };
         let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
         parsed += 1;
-        let usage = ast::class_method_usage(&cctx, class_name, &method_names);
+        // VERIFIED-FIRST: an LSP attribution for this file wins over the AST read — but only when it names a
+        // method the anchor class actually declares, and only when something survives that filter (an empty
+        // verified entry must NOT blank out a real AST usage).
+        let v: HashMap<String, usize> = verified
+            .and_then(|vm| vm.get(&con.file))
+            .map(|m| m.iter().filter(|(k, _)| method_names.contains(k.as_str())).map(|(k, n)| (k.clone(), *n)).collect())
+            .unwrap_or_default();
+        let usage = if verified.is_some() && !v.is_empty() { v } else { ast::class_method_usage(&cctx, class_name, &method_names) };
         let units = ast::named_units(&cctx);
         let line = if !usage.is_empty() {
             *usage.values().min().unwrap()

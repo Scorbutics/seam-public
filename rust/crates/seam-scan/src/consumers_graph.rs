@@ -19,13 +19,25 @@ use seam_lang::{node_kinds as nk, provider_for, Ctx};
 use seam_resolve::{Status, Workspace};
 use std::collections::HashSet;
 
-#[derive(Default)]
 pub struct ConsumersOpts {
     pub anchor_line: Option<usize>,
+    /// The consumer DEPTH. 1 (the default) is the direct-caller floor; 2+ additionally runs the environment
+    /// ripple — each exported depth-1 consumer's own importers, as the boundary frontier.
+    pub depth: usize,
     /// Skip the receiver-agnostic call-site pass (blast-radius counts don't need it).
     pub skip_callsite: bool,
     /// Run the dataCoupling OVERLAY (resolveCoupling + route-consumer chaining). Structural-only when false.
     pub data_coupling: bool,
+    /// LSP-verified method attribution for a CLASS anchor (`--attribution`), or None.
+    pub verified: Option<crate::class_graph::Verified>,
+}
+
+// `depth: 1` is the DEFAULT depth, not 0 — `..Default::default()` must mean "the direct-caller floor", the
+// same thing `opts.depth ?? 1` means on the TS side.
+impl Default for ConsumersOpts {
+    fn default() -> Self {
+        Self { anchor_line: None, depth: 1, skip_callsite: false, data_coupling: false, verified: None }
+    }
 }
 
 /// The import-scan core: anchor node + import-resolved consumers + same-file callers. A CLASS anchor is
@@ -58,7 +70,7 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         range = (al, al.max(range.1));
     }
     if kind == "class" {
-        return build_class_graph(repo, anchor_file, symbol, opts.data_coupling);
+        return build_class_graph(repo, anchor_file, symbol, opts.data_coupling, opts.verified.as_ref());
     }
 
     let enclosing = if kind == "method" {
@@ -109,6 +121,10 @@ pub fn build_resolved_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 );
             }
         }
+    }
+    // THE DEPTH-2 RIPPLE, before the coupling overlay — the id order depends on it (TS runs it here too).
+    if opts.depth >= 2 {
+        b.ripple_depth2(repo, &Workspace::cached(repo));
     }
     // dataCoupling OVERLAY — the anchor's shared-key boundaries + route-consumer chain (whole-file span when
     // the symbol didn't resolve). Port of the consumers_graph.ts dataCoupling block.

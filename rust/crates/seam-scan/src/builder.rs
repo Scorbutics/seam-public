@@ -82,6 +82,18 @@ impl GraphBuilder {
 
     /// The dataCoupling OVERLAY for the UP builder — ground the anchor span's shared keys (whole-file when the
     /// symbol didn't resolve to a def range), append the crossing delta with `dc{n}` ids continuing this
+    /// THE DEPTH-2 RIPPLE (`--depth 2`+): each depth-1 consumer that is an EXPORTED symbol gets ITS importers
+    /// wired in as the environment frontier. Runs on the consumers accumulated so far, MINUS the anchor
+    /// (`nodes[1..]`, exactly TS's `nodes.slice(1)`), and BEFORE the coupling overlay — so the `n{counter}`
+    /// ids the ripple mints come before any `dc{n}`, as they do on the TS side.
+    pub fn ripple_depth2(&mut self, repo: &str, ws: &seam_resolve::Workspace) {
+        let consumers: Vec<GraphNode> = self.nodes.iter().skip(1).cloned().collect();
+        let (nodes, edges, counter) = crate::attach::depth2_ripple(repo, &consumers, self.counter, &mut self.seen, ws);
+        self.counter = counter;
+        self.nodes.extend(nodes);
+        self.edges.extend(edges);
+    }
+
     /// builder's counter, then chain route consumers. Port of the consumers_graph.ts dataCoupling block.
     pub fn overlay_coupling(&mut self, repo: &str, anchor_file: &str, anchor_src: &str, arange: (usize, usize), ws: &seam_resolve::Workspace) {
         let resolved = arange.1 > 0;

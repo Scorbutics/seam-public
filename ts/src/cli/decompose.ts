@@ -353,13 +353,39 @@ async function runCodebase(a: Args): Promise<number> {
   let fileAnchor = false;   // chosen anchor is a FILE/module (no named symbol — a module.exports/Vue plugin) → grow FILE-LEVEL
   let anchorSet: { name: string; file: string; kind: string }[] | null = null;   // multi-anchor covering set (primary first), or null for single
   let centerPicked = false;   // --concern center-first: the mechanism(s) were picked repo-wide (no anchor, no detection grow)
+  // THE FOOTPRINT BUILDERS, on the core. The two call sites below are the last `--scan` reaches into the
+  // TypeScript scan layer: `--expand-graph` and the plain (non-auto) consumers/module scan.
+  //
+  // The LLM key-discovery FLYWHEEL is warmed FIRST, exactly as the auto path does it. On the TypeScript path
+  // it was driven lazily from resolveCoupling, so `dataCouplingLlm` could be handed to the builder and forgotten
+  // about; the core REPLAYS `.seam` instead of learning inside the overlay, so an unwarmed run would quietly
+  // fall back to the deterministic floor and answer with fewer crossings. Scoped to the anchor file, which is
+  // the only span this overlay ever reads (a footprint's overlay is the anchor's own, not the flow's).
+  const coreFootprint = async (file: string, symbol: string | null, direction: string, opts: { depth?: number; anchorLine?: number | null; verified?: any } = {}): Promise<any> => {
+    const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+    if (a.dataCoupling && dcLlm) {
+      const { rustDiscover } = await import("../codebase/grow/rust_discover.js");
+      await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin, scopeFiles: [file] });
+    }
+    // `verified` arrives as `{ file: { method: line } }` (the extension's --attribution JSON); the core takes
+    // it as flat rows so the boundary carries no map-of-maps.
+    const rows: string[][] | null = opts.verified
+      ? Object.entries(opts.verified).flatMap(([f, ms]: [string, any]) => Object.entries(ms).map(([m, ln]) => [f, m, String(ln)]))
+      : null;
+    const dto = core.buildFootprint(a.repo, file, symbol, direction, a.dataCoupling, opts.depth ?? null, opts.anchorLine ?? null, rows);
+    if (!dto) err(`the Seam core could not build the ${direction} footprint of ${symbol ?? file}`);
+    const { toResolvedGraph } = await import("../codebase/grow/rust_core.js");
+    return { ...toResolvedGraph(dto), depth: opts.depth ?? 1 };
+  };
+
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
-    const { merge_resolved } = await import("../codebase/scan/index.js");
+    const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
-      const add = await scan.build_footprint(a.repo, a.expandFile!, a.expandSymbol!, { direction: a.down ? "down" : "up", depth: a.depth, anchorLine: a.expandLine ?? null, useLlm: useLlm0, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm, model: a.model, claudeBin: a.claudeBin });
-      data = merge_resolved(base, add, add.anchor?.id);
+      const add = await coreFootprint(a.expandFile!, a.expandSymbol!, a.down ? "down" : "up", { depth: a.depth, anchorLine: a.expandLine ?? null });
+      const rc = await import("../codebase/grow/rust_core.js");
+      data = rc.toResolvedGraph(core.mergeResolved(rc.toGraphDto(base), rc.toGraphDto(add), add.anchor?.id));
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
   } else if (a.scan) {
@@ -665,8 +691,7 @@ async function runCodebase(a: Args): Promise<number> {
     try {
       // --symbol → single-symbol anchor; CONSUMERS = importers + (class/interface) call-sites in one.
       // Omit --symbol → MODULE mode (all exports as members, member co-occurrence).
-      data = await scan.build_footprint(a.repo, a.anchorFile!, a.symbol ?? null,
-        { direction: a.symbol && a.bidirectional ? "both" : "up", depth: a.depth, verified, dataCoupling: a.dataCoupling, dataCouplingLlm: dcLlm, model: a.model, claudeBin: a.claudeBin });
+      data = await coreFootprint(a.anchorFile!, a.symbol ?? null, a.symbol && a.bidirectional ? "both" : "up", { depth: a.depth, verified });
     } catch (e) { err(`import scan failed: ${(e as Error).message}`); }
   } else {
     try { data = JSON.parse(readFileSync(a.graph!, "utf-8")); }

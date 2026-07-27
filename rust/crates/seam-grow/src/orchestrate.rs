@@ -231,7 +231,7 @@ fn apply_move(repo: &str, data: &mut ResolvedGraph, mv: &Move, ex: &Exclusion, i
         ex.prune(&mut g);
         Some(g)
     } else {
-        let build = || build_consumers_graph(repo, &next.file, &next.symbol, &ConsumersOpts { anchor_line: Some(next.range.0), skip_callsite: false, data_coupling: false });
+        let build = || build_consumers_graph(repo, &next.file, &next.symbol, &ConsumersOpts { anchor_line: Some(next.range.0), skip_callsite: false, data_coupling: false, ..Default::default() });
         seam_cache::cached::<Option<ResolvedGraph>, _>(repo, "footprint-v1", &next.file, &cache_key, &epoch, build).map(|mut g| {
             ex.prune(&mut g);
             g

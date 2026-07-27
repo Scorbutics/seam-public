@@ -94,3 +94,130 @@ pub fn chain_route_consumers(repo: &str, nodes: &mut Vec<GraphNode>, edges: &mut
     let _ = is_test_file; // (kept in scope parity with the TS import; unused here)
     counter
 }
+
+/// THE ENVIRONMENT RIPPLE (depth-2 = the boundary frontier): for each depth-1 consumer that is an EXPORTED
+/// symbol, find ITS importers and wire them in (role=environment downstream). Returns (newNodes, newEdges,
+/// counter). Port of `_depth2_ripple`.
+///
+/// REVERSE-INDEX CANDIDATES (SEAM_RIPPLE_INDEX, ON by default; =0 kill-switch → the old full walk) — the walk
+/// below would otherwise re-read + text-scan EVERY repo source file to find who imports a target consumer,
+/// which was the dominant cost of a cold structural UP-grow (measured on cal.com: the walk alone was 76s →
+/// 3.5s once replaced, 21×). `file_importers` already maps target-file → its importer files, so the read+scan
+/// is SKIPPED for any file importing no target. SAFE BY CONSTRUCTION: `file_importers` is a file-level
+/// SUPERSET of the walk's importers, the inner import parse below still does the exact symbol match (so extra
+/// candidates are filtered), and the walk ORDER is preserved (only the read is gated) → the `n{counter}` ids
+/// and the whole node set are byte-identical to the full walk.
+pub fn depth2_ripple(
+    repo: &str,
+    consumers: &[GraphNode],
+    mut counter: usize,
+    seen_keys: &mut std::collections::HashMap<String, String>,
+    ws: &Workspace,
+) -> (Vec<GraphNode>, Vec<GraphEdge>, usize) {
+    use seam_fs::normpath;
+    // `{symbol} {normpath(file)}` → consumer node id, in consumer order (a JS Map: insertion-ordered).
+    let mut targets: Vec<(String, String)> = Vec::new();
+    for n in consumers {
+        if n.kind == "module" {
+            continue;
+        }
+        let Some((text, lang)) = read(repo, &n.file) else { continue };
+        let Some(ctx) = Ctx::parse(&text, &lang) else { continue };
+        if ast::exported_members(&ctx, &n.file).iter().any(|m| m.name == n.symbol) {
+            let k = format!("{} {}", n.symbol, normpath(&n.file));
+            match targets.iter_mut().find(|(tk, _)| *tk == k) {
+                Some(slot) => slot.1 = n.id.clone(), // JS Map.set on an existing key keeps its position
+                None => targets.push((k, n.id.clone())),
+            }
+        }
+    }
+    if targets.is_empty() {
+        return (Vec::new(), Vec::new(), counter);
+    }
+    let target_syms: HashSet<&str> = targets.iter().map(|(k, _)| k.split(' ').next().unwrap_or("")).collect();
+    let candidates: Option<HashSet<String>> = if std::env::var("SEAM_RIPPLE_INDEX").ok().as_deref() != Some("0") {
+        let importers = ws.file_importers();
+        let mut set = HashSet::new();
+        for (k, _) in &targets {
+            let tf = &k[k.find(' ').map(|i| i + 1).unwrap_or(0)..];
+            for imp in importers.get(tf).into_iter().flatten() {
+                set.insert(normpath(imp));
+            }
+        }
+        Some(set)
+    } else {
+        None // whole-repo walk-read → not per-file expressible; the caller's depsig falls back to the epoch
+    };
+
+    let mut new_nodes: Vec<GraphNode> = Vec::new();
+    let mut new_edges: Vec<GraphEdge> = Vec::new();
+    for rel in seam_fs::source_files(repo, |r| seam_couple::ground::floor::ends_with_source_ext(r)) {
+        if candidates.as_ref().is_some_and(|c| !c.contains(&normpath(&rel))) {
+            continue; // the reverse index says this file imports no target → skip the read+scan
+        }
+        let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { continue };
+        let text = String::from_utf8_lossy(&bytes).into_owned();
+        if !target_syms.iter().any(|s| text.contains(s)) {
+            continue;
+        }
+        // target consumer node id → local, insertion-ordered (a JS Map)
+        let mut hits: Vec<(String, String)> = Vec::new();
+        let Some(provider) = seam_lang::provider_for(&rel) else { continue };
+        for r in provider.imports(&text) {
+            let Some(source) = &r.source else { continue }; // no source ⇒ the LSP symbol path, absent here
+            let Some(target) = ws.resolve(&rel, source) else { continue };
+            let k = format!("{} {}", r.name, normpath(&target));
+            let Some((_, tid)) = targets.iter().find(|(tk, _)| *tk == k) else { continue };
+            match hits.iter_mut().find(|(h, _)| h == tid) {
+                Some(slot) => slot.1 = r.local.clone(),
+                None => hits.push((tid.clone(), r.local.clone())),
+            }
+        }
+        if hits.is_empty() {
+            continue;
+        }
+        let Some((ctext, clang)) = read(repo, &rel) else { continue };
+        let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
+        let units = ast::named_units(&cctx);
+        for (tid, local) in &hits {
+            let line = ast::usage_lines(&cctx, &units, local).first().copied().unwrap_or(0);
+            let (name, kind, start, end) = match ast::enclosing(&units, line) {
+                Some(u) => (u.name.clone(), u.kind.clone(), u.start, u.end),
+                None => (seam_fs::stem(&rel), "module".to_string(), line, line),
+            };
+            let key = format!("{rel}#{name}#{start}");
+            let d2id = match seen_keys.get(&key) {
+                Some(id) => id.clone(),
+                None => {
+                    counter += 1;
+                    let id = format!("n{counter}");
+                    seen_keys.insert(key, id.clone());
+                    new_nodes.push(GraphNode {
+                        id: id.clone(),
+                        symbol: name,
+                        kind: kind_for(&rel, &kind),
+                        file: rel.clone(),
+                        range: (start, end),
+                        enclosing: ast::enclosing_class(&units, start, end),
+                        complexity: (end as i64 - start as i64 + 1).max(1) as usize,
+                        coupling: false,
+                        direction: None,
+                        hub: None,
+                        unlocated: false,
+                    });
+                    id
+                }
+            };
+            if &d2id != tid {
+                new_edges.push(GraphEdge {
+                    from: d2id,
+                    to: tid.clone(),
+                    kind: "reference".into(),
+                    provenance: "RESOLVED_FULL".into(),
+                    ..Default::default()
+                });
+            }
+        }
+    }
+    (new_nodes, new_edges, counter)
+}

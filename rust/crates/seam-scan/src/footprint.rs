@@ -34,12 +34,40 @@ pub fn build_bidirectional_graph(repo: &str, anchor_file: &str, symbol: &str, da
 /// A footprint around (anchor_file, symbol). `direction` = "up" | "down" | "both" (default "up"); a `None`
 /// symbol builds the whole-module footprint. Port of `build_footprint`.
 pub fn build_footprint(repo: &str, anchor_file: &str, symbol: Option<&str>, direction: &str, data_coupling: bool) -> Option<ResolvedGraph> {
+    build_footprint_opts(repo, anchor_file, symbol, direction, &FootprintOpts { data_coupling, ..Default::default() })
+}
+
+/// The options a footprint builder reads. `depth` (2+ = the environment ripple) and `verified` (the LSP
+/// method attribution for a CLASS anchor) apply to the UP slice only, which is where the TS builders read
+/// them too — the down/module builders take neither.
+pub struct FootprintOpts {
+    pub data_coupling: bool,
+    pub anchor_line: Option<usize>,
+    pub depth: usize,
+    pub verified: Option<crate::class_graph::Verified>,
+}
+
+impl Default for FootprintOpts {
+    fn default() -> Self {
+        Self { data_coupling: false, anchor_line: None, depth: 1, verified: None }
+    }
+}
+
+/// Build a footprint around (anchor_file, symbol). `direction` selects the slice (default "up" = consumers);
+/// a None symbol builds the whole-module footprint. Port of `build_footprint`.
+pub fn build_footprint_opts(repo: &str, anchor_file: &str, symbol: Option<&str>, direction: &str, opts: &FootprintOpts) -> Option<ResolvedGraph> {
     let Some(symbol) = symbol else {
         return build_module_graph(repo, anchor_file);
     };
     match direction {
-        "down" => Some(build_dependency_graph(repo, anchor_file, symbol, &DepOpts { data_coupling, ..Default::default() })),
-        "both" => Some(build_bidirectional_graph(repo, anchor_file, symbol, data_coupling)),
-        _ => build_consumers_graph(repo, anchor_file, symbol, &ConsumersOpts { data_coupling, ..Default::default() }),
+        "down" => Some(build_dependency_graph(repo, anchor_file, symbol, &DepOpts { data_coupling: opts.data_coupling, anchor_line: opts.anchor_line, ..Default::default() })),
+        "both" => Some(build_bidirectional_graph(repo, anchor_file, symbol, opts.data_coupling)),
+        _ => build_consumers_graph(repo, anchor_file, symbol, &ConsumersOpts {
+            data_coupling: opts.data_coupling,
+            anchor_line: opts.anchor_line,
+            depth: opts.depth,
+            verified: opts.verified.clone(),
+            skip_callsite: false,
+        }),
     }
 }

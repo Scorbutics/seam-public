@@ -35,6 +35,16 @@ done
 # The two paths a shape-only sweep MISSES, and the reason a deletion once looked safe when it wasn't:
 # name-grounded recall (--recall name) and the NL router (--query ask). Offline, `ask` takes the no-backend
 # branch — which still exercises the routing entry point, so a broken wire shows up as a changed message.
+# DEPTH 2 — the environment ripple (each exported depth-1 consumer's own importers). Depth 1 is every other
+# case here, so without this the ripple is entirely outside the guarantee.
+run q_depth2    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 2 --data-coupling floor
+run q_depth1    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 1 --data-coupling floor
+# --expand-graph: build a graph, then expand it from a second anchor and merge. Two core calls plus the merge,
+# and the one path that reads a graph the engine WROTE rather than one it just built.
+SEAM_GRAPH_CACHE=0 timeout 300 bun src/cli/decompose.ts --repo "$R" --scan --anchor-file "$A" --symbol "$S" \
+  --emit-graph "$OUT/graph.json" --data-coupling floor >/dev/null 2>&1
+run expand      --repo "$R" --scan --expand-graph "$OUT/graph.json" --expand-file "$A" --expand-symbol "$S" --data-coupling floor
+rm -f "$OUT/graph.json"
 run q_recall    --repo "$R" --scan --query consumers --anchor-file "$A" --symbol "$S" --recall name --data-coupling floor
 run q_ask       --repo "$R" --scan --query ask --ask "who calls $S" --data-coupling floor
 echo "snapshot: $OUT ($(ls "$OUT" | wc -l) files)"
