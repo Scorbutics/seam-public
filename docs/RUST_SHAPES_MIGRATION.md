@@ -217,25 +217,48 @@ expectations were verified against the TS engine on the SAME fixture, so it pins
 a Rust quirk: writer found across files nothing links; column grain drops a writer that touches only
 un-filtered columns and KEEPS an opaque one flagged unverified; both roles; and the honest empty.
 
-### Step 4 — wire, one shape at a time. 🔶 IN PROGRESS — `consumers` + `dependencies` flipped.
+### Step 4 — wire, one shape at a time. ✅ DONE (with three shapes deliberately gated, one not routed)
 
 `rustShapeOk` in `ts/src/cli/queries.ts` is the grow's guard minus its intent condition (a `--query` shape is
-structural by definition, so the "an intent-shaped grow returns a different region" hazard cannot arise); the
-language pair carries over verbatim, because an unparseable file degrades SILENTLY in the addon.
-`rustSetToModel` adapts the DTO — the members are already byte-identical, only the anchor is spelled
-differently and TS omits absent `noStructure`/`recalled` rather than emitting falsy ones.
-Any addon failure falls through to TS: a shape that cannot answer is worse than one that answers slower.
+structural by definition); the language pair carries over verbatim, because an unparseable file degrades
+SILENTLY in the addon. Each shape has a DTO→model adapter (`rustSetToModel`, `rustImpactToModel`, …) — the
+members are byte-identical, only the anchor is spelled flat and `noStructure` is always emitted where TS omits
+a falsy one. Any addon failure falls through to TS.
 
-**Gate: `rust/parity/wired_shapes.ts` — 16/16 renders byte-identical** over 8 anchors × 2 shapes (10 with a
-resolved member; it refuses to pass on all-empty). This one pins the RENDERED answer, not the projection: the
-projection being identical is necessary but not sufficient, since the model→render adapter is exactly where a
-wired shape breaks (a missing `anchor`, an emitted falsy `noStructure`, a dropped `recalled`). §5 collateral
-through the wired path: getBusyTimes 4, createBooking 8, getSlots 45 — unchanged.
+| shape | routed |
+|---|---|
+| consumers, dependencies, contract, writers, coupling | **always** |
+| impact, neighborhood, reaches | **only with `--no-data-coupling`** |
+| refactor | **not routed** |
 
-REMAINING to wire: `impact`, `contract`, `neighborhood`, `compare`, `reaches`, `refactor`, `writers`,
-`coupling`. Each needs its own DTO→model adapter and must be added to `WIRED` in the harness before flipping.
+THE GATES ARE NOT CAUTION, THEY ARE MEASURED GAPS. The addon has no coupling pass for these three shapes, and
+routing them on the default would silently drop the moat:
+- `neighborhood` lost the egress member `stripe.com` on
+  `apps/web/app/api/teams/api/create/route.ts#getCheckoutSessionMetadata` — a subsystem map missing its
+  external boundary is the wrong answer, not a faster one.
+- `impact` computes its crossings INSIDE `projectImpact` (`couplingOverlay`), unlike `consumers` where the
+  shell attaches them after: `cross-stack: 24` became nothing on
+  `handleNewBooking/createBooking.ts#saveBooking`.
+- `reaches` — the Rust BFS has no coupling branch, so a pair connected through SHARED STATE would report "no
+  path", which is precisely the connection the shape exists to find.
+- `refactor` cannot be routed AT ALL yet: `gatherRefactorFacts` calls `projectImpact` without
+  `couplingOverlay: false`, and that defaults ON, so its facts always carry the crossings — `--no-data-coupling`
+  does not turn them off there. It flips when the impact overlay is ported.
 
-Original plan:
+**Gate: `rust/parity/wired_shapes.ts` — 98/98 renders byte-identical** (14 anchors × 7 shapes, 41 non-trivial).
+It compares the RENDERED answer, running the same CLI invocation with `SEAM_RUST_CORE=1` and `0` — the
+projection being identical is necessary but NOT sufficient, since the model→render adapter is where a wired
+shape actually breaks. The three gated shapes are exercised IN their routed configuration (`--no-data-coupling`),
+or the harness would compare TS against TS and call it parity. It also refuses to pass when every anchor
+rendered empty — which is exactly what caught a syntax error that made both engines crash identically.
+
+§5 collateral through the wired path: getBusyTimes 4 usage sites / cross-stack 6, impact 31|29. Suite 1323/0.
+
+TO FINISH THE WIRING: port the impact/neighborhood coupling overlay and the reach coupling hops into the core
+(the same `couplingOtherSides`/`anchorCounterparts` pass B2 already moved), then drop the three gates and route
+`refactor`.
+
+Original plan:Original plan:
 Reuse the grow's guard verbatim — `rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)`
 — in `ts/src/cli/queries.ts`. Each shape flips only when its comparator is byte-identical. Keep the TS
 implementation until every shape is green: it is the parity oracle.

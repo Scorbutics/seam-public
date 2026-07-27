@@ -38,6 +38,54 @@ async function rustShapeOk(a: Args): Promise<any | null> {
 // The Rust SET dto → the TS model shape. The members are already byte-identical (pinned by
 // rust/parity/shapes_set.ts); only the anchor is spelled differently, and TS omits `noStructure`/`recalled`
 // when they are absent rather than emitting falsy ones, which the renderers rely on.
+// The DTO→model adapters. Each Rust shape carries the same DATA (pinned byte-identical by the harnesses in
+// rust/parity) but spells its ANCHOR flat (`anchorSymbol`/`anchorFile`) where the TS model nests it, omits the
+// `shape` tag the renderers switch on, and always emits `noStructure` where TS omits a falsy one. That is the
+// whole difference, and it is exactly where a wired shape breaks — hence rust/parity/wired_shapes.ts compares
+// the RENDER, not the projection.
+const nz = (r: any): any => (r?.noStructure ? { noStructure: true, ...(r.reason ? { reason: r.reason } : {}) } : {});
+const anchorOf = (r: any) => ({ symbol: r.anchorSymbol, file: r.anchorFile });
+
+const rustImpactToModel = (r: any): any => ({
+  shape: "impact", anchor: anchorOf(r), impacted: r.impacted, files: r.files, surface: r.surface,
+  total: r.total, fileCount: r.fileCount, gaps: r.gaps, hops: r.hops, truncated: r.truncated, ...nz(r),
+});
+const rustContractToModel = (r: any): any => ({
+  shape: "contract", module: r.module, provides: r.provides, unusedExports: r.unusedExports,
+  depends: r.depends, afferent: r.afferent, efferent: r.efferent, ...nz(r),
+});
+const rustNeighborhoodToModel = (r: any): any => ({
+  shape: "neighborhood", anchor: anchorOf(r), members: r.members, coreFiles: r.coreFiles,
+  peripheryFiles: r.peripheryFiles, boundaryCut: r.boundaryCut, cohesion: r.cohesion, depth: r.depth,
+  hops: r.hops, ...nz(r),
+});
+const rustCompareToModel = (r: any): any => ({
+  shape: "comparison", a: { symbol: r.aSymbol, file: r.aFile }, b: { symbol: r.bSymbol, file: r.bFile },
+  shared: r.shared, aOnly: r.aOnly, bOnly: r.bOnly, similarity: r.similarity, depth: r.depth, ...nz(r),
+});
+const rustReachToModel = (r: any): any => ({
+  shape: "reaches", from: { symbol: r.fromSymbol, file: r.fromFile },
+  // the TS model omits `file` on the TARGET when the caller named only a symbol — an absent file is "any file
+  // with this symbol", and emitting `file: undefined` would render as a located target that was never asked for
+  to: { symbol: r.toSymbol, ...(r.toFile ? { file: r.toFile } : {}) },
+  reachable: r.reachable, path: r.path, hops: r.hops, reason: r.reason, ...nz(r),
+});
+const rustRefactorToModel = (r: any): any => ({
+  shape: "refactor", anchor: anchorOf(r),
+  impact: rustImpactToModel(r.impact), dependencies: rustSetToModel(r.dependencies), contract: rustContractToModel(r.contract),
+});
+
+const rustWritersToModel = (r: any): any => ({
+  shape: "writers", anchor: anchorOf(r), members: r.members, unresolved: [], resolutionQuality: r.resolutionQuality,
+  tables: r.tables, columnGrain: r.columnGrain,
+  // napi has no map type, so the DTO carries `[[table, ...columns], …]`; the model wants `{table: [columns]}`
+  filterColumns: Object.fromEntries((r.filterColumns ?? []).map((row: string[]) => [row[0], row.slice(1)])),
+  ...nz(r),
+});
+const rustCouplingToModel = (r: any): any => ({
+  shape: "coupling", anchor: anchorOf(r), keys: r.keys, total: r.total, ...nz(r),
+});
+
 const rustSetToModel = (r: any): any => ({
   shape: r.shape,
   anchor: { symbol: r.anchorSymbol, file: r.anchorFile },
@@ -267,6 +315,19 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   const { renderWritersSet } = await import("../codebase/llm_context.js");
 
   emit(`Resolving writers of the table(s) ${a.symbol ?? basename(a.anchorFile!)} reads…`);
+  // RUST FIRST (see rustShapeOk) — the whole shape, floor scan included, is in the core.
+  const rustA7 = await rustShapeOk(a);
+  if (rustA7) {
+    try {
+      const model: any = { mode: "codebase", ...rustWritersToModel(rustA7.projectWriters(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
+      if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
+      else if (model.noStructure && model.reason === "none")
+        process.stdout.write(`Writers of what '${model.anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
+      else process.stdout.write(`Writers of ${model.tables.map((t: string) => `"${t}"`).join(", ")} (read by ${model.anchor.symbol}): ${model.members.length} write site(s).\n`);
+      if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
+      return 0;
+    } catch { /* fall through to the TS path — a shape that cannot answer is worse than a slower one */ }
+  }
   let text: string;
   try { text = readFileSync(join(a.repo, a.anchorFile!), "utf-8"); } catch (e) { err(`cannot read center file: ${(e as Error).message}`); return 1; }
 
@@ -358,6 +419,19 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
   const { renderCoupling } = await import("../codebase/llm_context.js");
 
   emit(`Resolving the data boundary of ${a.symbol ?? basename(a.anchorFile!)}…`);
+  // RUST FIRST (see rustShapeOk) — the whole shape, floor scan included, is in the core.
+  const rustA8 = await rustShapeOk(a);
+  if (rustA8) {
+    try {
+      const model: any = { mode: "codebase", ...rustCouplingToModel(rustA8.projectCoupling(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
+      if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
+      else if (model.noStructure && model.reason === "none")
+        process.stdout.write(`Coupling of '${model.anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
+      else process.stdout.write(`Coupling of '${model.anchor.symbol}': ${model.keys.length} shared key(s), ${model.total} counterpart site(s).\n`);
+      if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
+      return 0;
+    } catch { /* fall through to the TS path */ }
+  }
   let text: string;
   try { text = readFileSync(join(a.repo, a.anchorFile!), "utf-8"); } catch (e) { err(`cannot read center file: ${(e as Error).message}`); return 1; }
 
@@ -427,6 +501,11 @@ export async function runRefactorFacts(a: Args): Promise<number> {
   const { gatherRefactorFacts } = await import("../codebase/grow/refactor_facts.js");
   const { renderRefactorFacts } = await import("../codebase/llm_context.js");
   emit(`Gathering refactor facts for ${a.symbol}…`);
+  // NOT ROUTED TO RUST — measured, not assumed. `gatherRefactorFacts` calls `projectImpact` WITHOUT
+  // `couplingOverlay: false`, and that option defaults ON, so the TS facts always carry the cross-stack
+  // crossings — `--no-data-coupling` does not turn them off here. The addon has no such pass, so routing this
+  // shape drops them in every configuration (measured: `cross-stack: 24` → absent on
+  // handleNewBooking/createBooking.ts#saveBooking). It flips when the impact overlay is ported, not before.
   let rf: any;
   try { rf = await gatherRefactorFacts(a.repo, a.anchorFile!, a.symbol!, { model: a.model, claudeBin: a.claudeBin }); }
   catch (e) { err(`refactor facts failed: ${(e as Error).message}`); }
@@ -451,14 +530,20 @@ export async function runImpact(a: Args): Promise<number> {
   const { projectImpact } = await import("../codebase/grow/impact.js");
   const { renderImpact } = await import("../codebase/llm_context.js");
   emit(`Computing the impact of ${a.symbol}…`);
-  let im: any;
   // The shared --depth defaults to 1 (a direct-consumer hop); impact is TRANSITIVE, so treat the default
   // as "use the impact default" and only honor an explicit deeper --depth. (depth 1 = find_consumers.)
   // Blast radius = a STRUCTURAL closure (transitive resolved consumers) PLUS the anchor's cross-stack crossings.
   // Traverse structure-only (dataCoupling:false → cached & fast; per-node coupling was ~pure waste and blocked the
   // cache), then attach shared-key readers/writers as ONE anchor overlay (couplingOverlay). Coupling stays ON by
   // default (the cross-stack half a call-graph misses) but is now O(1) coupling passes, not O(closure).
-  try { im = await projectImpact(a.repo, a.anchorFile!, a.symbol!, {
+  // RUST FIRST, but ONLY with coupling OFF. Unlike `consumers` — where the shell attaches the overlay after the
+  // projection — impact computes its CROSS-STACK crossings INSIDE projectImpact (`couplingOverlay`), and the
+  // addon has no such pass: measured on handleNewBooking/createBooking.ts#saveBooking, `cross-stack: 24`
+  // became nothing at all. Dropping the moat is not an acceptable price for a faster closure.
+  const rustA1 = a.dataCoupling === false ? await rustShapeOk(a) : null;
+  let im: any = null;
+  if (rustA1) { try { im = rustImpactToModel(rustA1.projectImpact(a.repo, a.anchorFile!, a.symbol!, a.depth > 1 ? a.depth : null, null)); } catch { im = null; } }
+  if (!im) try { im = await projectImpact(a.repo, a.anchorFile!, a.symbol!, {
     depth: a.depth > 1 ? a.depth : undefined,
     dataCoupling: false,
     couplingOverlay: a.dataCoupling,
@@ -488,8 +573,11 @@ export async function runCompare(a: Args): Promise<number> {
   const { projectCompare } = await import("../codebase/grow/compare.js");
   const { renderComparison } = await import("../codebase/llm_context.js");
   emit(`Comparing dependencies: ${a.symbol} vs ${a.toSymbol}…`);
-  let c: any;
-  try { c = await projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
+  // RUST FIRST (see rustShapeOk). Both sides must be parseable, so the guard is asked for the TARGET too.
+  const rustA4 = (a.toFile && await rustShapeOk({ ...a, anchorFile: a.toFile } as Args)) ? await rustShapeOk(a) : null;
+  let c: any = null;
+  if (rustA4) { try { c = rustCompareToModel(rustA4.projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!)); } catch { c = null; } }
+  if (!c) try { c = await projectCompare(a.repo, a.anchorFile!, a.symbol!, a.toFile!, a.toSymbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
   catch (e) { err(`comparison failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
@@ -513,8 +601,16 @@ export async function runNeighborhood(a: Args): Promise<number> {
   const { projectNeighborhood } = await import("../codebase/grow/neighborhood.js");
   const { renderNeighborhood } = await import("../codebase/llm_context.js");
   emit(`Mapping the subsystem around ${a.symbol}…`);
-  let n: any;
-  try { n = await projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
+  // RUST FIRST, but ONLY with coupling OFF. The addon's neighborhood is STRUCTURAL — it has no coupling
+  // overlay — so on the default (`dataCoupling` on) it drops the coupling members the TS ball includes: measured
+  // on apps/web/app/api/teams/api/create/route.ts#getCheckoutSessionMetadata, the egress member `stripe.com`
+  // simply vanished. A subsystem map missing its external boundary is the wrong answer, not a faster one.
+  const rustA3 = a.dataCoupling === false ? await rustShapeOk(a) : null;
+  let n: any = null;
+  // `a.depth` verbatim, NOT `> 1 ? … : null` like impact: this shape passes --depth straight through (default
+  // 1) while the addon's own default is 2, so gating it would silently widen the ball on every default query.
+  if (rustA3) { try { n = rustNeighborhoodToModel(rustA3.projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, a.depth)); } catch { n = null; } }
+  if (!n) try { n = await projectNeighborhood(a.repo, a.anchorFile!, a.symbol!, { depth: a.depth, dataCoupling: a.dataCoupling }); }
   catch (e) { err(`neighborhood mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...n };
 
@@ -539,8 +635,10 @@ export async function runContract(a: Args): Promise<number> {
   const { projectContract } = await import("../codebase/grow/contract.js");
   const { renderContract } = await import("../codebase/llm_context.js");
   emit(`Mapping the contract of ${basename(a.anchorFile!)}…`);
-  let c: any;
-  try { c = await projectContract(a.repo, a.anchorFile!, { model: a.model, claudeBin: a.claudeBin }); }
+  const rustA2 = await rustShapeOk(a);
+  let c: any = null;
+  if (rustA2) { try { c = rustContractToModel(rustA2.projectContract(a.repo, a.anchorFile!)); } catch { c = null; } }
+  if (!c) try { c = await projectContract(a.repo, a.anchorFile!, { model: a.model, claudeBin: a.claudeBin }); }
   catch (e) { err(`contract mapping failed: ${(e as Error).message}`); }
   const model: any = { mode: "codebase", ...c };
 
@@ -565,12 +663,18 @@ export async function runReaches(a: Args): Promise<number> {
   const { findReach } = await import("../codebase/grow/reach.js");
   const { renderReach } = await import("../codebase/llm_context.js");
   emit(`Searching for a path ${a.symbol} → ${a.toSymbol}…`);
-  let res: any;
+  // RUST FIRST, but ONLY when coupling hops are OFF. Rust's `find_reach` walks call/import edges alone — it has
+  // no coupling branch — so with hops ON (the default) it would report "no path" for a pair connected through
+  // SHARED STATE, which is precisely the connection this shape exists to find. Routing it there by default would
+  // trade the moat for speed and say nothing about it. Lifts when the coupling hops are ported.
+  const rustA5 = a.dataCoupling === false ? await rustShapeOk(a) : null;
+  let res: any = null;
+  if (rustA5) { try { res = rustReachToModel(rustA5.findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, a.toFile ?? null, a.maxHops ?? null)); } catch { res = null; } }
   // Reachability is purely structural (a path of resolved edges). Coupling is irrelevant to it and only
   // disables the footprint cache — traverse structure-only unless explicitly opted in.
   // couplingHops ON by default (the moat): a pair connected through SHARED STATE (a table one writes and the other
   // reads) is genuinely reachable — a call-only BFS reports a misleading "no path". --no-data-coupling → call-only.
-  try { res = await findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, {
+  if (!res) try { res = await findReach(a.repo, a.anchorFile!, a.symbol!, a.toSymbol!, {
     toFile: a.toFile, maxHops: a.maxHops, dataCoupling: a.dataCouplingExplicit ? a.dataCoupling : false,
     couplingHops: a.dataCoupling !== false, dataCouplingLlm: a.dataCouplingLlm, model: a.model, claudeBin: a.claudeBin }); }
   catch (e) { err(`reachability search failed: ${(e as Error).message}`); }

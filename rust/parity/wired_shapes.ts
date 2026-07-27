@@ -16,16 +16,27 @@ const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 const repo = process.argv[2] ?? "/home/scorbutics/dev/cal.com";
 const maxAnchors = parseInt(process.argv[3] ?? "8", 10);
 const CLI = "/home/scorbutics/seam-phase0/ts/src/cli/decompose.ts";
-const WIRED = ["consumers", "dependencies"];   // the shapes routed so far; extend as each one flips
+// Every shape that routes to Rust, in the configuration it is ROUTED in. Three of them only route with
+// coupling OFF (the addon has no coupling pass for those), so the harness must pass that flag — otherwise it
+// would compare TS against TS and call the result parity. `reaches` is covered by rust/parity/reach.ts (a
+// projection comparator) because this one drives the CLI, which needs a --to-symbol pair; `refactor` is not
+// routed at all (see queries.ts).
+const WIRED: { q: string; extra?: string[] }[] = [
+  { q: "consumers" }, { q: "dependencies" }, { q: "contract" }, { q: "writers" }, { q: "coupling" },
+  // routed only with coupling OFF (the addon has no coupling pass for these) — so the harness must exercise
+  // THAT configuration, or it would be comparing TS against TS and calling it parity
+  { q: "impact", extra: ["--no-data-coupling"] },
+  { q: "neighborhood", extra: ["--no-data-coupling"] },   // routed only with coupling off — see queries.ts
+];
 
 const defs = (addon.enumerateDefs(repo, 200000, undefined, false) as any[])
   .filter((d) => /\.(ts|tsx)$/.test(d.file) && ["function", "method"].includes(d.kind) && d.name);
 const step = Math.max(1, Math.floor(defs.length / maxAnchors));
 const anchors = defs.filter((_, i) => i % step === 0).slice(0, maxAnchors);
 
-const run = (query: string, center: string, engine: "0" | "1"): string => {
+const run = (query: string, center: string, engine: "0" | "1", extra: string[] = []): string => {
   try {
-    return execFileSync("bun", [CLI, "--scan", "--repo", repo, "--query", query, "--center", center, "--format", "llm-context"],
+    return execFileSync("bun", [CLI, "--scan", "--repo", repo, "--query", query, "--center", center, "--format", "llm-context", ...extra],
       { env: { ...process.env, SEAM_RUST_CORE: engine }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], maxBuffer: 1 << 28 });
   } catch (e: any) { return `ERROR ${String(e?.status ?? e).slice(0, 120)}`; }
 };
@@ -35,9 +46,9 @@ const fails: string[] = [];
 const t0 = Date.now();
 for (const [i, d] of anchors.entries()) {
   const center = `${d.file}#${d.name}`;
-  for (const q of WIRED) {
-    const ts = run(q, center, "0"), rust = run(q, center, "1");
-    if (/resolved: [1-9]/.test(ts)) nonTrivial++;
+  for (const { q, extra } of WIRED) {
+    const ts = run(q, center, "0", extra), rust = run(q, center, "1", extra);
+    if (/resolved: [1-9]|impacted: [1-9]|provides: [1-9]|members: [1-9]|shared key/.test(ts)) nonTrivial++;
     if (ts === rust) { ok++; continue; }
     bad++;
     if (fails.length < 6) {
@@ -50,7 +61,7 @@ for (const [i, d] of anchors.entries()) {
 }
 process.stderr.write("\n");
 
-console.log(`\nwired-shape render parity over ${repo}  (${WIRED.join(", ")})`);
+console.log(`\nwired-shape render parity over ${repo}  (${WIRED.map((w) => w.q).join(", ")})`);
 console.log(`  anchors: ${anchors.length}   renders compared: ${ok + bad}   with a resolved member: ${nonTrivial}`);
 console.log(`  byte-identical: ${ok}   mismatches: ${bad}`);
 for (const f of fails) console.log(f);
