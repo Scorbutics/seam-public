@@ -521,33 +521,40 @@ hop-distance rule, the border floods, and the band collapses. Verified, not asse
 
 MEASURED — `growintent` on cal.com `getBookingData`, intent "how is a booking saved to the database":
 
-| | first run (5 pieces) | + coupling border | + matched weights |
-|---|---|---|---|
-| nodes | TS 256 / Rust 386 | 256 / 253 | 256 / 254 |
-| only-Rust | 130 (all `#C`) | 0 | 1 |
-| only-TS | 0 | 3 | 3 |
-| parked frontier | 1 diff | 1 diff | **0 diff (62/62)** |
+| | 5 pieces | + coupling border | + matched int8 | + fp32 both | + weight-keyed cache |
+|---|---|---|---|---|---|
+| nodes | TS 256 / Rust 386 | 256 / 253 | 256 / 254 | 257 / 253 | 257 / 253 |
+| only-Rust | 130 (all `#C`) | 0 | 1 | 0 | 0 |
+| only-TS | 0 | 3 | 3 | 4 | 4 |
+| parked frontier | 1 diff | 1 diff | **0 (62/62)** | 1 diff | **0 (61/61)** |
 
-Two corrections came out of this, both from measurement rather than reading:
+The TIER RULE agrees exactly — its own output, the parked frontier, is identical. Two TS defects fell out of
+getting there, both fixed and both found by measurement rather than review:
 
-1. I had forced `SEAM_EMBED_QUANTIZED=0` in the harness, copying embed.ts. Wrong here: embed.ts can force
-   fp32 because it builds its own transformers.js pipeline; the grow path cannot, because `def_embed.ts:73` is
-   a bare `pipeline("feature-extraction", MODEL)` — the TS engine takes transformers.js's int8 default and
-   honours no knob. So the harness had Rust on fp32 against an int8 oracle. Fixing it closed the frontier gap
-   exactly (62/62), which is the tier rule's own output.
+1. `def_embed.ts:73` was a bare `pipeline("feature-extraction", MODEL)` — hard-wired to transformers.js's int8
+   default, honouring no knob, while the Rust core reads `SEAM_EMBED_QUANTIZED`. The two int8 execution
+   providers disagree by up to ~3e-2 on a cosine over real def strings (`_patch.ts` = 0.2741 under
+   transformers.js, 0.2452 under native ORT), which is the same order as the distance between a real score and
+   `couplingMargin` (0.25) / `tierMargin` (0.20).
+2. `cachePath` hashed `repo|MODEL` while the cache maps `md5(embedString) -> vector`. So the moment fp32 became
+   selectable, a run reused int8 vectors for every previously-seen string and computed fp32 only for new ones —
+   one field from two sets of weights. The tell was that forcing fp32 on both engines moved the comparison the
+   WRONG way (only-TS 3 -> 4, frontier diff back) instead of closing it.
 
-2. The 4 remaining node differences are all coupling COMPLEMENTS scoring within ~0.03 of the 0.25 coupling
-   margin, and the two int8 runtimes disagree by about that much on the same input. Measured on the SAME def
-   strings (verified identical — same defs, same `embedString` output): `_patch.ts` scores **0.2741 under
-   transformers.js and 0.2452 under native ORT**, straddling the margin. That is the int8 kernel divergence
-   `embed.ts` already documents, except the real figure on def strings is ~3e-2, not the ~1e-2 that harness
-   reports on short symbol names. This is NOT closable by porting: it is two ONNX runtimes over the same
-   quantized weights. It IS closable by giving `def_embed.ts` an option object so both engines can run fp32
-   (§7), where the same harness measures 3.7e-7.
+STILL OPEN — 4 coupling complements and node ORDER. All four are `apps/api/v1/pages/api/...` complements that
+TS KEEPS and Rust DROPS via `border_coupling_det`, in one direction, on both weight settings. It is NOT
+explained by the score: measured directly, `_auth-middleware.ts` scores 0.2726 in the Rust field against the
+0.25 margin, i.e. Rust should keep it, and an unscored file is kept anyway (I3). And it is not the phase order
+(TS runs the border after the deep fan-couple, as Rust does — orchestrate.ts:1275 then :1286). So the next
+diagnostic is CANDIDACY, not scoring: instrument `border_coupling_det` to report, for those four ids, whether
+each was a `fan_comps` candidate, the fan width of every marker that reached it, and the file score actually
+looked up. The suspect is the marker->complement mapping the deep fan-couple produces, which growfull already
+records as a known open divergence (~34/1269 edges, different representative producers for shared boundaries)
+— a difference in `marker_comps` sizes flips `wide()` and so flips candidacy without any score being wrong.
 
-STILL OPEN: node ORDER is not yet identical. With 4 of 256 nodes differing the order diff cannot be read
-cleanly — re-measure once the weights item above is settled, since a score straddling a margin also reorders
-the band it lands in.
+NOT YET DONE, and blocked on the above: flipping `intentShapesGrow`, and the 14 behavioural tests run with
+the grow routed to Rust. Routing with a known containment difference is exactly what those tests exist to
+catch, so the router stays as it is until the four are explained.
 
 GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
 output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both
