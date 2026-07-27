@@ -30,8 +30,8 @@ import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
-import { _key, merge_resolved } from "../scan/expand.js";
-import { build_footprint, build_footprint_cached, cachedCouplingDelta, cachedMPIndex, cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+
+import { cachedGrow, seamEnvSnapshot } from "../scan/index.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { epochOf } from "../scan/footprint_cache.js";
 
@@ -42,6 +42,12 @@ import { epochOf } from "../scan/footprint_cache.js";
 // Keyed on (repo, sorted center set, SOURCE epoch). Bounded to a small cap and dropped oldest-first so a long-lived
 // process (the MCP server) can't grow it without limit; deliberately memory-only — a per-concern file-set on disk
 // would grow linearly with distinct clusters, which we do NOT want.
+// The node CONTENT key — file#startLine#kind. Includes KIND because a synthetic boundary node (a route/table
+// the coupling overlay places AT the handler's annotation line) and the real handler METHOD at that same line
+// are distinct nodes; keying on file#line alone collided them and deduped the handler away. Was
+// `scan/expand.ts::_key`, inlined here with its last two callers.
+const _key = (n: any): string => `${n.file ?? ""}#${(n.range ?? [0])[0] ?? 0}#${n.kind ?? ""}`;
+
 const _SCOPE_MEMO = new Map<string, Set<string>>();
 const _SCOPE_CAP = 64;
 function _scopeMemoSet(key: string, files: Set<string>): void {
@@ -65,8 +71,8 @@ const transformersAvailable = async (): Promise<boolean> => {
   try { return !!(await import("./rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
 };
 import { makeCtx, available, type Ctx } from "../atoms.js";
-import type { Unit } from "../scan/graph.js";
-import { _annotationLo, _chain_route_consumers } from "../scan/attach.js";
+import type { Unit } from "../ast_units.js";
+
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
 
@@ -327,10 +333,14 @@ function _makeExclusion(opts: { excludeDirs?: string[]; includeTests?: boolean }
 // bounded (A), and the off-intent tail is cropped in tiering (D) — so a bidirectional neighborhood is the right
 // default. (The deepest reach — UI ⇄ backend across an HTTP route — is still the COUPLING overlay's job, P3.)
 async function _phaseSeed(repo: string, anchorFile: string, symbol: string, _opts: any, coStruct: any, prune: (g: any) => any): Promise<any> {
-  const up: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "up", ...coStruct }));
-  const down: any = prune(await build_footprint(repo, anchorFile, symbol, { direction: "down", ...coStruct }));
+  const rc = await import("./rust_core.js");
+  const core = rc.loadAddon();
+  const dc = coStruct?.dataCoupling !== false;
+  const foot = (dir: string) => prune(rc.toResolvedGraph(core.buildFootprint(repo, anchorFile, symbol, dir, dc, null, null, null)));
+  const up: any = foot("up");
+  const down: any = foot("down");
   for (const n of down.nodes) if (n.id !== down.anchor?.id && !n.direction) n.direction = "backward";   // deps expand DOWNSTREAM
-  return merge_resolved(up, down, down.anchor?.id);
+  return rc.toResolvedGraph(core.mergeResolved(rc.toGraphDto(up), rc.toGraphDto(down), down.anchor?.id ?? null));
 }
 
 
