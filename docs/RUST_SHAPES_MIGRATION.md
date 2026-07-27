@@ -519,6 +519,17 @@ construction — no densify, `have()` false, every score 0 — so the tier gate 
 hop-distance rule, the border floods, and the band collapses. Verified, not asserted: `growfull` on cal.com
 `getBookingData` is 427/427 nodes, 937/937 edges, order-identical after the wiring.
 
+MEASURED, first run with the six pieces in: TS=256 nodes / Rust=253, only-Rust=0, only-TS=3 — plus one
+frontier entry. All four traced to ONE cause, and it was the harness, not the port: I had forced
+`SEAM_EMBED_QUANTIZED=0` (copying embed.ts) so Rust ran fp32 weights while the TS oracle ran int8, because
+`def_embed.ts:73` is a bare `pipeline("feature-extraction", MODEL)` — the TS engine is HARD-WIRED to
+transformers.js's int8 default and honours no knob. embed.ts can force fp32 because it builds its own
+pipeline; the grow path cannot. The ~1e-2 int8-vs-fp32 delta then flips exactly the near-ties the two margins
+compare against: `_auth-middleware.ts` scored 0.277 on TS against a 0.25 coupling margin, and
+`handleCustomInputs` 0.2175 against a 0.20 tier margin. Both sides now run the engine default.
+
+(That `def_embed.ts` cannot select its weights is worth fixing on its own — §7.)
+
 GATE: `rust/parity/growintent.ts` (new) — node set, node ORDER, and the PARKED FRONTIER (the tier rule's own
 output; comparing only the grown set would miss a tier-3 park another rule happened to exclude anyway). Both
 sides forced to fp32 weights, because `embed.ts` pins that int8 kernels differ ~1e-2 between the two runtimes
@@ -546,6 +557,13 @@ goes.
   Still open, lower severity: the overlay mints that twin at all instead of reusing the existing node id, so a
   `--data-coupling` graph carries a redundant duplicate of any unit it re-materialises. Harmless now that
   identity is stable, but it is why the collision exists.
+
+- **`def_embed.ts` cannot select its weights.** `pipeline("feature-extraction", MODEL)` (:73) takes
+  transformers.js's INT8 default and ignores `SEAM_EMBED_QUANTIZED`, which the Rust core honours. So the two
+  engines' fields can only be compared on int8 — where the two ONNX runtimes disagree by ~1e-2 on a cosine,
+  which is the same order as the distance between a real score and `tierMargin`. Not a blocker (both engines
+  default to the same weights, so production agrees), but it puts a noise floor under every intent-grow
+  comparison, and the fix is one option object.
 
 - **`--format concern` vs `--concern` diverge.** `isConcern` (gating `SEAM_GROW_STRUCTURAL`) reads
   `a.concern` only, so `--format concern` forces a structural grow then switches the star on afterwards —

@@ -29,11 +29,14 @@ const borderTol = tolA && tolA !== "-" ? parseFloat(tolA) : null;
 const maxSteps = parseInt(stepsA ?? "12", 10);
 const maxNodes = parseInt(nodesA ?? "80", 10);
 
-// BOTH ENGINES ON THE SAME WEIGHTS. The int8 kernels differ by ~1e-2 between onnxruntime-web and native ORT —
-// enough to swap near-ties, which is exactly what `tierMargin` and the border tolerance compare against. fp32
-// on both sides removes the only known source of decision-level disagreement in the field itself, so anything
-// this harness then reports is a PORTING difference, not runtime noise. (embed.ts pins that finding.)
-process.env.SEAM_EMBED_QUANTIZED = "0";
+// BOTH ENGINES ON THE SAME WEIGHTS — which here means the QUANTIZED ones, NOT fp32. embed.ts forces fp32 on
+// both sides because it builds its own transformers.js pipeline and can pass `{quantized: false}`; the GROW
+// path cannot. `def_embed.ts:73` is `pipeline("feature-extraction", MODEL)` with no options, so the TS engine
+// is HARD-WIRED to transformers.js's int8 default and honours no knob. Setting SEAM_EMBED_QUANTIZED=0 here
+// therefore puts Rust on fp32 against a TS oracle still on int8 — a ~1e-2 delta that flips exactly the
+// near-ties `tierMargin` (0.20) and `couplingMargin` (0.25) compare against, and the harness then "measures" a
+// divergence it created itself. MEASURED: with fp32 forced, `_auth-middleware.ts` scored 0.277 on TS and below
+// 0.25 on Rust, and three complements diverged for that reason alone. Leave the engine default in place.
 // `process.env` does not cross the napi boundary — the addon reads its own process environment.
 addon.syncSeamEnv(Object.entries(process.env).filter(([k]) => k.startsWith("SEAM_")).map(([k, v]) => [k, String(v)]));
 
