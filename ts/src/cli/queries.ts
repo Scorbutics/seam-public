@@ -309,88 +309,17 @@ export async function runWritersSet(a: Args, _scan: typeof import("../codebase/s
   emit(`Resolving writers of the table(s) ${a.symbol ?? basename(a.anchorFile!)} reads…`);
   // RUST FIRST (see rustShapeOk) — the whole shape, floor scan included, is in the core.
   const rustA7 = await rustShapeOk(a);
-  if (rustA7) {
-    try {
-      const model: any = { mode: "codebase", ...rustWritersToModel(rustA7.projectWriters(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
-      if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
-      else if (model.noStructure && model.reason === "none")
-        process.stdout.write(`Writers of what '${model.anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
-      else process.stdout.write(`Writers of ${model.tables.map((t: string) => `"${t}"`).join(", ")} (read by ${model.anchor.symbol}): ${model.members.length} write site(s).\n`);
-      if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
-      return 0;
-    } catch { /* fall through to the TS path — a shape that cannot answer is worse than a slower one */ }
-  }
-  let text: string;
-  try { text = readFileSync(join(a.repo, a.anchorFile!), "utf-8"); } catch (e) { err(`cannot read center file: ${(e as Error).message}`); return 1; }
-
-  // 1) the tables the CENTER reads (kind db-table, CONSUME role), scoped to the symbol's span when one is given.
-  const span = a.symbol ? await symbol_span(a.repo, a.anchorFile!, a.symbol) : null;
-  const inSpan = (line: number) => !span || (line >= span[0] && line <= span[1]);
-  const readHits = scan_file_keys(a.anchorFile!, text).filter((h) => h.kind === "db-table" && !h.produces && inSpan(h.line));
-  const readTables = [...new Set(readHits.map((h) => h.value))];
-
-  const anchor = { symbol: a.symbol ?? basename(a.anchorFile!), file: a.anchorFile! };
-  // COLUMN-GRAIN (default on; SEAM_WRITERS_COLUMNS=0 = table-level). Read BEFORE the empty early-return so the
-  // model carries the same fields whether or not the answer is empty — a consumer should not have to special-case
-  // the shape of an empty answer (the renderer reads `columnGrain`/`filterColumns` unconditionally).
-  const colGrain = process.env.SEAM_WRITERS_COLUMNS !== "0";
-  if (!readTables.length) {
-    const model: any = { mode: "codebase", shape: "writers", anchor, members: [], unresolved: [],
-      resolutionQuality: "FULL", tables: [], columnGrain: colGrain, filterColumns: {}, noStructure: true, reason: "none" };
+  // The TypeScript writers scan below this is gone — the whole shape, floor scan included, is in the core,
+  // so an addon failure is the answer rather than a slower second opinion computed a different way.
+  try {
+    const model: any = { mode: "codebase", ...rustWritersToModel(rustA7.projectWriters(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
     if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
-    else process.stdout.write(`Writers of what '${anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
-    // An EMPTY answer is still an ANSWER, and `--emit-seams` is the programmatic caller's only channel: skipping
-    // the write here left it unable to tell "this symbol reads no table" from "the query crashed" — no file
-    // either way. Same honest-empty contract the shapes themselves keep.
+    else if (model.noStructure && model.reason === "none")
+      process.stdout.write(`Writers of what '${model.anchor.symbol}' reads: it reads no resolvable DB table (nothing to reverse-couple; use grep).\n`);
+    else process.stdout.write(`Writers of ${model.tables.map((t: string) => `"${t}"`).join(", ")} (read by ${model.anchor.symbol}): ${model.members.length} write site(s).\n`);
     if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
     return 0;
-  }
-
-  // 1b) COLUMN-GRAIN (default on; SEAM_WRITERS_COLUMNS=0 = table-level): the COLUMNS the center FILTERS on per table
-  // (its `where` keys). A writer is kept only if it writes a column the reader filters on (that's what changes the
-  // read's result); a writer whose columns we can't parse is KEPT but flagged unverified (never drop a real write).
-  const parseCache = new Map<string, any>();
-  const readerCols = new Map<string, Set<string>>();   // table -> columns the center's where-clauses filter on
-  if (colGrain) for (const h of readHits) {
-    const cols = (await accessColumns(a.repo, a.anchorFile!, h.line, parseCache)).reads;
-    const set = readerCols.get(h.value) ?? new Set<string>();
-    for (const c of cols) set.add(c);
-    readerCols.set(h.value, set);
-  }
-
-  // 2) repo-wide coupling-FLOOR producers (writers) of each read table — uncapped; otherSide drops test/fixtures.
-  const ctx = new EngineCtx();
-  const idx = floor_base_index(a.repo, SKIP_DIRS, ctx);
-  const seen = new Set<string>();
-  const members: any[] = [];
-  for (const table of readTables) {
-    const filterCols = readerCols.get(table);   // undefined/empty ⇒ reader columns opaque → keep all (table-level)
-    for (const w of otherSide(idx, "db-table", table, false)) {         // produces:false ⇒ the OTHER side = producers = writers
-      const dedup0 = `${w.file}#${w.line}#${table}`;   // per-access guard for the column parse
-      let columns: string[] = [], colVerified = false;
-      if (colGrain && filterCols && filterCols.size) {
-        const writeCols = (await accessColumns(a.repo, w.file, w.line, parseCache)).writes;
-        if (writeCols.length) {
-          columns = writeCols.filter((c) => filterCols.has(c));
-          colVerified = true;
-          if (!columns.length) continue;   // writes only columns the reader does NOT filter on → not coupled, DROP
-        }   // else: opaque write args → keep, unverified (colVerified stays false)
-      }
-      const unit = await complement_unit(a.repo, w.file, w.line);
-      const dedup = `${w.file}#${unit.symbol}#${table}`;
-      if (seen.has(dedup)) continue;                                    // collapse a method's many write-lines to one member
-      seen.add(dedup);
-      members.push({ symbol: unit.symbol, file: w.file, line: to1(w.line), kind: unit.kind, enclosing: "", edgeKind: "db-write", provenance: "RESOLVED_PARTIAL", table, columns, colVerified });
-    }
-  }
-  members.sort((x, y) => x.table.localeCompare(y.table) || x.file.localeCompare(y.file) || x.line - y.line);
-  const filterColumns: Record<string, string[]> = {};
-  for (const [t, s] of readerCols) if (s.size) filterColumns[t] = [...s].sort();
-  const model: any = { mode: "codebase", shape: "writers", anchor, members, unresolved: [], resolutionQuality: "FULL",
-    tables: readTables, columnGrain: colGrain, filterColumns, ...(members.length ? {} : { noStructure: true, reason: "opaque" }) };
-  if (a.format === "llm-context") process.stdout.write(renderWritersSet(model, await snippetReaderOf(a)) + "\n");
-  else process.stdout.write(`Writers of ${readTables.map((t) => `"${t}"`).join(", ")} (read by ${anchor.symbol}): ${members.length} write site(s).\n`);
-  if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
+  } catch (e) { err(`writers scan failed: ${(e as Error).message}`); }
   return 0;
 }
 
@@ -413,76 +342,17 @@ export async function runCouplingSet(a: Args, _scan: typeof import("../codebase/
   emit(`Resolving the data boundary of ${a.symbol ?? basename(a.anchorFile!)}…`);
   // RUST FIRST (see rustShapeOk) — the whole shape, floor scan included, is in the core.
   const rustA8 = await rustShapeOk(a);
-  if (rustA8) {
-    try {
-      const model: any = { mode: "codebase", ...rustCouplingToModel(rustA8.projectCoupling(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
-      if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
-      else if (model.noStructure && model.reason === "none")
-        process.stdout.write(`Coupling of '${model.anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
-      else process.stdout.write(`Coupling of '${model.anchor.symbol}': ${model.keys.length} shared key(s), ${model.total} counterpart site(s).\n`);
-      if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
-      return 0;
-    } catch { /* fall through to the TS path */ }
-  }
-  let text: string;
-  try { text = readFileSync(join(a.repo, a.anchorFile!), "utf-8"); } catch (e) { err(`cannot read center file: ${(e as Error).message}`); return 1; }
-
-  // 1) the anchor's OWN keys (both roles), scoped to the symbol span when given.
-  const span = a.symbol ? await symbol_span(a.repo, a.anchorFile!, a.symbol) : null;
-  const inSpan = (line: number) => !span || (line >= span[0] && line <= span[1]);
-  const hits = scan_file_keys(a.anchorFile!, text).filter((h) => inSpan(h.line));
-  const own = new Map<string, { kind: string; value: string; reads: boolean; writes: boolean }>();
-  for (const h of hits) {
-    const k = `${h.kind} ${h.value}`;
-    const e = own.get(k) ?? { kind: h.kind, value: h.value, reads: false, writes: false };
-    if (h.produces) e.writes = true; else e.reads = true;
-    own.set(k, e);
-  }
-  const anchor = { symbol: a.symbol ?? basename(a.anchorFile!), file: a.anchorFile! };
-  if (!own.size) {
-    const model: any = { mode: "codebase", shape: "coupling", anchor, keys: [], noStructure: true, reason: "none" };
+  // The TypeScript coupling scan below this is gone. Both halves — the anchor's own keys and the repo-wide
+  // floor counterparts — live in the core, so there is no second implementation to fall through to.
+  try {
+    const model: any = { mode: "codebase", ...rustCouplingToModel(rustA8.projectCoupling(a.repo, a.anchorFile!, a.symbol ?? undefined)) };
     if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
-    else process.stdout.write(`Coupling of '${anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
-    // see the same note on the `writers` empty path — an empty answer still owes the caller its model.
+    else if (model.noStructure && model.reason === "none")
+      process.stdout.write(`Coupling of '${model.anchor.symbol}': it touches no shared key (no db-table/route/event boundary) — nothing to couple.\n`);
+    else process.stdout.write(`Coupling of '${model.anchor.symbol}': ${model.keys.length} shared key(s), ${model.total} counterpart site(s).\n`);
     if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
     return 0;
-  }
-
-  // 2) per key, the COUNTERPARTS on the other side (a write's readers, a read's writers) from the repo-wide floor.
-  const ctx = new EngineCtx();
-  const idx = floor_base_index(a.repo, SKIP_DIRS, ctx);
-  const anchorNorm = `${a.anchorFile}`;
-  const parseCache = new Map<string, any>();   // one tree-sitter ctx per file across the whole column pass
-  const keys: any[] = [];
-  for (const e of [...own.values()].sort((x, y) => (x.kind + x.value).localeCompare(y.kind + y.value))) {
-    const sides: any[] = [];
-    const seen = new Set<string>();
-    // the anchor READS this key → its counterparts are the WRITERS (produces:false ⇒ producers); and vice versa.
-    for (const [role, produces] of [["writes", false], ["reads", true]] as const) {
-      if (role === "writes" && !e.reads) continue;    // only look up writers when the anchor reads it
-      if (role === "reads" && !e.writes) continue;    // only look up readers when the anchor writes it
-      for (const acc of otherSide(idx, e.kind, e.value, produces)) {
-        if (acc.file === anchorNorm) continue;
-        const unit = await complement_unit(a.repo, acc.file, acc.line);
-        const dk = `${acc.file}#${unit.symbol}#${role}`;
-        if (seen.has(dk)) continue;
-        seen.add(dk);
-        // COLUMN-GRAIN (subsumes the `writers` shape): which columns this counterpart touches, so one `coupling`
-        // call answers "who writes the state I read, and on which field" — no second query needed.
-        const cols = e.kind === "db-table" ? await accessColumns(a.repo, acc.file, acc.line, parseCache) : { writes: [], reads: [] };
-        const columns = role === "writes" ? cols.writes : cols.reads;
-        sides.push({ symbol: unit.symbol, file: acc.file, line: to1(acc.line), kind: unit.kind, role, columns });
-      }
-    }
-    sides.sort((x, y) => x.role.localeCompare(y.role) || x.file.localeCompare(y.file) || x.line - y.line);
-    keys.push({ kind: e.kind, value: e.value, anchorRole: e.reads && e.writes ? "reads+writes" : e.reads ? "reads" : "writes", sides });
-  }
-  const total = keys.reduce((n, k) => n + k.sides.length, 0);
-  const model: any = { mode: "codebase", shape: "coupling", anchor, keys, total,
-    ...(total ? {} : { noStructure: true, reason: "opaque" }) };
-  if (a.format === "llm-context") process.stdout.write(renderCoupling(model, await snippetReaderOf(a)) + "\n");
-  else process.stdout.write(`Coupling of '${anchor.symbol}': ${keys.length} shared key(s), ${total} counterpart site(s).\n`);
-  if (a.emitSeams) { writeFileSync(a.emitSeams, JSON.stringify(stamp(model))); process.stdout.write(`Seams: ${a.emitSeams}\n`); }
+  } catch (e) { err(`coupling scan failed: ${(e as Error).message}`); }
   return 0;
 }
 
