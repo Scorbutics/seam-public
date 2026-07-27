@@ -64,13 +64,8 @@ describe("method-precise fan attribution: a delegate's write, not a sibling's, r
     expect([...writes]).not.toContain("attributes");        // setAttribute (never called by grantRole) → dropped, no bleed
   });
 
-  test("SEAM_METHOD_PRECISE=0 restores the whole-file bleed (the sibling write reappears on the reached node)", async () => {
-    if (!available()) return;
-    const prev = process.env.SEAM_METHOD_PRECISE; process.env.SEAM_METHOD_PRECISE = "0";
-    try {
-      const [data]: any = await grow_to_terminals(REPO, "src/entry.ts", "handler", { maxSteps: 8, maxNodes: 40, dataCoupling: true } as any);
-      const writes = svcWrites(data);
-      expect([...writes]).toContain("attributes");          // opt-out = old whole-file fan bleeds the sibling write in
-    } finally { if (prev === undefined) delete process.env.SEAM_METHOD_PRECISE; else process.env.SEAM_METHOD_PRECISE = prev; }
-  });
+  // SEAM_METHOD_PRECISE=0 USED TO restore the pre-fix whole-file fan bleed by routing the grow to the TS
+  // engine, which implemented it. That engine is gone and the Rust fan is method-precise unconditionally, so
+  // the flag now selects nothing — the opt-out is removed rather than left as a switch with no other side.
+  // The behaviour it existed to contrast with is asserted above, which is the half worth keeping.
 });

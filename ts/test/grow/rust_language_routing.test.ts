@@ -34,18 +34,16 @@ beforeAll(() => {
 });
 afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 
-async function grow(rust: boolean): Promise<string[]> {
-  const saved = process.env.SEAM_RUST_CORE;
-  process.env.SEAM_RUST_CORE = rust ? "1" : "0";
-  try {
-    const [data] = await grow_to_terminals(repo, "app/core.rb", "save", { maxNodes: 40, dataCoupling: false, structuralGrow: true } as any);
-    return files(data);
-  } finally {
-    if (saved === undefined) delete process.env.SEAM_RUST_CORE; else process.env.SEAM_RUST_CORE = saved;
-  }
+// THE TS ENGINE IS GONE, so this can no longer be a DIFFERENTIAL test — there is no second implementation to
+// diff against. What survives is the claim that actually mattered: the addon reads Ruby correctly. Keeping the
+// SEAM_RUST_CORE=0 arm would only assert that the engine throws when disabled, which is a property of the
+// router, not of the answer.
+async function grow(): Promise<string[]> {
+  const [data] = await grow_to_terminals(repo, "app/core.rb", "save", { maxNodes: 40, dataCoupling: false, structuralGrow: true } as any);
+  return files(data);
 }
 
-describe("Rust core — a language it cannot parse stays on the TS engine", () => {
+describe("Rust core — the vendored grammars are honest about what they read", () => {
   test("canParse is honest about which grammars are linked", () => {
     if (!addonPresent()) return;
     expect(rustCanParse("src/Foo.java")).toBe(true);
@@ -108,14 +106,15 @@ describe("Rust core — a language it cannot parse stays on the TS engine", () =
     }
   });
 
-  test("a Ruby grow returns the SAME footprint with the addon enabled as without it", async () => {
+  // The regression this pins: the addon once returned ['app/core.rb'] where the TS engine returned
+  // ['app/caller.rb', 'app/core.rb'] — the Ruby CONSUMER silently vanished because the grammar was not linked.
+  // The diff against TS is gone with the TS engine, so assert the reach DIRECTLY: a cross-file Ruby consumer
+  // must be in the footprint. That is the fact the old equality was standing in for, and it cannot pass
+  // vacuously — an addon that reads no Ruby fails it exactly as it did before.
+  test("a Ruby grow reaches the cross-file consumer (the grammar is really linked)", async () => {
     if (!available() || !addonPresent()) return;
-    const ts = await grow(false);
-    const rust = await grow(true);
-    // The regression: `rust` was ['app/core.rb'] while `ts` was ['app/caller.rb', 'app/core.rb'] — the consumer
-    // silently vanished. Equality here is the contract; reaching the consumer at all is asserted separately so
-    // a fixture that stops resolving can't make this pass vacuously.
-    expect(ts).toContain("app/caller.rb");
-    expect(rust).toEqual(ts);
+    const out = await grow();
+    expect(out).toContain("app/core.rb");
+    expect(out).toContain("app/caller.rb");
   }, 60_000);
 });
