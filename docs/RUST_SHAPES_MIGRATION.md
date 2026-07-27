@@ -492,11 +492,25 @@ gate and the growing centroid read the field and live in the TS wave; the Rust w
 (`border_policies.rs` says so explicitly: "tier-grow/up-hop/soft-border stay" on TS). `growViaRust` therefore
 still serves STRUCTURAL grows only, and `intentShapesGrow` keeps the rest on TS.
 
-Scope: `intent_rank.ts` (136 lines) + `key_ranker.ts` (35) + the densify/centroid/soft-border/tier-gate
-sites in `orchestrate.ts`. The field it needs now exists in the core, so this is a port of the WALK logic, not
-of any ML. Its gate is not a new harness — it is the 14 behavioural tests that already pin these behaviours
-(the soft border halting at the relevance cliff, the tier rule parking an off-intent fan, the decision-point
-frontier, the concern grows), run with the grow routed to Rust.
+SCOPE — I first wrote this as "171 lines" (`intent_rank.ts` + `key_ranker.ts`). That was wrong and the
+correction matters: those two files are the RENDER-side ranking. The wave-side consumption is inside
+`_growToTerminalsImpl` itself and is not extractable as a list of helpers —
+  · `densify` (:708) — embed the newly reached files each step, incrementally
+  · `_growCentroid` / `RegionCentroid` / `_fieldScore` (:731-745) — the region-centroid field, with the
+    `intent | centroid | blend` modes
+  · the FRONTIER ORDERING (:353-370) — relevance first, closeness as the tiebreak
+  · the SOFT BORDER (:917+, ~84 lines) — a FIXPOINT over path high-water marks that tolerates a shallow dip
+    and halts at a relevance cliff
+  · the TIER RULE — pivot score, parking the off-intent fan, and the decision-point frontier it emits
+These are threaded through the wave loop that Rust re-implements independently (`seam-grow`, 1826 lines), so
+the port is "add an intent field to the Rust wave and make its five decision points agree", not a file copy.
+
+The FIELD it needs now exists in the core and is decision-equivalent, so no ML work remains — but this is the
+largest single item left in the migration, not the smallest. Its gate already exists and is strict: the 14
+behavioural tests that pin these exact behaviours (the soft border halting at the relevance cliff, the tier
+rule parking an off-intent fan, the decision-point frontier with `cutBy`, the concern grows), run with the
+grow routed to Rust. A partial port cannot be routed at all — flipping the router with only some of the five
+decision points ported changes containment, which is what those tests exist to catch.
 
 And independently of that: 62 of the 64 `rust/parity` harnesses import `ts/src` as the ORACLE. Deleting it
 ends the ability to prove the Rust engine correct — including on the day someone changes it. Whatever is
