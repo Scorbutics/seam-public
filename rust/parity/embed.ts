@@ -26,6 +26,12 @@ env.allowLocalModels = true;
 env.localModelPath = "/home/scorbutics/seam-phase0/ts/node_modules/@xenova/transformers/.cache";
 
 const INTENT = "how is a booking saved to the database";
+// SHORT STRINGS UNDERSTATE THE RISK. This harness compares symbol NAMES, and on those the two runtimes agreed
+// to 3.7e-7 while the real field disagreed by ~3e-2 — because the grow embeds `embedString` passages
+// (signature + enclosing + path + doc + BODY), and the Rust `tokenizers` crate honoured `tokenizer.json`'s
+// `truncation.max_length = 128` while transformers.js ignores that section and truncates at `model_max_length`
+// (512). Anything past 128 tokens was silently dropped on one side only. Fixed in seam-embed; noted here
+// because this harness CANNOT see that class of bug — see rust/parity/growintent.ts, which can.
 // A REAL candidate set, not a handful: the grow ranks hundreds of symbol names, and a rank swap is only
 // meaningful if the sample is big enough to contain near-ties. Drawn from the actual repo so the strings have
 // the shape the field really sees.

@@ -269,6 +269,28 @@ pub fn border_coupling_det(repo: &str, data: &mut seam_scan::graph::ResolvedGrap
             *e = e.max(*v);
         }
     }
+    // WHY-TRACE — `SEAM_BORDER_WHY=<path substring>` reports this border's decision for the matching
+    // complements: candidacy, the fan width of every marker that reached it, and the score actually looked up.
+    // A drop has three independent causes (not a candidate at all / an unscored file / a score under the
+    // margin) and the OUTPUT looks the same for all three, so the only way to tell them apart is to ask here.
+    if let Ok(want) = std::env::var("SEAM_BORDER_WHY") {
+        for id in &fan_comps {
+            let file = comp_by_id.get(*id).cloned().unwrap_or_default();
+            if !file.contains(&want) {
+                continue;
+            }
+            let widths: Vec<usize> = comp_markers.get(id).map(|ms| ms.iter().map(|m| marker_comps.get(m).map(|s| s.len()).unwrap_or(0)).collect()).unwrap_or_default();
+            eprintln!("[border-why] CANDIDATE {id} {file} marker-fans={widths:?} score={:?} margin={margin}", file_score.get(&file));
+        }
+        // a complement that is NOT a candidate is kept unconditionally — report those too, with the reason
+        for (id, file) in &comp_by_id {
+            if !file.contains(&want) || fan_comps.contains(&id.as_str()) {
+                continue;
+            }
+            let widths: Vec<usize> = comp_markers.get(id.as_str()).map(|ms| ms.iter().map(|m| marker_comps.get(m).map(|s| s.len()).unwrap_or(0)).collect()).unwrap_or_default();
+            eprintln!("[border-why] NOT-CANDIDATE {id} {file} marker-fans={widths:?} (kept: no marker, or a narrow one vouches)");
+        }
+    }
     let drop: HashSet<&str> = fan_comps
         .iter()
         .copied()

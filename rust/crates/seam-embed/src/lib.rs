@@ -85,6 +85,18 @@ fn onnx_path(dir: &PathBuf) -> Option<PathBuf> {
     None
 }
 
+/// `model_max_length` from `tokenizer_config.json` — the length transformers.js truncates at (512 for the
+/// MiniLM family). Falls back to 512, the model's `max_position_embeddings`.
+fn model_max_length(dir: &std::path::Path) -> usize {
+    std::fs::read_to_string(dir.join("tokenizer_config.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .and_then(|v| v.get("model_max_length").and_then(|m| m.as_u64()))
+        .map(|v| v as usize)
+        .filter(|v| *v > 0 && *v <= 8192)
+        .unwrap_or(512)
+}
+
 struct Embedder {
     session: ort::session::Session,
     tokenizer: tokenizers::Tokenizer,
@@ -99,7 +111,20 @@ fn with_embedder<T>(f: impl FnOnce(&mut Embedder) -> Option<T>) -> Option<T> {
         // one per call
         *slot = Some((|| {
             let dir = model_dir()?;
-            let tokenizer = tokenizers::Tokenizer::from_file(dir.join("tokenizer.json")).ok()?;
+            let mut tokenizer = tokenizers::Tokenizer::from_file(dir.join("tokenizer.json")).ok()?;
+            // SEQUENCE LENGTH IS PART OF THE CONTRACT. `tokenizer.json` carries `truncation.max_length = 128`
+            // and `padding = Fixed(128)`, and the Rust `tokenizers` crate HONOURS both. transformers.js does
+            // not: it ignores that section and truncates at `model_max_length` (512), padding to the longest
+            // item in the batch. So the same text produced two different token sequences, and the mean-pooled
+            // vectors diverged — invisibly, because both engines "worked".
+            //
+            // It only shows on LONG inputs, which is why embed.ts (short symbol names) measured agreement to
+            // 3.7e-7 while the real field disagreed by ~3e-2: `embedString` is signature + enclosing + path +
+            // doc + BODY and routinely exceeds 128 tokens. Measured on `_patch.ts`: TS 0.2744, Rust 0.2410
+            // against a 0.25 margin — a borderline complement kept by one engine and dropped by the other.
+            // Padding is turned OFF here because this module builds its own batch-longest padding below.
+            tokenizer.with_truncation(Some(tokenizers::TruncationParams { max_length: model_max_length(&dir), ..Default::default() })).ok()?;
+            tokenizer.with_padding(None);
             // read the file ourselves: `commit_from_file` is not in this ort release's builder, and loading from memory
             // also keeps the model path out of ort's own resolution logic
             let bytes = std::fs::read(onnx_path(&dir)?).ok()?;

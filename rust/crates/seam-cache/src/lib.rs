@@ -19,7 +19,8 @@ use std::sync::Mutex;
 /// ENGINE EPOCH — bump when the grow/footprint/coupling LOGIC changes so a warm `.seam` can't replay a stale
 /// answer computed by the previous binary. (TS auto-derives this from a source-tree hash; the Rust binary's
 /// version is the boundary — a manual constant, bumped per logic change.)
-const ENGINE_EPOCH: &str = "rs8";   // rs8: the wave carries an INTENT FIELD — densify, the region-centroid, the soft border, the tier rule and the frontier score are all live (inert on a structural grow, so a structural answer is unchanged)
+const ENGINE_EPOCH: &str = "rs9";   // rs9: the embedder truncates at model_max_length (512) like transformers.js, not at tokenizer.json's 128 — every long def string scored differently before, so cached intent grows are stale
+// rs8: the wave carries an INTENT FIELD — densify, the region-centroid, the soft border, the tier rule and the frontier score are all live (inert on a structural grow, so a structural answer is unchanged)
 // rs7: a bare barrel re-export is cited at its IMPORT line + a node with no grounded site is `unlocated` (never `:1`); the module contract sees default-import consumers, the default SLOT as a member, and type-level exports
                                     // rs6: a class's FIELD-BOUND function members are part of its method set (the UP pass finds their callers) + a self-receiver call on an unrelated class is dropped
                                     // rs5: factory-obtained receivers ground to RESOLVED_FULL + a named-arrow complement is no longer a module stub (the upstream climb crosses the route)
