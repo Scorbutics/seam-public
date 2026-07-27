@@ -187,6 +187,12 @@ impl IntentField {
         }
     }
 
+    /// How many files the field has embedded so far — a diagnostic for the why-trace, since an unscored node
+    /// and a genuinely off-intent one both read 0.
+    pub fn scored_files_len(&self) -> usize {
+        self.scored_files.len()
+    }
+
     /// Is the field populated? The tier rule needs a pivot score; absent, it falls back to the legacy distance
     /// gate rather than parking the whole frontier.
     pub fn have(&self) -> bool {

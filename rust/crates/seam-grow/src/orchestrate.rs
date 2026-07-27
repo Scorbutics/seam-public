@@ -449,7 +449,11 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                         parked.insert(n.id.clone(), if opts.hub_collapse { "hub".to_string() } else { "decision".to_string() });
                         continue;
                     }
-                    if field.field_score(n) < tier_margin {
+                    let fs = field.field_score(n);
+                    if std::env::var("SEAM_TIER_WHY").is_ok() {
+                        eprintln!("[tier-why] {} {} score={fs:.4} margin={tier_margin} scored_files={}", n.symbol, n.file, field.scored_files_len());
+                    }
+                    if fs < tier_margin {
                         parked.insert(n.id.clone(), "decision".to_string());
                         continue;
                     }

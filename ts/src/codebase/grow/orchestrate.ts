@@ -1237,7 +1237,11 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // the ANCHOR; `rustCanServeRepo` gates everything the grow could REACH from it, since a grow that starts in
   // TypeScript and crosses into Ruby would otherwise lose that file just as quietly. Both shrink to no-ops as
   // the remaining grammars are vendored.
-  if (rustCoreEnabled() && deterministic && !intentShapesGrow && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+  // SEAM_RUST_INTENT=1 opts an intent-shaped grow into the Rust wave. A staged-rollout switch, not a
+  // permanent fork: it exists so the remaining shapes can be compared and fixed ONE at a time against a green
+  // tree, instead of the flip being all-or-nothing across 15 tests. It goes away with the guard's other half.
+  const rustIntentOk = _envFlag(process.env.SEAM_RUST_INTENT) ?? false;
+  if (rustCoreEnabled() && deterministic && (!intentShapesGrow || rustIntentOk) && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
     return growViaRust(repo, anchorFile, symbol, opts);
   }
   const km = growCacheKeyMaterial(symbol, opts, intentShapesGrow, seamEnvSnapshot());
