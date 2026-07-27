@@ -217,48 +217,40 @@ expectations were verified against the TS engine on the SAME fixture, so it pins
 a Rust quirk: writer found across files nothing links; column grain drops a writer that touches only
 un-filtered columns and KEEPS an opaque one flagged unverified; both roles; and the honest empty.
 
-### Step 4 — wire, one shape at a time. ✅ DONE (with three shapes deliberately gated, one not routed)
+### Step 4 — wire, one shape at a time. ✅ DONE (one shape still gated, with the reason measured)
 
-`rustShapeOk` in `ts/src/cli/queries.ts` is the grow's guard minus its intent condition (a `--query` shape is
-structural by definition); the language pair carries over verbatim, because an unparseable file degrades
-SILENTLY in the addon. Each shape has a DTO→model adapter (`rustSetToModel`, `rustImpactToModel`, …) — the
-members are byte-identical, only the anchor is spelled flat and `noStructure` is always emitted where TS omits
-a falsy one. Any addon failure falls through to TS.
+`rustShapeOk` in `ts/src/cli/queries.ts` is the grow's guard minus its intent condition; each shape has a
+DTO→model adapter. Any addon failure falls through to TS.
 
 | shape | routed |
 |---|---|
-| consumers, dependencies, contract, writers, coupling | **always** |
-| impact, neighborhood, reaches | **only with `--no-data-coupling`** |
-| refactor | **not routed** |
+| consumers, dependencies, contract, writers, coupling, **impact**, **reaches**, **refactor** | **always** |
+| neighborhood | **only with `--no-data-coupling`** |
 
-THE GATES ARE NOT CAUTION, THEY ARE MEASURED GAPS. The addon has no coupling pass for these three shapes, and
-routing them on the default would silently drop the moat:
-- `neighborhood` lost the egress member `stripe.com` on
-  `apps/web/app/api/teams/api/create/route.ts#getCheckoutSessionMetadata` — a subsystem map missing its
-  external boundary is the wrong answer, not a faster one.
-- `impact` computes its crossings INSIDE `projectImpact` (`couplingOverlay`), unlike `consumers` where the
-  shell attaches them after: `cross-stack: 24` became nothing on
-  `handleNewBooking/createBooking.ts#saveBooking`.
-- `reaches` — the Rust BFS has no coupling branch, so a pair connected through SHARED STATE would report "no
-  path", which is precisely the connection the shape exists to find.
-- `refactor` cannot be routed AT ALL yet: `gatherRefactorFacts` calls `projectImpact` without
-  `couplingOverlay: false`, and that defaults ON, so its facts always carry the crossings — `--no-data-coupling`
-  does not turn them off there. It flips when the impact overlay is ported.
+THE COUPLING OVERLAY IS NOW IN THE CORE, which is what lifted three of the four gates:
+- `seam_couple::anchor_counterparts` — the UNCAPPED floor counterparts (the targeted bridge is bounded by
+  design, and on a hub key that bound silently drops the very counterpart a reachability query is looking for).
+- `impact` gained `coupling_overlay` (ONE anchor pass, deduped against the structural closure) →
+  `cross_stack` + `cross_stack_truncations`.
+- `find_reach` gained COUPLING HOPS (match-first across all counterparts, then a bounded frontier) and the
+  `via_coupling` flag the render prints — "reachable through shared state" is a materially different claim
+  from "reachable by calls".
+- `refactor` routes, since its impact half now carries the crossings.
 
-**Gate: `rust/parity/wired_shapes.ts` — 98/98 renders byte-identical** (14 anchors × 7 shapes, 41 non-trivial).
-It compares the RENDERED answer, running the same CLI invocation with `SEAM_RUST_CORE=1` and `0` — the
-projection being identical is necessary but NOT sufficient, since the model→render adapter is where a wired
-shape actually breaks. The three gated shapes are exercised IN their routed configuration (`--no-data-coupling`),
-or the harness would compare TS against TS and call it parity. It also refuses to pass when every anchor
-rendered empty — which is exactly what caught a syntax error that made both engines crash identically.
+`neighborhood` STAYS GATED. The bidirectional builder does thread `data_coupling` into both halves, yet on
+`apps/web/app/api/teams/api/create/route.ts#getCheckoutSessionMetadata` the EGRESS member (`stripe`) is still
+absent from the Rust ball while TS grounds it — so the gap is in the coupling RESOLUTION for that key shape,
+not in the wiring. A subsystem map without its external boundary is the wrong answer, so it keeps the gate.
 
-§5 collateral through the wired path: getBusyTimes 4 usage sites / cross-stack 6, impact 31|29. Suite 1323/0.
+**Gates: `wired_shapes.ts` 96/96 renders byte-identical** (12 anchors × 8 shapes, 50 non-trivial),
+`reach` 72/72 with hops ON, `writers_coupling` 24/24, `shapes_set` 214/0, suite 1323/0.
 
-TO FINISH THE WIRING: port the impact/neighborhood coupling overlay and the reach coupling hops into the core
-(the same `couplingOtherSides`/`anchorCounterparts` pass B2 already moved), then drop the three gates and route
-`refactor`.
+TWO BUGS THE COMPARATORS CAUGHT, both mine: `writers` sorted `filterColumns` by table where TS keeps
+first-seen order (a user-visible line, reordered); and the `viaCoupling` flag was not carried through the
+reach adapter, so a coupling path rendered as if it were a call path — the SUITE caught that one, because
+`reaches` needs a symbol pair and is covered by a projection comparator rather than the render harness.
 
-Original plan:Original plan:
+Original plan:Original plan:Original plan:
 Reuse the grow's guard verbatim — `rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)`
 — in `ts/src/cli/queries.ts`. Each shape flips only when its comparator is byte-identical. Keep the TS
 implementation until every shape is green: it is the parity oracle.

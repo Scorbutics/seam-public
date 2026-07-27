@@ -648,6 +648,24 @@ pub struct ImpactGapDto {
 
 /// Wire form of a `seam_shapes::Impact` (the impact shape).
 #[napi(object)]
+pub struct CrossStackImpactDto {
+    pub symbol: String,
+    pub file: String,
+    pub edge_kind: String,
+    pub via: String,
+}
+
+/// A key whose counterpart walk was BOUNDED — reported so a truncated overlay is never read as complete.
+#[napi(object)]
+pub struct CrossStackTruncationDto {
+    pub kind: String,
+    pub value: String,
+    pub scanned: u32,
+    pub total: u32,
+    pub reason: String,
+}
+
+#[napi(object)]
 pub struct ImpactDto {
     pub anchor_symbol: String,
     pub anchor_file: String,
@@ -661,6 +679,8 @@ pub struct ImpactDto {
     pub truncated: bool,
     pub no_structure: bool,
     pub reason: Option<String>,
+    pub cross_stack: Vec<CrossStackImpactDto>,
+    pub cross_stack_truncations: Vec<CrossStackTruncationDto>,
 }
 
 impl From<seam_shapes::ImpactedSymbol> for ImpactedSymbolDto {
@@ -684,17 +704,25 @@ impl From<seam_shapes::Impact> for ImpactDto {
             truncated: i.truncated,
             no_structure: i.no_structure,
             reason: i.reason,
+            cross_stack: i.cross_stack.into_iter().map(|c| CrossStackImpactDto { symbol: c.symbol, file: c.file, edge_kind: c.edge_kind, via: c.via }).collect(),
+            cross_stack_truncations: i.cross_stack_truncations.into_iter().map(|t| CrossStackTruncationDto { kind: t.kind, value: t.value, scanned: t.scanned as u32, total: t.total as u32, reason: t.reason }).collect(),
         }
     }
 }
 
-/// projectImpact — the transitive blast radius (structural closure; couplingOverlay off).
+/// projectImpact — the transitive blast radius: the structural closure PLUS the anchor's cross-stack crossings.
+/// `couplingOverlay` defaults ON (as in TS): without it the radius silently omits every consumer reached only
+/// through shared state, which is the half a call graph cannot see.
 #[napi]
-pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>) -> ImpactDto {
+pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>, coupling_overlay: Option<bool>, llm: Option<bool>, model: Option<String>, claude_bin: Option<String>) -> ImpactDto {
     let opts = seam_shapes::ImpactOpts {
         depth: depth.map(|d| d as usize).unwrap_or(6),
         max_expansions: max_expansions.map(|m| m as usize).unwrap_or(80),
         skip_callsite: false,
+        coupling_overlay: coupling_overlay.unwrap_or(true),
+        llm: llm.unwrap_or(false),
+        model,
+        claude_bin,
     };
     seam_shapes::project_impact(&repo, &anchor_file, &symbol, &opts).into()
 }
@@ -1215,6 +1243,8 @@ pub struct ReachStepDto {
 /// Wire form of a `seam_shapes::ReachResult` (the reaches shape).
 #[napi(object)]
 pub struct ReachResultDto {
+    /// the witness path used a COUPLING hop — a materially different claim from "reachable by calls"
+    pub via_coupling: bool,
     pub from_symbol: String,
     pub from_file: String,
     pub to_symbol: String,
@@ -1228,10 +1258,12 @@ pub struct ReachResultDto {
 
 /// findReach — can FROM reach TO through the dependency graph? (structural, dataCoupling off).
 #[napi]
-pub fn find_reach(repo: String, from_file: String, from_symbol: String, to_symbol: String, to_file: Option<String>, max_hops: Option<u32>) -> ReachResultDto {
-    let opts = seam_shapes::ReachOpts { to_file, max_hops: max_hops.map(|h| h as usize).unwrap_or(40), skip_callsite: false };
+pub fn find_reach(repo: String, from_file: String, from_symbol: String, to_symbol: String, to_file: Option<String>, max_hops: Option<u32>, coupling_hops: Option<bool>) -> ReachResultDto {
+    // `couplingHops` defaults ON, as in TS: a call-only BFS answers "no path" for a pair joined through shared state.
+    let opts = seam_shapes::ReachOpts { to_file, max_hops: max_hops.map(|h| h as usize).unwrap_or(40), skip_callsite: false, coupling_hops: coupling_hops.unwrap_or(true) };
     let r = seam_shapes::find_reach(&repo, &from_file, &from_symbol, &to_symbol, &opts);
     ReachResultDto {
+        via_coupling: r.via_coupling,
         from_symbol: r.from_symbol,
         from_file: r.from_file,
         to_symbol: r.to_symbol,
@@ -1269,12 +1301,14 @@ pub struct NeighborhoodDto {
     pub no_structure: bool,
 }
 
-/// projectNeighborhood — the cohesive subsystem around a symbol (structural, dataCoupling off).
+/// projectNeighborhood — the cohesive subsystem around a symbol. `dataCoupling` defaults ON (as in TS): a
+/// subsystem map without its external boundary is a call cluster, not a subsystem.
 #[napi]
-pub fn project_neighborhood(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>) -> NeighborhoodDto {
+pub fn project_neighborhood(repo: String, anchor_file: String, symbol: String, depth: Option<u32>, max_expansions: Option<u32>, data_coupling: Option<bool>) -> NeighborhoodDto {
     let opts = seam_shapes::NeighborhoodOpts {
         depth: depth.map(|d| d as usize).unwrap_or(2),
         max_expansions: max_expansions.map(|m| m as usize).unwrap_or(40),
+        data_coupling: data_coupling.unwrap_or(true),
     };
     let n = seam_shapes::project_neighborhood(&repo, &anchor_file, &symbol, &opts);
     NeighborhoodDto {

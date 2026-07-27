@@ -32,6 +32,16 @@ pub struct ImpactGap {
     pub evidence: String,
 }
 
+/// One CROSS-STACK crossing of the anchor's data boundary — a shared-key reader/writer with no import or call
+/// edge to it. The half of a blast radius a call graph structurally cannot see.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CrossStackImpact {
+    pub symbol: String,
+    pub file: String,
+    pub edge_kind: String,
+    pub via: String,
+}
+
 #[derive(Clone, Debug)]
 pub struct Impact {
     pub anchor_symbol: String,
@@ -46,17 +56,27 @@ pub struct Impact {
     pub truncated: bool,
     pub no_structure: bool,
     pub reason: Option<String>, // "isolated" | "opaque" | None
+    /// The anchor's shared-key readers/writers (ONE bounded overlay pass, not one per closure node).
+    pub cross_stack: Vec<CrossStackImpact>,
+    /// The keys whose counterpart walk was bounded — an honest lower bound, never a silent truncation.
+    pub cross_stack_truncations: Vec<seam_couple::Truncation>,
 }
 
 pub struct ImpactOpts {
     pub depth: usize,
     pub max_expansions: usize,
     pub skip_callsite: bool,
+    /// Attach the CROSS-STACK overlay (default ON, matching TS `couplingOverlay`). The structural closure is a
+    /// call graph; without this the blast radius silently omits every consumer reached through shared state.
+    pub coupling_overlay: bool,
+    pub llm: bool,
+    pub model: Option<String>,
+    pub claude_bin: Option<String>,
 }
 
 impl Default for ImpactOpts {
     fn default() -> Self {
-        Self { depth: 6, max_expansions: 80, skip_callsite: false }
+        Self { depth: 6, max_expansions: 80, skip_callsite: false, coupling_overlay: true, llm: false, model: None, claude_bin: None }
     }
 }
 
@@ -155,6 +175,25 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
         None
     };
 
+    // CROSS-STACK OVERLAY — ONE targeted pass on the ANCHOR, not one per closure node (that was pure cost and
+    // blocked the footprint cache). Anything the structural closure already reached is dropped: a consumer is
+    // reported once, as the strongest edge that found it.
+    let (mut cross_stack, mut cross_stack_truncations) = (Vec::new(), Vec::new());
+    if opts.coupling_overlay {
+        let mut bctx = seam_couple::BridgeCtx { llm: opts.llm, model: opts.model.clone(), claude_bin: opts.claude_bin.clone(), ..Default::default() };
+        let anchor_k = key(anchor_file, symbol);
+        let mut seen_cs: HashSet<String> = HashSet::new();
+        for s in seam_couple::coupling_other_sides(repo, anchor_file, symbol, &mut bctx) {
+            let k = key(&s.file, &s.symbol);
+            if k == anchor_k || visited.contains(&k) || !seen_cs.insert(k) {
+                continue; // never duplicate a structural consumer
+            }
+            cross_stack.push(CrossStackImpact { symbol: s.symbol, file: s.file, edge_kind: s.edge_kind, via: format!("{} {}", s.kind, s.value) });
+        }
+        cross_stack.sort_by(|a, b| locale_compare(&a.file, &b.file).then_with(|| locale_compare(&a.symbol, &b.symbol)));
+        cross_stack_truncations = bctx.truncations;
+    }
+
     Impact {
         anchor_symbol: symbol.to_string(),
         anchor_file: anchor_file.to_string(),
@@ -168,5 +207,7 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
         truncated,
         no_structure,
         reason,
+        cross_stack,
+        cross_stack_truncations,
     }
 }

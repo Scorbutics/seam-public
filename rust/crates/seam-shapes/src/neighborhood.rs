@@ -35,11 +35,15 @@ pub struct Neighborhood {
 pub struct NeighborhoodOpts {
     pub depth: usize,
     pub max_expansions: usize,
+    /// Build each ball step WITH the coupling overlay (default ON, matching the TS shape). Off, the subsystem
+    /// map loses its external boundary — the egress/table members that are precisely what makes it a SUBSYSTEM
+    /// rather than a call cluster.
+    pub data_coupling: bool,
 }
 
 impl Default for NeighborhoodOpts {
     fn default() -> Self {
-        Self { depth: 2, max_expansions: 40 }
+        Self { depth: 2, max_expansions: 40, data_coupling: true }
     }
 }
 
@@ -67,7 +71,7 @@ pub fn project_neighborhood(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 break;
             }
             hops += 1;
-            let g = build_bidirectional_graph(repo, &node.0, &node.1, false);
+            let g = build_bidirectional_graph(repo, &node.0, &node.1, opts.data_coupling);
             let by_id: HashMap<&str, &seam_scan::GraphNode> = g.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
             let node_key = key(&node.0, &node.1);
             for e in &g.edges {

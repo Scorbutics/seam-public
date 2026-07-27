@@ -143,16 +143,17 @@ pub fn project_writers(repo: &str, anchor_file: &str, symbol: Option<&str>) -> W
             .then_with(|| a.line.cmp(&b.line))
     });
 
-    let mut filter_columns: Vec<(String, Vec<String>)> = reader_cols
-        .into_iter()
-        .filter(|(_, s)| !s.is_empty())
-        .map(|(t, s)| {
-            let mut v: Vec<String> = s.into_iter().collect();
-            v.sort(); // JS default Array.sort = codepoint order
-            (t, v)
+    // FIRST-SEEN table order, NOT sorted: TS iterates its `readerCols` Map, whose order is the order the tables
+    // were read in the anchor. The render prints these verbatim, so sorting them reorders a user-visible line.
+    let filter_columns: Vec<(String, Vec<String>)> = tables
+        .iter()
+        .filter_map(|t| {
+            let cols = reader_cols.get(t).filter(|s| !s.is_empty())?;
+            let mut v: Vec<String> = cols.iter().cloned().collect();
+            v.sort(); // the COLUMNS are sorted (JS default Array.sort = codepoint order)
+            Some((t.clone(), v))
         })
         .collect();
-    filter_columns.sort_by(|a, b| a.0.cmp(&b.0));
 
     let no_structure = members.is_empty();
     WritersSet {

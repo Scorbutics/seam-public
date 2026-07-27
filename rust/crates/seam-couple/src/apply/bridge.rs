@@ -251,3 +251,68 @@ pub fn coupling_other_sides(repo: &str, anchor_file: &str, symbol: &str, ctx: &m
     }
     out
 }
+
+// ── UNCAPPED FLOOR COUNTERPARTS ─────────────────────────────────────────────────────────────────────────────
+/// One counterpart on the other side of a key the anchor touches. `role` is what THIS site does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AnchorCounterpart {
+    pub file: String,
+    pub symbol: String,
+    pub line: usize, // 0-BASED (the coupling floor's convention) — the caller converts
+    pub kind: String,
+    pub value: String,
+    pub role: String, // "reads" | "writes"
+}
+
+/// The anchor's counterparts from the repo-wide FLOOR index — UNCAPPED, unlike `coupling_other_sides`.
+///
+/// The targeted bridge is bounded by design (READER_CAP + the scan budget), which is right when the answer is a
+/// SAMPLE of a boundary. It is wrong when the question is "is this pair connected AT ALL": on a hub key the cap
+/// silently drops the very counterpart being looked for, and a genuinely coupled pair reads as unreachable.
+/// So reachability and the blast radius use the complete floor instead, and pay a full index build for it.
+/// Port of `anchorCounterparts` (coupling/bridge.ts).
+pub fn anchor_counterparts(repo: &str, file: &str, symbol: Option<&str>) -> Vec<AnchorCounterpart> {
+    let Ok(bytes) = std::fs::read(format!("{repo}/{file}")) else { return Vec::new() };
+    let text = String::from_utf8_lossy(&bytes).into_owned();
+    let span = symbol.and_then(|s| crate::apply::columns::symbol_span(repo, file, s));
+    let in_span = |l: usize| span.is_none_or(|(lo, hi)| l >= lo && l <= hi);
+    let mask = MaskCtx::new(&text);
+    // (kind, value) → (reads, writes), first-seen order
+    let mut own: Vec<(String, String, bool, bool)> = Vec::new();
+    for h in scan_file_keys(file, &text, &mask).into_iter().filter(|h| in_span(h.line)) {
+        match own.iter_mut().find(|(k, v, _, _)| *k == h.kind && *v == h.value) {
+            Some(e) => {
+                if h.produces { e.3 = true } else { e.2 = true }
+            }
+            None => own.push((h.kind.clone(), h.value.clone(), !h.produces, h.produces)),
+        }
+    }
+    if own.is_empty() {
+        return Vec::new();
+    }
+    let idx = crate::ground::floor_base_index(repo);
+    let anchor_norm = normpath(file);
+    let mut out: Vec<AnchorCounterpart> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for (kind, value, reads, writes) in &own {
+        // the anchor READS a key → its counterparts are the WRITERS (produces:false ⇒ producers), and vice versa
+        for (role, produces) in [("writes", false), ("reads", true)] {
+            if (role == "writes" && !reads) || (role == "reads" && !writes) {
+                continue;
+            }
+            for acc in crate::ground::other_side(&idx.floor_base, kind, value, produces) {
+                if normpath(&acc.file) == anchor_norm {
+                    continue;
+                }
+                let (unit_symbol, _, _, _) = complement_unit(repo, &acc.file, acc.line);
+                if !seen.insert(format!("{}#{}#{} {}#{}", acc.file, unit_symbol, kind, value, role)) {
+                    continue;
+                }
+                out.push(AnchorCounterpart { file: acc.file.clone(), symbol: unit_symbol, line: acc.line, kind: kind.clone(), value: value.clone(), role: role.into() });
+            }
+        }
+    }
+    // `localeCompare` on the TS side; ASCII paths compare identically byte-wise, and the line breaks ties.
+    out.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
+    out
+}
