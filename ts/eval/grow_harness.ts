@@ -23,7 +23,11 @@ import { grow_to_terminals } from "../src/codebase/grow/orchestrate.js";
 import { EngineCtx } from "../src/codebase/engine_ctx.js";
 import { normpath } from "../src/core/resolve/walk.js";
 import { reset_usage, get_usage, fastCheapBackend, available } from "../src/core/llm.js";
-import { transformersAvailable } from "../src/codebase/scan/def_embed.js";
+import { loadAddon } from "../src/codebase/grow/rust_core.js";
+
+// The embeddings live in the core now — ask IT whether it can embed, not a JS runtime that no longer computes
+// anything for the grow.
+const transformersAvailable = async (): Promise<boolean> => { try { return !!loadAddon()?.embedAvailable(); } catch { return false; } };
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CASES = join(__dir, "autogrow-cases.json");

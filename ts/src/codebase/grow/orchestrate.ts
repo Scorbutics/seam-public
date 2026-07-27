@@ -31,7 +31,7 @@ import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 
-import { cachedGrow, seamEnvSnapshot } from "../scan/index.js";
+import { cachedGrow, seamEnvSnapshot } from "../scan/footprint_cache.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
 import { epochOf } from "../scan/footprint_cache.js";
 
@@ -716,7 +716,7 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
         }
         return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
       })
-      .catch((e) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
+      .catch((e: any) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
     // feed the DISCOVERY into the persistent map so the next related concern can PROJECT instead of re-grow.
     return [res];
   }

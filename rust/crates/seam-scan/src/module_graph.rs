@@ -1,8 +1,10 @@
 //! build_module_graph — the MODULE-anchor footprint (a whole file's EXPORTED members + their cross-file
 //! consumers). The `--center <file>` (bare file) mode; a null symbol routes here. Port of build_module_graph.
 //!
-//! SCOPE: the structural core — the whole-file shared-key overlay is the coupling phase, so this is the
-//! `dataCoupling:false` module graph (validated against TS with that option).
+//! `data_coupling` runs the WHOLE-FILE shared-key overlay (node id "mod", span = the entire file) plus the
+//! route-consumer chain — the same overlay the consumers graph runs on the anchor's own span. It is ON by
+//! default for a module anchor on the TS side, and leaving it out here made a module-mode `--scan` answer
+//! with the cross-stack boundary silently missing: 7 symbols became 2, and the render still said FULL.
 
 use crate::graph::{make_graph, GraphEdge, GraphNode, ResolvedGraph};
 use crate::util::{complexity, kind_for, read};
@@ -13,6 +15,10 @@ use seam_resolve::Workspace;
 use std::collections::HashSet;
 
 pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph> {
+    build_module_graph_opts(repo, anchor_file, false)
+}
+
+pub fn build_module_graph_opts(repo: &str, anchor_file: &str, data_coupling: bool) -> Option<ResolvedGraph> {
     let (text, lang) = read(repo, anchor_file)?;
     let ctx = Ctx::parse(&text, &lang)?;
     let mod_name = stem(anchor_file);
@@ -67,6 +73,30 @@ pub fn build_module_graph(repo: &str, anchor_file: &str) -> Option<ResolvedGraph
         }
     }
 
+    // WHOLE-FILE COUPLING OVERLAY — keyed on "mod" over the entire file (a module anchor has no def span), then
+    // the route-consumer chain, exactly as consumers_graph does on the anchor's own span.
+    let mut blindspots = Vec::new();
+    if data_coupling {
+        let delta = seam_couple::resolve_coupling(repo, "mod", anchor_file, &text, 0, mlen, counter as u64, false);
+        for n in delta.nodes {
+            nodes.push(GraphNode { id: n.id, symbol: n.symbol, kind: n.kind, file: n.file, range: n.range, enclosing: n.enclosing, complexity: n.complexity, coupling: true, direction: n.direction, ..Default::default() });
+        }
+        for e in delta.edges {
+            edges.push(GraphEdge { from: e.from, to: e.to, kind: e.kind, provenance: "RESOLVED_PARTIAL".into(), line: e.line, op: e.op });
+        }
+        for b in delta.blindspots {
+            blindspots.push(crate::graph::Blindspot {
+                node: b.node, mechanism: b.mechanism, evidence: b.evidence,
+                candidates: b.candidates.into_iter().map(|c| crate::graph::Candidate { symbol: c.symbol, file: Some(c.file), provenance: Some(c.provenance) }).collect(),
+                persists: false,
+            });
+        }
+        counter = delta.counter as usize;
+        crate::attach::chain_route_consumers(repo, &mut nodes, &mut edges, counter, &Workspace::cached(repo));
+    }
+
     let graph_lang = provider_for(anchor_file).map(|p| p.name().to_string()).unwrap_or_default();
-    Some(make_graph(("mod".into(), mod_name, anchor_file.into(), (0, mlen)), graph_lang, nodes, edges))
+    let mut g = make_graph(("mod".into(), mod_name, anchor_file.into(), (0, mlen)), graph_lang, nodes, edges);
+    g.blindspots = blindspots;
+    Some(g)
 }

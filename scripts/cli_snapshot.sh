@@ -40,6 +40,11 @@ done
 # branch — which still exercises the routing entry point, so a broken wire shows up as a changed message.
 # DEPTH 2 — the environment ripple (each exported depth-1 consumer's own importers). Depth 1 is every other
 # case here, so without this the ripple is entirely outside the guarantee.
+# MODULE MODE (--center <file>, no #symbol). Every other case here pins a SYMBOL, so the whole-file coupling
+# overlay — which is what a module anchor's answer mostly IS — was outside the guarantee. It regressed from 7
+# symbols to 2 while the render still said "resolution: FULL", and nothing here noticed.
+run module      --repo "$R" --scan --anchor-file "$A" --data-coupling floor
+run q_contract2 --repo "$R" --scan --query contract --anchor-file "$A" --data-coupling floor
 run q_depth2    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 2 --data-coupling floor
 run q_depth1    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 1 --data-coupling floor
 # --expand-graph: build a graph, then expand it from a second anchor and merge. Two core calls plus the merge,

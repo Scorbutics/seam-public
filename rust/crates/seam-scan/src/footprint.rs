@@ -57,7 +57,7 @@ impl Default for FootprintOpts {
 /// a None symbol builds the whole-module footprint. Port of `build_footprint`.
 pub fn build_footprint_opts(repo: &str, anchor_file: &str, symbol: Option<&str>, direction: &str, opts: &FootprintOpts) -> Option<ResolvedGraph> {
     let Some(symbol) = symbol else {
-        return build_module_graph(repo, anchor_file);
+        return crate::module_graph::build_module_graph_opts(repo, anchor_file, opts.data_coupling);
     };
     match direction {
         "down" => Some(build_dependency_graph(repo, anchor_file, symbol, &DepOpts { data_coupling: opts.data_coupling, anchor_line: opts.anchor_line, ..Default::default() })),
