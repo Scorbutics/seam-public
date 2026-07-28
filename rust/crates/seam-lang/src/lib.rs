@@ -3,6 +3,7 @@
 //! `provider_for` registry — it never names a language.
 
 pub mod ast;
+pub mod atoms;
 pub mod dispatch;
 pub mod node_kinds;
 pub mod provider;

@@ -1574,6 +1574,21 @@ pub fn git_lineage(repo: String, files: Vec<String>) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// extractAtoms — the anchor's inner functions and the identifiers each mentions, as
+/// `[start, end, name…]` rows. The substrate for subcore detection: a god-object method has no seams the
+/// call graph can see, and which inner functions share names is the only structure left to read.
+#[napi]
+pub fn extract_atoms(content: String, lang: String, start_line: u32, end_line: u32) -> Vec<Vec<String>> {
+    seam_lang::atoms::extract_atoms(&content, &lang, start_line as usize, end_line as usize)
+        .into_iter()
+        .map(|a| {
+            let mut row = vec![a.start.to_string(), a.end.to_string()];
+            row.extend(a.names);
+            row
+        })
+        .collect()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy

@@ -217,3 +217,10 @@ pub fn is_call_value_unwrap(k: &str) -> bool {
             | "unary_expression"
     )
 }
+
+/// A function BODY block — the node `extract_atoms` descends into to find the anchor's inner functions.
+/// Concepts, never one grammar's literal kinds: `statement_block` (JS/TS), `compound_statement` (C-family),
+/// `block` (Java/Python/Rust), `do_block` (Ruby). Port of `_BODY`.
+pub fn is_body(k: &str) -> bool {
+    matches!(k, "statement_block" | "compound_statement" | "block" | "constructor_body" | "function_body" | "do_block")
+}
