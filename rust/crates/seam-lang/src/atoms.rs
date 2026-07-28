@@ -386,7 +386,7 @@ pub fn dynamic_import_candidates(repo: &str, anchor_rel: &str, resolved: &std::c
                 continue;
             }
             for c in DYNAMIC_IMPORT_RE.captures_iter(line) {
-                if stem_of(&c[1]) == stem {
+                if specifier_targets(&c[1], &rel, anchor_rel, stem) {
                     out.push((rel.clone(), idx + 1));
                 }
             }
@@ -394,6 +394,50 @@ pub fn dynamic_import_candidates(repo: &str, anchor_rel: &str, resolved: &std::c
     }
     out.truncate(cap);
     out
+}
+
+
+/// Does a dynamic-import SPECIFIER actually target the anchor?
+///
+/// A RELATIVE specifier is resolved against the importing file's directory and compared as a PATH. Matching
+/// on the basename alone — which this did, and the TypeScript before it — makes every `consumers.ts` in the
+/// repo a "consumer" of every other: measured on this repo, `import("../core/resolve/consumers.js")` in
+/// cli/decompose.ts was reported as a dynamic import of `rust/parity/consumers.ts`, a file it has nothing to
+/// do with. Three of five sampled candidates were wrong that way.
+///
+/// A NON-RELATIVE specifier (a bare package, a tsconfig path alias) cannot be resolved here without the
+/// module-resolution config, so the basename heuristic stays for those. That is the case where SUGGESTED is
+/// an honest label rather than an excuse: it is a lead, and there is genuinely no more information locally.
+fn specifier_targets(spec: &str, importer_rel: &str, anchor_rel: &str, anchor_stem: &str) -> bool {
+    if !(spec.starts_with("./") || spec.starts_with("../")) {
+        return stem_of(spec) == anchor_stem; // bare/aliased — a lead is the best available answer
+    }
+    let dir = match importer_rel.rfind('/') {
+        Some(i) => &importer_rel[..i],
+        None => "",
+    };
+    let mut parts: Vec<&str> = if dir.is_empty() { Vec::new() } else { dir.split('/').collect() };
+    for seg in spec.split('/') {
+        match seg {
+            "." | "" => {}
+            ".." => {
+                parts.pop();
+            }
+            s => parts.push(s),
+        }
+    }
+    let joined = parts.join("/");
+    // compare EXTENSION-FREE: the specifier says `.js` where the file on disk is `.ts`/`.tsx`
+    stem_path(&joined) == stem_path(anchor_rel)
+}
+
+/// A path with its final extension removed (`a/b/c.ts` -> `a/b/c`), so a `.js` specifier matches a `.ts` file.
+fn stem_path(p: &str) -> String {
+    match (p.rfind('.'), p.rfind('/')) {
+        (Some(d), Some(sl)) if d > sl + 1 => p[..d].to_string(),
+        (Some(d), None) if d > 0 => p[..d].to_string(),
+        _ => p.to_string(),
+    }
 }
 
 /// A dynamic import of a NON-literal: `import(x)` where x is not a quoted string. A literal is statically
@@ -465,6 +509,47 @@ pub fn dynamic_dispatch_evidence(body: &str, imports: &[String]) -> Option<Strin
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn a_relative_specifier_must_resolve_to_the_ANCHOR_PATH_not_merely_its_basename() {
+        // the measured false positive: cli/decompose.ts imports core/resolve/consumers.js, and a basename
+        // match reported it as a dynamic import of the UNRELATED rust/parity/consumers.ts
+        assert!(!specifier_targets(
+            "../core/resolve/consumers.js",
+            "ts/src/cli/decompose.ts",
+            "rust/parity/consumers.ts",
+            "consumers"
+        ));
+        // ...while the file it REALLY targets still matches
+        assert!(specifier_targets(
+            "../core/resolve/consumers.js",
+            "ts/src/cli/decompose.ts",
+            "ts/src/core/resolve/consumers.ts",
+            "consumers"
+        ));
+    }
+
+    #[test]
+    fn a_same_dir_specifier_matches_and_the_js_ts_extension_gap_is_bridged() {
+        assert!(specifier_targets("./field_facts.js", "ts/src/cli/review_relevance.ts", "ts/src/cli/field_facts.ts", "field_facts"));
+        assert!(specifier_targets("./x", "a/b.ts", "a/x.tsx", "x"));
+    }
+
+    #[test]
+    fn a_bare_or_aliased_specifier_falls_back_to_the_basename_lead() {
+        // no module-resolution config here, so a lead is the best available answer — and SUGGESTED says so
+        assert!(specifier_targets("@app/consumers", "ts/src/cli/decompose.ts", "any/where/consumers.ts", "consumers"));
+        assert!(!specifier_targets("@app/other", "ts/src/cli/decompose.ts", "any/where/consumers.ts", "consumers"));
+    }
+
+    #[test]
+    fn dot_dot_walks_above_the_importer_dir_correctly() {
+        // from ts/src/codebase/grow, `../../` lands on ts/src — so this targets ts/src/core/lines.ts and
+        // NOT the codebase-level sibling, which is exactly the distinction a basename match cannot make
+        assert!(specifier_targets("../../core/lines.js", "ts/src/codebase/grow/x.ts", "ts/src/core/lines.ts", "lines"));
+        assert!(!specifier_targets("../../core/lines.js", "ts/src/codebase/grow/x.ts", "ts/src/codebase/core/lines.ts", "lines"));
+    }
+
     use super::*;
 
     const SRC: &str = r#"
