@@ -23,61 +23,9 @@ export interface AffinityHit { file: string; symbol: string; shared: string[]; c
 // symbol it connected through.
 export interface AffinityResult extends AffinityHit { connected: boolean; via?: string; }
 
-// The file's primary declared type — the symbol to grow a probe from. First class/interface/enum.
-function _symbolOf(text: string): string {
-  const m = text.match(/\b(?:export\s+)?(?:abstract\s+)?(?:class|interface|enum)\s+([A-Za-z_]\w*)/);
-  return m ? m[1] : "";
-}
 
-// A compact, cheap gist of a file (regex, no parse): its type decl + a couple of method names — enough
-// for the LLM to judge purpose without sending the whole file.
-function _gist(text: string): string {
-  const out: string[] = [];
-  const decl = text.match(/\b(?:class|interface|enum)\s+([A-Za-z_]\w*)/);
-  if (decl) out.push(decl[0].trim());
-  for (const m of text.matchAll(/\b(?:public|protected)\s+(?:static\s+)?[\w<>\[\],.\s]+?\b([a-z]\w*)\s*\(/g)) {
-    out.push(m[1] + "()");
-    if (out.length >= 3) break;
-  }
-  return out.join(" · ") || "(no decl)";
-}
 
-// Candidate files that reference ≥1 footprint subject, ranked by how many DISTINCT subjects they share
-// (co-occurrence — the more of the footprint's subjects a file touches, the likelier it's related), then
-// path for determinism. The structural floor; the LLM only ever sees the top `cap`.
-function _candidates(repo: string, subjects: string[], exclude: Set<string>, cap: number): { file: string; symbol: string; shared: string[]; gist: string }[] {
-  const pats = subjects.filter(Boolean).map((s) => ({ s, re: new RegExp(`\\b${s.replace(/[^\w]/g, "")}\\b`) }));
-  const out: { file: string; symbol: string; shared: string[]; gist: string }[] = [];
-  for (const rel of _core().candidateSourceFiles(repo) as string[]) {
-    if (exclude.has(rel)) continue;
-    let text: string;
-    try { text = readFileSync(join(repo, rel), "utf-8"); } catch { continue; }
-    const shared = pats.filter((p) => p.re.test(text)).map((p) => p.s);
-    if (shared.length) out.push({ file: rel, symbol: _symbolOf(text), shared, gist: _gist(text) });
-  }
-  out.sort((a, b) => b.shared.length - a.shared.length || (a.file < b.file ? -1 : a.file > b.file ? 1 : 0));
-  return out.slice(0, cap);
-}
 
-function _prompt(subjects: string[], intent: string, cands: { file: string; shared: string[]; gist: string }[]): string {
-  const units = cands.map((c, i) => `${i}\t${c.file} :: ${c.gist}  (shares: ${c.shared.join(", ")})`).join("\n");
-  return [
-    `These code units all reference shared subjects from a code footprint: ${subjects.join(", ")}.`,
-    `They span MANY concerns — touching a subject does NOT make a unit relevant.`,
-    ``,
-    `INTENT under investigation: "${intent}".`,
-    ``,
-    `For EACH unit decide: does it do work that is PART OF / DIRECTLY RELEVANT TO that intent — NOT merely`,
-    `that it shares a subject? Be strict: a different lifecycle stage, a view/read, a logger/DTO, sample`,
-    `data, or an adjacent concern that just happens to touch the same class is NOT related.`,
-    ``,
-    `Output ONLY a JSON array, one object per RELATED unit (OMIT the unrelated ones entirely):`,
-    `[{"id": <unit number>, "confidence": 0..1, "reason": "<=5 words"}]`,
-    ``,
-    `UNITS:`,
-    units,
-  ].join("\n");
-}
 
 // Run the intent-conditioned affinity pass with SELF-CONSISTENCY VOTING. The single LLM call is noisy on
 // borderline intent-relevance (measured: ~44% run-to-run agreement), so cast `votes` ballots and keep
@@ -87,10 +35,19 @@ function _prompt(subjects: string[], intent: string, cands: { file: string; shar
 export async function subject_affinity(repo: string, subjects: string[], intent: string,
     opts: { cap?: number; exclude?: string[]; votes?: number; model?: string; claudeBin?: string | null } = {}): Promise<AffinityHit[]> {
   if (!subjects.length || !intent) return [];
-  const cands = _candidates(repo, subjects, new Set(opts.exclude ?? []), opts.cap ?? 30);
+  // THE CANDIDATE SCAN AND THE PROMPT ARE THE CORE'S. That half reads EVERY source file in the repo with a
+  // regex, co-occurrence-ranks the matches and caps them — a repo-wide walk that belongs beside the file
+  // enumeration that feeds it, not one `readFileSync` at a time across the napi boundary. Pinned by
+  // rust/parity/affinity_prompt.ts, which compares the assembled prompt byte-for-byte.
+  //
+  // ONLY THE JUDGEMENT STAYS HERE: the ballots below, and the tally. The core's host bus is
+  // record-and-replay, so a pass it owned could not call back out to be served without deadlocking the
+  // blocked JS thread — the same seam the seam-intent pass is drawn on.
+  const _p = JSON.parse(_core().growAffinityPrompt(repo, subjects, intent, opts.exclude ?? [], opts.cap ?? 30));
+  const cands = _p.candidates as { file: string; symbol: string; shared: string[]; gist: string }[];
   if (!cands.length) return [];
   const votes = Math.max(1, opts.votes ?? 3);
-  const prompt = _prompt(subjects, intent, cands);
+  const prompt = _p.prompt as string;
   const ballots = await Promise.all(Array.from({ length: votes }, () =>
     run_pass_async(prompt, { tag: PASS.tag, thinking: 0, model: opts.model, claudeBin: opts.claudeBin }).catch(() => null)));
   const cast = ballots.filter(Boolean).length;

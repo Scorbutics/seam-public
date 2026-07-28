@@ -3236,3 +3236,25 @@ pub fn project_set_from_graph(graph_json: String, direction: String) -> napi::Re
         seam_shapes::project_consumer_set(&g).into()
     })
 }
+
+/// growAffinityPrompt — the DETERMINISTIC half of the shared-subject affinity pass: the repo-wide candidate
+/// scan (co-occurrence-ranked, capped) and the assembled prompt. The LLM judgement and its self-consistency
+/// voting stay with the caller; see the note in seam-grow/src/affinity.rs for why.
+#[napi]
+pub fn grow_affinity_prompt(
+    repo: String,
+    subjects: Vec<String>,
+    intent: String,
+    exclude: Vec<String>,
+    cap: Option<u32>,
+) -> napi::Result<String> {
+    let ex: std::collections::HashSet<String> = exclude.into_iter().collect();
+    let p = seam_grow::affinity::build_affinity_prompt(
+        &repo,
+        &subjects,
+        &intent,
+        &ex,
+        cap.unwrap_or(30) as usize,
+    );
+    serde_json::to_string(&p).map_err(|e| napi::Error::from_reason(format!("affinity prompt serialise: {e}")))
+}

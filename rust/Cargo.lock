@@ -1040,6 +1040,7 @@ dependencies = [
  "indexmap",
  "once_cell",
  "rayon",
+ "regex",
  "seam-cache",
  "seam-couple",
  "seam-embed",

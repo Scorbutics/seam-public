@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 once_cell = { workspace = true }
+regex = { workspace = true }
 indexmap = { workspace = true }
 seam-lang = { path = "../seam-lang" }
 seam-resolve = { path = "../seam-resolve" }

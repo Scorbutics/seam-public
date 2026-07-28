@@ -5,6 +5,7 @@
 //!   - `roles`      anchor-relative core/link/environment/test classification
 //! (ubiquity, hub classification, and the wave itself land in later increments.)
 
+pub mod affinity;
 pub mod border_policies;
 pub mod coupling;
 pub mod exclude;
