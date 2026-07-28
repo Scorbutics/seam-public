@@ -73,26 +73,6 @@ export interface ResolvedGraph {
 // (what it delegates to / how it works), BOTH = a direction-tagged merge of the two.
 export type Direction = "up" | "down" | "both";
 
-// The full option surface of build_footprint — a superset of every builder's options, documented in one
-// place. Not every option applies to every direction (`useLlm` is dependency-only, `verified`/`depth`
-// feed the consumers path); the dispatcher routes the relevant subset.
-export interface FootprintOpts {
-  direction?: Direction;                 // default "up"; a null symbol routes to the module footprint
-  depth?: number;                        // consumers: include the depth-2 environment ripple when >= 2
-  anchorLine?: number | null;
-  verified?: any;                        // consumers/class: LSP-verified method usage from the extension
-  useLlm?: boolean;                      // dependency: tier-3 LLM coupling discovery
-  dataCoupling?: boolean;                // shared-key boundary overlay (default on)
-  dataCouplingLlm?: boolean;             // use the LLM key front-end for the overlay
-  skipCallsite?: boolean;                // skip the uncached receiver-agnostic call-site walk (blast-radius counts)
-  callerFiles?: string[];                // dependency/class: files that REACHED this type anchor — restricts its
-                                         // DOWN methods to the ones those callers actually invoke (walk de-noise).
-                                         // Absent (seed / direct query) → ALL methods (the full class decomposition).
-  ctx?: EngineCtx;
-  model?: string;
-  claudeBin?: string | null;
-}
-
 // Build the canonical ResolvedGraph envelope — collapses the return literal the builders each repeated.
 export function makeGraph(
   anchor: ResolvedGraph["anchor"],

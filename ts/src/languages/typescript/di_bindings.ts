@@ -22,7 +22,7 @@ export interface DiBinding {
   line: number;                     // 1-based
 }
 
-type DiContribution = { bindings: DiBinding[] };
+export type DiContribution = { bindings: DiBinding[] };
 
 export const bare = (t: string) => (t.split(".").pop() ?? t).replace(/["'\[\]]/g, "").trim();
 const stripParens = (s: string) => s.replace(/^\(/, "").replace(/\)$/, "").trim();
@@ -83,7 +83,7 @@ export function scanDiBindings(rel: string, ctx: any): DiContribution {
         // or `cond ? new A() : new B()`), the rest are fallbacks — the renderer labels impls[0] "when (cond)". collect
         // yields tree-traversal order, so sort by source position to recover the branch semantics.
         const news = body
-          ? [...new Set(ctx.collect(body, (k: string) => k === "new_expression")
+          ? [...new Set<string>(ctx.collect(body, (k: string) => k === "new_expression")
               .sort((a: any, b: any) => (a.startIndex ?? 0) - (b.startIndex ?? 0))
               .map((n: any) => (field(n, "constructor")?.text ?? "").split("(")[0].trim()).filter(Boolean))]
           : [];

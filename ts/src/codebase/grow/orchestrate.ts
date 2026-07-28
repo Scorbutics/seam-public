@@ -202,7 +202,6 @@ const _UPCLIMB_MIN_DIST = 2;   // legacy hop-distance up-climb gate (fallback wh
 // hair-more-relevant FAR node thrash the budget (and undo the bound); banding only promotes a clearly-relevant
 // one. Env-tunable; the default (8) buckets typical MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent).
 const _INTENT_BANDS = (() => { const v = parseInt(process.env.SEAM_INTENT_BANDS ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 8; })();
-export type Move = { node: any; dir: "up" | "down" };
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
 // budget): drop test files (default; opt back with includeTests) and any node under an --exclude folder

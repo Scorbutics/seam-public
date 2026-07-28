@@ -48,11 +48,6 @@ export interface KeyKind {
                          // the rest of the pipeline (parsing/resolution) doesn't treat them as source.
   scan: (file: string, text: string, masked?: MaskCtx) => KeyHit[];   // masked = the per-file shared mask cache (optional; adapters fall back to masking `text` themselves)
 }
-// A LEARNED key adapter (one floor-blind file's deduced keys) — named + described for human review in
-// `seam-adapters`, the key-axis counterpart of a carrier signature. `name` is derived from the file
-// (per-file facts don't generalize like a carrier method rule does); `description` summarises the keys.
-export interface KeyAdapter { name: string; description: string; keys: KeyHit[] }
-
 // ---- STEP 3: GROUND -------------------------------------------------------------------------------------
 export interface Access { file: string; line: number }   // repo-relative file, 0-based line
 // The repo-wide grounding index: for each key, who PRODUCES it (writers) vs who CONSUMES it (readers). This

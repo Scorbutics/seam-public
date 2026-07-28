@@ -88,15 +88,5 @@ export class EngineCtx {
   }
 }
 
-// Canonical cache helper: return the cached value if present, else compute, store, and return it.
-// Used by every EngineCtx-backed index builder so they express only the key + computation, not the
-// has/get/set dance.
-export async function getOrSet<K, V>(map: Map<K, V>, key: K, compute: () => Promise<V>): Promise<V> {
-  if (map.has(key)) return map.get(key)!;
-  const value = await compute();
-  map.set(key, value);
-  return value;
-}
-
 // NOTE: the .seam/ DISK-cache in-memory mirrors (carrier/cache.ts, key_cache.ts) stay module-level — they
 // are a path-keyed persistence layer, not per-run compute state — and keep their own reset hooks.

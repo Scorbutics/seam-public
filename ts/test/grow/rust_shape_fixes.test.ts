@@ -82,7 +82,7 @@ describe("Rust core — shape fixes mirrored from the TS engine", () => {
     const a = addon();
     if (!a) return;
     const c = a.projectContract(repo, "src/mod.ts");
-    const by = new Map(c.provides.map((p: any) => [p.symbol, p]));
+    const by = new Map<string, any>(c.provides.map((p: any) => [p.symbol, p]));
     expect(by.get("named")?.consumerCount).toBe(1);
     expect(by.get("slot")?.consumerCount).toBe(1);   // the wrapped DEFAULT slot. Pre-port: absent entirely.
     expect(by.get("Shape")?.consumerCount).toBe(1);  // a type export. Pre-port: absent entirely.
