@@ -447,25 +447,6 @@ const _RELATION_PHRASE: Record<string, [string, string]> = {   // [reached-from 
   "route-serve": ["reached over a route from", "reaches over a route to"],
   "data-coupling": ["shares data with", "shares data with"], "type-ref": ["a data type used by", "uses the type"],
 };
-export function _reachPhrases(n: any, edges: any[], isReacher: (id: string) => boolean, symOf: (id: string) => string): string {
-  const seen = new Set<string>();
-  const out: string[] = [];
-  const rank = (k: string) => (k === "call" ? 0 : k === "route-serve" || k === "route-fetch" ? 1 : k === "import" || k === "reference" ? 2 : 3);
-  const cands: { r: number; s: string }[] = [];
-  for (const e of edges) {
-    let dir: "from" | "to" | null = null, other = "";
-    if (e.to === n.id && e.from !== n.id && isReacher(e.from)) { dir = "from"; other = e.from; }
-    else if (e.from === n.id && e.to !== n.id && isReacher(e.to)) { dir = "to"; other = e.to; }
-    if (!dir) continue;
-    const pair = _RELATION_PHRASE[e.kind] ?? ["reached from", "reaches"];
-    const s = `${dir === "from" ? pair[0] : pair[1]} ${symOf(other)}`;
-    if (seen.has(s)) continue; seen.add(s);
-    cands.push({ r: rank(e.kind), s });
-  }
-  cands.sort((a, b) => a.r - b.r);
-  for (const c of cands.slice(0, 2)) out.push(c.s);
-  return out.length ? out.join(", ") : "(reached from the region)";
-}
 
 
 
@@ -546,7 +527,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // the addon cannot serve is now an ERROR rather than a silently different answer from a second engine. Every
   // condition above is satisfiable (all mapped languages are vendored, streaming is supported), so reaching
   // here means the addon is missing or was explicitly disabled.
-  void growCacheKeyMaterial; void cachedGrow; void deterministic;
+  void deterministic;
   throw new Error(
     "the Seam core (Rust addon) could not serve this grow: " +
     (!rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
