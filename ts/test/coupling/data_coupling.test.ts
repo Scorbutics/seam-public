@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { build_dependency_graph } from "../helpers/scan.js";
-import { scan_file_keys } from "../../src/codebase/coupling/index.js";
+import { scan_file_keys } from "../helpers/coupling.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { _is_crossing } from "../../src/codebase/codebase.js";
 import { HostBus, set_host_bus } from "../../src/core/llm.js";

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { defs_in_file } from "../helpers/scan.js";
 import { scan as endpointMapScan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
-import { routeMatchSpecificity } from "../../src/codebase/coupling/index.js";
+import { routeMatchSpecificity } from "../helpers/coupling.js";
 import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites } from "../../src/codebase/coupling/effect_inference.js";
 import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
 import { available } from "../../src/codebase/atoms.js";

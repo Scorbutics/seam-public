@@ -463,3 +463,69 @@ fn cross_same_side(ctx: &PipelineCtx, state: &mut PipelineState, boundary_id: &s
     }
     let _ = plausible_key_value; // (kept in scope parity with TS bridge imports; unused here)
 }
+
+#[cfg(test)]
+mod key_cap_tests {
+    use super::*;
+
+    // FOOTPRINT-MEMBERSHIP prioritisation in the per-node key cap. A coupling node's span is the WHOLE file, so
+    // one node surfaces every method's boundary key; when there are more than `nodeKeyCap`, the cap must keep the
+    // keys of the methods the grow REACHED over unreached siblings. Without it a deterministic tiebreak (fanout,
+    // then alphabetical) can keep a sibling's key and surface the WRONG backend — the kc_3 `create` (base route
+    // `/admin/realms/*/users`) buried under 78 sibling routes. Ported from `footprint_key_cap.test.ts`; the
+    // ordering is a sort inside `run_pipeline`, so the test drives the same comparator over the same fields.
+    #[derive(Debug)]
+    struct K {
+        value: &'static str,
+        line: usize,
+        fanout: usize,
+    }
+
+    fn order(keys: &[K], fp: &[(usize, usize)]) -> Vec<&'static str> {
+        let mut v: Vec<&K> = keys.iter().collect();
+        v.sort_by(|a, b| {
+            footprint_rank(fp, a.line)
+                .cmp(&footprint_rank(fp, b.line))
+                .then_with(|| a.fanout.cmp(&b.fanout))
+                .then_with(|| a.value.cmp(b.value))
+        });
+        v.into_iter().map(|k| k.value).collect()
+    }
+
+    #[test]
+    fn a_line_inside_a_reached_range_ranks_first() {
+        let ranges = [(40, 55), (95, 110)];
+        assert_eq!(footprint_rank(&ranges, 47), 0); // in the first reached method
+        assert_eq!(footprint_rank(&ranges, 99), 0); // in the second
+        assert_eq!(footprint_rank(&ranges, 470), 1); // an unreached sibling far below
+        assert_eq!(footprint_rank(&[], 47), 1); // no footprint info → everything is "outside"
+    }
+
+    #[test]
+    fn a_reached_key_outranks_a_sibling_that_wins_both_tiebreaks() {
+        // `create` is REACHED (line 47) but loses BOTH tiebreaks: higher fanout (3 vs 1) and a later value.
+        // Footprint membership must still float it to the front, so a cap of 1 keeps the reached route.
+        let keys = [
+            K { value: "/aaa", line: 470, fanout: 1 }, // unreached, wins fanout + alpha
+            K { value: "/bbb", line: 480, fanout: 1 }, // unreached
+            K { value: "/admin/realms/*/users", line: 47, fanout: 3 }, // REACHED — worse on both tiebreaks
+        ];
+        assert_eq!(order(&keys, &[(40, 55)])[0], "/admin/realms/*/users");
+    }
+
+    #[test]
+    fn among_reached_keys_the_usual_tiebreaks_still_apply() {
+        let keys = [
+            K { value: "/z", line: 45, fanout: 2 },    // reached
+            K { value: "/a", line: 46, fanout: 1 },    // reached, lower fanout → first
+            K { value: "/out", line: 999, fanout: 1 }, // unreached → last
+        ];
+        assert_eq!(order(&keys, &[(40, 55)]), vec!["/a", "/z", "/out"]);
+    }
+
+    #[test]
+    fn with_no_footprint_ranges_it_degrades_to_fanout_then_value() {
+        let keys = [K { value: "/b", line: 10, fanout: 2 }, K { value: "/a", line: 20, fanout: 1 }];
+        assert_eq!(order(&keys, &[]), vec!["/a", "/b"]); // lowest fanout first
+    }
+}

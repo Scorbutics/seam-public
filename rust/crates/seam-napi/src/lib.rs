@@ -1217,6 +1217,45 @@ pub fn footprint_touches_boundary(repo: String, nodes: Vec<Vec<String>>) -> bool
     seam_couple::gate::footprint_touches_boundary(&repo, &parsed)
 }
 
+/// Route-specificity matching — `routeMatchSpecificity` (shared-literal-segment count of the best alignment,
+/// -1 = no overlap) and its `>= 1` predicate `routeSuffixMatch`. The grounding uses the predicate to decide a
+/// route key MEETS another and the score to rank the candidates once several do.
+#[napi]
+pub fn route_match_specificity(a: String, b: String) -> i32 {
+    seam_couple::adapters::http_route::route_match_specificity(&a, &b) as i32
+}
+
+#[napi]
+pub fn route_suffix_match(a: String, b: String) -> bool {
+    seam_couple::adapters::http_route::route_suffix_match(&a, &b)
+}
+
+/// The handler/controller-file recall net (P3 signal #5) — a route/handler file by DIRECTORY or BASENAME
+/// convention. Port of `_handlerShaped`.
+#[napi]
+pub fn handler_shaped(file: String) -> bool {
+    seam_couple::gate::handler_shaped(&file)
+}
+
+/// The floor's two indices SEPARATELY — `shared` (the adapter scan) and `param` (the const-resolved parameter
+/// sites) — flattened like `floor_index`. `floor_index` returns their merge; these are what distinguish "the
+/// adapter grounded this key" from "a resolved parameter constant did".
+#[napi]
+pub fn floor_index_part(repo: String, part: String) -> Vec<Vec<String>> {
+    let idx = seam_couple::floor_base_index(&repo);
+    let side = if part == "param" { &idx.param } else { &idx.shared };
+    let mut rows = Vec::new();
+    for (key, sides) in side.iter() {
+        for a in &sides.producers {
+            rows.push(vec![key.clone(), "p".into(), a.file.clone(), a.line.to_string()]);
+        }
+        for a in &sides.consumers {
+            rows.push(vec![key.clone(), "c".into(), a.file.clone(), a.line.to_string()]);
+        }
+    }
+    rows
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]
@@ -1367,6 +1406,28 @@ pub fn other_side(repo: String, kind: String, value: String, produces: bool) -> 
         .into_iter()
         .map(|a| vec![a.file, a.line.to_string()])
         .collect()
+}
+
+/// `other_side` over a CALLER-SUPPLIED index rather than the repo's floor — `[key, side, file, line]` rows in,
+/// `[file, line]` rows out. The route fanout-suppression rules (generic-route filtering, bare-wildcard drop,
+/// same-service preference) are ranking decisions over a set of candidates, and pinning them needs a
+/// hand-built candidate set, not a repo that happens to produce one.
+#[napi]
+pub fn other_side_over(index_rows: Vec<Vec<String>>, kind: String, value: String, produces: bool) -> Vec<Vec<String>> {
+    let mut idx: seam_couple::GroundingIndex = indexmap::IndexMap::new();
+    for r in &index_rows {
+        if r.len() < 4 {
+            continue;
+        }
+        let acc = seam_couple::types::Access { file: r[2].clone(), line: r[3].parse().unwrap_or(0) };
+        let e = idx.entry(r[0].clone()).or_default();
+        if r[1] == "p" {
+            e.producers.push(acc);
+        } else {
+            e.consumers.push(acc);
+        }
+    }
+    seam_couple::other_side(&idx, &kind, &value, produces).into_iter().map(|a| vec![a.file, a.line.to_string()]).collect()
 }
 
 /// Module-entry index: `[dirBasename, entry, entry, …]` rows (validation surface for string-dispatch).
@@ -1611,6 +1672,16 @@ pub fn validate_matchers(objs_json: String) -> String {
         })
         .collect();
     serde_json::to_string(&out).unwrap_or_default()
+}
+
+/// Persist validated matchers into `<repo>/.seam` — the LEARN half of the flywheel, exposed so a test can
+/// stage a learned rule the way a real run would and then assert the replay. In: JSON array of matcher
+/// objects (as `validate_matchers` emits). Port of `persistMatchers`.
+#[napi]
+pub fn persist_matchers(repo: String, matchers_json: String) {
+    let vals: Vec<serde_json::Value> = serde_json::from_str(&matchers_json).unwrap_or_default();
+    let ms: Vec<seam_couple::learn::KeyMatcher> = vals.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    seam_couple::learn::key_store::persist_matchers(&repo, &ms);
 }
 
 /// Serialize a schema-3 store to the exact bytes TS JSON.stringify(store,null,2) produces (store-write parity).

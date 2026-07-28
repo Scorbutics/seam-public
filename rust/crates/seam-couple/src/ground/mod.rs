@@ -52,8 +52,21 @@ pub struct FloorIndices {
 
 static CACHE: Lazy<Mutex<std::collections::HashMap<String, Arc<FloorIndices>>>> = Lazy::new(|| Mutex::new(std::collections::HashMap::new()));
 
+// The floor is not a pure function of the SOURCE: SEAM_NO_ADAPTERS empties it and SEAM_MAX_SCAN_BYTES trims
+// it. Keying the shard on the source epoch alone let a `SEAM_NO_ADAPTERS=1` run PERSIST an empty floor that
+// every later normal run then loaded — the source had not changed, so the epoch still matched. The knobs join
+// the key. (TS carried the same knobs in `couplingEnvHash`; the Rust shard was keyed on source only.)
+fn floor_env_tag() -> String {
+    let noadapt = std::env::var("SEAM_NO_ADAPTERS").unwrap_or_default();
+    let cap = std::env::var("SEAM_MAX_SCAN_BYTES").unwrap_or_default();
+    if noadapt.is_empty() && cap.is_empty() {
+        return String::new();
+    }
+    format!("-na{noadapt}-mb{cap}")
+}
+
 fn floor_shard(repo: &str, epoch: &str) -> String {
-    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}.bin")
+    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}{}.bin", floor_env_tag())
 }
 
 /// Build (or fetch cached) the deterministic floor indices for `repo`. Port of `build_floor_indices` +
@@ -62,7 +75,10 @@ fn floor_shard(repo: &str, epoch: &str) -> String {
 /// DISK-persisted (per-repo content epoch) via direct bincode — a fresh process LOADS instead of re-scanning
 /// every file for adapter keys. Keyed on the SOURCE epoch (the floor is source-only, no learned matchers).
 pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
-    if let Some(hit) = CACHE.lock().unwrap().get(repo) {
+    // Keyed by repo AND the knobs, for the same reason the disk shard is: a resident process that flips
+    // SEAM_NO_ADAPTERS between queries must not be served the other arm's floor.
+    let repo_key = format!("{repo}{}", floor_env_tag());
+    if let Some(hit) = CACHE.lock().unwrap().get(&repo_key) {
         return hit.clone();
     }
     let perf = std::env::var("SEAM_PERF").is_ok();
@@ -92,9 +108,12 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     if !epoch.is_empty() {
         let dir = format!("{repo}/.seam/rust/floor-indices-v1");
         let _ = std::fs::create_dir_all(&dir);
+        // Sweep shards for OTHER epochs, but keep this epoch's other env variants — they are all still valid,
+        // and deleting them would make an alternating (adapters on / off) run rebuild the floor every time.
         if let Ok(rd) = std::fs::read_dir(&dir) {
             for e in rd.flatten() {
-                if e.file_name().to_string_lossy() != format!("{epoch}.bin") {
+                let name = e.file_name().to_string_lossy().into_owned();
+                if !name.starts_with(&format!("{epoch}")) {
                     let _ = std::fs::remove_file(e.path());
                 }
             }
@@ -103,7 +122,7 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
             let _ = std::fs::write(floor_shard(repo, &epoch), bytes);
         }
     }
-    CACHE.lock().unwrap().insert(repo.to_string(), idx.clone());
+    CACHE.lock().unwrap().insert(repo_key, idx.clone());
     idx
 }
 
@@ -118,9 +137,9 @@ pub fn floor_base_index(repo: &str) -> Arc<FloorIndices> {
 pub fn reset_floor_indices(repo: Option<&str>) {
     let mut c = CACHE.lock().unwrap();
     match repo {
-        Some(r) => {
-            c.remove(r);
-        }
+        // The key carries the env tag, so drop every variant for this repo — a reset must not leave one arm's
+        // floor resident.
+        Some(r) => c.retain(|k, _| !k.starts_with(r)),
         None => c.clear(),
     }
 }

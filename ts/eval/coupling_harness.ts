@@ -17,7 +17,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { loadAddon, toResolvedGraph } from "../src/codebase/grow/rust_core.js";
 import { rustDiscover } from "../src/codebase/grow/rust_discover.js";
-import { isFlowSubject } from "../src/codebase/coupling/index.js";
+import { isFlowSubject } from "../src/codebase/coupling/subjects.js";
 import { _resetKeyCacheMem } from "../src/codebase/coupling/key_store.js";
 import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
 

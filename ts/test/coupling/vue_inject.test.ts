@@ -7,7 +7,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan_file_keys } from "../../src/codebase/coupling/index.js";
+import { scan_file_keys } from "../helpers/coupling.js";
 import { build_module_graph } from "../helpers/scan.js";
 
 const keys = (file: string, text: string) => scan_file_keys(file, text);

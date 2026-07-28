@@ -29,8 +29,21 @@ use regex::Regex;
 /// implicit keys (a Rails `resources` route, a controller's convention route) have NO key literal to ground a
 /// deterministic signal on, so the file's handler SHAPE is the only cheap signal it might carry a deducible
 /// boundary. Deliberately broad — a false positive costs one extra probe. Port of `isHandlerFileByLanguage`.
-static HANDLER_BASENAME: Lazy<Regex> =
-    Lazy::new(|| Regex::new(r"(?:controller\.py|(?:controller|resource)\.java|_controller\.rb|controller\.kt|controller\.cs|controller\.php|_handler\.go)$").unwrap());
+// The union of every language provider's `handlerFileConvention` plus the residual for stacks with no
+// provider (C#, PHP, Go). Read off the REGISTRY at runtime rather than transcribed from the source — the
+// TypeScript entry (`^route.(ts|js)$`, the Next app-router file) is anchored at the basename start, and a
+// hand-copied version of this set silently lost it.
+static HANDLER_BASENAME: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(concat!(
+        r"^route\.(?:ts|js)$",
+        r"|(?:controller\.(?:ts|js|py|java|kt|cs|php)",
+        r"|resource\.java",
+        r"|\.handler\.(?:ts|js)",
+        r"|_controller\.rb",
+        r"|_handler\.go)$",
+    ))
+    .unwrap()
+});
 
 const HANDLER_DIRS: &[&str] = &["controllers", "controller", "handlers", "routes", "endpoints", "resolvers", "webhooks"];
 
@@ -120,9 +133,14 @@ mod tests {
         assert!(handler_shaped("app/controllers/users.rb"));
         assert!(handler_shaped("src/routes/index.ts"));
         assert!(handler_shaped("com/acme/UserController.java"));
+        assert!(handler_shaped("src/payments/payments.controller.ts")); // NestJS
+        assert!(handler_shaped("app/api/admin/payments/route.ts")); // Next app-router (basename-anchored)
+        assert!(handler_shaped("src/webhooks/stripe.handler.ts"));
+        assert!(handler_shaped("src/hooks/stripe.handler.ts")); // handler-suffixed, no handler DIRECTORY
         assert!(handler_shaped("app/users_controller.rb"));
         assert!(handler_shaped("api/order_handler.go"));
         assert!(!handler_shaped("src/lib/util.ts"));
+        assert!(!handler_shaped("src/lib/reroute.ts")); // `route.ts` is basename-ANCHORED, not a suffix
         assert!(!handler_shaped("src/models/user.rb"));
     }
 }

@@ -65,7 +65,7 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
     expect([...idx.keys()].sort()).toEqual(["key timeout", "key weight"]);
   });
   test("SEAM_NO_ADAPTERS gates the floor (param_key_index returns empty)", async () => {
-    const { param_key_index } = await import("../../src/codebase/coupling/index.js");   // moved: built in the fused floor pass
+    const { param_key_index } = await import("../helpers/coupling.js");   // moved: built in the fused floor pass
     const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const prev = process.env.SEAM_NO_ADAPTERS;
     process.env.SEAM_NO_ADAPTERS = "1";
@@ -73,29 +73,23 @@ describe("resolveParamKeys — constant resolution + grounding", () => {
     finally { if (prev === undefined) delete process.env.SEAM_NO_ADAPTERS; else process.env.SEAM_NO_ADAPTERS = prev; }
   });
 
-  test("fused builder: param_key_index + shared_key_index share ONE pass and agree with the standalone walk", async () => {
-    const { param_key_index, shared_key_index } = await import("../../src/codebase/coupling/index.js");
-    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
-    const ctx = new EngineCtx();
-    const fused = param_key_index(REPO, new Set(["node_modules", ".git"]), ctx);
-    shared_key_index(REPO, new Set(["node_modules", ".git"]), ctx);   // same ctx → must reuse the one build
-    // the fused param index matches the standalone resolveParamKeys (behaviour-identical), and the shared
-    // index was populated in the same pass (cached on the ctx)
-    expect([...fused.keys()].sort()).toEqual([...resolveParamKeys(REPO).keys()].sort());
-    expect(ctx.sharedKey.has(REPO)).toBe(true);
-    expect(ctx.paramKeys.has(REPO)).toBe(true);
+  // The MEMOIZATION half of these two claims ("one shared pass", "built once, same ref") was about the
+  // TypeScript EngineCtx's own caches. In the core the floor is memoized per repo (and per the knobs that
+  // change it) inside `floor_indices`, and that is pinned where it lives —
+  // `floor_indices_memoize_and_invalidate` in crates/seam-couple/src/ground/mod.rs asserts both the warm-hit
+  // identity and the drop on reset. Asserting it from here would only test the helper, which rebuilds a JS Map
+  // per call by construction. What survives is the BEHAVIOURAL half, which is what the floor promises.
+  test("the fused param index agrees with the standalone resolveParamKeys walk", async () => {
+    const { param_key_index } = await import("../helpers/coupling.js");
+    expect([...param_key_index(REPO).keys()].sort()).toEqual([...resolveParamKeys(REPO).keys()].sort());
   });
 
-  test("floor_base_index is the cached merge of shared⊕param — built once, same ref on re-call (perf fix)", async () => {
-    const { floor_base_index } = await import("../../src/codebase/coupling/index.js");
-    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
-    const ctx = new EngineCtx();
-    const a = floor_base_index(REPO, new Set(["node_modules", ".git"]), ctx);
-    const b = floor_base_index(REPO, new Set(["node_modules", ".git"]), ctx);
-    expect(b).toBe(a);                       // cached — the per-call mergeGrounding no longer runs per grow step
-    expect(ctx.floorBase.has(REPO)).toBe(true);
-    // the base carries the param keys (it's the merge), so the const-resolved "timeout" key is present
-    expect(a.has("key timeout")).toBe(true);
+  test("floor_base_index is the merge of shared⊕param — it carries the const-resolved param key", async () => {
+    const { floor_base_index, shared_key_index, param_key_index } = await import("../helpers/coupling.js");
+    const base = floor_base_index(REPO);
+    expect(base.has("key timeout")).toBe(true);            // the const-resolved param key is in the merge…
+    expect(param_key_index(REPO).has("key timeout")).toBe(true);   // …because the param half grounds it…
+    expect(shared_key_index(REPO).has("key timeout")).toBe(false); // …and the adapter half does not.
   });
 });
 

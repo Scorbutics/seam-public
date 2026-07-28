@@ -7,18 +7,18 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveCoupling } from "../../src/codebase/coupling/index.js";
-import { persistMatchers, _resetKeyStoreMem } from "../../src/codebase/coupling/key_store.js";
-import { validateMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { resolveCoupling, persistMatchers, validateMatcher } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
-import { EngineCtx } from "../../src/codebase/engine_ctx.js";
+import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+
+const resetStore = (repo: string) => loadAddon()!.resetCaches(repo);
 
 let REPO: string, SHARED: string;
 const ANCHOR = `export function emitSync() { customBus.fire('sync'); }\n`;   // grounds ONLY via a learned channel rule
 
 beforeEach(() => {
   REPO = mkdtempSync(join(tmpdir(), "sf-repo-")); SHARED = mkdtempSync(join(tmpdir(), "sf-shared-"));
-  process.env.SEAM_ADAPTERS_DIR = SHARED; _resetKeyStoreMem();
+  process.env.SEAM_ADAPTERS_DIR = SHARED; loadAddon()!.syncSeamEnv([["SEAM_ADAPTERS_DIR", SHARED]]); resetStore(REPO);
   mkdirSync(join(REPO, "src"), { recursive: true });
   writeFileSync(join(REPO, "src", "anchor.ts"), ANCHOR);
   writeFileSync(join(REPO, "src", "other.ts"), `export function onSync() { customBus.on('sync', () => {}); }\n`);   // the consumer
@@ -28,21 +28,21 @@ beforeEach(() => {
     validateMatcher({ via: "channel", token: "customBus", verbs: ["on"], kind: "event", role: "consumes" })!,
   ]);
 });
-afterEach(() => { rmSync(REPO, { recursive: true, force: true }); rmSync(SHARED, { recursive: true, force: true }); delete process.env.SEAM_ADAPTERS_DIR; _resetKeyStoreMem(); });
+afterEach(() => { rmSync(REPO, { recursive: true, force: true }); rmSync(SHARED, { recursive: true, force: true }); delete process.env.SEAM_ADAPTERS_DIR; resetStore(REPO); });
 
 describe("stable-floor footprint pre-grow", () => {
-  const resolve = (ctx: EngineCtx) => resolveCoupling(REPO, "a0", "src/anchor.ts", ANCHOR, 0, 99, 0, { dataCoupling: true, llm: false }, ctx);
+  // `stableFloor` is an explicit parameter in the core (it was an EngineCtx field in TypeScript).
+  const resolve = (stableFloor: boolean) => resolveCoupling(REPO, "a0", "src/anchor.ts", ANCHOR, 0, 99, 0, stableFloor);
 
   test("WITHOUT stableFloor: the learned channel rule grounds the 'sync' coupling", async () => {
     if (!available()) return;   // resolveCoupling needs tree-sitter for the complement unit
-    const r = await resolve(new EngineCtx());
-    expect(r.nodes.some((n: any) => n.coupling && n.symbol === "sync")).toBe(true);
+    const r = resolve(false);
+    expect(r.nodes.some((n) => n.symbol === "sync")).toBe(true);
   });
 
   test("WITH stableFloor: the learned rule is ignored → no 'sync' coupling (deterministic floor only)", async () => {
     if (!available()) return;
-    const ctx = new EngineCtx(); ctx.stableFloor = true;
-    const r = await resolve(ctx);
-    expect(r.nodes.some((n: any) => n.coupling && n.symbol === "sync")).toBe(false);
+    const r = resolve(true);
+    expect(r.nodes.some((n) => n.symbol === "sync")).toBe(false);
   });
 });

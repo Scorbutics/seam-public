@@ -6,7 +6,7 @@
 // purpose (a false positive is one extra probe; a false negative skips a real implicit key). The gate's
 // behaviour + the cross-stack/implicit-route recall are covered by data_coupling.test.ts (all green).
 import { describe, expect, test } from "bun:test";
-import { _handlerShaped } from "../../src/codebase/coupling/index.js";
+import { handlerShaped as _handlerShaped } from "../helpers/coupling.js";
 
 describe("_handlerShaped — the L3 trigger's handler-file recall net (signal #5)", () => {
   test("recognises route/handler files across stacks", () => {

@@ -5,7 +5,7 @@
 //   • raw-SQL masks comments (SQL-looking text in a doc-comment is not a real query)
 // Real tables / routes / keys must still pass.
 import { describe, expect, test } from "bun:test";
-import { scan_file_keys } from "../../src/codebase/coupling/index.js";
+import { scan_file_keys } from "../helpers/coupling.js";
 
 const keys = (file: string, text: string) => scan_file_keys(file, text);
 const tables = (text: string) => keys("X.java", text).filter((h) => h.kind === "db-table").map((h) => h.value);

@@ -5,7 +5,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { routeSuffixMatch, routeMatchSpecificity, otherSide } from "../../src/codebase/coupling/index.js";
+import { routeSuffixMatch, routeMatchSpecificity, otherSideOver as otherSide } from "../helpers/coupling.js";
 import { HTTP_ROUTE } from "../../src/codebase/coupling/adapters/http_route.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 

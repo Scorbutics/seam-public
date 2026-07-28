@@ -85,6 +85,13 @@ pub fn route_match_specificity(a: &str, b: &str) -> i64 {
     best
 }
 
+/// Do two routes SHARE at least one literal segment under the best alignment? The predicate the grounding
+/// uses to decide a route key meets another; the raw specificity score is what ranks the candidates once
+/// several match. Port of `routeSuffixMatch`.
+pub fn route_suffix_match(a: &str, b: &str) -> bool {
+    route_match_specificity(a, b) >= 1
+}
+
 /// A route with NO literal segments (all `*`/params — `/*`, `/`, `/*/*`) — non-discriminating. Port of
 /// `isBareWildcardRoute`.
 pub fn is_bare_wildcard_route(value: &str) -> bool {

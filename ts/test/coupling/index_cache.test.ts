@@ -2,12 +2,11 @@
 // edit must re-scan ONLY that file, the merged index must equal the uncached build, and the cross-file const
 // dependency (a constant defined in Z used in A) must stay correct when only one side changes.
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { incrementalScan } from "../../src/codebase/coupling/index_cache.js";
-import { shared_key_index, param_key_index } from "../../src/codebase/coupling/index.js";
-import { EngineCtx } from "../../src/codebase/engine_ctx.js";
+import { shared_key_index, param_key_index } from "../helpers/coupling.js";
 import type { GroundingIndex } from "../../src/codebase/coupling/types.js";
 
 const SKIP = new Set(["node_modules", ".git"]);
@@ -47,31 +46,32 @@ describe("incrementalScan — re-scans only what changed", () => {
   });
 });
 
-describe("integration: cached floor == uncached floor, and cross-file const stays correct", () => {
-  const withEnv = <T>(val: string, fn: () => T): T => { const p = process.env.SEAM_INDEX_CACHE; process.env.SEAM_INDEX_CACHE = val; try { return fn(); } finally { if (p === undefined) delete process.env.SEAM_INDEX_CACHE; else process.env.SEAM_INDEX_CACHE = p; } };
-  const withCache = <T>(fn: () => T): T => withEnv("1", fn);
-  const withoutCache = <T>(fn: () => T): T => withEnv("0", fn);   // cache is ON by default → opt OUT to get the plain walk
+describe("integration: the core's floor cache never changes the answer", () => {
+  // The TypeScript floor had an INCREMENTAL per-file cache (SEAM_INDEX_CACHE, opt-out). The core caches a
+  // whole shard per repo, keyed on the source epoch and on the knobs that change what the floor contains —
+  // so there is no "uncached" arm to compare against, and "uncached writes nothing" is not a claim it makes.
+  // What DOES carry over, and is what the cache actually has to promise: a warm read equals a cold one, and a
+  // one-file edit is never served stale.
   const keys = (i: GroundingIndex) => [...i.keys()].sort();
+  const cold = () => rmSync(join(REPO, ".seam"), { recursive: true, force: true });
 
-  test("warm cached build == cold uncached build (same keys)", () => {
+  test("warm read == cold read (same keys)", () => {
     write("a.js", "$http.put('/manage/rest/x/y/' + id);\n");
     write("Svc.java", '@Path("x")\nclass Svc { @PUT @Path("y/{id}") void go(){} }\n');
-    const uncached = withoutCache(() => keys(shared_key_index(REPO, SKIP, new EngineCtx())));
-    expect(existsSync(join(REPO, ".seam"))).toBe(false);   // uncached path writes nothing
-    withCache(() => {
-      keys(shared_key_index(REPO, SKIP, new EngineCtx()));            // cold (writes cache)
-      expect(keys(shared_key_index(REPO, SKIP, new EngineCtx()))).toEqual(uncached);   // warm == uncached
-    });
+    cold();
+    const first = keys(shared_key_index(REPO));    // cold: scans, then persists the shard
+    const warm = keys(shared_key_index(REPO));     // warm: loads the shard
+    expect(warm).toEqual(first);
+    expect(first.length).toBeGreaterThan(0);       // guard: two empty lists agree trivially and prove nothing
   });
 
-  test("cross-file: a const in Z used in A — editing ONLY Z's value re-resolves A's key (no stale hit)", () => {
-    write("K.java", 'class K { static final String TOK = "token"; }\n');         // Z: the constant
-    write("A.java", "class A { void f(URL u){ u.getParameter(TOK); } }\n");        // A: uses it (unchanged throughout)
-    withCache(() => {
-      expect(keys(param_key_index(REPO, SKIP, new EngineCtx()))).toEqual(["key token"]);   // cold: resolves to "token"
-      write("K.java", 'class K { static final String TOK = "renamed"; }\n'); touch("K.java");   // change ONLY the const value
-      // A is reused from cache (its raw site), K is re-scanned, the post-merge resolve picks up the new value:
-      expect(keys(param_key_index(REPO, SKIP, new EngineCtx()))).toEqual(["key renamed"]);
-    });
+  test("cross-file: a const in K used in A — editing ONLY K's value re-resolves A's key (no stale hit)", () => {
+    write("K.java", 'class K { static final String TOK = "token"; }\n');      // the constant
+    write("A.java", "class A { void f(URL u){ u.getParameter(TOK); } }\n");   // uses it (unchanged throughout)
+    cold();
+    expect(keys(param_key_index(REPO))).toEqual(["key token"]);
+    write("K.java", 'class K { static final String TOK = "renamed"; }\n'); touch("K.java");   // change ONLY the value
+    // The edit moves the source epoch, so the shard misses and the post-merge resolve picks up the new value.
+    expect(keys(param_key_index(REPO))).toEqual(["key renamed"]);
   });
 });

@@ -7,7 +7,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { couplingOtherSides } from "../../src/codebase/coupling/index.js";
+import { couplingOtherSides } from "../helpers/coupling.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { COUPLING } from "../../src/codebase/coupling/config.js";
 import { available } from "../../src/codebase/atoms.js";
@@ -93,7 +93,7 @@ describe("couplingOtherSides — targeted value-grep, not a full-repo index", ()
     expect(sides.some((s) => s.file.startsWith("pad/"))).toBe(false);   // no padding: a mention is not a coupling
 
     // HONESTY — stopping at the cap with candidates unscanned is TRUNCATION, and it is reported, never silent.
-    const t = ctx.couplingTruncations.find((x) => x.value === "payments");
+    const t = sides.truncations.find((x) => x.value === "payments");
     expect(t).toBeDefined();
     expect(t!.reason).toBe("reader-cap");
     expect(t!.scanned).toBeLessThan(t!.total);
