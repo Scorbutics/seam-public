@@ -301,6 +301,8 @@ pub struct LearnOutcome {
     pub reps: usize,
     pub covered_marked: usize,
     pub shapeless_marked: usize,
+    /// files whose literal keys were deduced by the PER-FILE axis this run (`SEAM_PER_FILE_KEYS=1`)
+    pub keyed_files: usize,
     pub note: String,
 }
 
@@ -309,19 +311,47 @@ pub struct LearnOutcome {
 /// rust_discover.ts), with the LLM served in-process.
 pub fn learn_matchers(repo: &str, key_budget: i64, scope: Option<&std::collections::HashSet<String>>, model: Option<&str>, claude_bin: Option<&str>) -> LearnOutcome {
     let none = |note: &str, reps: usize, c: &BlindCollection| LearnOutcome {
-        learned: 0, replayed: false, reps, covered_marked: 0, shapeless_marked: c.shapeless.len(), note: note.into(),
+        learned: 0, replayed: false, reps, covered_marked: 0, shapeless_marked: c.shapeless.len(), keyed_files: 0, note: note.into(),
     };
     // The gate is asked FIRST: with no backend there is nothing to learn, and walking the repo to discover that
     // would be pure cost on every grow of an offline checkout.
     if !seam_llm::available(claude_bin) {
-        return LearnOutcome { learned: 0, replayed: false, reps: 0, covered_marked: 0, shapeless_marked: 0, note: "no llm backend".into() };
+        return LearnOutcome { learned: 0, replayed: false, reps: 0, covered_marked: 0, shapeless_marked: 0, keyed_files: 0, note: "no llm backend".into() };
     }
     let budget = key_budget.max(0) as usize;
     let coll = collect_blind(repo, budget, scope);
+
+    // ── THE PER-FILE KEY AXIS (opt-in) ──────────────────────────────────────────────────────────────────
+    // Two DIFFERENT questions get asked about the same floor-blind files, and they are not interchangeable.
+    // The matcher axis below asks for a RULE — a token/verb shape the core can re-execute over any file,
+    // forever, with no model. This axis asks for the LITERAL KEYS in these specific files. The rule is worth
+    // far more when it exists, which is why the matcher axis is the default and this one is DEFAULT-OFF: on a
+    // footprint grow the two were measured overlapping almost completely, so running both was a second LLM
+    // sweep over the same files for ~nothing. `SEAM_PER_FILE_KEYS=1` restores it for the repos where the
+    // coupling really is per-file literals with no shape to generalise.
+    //
+    // Cache-first: a rep whose content key is already known is dropped before the call, so a warm run spends
+    // nothing here and the wheel settles. Port of the `perFileKeys` branch of `llmKeyIndex`.
+    let mut keyed_files = 0usize;
+    if std::env::var("SEAM_PER_FILE_KEYS").as_deref() == Ok("1") && !coll.reps.is_empty() {
+        let todo: Vec<(String, String)> = coll
+            .reps
+            .iter()
+            .filter(|(f, t)| !crate::learn::key_store::cached_file_keys(repo, &crate::learn::per_file_keys::content_key(f, t)).0)
+            .take(budget)
+            .cloned()
+            .collect();
+        if !todo.is_empty() {
+            keyed_files = crate::learn::per_file_keys::batch_synthesize(repo, &todo, model, claude_bin).len();
+        }
+    }
+
     let start = learn_start(repo, &coll.reps, key_budget);
     let (sig, prompt1, snips) = match start {
         LearnStart::Replay(ms) => {
-            return LearnOutcome { learned: ms.len(), replayed: true, reps: coll.reps.len(), covered_marked: 0, shapeless_marked: coll.shapeless.len(), note: "replayed".into() };
+            // The two axes are INDEPENDENT: a repo whose matcher signature is already learned may still have
+            // per-file keys to deduce, so the replay short-circuit reports what this axis just did.
+            return LearnOutcome { learned: ms.len(), replayed: true, reps: coll.reps.len(), covered_marked: 0, shapeless_marked: coll.shapeless.len(), keyed_files, note: "replayed".into() };
         }
         LearnStart::Nothing => return none("nothing to learn", coll.reps.len(), &coll),
         LearnStart::Prompt { prompt, sig, snippets } => (sig, prompt, snippets),
@@ -377,7 +407,13 @@ pub fn learn_matchers(repo: &str, key_budget: i64, scope: Option<&std::collectio
         reps: coll.reps.len(),
         covered_marked: marks.len(),
         shapeless_marked: coll.shapeless.len(),
-        note: if accepted.is_empty() { "no rules accepted".into() } else { "learned".into() },
+        keyed_files,
+        note: match (accepted.is_empty(), keyed_files) {
+            (true, 0) => "no rules accepted".into(),
+            (true, n) => format!("no rules accepted, {n} file(s) keyed"),
+            (false, 0) => "learned".into(),
+            (false, n) => format!("learned, {n} file(s) keyed"),
+        },
     }
 }
 

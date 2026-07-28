@@ -25,6 +25,6 @@ export async function rustDiscover(repo: string, opts: DiscoverOpts = {}): Promi
   // already marked, nothing is learned, key-adapters.json is untouched, the coupling epoch holds and the answer
   // cache hits. New reps on a REPEAT run pinpoint a settling leak, which is why the marks are counted at all.
   if (process.env.SEAM_FP_DEBUG)
-    process.stderr.write(`[rust-discover] ${o.note}: learned=${o.learned} reps=${o.reps} marked(covered=${o.coveredMarked}, shapeless=${o.shapelessMarked})\n`);
+    process.stderr.write(`[rust-discover] ${o.note}: learned=${o.learned} reps=${o.reps} keyed=${o.keyedFiles} marked(covered=${o.coveredMarked}, shapeless=${o.shapelessMarked})\n`);
   return o.learned;
 }

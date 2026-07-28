@@ -56,7 +56,12 @@ export async function scoreCouplingCase(repo: string, c: CouplingCase, opts: { n
     // The core REPLAYS the flywheel from `.seam` rather than learning inside the overlay, so an LLM arm has to
     // warm it FIRST. On the TypeScript path this was driven lazily from resolveCoupling, which is why the
     // option could simply be passed down and forgotten about.
-    if (opts.llm) await rustDiscover(repo, { scopeFiles: [c.anchorFile] });
+    // UNSCOPED warm-up, deliberately. Scoping discovery to the anchor FILE alone learns only the producer's
+    // side, and a key with no counterpart anywhere grounds nothing — so a correctly-deduced coupling would
+    // score as a miss. The TypeScript engine scoped this to the anchor's MODULE, which on these fixtures is
+    // the whole repo; a CI warm-up is unscoped for the same reason. (Real grows scope to the footprint, which
+    // by construction contains both sides of anything the flow actually reaches.)
+    if (opts.llm) await rustDiscover(repo);
     const g = toResolvedGraph(core.buildFootprint(repo, c.anchorFile, c.symbol, "up", true, null, null, null));
     const coupling = g.nodes.filter((n: any) => n.coupling);
     const recovered = coupling.map((n: any) => String(n.symbol));

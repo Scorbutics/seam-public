@@ -2025,6 +2025,8 @@ pub struct LearnOutcomeDto {
     pub reps: u32,
     pub covered_marked: u32,
     pub shapeless_marked: u32,
+    /// files whose literal keys the PER-FILE axis deduced this run (`SEAM_PER_FILE_KEYS=1`; 0 when off)
+    pub keyed_files: u32,
     pub note: String,
 }
 
@@ -2042,6 +2044,7 @@ pub fn discover_learn(repo: String, key_budget: Option<i64>, scope_files: Option
         reps: o.reps as u32,
         covered_marked: o.covered_marked as u32,
         shapeless_marked: o.shapeless_marked as u32,
+        keyed_files: o.keyed_files as u32,
         note: o.note,
     }
 }

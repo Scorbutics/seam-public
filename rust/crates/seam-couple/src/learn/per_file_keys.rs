@@ -204,10 +204,17 @@ pub fn batch_synthesize(repo: &str, files: &[(String, String)], model: Option<&s
             return;
         }
         let prompt = batch_prompt(chunk);
-        let by_file = match seam_llm::run_pass_json(&prompt, &opts) {
-            Ok(vals) => parse_batch(&vals),
+        // WHETHER the pass answered is kept, not collapsed into "it found nothing". Persisting a `no keys`
+        // adapter is a VERDICT — the content key is then cached and the file is never asked about again. Doing
+        // that because the model was unreachable (no backend, a timeout, or a host bus still collecting
+        // prompts) permanently blinds the repo to that file's coupling on the strength of a missing binary.
+        // An empty ANSWER is a real verdict and still settles; an error does not.
+        let answered = seam_llm::run_pass_json(&prompt, &opts);
+        let by_file = match &answered {
+            Ok(vals) => parse_batch(vals),
             Err(_) => Vec::new(), // a failed/malformed pass finds nothing; the floor still stands
         };
+        let persist = answered.is_ok();
         let def_names = defined_names(texts);
         for (file, _) in chunk.iter() {
             let keys: Vec<KeyHit> = by_file
@@ -216,8 +223,10 @@ pub fn batch_synthesize(repo: &str, files: &[(String, String)], model: Option<&s
                 .map(|(_, ks)| ks.iter().filter(|h| !def_names.contains(&h.value)).cloned().collect())
                 .unwrap_or_default();
             let text = texts.iter().find(|(f, _)| f == file).map(|(_, t)| t.clone()).unwrap_or_default();
-            let (name, description) = key_adapter_meta(file, &keys);
-            persist_file_keys(repo, &content_key(file, &text), &KeyAdapter { name, description, keys: keys.clone() });
+            if persist {
+                let (name, description) = key_adapter_meta(file, &keys);
+                persist_file_keys(repo, &content_key(file, &text), &KeyAdapter { name, description, keys: keys.clone() });
+            }
             out.push((file.clone(), keys));
         }
         chunk.clear();

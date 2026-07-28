@@ -38,22 +38,29 @@ beforeEach(() => { _resetKeyCacheMem(); set_host_bus(null); process.env.SEAM_PER
 afterAll(() => { set_host_bus(null); delete process.env.SEAM_PER_FILE_KEYS; });
 
 describe("framework-agnostic regeneration (adapters unlinked + LLM)", () => {
-  // The HOST BUS now reaches the core (see host_bus_bridge.test.ts) — that gap is closed. What these three
-  // still need is a DIFFERENT missing piece, and it is worth naming precisely because it is easy to mistake
-  // for the old one.
-  //
-  // The core's discovery pass asks `discover-key-matchers`: give me RULES (a token + verb shape) it can
-  // re-execute deterministically over any file. The TypeScript flywheel these tests were written against asked
-  // `discover-keys-batch`: give me the KEYS in these specific files. The core HAS the machinery for the second
-  // (`learn::per_file_keys::batch_synthesize`) but nothing drives it repo-wide — it is reachable only through
-  // `anchor_proposed_keys` for a single anchor. So a bus scripted with per-file key answers, as these are, is
-  // answering a question the core never asks.
-  //
-  // Closing this is a port, not a bridge fix: drive `batch_synthesize` over the scope's files inside
-  // `discover_learn` and persist the result as file keys, the way `llmKeyIndex` did.
-  test.todo("the LLM regenerates the db-table coupling the adapter used to provide → recall back to 100%", () => {});
+  test("the LLM regenerates the db-table coupling the adapter used to provide → recall back to 100%", async () => {
+    const repo = freshRepo();
+    set_host_bus(new RoutingBus(() => produces, batchBoth));
+    const s = await scoreCouplingCase(repo, CASE, { noAdapters: true, llm: true });
+    expect(s.recovered).toContain("payments");   // the deduced key, grounded by cross-site co-occurrence
+  });
 
-  test.todo("grounding gate: a key proposed on only ONE side (no co-occurrence) is dropped — no fabricated edge", () => {});
+  test("grounding gate: a key proposed on only ONE side (no co-occurrence) is dropped — no fabricated edge", async () => {
+    const repo = freshRepo();
+    set_host_bus(new RoutingBus(() => produces, batchProducerOnly));
+    const s = await scoreCouplingCase(repo, CASE, { noAdapters: true, llm: true });
+    // The model proposed `payments` on the PRODUCER only. With no consumer anywhere it grounds nothing —
+    // a proposal is used without human validation, but never without evidence on both sides.
+    expect(s.recovered).not.toContain("payments");
+  });
 
-  test.todo("warm .seam covers the anchor side on a DET run (no LLM)", () => {});
+  // FIX (a): the anchor's keys come from the cached index, so a WARM .seam covers the anchor side on a
+  // DETERMINISTIC run too — "LLM once (CI warm-up) → det forever" now includes the anchor's own keys.
+  test("warm .seam covers the anchor side on a DET run (no LLM)", async () => {
+    const repo = freshRepo();
+    set_host_bus(new RoutingBus(() => "[]", batchBoth));
+    expect((await scoreCouplingCase(repo, CASE, { noAdapters: true, llm: true })).recovered).toContain("payments");  // warm it
+    _resetKeyCacheMem(); _resetCarrierCacheMem(); set_host_bus(null);                          // drop mem + remove LLM
+    expect((await scoreCouplingCase(repo, CASE, { noAdapters: true, llm: false })).recovered).toContain("payments"); // det reads .seam → anchor covered
+  });
 });
