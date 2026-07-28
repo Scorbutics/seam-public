@@ -13,8 +13,6 @@ import { recordRead } from "../core/resolve/dep_recorder.js";
 // A named unit: [name, kind, startLine, endLine]. Was imported from the scan graph; inlined so these
 // generic AST helpers carry no dependency on the import-scan layer.
 export type Unit = [name: string, kind: string, start: number, end: number];
-
-export const expanduser = (p: string) => (p.startsWith("~") ? (process.env.HOME ?? "") + p.slice(1) : p);
 export const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
 // Read a repo-relative source file + its language; null when the path isn't a known source language or the
@@ -123,36 +121,6 @@ function _wrappedImpl(ctx: Ctx, call: any, units: Unit[], depth = 0): { inline: 
   return null;
 }
 
-// ADDRESSING — every name this file BINDS or DECLARES, i.e. the closed set of symbols a `<file>#<symbol>`
-// address can legitimately name. Deliberately GENEROUS (a superset of the units the footprint builders anchor
-// on): the question it answers is not "can we build a rich anchor node for this?" but "does this file mention
-// this name as a DECLARATION at all?" — so a value const (`export const dynamicEvent = {…}`, a real anchor with
-// real consumers), a type alias, a non-exported local or a re-export specifier all count. Only a name the file
-// NEVER binds — the importer's local alias for a default export, a typo, a name that lives in another file — is
-// absent, and that is an ADDRESSING error, never an empty result.
-//   • _named_units       — functions / methods / classes / interfaces / enums
-//   • _exported_members  — the public surface (adds value consts + barrel re-exports; exportless languages too)
-//   • _VAR_DECLARATOR    — every binder, exported or not
-//   • the `name` FIELD of any non-CALL node — type aliases, namespaces, Ruby modules, … (calls are excluded
-//     because Java's method_invocation/Ruby's call carry a `name`/`method` field too, and a name that is only
-//     CALLED here is not declared here)
-//   • _EXPORT_SPECIFIER  — both sides of `export { local as exported }`
-export function _declared_names(ctx: Ctx, file?: string): Set<string> {
-  const out = new Set<string>();
-  for (const u of _named_units(ctx)) out.add(u[0]);
-  for (const m of _exported_members(ctx, file)) out.add(m[0]);
-  for (const n of ctx.collect(ctx.root, () => true)) {
-    const k = n.type;
-    if (!_CALL.has(k)) {
-      const nf = n.childForFieldName?.("name");
-      if (nf && (_NAME_KINDS.has(nf.type) || _NAME_LEAVES.has(nf.type))) out.add(ctx.text(nf));
-    }
-    if (_VAR_DECLARATOR.has(k)) { const ch = ctx.children(n); if (ch.length && _NAME_KINDS.has(ch[0].type)) out.add(ctx.text(ch[0])); }
-    if (_EXPORT_SPECIFIER.has(k)) for (const c of ctx.children(n)) if (_NAME_KINDS.has(c.type)) out.add(ctx.text(c));
-  }
-  out.delete("default");   // the `default` in `export { x as default }` is the BOUNDARY name, not a declared symbol
-  return out;
-}
 
 // The LOCAL symbol behind this file's `export default` — the missing piece of the most common addressing
 // mistake. Importers bind a default export under a name of THEIR choosing (`import handleCancelBooking from
@@ -197,14 +165,6 @@ export function _enclosing(units: Unit[], line: number): Unit | null {
   return cands.length ? cands.reduce((a, b) => (b[3] - b[2] < a[3] - a[2] ? b : a)) : null;
 }
 
-// The name of the CLASS that owns the span [start,end] — the `enclosing` for a METHOD node (so a consumer
-// reached mid-grow reads `AcmeCheckBookingsService.createBooking`, not a bare, ambiguous `createBooking`).
-// Tightest containing class wins (nested classes); "" for a top-level function or a call in a class body whose
-// own unit IS the class. STRUCTURAL (tree-sitter units), never a name heuristic.
-export function _enclosingClass(units: Unit[], start: number, end: number): string {
-  const cands = units.filter((u) => u[1] === "class" && u[2] <= start && end <= u[3] && !(u[2] === start && u[3] === end));
-  return cands.length ? cands.reduce((a, b) => (b[3] - b[2] < a[3] - a[2] ? b : a))[0] : "";
-}
 
 export function _call_lines(ctx: Ctx, local: string): number[] {
   const lines: number[] = [];
@@ -215,122 +175,9 @@ export function _call_lines(ctx: Ctx, local: string): number[] {
   return lines;
 }
 
-// METHOD-PRECISE INDEX — the SERIALIZABLE derivations the fan's method-precise rehydration needs (the reached
-// method ranges + the file's bare-identifier call sites grouped by callee). Computed in ONE parse so the whole
-// artifact can be DISK-CACHED per content-hash (see cachedMPIndex): a warm grow then skips the tree-sitter parse
-// (`makeCtx`) that otherwise re-ran for every boundary file every run — the O(footprint) parse cost. `calls` is a
-// superset of `_call_lines` (all callee names, not one), keyed for O(1) lookup during rehydration.
-export type MPIndex = { units: Unit[]; calls: Record<string, number[]> };
-export function methodPreciseIndex(ctx: Ctx): MPIndex {
-  const units = _named_units(ctx);
-  // NULL-PROTOTYPE: a callee named `toString`/`constructor`/`valueOf` would else read a truthy Object.prototype
-  // member, so `??=` skips the array init and `.push` throws (real Java calls `toString()` everywhere). The read
-  // side (rehydration) guards with Array.isArray for the same reason (a warm JSON.parse re-adds the prototype).
-  const calls: Record<string, number[]> = Object.create(null);
-  for (const c of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    const ch = ctx.children(c);
-    if (ch.length && ch[0].type.includes("identifier")) (calls[ctx.text(ch[0])] ??= []).push(ctx.span(c)[0]);
-  }
-  return { units, calls };
-}
 
-// The occurrences of `local`, split by whether the name is a MODULE-SCOPE binding use or a MEMBER access.
-//  - BARE      — a plain name reference (`f`, `f(…)`): whatever binds `f` in this file (a def, an import) IS
-//                what this occurrence means.
-//  - QUALIFIED — the property side of a member access (`this.f`, `obj.f`): a member of some receiver, never
-//                the file's module-scope binding.
-// The distinction is what lets a caller drop a bare occurrence it can PROVE belongs to another binding while
-// keeping the member calls on the anchor's own class. Structural, off the _MEMBER/_MEMBER_NAME kind registry
-// (JS `member_expression`/`property_identifier`, Java `field_access`, C/C++ `field_expression`/`field_identifier`),
-// never a literal grammar kind — so it degrades to "everything is bare" on a grammar with no member node,
-// which is the conservative side.
-export function _ref_lines_split(ctx: Ctx, local: string): { bare: number[]; qualified: number[] } {
-  const bare = new Set<number>(), qualified = new Set<number>();
-  for (const i of ctx.collect(ctx.root, (k) => k.includes("identifier"))) {
-    if (ctx.text(i) !== local) continue;
-    const p = (i as any).parent;
-    const isProp = _MEMBER_NAME.has(i.type)
-      || (p && _MEMBER.has(p.type) && ctx.children(p)[0]?.startIndex !== (i as any).startIndex);   // grammars with no distinct property kind
-    (isProp ? qualified : bare).add(ctx.span(i)[0]);
-  }
-  return { bare: [...bare].sort((a, b) => a - b), qualified: [...qualified].sort((a, b) => a - b) };
-}
 
-export function _ref_lines(ctx: Ctx, local: string): number[] {
-  const s = _ref_lines_split(ctx, local);
-  return [...new Set([...s.bare, ...s.qualified])].sort((a, b) => a - b);
-}
 
-// The lines where `local` is USED: calls if any (the strongest signal), else references inside a unit,
-// else all-but-the-first reference (drops the import/binding line).
-export function _usage_lines(ctx: Ctx, units: Unit[], local: string): number[] {
-  const calls = _call_lines(ctx, local);
-  if (calls.length) return calls;
-  const refs = _ref_lines(ctx, local);
-  const inside = refs.filter((ln) => _enclosing(units, ln));
-  return inside.length ? inside : refs.slice(1);
-}
-
-// The module's PUBLIC SURFACE, deduped by name. Feeds the module-anchor builder and the depth-2 ripple
-// (only exported symbols ripple to their importers).
-//
-// A module boundary is expressed TWO structurally different ways, and reading only the first made the whole
-// module shape (contract) return "no exported members" for most real files:
-//  - EXPORT-STATEMENT languages (TS/JS): the boundary is the `export` node. Its child is a DECLARATION
-//    (`export function f`) — or an export CLAUSE (`export { a } from "./x"`), the barrel/re-export form that
-//    was previously skipped entirely, so an index.* that only re-exports looked empty.
-//  - EXPORTLESS languages (Java/C/C++/Ruby/Python): there is no export node at all; visibility rides on
-//    MODIFIERS, so the boundary is the file's TOP-LEVEL type declarations and their members. Asking these
-//    files for `export_statement` found nothing, which is why EVERY Java/Ruby/C module reported no contract.
-// `file` selects the reading via the language registry (`exportStatements`); omitted ⇒ export-statement
-// reading only, preserving the original behaviour for callers that have no path.
-export function _exported_members(ctx: Ctx, file?: string): Unit[] {
-  const out: Unit[] = [];
-  if (file && !provider_for(file)?.exportStatements) return _public_surface(ctx);
-  for (const es of ctx.collect(ctx.root, (k) => _EXPORT.has(k))) {
-    for (const ch of ctx.children(es)) {
-      const k = ch.type;
-      if (_FUNCLIKE.has(k) && !_ANON_FUNC.has(k)) { const nm = _name_of(ctx, ch); if (nm) { const [s, e] = ctx.span(ch); out.push([nm, "function", s, e]); } }
-      else if (_CLASS_KINDS.has(k)) { const nm = _name_of(ctx, ch); if (nm) { const [s, e] = ctx.span(ch); out.push([nm, "class", s, e]); } }
-      else if (_VAR_DECL.has(k)) {
-        for (const d of ctx.children(ch)) {
-          if (!_VAR_DECLARATOR.has(d.type)) continue;
-          const dch = ctx.children(d);
-          if (dch.length && _NAME_KINDS.has(dch[0].type)) {
-            const isFn = dch.some((c) => _FUNCLIKE.has(c.type));
-            const [s, e] = ctx.span(ch);
-            out.push([ctx.text(dch[0]), isFn ? "function" : "constant", s, e]);
-          }
-        }
-      }
-      // RE-EXPORT / export-list: `export { a, b }` · `export { a as b } from "./x"`. The exported NAME is the
-      // specifier's last name identifier (`a as b` exports `b`); the local alias is irrelevant at the boundary.
-      else if (_EXPORT_CLAUSE.has(k)) {
-        for (const sp of ctx.children(ch)) {
-          if (!_EXPORT_SPECIFIER.has(sp.type)) continue;
-          const names = ctx.children(sp).filter((c) => _NAME_KINDS.has(c.type));
-          if (!names.length) continue;
-          const [s, e] = ctx.span(sp);
-          out.push([ctx.text(names[names.length - 1]), "reference", s, e]);
-        }
-      }
-    }
-  }
-  // THE DEFAULT SLOT IS PUBLIC SURFACE TOO. `export default handler` / `export default withReporting(handler,
-  // "handler")` puts a declaration on the module boundary WITHOUT naming it in any declaration or specifier the
-  // loop above reads — its child is a bare identifier or a CALL. So a module whose entire public API is its
-  // default export reported ZERO exported members, hence `fan-in: 0 consuming files` for a module with real
-  // importers (cal.com packages/features/schedules/lib/slots.ts, whose 3 default importers were invisible).
-  // Grounded, not name-matched: the local must be a DECLARED unit of this file (that's where the span comes
-  // from); an anonymous `export default () => …` or an opaque wrapper adds nothing. No double count — a default
-  // whose local is ALSO a named export (`export const prisma` + `export default prisma`) dedupes below.
-  const dunits = _named_units(ctx);
-  const dflt = _default_export_local(ctx, dunits);
-  const du = dflt ? dunits.find((u) => u[0] === dflt) : undefined;
-  if (dflt && du) out.push([dflt, du[1], du[2], du[3]]);
-  const seen = new Set<string>();
-  return out.filter((m) => (seen.has(m[0]) ? false : (seen.add(m[0]), true)));
-}
 
 // The public surface of an EXPORTLESS language: top-level type declarations (class/interface/enum/record/
 // struct) plus the members declared directly in their bodies, and top-level free functions (C/C++/Ruby).
