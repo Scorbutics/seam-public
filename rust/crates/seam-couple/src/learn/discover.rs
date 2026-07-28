@@ -253,7 +253,9 @@ pub fn learn_ingest(blind: &[(String, String)], snippets: &[(String, String)], a
 
 /// Step 3: ingest the retry answer, add newly-detecting non-dupes, persist + record, return accepted. Port of
 /// the tail of `learnKeyMatchers`.
-pub fn learn_finalize(repo: &str, sig: &str, blind: &[(String, String)], mut accepted: Vec<KeyMatcher>, answer2: &str) -> Vec<KeyMatcher> {
+/// `answered` = at least one pass actually came back from a model. A pass that ERRORED (no backend, a timeout,
+/// or a host bus still collecting prompts) must NOT mark the signature learned — see `learn_commit`.
+pub fn learn_finalize(repo: &str, sig: &str, blind: &[(String, String)], mut accepted: Vec<KeyMatcher>, answer2: &str, answered: bool) -> Vec<KeyMatcher> {
     let mut have: std::collections::HashSet<String> = accepted.iter().map(|m| m.key()).collect();
     for m in parse(answer2) {
         if !have.contains(&m.key()) && detects(&m, blind) {
@@ -262,14 +264,24 @@ pub fn learn_finalize(repo: &str, sig: &str, blind: &[(String, String)], mut acc
         }
     }
     persist_matchers(repo, &accepted);
-    record_learned_matchers(repo, sig);
+    if answered {
+        record_learned_matchers(repo, sig);
+    }
     accepted
 }
 
 /// Convenience for the no-retry path (Done): persist + record. Mirrors the same tail without a second answer.
-pub fn learn_commit(repo: &str, sig: &str, accepted: &[KeyMatcher]) -> Vec<KeyMatcher> {
+///
+/// `answered` GATES THE SIGNATURE RECORD, and the distinction it draws is the whole point. Recording a
+/// signature means "this cluster has been learned — never ask about it again". A pass that came back EMPTY is a
+/// real verdict ("no rule here") and should settle. A pass that ERRORED never reached a model at all, and
+/// recording it permanently blinds the repo to that cluster on the strength of a missing binary or a timeout.
+/// The two used to be indistinguishable because the driver collapsed an error into `"[]"`.
+pub fn learn_commit(repo: &str, sig: &str, accepted: &[KeyMatcher], answered: bool) -> Vec<KeyMatcher> {
     persist_matchers(repo, accepted);
-    record_learned_matchers(repo, sig);
+    if answered {
+        record_learned_matchers(repo, sig);
+    }
     accepted.to_vec()
 }
 
@@ -321,17 +333,25 @@ pub fn learn_matchers(repo: &str, key_budget: i64, scope: Option<&std::collectio
         thinking: Some(0),                          // a mechanical extraction pass, not a reasoning one
         claude_bin: claude_bin.map(|c| c.to_string()),
     };
-    // A failed pass is an EMPTY answer, not an error: `parse` yields no rules, the loop finishes, and the grow
-    // replays what it already had. Mirrors TS learnKeyMatchers' `catch (LLMError) → []`.
-    let serve = |p: &str| seam_llm::run_pass(p, &opts).unwrap_or_else(|_| "[]".to_string());
+    // A failed pass still yields no rules and the grow replays what it had — but WHETHER it failed is kept,
+    // because the signature record below must not treat "never reached a model" as "the model said nothing".
+    let serve = |p: &str| seam_llm::run_pass(p, &opts).ok();
 
-    let a1 = serve(&prompt1);
+    let r1 = serve(&prompt1);
+    let mut answered = r1.is_some();
+    let a1 = r1.unwrap_or_else(|| "[]".to_string());
     let accepted = match learn_ingest(&coll.reps, &snips, &a1) {
-        LearnIngest::Done(ms) => learn_commit(repo, &sig, &ms),
+        LearnIngest::Done(ms) => learn_commit(repo, &sig, &ms, answered),
         LearnIngest::Retry { prompt: p2, accepted } => {
             // ONE retry, and only if the budget allows it (mirrors the TS synth gate).
-            let a2 = if key_budget > 1 { serve(&p2) } else { "[]".to_string() };
-            learn_finalize(repo, &sig, &coll.reps, accepted, &a2)
+            let a2 = if key_budget > 1 {
+                let r2 = serve(&p2);
+                answered = answered || r2.is_some();
+                r2.unwrap_or_else(|| "[]".to_string())
+            } else {
+                "[]".to_string()
+            };
+            learn_finalize(repo, &sig, &coll.reps, accepted, &a2, answered)
         }
     };
 

@@ -1256,6 +1256,38 @@ pub fn floor_index_part(repo: String, part: String) -> Vec<Vec<String>> {
     rows
 }
 
+// ── THE HOST BUS ─────────────────────────────────────────────────────────────────────────────────────────
+// Serving the core's LLM passes from the CALLER's model. The JS thread is blocked inside every synchronous
+// napi call, so a callback into JS would deadlock on an event loop that cannot turn — hence record-and-replay:
+// install the answers known so far, run, take back the prompts that went unanswered, serve them, repeat.
+// `ts/src/core/host_bridge.ts` is the pump that drives this loop; see `seam_llm::host_bus` for why the answers
+// are keyed by content hash rather than call order.
+
+/// Install the host bus with the answers gathered so far — `[key, text]` rows. Clears the previous round's
+/// recorded prompts.
+#[napi]
+pub fn install_host_bus(answers: Vec<Vec<String>>) {
+    let map: std::collections::HashMap<String, String> =
+        answers.into_iter().filter(|r| r.len() >= 2).map(|r| (r[0].clone(), r[1].clone())).collect();
+    seam_llm::host_bus::install(map);
+}
+
+/// Remove the host bus — the core goes back to spawning a local `claude`/`copilot`.
+#[napi]
+pub fn uninstall_host_bus() {
+    seam_llm::host_bus::uninstall();
+}
+
+/// The prompts the core wanted and could not answer, in ask order: `[key, tag, prompt, model, thinking]`
+/// (`thinking` empty = unset). Leaves the bus installed and empty.
+#[napi]
+pub fn take_host_recorded() -> Vec<Vec<String>> {
+    seam_llm::host_bus::take_recorded()
+        .into_iter()
+        .map(|r| vec![r.key, r.tag, r.prompt, r.model, r.thinking.map(|t| t.to_string()).unwrap_or_default()])
+        .collect()
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]
@@ -1744,7 +1776,8 @@ pub fn learn_ingest(blind_json: String, snippets_json: String, answer1: String) 
 pub fn learn_finalize(repo: String, sig: String, blind_json: String, accepted_json: String, answer2: String) -> String {
     let blind = parse_pairs(&blind_json);
     let accepted: Vec<seam_couple::KeyMatcher> = serde_json::from_str(&accepted_json).unwrap_or_default();
-    let out = seam_couple::learn::discover::learn_finalize(&repo, &sig, &blind, accepted, &answer2);
+    // `answered = true`: these entries exist for a JS driver that has ALREADY obtained a model reply.
+    let out = seam_couple::learn::discover::learn_finalize(&repo, &sig, &blind, accepted, &answer2, true);
     serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
 }
 
@@ -1752,7 +1785,7 @@ pub fn learn_finalize(repo: String, sig: String, blind_json: String, accepted_js
 #[napi]
 pub fn learn_commit(repo: String, sig: String, accepted_json: String) -> String {
     let accepted: Vec<seam_couple::KeyMatcher> = serde_json::from_str(&accepted_json).unwrap_or_default();
-    let out = seam_couple::learn::discover::learn_commit(&repo, &sig, &accepted);
+    let out = seam_couple::learn::discover::learn_commit(&repo, &sig, &accepted, true);
     serde_json::to_string(&out).unwrap_or_else(|_| "[]".into())
 }
 

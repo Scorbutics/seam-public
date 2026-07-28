@@ -8,6 +8,7 @@
 // What is left here is a thin call plus the SETTLING diagnostic, because deciding what to LOG belongs to the
 // shell, not the engine. Learn-once → `.seam/key-adapters.json` is replayed byte-identically forever after.
 import { loadAddon } from "../rust_core.js";
+import { withHostBus } from "../../core/host_bridge.js";
 
 // `scopeFiles` = the repo-relative files the flow reaches (a floor pre-grow's footprint). Discovery considers
 // ONLY those: unscoped, a 4-file flow in a 10k-file repo learned from — and paid the LLM over — every blind file.
@@ -17,7 +18,9 @@ export interface DiscoverOpts { model?: string; claudeBin?: string | null; keyBu
 // backend or a malformed reply degrades to 0 and the grow proceeds on what the store already holds.
 export async function rustDiscover(repo: string, opts: DiscoverOpts = {}): Promise<number> {
   const addon = loadAddon();
-  const o = addon.discoverLearn(repo, opts.keyBudget ?? 60, opts.scopeFiles, opts.model, opts.claudeBin ?? undefined);
+  // Wrapped in the HOST-BUS PUMP: when the caller has lent us a model (`set_host_bus`), the core's discovery
+  // passes are served by it. Without one this is a plain call and the core resolves its own backend.
+  const o = withHostBus(addon, () => addon.discoverLearn(repo, opts.keyBudget ?? 60, opts.scopeFiles, opts.model, opts.claudeBin ?? undefined));
   // SETTLING CENSUS — on a truly warm run this must read `replayed` (or 0 reps): every floor-blind file is
   // already marked, nothing is learned, key-adapters.json is untouched, the coupling epoch holds and the answer
   // cache hits. New reps on a REPEAT run pinpoint a settling leak, which is why the marks are counted at all.

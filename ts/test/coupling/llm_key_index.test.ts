@@ -38,24 +38,22 @@ beforeEach(() => { _resetKeyCacheMem(); set_host_bus(null); process.env.SEAM_PER
 afterAll(() => { set_host_bus(null); delete process.env.SEAM_PER_FILE_KEYS; });
 
 describe("framework-agnostic regeneration (adapters unlinked + LLM)", () => {
-  // KNOWN GAP — THE HOST BUS DOES NOT CROSS INTO THE CORE. Every test here injects an LLM via
-  // `set_host_bus(...)`, but `crates/seam-llm` serves a pass ONE way: by spawning a local `claude`/`copilot`
-  // binary. There is no host-bus bridge, so a TS-injected model is invisible to the Rust flywheel — the
-  // discovery pass runs, finds its blind representative, gets no answer, and accepts no rules
-  // (`[rust-discover] no rules accepted: learned=0 reps=1`). Nothing is persisted, so the DET replay has
-  // nothing to read either. The claims below (the LLM regenerates what an unlinked adapter used to provide;
-  // a one-sided key is dropped; a warm `.seam` covers the anchor on a det run) are all still what we want.
+  // The HOST BUS now reaches the core (see host_bus_bridge.test.ts) — that gap is closed. What these three
+  // still need is a DIFFERENT missing piece, and it is worth naming precisely because it is easy to mistake
+  // for the old one.
   //
-  // This is NOT the carrier gap these were originally filed under — the carrier axis is ported and green
-  // (`rust/parity/carrier.ts`, `crates/seam-couple/tests/carrier_channel.rs`), and `Data/Bill.rxdata` now
-  // grounds. The third test below only STARTED failing once `SEAM_NO_ADAPTERS` was honoured in the Rust
-  // floor: before that the adapters stayed linked under the "unlinked" arm and `payments` came from the
-  // floor, so the test passed without the LLM regenerating anything. It was green for the wrong reason.
+  // The core's discovery pass asks `discover-key-matchers`: give me RULES (a token + verb shape) it can
+  // re-execute deterministically over any file. The TypeScript flywheel these tests were written against asked
+  // `discover-keys-batch`: give me the KEYS in these specific files. The core HAS the machinery for the second
+  // (`learn::per_file_keys::batch_synthesize`) but nothing drives it repo-wide — it is reachable only through
+  // `anchor_proposed_keys` for a single anchor. So a bus scripted with per-file key answers, as these are, is
+  // answering a question the core never asks.
+  //
+  // Closing this is a port, not a bridge fix: drive `batch_synthesize` over the scope's files inside
+  // `discover_learn` and persist the result as file keys, the way `llmKeyIndex` did.
   test.todo("the LLM regenerates the db-table coupling the adapter used to provide → recall back to 100%", () => {});
 
   test.todo("grounding gate: a key proposed on only ONE side (no co-occurrence) is dropped — no fabricated edge", () => {});
 
-  // FIX (a): the anchor's keys come from the cached index, so a WARM .seam covers the anchor side on a
-  // DETERMINISTIC run too — "LLM once (CI warm-up) → det forever" now includes the anchor's own keys.
   test.todo("warm .seam covers the anchor side on a DET run (no LLM)", () => {});
 });

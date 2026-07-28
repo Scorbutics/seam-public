@@ -17,10 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+pub mod host_bus;
+pub use host_bus::{pass_key, RecordedPass};
+
 /// The one error type — every failure mode collapses to this, because every caller treats them identically
 /// (degrade to the floor). Mirrors `ClassifierError`.
 #[derive(Debug, Clone)]
 pub struct LlmError(pub String);
+
 
 impl std::fmt::Display for LlmError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -162,7 +166,9 @@ pub fn resolve_backend(claude_override: Option<&str>) -> R<(Backend, String)> {
 
 /// Is a backend reachable at all? The gate every flywheel axis checks before spending a cold pass.
 pub fn available(claude_override: Option<&str>) -> bool {
-    resolve_backend(claude_override).is_ok()
+    // A HOST BUS is a backend. Checking only for a binary would have a flywheel axis skip its work while the
+    // caller's own model sat waiting — the exact failure that made the injected-model path invisible to the core.
+    host_bus::active() || resolve_backend(claude_override).is_ok()
 }
 
 // ── JSON-array extraction ────────────────────────────────────────────────────────────────────────────────
@@ -392,10 +398,16 @@ pub struct PassOpts {
 /// timeout, envelope parsing and metering all happen here, so every flywheel axis gets identical behaviour.
 /// Port of `run_pass` + `runPassRaw`.
 pub fn run_pass(prompt: &str, opts: &PassOpts) -> R<String> {
-    let (backend, bin) = resolve_backend(opts.claude_bin.as_deref())?;
     let base = opts.model.clone().unwrap_or_else(|| "claude-haiku-4-5".to_string());
     let model = route_model(opts.tag.as_deref(), &base);
     let thinking = opts.thinking.or(Some(0));
+    // THE HOST BUS comes first — before backend resolution, so a caller-served pass works with no `claude` or
+    // `copilot` on PATH at all. Tier routing still runs above, so the recorded pass names the model the core
+    // WOULD have picked and the host can honour it.
+    if let Some(served) = host_bus::serve(opts.tag.as_deref().unwrap_or(""), prompt, &model, thinking) {
+        return served;
+    }
+    let (backend, bin) = resolve_backend(opts.claude_bin.as_deref())?;
     match backend {
         Backend::Claude => {
             let env: Vec<(String, String)> = thinking.map(|t| vec![("MAX_THINKING_TOKENS".to_string(), t.to_string())]).unwrap_or_default();
