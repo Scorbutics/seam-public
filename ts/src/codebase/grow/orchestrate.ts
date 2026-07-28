@@ -61,7 +61,6 @@ import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
 import { isFlowSubject, isHandlerEdge, isProduceEdge } from "../coupling/subjects.js";
-import { _enclosing } from "../ast_units.js";
 
 // EMBEDDINGS-AVAILABLE, from the core. This used to ask the TypeScript transformers.js runtime; the intent
 // field and every def score run in the addon now, so asking the old runtime could answer "yes" for an engine
@@ -70,7 +69,6 @@ const transformersAvailable = async (): Promise<boolean> => {
   try { return !!(await import("../rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
 };
 import { makeCtx, available, type Ctx } from "../atoms.js";
-import type { Unit } from "../ast_units.js";
 
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";
@@ -128,101 +126,6 @@ function _rehydrateFanDelta(delta: { nodes: any[]; edges: any[]; blindspots: any
   return { nodes, edges, blindspots, counter };
 }
 
-// METHOD-PRECISE fan attribution (default; opt-out SEAM_METHOD_PRECISE=0). The whole-file fan wires EVERY write in
-// a file to the ONE reached node (the first grounded node the grow hit there), so a class's SIBLING methods bleed
-// onto it: keycloak `grantRole` (536-541) credited with the UserAttribute/RequiredAction/GroupMembership writes it
-// never touches, and a whole-CLASS node (`JpaRealmProvider` 95-1572) absorbing the ENTIRE file (→ a garbage
-// `RealmLocalizationTextsEntity` crown). Re-attribute each NEAR crossing to the method ENCLOSING its write LINE,
-// restricted to the reached method's same-file call CLOSURE (the reached method + what it transitively calls, via
-// unqualified `grantRoleImpl(...)`-style call sites). Mint a node per closure method + a `call` edge srcId→method so
-// the spine can reach it; DROP a crossing whose method is OUTSIDE the closure (a sibling not on the flow). A
-// whole-CLASS reached node pins NO method (its enclosing unit is the class, which calls nothing) → empty closure →
-// its file-wide bleed drops entirely. STRUCTURAL: tree-sitter units + same-file resolved call sites, no name guess.
-function _rehydrateFanDeltaMethodPrecise(
-  delta: { nodes: any[]; edges: any[]; blindspots: any[] }, srcId: string, srcRange: [number, number] | undefined,
-  fileNodes: { id: string; range: [number, number] }[],
-  file: string, units: Unit[], calls: Record<string, number[]>, counter: number,
-): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
-  const isMethod = (u: Unit | null): u is Unit => !!u && (u[1] === "method" || u[1] === "function");
-  // the reached node's OWN method (its writes stay on it) — from its range DIRECTLY, so a coupling-complement
-  // reached node (persistPayment, a synthetic writer node excluded from fileNodes) still resolves its method.
-  const reached = srcRange ? _enclosing(units, srcRange[0]) : null;
-  // an EXISTING footprint code node that is the METHOD enclosing a write line — the write belongs to it (already in
-  // the graph, connected). Covers a crossing in the reached node's CALLER (OrdersPage's `$http.get` reached via its
-  // callee `render`) or any other already-grown method. Gated to a node CONTAINED IN the tightest enclosing method
-  // unit: a whole-CLASS footprint node (JpaRealmProvider 95-1572) encloses EVERY line, so a plain "tightest node
-  // containing L" would re-credit the class with every method's write (the very bleed we're removing) — requiring
-  // the node to sit INSIDE the enclosing method excludes the class, so a class-body write with no grown method drops.
-  const encFootprint = (L: number): string | null => {
-    const m = _enclosing(units, L);
-    if (!m) return null;
-    let best: { id: string; range: [number, number] } | null = null;
-    for (const fn of fileNodes) if (fn.range && fn.range[0] <= L && L <= fn.range[1] && fn.range[0] >= m[2] && fn.range[1] <= m[3]
-        && (!best || (fn.range[1] - fn.range[0] < best.range[1] - best.range[0]))) best = fn;
-    return best ? best.id : null;
-  };
-  // same-file caller→callee adjacency from UNQUALIFIED call sites (`_call_lines` matches a bare-identifier callee,
-  // i.e. a private-delegate call like `grantRoleImpl(role)`); bucket each call site by its enclosing method.
-  const methodNames = new Map<string, Unit[]>();
-  for (const u of units) if (isMethod(u)) (methodNames.get(u[0]) ?? methodNames.set(u[0], []).get(u[0])!).push(u);
-  const adj = new Map<Unit, Set<Unit>>();
-  for (const [name, defs] of methodNames) for (const L of (Array.isArray(calls[name]) ? calls[name] : [])) {   // Array.isArray guard: a callee named `constructor`/`toString` would else hit Object.prototype (not own-key)
-    const caller = _enclosing(units, L);
-    if (isMethod(caller)) { const set = adj.get(caller) ?? adj.set(caller, new Set()).get(caller)!; for (const d of defs) if (d !== caller) set.add(d); }
-  }
-  // Seed the same-file call closure from the reached node's method AND EVERY grown footprint method in this file —
-  // not just `reached`. The fan couples a boundary file ONCE (post-seed, before the wave has expanded the deep
-  // delegates), and the triggering node is often the CLASS node (grounded via the file's `import` edge) or a
-  // shallow method, so a `reached`-only closure is empty (a class has no in-body calls) or stops short — dropping a
-  // db-write that sits several delegate hops down (BookingsBean.updateBooking → step1 → … →
-  // updateAndSaveMemberBookingEntity → em.merge) as "bleed", though that method IS on the grown flow (the shallow
-  // acme write in updateBooking survived only because its method was already a footprint node; the deep write
-  // vanished — the reproduced Acme "no grounded boundary" case). The adjacency above is the FILE's REAL
-  // call graph (independent of what the wave has grown yet), so seeding from any grown method reaches the deep write
-  // regardless of coupling timing. A write reachable from a grown method is on a grown flow (not bleed); a truly
-  // unrelated sibling that no grown method calls stays out of the closure and is still dropped.
-  const closure = new Set<Unit>();
-  const seedMethods: Unit[] = [];
-  if (isMethod(reached)) seedMethods.push(reached);
-  for (const fn of fileNodes) { const mu = _enclosing(units, fn.range[0]); if (isMethod(mu)) seedMethods.push(mu); }
-  for (const seed of seedMethods) if (!closure.has(seed)) { const st: Unit[] = [seed]; closure.add(seed); while (st.length) { const A = st.pop()!; for (const B of adj.get(A) ?? []) if (!closure.has(B)) { closure.add(B); st.push(B); } } }
-  // renumber boundary/complement nodes into the `fc` namespace (as _rehydrateFanDelta does)
-  const idmap = new Map<string, string>();
-  let ctr = counter;
-  const outNodes = delta.nodes.map((n) => { const nid = `fc${ctr++}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
-  const mintEdges: any[] = [];
-  const minted = new Map<Unit, string>();
-  const methodNodeFor = (u: Unit): string => {
-    if (u === reached) return srcId;                                  // the reached method IS srcId — attribute directly
-    const ex = minted.get(u); if (ex) return ex;
-    const id = `fc${ctr++}`;
-    outNodes.push({ id, symbol: u[0], kind: u[1], file, range: [u[2], u[3]], enclosing: "", complexity: Math.max(1, u[3] - u[2] + 1), coupling: true });
-    mintEdges.push({ from: srcId, to: id, kind: "call", provenance: "RESOLVED_PARTIAL", line: u[2] });
-    minted.set(u, id); return id;
-  };
-  const map = (x: string) => x === _FAN_SRC ? srcId : (idmap.get(x) ?? x);
-  const outEdges: any[] = [];
-  for (const e of delta.edges) {
-    if (e.from === _FAN_SRC) {                                        // a NEAR crossing (reached node → boundary)
-      const L = Number(e.line);
-      const foot = Number.isFinite(L) ? encFootprint(L) : null;
-      const m = Number.isFinite(L) ? _enclosing(units, L) : null;
-      if (foot) outEdges.push({ ...e, from: foot, to: map(e.to) });                 // an existing footprint method owns the write
-      else if (isMethod(m) && closure.has(m)) outEdges.push({ ...e, from: methodNodeFor(m), to: map(e.to) });   // a same-file delegate not yet grown → mint + wire
-      else if (!isMethod(m)) outEdges.push({ ...e, from: srcId, to: map(e.to) });   // top-level / class-body write with no enclosing method → keep on the reached node
-      // else: a sibling method that is neither grown nor in the closure → DROP (the bleed)
-    } else {
-      outEdges.push({ ...e, from: map(e.from), to: map(e.to) });
-    }
-  }
-  outEdges.push(...mintEdges);
-  // drop a boundary/complement node orphaned by the re-attribution (its only near crossing was dropped)
-  const referenced = new Set<string>();
-  for (const e of outEdges) { referenced.add(e.from); referenced.add(e.to); }
-  const nodes = outNodes.filter((n) => referenced.has(n.id) || !n.coupling);
-  const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: map(b.node) }));
-  return { nodes, edges: outEdges, blindspots, counter: ctr };
-}
 
 // Merge the coupling overlay onto the settled footprint. DEDUP BY CONTENT (`_key` = file#line#kind), like
 // merge_resolved: `_chain_route_consumers` re-derives the SAME route→consumer crossing every time any file

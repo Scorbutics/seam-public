@@ -103,11 +103,6 @@ function _wrappedImpl(ctx: Ctx, call: any, units: Unit[], depth = 0): { inline: 
 
 
 
-// The smallest unit that encloses `line` (the tightest def around a usage), or null.
-export function _enclosing(units: Unit[], line: number): Unit | null {
-  const cands = units.filter((u) => u[2] <= line && line <= u[3]);
-  return cands.length ? cands.reduce((a, b) => (b[3] - b[2] < a[3] - a[2] ? b : a)) : null;
-}
 
 
 
