@@ -695,3 +695,65 @@ goes.
   Worth understanding before trusting Rust on Java.
 - **The eval is 18/30 graded** (5 wins, 5 ties, 8 losses contested). A9/B9 have both answers written and
   need only graders. Blocked on the 200-subagent session cap.
+
+---
+
+## Decompose migration: state after the `seam-decompose` session
+
+The whole deterministic decompose stage now lives in Rust (`seam-decompose`): roles, connected-component
+clustering, the HUB-aware carrier split, spine/path topology, `emit_seams`, and the seam-intent priors.
+`ts/src/codebase` in scope is **8,894 → 3,255 lines**. Each pass was pinned by a differential harness that
+was FALSIFIED before being trusted — `decompose` 1364/1364, `spine` 7705/7705, `emit` 1005/1005 (whole-model),
+`intent_prompt` 158/158 and `affinity_prompt` 44/44 (both byte-for-byte).
+
+### The rule that decided what moved
+
+Move a thing when it is (a) a SECOND copy of something the core already owns, (b) drift-prone — a fact the
+core computes and the shell recomputes, or (c) a repo-wide scan crossing the boundary a file at a time.
+Otherwise leave it. Two things were deliberately NOT ported on that test:
+
+- **`grow/structural_knobs.ts`** — it is the ONE place `opts→env→default` resolves, and Rust holds no
+  defaulting logic at all, precisely so the two engines cannot disagree. Moving it would invert its purpose.
+- **`grow/center_judge.ts`** — its "deterministic half" is two template strings and two verdict parsers; the
+  candidates come from the caller. No scan, no ranking, one copy. Porting it would move 30 lines of string
+  templates across a napi boundary for no correctness or performance gain.
+
+### Every LLM pass splits the same way — and the seam is forced
+
+`intent_llm`, `subject_affinity` and `center_judge` all decompose into deterministic FACTS plus a model call.
+The facts moved; the call did not, and cannot without a redesign: **the core's host bus is RECORD-AND-REPLAY,
+not a callback.** The JS thread is blocked inside the synchronous napi call, so a pass owned by the core
+cannot call back out to be served — that is a deadlock, not a slow path. Moving `run_pass` across means
+making the whole decompose pipeline re-runnable across bus rounds. A design decision, not a port.
+
+### What is actually left
+
+- **`grow/orchestrate.ts` (626) + `footprint_cache.ts` (317)** — one coherent piece. NOTE:
+  `grow_to_terminals` is ALREADY fully Rust (`growViaRust`, no TS fallback — it throws). What remains is the
+  MERGED CONCERN GROW and its `cachedGrow` answer cache, which the CLI enables by default
+  (`cli/decompose.ts:297` sets `SEAM_CENTERS_MERGED=1`). `cachedGrow` has exactly one live caller,
+  `grow_centers_scoped:565`. The cache, the LLM-coupling scoping and `EngineCtx` forking move together.
+- **Irreducible by design**: `graph.ts` / `core/graph_ir.ts` (TS-side wire types), `engine_ctx.ts`,
+  `codebase.ts` (the barrel), `config.ts` + `coupling/config.ts` (views over the core's tunables), and the
+  LLM transport in `seams/intent_llm.ts`.
+- **Blocked, not hard**: `atoms.ts` is live production substrate — `cli/field_facts.ts` uses `_CALL` and
+  `ast_units.ts` uses the kind sets — so it cannot move until its consumers do, and `cli/` is out of scope.
+
+### Measuring reachability: use Seam, and cross-check
+
+Five hand-rolled reachability sweeps in one session were wrong, ALL in the direction that makes live code
+look dead: `re.S` making `//.*` eat the file from its first comment; `/\*.*?\*/` treating the `/*` inside a
+glob string like `"**/*.ts"` as a comment opener; `grep` silently returning nothing on a file where Python
+finds 27 exports; and — the one no regex can fix — **dynamic `await import(...)`, which is invisible to any
+text match**. `Direction` was on a delete list until a raw count found two live uses in `llm_context.ts`.
+
+Use the engine's own consumer set, and cross-check against a RAW (uncommented, unstripped) count: raw
+over-counts, and over-counting is the safe direction — a false "dead" gets deleted, still typechecks, still
+passes tests, and surfaces later as a missing capability. The two disagree in both directions and each
+catches what the other misses: a scoped query called `_named_units` dead (its consumers are in `tools/` and
+`rust/parity/`, outside the scan scope), while a raw count called three unrelated local `_read` functions one
+symbol.
+
+**A rebuilt addon does not reach a running MCP server.** Anything measured through MCP after a
+`cargo build` is stale until it restarts — a `find_consumers` result read that way led to a fix for a bug
+that did not exist, built and then reverted.
