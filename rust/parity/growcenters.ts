@@ -23,7 +23,7 @@ const repo = process.argv[2] ?? "/home/scorbutics/dev/keycloak";
 const maxSets = parseInt(process.argv[3] ?? "20", 10);
 const glob = process.argv[4] ?? "*.java";
 const dataCoupling = (process.argv[5] ?? "false") === "true";
-const MAX_NODES = 80, MAX_STEPS = 12;
+const MAX_NODES = parseInt(process.env.PARITY_MAX_NODES ?? "80", 10), MAX_STEPS = 12;
 
 // Build center-sets: files with ≥2 method defs → a 2-center set from that file (a real intra-module concern).
 const defs = (addon.enumerateDefs(repo, 200000, undefined, false) as any[])
@@ -66,7 +66,11 @@ for (const merged of MERGED_MODES) {
       data = data ? merge_resolved(data, d, d.anchor?.id) : d;
     }
     const a = ser(data);
-    const b = ser(addon.growCenters(repo, centers, dataCoupling, MAX_STEPS, MAX_NODES));
+    // OPTS IS AN OBJECT, not positional. This passed `MAX_STEPS, MAX_NODES` as two trailing arguments;
+      // napi silently coerced them to a DEFAULT GrowOptsDto and ignored both. It agreed with TypeScript only
+      // because MAX_NODES here is 80, which happens to BE the default — proved by
+      // `growCenters(repo, centers, false, 12, 20)` returning 80 nodes where the object form returns 47.
+      const b = ser(addon.growCenters(repo, centers, dataCoupling, { maxSteps: MAX_STEPS, maxNodes: MAX_NODES }));
     if (a === b) ok++;
     else {
       bad++;
