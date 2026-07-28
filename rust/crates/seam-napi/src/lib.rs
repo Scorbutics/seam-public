@@ -358,6 +358,16 @@ pub struct MoveRecordDto {
 }
 
 #[napi(object)]
+/// One center's answer-cache verdict in a multi-center grow — the shell emits an identical `[grow] …` line
+/// per center from these.
+pub struct CenterVerdictDto {
+    pub file: String,
+    pub key: String,
+    pub epoch: String,
+    pub verdict: String,
+}
+
+#[napi(object)]
 pub struct GraphDto {
     pub anchor_id: String,
     pub anchor_symbol: String,
@@ -373,6 +383,13 @@ pub struct GraphDto {
     pub frontier: Vec<FrontierPointDto>,
     /// The wave's APPLIED-move history, in order — what the TS grow returns as its second tuple element.
     pub history: Vec<MoveRecordDto>,
+    /// PER-CENTER warm-path verdicts for a MULTI-center grow (empty otherwise). A merged concern grow needs
+    /// one per center: a HIT on a SHARED center beside a MISS on a novel one IS the warm/learned-repo
+    /// contract, and a single collapsed verdict cannot express it.
+    /// OPTIONAL on the wire. The shell CONSTRUCTS a GraphDto too (`toGraphDto`, feeding mergeResolved and
+    /// friends), so a required field here breaks every existing producer — which it did: 11 cross-stack and
+    /// merge tests failed the moment this was added as `Vec<…>`.
+    pub center_verdicts: Option<Vec<CenterVerdictDto>>,
     /// Warm-path diagnostics from the P5 answer cache (empty on every other path) — the TS shell prints them.
     pub cache_verdict: String,
     pub cache_key: String,
@@ -426,6 +443,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
             anchors: g.anchors,
             resolved_methods: g.resolved_methods,
             frontier: g.frontier.into_iter().map(|f| FrontierPointDto { id: f.id, symbol: f.symbol, file: f.file, kind: f.kind, reached_via: f.reached_via, score: f.score, cut_by: f.cut_by }).collect(),
+            center_verdicts: Some(g.center_verdicts.into_iter().map(|v| CenterVerdictDto { file: v.file, key: v.key, epoch: v.epoch, verdict: v.verdict }).collect()),
             cache_verdict: g.cache_verdict,
             cache_key: g.cache_key,
             cache_epoch: g.cache_epoch,
@@ -438,6 +456,7 @@ impl From<seam_scan::ResolvedGraph> for GraphDto {
 fn dto_to_resolved(g: GraphDto) -> seam_scan::ResolvedGraph {
     seam_scan::ResolvedGraph {
         history: Vec::new(), // the DTO->graph direction is an INPUT conversion; the history only flows outward
+        center_verdicts: Vec::new(), // likewise: a warm-path diagnostic, outward only
         anchor_id: g.anchor_id,
         anchor_symbol: g.anchor_symbol,
         anchor_file: g.anchor_file,
@@ -3226,6 +3245,7 @@ pub fn project_set_from_graph(graph_json: String, direction: String) -> napi::Re
         resolved_methods: Vec::new(),
         frontier: Vec::new(),
         history: Vec::new(),
+        center_verdicts: Vec::new(),
         cache_verdict: String::new(),
         cache_key: String::new(),
         cache_epoch: String::new(),

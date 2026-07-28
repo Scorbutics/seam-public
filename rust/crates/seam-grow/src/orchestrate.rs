@@ -811,6 +811,10 @@ pub struct Center {
 /// matchers are replayed from the `.seam` cache regardless. So the floor path IS the whole multi-center grow here.
 pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &WaveOpts) -> Option<ResolvedGraph> {
     let mut data: Option<ResolvedGraph> = None;
+    // Each center's warm-path verdict, COLLECTED — the merge below produces a new graph and would otherwise
+    // drop them, leaving a HIT on a shared center reported nowhere. That reuse is the warm/learned-repo
+    // contract, so it has to stay observable, not merely happen.
+    let mut verdicts: Vec<seam_scan::graph::CenterVerdict> = Vec::new();
     for c in centers {
         if let Some(d) = &data {
             if d.nodes.len() >= opts.max_nodes {
@@ -818,6 +822,14 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
             }
         }
         let Some(cd) = grow_to_terminals(repo, &c.file, &c.symbol, data_coupling, opts) else { continue };
+        if !cd.cache_verdict.is_empty() {
+            verdicts.push(seam_scan::graph::CenterVerdict {
+                file: c.file.clone(),
+                key: cd.cache_key.clone(),
+                epoch: cd.cache_epoch.clone(),
+                verdict: cd.cache_verdict.clone(),
+            });
+        }
         data = Some(match data {
             Some(base) => {
                 let anchor = cd.anchor_id.clone();
@@ -825,6 +837,9 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
             }
             None => cd,
         });
+    }
+    if let Some(g) = data.as_mut() {
+        g.center_verdicts = verdicts;
     }
     data
 }

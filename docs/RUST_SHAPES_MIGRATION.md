@@ -814,3 +814,39 @@ and verified.
 Also note the routing is scoped OFF for `dataCouplingLlm`: the core replays learned matchers but does not
 turn the flywheel, and the caller's `ctx.footprintFiles` scoping has no equivalent there, so routing that
 path would quietly stop the repo learning.
+
+### The per-center verdicts landed — and immediately falsified the assumption behind the routing
+
+`grow_centers` now collects each center's answer-cache verdict (`grow_to_terminals` computes them; the merge
+was discarding them) and reports them across the boundary as `center_verdicts`, so the shell emits one
+`[grow] <file> <key> epoch=<e> <verdict>` line per center. Reported rather than printed, for the reason the
+single-anchor path already documents: a caller asserting on this contract captures `process.stderr.write`,
+which a Rust `eprintln!` bypasses entirely.
+
+The routing is still NOT landed, and the reason changed. The earlier note said the reuse "almost certainly
+still happens, it is just unobservable". With the verdicts visible, that is FALSE. Two concerns sharing a
+center, second run:
+
+    concern 1:  [grow] src/shared.ts ut7e6i  epoch=16oh28p MISS(new)
+    concern 2:  [grow] src/shared.ts 182u9mk epoch=16oh28p MISS(new)
+
+Same center, same epoch, DIFFERENT cache key, MISS both times. The core's per-center answer cache is not
+reusing a shared center across concerns — so routing would not merely hide the warm/learned-repo contract,
+it would BREAK it. `test/grow/centers_shared_reuse.test.ts` fails on the routed path for a real reason.
+
+That is what the instrumentation was for. The assumption was comfortable and wrong, and one line of output
+settled it.
+
+**Next:** find why the Rust key differs per concern for the same center. The key is
+`hash(symbol | data_coupling | opts.fingerprint() | seam_env_snapshot())` — with the epoch equal, the
+difference is in one of those four, and `opts.fingerprint()` is the likely suspect (the two concerns pass
+different center LISTS, and if anything list-shaped reaches the fingerprint the key stops being per-symbol).
+Until that is fixed the merged grow stays on the TypeScript path.
+
+### One trap worth repeating: a new REQUIRED field on a shared DTO breaks its producers
+
+Adding `center_verdicts: Vec<CenterVerdictDto>` to `GraphDto` failed 11 cross-stack and merge tests
+instantly. The shell CONSTRUCTS that DTO too (`toGraphDto`, feeding `mergeResolved`), so a required field it
+does not supply is a breaking change to every existing producer. `Option<Vec<…>>` fixes it. Same shape as the
+`Seam`/`ResolvedGraph` serde-default work: on a wire type crossing napi, new fields are optional or they are
+a break.

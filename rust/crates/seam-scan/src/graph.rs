@@ -126,6 +126,17 @@ pub struct MoveRecord {
 }
 
 
+/// One center's answer-cache verdict in a multi-center grow: which anchor file it was, and how the P5 cache
+/// resolved for it. `verdict` is the same label the single-anchor path reports (`HIT (skip wave)`,
+/// `MISS(new)`, …), so the shell emits an identical `[grow] …` line per center.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct CenterVerdict {
+    pub file: String,
+    pub key: String,
+    pub epoch: String,
+    pub verdict: String,
+}
+
 /// The footprint contract (the fields a footprint builder populates; scalars are constant here).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ResolvedGraph {
@@ -153,6 +164,14 @@ pub struct ResolvedGraph {
     /// WARM-PATH DIAGNOSTICS (not part of the footprint contract — empty on every path but the answer-cached
     /// grow): how the P5 answer cache resolved, and the key/epoch it resolved under. Carried here so the TS
     /// shell can emit the same `[grow] … HIT (skip wave)` line its own cache does; see grow::grow_to_terminals.
+    /// PER-CENTER warm-path verdicts, for a MULTI-CENTER grow. The single-anchor fields below carry ONE
+    /// verdict, which a merged concern grow cannot use: it grows several centers and merges them, so a HIT on
+    /// one and a MISS on another collapse into a single value — and the whole point of the warm/learned-repo
+    /// contract is that a SHARED center is reused while a NOVEL one is grown. Reported, not printed, for the
+    /// same reason as the rest: the shell owns I/O and is the only side whose output a caller capturing
+    /// `process.stderr.write` can see.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub center_verdicts: Vec<CenterVerdict>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub cache_verdict: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -182,6 +201,7 @@ pub fn make_graph(
         resolved_methods: Vec::new(),
         frontier: Vec::new(),
         history: Vec::new(),
+        center_verdicts: Vec::new(),
         cache_verdict: String::new(),
         cache_key: String::new(),
         cache_epoch: String::new(),
