@@ -757,3 +757,28 @@ symbol.
 **A rebuilt addon does not reach a running MCP server.** Anything measured through MCP after a
 `cargo build` is stale until it restarts — a `find_consumers` result read that way led to a fix for a bug
 that did not exist, built and then reverted.
+
+### Measured: the outer `cachedGrow` is not load-bearing for the Rust route
+
+The open question was whether routing the merged concern grow to `seam_grow::grow_centers` loses the P5
+answer cache — the TypeScript wraps the whole merge in `cachedGrow`, keyed on the center set; the Rust has
+no outer cache, only the per-center `grow-v1` answer cache inside `grow_to_terminals`.
+
+Measured on keycloak, two CROSS-FILE centers, cold vs warm in SEPARATE processes (so "warm" is genuine disk
+reuse, not an in-process memo), shared indices warmed first and never cleared:
+
+    engine                                cold      warm     nodes
+    TS  merged=1, with cachedGrow        570 ms    375 ms      268
+    RUST growCenters, no outer cache     122 ms    123 ms      268
+
+Identical output. `cachedGrow` saves ~195 ms on the TypeScript path — and the Rust path COLD is 250 ms
+faster than the TypeScript path WARM. So the outer cache is worth having only for an engine slow enough to
+need it; routing to Rust is a 3x win over the cached TypeScript, cache or no cache.
+
+Two caveats, neither blocking:
+  - `test/grow/centers_merged_cache.test.ts` asserts the literal `HIT (skip wave)` line. The Rust path
+    reports its own warm verdict (`cache_verdict`/`cache_key` on ResolvedGraph, emitted by rust_core.ts), so
+    the line can still appear via the per-center grows — but that must be CHECKED when routing, not assumed.
+  - `maxNodes` is soft. Both engines returned 268 nodes at `maxNodes: 80` — the wave checks the budget
+    BETWEEN moves and one move adds a batch. They AGREE, which is the point; the overshoot is a separate
+    (pre-existing, both-engines) property worth knowing before anyone reads the number as a cap.
