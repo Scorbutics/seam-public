@@ -7,6 +7,7 @@ pub mod adapters;
 pub mod apply;
 pub mod grounding;
 pub mod carrier;
+pub mod gate;
 pub mod ground;
 pub mod learn;
 pub mod frameworks;

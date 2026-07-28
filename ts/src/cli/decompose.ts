@@ -506,8 +506,12 @@ async function runCodebase(a: Args): Promise<number> {
             const floorData = await orch.scoping_pre_grow(a.repo, af, sym, gOptsFor(ctx, { structuralGrow: structural || undefined }));
             const scopeFiles = [...new Set((floorData.nodes ?? []).map((n: any) => n.file).filter(Boolean) as string[])];
             ctx.footprintFiles = new Set(scopeFiles);
-            const { footprintTouchesBoundary } = await import("../codebase/coupling/index.js");
-            const gated = await footprintTouchesBoundary(a.repo, floorData.nodes ?? [], { llm: true, model: a.model, claudeBin: a.claudeBin }, ctx);
+            // THE P3 GATE lives in the core (`seam-couple::gate`) — the same grounded signals (floor keys, a JPA
+            // wrapper write, param sites, http I/O, a resource route, the handler-file recall net, the learned
+            // matchers), applied to the footprint's nodes.
+            const { loadAddon } = await import("../codebase/grow/rust_core.js");
+            const gateNodes = (floorData.nodes ?? []).map((n: any) => [String(n.file ?? ""), ...(n.range ? [String(n.range[0]), String(n.range[1])] : [])]);
+            const gated = loadAddon()!.footprintTouchesBoundary(a.repo, gateNodes);
             process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scopeFiles.length} files across the flow${gated ? "" : " — no grounded boundary in the footprint, flywheel skipped"}\n`);
             if (gated) { const { rustDiscover } = await import("../codebase/grow/rust_discover.js"); await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin, scopeFiles }); }
           }

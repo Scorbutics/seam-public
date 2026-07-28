@@ -56,7 +56,7 @@ fn complement_budget() -> i64 {
 // re-derived once (mirrors ctx.httpClients cached per grow). The expensive full-repo binding scan runs once.
 static HTTP_CLIENTS_CACHE: Lazy<Mutex<HashMap<String, Arc<Vec<String>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 
-fn effect_clients(repo: &str) -> Arc<Vec<String>> {
+pub fn effect_clients(repo: &str) -> Arc<Vec<String>> {
     if let Some(hit) = HTTP_CLIENTS_CACHE.lock().unwrap().get(repo) {
         return hit.clone();
     }

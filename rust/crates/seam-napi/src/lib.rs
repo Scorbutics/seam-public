@@ -1198,6 +1198,25 @@ pub fn anchor_carrier_accs(repo: String, file: String, text: String, lo: u32, hi
         .collect()
 }
 
+/// THE P3 GATE over a floor pre-grown footprint — "is the repo-wide grounding pass (and the LLM flywheel
+/// behind it) worth running at all?". `nodes` = `[file, lo, hi]` rows; an empty lo/hi means the whole file.
+/// Port of `footprintTouchesBoundary`.
+#[napi]
+pub fn footprint_touches_boundary(repo: String, nodes: Vec<Vec<String>>) -> bool {
+    let parsed: Vec<(String, Option<(usize, usize)>)> = nodes
+        .into_iter()
+        .filter(|r| !r.is_empty() && !r[0].is_empty())
+        .map(|r| {
+            let range = match (r.get(1).and_then(|s| s.parse::<usize>().ok()), r.get(2).and_then(|s| s.parse::<usize>().ok())) {
+                (Some(lo), Some(hi)) => Some((lo, hi)),
+                _ => None,
+            };
+            (r[0].clone(), range)
+        })
+        .collect();
+    seam_couple::gate::footprint_touches_boundary(&repo, &parsed)
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]

@@ -20,7 +20,6 @@ import { RegexFactsProvider, changed_newside } from "../diff/facts.js";
 import type { Hunk } from "../diff/parser.js";
 import { normpath } from "../core/resolve/walk.js";
 import { run_pass_async, registerPass, available, get_host_bus, ClassifierError as LLMError } from "../core/llm.js";
-import { EngineCtx } from "../codebase/engine_ctx.js";
 import { scoreRelevanceAst, externalRelevance, type Relevance } from "./review_relevance.js";
 
 const TRIAGE_PASS = registerPass({ tag: "review-triage", tier: "strong", note: "judge if a change is relevant to an unknown consumer — semantic" });
@@ -92,8 +91,8 @@ export async function annotateReviewImpact(
   try { batch = await scan_consumers_batch(repo, allSubjects) as typeof batch; } catch { /* degrade to empty */ }
 
   const cache = new Map<string, Raw>();
-  const ctx = new EngineCtx();   // shared across the per-symbol couplingOtherSides calls (targeted; file-key cache reused)
-  const { couplingOtherSides } = await import("../codebase/coupling/index.js");
+  const { loadAddon } = await import("../codebase/grow/rust_core.js");
+  const addon = loadAddon();   // the cross-stack overlay is the core's; its per-repo indices are resident across calls
 
   // analyze = derive a symbol's Raw from the precomputed batch (consumers) + the targeted coupling pass.
   const analyze = async (file: string, symbol: string): Promise<Raw> => {
@@ -110,7 +109,7 @@ export async function annotateReviewImpact(
     try {
       // cross-stack: TARGETED (couplingOtherSides) — the change's keys are known locally, so grep the repo for
       // those exact values and scan only the matching files (O(files that mention the key), not a full index).
-      for (const side of await couplingOtherSides(repo, file, symbol, { llm: opts.dataCouplingLlm, model: opts.model, claudeBin: opts.claudeBin }, ctx)) {
+      for (const side of addon!.couplingOtherSides(repo, file, symbol, opts.dataCouplingLlm, opts.model, opts.claudeBin ?? undefined).sides) {
         if (changed.has(normpath(side.file)) || normpath(side.file) === normpath(file)) continue;
         res.crossStack.push({ symbol: side.symbol, file: side.file, key: side.value, relation: side.edgeKind, provenance: side.provenance, hop: 1 });
       }

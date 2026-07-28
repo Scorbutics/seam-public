@@ -159,16 +159,16 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossSt
   const none = { crossStack: [] as CrossStackCrossing[], truncations: [] as CouplingTruncation[] };
   if (a.dataCoupling === false || !a.anchorFile || !a.symbol) return none;
   try {
-    const { couplingOtherSides } = await import("../codebase/coupling/index.js");
-    const { EngineCtx } = await import("../codebase/engine_ctx.js");
+    const { loadAddon } = await import("../codebase/grow/rust_core.js");
     const { available } = await import("../core/llm.js");
     // AUTO (default) → the LLM key-discovery FLYWHEEL when a backend is present (learn-once, cached → replayed
     // deterministically after), else the deterministic FLOOR. Explicit --data-coupling llm/floor overrides; SEAM_COUPLING=floor
     // forces determinism. Mirrors the grow's auto→llm resolution (decompose.ts) so the overlay's recall matches a grow's.
     const llm = a.dataCouplingLlm || (a.dataCouplingAuto && process.env.SEAM_COUPLING !== "floor" && available(a.claudeBin));
-    const ctx = new EngineCtx();
-    const sides = await couplingOtherSides(a.repo, a.anchorFile, a.symbol,
-      { llm, model: a.model, claudeBin: a.claudeBin }, ctx);
+    // The overlay is the core's (`seam_couple::coupling_other_sides`), which returns the crossings AND the
+    // bounds that bit while finding them — reporting the first without the second would present a bounded
+    // walk as an exhaustive one.
+    const { sides, truncations } = loadAddon()!.couplingOtherSides(a.repo, a.anchorFile, a.symbol, llm, a.model, a.claudeBin ?? undefined);
     const seen = new Set<string>();
     const out: CrossStackCrossing[] = [];
     for (const s of sides) {
@@ -178,7 +178,7 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossSt
       out.push({ symbol: s.symbol, file: s.file, edgeKind: s.edgeKind, via: `${s.kind} ${s.value}` });
     }
     out.sort((x, y) => x.file.localeCompare(y.file) || x.symbol.localeCompare(y.symbol));
-    return { crossStack: out, truncations: ctx.couplingTruncations.slice() };
+    return { crossStack: out, truncations };
   } catch { return none; }   // coupling unavailable (no tree-sitter) → the structural set is still complete
 }
 
