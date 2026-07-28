@@ -3025,3 +3025,95 @@ pub fn decompose_sweep_leftovers(graph_json: String, seams_json: String) -> Stri
     serde_json::to_string(&seam_decompose::clusters::sweep_leftovers(&g, seams, &adj))
         .unwrap_or_else(|_| "[]".into())
 }
+
+// ---- DECOMPOSE: spine / path topology (port of ts/src/codebase/seams/spine.ts) --------------------------
+
+// A malformed graph/seam payload is an ERROR, never an empty answer. `unwrap_or_default()` here would turn
+// a marshalling mistake into "this footprint has no seams" / "no paths" — indistinguishable from a real
+// negative result, and it hid exactly that for one build: a caller omitting an optional-looking seam field
+// made serde reject the list and every pass answered zero.
+fn dec_graph(json: &str) -> napi::Result<seam_decompose::Graph> {
+    serde_json::from_str(json).map_err(|e| napi::Error::from_reason(format!("bad decompose graph JSON: {e}")))
+}
+fn dec_seams(json: &str) -> napi::Result<Vec<seam_decompose::Seam>> {
+    serde_json::from_str(json).map_err(|e| napi::Error::from_reason(format!("bad decompose seams JSON: {e}")))
+}
+
+/// renderTunables — the RENDER caps that shape the emitted seam map, as sorted [key, value] rows.
+#[napi]
+pub fn render_tunables() -> Vec<Vec<String>> {
+    seam_decompose::config::tunables()
+}
+
+/// decomposeSpineOrder — the spine-tier seam ids ordered as a TRACE outward from the anchor.
+#[napi]
+pub fn decompose_spine_order(graph_json: String, seams_json: String, lead: Option<String>) -> napi::Result<Vec<String>> {
+    Ok(seam_decompose::spine_order(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, lead.as_deref()))
+}
+
+/// decomposeSeamPath — the shortest seam-chain between two seams, inclusive; empty when disconnected.
+#[napi]
+pub fn decompose_seam_path(graph_json: String, seams_json: String, from_id: String, to_id: String) -> napi::Result<Vec<String>> {
+    Ok(seam_decompose::seam_path(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, &from_id, &to_id))
+}
+
+/// decomposeExtractPaths — one SeamPath per data-flow crossing, closest to the anchor first.
+#[napi]
+pub fn decompose_extract_paths(graph_json: String, seams_json: String, lead: Option<String>) -> napi::Result<String> {
+    let paths = seam_decompose::extract_paths(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, lead.as_deref());
+    Ok(serde_json::to_string(&paths).unwrap_or_else(|_| "[]".into()))
+}
+
+/// decomposeStructuralSpine — the topology-only backbone: the seam-path anchor → culmination.
+#[napi]
+pub fn decompose_structural_spine(graph_json: String, seams_json: String, lead: Option<String>) -> napi::Result<Vec<String>> {
+    Ok(seam_decompose::structural_spine(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, lead.as_deref()))
+}
+
+/// decomposePromoteSpinePath — returns the seam ids on the path that should be PROMOTED to spine (they were
+/// `supporting`). Returning the promotions rather than the seams keeps this promote-only at the wire too:
+/// the caller cannot accidentally apply a demotion it never asked for.
+#[napi]
+pub fn decompose_promote_spine_path(graph_json: String, seams_json: String, from_id: String, to_id: String) -> napi::Result<Vec<String>> {
+    let g = dec_graph(&graph_json)?;
+    let mut seams = dec_seams(&seams_json)?;
+    let before: Vec<Option<String>> = seams.iter().map(|s| s.tier.clone()).collect();
+    seam_decompose::promote_spine_path(&g, &mut seams, &from_id, &to_id);
+    Ok(seams
+        .iter()
+        .zip(before)
+        .filter(|(s, b)| s.tier != *b)
+        .map(|(s, _)| s.id.clone())
+        .collect())
+}
+
+/// decomposeCollapseOffSeams — fold the smallest OFF seams past `cap` into one roll-up. Presentation only.
+#[napi]
+pub fn decompose_collapse_off_seams(seams_json: String, cap: Option<u32>) -> napi::Result<String> {
+    let seams = dec_seams(&seams_json)?;
+    let out = match cap {
+        Some(c) => seam_decompose::collapse_off_seams(&seams, c as usize),
+        None => seam_decompose::spine::collapse_off_seams_default(&seams),
+    };
+    Ok(serde_json::to_string(&out).unwrap_or_else(|_| "[]".into()))
+}
+
+/// decomposePromoteTerminals — the graph's anchor list after terminal + cross-stack-handler promotion.
+#[napi]
+pub fn decompose_promote_terminals(graph_json: String) -> napi::Result<Vec<String>> {
+    let mut g = dec_graph(&graph_json)?;
+    seam_decompose::promote_terminals(&mut g);
+    Ok(g.anchors)
+}
+
+/// decomposeDetectShape — "policy" (a cross-cutting mechanism enforced at N sites) or "flow" (a pipeline).
+#[napi]
+pub fn decompose_detect_shape(graph_json: String) -> napi::Result<String> {
+    Ok(seam_decompose::detect_shape(&dec_graph(&graph_json)?))
+}
+
+/// decomposeLeadSlice — which slice the view fronts: "backward" (how it works) or "forward" (where used).
+#[napi]
+pub fn decompose_lead_slice(graph_json: String, seams_json: String, shape: String) -> napi::Result<String> {
+    Ok(seam_decompose::lead_slice(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, &shape))
+}

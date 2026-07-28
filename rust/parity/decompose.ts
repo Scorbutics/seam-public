@@ -32,6 +32,11 @@ import { from_resolved_graph, type Graph } from "../../ts/src/core/graph_ir.js";
 import { assign_roles } from "../../ts/src/codebase/seams/roles.js";
 import { assign_clusters, assign_intent_seams, _extract_suggested_seams, type Seam } from "../../ts/src/codebase/seams/clusters.js";
 import { loadAddon, toResolvedGraph } from "../../ts/src/codebase/rust_core.js";
+// THE PRODUCTION WIRE, imported rather than re-declared. This harness used to carry its own copy, and
+// that copy included `direction` while the real one did not — so the harness was green while every
+// bidirectional footprint reached the core with its directions stripped. A harness must exercise the
+// encoding the engine actually uses, or it is testing a different program.
+import { toWire } from "../../ts/src/codebase/seams/wire.js";
 
 const addon = loadAddon();
 if (!addon) { console.log("no addon"); process.exit(0); }
@@ -39,18 +44,6 @@ if (!addon) { console.log("no addon"); process.exit(0); }
 const __dir = dirname(fileURLToPath(import.meta.url));
 const REPO = join(__dir, "..", "..");
 const fixtures = join(REPO, "ts", "test", "fixtures");
-
-// The wire: nodes as an ARRAY (see the note on `Graph` in ir.rs — a JSON object would reorder integer-like
-// ids), only the fields the passes read.
-const wire = (g: Graph) => ({
-  nodes: [...g.nodes.values()].map((n) => ({
-    id: n.id, label: n.label, file: n.file, kind: n.kind, enclosing: n.enclosing,
-    complexity: n.complexity, role: n.role, role_confidence: n.role_confidence,
-    group: n.group, intent: n.intent,
-  })),
-  edges: g.edges.map((e) => ({ src: e.src, dst: e.dst, kind: e.kind, provenance: e.provenance, line: e.line ?? 0 })),
-  anchor: g.anchor, anchors: g.anchors,
-});
 
 // ---- corpus ---------------------------------------------------------------------------------------------
 const raw = new Map<Graph, any>();
@@ -114,20 +107,20 @@ for (const { name, data } of corpus) {
 
   // --- roles
   const gr = mk(); assign_roles(gr);
-  const rsRoles = JSON.parse(addon.decomposeAssignRoles(JSON.stringify(wire(mk()))));
+  const rsRoles = JSON.parse(addon.decomposeAssignRoles(toWire(mk())));
   check(name, "roles", [...gr.nodes.values()].map((n) => [n.id, n.role, n.role_confidence]),
         (rsRoles.nodes ?? []).map((n: any) => [n.id, n.role, n.role_confidence]));
 
   // --- clusters (run AFTER roles: the intent label reads n.role)
   const gc = mk(); assign_roles(gc); assign_clusters(gc);
-  const rsC = JSON.parse(addon.decomposeAssignClusters(addon.decomposeAssignRoles(JSON.stringify(wire(mk())))));
+  const rsC = JSON.parse(addon.decomposeAssignClusters(addon.decomposeAssignRoles(toWire(mk()))));
   check(name, "clusters", [...gc.nodes.values()].map((n) => [n.id, n.group, n.intent]),
         (rsC.nodes ?? []).map((n: any) => [n.id, n.group, n.intent]));
 
   // --- intent seams
   const gs = mk(); assign_roles(gs); assign_clusters(gs);
   const tsSeams: Seam[] = assign_intent_seams(gs);
-  const rolesJson = addon.decomposeAssignRoles(JSON.stringify(wire(mk())));
+  const rolesJson = addon.decomposeAssignRoles(toWire(mk()));
   const clustJson = addon.decomposeAssignClusters(rolesJson);
   const rsSeams = JSON.parse(addon.decomposeIntentSeams(clustJson));
   if (tsSeams.length) withSeams++;

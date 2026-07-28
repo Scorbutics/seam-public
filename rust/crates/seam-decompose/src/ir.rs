@@ -34,6 +34,11 @@ pub struct Node {
     pub group: String,
     #[serde(default)]
     pub intent: String,
+    /// Bidirectional footprint: reached as a CONSUMER ("forward") or a DEPENDENCY ("backward"). `None` on a
+    /// single-direction footprint — which is why it is an Option and not a `String`: `_detect_shape` counts
+    /// forward nodes, and an absent direction must not read as one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
 }
 
 /// One directed relation. `provenance` is kept as the raw string: the only questions asked of it here are

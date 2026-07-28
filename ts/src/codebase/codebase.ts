@@ -12,7 +12,7 @@ export {
 } from "./seams/clusters.js";
 export { refine_seams_llm, label_focus_relevance_llm } from "./seams/intent_llm.js";
 export {
-  type SeamPath, extract_paths, _seam_graph, _spine_order, _seam_path, _structural_spine,
+  type SeamPath, extract_paths, _spine_order, _seam_path, _structural_spine,
   _promote_spine_path, _OFF_CAP, collapse_off_seams, _promote_terminals, _detect_shape, _lead_slice,
 } from "./seams/spine.js";
 export { emit_seams } from "./seams/emit.js";

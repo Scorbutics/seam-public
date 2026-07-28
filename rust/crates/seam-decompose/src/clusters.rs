@@ -17,12 +17,27 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Seam {
     pub id: String,
+    // EVERY field defaults. A seam reaching the core from a caller that only set the fields it cared about
+    // (a test fixture, a hand-built projection) must still deserialise: without this, serde rejects the whole
+    // list and the pass answers with an EMPTY seam set — a confident zero, which is the one failure mode
+    // that looks like a valid answer.
+    #[serde(default)]
     pub label: String,
+    #[serde(default)]
     pub link_only: bool,
+    #[serde(default)]
     pub node_ids: Vec<String>,
+    #[serde(default)]
     pub proposed_by: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suggested: Option<bool>,
+    /// Set by the LLM tier pass, never by the floor: "spine" | "supporting" | "off". The spine passes read
+    /// it, so it round-trips; `None` means no intent pass ran and there is no tiering to respect.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<String>,
+    /// The seam the LLM marked as ANSWERING the question — the culmination the structural spine aims at.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected: Option<bool>,
 }
 
 /// Port of `_mk_seam`. The `label || sid` fallback matters: a seam whose representative node has no label
@@ -35,6 +50,8 @@ pub fn mk_seam(sid: &str, label: &str, node_ids: &[String], link_only: bool, pro
         node_ids: node_ids.to_vec(),
         proposed_by: proposed_by.to_string(),
         suggested: None,
+        tier: None,
+        selected: None,
     }
 }
 
@@ -657,5 +674,24 @@ mod tests {
         // turn most cores into hubs — a silent divergence this pins.
         assert!(js_max(2.0, f64::NAN).is_nan());
         assert!(!(5.0 > js_max(2.0, f64::NAN)));
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+
+    #[test]
+    fn a_seam_missing_every_optional_looking_field_still_deserialises() {
+        // A caller that set only what it cared about (a test fixture, a hand-built projection) must not make
+        // the whole list unparseable. When it did, the pass answered with an EMPTY seam set and every
+        // downstream question came back "no paths" — a confident zero indistinguishable from a real negative.
+        let seams: Vec<Seam> =
+            serde_json::from_str(r#"[{"id":"s0","node_ids":["n1"],"tier":"spine"}]"#).expect("must parse");
+        assert_eq!(seams.len(), 1);
+        assert_eq!(seams[0].id, "s0");
+        assert_eq!(seams[0].label, "");
+        assert!(!seams[0].link_only);
+        assert_eq!(seams[0].tier.as_deref(), Some("spine"));
     }
 }

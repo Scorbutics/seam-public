@@ -27,6 +27,11 @@ export const toWire = (g: Graph): string => JSON.stringify({
     id: n.id, label: n.label, file: n.file, kind: n.kind, enclosing: n.enclosing,
     complexity: n.complexity, role: n.role, role_confidence: n.role_confidence,
     group: n.group, intent: n.intent,
+    // OMITTED when absent, never sent as "". `_detect_shape` counts FORWARD-direction nodes to tell a policy
+    // from a flow, and a single-direction footprint has no direction at all — an empty string would be a
+    // value where there is none. Leaving this field out entirely is what made every bidirectional footprint
+    // read as a flow.
+    ...(n.direction ? { direction: n.direction } : {}),
   })),
   edges: g.edges.map((e) => ({ src: e.src, dst: e.dst, kind: e.kind, provenance: e.provenance, line: e.line ?? 0 })),
   anchor: g.anchor,
