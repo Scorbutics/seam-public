@@ -38,6 +38,14 @@ pub struct Seam {
     /// The seam the LLM marked as ANSWERING the question — the culmination the structural spine aims at.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selected: Option<bool>,
+    /// Intent pass only: a culmination confidence (0..1) plus the facts that grounded it. Absent on
+    /// non-intent footprints, which is what keeps the *_seams oracles byte-identical.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub culmination: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub writes: Option<Vec<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dir: Option<String>,
 }
 
 /// Port of `_mk_seam`. The `label || sid` fallback matters: a seam whose representative node has no label
@@ -52,6 +60,9 @@ pub fn mk_seam(sid: &str, label: &str, node_ids: &[String], link_only: bool, pro
         suggested: None,
         tier: None,
         selected: None,
+        culmination: None,
+        writes: None,
+        dir: None,
     }
 }
 
@@ -477,7 +488,7 @@ mod tests {
         }
     }
     fn edge(s: &str, d: &str, kind: &str, prov: &str) -> Edge {
-        Edge { src: s.into(), dst: d.into(), kind: kind.into(), provenance: prov.into(), line: 0 }
+        Edge { src: s.into(), dst: d.into(), kind: kind.into(), provenance: prov.into(), line: 0, op: None }
     }
     fn build(nodes: Vec<Node>, edges: Vec<Edge>, anchor: &str) -> Graph {
         let mut g = Graph::default();

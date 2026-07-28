@@ -11,6 +11,7 @@
 //! would compile, pass a hand-written test, and silently produce a different labelling on real input.
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 /// A node in the decompose IR. Field defaults mirror `mkNode`.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -20,6 +21,12 @@ pub struct Node {
     pub label: String,
     #[serde(default)]
     pub file: String,
+    /// 0-BASED row indices, the IR's own convention — `emit` is the one place that shifts them to 1-based.
+    /// `[0, 0]` is the UNLOCATED sentinel, not line zero.
+    #[serde(default)]
+    pub start: i64,
+    #[serde(default)]
+    pub end: i64,
     #[serde(default)]
     pub kind: String,
     #[serde(default)]
@@ -39,6 +46,24 @@ pub struct Node {
     /// forward nodes, and an absent direction must not read as one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub direction: Option<String>,
+    /// Whether the node survived the relevance crop. Defaults TRUE: `mkNode` does, and a node arriving
+    /// without the field is one nothing has judged yet, not one judged irrelevant.
+    #[serde(default = "yes")]
+    pub relevant: bool,
+    /// Detected structure attached by the decompose passes and carried through emit UNREAD. Modelled as
+    /// opaque JSON on purpose — this crate has no business knowing a contract member's shape, and parsing it
+    /// into a struct here would make every field addition upstream a change in two places.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub subcores: Vec<Value>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub contract: Vec<Value>,
+    /// A COLLAPSED hub marker (reason/fan/sampleConsumers) — present only under hub collapse.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub hub: Option<Value>,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// One directed relation. `provenance` is kept as the raw string: the only questions asked of it here are
@@ -54,6 +79,10 @@ pub struct Edge {
     pub provenance: String,
     #[serde(default)]
     pub line: i64,
+    /// A data-WRITE's op-class (create/update/delete) when the coupling classified it; absent on structural
+    /// edges.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op: Option<String>,
 }
 
 pub const SUGGESTED: &str = "SUGGESTED";
@@ -78,6 +107,20 @@ pub struct Graph {
     pub anchor: String,
     #[serde(default)]
     pub anchors: Vec<String>,
+    /// Carried through emit unread — see the note on `subcores`.
+    #[serde(default)]
+    pub blindspots: Vec<Value>,
+    #[serde(default)]
+    pub unresolved: Vec<Value>,
+    /// The decision-point frontier (tier-grow residue) the caller can deepen from.
+    #[serde(default)]
+    pub frontier: Vec<Value>,
+    #[serde(default)]
+    pub language: String,
+    #[serde(default)]
+    pub resolution_quality: String,
+    #[serde(default = "yes")]
+    pub complete: bool,
 }
 
 mod nodes_as_array {

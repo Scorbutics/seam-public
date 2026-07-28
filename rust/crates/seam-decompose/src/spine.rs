@@ -437,7 +437,7 @@ mod tests {
         Node { id: id.into(), label: id.into(), kind: kind.into(), complexity, ..Default::default() }
     }
     fn edge(s: &str, d: &str, kind: &str) -> Edge {
-        Edge { src: s.into(), dst: d.into(), kind: kind.into(), provenance: "RESOLVED_FULL".into(), line: 0 }
+        Edge { src: s.into(), dst: d.into(), kind: kind.into(), provenance: "RESOLVED_FULL".into(), line: 0, op: None }
     }
     fn build(nodes: Vec<Node>, edges: Vec<Edge>, anchor: &str) -> Graph {
         let mut g = Graph::default();

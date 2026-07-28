@@ -8,12 +8,14 @@
 //! are a separate concern.
 pub mod clusters;
 pub mod config;
+pub mod emit;
 pub mod ir;
 pub mod roles;
 pub mod spine;
 
 pub use clusters::{assign_clusters, assign_intent_seams, extract_suggested_seams, is_crossing, mk_seam, Seam};
 pub use ir::{connected_components, Edge, Graph, Node};
+pub use emit::{emit_seams, EmitOpts, EmitResult, Health, SeamModel};
 pub use roles::assign_roles;
 pub use spine::{
     collapse_off_seams, detect_shape, extract_paths, lead_slice, promote_spine_path, promote_terminals,

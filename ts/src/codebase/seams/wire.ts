@@ -24,18 +24,33 @@ export const core = () => {
 
 export const toWire = (g: Graph): string => JSON.stringify({
   nodes: [...g.nodes.values()].map((n) => ({
-    id: n.id, label: n.label, file: n.file, kind: n.kind, enclosing: n.enclosing,
+    id: n.id, label: n.label, file: n.file, start: n.start, end: n.end, kind: n.kind, enclosing: n.enclosing,
     complexity: n.complexity, role: n.role, role_confidence: n.role_confidence,
-    group: n.group, intent: n.intent,
+    group: n.group, intent: n.intent, relevant: n.relevant,
+    // Carried for `emit`, which passes them through to the model UNREAD. Sent only when non-empty so the
+    // payload of a plain clustering call does not grow a contract/subcore blob it will never look at.
+    ...(n.subcores?.length ? { subcores: n.subcores } : {}),
+    ...(n.contract?.length ? { contract: n.contract } : {}),
+    ...(n.hub ? { hub: n.hub } : {}),
     // OMITTED when absent, never sent as "". `_detect_shape` counts FORWARD-direction nodes to tell a policy
     // from a flow, and a single-direction footprint has no direction at all — an empty string would be a
     // value where there is none. Leaving this field out entirely is what made every bidirectional footprint
     // read as a flow.
     ...(n.direction ? { direction: n.direction } : {}),
   })),
-  edges: g.edges.map((e) => ({ src: e.src, dst: e.dst, kind: e.kind, provenance: e.provenance, line: e.line ?? 0 })),
+  edges: g.edges.map((e) => ({ src: e.src, dst: e.dst, kind: e.kind, provenance: e.provenance, line: e.line ?? 0,
+    ...(e.op ? { op: e.op } : {}) })),
   anchor: g.anchor,
   anchors: g.anchors,
+  // Read only by `emit`, which threads them into the model. `blindspots`/`unresolved`/`frontier` cross as
+  // opaque JSON: the core passes them through without inspecting their shape, so modelling them would put a
+  // second definition of each in a crate that has no use for one.
+  blindspots: g.blindspots ?? [],
+  unresolved: g.unresolved ?? [],
+  frontier: g.frontier ?? [],
+  language: g.language ?? "",
+  resolution_quality: g.resolution_quality ?? "",
+  complete: g.complete ?? true,
 });
 
 // Copy the core's per-node verdict back onto the LIVE nodes. Fields are applied one by one rather than by

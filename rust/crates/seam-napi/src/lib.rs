@@ -3124,3 +3124,23 @@ pub fn decompose_lead_slice(graph_json: String, seams_json: String, shape: Strin
 pub fn boundary_node_kinds() -> Vec<String> {
     seam_couple::apply::semantics::boundary_node_kinds()
 }
+
+/// decomposeEmitSeams — assemble the final SeamModel. Returns `{model, spineLocked}`: the structural-spine
+/// lock rewrites `tier` on the CALLER's seams as well as the emitted copies, and that mutation is returned
+/// explicitly rather than left as a hidden side effect the wrapper has to guess at.
+#[napi]
+pub fn decompose_emit_seams(
+    graph_json: String,
+    health_json: String,
+    seams_json: String,
+    opts_json: String,
+) -> napi::Result<String> {
+    let g = dec_graph(&graph_json)?;
+    let mut seams = dec_seams(&seams_json)?;
+    let health: seam_decompose::Health = serde_json::from_str(&health_json)
+        .map_err(|e| napi::Error::from_reason(format!("bad decompose health JSON: {e}")))?;
+    let opts: seam_decompose::EmitOpts = serde_json::from_str(&opts_json)
+        .map_err(|e| napi::Error::from_reason(format!("bad decompose emit opts JSON: {e}")))?;
+    let res = seam_decompose::emit_seams(&g, &health, &mut seams, &opts);
+    serde_json::to_string(&res).map_err(|e| napi::Error::from_reason(format!("emit serialise: {e}")))
+}
