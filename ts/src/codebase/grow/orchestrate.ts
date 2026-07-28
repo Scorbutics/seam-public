@@ -461,7 +461,17 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   let data: any = null; let idx: GrowIndex | null = null;
   const history: any[] = [];
   const expUnion = new Set<string>();   // union each center's map-completeness set (survives the _mergeInto that drops it)
+  const _maxNodes = opts.maxNodes ?? 80;
   for (const c of centers) {
+    // GLOBAL node budget. Measured missing: with SEAM_CENTERS_MERGED=1 (the CLI default) this loop merged
+    // every center's full closure, so `--max-nodes 80` returned 155 nodes for 2 centers, 168 for 3, 179 for
+    // 4. The caller's own check (`decompose.ts`: `if (data && nodes >= maxNodes) break`) cannot fire here
+    // because the merged path collapses N results into ONE — so its
+    // "[multi-anchor] node budget reached" line was unreachable on the default path.
+    if (data && (data.nodes?.length ?? 0) >= _maxNodes) {
+      process.stderr.write(`[centers] node budget ${_maxNodes} reached — skipping remaining mechanism(s)\n`);
+      break;
+    }
     // per-center closure — P5-cached by SYMBOL (the reused unit across concerns). Sequential so the shared ctx has a
     // single flywheel writer; a cached center returns instantly (HIT skip wave), so this is cheap once warm.
     const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx })
