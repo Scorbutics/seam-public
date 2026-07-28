@@ -367,8 +367,11 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // The route-composer teacher learns each such handler's full path (LLM once → cached) so a front-end fetch
   // grounds to the backend handler it actually hits (kc_3). Repo-wide (backend handlers sit outside a UI
   // footprint scope) + memoised per repo + self-gating to zero on a det run with no `.seam/`.
-  const { composeRoutes } = await import("./route_composer.js");
-  const composedIdx: GroundingIndex = await composeRoutes(repo, opts, ctx);
+  // The COMPOSED-ROUTE axis is the core's (`seam_couple::learn::key_index::compose_routes`), which owns both
+  // the detection and the cross-file mount-chain gather. Read it rather than keep a second implementation:
+  // the two disagreeing would have the flywheel ground routes the product never sees.
+  const { composedRoutesIndex } = await import("./core_floor.js");
+  const composedIdx: GroundingIndex = composedRoutesIndex(repo);
 
   for (const sub of [filesIdx, matchersIdx, composedIdx]) for (const [k, v] of sub) {   // union all axes into the result
     if (!idx.has(k)) idx.set(k, { producers: [], consumers: [] });

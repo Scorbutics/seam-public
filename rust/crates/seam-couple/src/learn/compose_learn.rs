@@ -207,32 +207,66 @@ pub fn gather_mount_chain(repo: &str, class_name: &str, depth: usize, visited: &
     if depth == 0 || out.len() >= MAX_SNIPPETS || !visited.insert(class_name.to_string()) {
         return;
     }
+    // A LOCATOR line: `UsersResource users(` — the class as a method's RETURN TYPE.
+    let Ok(locator_re) = Regex::new(&format!(r"\b{}\b\s+\w+\s*\(", regex::escape(class_name))) else { return };
+    // The class's own DEFINITION line, for its class-level route (the chain's ROOT prefix).
+    let Ok(def_re) = Regex::new(&format!(r"\b(?:class|interface)\s+{}\b", regex::escape(class_name))) else { return };
+    let owner_re = Regex::new(r"\b(?:public\s+|abstract\s+|final\s+)*(?:class|interface)\s+(\w+)").unwrap();
+
     let hits: Vec<String> = crate::apply::bridge::grep_files(repo, class_name)
         .into_iter()
-        .filter(|f| !IS_TEST.is_match(f) && crate::ground::floor::scannable_for_keys(f))
+        .filter(|f| !IS_TEST.is_match(f))
         .take(FILES_PER_CLASS)
         .collect();
-    let mut parents: Vec<String> = Vec::new();
+    let mut climb: Vec<String> = Vec::new();
     for f in hits {
+        if out.len() >= MAX_SNIPPETS || !crate::ground::floor::ends_with_source_ext(&f) {
+            continue;
+        }
         let Ok(bytes) = std::fs::read(format!("{repo}/{f}")) else { continue };
         let text = String::from_utf8_lossy(&bytes).into_owned();
-        let locs = locators(&text);
-        if !locs.iter().any(|(rt, _)| rt == class_name) {
-            continue; // it merely mentions the class; it does not MOUNT it
+        let lines: Vec<&str> = text.split('\n').collect();
+        // the resource class that OWNS the locators in this file — the next hop UP the chain
+        let owner = owner_re.captures(&text).map(|c| c[1].to_string());
+        let mut is_locator_file = false;
+        for i in 0..lines.len() {
+            if out.len() >= MAX_SNIPPETS {
+                break;
+            }
+            // (a) a locator method RETURNING this class, carrying a route annotation → the mount hop
+            if locator_re.is_match(lines[i]) && attached_annots(&lines, i).iter().any(|a| is_route_annotation(&a.name) && a.lit.is_some()) {
+                push_window(&f, &lines, i, out);
+                is_locator_file = true;
+            }
+            // (b) this class's OWN definition carrying an ABSOLUTE class-level route (`@Path("/admin") class
+            //     AdminRoot`) → the ROOT prefix of the whole chain. No locator mounts a root resource, so
+            //     without this branch the chain has a hole at the top and the composed path loses its base.
+            else if def_re.is_match(lines[i]) {
+                if attached_annots(&lines, i).iter().any(|a| is_route_annotation(&a.name) && has_own_path(a.lit.as_deref())) {
+                    push_window(&f, &lines, i, out);
+                }
+            }
         }
-        // the mounting file's own class is the next hop up the chain
-        if let Some(c) = CLASS_RE.captures(&text) {
-            parents.push(c[1].to_string());
-        }
-        let snippet = crate::learn::per_file_keys::candidate_passages(&text, 1200, 3, 400);
-        out.push((f, snippet));
-        if out.len() >= MAX_SNIPPETS {
-            return;
+        if is_locator_file {
+            if let Some(o) = owner {
+                if o != class_name {
+                    climb.push(o); // climb to each locator's OWNER class, not to the first class in the file
+                }
+            }
         }
     }
-    for p in parents {
-        gather_mount_chain(repo, &p, depth - 1, visited, out);
+    for owner in climb {
+        gather_mount_chain(repo, &owner, depth - 1, visited, out);
     }
+}
+
+/// The ±3-line window around an evidence line. A WINDOW, not the whole file: the model is being asked to read
+/// a mount chain, and burying three relevant lines in four full source files is how a determinable prefix
+/// becomes "can't tell". Mirrors the TS `push`.
+fn push_window(file: &str, lines: &[&str], i: usize, out: &mut Vec<(String, String)>) {
+    let lo = i.saturating_sub(3);
+    let hi = (i + 2).min(lines.len().saturating_sub(1));
+    out.push((file.to_string(), format!("… (line {})\n{}", lo + 1, lines[lo..=hi].join("\n"))));
 }
 
 fn compose_prompt(sr: &SubResource, snippets: &[(String, String)]) -> String {
@@ -486,5 +520,93 @@ public class RealmAdminResource {
         let o = compose_learn(&dir.to_string_lossy(), None, None, Some("/nonexistent/claude-xyz"));
         assert_eq!(o, ComposeOutcome::default());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // ── THE DETERMINISTIC HALVES OF THE COMPOSED-ROUTE TEACHER ────────────────────────────────────────────
+    // A route handler whose class carries NO class-level route annotation is a mount-blind SUB-RESOURCE: its
+    // full path is assembled from a cross-file locator chain. The LLM concatenates the fragments; everything
+    // below it — detecting the mount-blind handlers, and gathering the chain's evidence — is deterministic and
+    // is what makes the composition possible at all. Ported from `route_composer.test.ts`.
+    //
+    // The fixture is a JAX-RS locator chain across four files:
+    //   Root(@Path("/api")) ──@Path("realms")──▶ RealmsResource ──@Path("{realm}")──▶ RealmAdminResource
+    //     ──@Path("users")──▶ UsersResource ──@POST createUser / @GET @Path("count")──▶ the handlers
+    // UsersResource has NO class-level route, so its handlers compose to /api/realms/*/users[...].
+    const USERS_RESOURCE: &str = r#"public class UsersResource {
+  @POST
+  @Consumes(MediaType.APPLICATION_JSON)
+  @APIResponses(value = {
+    @APIResponse(responseCode = "201", description = "Created"),
+    @APIResponse(responseCode = "409", description = "Conflict")
+  })
+  public Response createUser(final UserRepresentation rep) { return null; }
+
+  @GET
+  @Path("count")
+  public Response getUsersCount() { return null; }
+}
+"#;
+
+    // A NORMAL controller: it carries a class-level @Path, so the in-file floor already keys it.
+    const HEALTH_CONTROLLER: &str = "@Path(\"/health\")\npublic class HealthController {\n  @GET\n  public Response health() { return null; }\n}\n";
+
+    #[test]
+    fn detects_the_mount_blind_verb_handlers_of_a_sub_resource() {
+        let srs = sub_resources(USERS_RESOURCE);
+        assert_eq!(srs.len(), 1);
+        assert_eq!(srs[0].class_name, "UsersResource");
+        let by_name: std::collections::HashMap<&str, &Handler> = srs[0].handlers.iter().map(|h| (h.name.as_str(), h)).collect();
+        assert_eq!(by_name.get("createUser").map(|h| h.verb.as_str()), Some("POST")); // bare @POST, mounted externally
+        assert_eq!(by_name.get("getUsersCount").map(|h| h.verb.as_str()), Some("GET"));
+        // the relative own segment is carried through, because composition needs base ⊕ own
+        assert_eq!(by_name.get("getUsersCount").and_then(|h| h.own.as_deref()), Some("count"));
+    }
+
+    #[test]
+    fn does_not_flag_a_class_routed_controller() {
+        // The floor already keys it in-file. Flagging it would spend a composition call to re-derive a path
+        // that is sitting right there in the annotation.
+        assert!(sub_resources(HEALTH_CONTROLLER).is_empty());
+    }
+
+    #[test]
+    fn locators_map_a_return_type_resource_class_to_its_mount_segment() {
+        // `@Path("users") public UsersResource users()` → UsersResource mounts at "users". This is the
+        // DEMAND GATE signal: a consumer route naming `users` is what makes UsersResource worth composing.
+        let text = "public class RealmAdminResource {\n  @Path(\"users\")\n  public UsersResource users() { return new UsersResource(); }\n}\n";
+        assert!(locators(text).contains(&("UsersResource".to_string(), "users".to_string())));
+    }
+
+    #[test]
+    fn gathers_the_locator_fragments_and_the_root_class_path_across_files() {
+        let Some(dir) = crate::learn::compose_learn::tests::rg_fixture() else { return }; // needs ripgrep
+        let repo = dir.to_string_lossy().to_string();
+        let mut out: Vec<(String, String)> = Vec::new();
+        gather_mount_chain(&repo, "UsersResource", 5, &mut HashSet::new(), &mut out);
+        let blob = out.iter().map(|(_, s)| s.as_str()).collect::<Vec<_>>().join("\n");
+        // every hop's evidence is present — the fragments that concatenate to /api/realms/*/users
+        assert!(blob.contains("@Path(\"users\")"), "RealmAdminResource → UsersResource missing: {blob}");
+        assert!(blob.contains("@Path(\"{realm}\")"), "RealmsResource → RealmAdminResource missing");
+        assert!(blob.contains("@Path(\"/api\")"), "the ROOT class prefix was not climbed to");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The four-file chain on disk, in a directory of its OWN — the sibling test below uses
+    /// `seam-compose-<pid>` and wipes it, which under the parallel runner would delete this fixture mid-grep.
+    /// `None` when ripgrep is absent — the gather greps, so there is nothing to
+    /// assert without it (and asserting an empty blob would pass for the wrong reason).
+    pub(super) fn rg_fixture() -> Option<std::path::PathBuf> {
+        if std::process::Command::new("rg").arg("--version").output().map(|o| !o.status.success()).unwrap_or(true) {
+            return None;
+        }
+        let dir = std::env::temp_dir().join(format!("seam-compose-gather-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).ok()?;
+        let w = |rel: &str, t: &str| std::fs::write(dir.join("src").join(rel), t);
+        w("Root.java", "@Path(\"/api\")\npublic class Root {\n  @Path(\"realms\")\n  public RealmsResource realms() { return new RealmsResource(); }\n}\n").ok()?;
+        w("RealmsResource.java", "public class RealmsResource {\n  @Path(\"{realm}\")\n  public RealmAdminResource realm(@PathParam(\"realm\") String r) { return new RealmAdminResource(); }\n}\n").ok()?;
+        w("RealmAdminResource.java", "public class RealmAdminResource {\n  @Path(\"users\")\n  public UsersResource users() { return new UsersResource(); }\n}\n").ok()?;
+        w("UsersResource.java", USERS_RESOURCE).ok()?;
+        Some(dir)
     }
 }

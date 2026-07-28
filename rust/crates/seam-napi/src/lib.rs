@@ -1288,6 +1288,33 @@ pub fn take_host_recorded() -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The cross-file MOUNT CHAIN evidence for a mount-blind sub-resource: `[file, snippet]` windows in gather
+/// order. This is the half of the composed-route axis the detection parity harness never covered — and the
+/// half that was silently truncated to one hop.
+#[napi]
+pub fn gather_mount_chain(repo: String, class_name: String, depth: u32) -> Vec<Vec<String>> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    seam_couple::learn::compose_learn::gather_mount_chain(&repo, &class_name, depth as usize, &mut std::collections::HashSet::new(), &mut out);
+    out.into_iter().map(|(f, s)| vec![f, s]).collect()
+}
+
+/// The COMPOSED-ROUTE grounding index — sub-resource handlers whose full path was composed from their
+/// cross-file mount chain, replayed from `.seam`. Flattened like `floor_index`.
+#[napi]
+pub fn composed_routes_index(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_couple::learn::key_index::compose_routes::compose_routes(&repo);
+    let mut rows = Vec::new();
+    for (key, sides) in idx.iter() {
+        for a in &sides.producers {
+            rows.push(vec![key.clone(), "p".into(), a.file.clone(), a.line.to_string()]);
+        }
+        for a in &sides.consumers {
+            rows.push(vec![key.clone(), "c".into(), a.file.clone(), a.line.to_string()]);
+        }
+    }
+    rows
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]

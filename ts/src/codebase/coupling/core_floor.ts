@@ -37,3 +37,14 @@ export function fileFloorKeys(file: string, text: string): KeyHit[] {
     return h;
   });
 }
+
+/// The COMPOSED-ROUTE index — sub-resource handlers whose full path the core composed from their cross-file
+/// mount chain, replayed from `.seam`.
+export function composedRoutesIndex(repo: string): GroundingIndex {
+  const idx: GroundingIndex = new Map();
+  for (const [key, side, file, line] of core().composedRoutesIndex(repo) as string[][]) {
+    if (!idx.has(key)) idx.set(key, { producers: [], consumers: [] });
+    (side === "p" ? idx.get(key)!.producers : idx.get(key)!.consumers).push({ file, line: Number(line) });
+  }
+  return idx;
+}
