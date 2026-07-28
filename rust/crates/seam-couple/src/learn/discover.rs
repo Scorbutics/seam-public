@@ -422,10 +422,11 @@ mod tests {
         };
         // the rule must DETECT on the corpus, or it is rejected — that is the validate-by-re-execution contract
         let accepted = match learn_ingest(&coll.reps, &snips, ANSWER) {
-            LearnIngest::Done(ms) => learn_commit(&repo, &sig, &ms),
+            // `answered = true`: this test hands over a real reply, so the signature SHOULD settle.
+            LearnIngest::Done(ms) => learn_commit(&repo, &sig, &ms, true),
             LearnIngest::Retry { accepted, .. } => {
                 assert!(!accepted.is_empty(), "the rule detects on the fixture, so it must be accepted");
-                learn_finalize(&repo, &sig, &coll.reps, accepted, "[]")
+                learn_finalize(&repo, &sig, &coll.reps, accepted, "[]", true)
             }
         };
         assert_eq!(accepted.len(), 1);
