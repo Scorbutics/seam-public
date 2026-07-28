@@ -11,11 +11,6 @@ const langForExtAtoms = langForExt;
 export const _FUNCLIKE = new Set(["arrow_function", "function_declaration", "function_expression", "method_definition",
   "generator_function_declaration", "function_signature", "function_definition", "lambda_expression",
   "method_declaration", "constructor_declaration", "function_item", "closure_expression", "lambda", "function", "method"]);
-const _BODY = new Set(["statement_block", "compound_statement", "block", "constructor_body", "function_body", "do_block"]);
-const _PARAM_LIST = new Set(["formal_parameters", "parameter_list", "parameters", "method_parameters"]);
-const _PARAM_NODE = new Set(["required_parameter", "optional_parameter", "rest_pattern",
-  "parameter_declaration", "optional_parameter_declaration", "formal_parameter", "spread_parameter",
-  "receiver_parameter", "typed_parameter", "default_parameter", "typed_default_parameter", "parameter"]);
 export const _CALL = new Set(["call_expression", "method_invocation", "call", "invocation_expression"]);
 // class / member / instantiation vocabulary (shared with import_scan). "Class-like" = any NAMED TYPE
 // declaration that can be imported/depended on — incl. interfaces/enums/records (Java + TS), not just
@@ -119,7 +114,6 @@ export const _STRING_KINDS = new Set(["string", "string_literal", "interpreted_s
 export const _SPREAD_KINDS = new Set(["spread_element", "rest_pattern", "splat_argument", "object_spread", "dictionary_splat", "subscript_expression", "subscript", "element_access_expression"]);
 export const available = isAvailable;
 
-export interface ContractMember { name: string; invoked: boolean; ranges: number[][]; }
 
 export function lang_for(filePath: string): string | null {
   const dot = filePath.lastIndexOf(".");
@@ -183,58 +177,6 @@ export async function makeCtx(content: string, grammar: string): Promise<Ctx | n
   return ctx;
 }
 
-// Snaps a raw line number (e.g. a diff hunk's start line) to its enclosing function node: picks the
-// function-like node whose span starts closest to startLine, tie-broken toward the larger span, and
-// rejects the match if it's more than 3 lines off (the line isn't actually inside a function).
-function _anchor_func(ctx: Ctx, startLine: number): any | null {
-  const funcs = ctx.collect(ctx.root, (k) => _FUNCLIKE.has(k));
-  if (!funcs.length) return null;
-  const key = (n: any): [number, number] => { const [s, e] = ctx.span(n); return [Math.abs(s - startLine), -(e - s)]; };
-  const af = funcs.reduce((a, b) => { const ka = key(a), kb = key(b); return (kb[0] < ka[0] || (kb[0] === ka[0] && kb[1] < ka[1])) ? b : a; });
-  return Math.abs(ctx.span(af)[0] - startLine) <= 3 ? af : null;
-}
-
-// Returns the function's body block, or the function node itself if no body child is found.
-function _body_of(ctx: Ctx, func: any): any {
-  for (const c of ctx.children(func)) if (_BODY.has(c.type)) return c;
-  return func;
-}
-
-// BFS over the function's children to find its parameter-list node. Stops descending into a nested
-// body or a nested function so a nested closure's own param list is never mistaken for the anchor's.
-function _param_list(ctx: Ctx, func: any): any | null {
-  const queue = ctx.children(func);
-  while (queue.length) {
-    const c = queue.shift()!;
-    const k = c.type;
-    if (_PARAM_LIST.has(k)) return c;
-    if (_BODY.has(k) || _FUNCLIKE.has(k)) continue;
-    queue.push(...ctx.children(c));
-  }
-  return null;
-}
-
-// Extracts the bound name(s) from a single parameter node: destructured fields (`{ a, b }`) if
-// present, else the LAST identifier child (handles typed params like `x: Foo`, where `identifier`
-// also matches the type reference — the last one is the parameter's own name).
-function _param_names(ctx: Ctx, paramNode: any): string[] {
-  const fields = ctx.collect(paramNode, (k) => k.includes("shorthand_property_identifier_pattern"));
-  if (fields.length) return fields.map((f) => ctx.text(f));
-  const ids = ctx.collect(paramNode, (k) => k === "identifier").sort((a, b) => a.startIndex - b.startIndex);
-  return ids.length ? [ctx.text(ids[ids.length - 1])] : [];
-}
-
-// Collapses a set of line numbers into sorted, merged contiguous [start, end] ranges (for compact
-// occurrence reporting instead of a flat line list).
-function _merge_lines(lines: number[]): number[][] {
-  const out: number[][] = [];
-  for (const l of [...new Set(lines)].sort((a, b) => a - b)) {
-    if (out.length && l <= out[out.length - 1][1] + 1) out[out.length - 1][1] = l;
-    else out.push([l, l]);
-  }
-  return out;
-}
-
 // Anchors to the function enclosing startLine, then collects its nested function-like nodes
 // ("atoms") that fall entirely inside [startLine, endLine], each tagged with the identifier names
 // it references. Used to decompose a changed region into its nested-function-sized sub-units.
@@ -243,53 +185,6 @@ function _merge_lines(lines: number[]): number[][] {
 // out of a param via a body-level destructure (`const { a, b } = paramName`), where the source param
 // is dropped once it's just a pass-through. Each contract member records where it's used (merged
 // line ranges) and whether it's ever invoked as a call.
-export async function extract_contract(content: string, lang: string, startLine: number, endLine: number): Promise<ContractMember[]> {
-  if (!isAvailable()) return [];
-  const ctx = await makeCtx(content, lang);
-  if (!ctx) return [];
-  const func = _anchor_func(ctx, startLine);
-  if (!func) return [];
-  const body = _body_of(ctx, func);
-
-  const plist = _param_list(ctx, func);
-  const sigFields = new Set<string>();
-  const plainParams = new Set<string>();
-  if (plist) {
-    for (const p of ctx.children(plist)) {
-      if (!_PARAM_NODE.has(p.type) && p.type !== "identifier") continue;
-      if (ctx.collect(p, (k) => k.includes("object_pattern")).length) for (const n of _param_names(ctx, p)) sigFields.add(n);
-      else for (const n of _param_names(ctx, p)) plainParams.add(n);
-    }
-  }
-  const bodyFields = new Set<string>();
-  const sources = new Set<string>();
-  for (const d of ctx.collect(body, (k) => k === "variable_declarator")) {
-    const ch = ctx.children(d);
-    if (ch.length < 2) continue;
-    const pat = ch[0], val = ch[ch.length - 1];
-    if (pat.type.includes("object_pattern") && val.type === "identifier" && plainParams.has(ctx.text(val))) {
-      sources.add(ctx.text(val));
-      for (const f of ctx.collect(pat, (k) => k.includes("shorthand_property_identifier_pattern"))) bodyFields.add(ctx.text(f));
-    }
-  }
-  const contract = new Set<string>([...sigFields, ...bodyFields, ...[...plainParams].filter((p) => !sources.has(p))]);
-  if (!contract.size) return [];
-
-  const idents = ctx.collect(body, (k) => k.includes("identifier"));
-  const called = new Set<string>();
-  for (const c of ctx.collect(body, (k) => _CALL.has(k))) {
-    const ch = ctx.children(c);
-    if (ch.length && ch[0].type.includes("identifier")) called.add(ctx.text(ch[0]));
-  }
-  const members: ContractMember[] = [];
-  for (const name of [...contract].sort()) {
-    const occ = idents.filter((i) => ctx.text(i) === name).map((i) => ctx.span(i)[0]);
-    if (!occ.length) continue;
-    members.push({ name, invoked: called.has(name), ranges: _merge_lines(occ) });
-  }
-  return members;
-}
-
 // What a CALLER binds into an anchor tag/attribute form — JSX (`<Anchor prop={value} />`) for TS/JS today.
 // Dispatches to the file's LanguageProvider.consumerFeeds (undefined ⇒ that language has no such attribute-
 // binding concept, e.g. Java/Ruby/Python ⇒ {}). Kept OUT of this generic file's own logic — see

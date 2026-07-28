@@ -1606,6 +1606,22 @@ pub fn subcores_of(content: String, lang: String, start_line: u32, end_line: u32
         .collect()
 }
 
+/// extractContract — the anchor's boundary dependencies as `[name, "1"|"", "s:e,s:e"]` rows: the external
+/// names it reads, whether each is INVOKED (a collaborator it drives, not just a value it reads), and where.
+#[napi]
+pub fn extract_contract(content: String, lang: String, start_line: u32, end_line: u32) -> Vec<Vec<String>> {
+    seam_lang::atoms::extract_contract(&content, &lang, start_line as usize, end_line as usize)
+        .into_iter()
+        .map(|m| {
+            vec![
+                m.name,
+                if m.invoked { "1".to_string() } else { String::new() },
+                m.ranges.iter().map(|(s, e)| format!("{s}:{e}")).collect::<Vec<_>>().join(","),
+            ]
+        })
+        .collect()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy

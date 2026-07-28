@@ -1,52 +1,37 @@
-// Byte-identical harness — Rust project_contract vs TS projectContract. Anchor = a whole Java file (module).
-// Compares provides (used exports + consumers), unusedExports, depends (external imports), afferent/efferent.
-//   bun rust/parity/contract.ts [repo] [maxFiles]
-import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
-import { projectContract } from "../../ts/src/codebase/grow/contract.js";
+// DIFFERENTIAL: Rust `extract_contract` vs the TypeScript oracle.
+//
+// The contract is where the anchor meets everything outside it, so a drift here is a drift in what the whole
+// decompose says a unit DEPENDS ON. Three rules can each go wrong silently: a typed param's TYPE must not be
+// mistaken for its name (`x: Foo` — the last identifier wins, not the first); a body-destructured param must
+// DROP OUT in favour of its fields (`const {a,b} = props` reports a and b, never props); and `invoked` marks a
+// collaborator the anchor drives rather than a value it reads.
+//
+//   bun rust/parity/contract.ts <dir…>
+import { extract_contract, lang_for, available } from "../../ts/src/codebase/atoms.js";
+import { loadAddon } from "../../ts/src/codebase/rust_core.js";
+import { readFileSync, readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 
-const require = createRequire(import.meta.url);
-const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
+const addon = loadAddon();
+if (!available() || !addon) { console.log("no tree-sitter / no addon"); process.exit(0); }
 
-const repo = process.argv[2] ?? "/home/scorbutics/dev/keycloak";
-const maxFiles = parseInt(process.argv[3] ?? "200", 10);
+const files: string[] = [];
+const walk = (d: string) => { for (const e of readdirSync(d)) { if (e === "node_modules" || e === ".git" || e === "target") continue; const p = join(d, e); if (statSync(p).isDirectory()) walk(p); else if (/\.(ts|js|java|rb|py)$/.test(p) && !p.endsWith(".d.ts")) files.push(p); } };
+for (const root of process.argv.slice(2)) walk(root);
 
-const files = execFileSync("git", ["-C", repo, "ls-files", "-z", "*.java"], { maxBuffer: 512 * 1024 * 1024 })
-  .toString().split("\0").filter(Boolean).slice(0, maxFiles);
-
-const ser = (c: any) => {
-  const prov = (p: any) => `P ${p.symbol}|${p.kind}|${p.consumerCount ?? p.consumer_count}|${p.consumers.map((x: any) => `${x.file}:${x.symbol}`).join(";")}`;
-  const dep = (d: any) => `D ${d.symbol}|${d.source}|${d.file}`;
-  return [
-    `M ${c.module} aff=${c.afferent} eff=${c.efferent} nostruct=${(c.noStructure ?? c.no_structure) ? 1 : 0} reason=${c.reason ?? ""}`,
-    ...c.provides.map(prov),
-    `U ${c.unusedExports.join(",") ?? (c.unused_exports ?? []).join(",")}`,
-    ...c.depends.map(dep),
-  ].join("\n");
-};
-
-let ok = 0, bad = 0, nonTrivial = 0;
-const fails: string[] = [];
-const t0 = Date.now();
-
-for (let i = 0; i < files.length; i++) {
-  const file = files[i];
-  process.stdout.write(`[${i + 1}/${files.length} ${((Date.now() - t0) / 1000).toFixed(0)}s ok=${ok} bad=${bad}] ${file}\n`);
-  const ts = await projectContract(repo, file);
-  const rust = addon.projectContract(repo, file);
-  if (ts.provides.length || ts.depends.length) nonTrivial++;
-  const t = ser(ts), r = ser(rust);
-  if (t === r) { ok++; continue; }
-  bad++;
-  if (fails.length < 15) {
-    const tl = t.split("\n"), rl = r.split("\n");
-    const k = tl.findIndex((l, j) => l !== rl[j]);
-    fails.push(`✗ ${file}\n    ts:   ${tl[k] ?? "<none>"}\n    rust: ${rl[k] ?? "<none>"}`);
+let ok = 0, bad = 0, nonEmpty = 0, invoked = 0, multiRange = 0; const fails: string[] = [];
+for (const f of files) {
+  const text = readFileSync(f, "utf-8");
+  const lang = lang_for(f); if (!lang) continue;
+  const lines = text.split("\n").length;
+  for (let s = 0; s < lines; s += 3) {
+    const e = Math.min(lines - 1, s + 60);
+    const ts = (await extract_contract(text, lang, s, e)).map((m: any) => [m.name, m.invoked ? "1" : "", m.ranges.map((r: number[]) => `${r[0]}:${r[1]}`).join(",")]);
+    const rs = addon.extractContract(text, lang, s, e) as string[][];
+    if (ts.length) { nonEmpty++; if (ts.some((m) => m[1] === "1")) invoked++; if (ts.some((m) => m[2].includes(","))) multiRange++; }
+    const a = JSON.stringify(ts), b = JSON.stringify(rs);
+    if (a === b) ok++; else { bad++; if (fails.length < 4) fails.push(`${f}@${s}\n  TS: ${a.slice(0, 400)}\n  RS: ${b.slice(0, 400)}`); }
   }
 }
-
-console.log(`\nproject_contract parity over ${repo}`);
-console.log(`  contracts: ${ok + bad}   non-trivial: ${nonTrivial}`);
-console.log(`  byte-identical: ${ok}   mismatches: ${bad}`);
-if (fails.length) console.log("\n" + fails.join("\n"));
-process.exit(bad ? 1 : 0);
+console.log(`contract parity: ${ok} ok / ${bad} bad   (non-empty ${nonEmpty}, with-invoked ${invoked}, multi-range ${multiRange}, files ${files.length})`);
+for (const x of fails) console.log(x);

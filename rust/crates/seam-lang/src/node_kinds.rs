@@ -224,3 +224,19 @@ pub fn is_call_value_unwrap(k: &str) -> bool {
 pub fn is_body(k: &str) -> bool {
     matches!(k, "statement_block" | "compound_statement" | "block" | "constructor_body" | "function_body" | "do_block")
 }
+
+/// A function's PARAMETER LIST node. Port of `_PARAM_LIST`.
+pub fn is_param_list(k: &str) -> bool {
+    matches!(k, "formal_parameters" | "parameter_list" | "parameters" | "method_parameters")
+}
+
+/// ONE parameter within that list. Port of `_PARAM_NODE`.
+pub fn is_param_node(k: &str) -> bool {
+    matches!(
+        k,
+        "required_parameter" | "optional_parameter" | "rest_pattern" | "parameter_declaration"
+            | "optional_parameter_declaration" | "formal_parameter" | "spread_parameter"
+            | "receiver_parameter" | "typed_parameter" | "default_parameter"
+            | "typed_default_parameter" | "parameter"
+    )
+}

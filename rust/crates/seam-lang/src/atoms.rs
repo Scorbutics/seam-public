@@ -5,7 +5,7 @@
 //! Port of `atoms.ts`'s extraction half. The node-KIND vocabulary it also carried lives in `node_kinds`
 //! already, so only the extractors move here.
 
-use crate::node_kinds::{is_body, is_funclike};
+use crate::node_kinds::{is_body, is_call, is_funclike, is_param_list, is_param_node};
 use crate::treesitter::Ctx;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use tree_sitter::Node;
@@ -190,6 +190,140 @@ pub fn subcores(atoms: &[Atom]) -> Vec<Subcore> {
         .collect()
 }
 
+/// One external name the anchor's boundary depends on, and where it is used.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContractMember {
+    pub name: String,
+    /// Ever used as a CALL target inside the body — the difference between a value the anchor reads and a
+    /// collaborator it drives, which is what makes it a `link` rather than an `environment` member.
+    pub invoked: bool,
+    /// Merged, sorted `[start, end]` line ranges of its occurrences.
+    pub ranges: Vec<(usize, usize)>,
+}
+
+/// The parameter-list node. BFS from the function, refusing to descend into a nested BODY or a nested
+/// FUNCTION — otherwise a closure declared in a default-argument position offers its own parameter list first
+/// and the anchor ends up with someone else's signature. Port of `_param_list`.
+fn param_list<'a>(ctx: &'a Ctx, func: Node<'a>) -> Option<Node<'a>> {
+    let mut queue: std::collections::VecDeque<Node> = ctx.children(func).into_iter().collect();
+    while let Some(c) = queue.pop_front() {
+        let k = c.kind();
+        if is_param_list(k) {
+            return Some(c);
+        }
+        if is_body(k) || is_funclike(k) {
+            continue;
+        }
+        queue.extend(ctx.children(c));
+    }
+    None
+}
+
+/// The name(s) a single parameter binds: its destructured fields if it has any, else its LAST identifier.
+/// Last, because on a typed parameter (`x: Foo`) the type reference is an `identifier` too and comes first —
+/// taking the first would put the TYPE into the contract instead of the parameter. Port of `_param_names`.
+fn param_names(ctx: &Ctx, param: Node) -> Vec<String> {
+    let fields = ctx.collect(param, |k| k.contains("shorthand_property_identifier_pattern"));
+    if !fields.is_empty() {
+        return fields.into_iter().map(|f| ctx.text(f).to_string()).collect();
+    }
+    let mut ids = ctx.collect(param, |k| k == "identifier");
+    ids.sort_by_key(|n| n.start_byte());
+    ids.last().map(|n| vec![ctx.text(*n).to_string()]).unwrap_or_default()
+}
+
+/// Collapse line numbers into sorted, merged ranges. ADJACENT lines merge as well as duplicates (`l <= end+1`),
+/// so a name used on lines 3 and 4 reports one range rather than two — the output is read by a human scanning
+/// where a member is touched, and a run of single-line ranges obscures that. Port of `_merge_lines`.
+fn merge_lines(lines: &[usize]) -> Vec<(usize, usize)> {
+    let mut uniq: Vec<usize> = lines.to_vec();
+    uniq.sort_unstable();
+    uniq.dedup();
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    for l in uniq {
+        match out.last_mut() {
+            Some(last) if l <= last.1 + 1 => last.1 = l,
+            _ => out.push((l, l)),
+        }
+    }
+    out
+}
+
+/// The anchor's CONTRACT: the external names its boundary depends on.
+///
+/// Three sources, and the third is the one that matters. A plain parameter is a dependency; a destructured
+/// signature parameter contributes its FIELDS; and a parameter destructured in the BODY (`const { a, b } =
+/// props`) contributes those fields while the parameter itself DROPS OUT — it was only ever a pass-through,
+/// and reporting both would claim a dependency on the container as well as on what was taken from it.
+///
+/// Members are sorted by name, and one with no occurrence in the body is omitted entirely. Port of
+/// `extract_contract`.
+pub fn extract_contract(content: &str, lang: &str, start_line: usize, end_line: usize) -> Vec<ContractMember> {
+    let _ = end_line; // the TS signature takes it but the contract is derived from the function node alone
+    let Some(ctx) = Ctx::parse(content, lang) else { return Vec::new() };
+    let Some(func) = anchor_func(&ctx, start_line) else { return Vec::new() };
+    let body = body_of(&ctx, func);
+
+    let mut sig_fields: BTreeSet<String> = BTreeSet::new();
+    let mut plain_params: BTreeSet<String> = BTreeSet::new();
+    if let Some(plist) = param_list(&ctx, func) {
+        for p in ctx.children(plist) {
+            if !is_param_node(p.kind()) && p.kind() != "identifier" {
+                continue;
+            }
+            let destructured = !ctx.collect(p, |k| k.contains("object_pattern")).is_empty();
+            for n in param_names(&ctx, p) {
+                if destructured { sig_fields.insert(n); } else { plain_params.insert(n); }
+            }
+        }
+    }
+
+    let mut body_fields: BTreeSet<String> = BTreeSet::new();
+    let mut sources: BTreeSet<String> = BTreeSet::new();
+    for d in ctx.collect(body, |k| k == "variable_declarator") {
+        let ch = ctx.children(d);
+        if ch.len() < 2 {
+            continue;
+        }
+        let (pat, val) = (ch[0], ch[ch.len() - 1]);
+        if pat.kind().contains("object_pattern") && val.kind() == "identifier" && plain_params.contains(ctx.text(val)) {
+            sources.insert(ctx.text(val).to_string());
+            for f in ctx.collect(pat, |k| k.contains("shorthand_property_identifier_pattern")) {
+                body_fields.insert(ctx.text(f).to_string());
+            }
+        }
+    }
+
+    let contract: BTreeSet<String> = sig_fields
+        .into_iter()
+        .chain(body_fields)
+        .chain(plain_params.iter().filter(|p| !sources.contains(*p)).cloned())
+        .collect();
+    if contract.is_empty() {
+        return Vec::new();
+    }
+
+    let idents = ctx.collect(body, |k| k.contains("identifier"));
+    let called: std::collections::HashSet<String> = ctx
+        .collect(body, |k| is_call(k))
+        .into_iter()
+        .filter_map(|c| ctx.children(c).first().copied())
+        .filter(|f| f.kind().contains("identifier"))
+        .map(|f| ctx.text(f).to_string())
+        .collect();
+
+    contract
+        .into_iter()
+        .filter_map(|name| {
+            let occ: Vec<usize> = idents.iter().filter(|i| ctx.text(**i) == name).map(|i| ctx.line_of(i.start_byte())).collect();
+            if occ.is_empty() {
+                return None;
+            }
+            Some(ContractMember { invoked: called.contains(&name), ranges: merge_lines(&occ), name })
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -283,6 +417,58 @@ export function godObject(input) {
         assert_eq!(out.len(), 11);
         let ids: Vec<&str> = out.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids[..4], ["g1", "g10", "g11", "g2"], "lexicographic, not numeric: {ids:?}");
+    }
+
+    // A BODY-DESTRUCTURED PARAM DROPS OUT in favour of its fields. `props` was only ever a pass-through, and
+    // reporting it alongside `a`/`b` would claim a dependency on the container as well as on what was taken
+    // from it — two entries for one boundary fact.
+    #[test]
+    fn a_param_destructured_in_the_body_yields_its_fields_and_not_itself() {
+        let src = "function f(props, other) {\n  const { a, b } = props;\n  return a + b + other;\n}\n";
+        let ms = extract_contract(src, "typescript", 0, 3);
+        let names: Vec<&str> = ms.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["a", "b", "other"], "props is the source, not a member");
+    }
+
+    // On a TYPED parameter the type reference is an `identifier` too, and it comes FIRST. Taking the first
+    // would put `Foo` — a type, not a dependency — into the contract.
+    #[test]
+    fn a_typed_param_contributes_its_name_not_its_type() {
+        let src = "function f(x: Foo, y: Bar) {\n  return x + y;\n}\n";
+        let ms = extract_contract(src, "typescript", 0, 2);
+        let names: Vec<&str> = ms.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["x", "y"]);
+    }
+
+    // A destructured SIGNATURE param contributes its fields directly, and `invoked` separates a collaborator
+    // the anchor DRIVES from a value it merely reads — the distinction that makes one a `link` member and the
+    // other `environment`.
+    #[test]
+    fn signature_destructuring_contributes_fields_and_invoked_marks_the_ones_called() {
+        let src = "function f({ save, label }) {\n  save(label);\n  return label;\n}\n";
+        let ms = extract_contract(src, "typescript", 0, 3);
+        let by = |n: &str| ms.iter().find(|m| m.name == n).unwrap_or_else(|| panic!("missing {n}: {ms:?}"));
+        assert!(by("save").invoked, "called → a collaborator");
+        assert!(!by("label").invoked, "read → environment");
+    }
+
+    // ADJACENT lines merge, so a member used on 1 and 2 reports one range. The output is read by a human
+    // scanning where a dependency is touched; a run of single-line ranges obscures exactly that.
+    #[test]
+    fn occurrence_lines_merge_when_adjacent_and_split_when_not() {
+        assert_eq!(merge_lines(&[3, 1, 2, 2]), vec![(1, 3)]);
+        assert_eq!(merge_lines(&[1, 5, 6, 9]), vec![(1, 1), (5, 6), (9, 9)]);
+        assert_eq!(merge_lines(&[]), vec![]);
+    }
+
+    // A name in the signature but never used in the body is NOT a contract member: the boundary depends on
+    // what the code actually touches, not on what it declared and ignored.
+    #[test]
+    fn an_unused_parameter_is_not_a_contract_member() {
+        let src = "function f(used, ignored) {\n  return used;\n}\n";
+        let ms = extract_contract(src, "typescript", 0, 2);
+        let names: Vec<&str> = ms.iter().map(|m| m.name.as_str()).collect();
+        assert_eq!(names, ["used"]);
     }
 
     // The atoms of a god-object anchor are its INNER functions, each carrying the names it mentions — that

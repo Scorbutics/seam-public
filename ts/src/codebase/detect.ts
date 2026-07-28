@@ -167,8 +167,15 @@ export async function detect_contract(g: Graph, repo: string): Promise<void> {
   if (!lang) return;
   const content = readRepoFile(repo, node.file);
   if (content === null) return;
-  const members = await atoms.extract_contract(content, lang, node.start, node.end);
-  node.contract = members.map((m) => ({ name: m.name, role: m.invoked ? "link" : "environment", ranges: m.ranges.map((r) => [...r]), invoked: m.invoked }));
+  // `[name, invoked, "s:e,s:e"]` from the core. ROLE is decided here, not there: `invoked` is a structural
+  // fact (the name is a call target) while link-vs-environment is this pass's reading of it.
+  const rows = ((await import("./rust_core.js")).loadAddon()?.extractContract(content, lang, node.start, node.end) ?? []) as string[][];
+  node.contract = rows.map(([name, invoked, ranges]) => ({
+    name,
+    role: invoked ? "link" : "environment",
+    ranges: ranges ? ranges.split(",").map((r) => r.split(":").map(Number)) : [],
+    invoked: Boolean(invoked),
+  }));
 }
 
 export async function detect_consumer_feeds(g: Graph, repo: string): Promise<void> {
