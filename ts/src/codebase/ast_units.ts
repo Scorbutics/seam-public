@@ -13,7 +13,6 @@ import { recordRead } from "../core/resolve/dep_recorder.js";
 // A named unit: [name, kind, startLine, endLine]. Was imported from the scan graph; inlined so these
 // generic AST helpers carry no dependency on the import-scan layer.
 export type Unit = [name: string, kind: string, start: number, end: number];
-export const stem = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
 // Read a repo-relative source file + its language; null when the path isn't a known source language or the
 // read fails. The single I/O choke point the builders share.
@@ -23,7 +22,7 @@ export function _read(repo: string, rel: string): [string, string] | null {
   try { const content = readFileSync(join(repo, rel), "utf-8"); recordRead(rel, content); return [content, lang]; } catch { return null; }
 }
 
-export function _name_of(ctx: Ctx, node: any): string | null {
+function _name_of(ctx: Ctx, node: any): string | null {
   // (1) the tree-sitter `name` FIELD — the declared name, NOT a leading return type. A positional scan
   // grabs the wrong child on every typed language that writes the type first: Java/C++ `Booking
   // createBooking(...)` → the return type's `type_identifier` precedes the method `identifier`, so the
@@ -81,25 +80,6 @@ export function _named_units(ctx: Ctx): Unit[] {
   return units;
 }
 
-// A `const NAME = wrapper(realFn, …)` HOC / reporting wrapper (React memo/forwardRef, a sentry `withReporting`
-// wrapper, …): the const's VALUE is a CALL, not a funclike, so `_named_units` doesn't see NAME as a def and a
-// `--center #NAME` anchor binds to :0 with NO body (the real logic is the WRAPPED function). The impl is the
-// call's FUNCTION argument — an inline arrow/function, or an identifier naming a same-file function. Resolve NAME
-// to THAT span so the anchor gets the real body (cal.com `scheduleWorkflowReminders = withReporting(_scheduleWorkflowReminders)`
-// → the `_scheduleWorkflowReminders` impl). Anchor-scoped (not folded into `_named_units`) → zero repo-wide ripple.
-// Returns [start,end] of the impl, or the declarator span for an external wrapped fn (a real span beats :0), else null.
-export function _wrappedDefSpan(ctx: Ctx, symbol: string, units: Unit[]): [number, number] | null {
-  for (const d of ctx.collect(ctx.root, (k) => _VAR_DECLARATOR.has(k))) {
-    const ch = ctx.children(d);
-    if (!ch.length || !_NAME_KINDS.has(ch[0].type) || ctx.text(ch[0]) !== symbol) continue;
-    const call = ch.find((c) => _CALL.has(c.type));
-    if (!call) continue;   // `const X = <non-call>` (a value/config) — not a wrapped def
-    const w = _wrappedImpl(ctx, call, units);
-    if (w) return w.inline ? ctx.span(w.node) : [w.unit![2], w.unit![3]];
-    return ctx.span(d);                                                        // wrapped external fn → the declarator span (a real span, not :0)
-  }
-  return null;
-}
 
 // THE wrapper-unwrapping RULE, in one place: given a wrapper CALL node, which of its arguments is the real
 // implementation? An inline funclike argument IS the body (`memo(() => {…})`); otherwise the FIRST identifier
@@ -122,42 +102,6 @@ function _wrappedImpl(ctx: Ctx, call: any, units: Unit[], depth = 0): { inline: 
 }
 
 
-// The LOCAL symbol behind this file's `export default` — the missing piece of the most common addressing
-// mistake. Importers bind a default export under a name of THEIR choosing (`import handleCancelBooking from
-// "…/handleCancelBooking"`), so the name a caller sees at the call sites is NOT a symbol of the defining file;
-// the file's own name for it is. Structural: the `default` keyword node marks the export, and the local is the
-// exported declaration's name (`export default function handler`), the exported identifier (`export default
-// handler`), or the local side of `export { handler as default }`. Anonymous (`export default () => …`) → null,
-// there is no local name to point at.
-// (`export default withReporting(handler, "handler")` — a HOC / reporting WRAPPER call — fills the slot with the
-// RESULT of wrapping a local; the local behind it is found with the SAME `_wrappedImpl` rule as `_wrappedDefSpan`.)
-export function _default_export_local(ctx: Ctx, units?: Unit[]): string | null {
-  for (const es of ctx.collect(ctx.root, (k) => _EXPORT.has(k))) {
-    const kids = ctx.children(es);
-    if (!kids.some((c) => _EXPORT_DEFAULT.has(c.type))) {
-      // `export { handler as default }` — no `default` keyword on the statement; the specifier carries it.
-      for (const cl of kids) {
-        if (!_EXPORT_CLAUSE.has(cl.type)) continue;
-        for (const sp of ctx.children(cl)) {
-          if (!_EXPORT_SPECIFIER.has(sp.type)) continue;
-          const names = ctx.children(sp).filter((c) => _NAME_KINDS.has(c.type));
-          if (names.length >= 2 && ctx.text(names[names.length - 1]) === "default") return ctx.text(names[0]);
-        }
-      }
-      continue;
-    }
-    for (const c of kids) {
-      if (_EXPORT_DEFAULT.has(c.type)) continue;
-      if ((_FUNCLIKE.has(c.type) && !_ANON_FUNC.has(c.type)) || _CLASS_KINDS.has(c.type)) { const nm = _name_of(ctx, c); if (nm) return nm; }
-      else if (_NAME_KINDS.has(c.type)) return ctx.text(c);
-      else if (_CALL.has(c.type)) {
-        const w = _wrappedImpl(ctx, c, units ?? _named_units(ctx));
-        if (w && !w.inline) return w.unit![0];   // inline arrow ⇒ anonymous, no local name to point at
-      }
-    }
-  }
-  return null;
-}
 
 // The smallest unit that encloses `line` (the tightest def around a usage), or null.
 export function _enclosing(units: Unit[], line: number): Unit | null {
@@ -166,37 +110,6 @@ export function _enclosing(units: Unit[], line: number): Unit | null {
 }
 
 
-export function _call_lines(ctx: Ctx, local: string): number[] {
-  const lines: number[] = [];
-  for (const c of ctx.collect(ctx.root, (k) => _CALL.has(k))) {
-    const ch = ctx.children(c);
-    if (ch.length && ch[0].type.includes("identifier") && ctx.text(ch[0]) === local) lines.push(ctx.span(c)[0]);
-  }
-  return lines;
-}
 
 
 
-
-
-// The public surface of an EXPORTLESS language: top-level type declarations (class/interface/enum/record/
-// struct) plus the members declared directly in their bodies, and top-level free functions (C/C++/Ruby).
-// Nested/local functions are NOT surface — descent stops at a function body, exactly as _named_units does.
-function _public_surface(ctx: Ctx): Unit[] {
-  const out: Unit[] = [];
-  const visit = (n: any, depth: number) => {
-    const k = n.type;
-    if (_CLASS_KINDS.has(k)) {
-      const nm = _name_of(ctx, n);
-      if (nm) { const [s, e] = ctx.span(n); out.push([nm, "class", s, e]); }
-    } else if (_FUNCLIKE.has(k) && !_ANON_FUNC.has(k)) {
-      const nm = _name_of(ctx, n);
-      if (nm) { const [s, e] = ctx.span(n); out.push([nm, _METHOD_KINDS.has(k) || depth > 0 ? "method" : "function", s, e]); }
-      return;                                     // a function body holds locals, not surface
-    }
-    for (const c of ctx.children(n)) visit(c, _CLASS_KINDS.has(k) ? depth + 1 : depth);
-  };
-  visit(ctx.root, 0);
-  const seen = new Set<string>();
-  return out.filter((m) => (seen.has(m[0]) ? false : (seen.add(m[0]), true)));
-}
