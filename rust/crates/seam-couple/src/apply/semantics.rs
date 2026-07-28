@@ -88,6 +88,48 @@ pub fn is_flow_subject(node_kind: &str) -> bool {
     all_metas().any(|s| s.node_kind == node_kind)
 }
 
+/// Every label the registry declares, tagged edge (`true`) or node (`false`). The vocabulary EXPORT reads
+/// this rather than a hand-written list, so a new archetype joins the exported sets by existing.
+pub fn all_kind_labels() -> Vec<(String, bool)> {
+    let mut out = Vec::new();
+    for s in all_metas() {
+        out.push((s.produce_edge.to_string(), true));
+        out.push((s.consume_edge.to_string(), true));
+        if let Some(h) = s.handler_edge {
+            out.push((h.to_string(), true));
+        }
+        out.push((s.node_kind.to_string(), false));
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// Is `edge_kind` a WRITE (produce) edge — the SRC of it PRODUCES the key/subject (a db write, a created
+/// record, a dispatched message) rather than merely reading it? The intent pass grounds the CULMINATION on
+/// this: a flow culminates where it writes its subject. Port of `KEY_PRODUCE_EDGE_KINDS.has` / `isProduceEdge`.
+/// DERIVED FROM THE ADAPTER-BACKED ARCHETYPES ∪ GENERIC, not from every archetype — deliberately narrower
+/// than `is_coupling_crossing`, and matching TS's `KEY_PRODUCE_EDGE_KINDS` exactly.
+///
+/// That asymmetry is REAL and worth naming: a learned `queue`/`event`/`cache`/`service` matcher grounds a
+/// crossing whose produce side (`queue-publish`, `event-emit`, …) counts as a crossing but NOT as a produce
+/// edge, so the intent pass will not ground a culmination on it. Whether that is intended or an oversight in
+/// the original is a PRODUCT decision — widening it changes which node a flow is said to culminate at — so it
+/// is preserved here rather than quietly fixed while porting.
+pub fn is_produce_edge(edge_kind: &str) -> bool {
+    if GENERIC.produce_edge == edge_kind {
+        return true;
+    }
+    let adapter_kinds: Vec<&'static str> = crate::adapters::builtin_adapters().into_iter().map(|(_, k, _)| k).collect();
+    ARCHETYPES.iter().any(|(k, s)| adapter_kinds.contains(k) && s.produce_edge == edge_kind)
+}
+
+/// Is `node_kind` a DOMAIN subject — a persistent domain entity (the db-table archetype's node kind), as
+/// opposed to a route/event/cache boundary? Port of `DOMAIN_SUBJECT_KINDS.has` / `isDomainSubject`.
+pub fn is_domain_subject(node_kind: &str) -> bool {
+    ARCHETYPES.iter().any(|(k, s)| *k == "db-table" && s.node_kind == node_kind)
+}
+
 #[cfg(test)]
 mod classify_tests {
     use super::*;

@@ -1357,6 +1357,37 @@ pub fn is_terminal_kind(kind: String) -> bool {
     seam_couple::apply::semantics::is_terminal_kind(&kind)
 }
 
+/// THE DATA-COUPLING VOCABULARY as five membership sets — `[crossing…]`, `[handler…]`, `[flowSubject…]`,
+/// `[produce…]`, `[domainSubject…]`. Returned as SETS rather than as five predicates because the callers ask
+/// per graph EDGE (tens of thousands per grow); crossing the napi boundary that often to answer a set-membership
+/// question would be paying a syscall for a hash lookup. Derived from the archetype registry, never hardcoded.
+#[napi]
+pub fn coupling_vocabulary() -> Vec<Vec<String>> {
+    let kinds = seam_couple::apply::semantics::all_kind_labels();
+    let mut out = vec![Vec::new(); 5];
+    for (edge_or_node, is_edge) in kinds {
+        if is_edge {
+            if seam_couple::apply::semantics::is_coupling_crossing(&edge_or_node) {
+                out[0].push(edge_or_node.clone());
+            }
+            if seam_couple::apply::semantics::is_handler_edge(&edge_or_node) {
+                out[1].push(edge_or_node.clone());
+            }
+            if seam_couple::apply::semantics::is_produce_edge(&edge_or_node) {
+                out[3].push(edge_or_node.clone());
+            }
+        } else {
+            if seam_couple::apply::semantics::is_flow_subject(&edge_or_node) {
+                out[2].push(edge_or_node.clone());
+            }
+            if seam_couple::apply::semantics::is_domain_subject(&edge_or_node) {
+                out[4].push(edge_or_node.clone());
+            }
+        }
+    }
+    out
+}
+
 // ── THE `seam-adapters` CLI SURFACE ──────────────────────────────────────────────────────────────────────
 // Listing and PROMOTING what the flywheel learned is the human-review half of "learn once, replay forever":
 // a rule deduced for one repo is inspected and, if it generalises, promoted to the shared store so every repo
