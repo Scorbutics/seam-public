@@ -2,7 +2,7 @@
 // structural (topology-only) spine, terminal/shape detection, and the off-seam collapsing render helper.
 import { type Graph, bfsDistance } from "../../core/graph_ir.js";
 import { RENDER } from "../config.js";
-import { isHandlerEdge, isFlowSubject } from "../coupling/index.js";
+import { isHandlerEdge, isFlowSubject } from "../coupling/subjects.js";
 import { type Seam, _mk_seam, _is_crossing } from "./clusters.js";
 
 // Order the spine (main-path) seams as a TRACE from the anchor outward: BFS distance over the seam

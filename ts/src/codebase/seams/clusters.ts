@@ -2,7 +2,7 @@
 // suggested/crossing seams reached only via the grow frontier. No LLM here — see intent_llm.ts for the
 // judgement passes that refine/tier this floor.
 import { type Edge, type Graph, type Node, Provenance, connected_components } from "../../core/graph_ir.js";
-import { isCouplingCrossing } from "../coupling/index.js";
+import { isCouplingCrossing } from "../coupling/subjects.js";
 import { intersect, maxBy, dedup } from "./util.js";
 
 function _containment_edges(g: Graph): [string, string][] {

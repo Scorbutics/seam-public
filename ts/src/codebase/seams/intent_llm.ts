@@ -2,7 +2,7 @@
 // FINAL seams by intent (label_focus_relevance_llm). Both build a prompt, call run_pass, parse the JSON
 // verdicts back onto the seams — structure supplies the facts, the model only judges label/tier/culmination.
 import { type Graph, type Node, bfsDistance } from "../../core/graph_ir.js";
-import { isFlowSubject, isDomainSubject, isProduceEdge } from "../coupling/index.js";
+import { isFlowSubject, isDomainSubject, isProduceEdge } from "../coupling/subjects.js";
 import { run_pass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
 import { type Seam, _mk_seam, _sweep_leftovers } from "./clusters.js";

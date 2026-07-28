@@ -60,8 +60,7 @@ import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "./
 import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
-import { isFlowSubject, isHandlerEdge, isProduceEdge, resolveCoupling, couplingEnvHash } from "../coupling/index.js";
-import { resolveResourceRoutes } from "../coupling/resource_routes.js";
+import { isFlowSubject, isHandlerEdge, isProduceEdge } from "../coupling/subjects.js";
 import { _read, _enclosing, methodPreciseIndex } from "../ast_units.js";
 
 // EMBEDDINGS-AVAILABLE, from the core. This used to ask the TypeScript transformers.js runtime; the intent

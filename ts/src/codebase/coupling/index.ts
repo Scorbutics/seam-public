@@ -45,14 +45,10 @@ import { isTestFile } from "../../core/resolve/consumers.js";
 export type { KeyHit, KeyKind, Access, AnchorKey, KeySource, GroundingIndex } from "./types.js";
 export { ADAPTERS, scan_file_keys, scannableForKeys } from "./adapters/index.js";
 
-// Classification predicates — the data-coupling VOCABULARY exposed as BEHAVIOUR, not raw kind Sets.
-// Consumers (the grow loop, the seam assembler) ask coupling "is this edge a crossing? this node a flow
-// subject? this a produce-edge?" instead of importing the Sets, so coupling's representation stays private.
-export const isCouplingCrossing = (edgeKind: string): boolean => KEY_EDGE_KINDS.has(edgeKind);
-export const isHandlerEdge = (edgeKind: string): boolean => HANDLER_EDGE_KINDS.has(edgeKind);   // points AT a cross-stack handler endpoint
-export const isFlowSubject = (nodeKind: string): boolean => KEY_NODE_KINDS.has(nodeKind);
-export const isProduceEdge = (edgeKind: string): boolean => KEY_PRODUCE_EDGE_KINDS.has(edgeKind);
-export const isDomainSubject = (nodeKind: string): boolean => DOMAIN_SUBJECT_KINDS.has(nodeKind);
+// The classification predicates moved to ./subjects.ts — they are the vocabulary, not the engine, and they
+// have to outlive this file. Re-exported here so the in-module callers below keep reading naturally.
+export { isCouplingCrossing, isHandlerEdge, isFlowSubject, isProduceEdge, isDomainSubject } from "./subjects.js";
+import { isCouplingCrossing, isHandlerEdge, isFlowSubject, isProduceEdge, isDomainSubject } from "./subjects.js";
 
 const READER_CAP = COUPLING.readerCap;                          // materialise at most this many complement nodes per key
 const keyId = (kind: string, value: string) => `${kind} ${value}`;   // the kind+value identity of a shared key
