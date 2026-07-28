@@ -376,7 +376,12 @@ pub fn learn_matchers(repo: &str, key_budget: i64, scope: Option<&std::collectio
             // ONE retry, and only if the budget allows it (mirrors the TS synth gate).
             let a2 = if key_budget > 1 {
                 let r2 = serve(&p2);
-                answered = answered || r2.is_some();
+                // AND, not OR. The signature record means "this cluster is settled, never ask again", so it
+                // may only be written when EVERY pass this run made actually reached a model. With OR, a run
+                // whose retry went unanswered — a timeout, or a host bus still collecting prompts — recorded
+                // the signature off pass 1 alone, and the next run REPLAYED an empty result instead of asking
+                // the corrected question. The self-correction could then never land.
+                answered = answered && r2.is_some();
                 r2.unwrap_or_else(|| "[]".to_string())
             } else {
                 "[]".to_string()
@@ -445,6 +450,74 @@ mod tests {
     // model, not this code.
     const ANSWER: &str = r#"[{"type":"call","token":"store.run","argIndex":0,"kind":"db-table","role":"write","name":"store-run-rule","description":"custom store wrapper"}]"#;
 
+    // ── THE RE-EXECUTION GATE ────────────────────────────────────────────────────────────────────────────
+    // A proposed rule is accepted only if it DETECTS — re-executes to at least one key over the very files it
+    // was proposed from. That is what makes an unvalidated model answer safe to apply deterministically
+    // forever: a hallucinated token grounds nothing, so it is dropped rather than persisted and replayed.
+    // Ported from `key_matcher.test.ts`'s learnKeyMatchers block, now that the host bus reaches the core.
+
+    /// Drive `learn_matchers` with a scripted model, answering by what the PROMPT asks. The retry prompt names
+    /// the dead tokens, so keying on that distinguishes round 1 from the self-correction without depending on
+    /// call order.
+    fn run_learn(repo: &str, first: &str, retry: &str) -> LearnOutcome {
+        let mut answers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut out = LearnOutcome { learned: 0, replayed: false, reps: 0, covered_marked: 0, shapeless_marked: 0, keyed_files: 0, note: String::new() };
+        for _ in 0..4 {
+            seam_llm::host_bus::install(answers.clone());
+            out = learn_matchers(repo, 60, None, None, None);
+            let recorded = seam_llm::host_bus::take_recorded();
+            if recorded.is_empty() {
+                break;
+            }
+            for r in recorded {
+                let is_retry = r.prompt.contains("PREVIOUS attempt");
+                answers.insert(r.key, if is_retry { retry } else { first }.to_string());
+            }
+        }
+        seam_llm::host_bus::uninstall();
+        out
+    }
+
+    #[test]
+    fn a_hallucinated_token_is_dropped_even_after_the_retry() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = fixture("hallucinated");
+        // Both the first answer and the self-correction name a token absent from the files → never detects.
+        let dead1 = r#"[{"type":"call","token":"dispatchNope","argIndex":0,"kind":"event","role":"write","name":"nope"}]"#;
+        let dead2 = r#"[{"type":"call","token":"stillNope","argIndex":0,"kind":"event","role":"write","name":"nope2"}]"#;
+        let out = run_learn(&repo, dead1, dead2);
+        assert_eq!(out.learned, 0, "a rule that grounds nothing must not be persisted");
+        assert!(crate::learn::load_matchers(&repo).is_empty(), "and nothing reaches the store");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn a_dead_token_corrected_in_the_retry_is_then_accepted() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = fixture("selfcorrect");
+        // Round 1 proposes a typo that matches nothing; the retry names the dead token back to the model and
+        // the corrected rule DOES detect. Self-correction is what makes one retry worth its cost.
+        let typo = r#"[{"type":"call","token":"store.runn","argIndex":0,"kind":"db-table","role":"produces","name":"typo"}]"#;
+        let fixed = r#"[{"type":"call","token":"store.run","argIndex":0,"kind":"db-table","role":"produces","name":"store-run-rule"}]"#;
+        let out = run_learn(&repo, typo, fixed);
+        assert_eq!(out.learned, 1, "the corrected rule must be accepted: {}", out.note);
+        // The validator CANONICALISES a `call` rule to its method name — a call matcher keys on the call, not
+        // on the receiver expression the model happened to write. So the stored token is `run`, not `store.run`.
+        assert!(crate::learn::load_matchers(&repo).iter().any(|m| m.literal().as_deref() == Some("run")));
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    #[test]
+    fn no_backend_synthesises_nothing() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = fixture("nobackend");
+        seam_llm::host_bus::uninstall();
+        let out = learn_matchers(&repo, 60, None, None, Some("/nonexistent/claude-xyz"));
+        assert_eq!(out.learned, 0);
+        assert_eq!(out.note, "no llm backend");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
     #[test]
     fn an_accepted_rule_is_persisted_and_then_replayed_without_a_model_call() {
         let repo = fixture("accept");
@@ -489,6 +562,7 @@ mod tests {
 
     #[test]
     fn no_backend_degrades_to_zero_learned_instead_of_failing_the_grow() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());   // a bus installed elsewhere IS a backend
         let repo = fixture("nollm");
         // an override that does not exist ⇒ no backend ⇒ the wheel cannot turn
         let o = learn_matchers(&repo, 20, None, None, Some("/nonexistent/claude-xyz"));

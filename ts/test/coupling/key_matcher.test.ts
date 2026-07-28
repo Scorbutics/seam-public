@@ -10,8 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { validateMatcher, runMatcher, plausibleKeyValue, type KeyMatcher, applyMatchers } from "../helpers/coupling.js";
-import { learnKeyMatchers } from "../../src/codebase/coupling/key_matcher.js";
-import { loadMatchers, hasMatcherCache, _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 
 // ---- pure IR: validate + execute --------------------------------------------------------------------
@@ -73,11 +72,6 @@ let REPO: string, SHARED: string;
 const ctx = () => new EngineCtx();
 // A HostBus that serves the matcher-synthesis pass; `answers` is an ARRAY of successive replies (round 1,
 // then the self-correction round), so a test can model a first-bad-then-fixed exchange.
-class MatcherBus extends HostBus {
-  private n = 0;
-  constructor(private replies: string[]) { super(); }
-  serve(tag: string): string { return tag === "discover-key-matchers" ? (this.replies[this.n++] ?? "[]") : "[]"; }
-}
 const blind = [{ file: "bus.js", text: "this.$emit('sync', x); bus.on('sync', cb);" }];
 
 beforeEach(() => {
@@ -90,38 +84,11 @@ afterEach(() => {
   delete process.env.SEAM_ADAPTERS_DIR; set_host_bus(null); _resetMatcherCacheMem();
 });
 
-describe("learnKeyMatchers — re-execution gate + self-correction + persistence", () => {
-  test("a matcher that re-executes (detects a key) is accepted and persisted", async () => {
-    set_host_bus(new MatcherBus(['[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]']));
-    const learned = await learnKeyMatchers(REPO, blind, { llm: true }, ctx());
-    expect(learned.map((m) => (m.via === "call" ? m.token : ""))).toContain("$emit");
-    expect(hasMatcherCache(REPO)).toBe(true);                       // persisted → warm forever
-    expect(loadMatchers(REPO).some((m) => m.via === "call" && m.token === "$emit")).toBe(true);
-  });
-
-  test("a hallucinated matcher (token matches NOTHING) is dropped, even after the retry", async () => {
-    // both the first answer and the self-correction propose a token absent from the file → never detects
-    set_host_bus(new MatcherBus([
-      '[{"id":"r1","via":"call","token":"dispatchNope","argIndex":0,"kind":"event","role":"produces"}]',
-      '[{"id":"r1","via":"call","token":"stillNope","argIndex":0,"kind":"event","role":"produces"}]',
-    ]));
-    expect(await learnKeyMatchers(REPO, blind, { llm: true }, ctx())).toEqual([]);
-    expect(hasMatcherCache(REPO)).toBe(false);
-  });
-
-  test("self-correction: a first-round dead token is fixed in the retry and then accepted", async () => {
-    set_host_bus(new MatcherBus([
-      '[{"id":"r1","via":"call","token":"emitt","argIndex":0,"kind":"event","role":"produces"}]',   // typo → matches nothing
-      '[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]',    // corrected → detects
-    ]));
-    expect((await learnKeyMatchers(REPO, blind, { llm: true }, ctx())).map((m) => (m.via === "call" ? m.token : ""))).toContain("$emit");
-  });
-
-  test("no LLM (det) → no synthesis", async () => {
-    set_host_bus(new MatcherBus(['[{"id":"r1","via":"call","token":"$emit","argIndex":0,"kind":"event","role":"produces"}]']));
-    expect(await learnKeyMatchers(REPO, blind, { llm: false }, ctx())).toEqual([]);
-  });
-});
+// The learnKeyMatchers block moved to Rust — `learn::discover::tests` next to the state machine it drives:
+// a rule that RE-EXECUTES is accepted and persisted, a hallucinated token is dropped even after the retry, a
+// dead token corrected in the retry is then accepted, and no backend synthesises nothing. They belong there
+// because the re-execution gate is what makes an unvalidated model answer safe to replay forever, and it is
+// the core that replays it.
 
 // ---- deterministic application + the grounding gate --------------------------------------------------
 describe("applyMatchers — deterministic grounding (LLM-free)", () => {

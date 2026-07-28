@@ -342,6 +342,7 @@ mod tests {
 
     #[test]
     fn many_blind_files_cost_one_call_not_one_each() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The batching is the whole economics of the per-file axis: N floor-blind files must cost ONE model
         // call while they fit the snippet cap, not N. A regression here is invisible in the OUTPUT — the keys
         // are identical either way — and shows up only as a bill.

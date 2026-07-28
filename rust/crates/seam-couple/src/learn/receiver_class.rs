@@ -587,6 +587,7 @@ mod classify_tests {
 
     #[test]
     fn classification_picks_the_matcher_shape_and_the_blindspot_gate_bounds_the_candidates() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // ── a database receiver and an http look-alike ───────────────────────────────────────────────────
         let fx = fixture("kinds");
         let repo = fx.0.to_string_lossy().to_string();
@@ -698,6 +699,7 @@ mod classify_tests {
 
     #[test]
     fn a_custom_route_annotation_becomes_a_matcher_and_noise_is_dropped() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // The builtin annotation set cannot know a project's own `@GlobexRoute`. The model names it a route;
         // the result is a matcher that EXTRACTS the path literal, so the handler grounds against a front-end
         // fetch of the same path. `@Audit` is noise and must not become a matcher at all — a matcher per

@@ -23,3 +23,11 @@ pub use compose_learn::{compose_learn, ComposeOutcome};
 pub use receiver_class::{classify_annotations, classify_receivers};
 pub use carrier::{has_learned_carrier, prefetch_carrier_signatures, resolve_carrier_signature, CarrierSignature, SynthOutcome};
 pub use key_store::{cached_file_keys, has_key_cache, persist_file_keys, persist_file_keys_batch, KeyAdapter};
+
+/// THE PROCESS-GLOBAL TEST LOCK. Three things the learn tests touch are per-PROCESS, not per-test: the host
+/// bus, `SEAM_ADAPTERS_DIR` (which moves the SHARED matcher store out from under `load_matchers`), and the
+/// backend-availability answer that follows from the first. Any two such tests running in parallel see each
+/// other's state, and the failure is a plausible wrong result rather than a crash. Every test that installs a
+/// bus or sets that env takes this.
+#[cfg(test)]
+pub(crate) static GLOBAL_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
