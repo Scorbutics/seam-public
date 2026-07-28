@@ -2957,3 +2957,71 @@ pub fn defs_in_file_treesitter(rel: String, text: String) -> Option<Vec<DefDto>>
 pub fn symbol_callers(repo: String) -> std::collections::HashMap<String, Vec<String>> {
     seam_resolve::CallsiteIndex::cached(&repo).callers_map()
 }
+
+// ---- DECOMPOSE: roles, clusters, seams (port of ts/src/codebase/seams/) ---------------------------------
+//
+// These take and return the decompose IR as JSON rather than a DTO. The graph is one deeply nested value
+// passed straight through, and — more to the point — a DTO would have to model `nodes` as a map, which
+// leaks Rust's hash iteration order into the JS object's KEY order. The group ids `g1, g2, …` are numbered
+// by node walk order, so that would not merely reorder the output, it would RELABEL it.
+
+/// decomposeAssignRoles — anchor-relative role assignment. Returns the graph JSON with `role` and
+/// `role_confidence` set on every node.
+#[napi]
+pub fn decompose_assign_roles(graph_json: String) -> String {
+    let mut g: seam_decompose::Graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":{}}}", serde_json::to_string(&e.to_string()).unwrap()),
+    };
+    seam_decompose::assign_roles(&mut g);
+    serde_json::to_string(&g).unwrap_or_else(|_| "{}".into())
+}
+
+/// decomposeAssignClusters — connected-component grouping + per-component intent labelling. Returns the
+/// graph JSON with `group` and `intent` set on every node.
+#[napi]
+pub fn decompose_assign_clusters(graph_json: String) -> String {
+    let mut g: seam_decompose::Graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(e) => return format!("{{\"error\":{}}}", serde_json::to_string(&e.to_string()).unwrap()),
+    };
+    seam_decompose::assign_clusters(&mut g);
+    serde_json::to_string(&g).unwrap_or_else(|_| "{}".into())
+}
+
+/// decomposeIntentSeams — the HUB-aware carrier split (or the plain co-occurrence floor under SEAM_SPLIT=0,
+/// or the by-area fallback when there is no carrier structure). Returns a seam array as JSON.
+#[napi]
+pub fn decompose_intent_seams(graph_json: String) -> String {
+    let g: seam_decompose::Graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "[]".into(),
+    };
+    serde_json::to_string(&seam_decompose::assign_intent_seams(&g)).unwrap_or_else(|_| "[]".into())
+}
+
+/// decomposeSuggestedSeams — split crossing TARGETS out into their own `sug-<id>` seams and mark any seam
+/// living entirely outside the hard-reachable core as `suggested`.
+#[napi]
+pub fn decompose_suggested_seams(graph_json: String, seams_json: String) -> String {
+    let g: seam_decompose::Graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "[]".into(),
+    };
+    let seams: Vec<seam_decompose::Seam> = serde_json::from_str(&seams_json).unwrap_or_default();
+    serde_json::to_string(&seam_decompose::extract_suggested_seams(&g, seams)).unwrap_or_else(|_| "[]".into())
+}
+
+/// decomposeSweepLeftovers — place any core/link/environment node no seam claimed onto the first seam it
+/// neighbours (else the first seam outright). Seam COUNT and ORDER are preserved; only `node_ids` changes.
+#[napi]
+pub fn decompose_sweep_leftovers(graph_json: String, seams_json: String) -> String {
+    let g: seam_decompose::Graph = match serde_json::from_str(&graph_json) {
+        Ok(g) => g,
+        Err(_) => return "[]".into(),
+    };
+    let seams: Vec<seam_decompose::Seam> = serde_json::from_str(&seams_json).unwrap_or_default();
+    let adj = g.adjacency();
+    serde_json::to_string(&seam_decompose::clusters::sweep_leftovers(&g, seams, &adj))
+        .unwrap_or_else(|_| "[]".into())
+}

@@ -186,7 +186,7 @@ export function toGraphDto(g: any): any {
 // per call) and a cache hazard (seam_env_snapshot keys the answer cache on those same vars). Cheap enough to do
 // unconditionally: it is a few dozen string compares, and skipping it when "nothing changed" would require
 // tracking exactly the state this exists to distrust.
-function syncEnv(addon: any): void {
+export function syncEnv(addon: any): void {
   addon.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
 }
 

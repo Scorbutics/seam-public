@@ -1,0 +1,11 @@
+[package]
+name = "seam-decompose"
+version = { workspace = true }
+edition = { workspace = true }
+publish = false
+
+[dependencies]
+seam-couple = { path = "../seam-couple" }
+indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

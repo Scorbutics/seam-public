@@ -84,7 +84,7 @@ export function refine_seams_llm(g: Graph, floorSeams: Seam[], opts: { intent?: 
     if (sk === selectedSk) seam.selected = true;
     seams.push(seam);
   }
-  return _sweep_leftovers(g, seams, adj);
+  return _sweep_leftovers(g, seams);
 }
 
 // One intent-aware pass over the FINAL seams — INCLUDING the grown-consumer and data-coupling seams

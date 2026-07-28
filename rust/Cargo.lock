@@ -1002,6 +1002,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "seam-decompose"
+version = "0.0.0"
+dependencies = [
+ "indexmap",
+ "seam-couple",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "seam-embed"
 version = "0.0.0"
 dependencies = [
@@ -1075,6 +1085,7 @@ dependencies = [
  "napi-derive",
  "seam-cache",
  "seam-couple",
+ "seam-decompose",
  "seam-embed",
  "seam-fs",
  "seam-grow",
