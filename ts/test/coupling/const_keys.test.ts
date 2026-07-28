@@ -9,7 +9,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveParamKeys } from "../../src/codebase/coupling/const_keys.js";
+import { param_key_index, floor_base_index, shared_key_index } from "../helpers/coupling.js";
 import { build_module_graph } from "../helpers/scan.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -47,45 +47,36 @@ afterAll(() => rmSync(REPO, { recursive: true, force: true }));
 
 describe("resolveParamKeys — constant resolution + grounding", () => {
   test("a constant key grounds cross-file (producer ⇄ consumer on the resolved value)", () => {
-    const idx = resolveParamKeys(REPO);
+    const idx = param_key_index(REPO);
     const timeout = idx.get("key timeout");
     expect(timeout).toBeDefined();
     expect(timeout!.producers.some((a) => a.file === "Provider.java")).toBe(true);   // addParameter(TIMEOUT_KEY)
     expect(timeout!.consumers.some((a) => a.file === "Filter.java")).toBe(true);     // getParameter(Constants.TIMEOUT_KEY)
   });
   test("a literal key still grounds (resolution doesn't break the easy case)", () => {
-    const w = resolveParamKeys(REPO).get("key weight");
+    const w = param_key_index(REPO).get("key weight");
     expect(w?.producers.some((a) => a.file === "Provider.java")).toBe(true);
     expect(w?.consumers.some((a) => a.file === "Filter.java")).toBe(true);
   });
   test("a declared-but-unused constant creates NO key, and an unresolvable variable arg is skipped", () => {
-    const idx = resolveParamKeys(REPO);
+    const idx = param_key_index(REPO);
     expect(idx.has("key token")).toBe(false);     // TOKEN_KEY declared, never used in get/addParameter
     // the only keys are the two genuinely used ones — no junk from `getParameter(dynamic)`
     expect([...idx.keys()].sort()).toEqual(["key timeout", "key weight"]);
   });
   test("SEAM_NO_ADAPTERS gates the floor (param_key_index returns empty)", async () => {
-    const { param_key_index } = await import("../helpers/coupling.js");   // moved: built in the fused floor pass
-    const { EngineCtx } = await import("../../src/codebase/engine_ctx.js");
     const prev = process.env.SEAM_NO_ADAPTERS;
     process.env.SEAM_NO_ADAPTERS = "1";
-    try { expect(param_key_index(REPO, new Set(["node_modules", ".git"]), new EngineCtx()).size).toBe(0); }
+    try { expect(param_key_index(REPO).size).toBe(0); }
     finally { if (prev === undefined) delete process.env.SEAM_NO_ADAPTERS; else process.env.SEAM_NO_ADAPTERS = prev; }
   });
 
-  // The MEMOIZATION half of these two claims ("one shared pass", "built once, same ref") was about the
-  // TypeScript EngineCtx's own caches. In the core the floor is memoized per repo (and per the knobs that
-  // change it) inside `floor_indices`, and that is pinned where it lives —
-  // `floor_indices_memoize_and_invalidate` in crates/seam-couple/src/ground/mod.rs asserts both the warm-hit
-  // identity and the drop on reset. Asserting it from here would only test the helper, which rebuilds a JS Map
-  // per call by construction. What survives is the BEHAVIOURAL half, which is what the floor promises.
-  test("the fused param index agrees with the standalone resolveParamKeys walk", async () => {
-    const { param_key_index } = await import("../helpers/coupling.js");
-    expect([...param_key_index(REPO).keys()].sort()).toEqual([...resolveParamKeys(REPO).keys()].sort());
-  });
-
+  // The MEMOIZATION claims these tests used to make ("one shared pass", "built once, same ref") were about
+  // the TypeScript EngineCtx's caches, and the AGREEMENT claim compared two TypeScript builders that the core
+  // has as one. Memoization is pinned where it now lives — `floor_indices_memoize_and_invalidate` in
+  // crates/seam-couple/src/ground/mod.rs, which asserts both the warm-hit identity and the drop on reset.
+  // What survives here is the behavioural half: what the floor actually promises to contain.
   test("floor_base_index is the merge of shared⊕param — it carries the const-resolved param key", async () => {
-    const { floor_base_index, shared_key_index, param_key_index } = await import("../helpers/coupling.js");
     const base = floor_base_index(REPO);
     expect(base.has("key timeout")).toBe(true);            // the const-resolved param key is in the merge…
     expect(param_key_index(REPO).has("key timeout")).toBe(true);   // …because the param half grounds it…

@@ -24,6 +24,12 @@ fn join(base: &str, sub: &str) -> String {
     norm_path(&format!("{}/{}", base.trim_end_matches('/'), sub.trim_start_matches('/')))
 }
 
+/// The request builder's own `method:` — the HTTP verb this member calls the base path with. Part of the
+/// KEY's identity, not decoration: a GET consumer and a POST consumer of the same path are different
+/// crossings, and dropping the verb lets one pair with the other's backend handler.
+static OWN_METHOD: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?i)\bmethod\s*:\s*["'`](GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)["'`]"#).unwrap());
+
 /// Resolve each request method's full route (base ⊕ its own path), stamped at the METHOD's line. `[]` for a
 /// file that isn't an SDK resource. Port of `resolveResourceRoutes`.
 pub fn resolve_resource_routes(file: &str, text: &str) -> Vec<KeyHit> {
@@ -50,7 +56,71 @@ pub fn resolve_resource_routes(file: &str, text: &str) -> Vec<KeyHit> {
         if value == "/" {
             continue;
         }
-        out.push(KeyHit { kind: "http-route".into(), value, line: line_of(text, whole.start()), produces: false, ..Default::default() });
+        let method = OWN_METHOD.captures(window).map(|c| c[1].to_uppercase());
+        out.push(KeyHit { kind: "http-route".into(), value, line: line_of(text, whole.start()), produces: false, method, ..Default::default() });
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // CLASS-BASE-ROUTE inheritance — the consumer-side mirror of the sub-resource composer. An SDK resource
+    // class declares its route base once (constructor `super({path})`) and each request method inherits it.
+    // Coupling keys are attributed SPAN-LOCALLY, so without this the method node carries no route and its
+    // cross-stack crossing never materialises. Ported from `resource_routes.test.ts`.
+    const USERS: &str = r#"export class Users extends Resource<{ realm?: string }> {
+  public find = this.makeRequest<UserQuery, UserRepresentation[]>({
+    method: "GET",
+  });
+
+  public create = this.makeRequest<UserRepresentation, { id: string }>({
+    method: "POST",
+  });
+
+  public findOne = this.makeRequest<{ id: string }, UserRepresentation>({
+    method: "GET",
+    path: "/{id}",
+  });
+
+  constructor(client: KeycloakAdminClient) {
+    super(client, {
+      path: "/admin/realms/{realm}/users",
+      getUrlParams: () => ({ realm: client.realmName }),
+    });
+  }
+}
+"#;
+
+    #[test]
+    fn a_bare_request_method_inherits_the_class_base_path_at_its_own_line() {
+        let hits = resolve_resource_routes("resources/users.ts", USERS);
+        let create = hits
+            .iter()
+            .find(|h| h.value == "/admin/realms/*/users" && h.method.as_deref() == Some("POST"))
+            .expect("the inherited route");
+        // Stamped at the `create` member line (index 5), NOT the constructor's `path:` line — so the
+        // footprint's `create` node owns the crossing to the backend handler within its own span.
+        assert_eq!(create.line, 5);
+        assert!(!create.produces, "an SDK method is a route CONSUMER — it calls the backend");
+    }
+
+    #[test]
+    fn a_method_with_its_own_path_composes_base_then_own() {
+        let hits = resolve_resource_routes("resources/users.ts", USERS);
+        assert!(hits.iter().any(|h| h.value == "/admin/realms/*/users/*" && h.method.as_deref() == Some("GET")));
+    }
+
+    #[test]
+    fn a_file_with_no_base_path_resource_class_yields_nothing() {
+        assert!(resolve_resource_routes("util.ts", "export const x = () => fetch('/api/thing');\n").is_empty());
+        // no `super({path})` / base field → not a resource class, even though it makes an HTTP call
+        assert!(resolve_resource_routes("r.ts", "class R { m = this.makeRequest({ method: 'GET' }); }").is_empty());
+    }
+
+    #[test]
+    fn only_ts_and_js_files_are_scanned() {
+        assert!(resolve_resource_routes("resources/users.py", USERS).is_empty());
+    }
 }
