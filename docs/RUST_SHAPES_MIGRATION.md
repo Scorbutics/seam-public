@@ -830,12 +830,28 @@ center, second run:
     concern 1:  [grow] src/shared.ts ut7e6i  epoch=16oh28p MISS(new)
     concern 2:  [grow] src/shared.ts 182u9mk epoch=16oh28p MISS(new)
 
-Same center, same epoch, DIFFERENT cache key, MISS both times. The core's per-center answer cache is not
-reusing a shared center across concerns — so routing would not merely hide the warm/learned-repo contract,
-it would BREAK it. `test/grow/centers_shared_reuse.test.ts` fails on the routed path for a real reason.
+Same center, same epoch, DIFFERENT cache key, MISS both times.
 
-That is what the instrumentation was for. The assumption was comfortable and wrong, and one line of output
-settled it.
+**CORRECTION — the conclusion drawn from that was WRONG.** It said the core's per-center cache does not reuse
+a shared center across concerns. Measured directly at the Rust boundary, it does:
+
+    concern 1 [mechA, shared]:  src/shared.ts key=ut7e6i MISS(new)
+    concern 2 [mechB, shared]:  src/shared.ts key=ut7e6i HIT (skip wave)     <- same key, reused
+    concern 1 again:            both HIT
+
+Two follow-on hypotheses were also tested and are also wrong: `resetCaches` does NOT defeat it (the disk
+cache correctly survives — still HIT after a reset), and the epoch is STABLE across grows (o0w9k4 three times,
+including after a reset). And `WaveOpts::fingerprint()` contains no center list, so the key cannot vary with
+the concern.
+
+So the cache is sound at its own boundary, and the divergence is somewhere in the TypeScript-routed path.
+The unexplained signal is in that earlier output: TWO lines per center within ONE concern, at two DIFFERENT
+epochs (6wz66i and 16oh28p), when a direct call produces one line at one epoch. Something in
+`grow_centers_scoped` is growing twice under different epoch state. THAT is the thread to pull — not the
+cache.
+
+The instrumentation still earned its place: it is what made all of this measurable instead of arguable. It
+just took three wrong readings before a right one, and the wrong ones were published.
 
 **Next:** find why the Rust key differs per concern for the same center. The key is
 `hash(symbol | data_coupling | opts.fingerprint() | seam_env_snapshot())` — with the epoch equal, the
