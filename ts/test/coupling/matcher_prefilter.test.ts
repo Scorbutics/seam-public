@@ -7,8 +7,8 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { matcherLiteral, validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
-import { applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
+import { matcherLiteral, validateMatcher, runMatcher, type KeyMatcher, applyMatchers } from "../helpers/coupling.js";
+
 import { available } from "../../src/codebase/atoms.js";
 
 describe("matcherLiteral — the pre-filter discriminator", () => {

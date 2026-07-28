@@ -115,7 +115,6 @@ export const resolveCoupling = (repo: string, anchorId: string, file: string, te
 // The LEARN half of the flywheel: validate LLM-shaped matcher objects, then persist them into `<repo>/.seam`
 // so the next resolve REPLAYS them. Staging a learned rule this way is how a test distinguishes "the floor
 // grounded it" from "a learned matcher did" — the whole point of the stable-floor contract.
-export const validateMatcher = (obj: unknown): unknown | null => JSON.parse(core().validateMatchers(JSON.stringify([obj])))[0];
 export const persistMatchers = (repo: string, matchers: unknown[]): void => core().persistMatchers(repo, JSON.stringify(matchers));
 
 // EFFECT INFERENCE — which receivers are custom http clients, the matchers that key their call sites, and the
@@ -144,3 +143,32 @@ export const resolveHttpCallSites = (file: string, text: string, clients: Iterab
 // STRUCTURAL pre-clustering — re-exported from where the product reads it, so a test and the flywheel can
 // never be clustering by different rules.
 export { clusterBlindFiles, type BlindCluster } from "../../src/codebase/coupling/core_floor.js";
+
+// ── THE MATCHER IR ───────────────────────────────────────────────────────────────────────────────────────
+// Validating an LLM-proposed rule, executing one, and the two guards that bound what a rule may key on.
+// `validateMatcher` returns null for a proposal that is not a well-formed rule — the model is allowed to be
+// wrong, and a malformed shape must be dropped rather than half-applied.
+// A validated rule, shaped loosely on purpose: the variants differ by `via`, and the tests read whichever
+// fields their shape has. Pinning a discriminated union here would just re-declare the Rust enum in
+// TypeScript — the second definition this migration exists to remove.
+export interface KeyMatcher { via: string; kind: string; role: string; [k: string]: unknown }
+export const validateMatcher = (obj: unknown): KeyMatcher | null => JSON.parse(core().validateMatchers(JSON.stringify([obj])))[0];
+// NULL, not "", when the shape has no literal (a `method` rule matches structurally). The napi boundary
+// cannot carry a null String, so the translation happens here — and it is not cosmetic: absent means "no
+// pre-filter is possible, always run the regex", while an empty string would read as "match files containing
+// nothing", which every file does.
+export const matcherLiteral = (m: unknown): string | null => core().matcherLiteral(JSON.stringify(m)) || null;
+export const plausibleKeyValue = (v: string): boolean => core().plausibleKeyValue(v);
+export const isTerminalKind = (kind: string): boolean => core().isTerminalKind(kind);
+
+/// Ground a CALLER-SUPPLIED rule set over the repo — `applyMatchers`. The repo-store form is what the product
+/// runs; this one is for a test that wants to know its own rule grounded, not that some other learned rule did.
+export const applyMatchers = (repo: string, matchers: unknown[]): GroundingIndex => {
+  const idx: GroundingIndex = new Map();
+  for (const row of core().applyMatchersOver(repo, JSON.stringify(matchers)) as string[]) {
+    const [key, side, file, line] = row.split("|");
+    if (!idx.has(key)) idx.set(key, { producers: [], consumers: [] });
+    (side === "p" ? idx.get(key)!.producers : idx.get(key)!.consumers).push({ file, line: Number(line) });
+  }
+  return idx;
+};

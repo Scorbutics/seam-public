@@ -10,8 +10,8 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { persistMatchers, _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
-import { validateMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { validateMatcher, persistMatchers } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("a grow grounds a learned service-handle coupling (producer ⇄ consumer over an external SDK handle)", () => {

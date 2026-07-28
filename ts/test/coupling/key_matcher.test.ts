@@ -9,8 +9,8 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
-import { validateMatcher, runMatcher, plausibleKeyValue, type KeyMatcher } from "../../src/codebase/coupling/key_ir.js";
-import { learnKeyMatchers, applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
+import { validateMatcher, runMatcher, plausibleKeyValue, type KeyMatcher, applyMatchers } from "../helpers/coupling.js";
+import { learnKeyMatchers } from "../../src/codebase/coupling/key_matcher.js";
 import { loadMatchers, hasMatcherCache, _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 

@@ -8,8 +8,8 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
-import { applyMatchers } from "../../src/codebase/coupling/key_matcher.js";
+import { validateMatcher, runMatcher, type KeyMatcher, applyMatchers } from "../helpers/coupling.js";
+
 
 describe("handle matcher shape (receiver = stateful external handle)", () => {
   const produce = validateMatcher({ via: "handle", token: "client.auth", verbs: ["signInWithPassword", "signOut"], kind: "service", role: "produces" });

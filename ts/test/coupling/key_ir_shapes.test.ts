@@ -4,7 +4,7 @@
 // reproduce the EXACT keys the built-in ng_scope adapter emits — which is what will let us delete ng_scope.
 // Both shapes parse with tree-sitter (js for assign, html/vue for attr), so they gate on `available()`.
 import { describe, expect, test } from "bun:test";
-import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const CTRL = `angular.module('app').controller('FileNoteCtrl', function ($scope, $http) {

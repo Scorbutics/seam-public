@@ -1335,6 +1335,28 @@ pub fn shared_seam_dir() -> String {
     seam_couple::learn::matchers::shared_dir()
 }
 
+/// The universal floor guard: is this string PLAUSIBLE as a coupling key at all? Generic words, prose and
+/// too-short tokens are dropped from EVERY adapter's output — the deterministic floor is not immune to
+/// matching the English "…select … from the …". Port of `plausibleKeyValue`.
+#[napi]
+pub fn plausible_key_value(value: String) -> bool {
+    seam_couple::plausible_key_value(&value)
+}
+
+/// The literal a matcher keys on (its token / directive / annotation) — the cheap PRE-FILTER: a file whose
+/// text does not contain it cannot possibly match, so the regex never runs. Empty when the shape has no
+/// literal (a `method` rule matches structurally). Port of `matcherLiteral`.
+#[napi]
+pub fn matcher_literal(matcher_json: String) -> String {
+    serde_json::from_str::<seam_couple::KeyMatcher>(&matcher_json).ok().and_then(|m| m.literal()).unwrap_or_default()
+}
+
+/// Is this boundary kind TERMINAL — self-grounded by its own literal, with no in-repo other side (egress)?
+#[napi]
+pub fn is_terminal_kind(kind: String) -> bool {
+    seam_couple::apply::semantics::is_terminal_kind(&kind)
+}
+
 // ── THE `seam-adapters` CLI SURFACE ──────────────────────────────────────────────────────────────────────
 // Listing and PROMOTING what the flywheel learned is the human-review half of "learn once, replay forever":
 // a rule deduced for one repo is inspected and, if it generalises, promoted to the shared store so every repo
@@ -1494,6 +1516,22 @@ pub fn ubiquity_consumers(repo: String, file: String, limit: Option<u32>) -> Vec
 #[napi]
 pub fn apply_matchers(repo: String) -> Vec<String> {
     let matchers = seam_couple::load_matchers(&repo);
+    apply_matchers_rows(&repo, &matchers)
+}
+
+/// `apply_matchers` over a CALLER-SUPPLIED rule set rather than the repo's store — the store form is the
+/// product path; this one lets a test state exactly which rules it is exercising, so a pass means the rule
+/// under test grounded, not that some other learned rule did.
+#[napi]
+pub fn apply_matchers_over(repo: String, matchers_json: String) -> Vec<String> {
+    let vals: Vec<serde_json::Value> = serde_json::from_str(&matchers_json).unwrap_or_default();
+    let ms: Vec<seam_couple::KeyMatcher> = vals.iter().filter_map(|v| serde_json::from_value(v.clone()).ok()).collect();
+    apply_matchers_rows(&repo, &ms)
+}
+
+fn apply_matchers_rows(repo: &str, matchers: &[seam_couple::KeyMatcher]) -> Vec<String> {
+    let repo = repo.to_string();
+    let matchers = matchers.to_vec();
     let idx = seam_couple::learn::apply_matchers(&repo, &matchers);
     let mut rows = Vec::new();
     for (key, sides) in idx.iter() {

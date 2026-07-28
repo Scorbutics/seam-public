@@ -11,7 +11,7 @@ import { tmpdir } from "node:os";
 import { scan_file_keys, TERMINAL_KINDS } from "../../src/codebase/coupling/adapters/index.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
-import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
 
 const egress = (src: string, file = "a.java"): string[] => scan_file_keys(file, src).filter((k) => k.kind === "egress").map((k) => k.value);
 

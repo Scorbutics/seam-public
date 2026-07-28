@@ -217,7 +217,8 @@ impl KeyMatcher {
     }
 
     /// The required literal for the cheap `text.contains` prefilter. Port of `matcherLiteral`.
-    fn literal(&self) -> Option<String> {
+    /// The literal this rule keys on — the cheap pre-filter before its regex runs.
+    pub fn literal(&self) -> Option<String> {
         match self {
             KeyMatcher::Call { token, .. } | KeyMatcher::Assign { token, .. } | KeyMatcher::Member { token, .. } | KeyMatcher::Repository { token, .. } | KeyMatcher::Channel { token, .. } => Some(token.clone()),
             KeyMatcher::Handle { token, .. } => Some(token.split('.').next().unwrap_or(token).to_string()),

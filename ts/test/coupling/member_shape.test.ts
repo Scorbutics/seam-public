@@ -3,7 +3,7 @@
 // FACTOR a whole receiver-member layer into ONE rule-pair (read/write) instead of an LLM call per file —
 // validated on cal.com: 2 Prisma files learned the pair, which then covered 9/9 footprint Prisma files.
 import { describe, expect, test } from "bun:test";
-import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
 
 describe("member matcher shape (receiver-member data-access layer)", () => {
   const read = validateMatcher({ via: "member", token: "prisma", verbs: ["findUnique", "findMany", "count"], kind: "db-table", role: "consumes" });

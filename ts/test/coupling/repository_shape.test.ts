@@ -3,7 +3,7 @@
 // key). Synthesised by the receiver-classifier for a database-classified 2-part repository (`users.create()`,
 // `featuresRepository.set…()`) — the layer member_access (3-part) can't see. Role fixed per rule.
 import { describe, expect, test } from "bun:test";
-import { validateMatcher, runMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
 
 describe("repository matcher shape (receiver = table)", () => {
   const read = validateMatcher({ via: "repository", token: "userRepository", verbs: ["findMany", "get"], kind: "db-table", role: "consumes" });
