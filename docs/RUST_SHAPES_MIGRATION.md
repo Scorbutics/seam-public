@@ -782,3 +782,35 @@ Two caveats, neither blocking:
   - `maxNodes` is soft. Both engines returned 268 nodes at `maxNodes: 80` — the wave checks the budget
     BETWEEN moves and one move adds a batch. They AGREE, which is the point; the overshoot is a separate
     (pre-existing, both-engines) property worth knowing before anyone reads the number as a cap.
+
+### The routing was attempted and REVERTED — one well-defined thing is missing
+
+With the budget divergence closed and the harness repaired, routing the merged branch of
+`grow_centers_scoped` to `addon.growCenters` is a ~25-line change. It was written, and it works: the graph
+matches, `centerAnchors` is computable shell-side (the core returns a graph, not the cluster's roots), the
+core returns `history` (30 entries, same as TypeScript), and `_expanded` turns out to be written and never
+read — vestigial.
+
+It was reverted because ONE test failed, correctly: `test/grow/centers_shared_reuse.test.ts`, which pins the
+CROSS-CONCERN REUSE contract — two concerns sharing a center must reuse that center's closure as a cache HIT.
+
+Measured on the routed path, second concern, stderr:
+
+    [grow] src/mechB.ts eeukjt epoch=1lq3m8m MISS(new)      <- the novel center
+    (nothing at all for src/shared.ts)                       <- the SHARED center
+
+The reuse very likely still happens — `grow_to_terminals` is answer-cached inside the core — but it becomes
+UNOBSERVABLE: `grow_centers` merges its per-center results and only the merged graph carries a
+`cache_verdict`, so a HIT on one center of several is reported nowhere. That line is how a caller confirms
+the warm/learned-repo contract, which is the product's headline claim. A routing that keeps the answer and
+drops the evidence for it is not an improvement.
+
+**What is needed:** `grow_centers` must return PER-CENTER cache verdicts (`grow_to_terminals` already
+computes `cache_verdict`/`cache_key`/`cache_epoch` per center — `grow_centers` discards them in the merge),
+and the shell must emit the same `[grow] <file> <key> epoch=<e> <verdict>` line it does today. Roughly: a
+field on the returned DTO, plus the emit loop in the routing block. Everything else for the routing is done
+and verified.
+
+Also note the routing is scoped OFF for `dataCouplingLlm`: the core replays learned matchers but does not
+turn the flywheel, and the caller's `ctx.footprintFiles` scoping has no equivalent there, so routing that
+path would quietly stop the repo learning.
