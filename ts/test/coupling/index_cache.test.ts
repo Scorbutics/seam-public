@@ -5,7 +5,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { incrementalScan } from "../../src/codebase/coupling/index_cache.js";
+import { incrementalScan } from "../../src/core/resolve/index_cache.js";
 import { shared_key_index, param_key_index } from "../helpers/coupling.js";
 import type { GroundingIndex } from "../../src/codebase/coupling/types.js";
 

@@ -7,7 +7,6 @@
 // STAGED: this holds the COUPLING-axis caches today (the densest cluster + the bulk of the old test-reset
 // soup). The scan parse caches, atoms `Ctx` cache, java/consumers resolution caches and string_coupling
 // entry cache migrate into this same object in follow-up stages.
-import { COUPLING } from "./coupling/config.js";
 import type { GroundingIndex } from "./coupling/types.js";
 
 export class EngineCtx {
@@ -62,14 +61,10 @@ export class EngineCtx {
   stableFloor = false;
 
   // --- coupling: per-run LLM budgets (were module-level `_budget`, reset by hand) ---
-  keyBudget = COUPLING.keyBudget;     // llmKeyIndex: files sent to the LLM this run
-  synthBudget = COUPLING.synthBudget; // carrier synth: opaque carriers synthesized this run
-  complementBudget = COUPLING.complementBudget; // crossBoundary: complement units materialized this run (grow-wide) — bounds a hub's fan
   // TARGETED bridge (couplingOtherSides): distinct candidate FILES key-scanned this run. This is the cost bound
   // that replaced the old 200-candidate INPUT cap — the input cap decided the ANSWER (a complement past #200 was
   // invisible), this decides only how much WORK a run may do. Consumed in grep order (total), and only by a
   // CACHE MISS, so the stopping point is a pure function of the repo. Overflow is reported, not silent.
-  candidateScanBudget = COUPLING.candidateScanBudget;
   couplingTruncations: { kind: string; value: string; scanned: number; total: number; reason: string }[] = [];
   sameSideDrawn = new Set<string>();  // crossSameSide: keys whose CO-PRODUCERS were already drawn this grow — draw once, not per producing-node (the merge dedups the output; this dedups the WORK/budget)
 

@@ -20,6 +20,7 @@ pub mod types;
 pub use adapters::{adapter_keys, builtin_adapters, is_produce_edge, scan_file_keys};
 pub use apply::semantics::{is_coupling_crossing, is_flow_subject, is_handler_edge};
 pub use apply::{resolve_coupling, resolve_coupling_scoped, CouplingResult};
+pub use apply::pipeline::tunables;
 pub use apply::bridge::{anchor_counterparts, coupling_other_sides, grep_files, AnchorCounterpart, BridgeCtx, CouplingOtherSide, Truncation};
 pub use apply::columns::{access_columns, access_columns_in, symbol_span, AccessColumns};
 pub use ground::{floor_base_index, floor_indices, key_id, merge_grounding, other_side, other_side_scored, FloorIndices, GroundingIndex};

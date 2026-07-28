@@ -140,10 +140,6 @@ export const resolveHttpCallSites = (file: string, text: string, clients: Iterab
     return { kind, value, line: Number(line), produces: produces === "true" };
   });
 
-// STRUCTURAL pre-clustering — re-exported from where the product reads it, so a test and the flywheel can
-// never be clustering by different rules.
-export { clusterBlindFiles, type BlindCluster } from "../../src/codebase/coupling/core_floor.js";
-
 // ── THE MATCHER IR ───────────────────────────────────────────────────────────────────────────────────────
 // Validating an LLM-proposed rule, executing one, and the two guards that bound what a rule may key on.
 // `validateMatcher` returns null for a proposal that is not a well-formed rule — the model is allowed to be

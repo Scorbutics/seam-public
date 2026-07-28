@@ -8,7 +8,7 @@ import { recordQuery, registerQueryRerun, hashSet } from "../../core/resolve/dep
 import { walk } from "../../core/resolve/walk.js";
 import { makeCtx, available, lang_for } from "../atoms.js";
 import { _read } from "../ast_units.js";
-import { incrementalScanAsync, indexCacheEnabled } from "../coupling/index_cache.js";
+import { incrementalScanAsync, indexCacheEnabled } from "../../core/resolve/index_cache.js";
 import { DI_MARKERS, scanDiBindings, bare, type DiBinding, type DiContribution } from "../../languages/typescript/di_bindings.js";
 import { relative, join } from "node:path";
 

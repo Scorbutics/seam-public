@@ -1563,6 +1563,15 @@ pub fn list_learned_carriers(repo: String) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
+/// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
+/// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy
+/// carried its own literal defaults beside the core's.
+#[napi]
+pub fn coupling_tunables() -> Vec<Vec<String>> {
+    seam_couple::tunables().into_iter().map(|(k, v)| vec![k.to_string(), v.to_string()]).collect()
+}
+
 /// The passes whose call site is in the CORE — `[tag, tier, note]`, sorted by tag. The CLI registers these so
 /// `--list-passes` advertises every pass the engine can spend money on, including the ones with no TypeScript
 /// module left to declare them. Asked for rather than copied: a hand-kept list drifts the first time a tier or
@@ -2397,7 +2406,15 @@ pub struct LearnOutcomeDto {
 #[napi]
 pub fn discover_learn(repo: String, key_budget: Option<i64>, scope_files: Option<Vec<String>>, model: Option<String>, claude_bin: Option<String>) -> LearnOutcomeDto {
     let scope: Option<std::collections::HashSet<String>> = scope_files.filter(|s| !s.is_empty()).map(|s| s.into_iter().collect());
-    let o = seam_couple::learn_matchers(&repo, key_budget.unwrap_or(60), scope.as_ref(), model.as_deref(), claude_bin.as_deref());
+    // SEAM_KEY_BUDGET is the documented cap on cold LLM key/matcher synthesis per run, and `0` is its escape
+    // hatch — "apply cached adapters only", i.e. spend nothing. It was parsed on the TypeScript side into a
+    // config object no call site passed any more, so the knob silently did nothing and a user who set it to 0
+    // to avoid spend still paid. Read at the default here, where the default lives, so it holds for every
+    // caller; an EXPLICIT argument still wins, since a caller that named a budget meant it.
+    let budget = key_budget.unwrap_or_else(|| {
+        std::env::var("SEAM_KEY_BUDGET").ok().and_then(|v| v.trim().parse::<i64>().ok()).map(|n| n.max(0)).unwrap_or(60)
+    });
+    let o = seam_couple::learn_matchers(&repo, budget, scope.as_ref(), model.as_deref(), claude_bin.as_deref());
     LearnOutcomeDto {
         learned: o.learned as u32,
         replayed: o.replayed,

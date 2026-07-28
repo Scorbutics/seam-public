@@ -27,6 +27,19 @@ fn hub_fan() -> usize {
 fn hub_reader_cap() -> usize {
     env_num("SEAM_HUB_READER_CAP", 1) as usize
 }
+
+/// The tunables a caller OUTSIDE the core needs to agree with — `[name, value]`. The render decides which
+/// crossings were over-fanned using `hubFan`, and it has to be the SAME threshold the coupling damped by, or
+/// it excludes a different set than the one that was actually damped. Kept as an accessor rather than a
+/// duplicated literal on the TypeScript side, where the two defaults silently drifted apart.
+pub fn tunables() -> Vec<(&'static str, i64)> {
+    vec![
+        ("readerCap", reader_cap() as i64),
+        ("hubFan", hub_fan() as i64),
+        ("hubReaderCap", hub_reader_cap() as i64),
+        ("nodeKeyCap", node_key_cap() as i64),
+    ]
+}
 fn node_key_cap() -> usize {
     env_num("SEAM_NODE_KEY_CAP", 16) as usize
 }

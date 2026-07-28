@@ -1,11 +1,14 @@
 // The footprint-scoped grow (`--data-coupling llm`) runs a cheap deterministic FLOOR pre-grow to discover the
-// flow's files, then a real LLM grow scoped to them — both sharing ONE EngineCtx so the repo-wide indices build
-// once. The probe's footprint is DISCARDED, but its deterministic coupling still materialises complements, which
-// DECREMENT the grow-wide `complementBudget`. REGRESSION: left unrestored, the throwaway probe permanently
-// STARVES the real grow's crossing materialisation — a coupling-reached RESOURCE the floor found is INDEXED
-// (its keys surface in verbose data-coupling) but never materialised into the answer (the acmecheck symptom:
-// "AcmeCheckBookingsService appears in coupling-debug but not in the footprint"). `grow_footprint_scoped` must
-// snapshot + restore the consumable budgets so the probe is free and the real grow gets its full budget.
+// flow's files, then a real grow scoped to them. What is pinned here is the END STATE: a coupling-reached
+// RESOURCE the floor found must land IN the answer, not merely in the index — the acmecheck symptom was
+// "AcmeCheckBookingsService appears in coupling-debug but not in the footprint".
+//
+// NOT a budget-starvation regression test any more, and the name is left only because the symptom is known by
+// it. The original guard was that `grow_footprint_scoped` snapshotted and restored a `complementBudget`
+// consumable on the EngineCtx, which the throwaway probe would otherwise spend. That budget is the CORE's now
+// and is taken FRESH per `resolve_coupling` call, so the probe cannot starve the real grow by construction.
+// Measured before dropping the framing: with SEAM_COMPLEMENT_BUDGET at 0 and at 1 the resource is reached
+// either way, so asserting at a tight budget would have been a test that could not fail for its stated reason.
 // Hermetic; guards on tree-sitter.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
@@ -15,7 +18,8 @@ import { grow_footprint_scoped } from "../../src/codebase/grow/orchestrate.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
 
-describe("the floor pre-grow probe does not starve the real grow's coupling materialisation", () => {
+
+describe("the footprint-scoped grow materialises the coupling-reached resource", () => {
   const repo = join(tmpdir(), "seam-fpscope-" + process.pid);
   const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(join(p, ".."), { recursive: true }); writeFileSync(p, t); };
   beforeAll(() => {
@@ -27,13 +31,10 @@ describe("the floor pre-grow probe does not starve the real grow's coupling mate
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-  test("a TIGHT budget the floor would exhaust still reaches the coupling-reached resource", async () => {
+  test("the coupling-reached resource lands in the footprint, not just the index", async () => {
     if (!available()) return;
-    // budget = 1: enough for ONE grow to cross to the resource, but the floor pre-grow consumes it first. Without
-    // the restore, the real grow starts at 0 and the resource is never materialised. With it, the real grow gets
-    // its full budget back and the resource is reached.
+    // the resource is reached through the scoped grow, with the floor probe having run first
     const ctx = new EngineCtx();
-    ctx.complementBudget = 1;
     const [data]: any = await grow_footprint_scoped(repo, "web/memberBookings.js", "loadBookings",
       { maxSteps: 40, maxNodes: 200, dataCoupling: true, intent: "create a booking", ctx } as any);
     const files = new Set(data.nodes.map((n: any) => String(n.file)));

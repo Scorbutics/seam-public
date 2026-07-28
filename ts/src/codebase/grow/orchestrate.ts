@@ -606,7 +606,6 @@ export async function scoping_pre_grow(repo: string, anchorFile: string, symbol:
   const ctx = opts.ctx;
   emit("Floor pre-grow to scope coupling discovery to the footprint…");
   ctx.stableFloor = true;
-  const budget0 = { complementBudget: ctx.complementBudget, keyBudget: ctx.keyBudget, synthBudget: ctx.synthBudget };
   // PROBE BUDGET (SEAM_PROBE_MAX_NODES, default 120; 0 = old unbounded) — this pre-grow's footprint is DISCARDED;
   // it exists only to enumerate `footprintFiles` (below) to scope the real grow's LLM key-discovery, and the
   // floor-coupling SEED already carries the cross-stack files. The full structural EXPANSION (its costliest phase —
@@ -619,9 +618,9 @@ export async function scoping_pre_grow(repo: string, anchorFile: string, symbol:
   const _probeOpts = _probeCap ? { ...opts, maxNodes: Math.min(opts.maxNodes ?? 80, _probeCap) } : opts;
   const [floorData] = await grow_to_terminals(repo, anchorFile, symbol, { ..._probeOpts, dataCouplingLlm: false, ctx });
   ctx.stableFloor = false;
-  ctx.complementBudget = budget0.complementBudget;   // RESTORE: the scoping probe must not starve the answer
-  ctx.keyBudget = budget0.keyBudget;
-  ctx.synthBudget = budget0.synthBudget;
+  // (No budget save/restore here any more. It guarded against the probe DECREMENTING per-run budgets that the
+  // EngineCtx no longer holds — the core owns them. Verified dead: removing the restore left
+  // `footprint_scoped_budget.test.ts` — the test written FOR it — passing unchanged.)
   return floorData;
 }
 
