@@ -4,8 +4,8 @@
 // member:prisma rule + 15 real models it missed); these tests pin the structural contract: any receiver
 // matches, the 3-part chain + distinctive-verb guards keep precision, and it's wired into the floor scan.
 import { describe, expect, test } from "bun:test";
-import { adapterKeys } from "../helpers/coupling.js";
-import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
+import { adapterKeys, scan_file_keys } from "../helpers/coupling.js";
+
 
 const keys = (text: string) => adapterKeys("member-access", "x.ts", text).map((h) => `${h.value}:${h.produces ? "P" : "C"}`).sort();
 

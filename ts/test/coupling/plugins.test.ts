@@ -9,10 +9,10 @@ import { _loadManifestFrom, _loadCodeAdaptersFrom } from "../../src/codebase/cou
 import { isRouteAnnotation, routeAnnotationMethod, _resetRouteAnnotations } from "../../src/codebase/coupling/frameworks/route_annotations.js";
 import { httpClientCallRegex, _resetHttpClients } from "../../src/codebase/coupling/frameworks/http_clients.js";
 import { isOrmRead, _resetOrmMethods } from "../../src/codebase/coupling/frameworks/orm_methods.js";
-import { scan_file_keys, _resetAdapterPlugins } from "../../src/codebase/coupling/adapters/index.js";
+import { scan_file_keys, resetFrameworkPlugins } from "../helpers/coupling.js";
 
 const FX = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "plugins");
-afterEach(() => { _resetRouteAnnotations(); _resetHttpClients(); _resetOrmMethods(); _resetAdapterPlugins(); });
+afterEach(() => { _resetRouteAnnotations(); _resetHttpClients(); _resetOrmMethods(); resetFrameworkPlugins(); });
 
 describe("framework plugins", () => {
   test("a declarative frameworks.json manifest registers route-annotation vocabulary", () => {
@@ -37,11 +37,17 @@ describe("framework plugins", () => {
     expect(isOrmRead("lookup_all")).toBe(true);          // …registered from data
   });
 
-  test("a code KeyKind adapter is loaded and detects keys the builtins can't", async () => {
-    const src = 'function publish() { bus.topic("orders.created"); }';
-    expect(scan_file_keys("svc.js", src).some((k) => k.kind === "queue" && k.value === "orders.created")).toBe(false);   // no builtin knows `bus.topic`
-    await _loadCodeAdaptersFrom(join(FX, "plugins"));
-    const hits = scan_file_keys("svc.js", src);
-    expect(hits.some((k) => k.kind === "queue" && k.value === "orders.created" && k.produces)).toBe(true);   // the plugin adapter grounds it
-  });
+  // CAPABILITY LOST, not deferred — stated plainly because it is a real reduction in what Seam can do.
+  //
+  // A CODE plugin is a JavaScript module exporting a full `KeyKind` (its own `scan`), loaded at runtime and
+  // registered as a live adapter. The floor that scans is now Rust, and a JS module cannot extend it: there is
+  // no port of this, only a different design (a WASM adapter ABI, or a declarative shape rich enough that code
+  // is unnecessary). The DECLARATIVE manifests — route annotations, ORM verbs, http clients, which are the
+  // documented plugin path and the three tests above — are ported and green.
+  //
+  // Product impact is bounded: code plugins load from the user config dir, and from the repo only under an
+  // explicit `SEAM_REPO_PLUGINS=1` opt-in with a stderr warning. Anyone relying on one will now find it
+  // silently inert against the core's floor, which is why this is recorded here rather than deleted.
+  test.todo("a code KeyKind adapter is loaded and detects keys the builtins can't", () => {});
+
 });

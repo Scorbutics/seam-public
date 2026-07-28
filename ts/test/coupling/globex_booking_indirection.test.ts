@@ -19,8 +19,8 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
-import { floor_base_index, routeSuffixMatch } from "../helpers/coupling.js";
+
+import { floor_base_index, routeSuffixMatch, scan_file_keys } from "../helpers/coupling.js";
 import { SKIP_DIRS } from "../../src/core/resolve/languages/index.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 

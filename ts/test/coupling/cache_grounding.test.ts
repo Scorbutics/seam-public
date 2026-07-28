@@ -7,9 +7,9 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { kindOf } from "../../src/codebase/coupling/adapters/index.js";
+
 import { build_module_graph } from "../helpers/scan.js";
-import { _resetMatcherCacheMem } from "../helpers/coupling.js";
+import { _resetMatcherCacheMem, kindOf } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("the `cache` kind resolves to its archetype (cache boundary + write/read edges), not GENERIC", () => {

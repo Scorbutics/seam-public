@@ -5,7 +5,7 @@
 import { spawnSync } from "node:child_process";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { walkFiles } from "../../core/resolve/walk.js";
-import { scannableForKeys } from "./adapters/index.js";
+import { scannableForKeys } from "./core_floor.js";
 
 // Files containing `value` literally — ripgrep (gitignore-aware, instant) with a walk+substring fallback. The
 // value is a plausible key (identifier/path), matched as a FIXED string, so there's no regex/shell hazard.

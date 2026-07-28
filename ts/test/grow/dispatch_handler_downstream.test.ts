@@ -13,7 +13,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { kindOf } from "../../src/codebase/coupling/adapters/index.js";
+import { kindOf } from "../helpers/coupling.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";

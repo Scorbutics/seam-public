@@ -10,8 +10,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { defs_in_file } from "../helpers/scan.js";
-import { scan as endpointMapScan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
-import { routeMatchSpecificity } from "../helpers/coupling.js";
+
+import { routeMatchSpecificity, adapterKeys } from "../helpers/coupling.js";
 import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites, runMatcher } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -27,7 +27,7 @@ describe("booking-app fixture — the declarative-client + route contract", () =
   });
 
   test("the endpoint-map config routes resolve to consume keys (the crossing source)", () => {
-    const vals = new Set(endpointMapScan("web/bookingService.js", read("web/bookingService.js")).map((k) => k.value));
+    const vals = new Set(adapterKeys("endpoint-map", "web/bookingService.js", read("web/bookingService.js")).map((k) => k.value));
     expect(vals.has("/acme/rest/member/booking/v1")).toBe(true);       // createBooking (bare base)
     expect(vals.has("/acme/rest/member/booking/v1/*")).toBe(true);     // updateBooking (base + '/{id}')
   });
@@ -36,7 +36,7 @@ describe("booking-app fixture — the declarative-client + route contract", () =
     // the crossing node is labelled by the operation the config declares (`updateBooking`) instead of the raw
     // route (`/…/v1/*`), so a footprint shows the symbol, not an opaque path. Keyed on the base+'/{id}' entry,
     // whose route is unique (the bare-base one collides with getBookings — one boundary per route path).
-    const hits = endpointMapScan("web/bookingService.js", read("web/bookingService.js"));
+    const hits = adapterKeys("endpoint-map", "web/bookingService.js", read("web/bookingService.js"));
     const upd = hits.find((k) => k.value === "/acme/rest/member/booking/v1/*");
     expect(upd?.label).toBe("updateBooking");
   });

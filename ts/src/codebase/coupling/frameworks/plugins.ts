@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { homedir } from "node:os";
 import type { KeyKind } from "../types.js";
-import { registerAdapter } from "../adapters/index.js";
+
 import { registerRouteAnnotations, type RouteAnnotation } from "./route_annotations.js";
 import { registerHttpClients, type HttpClient } from "./http_clients.js";
 import { registerOrmMethods, type OrmMethod } from "./orm_methods.js";
@@ -57,20 +57,20 @@ function _loadManifest(path: string): void {
   } catch (e) { process.stderr.write(`[plugins] skipped invalid manifest ${path}: ${(e as Error).message}\n`); }
 }
 
+// CODE ADAPTERS ARE NO LONGER LOADABLE. A code plugin is a JavaScript module exporting a full `KeyKind`
+// (its own `scan`), registered at runtime as a live adapter. The floor that scans is the Rust core now, and a
+// JS module cannot extend it — this is a capability LOSS, not a deferral, and reinstating it needs a different
+// design (a WASM adapter ABI, or a declarative shape rich enough that code is unnecessary).
+//
+// It stays a loud WARNING rather than a silent no-op: a user who dropped an adapter into their plugins dir
+// must be told it is inert, not left to conclude their coupling simply is not there. The DECLARATIVE manifests
+// below (route annotations, ORM verbs, http clients) are the documented plugin path and are fully supported —
+// they register with the core.
 async function _loadCodeAdapters(dir: string): Promise<void> {
   if (!existsSync(dir)) return;
   let files: string[];
   try { files = readdirSync(dir).filter((f) => /\.(mjs|cjs|js)$/.test(f)).sort(); } catch { return; }
-  for (const f of files) {
-    const full = join(dir, f);
-    try {
-      const mod: any = await import(pathToFileURL(full).href);
-      const adapter: KeyKind | undefined = mod.default ?? mod.ADAPTER;
-      if (adapter && typeof adapter.scan === "function" && typeof adapter.kind === "string") {
-        if (registerAdapter(adapter)) process.stderr.write(`[plugins] loaded code adapter '${adapter.name ?? adapter.kind}' from ${full}\n`);
-      } else process.stderr.write(`[plugins] ${full} exports no KeyKind (default/ADAPTER with kind+scan) — skipped\n`);
-    } catch (e) { process.stderr.write(`[plugins] failed to load ${full}: ${(e as Error).message}\n`); }
-  }
+  if (files.length) process.stderr.write(`[plugins] ${files.length} code adapter(s) in ${dir} are NOT loaded: code plugins are unsupported against the Rust floor. Use a declarative frameworks.json manifest instead.\n`);
 }
 
 // used by tests to load a specific dir directly, bypassing the once-guard

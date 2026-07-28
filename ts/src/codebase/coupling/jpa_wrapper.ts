@@ -16,8 +16,7 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { walkFiles } from "../../core/resolve/walk.js";
-import { maskComments } from "./adapters/util.js";
-import { scannableForKeys } from "./adapters/index.js";
+import { maskComments, scannableForKeys } from "./core_floor.js";
 import { COUPLING } from "./config.js";
 import type { EngineCtx } from "../engine_ctx.js";
 import type { KeyHit } from "./types.js";

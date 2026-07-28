@@ -72,3 +72,8 @@ export const classifyReceivers = (repo: string, model?: string, claudeBin?: stri
   core().classifyReceivers(repo, model, claudeBin);
 export const classifyAnnotations = (repo: string, model?: string, claudeBin?: string): number =>
   core().classifyAnnotations(repo, model, claudeBin);
+
+/// "Is this file worth scanning for shared keys?" and the comment mask — both the core's, so a caller here
+/// bounds its walk by exactly what the floor scans.
+export const scannableForKeys = (file: string): boolean => core().scannableForKeys(file);
+export const maskComments = (text: string): string => core().maskComments(text);
