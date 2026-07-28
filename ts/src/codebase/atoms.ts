@@ -119,7 +119,6 @@ export const _STRING_KINDS = new Set(["string", "string_literal", "interpreted_s
 export const _SPREAD_KINDS = new Set(["spread_element", "rest_pattern", "splat_argument", "object_spread", "dictionary_splat", "subscript_expression", "subscript", "element_access_expression"]);
 export const available = isAvailable;
 
-export interface Atom { start: number; end: number; names: Set<string>; }
 export interface ContractMember { name: string; invoked: boolean; ranges: number[][]; }
 
 export function lang_for(filePath: string): string | null {
@@ -239,26 +238,6 @@ function _merge_lines(lines: number[]): number[][] {
 // Anchors to the function enclosing startLine, then collects its nested function-like nodes
 // ("atoms") that fall entirely inside [startLine, endLine], each tagged with the identifier names
 // it references. Used to decompose a changed region into its nested-function-sized sub-units.
-export async function extract_atoms(content: string, lang: string, startLine: number, endLine: number): Promise<Atom[]> {
-  if (!isAvailable()) return [];
-  const ctx = await makeCtx(content, lang);
-  if (!ctx) return [];
-  const func = _anchor_func(ctx, startLine);
-  if (!func) return [];
-  const body = _body_of(ctx, func);
-  const funcs: any[] = [];
-  const walk = (n: any) => { for (const c of ctx.children(n)) { if (_FUNCLIKE.has(c.type)) funcs.push(c); else walk(c); } };
-  walk(body);
-  const atoms: Atom[] = [];
-  for (const n of funcs) {
-    const [s, e] = ctx.span(n);
-    if (s < startLine || e > endLine) continue;
-    const names = new Set(ctx.collect(n, (k) => k.includes("identifier")).map((i) => ctx.text(i)));
-    atoms.push({ start: s, end: e, names });
-  }
-  return atoms;
-}
-
 // Anchors to the function enclosing startLine and derives its "contract": the external names the
 // function's boundary depends on — plain params, destructured signature fields, and fields pulled
 // out of a param via a body-level destructure (`const { a, b } = paramName`), where the source param

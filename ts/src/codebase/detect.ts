@@ -5,7 +5,7 @@
 // assembly, matching the anchor/scan/grow/coupling phase-folder split the rest of codebase/ already uses.
 import { readFileSync } from "node:fs";
 import { basename, join, normalize } from "node:path";
-import { type Edge, type Graph, connected_components } from "../core/graph_ir.js";
+import { type Edge, type Graph } from "../core/graph_ir.js";
 import { walk as repoWalk } from "../core/resolve/walk.js";
 import * as atoms from "./atoms.js";
 import { RENDER } from "./config.js";
@@ -145,29 +145,18 @@ export async function detect_subcores(g: Graph, repo: string): Promise<void> {
   if (!lang) return;
   const content = readRepoFile(repo, node.file);
   if (content === null) return;
-  const ats = await atoms.extract_atoms(content, lang, node.start, node.end);
-  if (ats.length < 2) return;
-  const cut = Math.max(1, Math.floor(ats.length / 2));
-  const freq = new Map<string, number>();
-  for (const a of ats) for (const n of a.names) freq.set(n, (freq.get(n) ?? 0) + 1);
-  const ambient = new Set([...freq.entries()].filter(([, c]) => c > cut).map(([n]) => n));
-  const ids = ats.map((_, i) => `${g.anchor}.b${i}`);
-  const byName = new Map<string, string[]>();
-  const edges: [string, string][] = [];
-  ats.forEach((a, i) => { for (const name of a.names) if (!ambient.has(name)) { if (!byName.has(name)) byName.set(name, []); byName.get(name)!.push(ids[i]); } });
-  for (const members of byName.values()) for (const x of members.slice(1)) edges.push([members[0], x]);
-  const groups = connected_components(ids, edges);
-  if (new Set(groups.values()).size < 2) return;
-  const byGroup = new Map<string, number[]>();
-  ats.forEach((_, i) => { const k = groups.get(ids[i])!; if (!byGroup.has(k)) byGroup.set(k, []); byGroup.get(k)!.push(i); });
-  const subcores: any[] = [];
-  for (const gid of [...byGroup.keys()].sort()) {
-    const idxs = byGroup.get(gid)!;
-    const ranges = idxs.map((i) => [ats[i].start, ats[i].end]);
-    const reads = [...new Set(idxs.flatMap((i) => [...ats[i].names].filter((n) => !ambient.has(n))))].sort();
-    subcores.push({ id: gid, label: reads.length ? reads[0] : gid, ranges, reads, proposed: true });
-  }
-  node.subcores = subcores;
+  // THE CLUSTERING IS THE CORE'S (`seam_lang::atoms::subcores`). It extracts the anchor's atoms, drops the
+  // AMBIENT names — anything more than half of them mention, which is the function's own scaffolding and
+  // would fuse every atom into one useless group — and unions what is left transitively. Rows arrive as
+  // `[id, label, "s:e,s:e", read…]`; `proposed` is added here because it is a presentation fact (these are
+  // suggestions for a reviewer, never resolved structure), not something the clustering decides.
+  const rows = ((await import("./rust_core.js")).loadAddon()?.subcoresOf(content, lang, node.start, node.end) ?? []) as string[][];
+  if (!rows.length) return;
+  node.subcores = rows.map(([id, label, ranges, ...reads]) => ({
+    id, label, reads,
+    ranges: ranges ? ranges.split(",").map((r) => r.split(":").map(Number)) : [],
+    proposed: true,
+  }));
 }
 
 export async function detect_contract(g: Graph, repo: string): Promise<void> {

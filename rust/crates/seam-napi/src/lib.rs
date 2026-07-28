@@ -1589,6 +1589,23 @@ pub fn extract_atoms(content: String, lang: String, start_line: u32, end_line: u
         .collect()
 }
 
+/// subcoresOf — the proposed INTERNAL cuts of a god-object anchor, as `[id, label, "s:e,s:e", read…]` rows.
+/// Atoms are re-extracted here so the caller passes source rather than marshalling an atom list back across
+/// the boundary for the round trip.
+#[napi]
+pub fn subcores_of(content: String, lang: String, start_line: u32, end_line: u32) -> Vec<Vec<String>> {
+    let atoms = seam_lang::atoms::extract_atoms(&content, &lang, start_line as usize, end_line as usize);
+    seam_lang::atoms::subcores(&atoms)
+        .into_iter()
+        .map(|sc| {
+            let ranges = sc.ranges.iter().map(|(s, e)| format!("{s}:{e}")).collect::<Vec<_>>().join(",");
+            let mut row = vec![sc.id, sc.label, ranges];
+            row.extend(sc.reads);
+            row
+        })
+        .collect()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy
