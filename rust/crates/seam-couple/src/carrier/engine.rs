@@ -270,3 +270,57 @@ pub fn anchor_carrier_accs(repo: &str, file: &str, text: &str, lo: usize, hi: us
 pub fn resolve_anchor_carrier(repo: &str, anchor_file: &str, anchor_text: &str, lo: usize, hi: usize, opts: &CarrierOpts) -> (Arc<GroundingIndex>, Vec<KeyHit>) {
     (carrier_channel_index(repo, opts), anchor_carrier_accs(repo, anchor_file, anchor_text, lo, hi))
 }
+
+#[cfg(test)]
+mod grounding_tests {
+    use super::*;
+
+    // The CARRIER http-route MEDIUM — the project-level learning lever. A learned signature for a project's
+    // OWN HTTP client (a custom `Vue.http`/`apiClient` wrapper) has to ground the frontend call under the SAME
+    // `http-route <path>` key the deterministic adapters use, so it MEETS the backend handler. These pin the
+    // medium → kind mapping, the URL normalisation, and the partition that keeps URLs and file paths from
+    // ever cross-grounding. Pure — no repo, no model. Ported from `carrier_http_medium.test.ts`.
+    fn hit(value: &str, produces: bool, medium: Option<&str>, file: &str, partial: bool) -> CarrierHit {
+        CarrierHit {
+            value: value.to_string(),
+            produces,
+            partial,
+            access: Access { file: file.to_string(), line: 1 },
+            medium: medium.map(String::from),
+        }
+    }
+
+    #[test]
+    fn http_route_hit_grounds_under_the_normalised_route_key() {
+        let idx = expand_and_index_hits(&[
+            hit("/acme/rest/member/booking/v1", false, Some("http-route"), "web/src/bookingService.js", false), // learned Vue.http consumer
+            hit("/acme/rest/member/booking/v1", true, Some("http-route"), "api/BookingsService.java", false),   // backend handler producer
+        ]);
+        let g = idx.get("http-route /acme/rest/member/booking/v1").expect("the shared route key");
+        assert!(g.consumers.iter().any(|a| a.file == "web/src/bookingService.js"));
+        assert!(g.producers.iter().any(|a| a.file == "api/BookingsService.java")); // grounded across the stack
+    }
+
+    #[test]
+    fn url_is_normalised_to_the_route_key_shape() {
+        let idx = expand_and_index_hits(&[hit("/acme/booking/{id}/cancel", false, Some("http-route"), "f.js", false)]);
+        assert!(idx.contains_key("http-route /acme/booking/*/cancel"), "{:?}", idx.keys().collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn no_medium_keeps_the_data_file_default() {
+        let idx = expand_and_index_hits(&[hit("exports/report.csv", true, None, "w.rb", false)]);
+        assert_eq!(idx.keys().collect::<Vec<_>>(), vec!["data-file exports/report.csv"]);
+    }
+
+    #[test]
+    fn http_route_and_data_file_never_cross_ground() {
+        let idx = expand_and_index_hits(&[
+            hit("/data/*", false, Some("http-route"), "f.js", true), // an http-route pattern
+            hit("/data/users.json", true, None, "w.rb", false),      // a data-file literal that string-matches the glob
+        ]);
+        // the data-file literal is NOT pulled into the http-route pattern's producers — separate kinds.
+        assert!(idx.get("http-route /data/*").map(|s| s.producers.is_empty()).unwrap_or(true));
+        assert!(idx.contains_key("data-file /data/users.json"));
+    }
+}

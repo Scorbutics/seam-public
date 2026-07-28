@@ -455,15 +455,10 @@ async function _learn(
     return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
   }
 
-  const { resolveAnchorCarrier } = await import("./carrier/engine.js");
-  const { index: carrierIndex, accesses: carrierAccesses } = await resolveAnchorCarrier(repo, anchorFile, anchorText, lo, hi, llmOpts, ctx);
-
-  const merged = mergeGrounding(llmKeyIndex.size ? llmKeyIndex : undefined, carrierIndex);
-  return {
-    carrierAccesses,
-    groundingIndex: merged.size ? merged : undefined,   // empty → undefined, so resolveCoupling keeps the cached base index (no copy)
-    proposedKeys,
-  };
+  // THE CARRIER AXIS MOVED TO THE CORE (`seam-couple::carrier`), which owns the trace, the teacher-2 glob
+  // grounding and the repo-wide index, and merges them into the grounding index inside `resolve_coupling`.
+  // Nothing is dropped here: a Ruby anchor's carrier accesses reach the graph through the addon.
+  return { groundingIndex: llmKeyIndex.size ? llmKeyIndex : undefined, proposedKeys };
 }
 
 // P3 GATE (perf guard) — the repo-wide grounding build only earns its keep when the ANCHOR's span touches a

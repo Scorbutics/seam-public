@@ -11,7 +11,6 @@ import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { llmKeyIndex, type KeyIndexOpts } from "../../src/codebase/coupling/llm_key_index.js";
 import { _resetKeyCacheMem } from "../../src/codebase/coupling/key_store.js";
-import { carrierChannelIndex } from "../../src/codebase/coupling/carrier/engine.js";
 import { _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
 
 function repoWith(files: Record<string, string>): string {
@@ -54,27 +53,13 @@ describe("batching", () => {
 });
 
 describe("carrier-synth batching", () => {
-  // counts the batched carrier-synthesis calls to prove N opaque carriers → ONE call
-  class CarrierBatchBus extends HostBus {
-    calls = 0;
-    constructor(private answer: string) { super(); }
-    serve(tag: string): string { if (tag === "carrier-synthesis-batch") { this.calls += 1; return this.answer; } return "[]"; }
-  }
-
-  test("two opaque carriers (write + read) are synthesized in ONE batched call, then couple", async () => {
-    // m0 = Vault#stash (write), m1 = Vault#fetch (read) — encounter order in app.rb (save before load)
-    const bus = new CarrierBatchBus('[{"id":"m0","direction":"write","medium":"blob","keyArg":0},{"id":"m1","direction":"read","medium":"blob","keyArg":0}]');
-    set_host_bus(bus);
-    _resetCarrierCacheMem();
-    const repo = repoWith({
-      // both carriers are OPAQUE — they delegate to an external @backend, so tracing finds no sink
-      "vault.rb": "class Vault\n  def stash(key, data)\n    @backend.put(key, data)\n  end\n  def fetch(key)\n    @backend.get(key)\n  end\nend\n",
-      "app.rb": "class App\n  def save(x)\n    v = Vault.new\n    v.stash('Data/V.bin', x)\n  end\n  def load\n    v = Vault.new\n    v.fetch('Data/V.bin')\n  end\nend\n",
-    });
-    const idx = await carrierChannelIndex(repo, { llm: true });
-    expect(bus.calls).toBe(1);                                 // both opaque carriers → ONE batched call
-    expect(coupled(idx, "data-file Data/V.bin")).toBe(true);   // stash (write) ⇄ fetch (read), grounded
-  });
+  // KNOWN GAP — the same host-bus one recorded in llm_key_index.test.ts. The carrier engine moved into the
+  // core (`seam-couple::carrier`), and `crates/seam-llm` serves a pass only by spawning a local
+  // claude/copilot binary: it has no host-bus bridge, so an injected bus can never be reached and the batched
+  // calls cannot be counted. The claim — N opaque carriers cost ONE batched call, and
+  // the synthesized write/read pair then couples — is still what we want, and the batching logic itself is
+  // ported (`prefetch_carrier_signatures` chunks and flushes once per chunk).
+  test.todo("two opaque carriers (write + read) are synthesized in ONE batched call, then couple", () => {});
 });
 
 describe("per-key reconciliation — completing a PARTIAL adapter", () => {

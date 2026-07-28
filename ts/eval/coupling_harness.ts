@@ -20,7 +20,6 @@ import { rustDiscover } from "../src/codebase/grow/rust_discover.js";
 import { isFlowSubject } from "../src/codebase/coupling/index.js";
 import { _resetKeyCacheMem } from "../src/codebase/coupling/key_store.js";
 import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
-import { _resetParseCache } from "../src/languages/ruby/carrier_trace.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CASES = join(__dir, "coupling-cases.json");
@@ -80,7 +79,7 @@ const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(
 // each run is INDEPENDENT: a fresh fixture copy (unique path → fresh per-path caches, no .seam) + reset budgets/parse
 function freshRun(repo: string): string {
   const d = mkdtempSync(join(tmpdir(), "cev-")); cpSync(join(FIXTURES, repo), d, { recursive: true }); rmSync(join(d, ".seam"), { recursive: true, force: true });
-  _resetKeyCacheMem(); _resetCarrierCacheMem(); _resetParseCache();
+  _resetKeyCacheMem(); _resetCarrierCacheMem();
   return d;
 }
 

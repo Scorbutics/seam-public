@@ -9,7 +9,7 @@
 // entry cache migrate into this same object in follow-up stages.
 import { COUPLING } from "./coupling/config.js";
 import type { GroundingIndex } from "./coupling/types.js";
-import type { CarrierSignature } from "./coupling/carrier/synth.js";
+import type { CarrierSignature } from "./coupling/carrier/cache.js";
 
 export class EngineCtx {
   // --- coupling: repo-wide grounding indices (were module-level `_CACHE`/`_IDX_CACHE`/`_RUBY_INDEX`/`_idxCache`) ---

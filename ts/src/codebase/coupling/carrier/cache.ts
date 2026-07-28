@@ -7,9 +7,20 @@
 // (run `--data-coupling llm` in CI, commit `.seam/`) warms this for a whole team.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
-import type { CarrierSignature } from "./synth.js";
 import { ensureSeamGitignore, sharedSeamDir } from "../seam_dir.js";
 import { recordAdapterUsed, recordAdapterLearned } from "../ledger.js";
+import { registerPass } from "../../../core/llm.js";
+
+// A learned carrier adapter. `name`/`description` are LLM-given so `.seam/` is human-reviewable (and
+// promotable) — not opaque content-hashes. `name` is short + kebab-case; `description` is one line.
+// The SYNTHESIS that produces one now lives in the core (`seam-couple::learn::carrier`); what stays here is
+// the STORE the CLI reads (`seam-adapters` lists and promotes these) and the shape it holds.
+export interface CarrierSignature { direction: "read" | "write"; medium: string; keyArg: number | null; name: string; description: string }
+
+// Carrier read/write classification is a semantic judgement and LEARN-ONCE (cached to `.seam`). The pass is
+// SERVED by the core, but it is registered here so `--list-passes` still advertises what the engine will
+// run — an inventory that silently drops a pass the engine still spends money on is worse than none.
+registerPass({ tag: "carrier-synthesis-batch", tier: "strong", note: "batch carrier read/write classification (semantic, learn-once)" });
 
 const SCHEMA = 1;
 const _file = "carrier-signatures.json";
