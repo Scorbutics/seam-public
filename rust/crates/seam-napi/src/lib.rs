@@ -1641,6 +1641,27 @@ pub fn extract_consumer_feeds(content: String, file: String, anchor_name: String
         .collect()
 }
 
+/// dynamicImportCandidates — files that load the anchor by STRING PATH, as `[rel, line]` rows (1-based line).
+/// `resolvedFiles` are the consumers that already have a RESOLVED edge into the anchor and are excluded:
+/// reporting those again would contradict the graph's own edge with a "cannot see this" claim.
+#[napi]
+pub fn dynamic_import_candidates(repo: String, anchor_rel: String, resolved_files: Vec<String>, cap: u32) -> Vec<Vec<String>> {
+    let resolved: std::collections::HashSet<String> = resolved_files.into_iter().collect();
+    seam_lang::atoms::dynamic_import_candidates(&repo, &anchor_rel, &resolved, cap as usize)
+        .into_iter()
+        .map(|(rel, line)| vec![rel, line.to_string()])
+        .collect()
+}
+
+/// dynamicDispatchEvidence — why a node's body dispatches out through something static resolution cannot
+/// thread, or "" when it does not. `fileText` supplies the file's imports (a registry subscript only counts
+/// when its receiver came from another module); `body` is the node's own span.
+#[napi]
+pub fn dynamic_dispatch_evidence(file_text: String, body: String) -> String {
+    let imports = seam_lang::atoms::imported_idents(&file_text);
+    seam_lang::atoms::dynamic_dispatch_evidence(&body, &imports).unwrap_or_default()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy

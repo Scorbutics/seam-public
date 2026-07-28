@@ -4,24 +4,19 @@
 // codebase.ts (the anchor-relative assembly core) — this is scan-phase work over source text/AST, not seam
 // assembly, matching the anchor/scan/grow/coupling phase-folder split the rest of codebase/ already uses.
 import { readFileSync } from "node:fs";
-import { basename, join, normalize } from "node:path";
+import { join } from "node:path";
 import { type Edge, type Graph } from "../core/graph_ir.js";
-import { walk as repoWalk } from "../core/resolve/walk.js";
 import * as atoms from "./atoms.js";
+import { loadAddon } from "./rust_core.js";
 import { RENDER } from "./config.js";
 import { EXTENSIONS as _TS_EXT } from "../languages/typescript/dispatch.js";
 
-const stemOf = (p: string) => { const b = basename(p); const d = b.lastIndexOf("."); return d > 0 ? b.slice(0, d) : b; };
 
-// TODO this constant should be into a JS/TS specific scan module
-const _DYNAMIC_IMPORT_RE = /import\(\s*['"]([^'"]+)['"]\s*\)/g;
 // `import()` is a JS/TS-only construct, so this scan is genuinely TS-only (unlike the generic repo walks
 // elsewhere in this file) — sourced from the TS provider's own extension list rather than a hand-kept copy,
 // so it can't silently drift the way this list once did (it was missing .mts/.cts until this fix).
 const _SCAN_EXT = _TS_EXT;
-const _CB_SKIP = new Set(["node_modules", ".git", "dist", "build", ".next", "out", ".turbo", "coverage", ".cache", "vendor"]);
 const _BLINDSPOT_CAP = RENDER.blindspotCap;
-const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.endsWith("/") ? n.slice(0, -1) : n; };
 
 // Layer 2: consumers that load the anchor via a STRING-PATH dynamic import — a text scan (no
 // tree-sitter), surfaced as a SUGGESTED blind spot (never a resolved edge).
@@ -38,37 +33,17 @@ const np = (p: string) => { const n = normalize(p); return n.length > 1 && n.end
 export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
   if (!g.anchor || !g.nodes.has(g.anchor) || !repo) return;
   const anchorFile = g.nodes.get(g.anchor)!.file;
-  const stem = anchorFile ? stemOf(anchorFile) : "";
-  if (!stem) return;
-  const anchorAbs = np(join(repo, anchorFile));
-  const resolvedFiles = new Set(g.edgesQuery({ dst: g.anchor }).map((e) => g.nodes.get(e.src)?.file).filter(Boolean));
-  const candidates: Edge[] = [];
-  outer: for (const [dir, files] of repoWalk(repo, _CB_SKIP)) {
-    for (const fn of files) {
-      if (!_SCAN_EXT.some((e) => fn.endsWith(e))) continue;
-      const fpath = join(dir, fn);
-      if (np(fpath) === anchorAbs) continue;
-      const rel = np(fpath).startsWith(np(repo) + "/") ? np(fpath).slice(np(repo).length + 1) : np(fpath);
-      if (resolvedFiles.has(rel)) continue;
-      let text: string;
-      try { text = readFileSync(fpath, "utf-8"); } catch { continue; }
-      if (!text.includes("import(") || !text.includes(stem)) continue;
-      text.split("\n").forEach((line, idx) => {
-        if (!line.includes("import(")) return;
-        for (const m of line.matchAll(_DYNAMIC_IMPORT_RE)) {
-          if (stemOf(m[1]) === stem) {
-            candidates.push({ src: g.anchor, dst: `${rel}:${idx + 1}`, kind: "dynamic-import", provenance: "SUGGESTED", line: 0 });
-          }
-        }
-      });
-      if (candidates.length >= _BLINDSPOT_CAP) break outer;
-    }
-  }
-  if (candidates.length) {
-    g.blindspots.push({ node: g.anchor, mechanism: "dynamic-import",
-      evidence: `loaded via dynamic import in ${candidates.length} place(s) — a string-path load the reference resolver can't see`,
-      candidates });
-  }
+  if (!anchorFile) return;
+  // Files already RESOLVED into the anchor are excluded by the core. A literal `import("./x")` resolves like a
+  // static import and the resolver already follows it, so reporting those again would contradict the graph's
+  // own edge with a "cannot see this" claim — only the genuinely-unresolved residue is a blind spot.
+  const resolved = [...new Set(g.edgesQuery({ dst: g.anchor }).map((e) => g.nodes.get(e.src)?.file).filter(Boolean))] as string[];
+  const rows = (loadAddon()?.dynamicImportCandidates(repo, anchorFile, resolved, _BLINDSPOT_CAP) ?? []) as string[][];
+  if (!rows.length) return;
+  const candidates: Edge[] = rows.map(([rel, line]) => ({ src: g.anchor, dst: `${rel}:${line}`, kind: "dynamic-import", provenance: "SUGGESTED", line: 0 }));
+  g.blindspots.push({ node: g.anchor, mechanism: "dynamic-import",
+    evidence: `loaded via dynamic import in ${candidates.length} place(s) — a string-path load the reference resolver can't see`,
+    candidates });
 }
 
 // DOWNSTREAM dynamic-dispatch blindspot (the twin of the UP dynamic-import scan above): a footprint node whose
@@ -82,19 +57,18 @@ export function detect_dynamic_import_blindspots(g: Graph, repo: string): void {
 //      `arr[i]` is NOT imported, so it's excluded; a literal key `M["x"]` IS resolvable, so it's excluded.
 // Emitted as `dynamic-dispatch` (the render's frontier-⟂/Blindspots already consumes that mechanism), naming the
 // node + the dispatch so a reader knows the flow provably continues THERE — instead of silently dropping the sink.
-const _DYN_IMPORT_NONLITERAL = /\bimport\(\s*[^'"\s)]/;
 export function detect_dynamic_dispatch_blindspots(g: Graph, repo: string): void {
   if (!repo) return;
   const _BOUNDARY = new Set(["table", "db-table", "route", "queue", "topic", "event", "service", "cache", "file"]);
-  const textCache = new Map<string, { lines: string[]; imports: Set<string> } | null>();
-  const load = (rel: string) => {
+  const core = loadAddon();
+  if (!core) return;
+  const textCache = new Map<string, string[] | null>();
+  const load = (rel: string): string[] | null => {
     if (textCache.has(rel)) return textCache.get(rel)!;
-    let text: string;
-    try { text = readFileSync(join(repo, rel), "utf-8"); } catch { textCache.set(rel, null); return null; }
-    const imports = new Set<string>();
-    for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s+from/g)) for (const p of m[1].split(",")) { const nm = p.trim().split(/\s+as\s+/).pop()!.trim(); if (/^\w+$/.test(nm)) imports.add(nm); }
-    for (const m of text.matchAll(/import\s+(\w+)\s*(?:,|from)/g)) imports.add(m[1]);
-    const rec = { lines: text.split("\n"), imports }; textCache.set(rel, rec); return rec;
+    let lines: string[] | null = null;
+    try { lines = readFileSync(join(repo, rel), "utf-8").split("\n"); } catch { /* unreadable */ }
+    textCache.set(rel, lines);
+    return lines;
   };
   let emitted = 0;
   const seen = new Set<string>();
@@ -103,24 +77,10 @@ export function detect_dynamic_dispatch_blindspots(g: Graph, repo: string): void
     if (!n.file || (n as any).coupling || _BOUNDARY.has(n.kind) || !_SCAN_EXT.some((e) => n.file.endsWith(e))) continue;
     if (!(n.end > n.start)) continue;   // needs a real body span
     const key = `${n.file}#${n.start}`; if (seen.has(key)) continue; seen.add(key);
-    const rec = load(n.file); if (!rec) continue;
-    const body = rec.lines.slice(n.start, n.end + 1).join("\n");
-    let evidence: string | null = null;
-    if (_DYN_IMPORT_NONLITERAL.test(body)) evidence = "dynamic-imports a non-literal module path";
-    else for (const ident of rec.imports) {
-      // an imported registry subscripted by a runtime (non-literal) key whose RESULT is ACTIVATED as code — awaited,
-      // called, constructed, or dynamically imported (directly, or via a `const X = REG[key]` binding then `await X`
-      // / `X(` / `new X` / `import(X)`). The activation check is what separates a real service/module dispatch
-      // (PaymentServiceMap[key] → await → .create) from a scalar ENUM/const lookup (`ErrorCode[key]`, a string) —
-      // the latter has an identical subscript SHAPE but never resolves to an impl with a data sink, so it's not a
-      // blindspot. Purely syntactic: `await`/`new`/`(`/`import(` on the subscript or its bound variable.
-      const sub = `${ident}\\[\\s*[^\\]'"\\s][^\\]]*\\]`;   // REG[<non-literal key>]
-      const direct = new RegExp(`(?:await\\s+|new\\s+|import\\(\\s*)${sub}|${sub}\\s*\\(`);
-      const bind = new RegExp(`(?:const|let|var)\\s+(\\w+)\\s*=\\s*${sub}`, "g");
-      let hit = direct.test(body);
-      if (!hit) for (const m of body.matchAll(bind)) { const v = m[1]; if (new RegExp(`(?:await\\s+${v}\\b|\\b${v}\\s*\\(|new\\s+${v}\\b|import\\(\\s*${v}\\b)`).test(body)) { hit = true; break; } }
-      if (hit) { evidence = `dispatches through the imported registry \`${ident}[…]\``; break; }
-    }
+    const lines = load(n.file); if (!lines) continue;
+    // The core reads the FILE for its imports and the BODY for the dispatch shape — a registry subscript only
+    // counts when its receiver came from another module, which the node's own span cannot tell you.
+    const evidence = core.dynamicDispatchEvidence(lines.join("\n"), lines.slice(n.start, n.end + 1).join("\n")) as string;
     if (!evidence) continue;
     g.blindspots.push({ node: n.id, mechanism: "dynamic-dispatch",
       evidence: `${n.label} ${evidence} — the concrete impl (and its data sink) is chosen at runtime; static resolution stops here`,

@@ -7,6 +7,8 @@
 
 use crate::node_kinds::{is_body, is_call, is_funclike, is_param_list, is_param_node};
 use crate::treesitter::Ctx;
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use tree_sitter::Node;
 
@@ -335,6 +337,132 @@ pub fn extract_consumer_feeds(content: &str, file: &str, anchor_name: &str) -> V
     provider.consumer_feeds(&ctx, anchor_name)
 }
 
+// ── DYNAMIC-DISPATCH DETECTION ───────────────────────────────────────────────────────────────────────────
+// Two blind spots static resolution cannot thread, both TS/JS-only and both purely SYNTACTIC — a code SHAPE,
+// never a guess at a name's meaning.
+
+/// TS/JS source extensions. `import()` is a JS/TS-only construct, so these scans are genuinely language-bound
+/// rather than a generic walk that happens to be applied to one language.
+pub const TS_EXTENSIONS: &[&str] = &[".ts", ".tsx", ".js", ".jsx", ".mts", ".cts", ".mjs", ".cjs"];
+
+fn stem_of(p: &str) -> &str {
+    let b = p.rsplit('/').next().unwrap_or(p);
+    match b.rfind('.') {
+        Some(i) if i > 0 => &b[..i],
+        _ => b,
+    }
+}
+
+/// A quoted, string-literal dynamic import: `import("./x")`.
+static DYNAMIC_IMPORT_RE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"import\(\s*['"]([^'"]+)['"]\s*\)"#).unwrap());
+
+/// Files that dynamically import the anchor by STRING PATH — a load the reference resolver cannot see, so it
+/// is surfaced as a SUGGESTED blind spot and never as a resolved edge.
+///
+/// `resolved` is the set of files that ALREADY have a resolved edge into the anchor, and excluding them is the
+/// point: a literal `import("./x")` resolves like a static import and the TypeScript resolver already follows
+/// it, so reporting those again would contradict the graph's own edge with a "cannot see this" claim. Only the
+/// genuinely-unresolved residue is a real blind spot. Returns `(rel, 1-based line)`, capped.
+pub fn dynamic_import_candidates(repo: &str, anchor_rel: &str, resolved: &std::collections::HashSet<String>, cap: usize) -> Vec<(String, usize)> {
+    let stem = stem_of(anchor_rel);
+    if stem.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for rel in seam_fs::source_files(repo, |r| TS_EXTENSIONS.iter().any(|e| r.ends_with(e))) {
+        if out.len() >= cap {
+            break;
+        }
+        if rel == anchor_rel || resolved.contains(&rel) {
+            continue;
+        }
+        let Ok(text) = std::fs::read_to_string(format!("{repo}/{rel}")) else { continue };
+        // cheap reject before the regex: both substrings must be present at all
+        if !text.contains("import(") || !text.contains(stem) {
+            continue;
+        }
+        for (idx, line) in text.lines().enumerate() {
+            if !line.contains("import(") {
+                continue;
+            }
+            for c in DYNAMIC_IMPORT_RE.captures_iter(line) {
+                if stem_of(&c[1]) == stem {
+                    out.push((rel.clone(), idx + 1));
+                }
+            }
+        }
+    }
+    out.truncate(cap);
+    out
+}
+
+/// A dynamic import of a NON-literal: `import(x)` where x is not a quoted string. A literal is statically
+/// resolvable and already followed, so only the non-literal form is a blind spot.
+static DYN_IMPORT_NONLITERAL: Lazy<Regex> = Lazy::new(|| Regex::new(r#"\bimport\(\s*[^'"\s)]"#).unwrap());
+
+/// The identifiers a file IMPORTS — named, aliased and default. A registry subscript only counts when its
+/// receiver came from another module: a local `arr[i]` is data, an imported `REG[key]` is a dispatch table.
+pub fn imported_idents(text: &str) -> Vec<String> {
+    static NAMED: Lazy<Regex> = Lazy::new(|| Regex::new(r"import\s+(?:type\s+)?\{([^}]*)\}\s+from").unwrap());
+    static DEFAULT: Lazy<Regex> = Lazy::new(|| Regex::new(r"import\s+(\w+)\s*(?:,|from)").unwrap());
+    static WORD: Lazy<Regex> = Lazy::new(|| Regex::new(r"^\w+$").unwrap());
+    // ORDER IS THE TS `Set`'s INSERTION ORDER — all named/aliased bindings in match order, then the default
+    // imports — because `dynamic_dispatch_evidence` names ONE registry and picks the first that matches. A
+    // sorted or hashed order would name a different one on a body that dispatches through two, which is a
+    // silent change to the emitted sentence rather than a fix.
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |n: String, out: &mut Vec<String>| { if !out.contains(&n) { out.push(n); } };
+    for c in NAMED.captures_iter(text) {
+        for part in c[1].split(',') {
+            let nm = part.trim().split(" as ").last().unwrap_or("").trim();
+            if WORD.is_match(nm) {
+                push(nm.to_string(), &mut out);
+            }
+        }
+    }
+    for c in DEFAULT.captures_iter(text) {
+        push(c[1].to_string(), &mut out);
+    }
+    out
+}
+
+/// Why a node's body DISPATCHES OUT through something static resolution cannot thread — or `None`.
+///
+/// Shape B (the registry) needs its ACTIVATION check, and that check is what makes the pass usable. A
+/// subscript of an imported map by a runtime key has the same syntax whether it yields a service class or a
+/// scalar: `PaymentServiceMap[key]` and `ErrorCode[key]` are indistinguishable by shape alone. Only the first
+/// is a blind spot, because only it resolves to an impl with a data sink — so the result must be ACTIVATED as
+/// code (awaited, called, constructed, or dynamically imported), either directly or through a `const X =
+/// REG[key]` binding. Without that, every enum lookup in the repo reads as a lost flow.
+pub fn dynamic_dispatch_evidence(body: &str, imports: &[String]) -> Option<String> {
+    if DYN_IMPORT_NONLITERAL.is_match(body) {
+        return Some("dynamic-imports a non-literal module path".to_string());
+    }
+    // IN THE CALLER'S ORDER (see `imported_idents`) — the evidence names ONE registry, and the first match
+    // wins, so the iteration order is part of the answer rather than an implementation detail.
+    for ident in imports {
+        let esc = regex::escape(ident);
+        let sub = format!(r#"{esc}\[\s*[^\]'"\s][^\]]*\]"#); // REG[<non-literal key>]
+        let direct = Regex::new(&format!(r"(?:await\s+|new\s+|import\(\s*){sub}|{sub}\s*\(")).ok()?;
+        let mut hit = direct.is_match(body);
+        if !hit {
+            let bind = Regex::new(&format!(r"(?:const|let|var)\s+(\w+)\s*=\s*{sub}")).ok()?;
+            for c in bind.captures_iter(body) {
+                let v = regex::escape(&c[1]);
+                let used = Regex::new(&format!(r"(?:await\s+{v}\b|\b{v}\s*\(|new\s+{v}\b|import\(\s*{v}\b)")).ok()?;
+                if used.is_match(body) {
+                    hit = true;
+                    break;
+                }
+            }
+        }
+        if hit {
+            return Some(format!("dispatches through the imported registry `{ident}[…]`"));
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -477,6 +605,74 @@ export function godObject(input) {
     fn a_language_without_the_concept_yields_no_feeds() {
         assert!(extract_consumer_feeds("class A { void f(B b) { b.g(1); } }", "A.java", "g").is_empty());
         assert!(extract_consumer_feeds(JSX, "page.rb", "Widget").is_empty());
+    }
+
+    fn imps(names: &[&str]) -> Vec<String> {
+        names.iter().map(|s| s.to_string()).collect()
+    }
+
+    // THE ACTIVATION CHECK IS THE WHOLE PASS. `PaymentServiceMap[key]` and `ErrorCode[key]` are the SAME
+    // syntax; only the first resolves to an impl with a data sink. Without requiring the result to be
+    // activated as code, every enum lookup in a repo would read as a lost flow and the blind-spot list would
+    // be worthless.
+    #[test]
+    fn an_imported_registry_is_a_blindspot_only_when_its_result_is_activated() {
+        let reg = imps(&["PaymentServiceMap", "ErrorCode"]);
+        for body in [
+            "const s = await PaymentServiceMap[key];",
+            "new PaymentServiceMap[key]();",
+            "return PaymentServiceMap[key](arg);",
+            "await import(PaymentServiceMap[key]);",
+        ] {
+            assert!(dynamic_dispatch_evidence(body, &reg).is_some(), "activated: {body}");
+        }
+        // a SCALAR lookup — identical shape, never an impl
+        assert!(dynamic_dispatch_evidence("const msg = ErrorCode[key];", &reg).is_none());
+        assert!(dynamic_dispatch_evidence("log(ErrorCode[key]);", &reg).is_none());
+    }
+
+    // The activation may be one hop away: `const X = REG[key]` then `await X`. Tracking the binding is what
+    // catches the idiomatic form, which is how this is actually written.
+    #[test]
+    fn a_bound_registry_lookup_counts_when_the_binding_is_activated() {
+        let reg = imps(&["ServiceMap"]);
+        assert!(dynamic_dispatch_evidence("const Svc = ServiceMap[key];\nconst s = await Svc;", &reg).is_some());
+        assert!(dynamic_dispatch_evidence("const Svc = ServiceMap[key];\nreturn Svc.name;", &reg).is_none(), "read, not activated");
+    }
+
+    // A LOCAL array is data, not a dispatch table. The receiver must have come from another module — that is
+    // what makes it a registry rather than a list someone is indexing.
+    #[test]
+    fn a_local_subscript_is_not_a_registry_dispatch() {
+        assert!(dynamic_dispatch_evidence("const x = await arr[i];", &imps(&["Other"])).is_none());
+        // …and a LITERAL key is statically resolvable, so it is not a blind spot either
+        assert!(dynamic_dispatch_evidence("await ServiceMap[\"stripe\"]();", &imps(&["ServiceMap"])).is_none());
+    }
+
+    // A dynamic import of a LITERAL resolves statically and is already followed; only the non-literal is blind.
+    #[test]
+    fn only_a_non_literal_dynamic_import_is_a_blindspot() {
+        let none = imps(&[]);
+        assert!(dynamic_dispatch_evidence("const m = await import(modulePath);", &none).is_some());
+        assert!(dynamic_dispatch_evidence("const m = await import('./known');", &none).is_none());
+    }
+
+    #[test]
+    fn imported_idents_reads_named_aliased_and_default_forms() {
+        let got = imported_idents("import React from 'react';\nimport { a, b as c } from './x';\nimport type { T } from './t';\n");
+        // NAMED bindings first in match order, then defaults — the TS Set's insertion order, which decides
+        // which registry the evidence names when two could match
+        assert_eq!(got, ["a", "c", "T", "React"], "alias binds the LOCAL name; order is insertion, not sorted");
+    }
+
+    // Evidence names ONE registry, and WHICH one is the caller's import order — not sorted, not hashed. The
+    // TypeScript walked a Set in insertion order and the first match won; reproducing that is what keeps the
+    // emitted sentence identical on a body that dispatches through two.
+    #[test]
+    fn the_named_registry_follows_import_order_when_two_could_match() {
+        let body = "await Alpha[k](); await Zeta[k]();";
+        assert!(dynamic_dispatch_evidence(body, &imps(&["Zeta", "Alpha"])).unwrap().contains("Zeta"));
+        assert!(dynamic_dispatch_evidence(body, &imps(&["Alpha", "Zeta"])).unwrap().contains("Alpha"));
     }
 
     // A BODY-DESTRUCTURED PARAM DROPS OUT in favour of its fields. `props` was only ever a pass-through, and
