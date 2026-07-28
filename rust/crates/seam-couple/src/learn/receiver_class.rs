@@ -513,3 +513,232 @@ mod tests {
         assert_eq!(profile_line(&prof("cache", &[("set", 2), ("get", 7)])), "cache: get(7) set(2)");
     }
 }
+
+#[cfg(test)]
+mod classify_tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    // RECEIVER CLASSIFICATION — the model says what a repeated receiver IS (database / http / store / none) and
+    // the answer picks the MATCHER SHAPE. A `userRepository` typed database becomes a repository matcher keyed
+    // on the receiver (it IS the table); an `axios` typed http becomes an http-route CHANNEL keyed on the path.
+    // Getting that backwards keys every outbound HTTP call as a database table. Ported from
+    // `receiver_class.test.ts`, now that the host bus reaches the core and the pass can be served in-process.
+    //
+    // These share the process-global host bus and the SEAM_ADAPTERS_DIR env, so they run as ONE test rather
+    // than racing each other under the parallel runner.
+    struct Fixture(std::path::PathBuf, std::path::PathBuf);
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+            let _ = std::fs::remove_dir_all(&self.1);
+            seam_llm::host_bus::uninstall();
+        }
+    }
+
+    fn fixture(tag: &str) -> Fixture {
+        let base = std::env::temp_dir();
+        let repo = base.join(format!("seam-rc-{tag}-{}", std::process::id()));
+        let shared = base.join(format!("seam-rc-shared-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::remove_dir_all(&shared);
+        std::fs::create_dir_all(repo.join("src")).unwrap();
+        std::fs::create_dir_all(&shared).unwrap();
+        std::env::set_var("SEAM_ADAPTERS_DIR", &shared);
+        Fixture(repo, shared)
+    }
+
+
+    /// The receiver TOKEN a matcher keys on, for the two variants classification produces.
+    fn token_of(m: &KeyMatcher) -> Option<&str> {
+        match m {
+            KeyMatcher::Repository { token, .. } | KeyMatcher::Channel { token, .. } => Some(token.as_str()),
+            _ => None,
+        }
+    }
+
+    /// Serve `answer` to the classify pass and return the PROMPT it was asked, plus the matchers produced.
+    /// Two rounds, because the host bus records on the first and replays on the second — the same pump the
+    /// TypeScript shell drives.
+    fn run_classify(repo: &str, answer: &str) -> (String, Vec<KeyMatcher>) {
+        let mut answers: HashMap<String, String> = HashMap::new();
+        let mut prompt = String::new();
+        let mut out = Vec::new();
+        for _ in 0..3 {
+            seam_llm::host_bus::install(answers.clone());
+            out = classify_receivers(repo, None, None);
+            let recorded = seam_llm::host_bus::take_recorded();
+            if recorded.is_empty() {
+                break;
+            }
+            for r in recorded {
+                if r.tag == "classify-receivers" {
+                    prompt = r.prompt.clone();
+                    answers.insert(r.key, answer.to_string());
+                } else {
+                    answers.insert(r.key, "[]".to_string());
+                }
+            }
+        }
+        seam_llm::host_bus::uninstall();
+        (prompt, out)
+    }
+
+    #[test]
+    fn classification_picks_the_matcher_shape_and_the_blindspot_gate_bounds_the_candidates() {
+        // ── a database receiver and an http look-alike ───────────────────────────────────────────────────
+        let fx = fixture("kinds");
+        let repo = fx.0.to_string_lossy().to_string();
+        for i in 0..5 {
+            // ≥MIN_FILES, each using BOTH receivers with a read AND a write verb → both are candidates
+            std::fs::write(
+                fx.0.join("src").join(format!("f{i}.ts")),
+                format!("export const a{i} = async () => {{ await userRepository.create({{}}); const u = await userRepository.findMany(); await axios.get('/x'); const c = axios.create(); return u; }};\n"),
+            )
+            .unwrap();
+        }
+        let (_, ms) = run_classify(&repo, r#"[{"id":"userRepository","type":"database"},{"id":"axios","type":"http"}]"#);
+
+        let shapes = |tok: &str| -> Vec<String> {
+            let mut v: Vec<String> = ms
+                .iter()
+                .filter(|m| token_of(m) == Some(tok))
+                .map(|m| match m {
+                    KeyMatcher::Repository { kind, .. } => format!("repository/{kind}"),
+                    KeyMatcher::Channel { kind, .. } => format!("channel/{kind}"),
+                    other => format!("other/{other:?}"),
+                })
+                .collect();
+            v.sort();
+            v.dedup();
+            v
+        };
+        // database-confirmed → repository (the receiver IS the table), split read/write
+        assert_eq!(shapes("userRepository"), vec!["repository/db-table"], "{ms:?}");
+        let mut roles: Vec<&str> = ms
+            .iter()
+            .filter(|m| token_of(m) == Some("userRepository"))
+            .map(|m| match m {
+                KeyMatcher::Repository { role, .. } => role.as_str(),
+                _ => "",
+            })
+            .collect();
+        roles.sort();
+        roles.dedup();
+        assert_eq!(roles, vec!["consumes", "produces"]);
+        // http-confirmed → an http-route CHANNEL (the ROUTE is the key), not mis-typed as a db-table
+        assert_eq!(shapes("axios"), vec!["channel/http-route"]);
+        drop(fx);
+
+        // ── no backend → no classification (degrades to member_access only) ──────────────────────────────
+        let fx = fixture("nobackend");
+        let repo = fx.0.to_string_lossy().to_string();
+        std::fs::write(fx.0.join("src").join("f.ts"), "export const a = () => userRepository.create({});\n").unwrap();
+        seam_llm::host_bus::uninstall();
+        assert!(classify_receivers(&repo, None, Some("/nonexistent/claude-xyz")).is_empty());
+        drop(fx);
+
+        // ── THE BLINDSPOT GATE: a receiver DECLARED in-repo is the grow's job, not a boundary ────────────
+        // A domain object built by in-repo code is followed by the structural grow; classifying it mints a
+        // channel matcher for something that is not a boundary at all. A never-declared global, or a binding
+        // backed by a library import, IS the external layer and must survive.
+        let fx = fixture("gate");
+        let repo = fx.0.to_string_lossy().to_string();
+        for i in 0..5 {
+            std::fs::write(
+                fx.0.join("src").join(format!("f{i}.ts")),
+                format!(
+                    "const savings = makeSavings();\nexport const a{i} = () => {{ savings.get('rate'); savings.set('rate', 1); localStorage.getItem('token'); localStorage.setItem('token', 1); }};\n"
+                ),
+            )
+            .unwrap();
+        }
+        let (prompt, ms) = run_classify(&repo, r#"[{"id":"localStorage","type":"store"}]"#);
+        assert!(prompt.contains("localStorage: getItem"), "a global store must survive the gate:\n{prompt}");
+        assert!(!prompt.contains("\nsavings:"), "an in-repo-declared receiver must not reach the classifier:\n{prompt}");
+        assert!(!ms.iter().any(|m| token_of(m) == Some("savings")));
+
+        // a binding BACKED by a node_modules import is external and is kept
+        for i in 0..5 {
+            std::fs::write(
+                fx.0.join("src").join(format!("g{i}.ts")),
+                format!(
+                    "import Redis from 'redis';\nconst cache = new Redis();\nconst savings = makeSavings();\nexport const b{i} = () => {{ cache.get('k'); cache.set('k', 1); savings.get('rate'); savings.set('rate', 1); }};\n"
+                ),
+            )
+            .unwrap();
+        }
+        let (prompt, _) = run_classify(&repo, r#"[{"id":"cache","type":"store"}]"#);
+        assert!(prompt.contains("\ncache:") || prompt.starts_with("cache:"), "a lib-backed binding survives:\n{prompt}");
+        assert!(!prompt.contains("\nsavings:"), "an in-repo-backed binding does not:\n{prompt}");
+        drop(fx);
+
+        // ── the DI-INJECTED case: the same gate, read off a Java field's TYPE ────────────────────────────
+        // `@Inject SavingsManager savingsManager` is typed by an IN-REPO class, so the grow can walk into it —
+        // classifying it would mint a boundary in the middle of the codebase. `EntityManager` has no in-repo
+        // class behind it, so it IS the edge of the repo and is the one real boundary here.
+        let fx = fixture("dijava");
+        let repo = fx.0.to_string_lossy().to_string();
+        std::fs::create_dir_all(fx.0.join("be")).unwrap();
+        std::fs::write(fx.0.join("be").join("SavingsManager.java"), "public class SavingsManager { }\n").unwrap();
+        for i in 0..5 {
+            std::fs::write(
+                fx.0.join("be").join(format!("Svc{i}.java")),
+                format!(
+                    "public class Svc{i} {{\n  @Inject SavingsManager savingsManager;\n  @Inject EntityManager entityManager;\n  void run{i}() {{ savingsManager.get(\"rate\"); savingsManager.set(\"rate\", 1); entityManager.persist(x); entityManager.find(x); }}\n}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let (prompt, _) = run_classify(&repo, "[]");
+        assert!(!prompt.contains("\nsavingsManager:"), "an in-repo-typed injection is the grow's job:\n{prompt}");
+        assert!(prompt.contains("\nentityManager:") || prompt.starts_with("entityManager:"), "the ORM is the surviving boundary:\n{prompt}");
+    }
+
+    #[test]
+    fn a_custom_route_annotation_becomes_a_matcher_and_noise_is_dropped() {
+        // The builtin annotation set cannot know a project's own `@GlobexRoute`. The model names it a route;
+        // the result is a matcher that EXTRACTS the path literal, so the handler grounds against a front-end
+        // fetch of the same path. `@Audit` is noise and must not become a matcher at all — a matcher per
+        // annotation would key the repo on its logging conventions.
+        let fx = fixture("annots");
+        let repo = fx.0.to_string_lossy().to_string();
+        std::fs::create_dir_all(fx.0.join("be")).unwrap();
+        for i in 0..5 {
+            std::fs::write(
+                fx.0.join("be").join(format!("R{i}.java")),
+                format!("@GlobexRoute(\"/api/bookings/{i}\")\n@Audit(\"booking\")\npublic void h{i}() {{}}\n"),
+            )
+            .unwrap();
+        }
+        let mut answers: HashMap<String, String> = HashMap::new();
+        let mut ms = Vec::new();
+        for _ in 0..3 {
+            seam_llm::host_bus::install(answers.clone());
+            ms = classify_annotations(&repo, None, None);
+            let recorded = seam_llm::host_bus::take_recorded();
+            if recorded.is_empty() {
+                break;
+            }
+            for r in recorded {
+                let a = if r.tag == "classify-annotations" { r#"[{"id":"GlobexRoute","type":"route"},{"id":"Audit","type":"none"}]"# } else { "[]" };
+                answers.insert(r.key, a.to_string());
+            }
+        }
+        seam_llm::host_bus::uninstall();
+
+        let annot_of = |m: &KeyMatcher| match m {
+            KeyMatcher::Annotation { annotation, kind, .. } => Some((annotation.clone(), kind.clone())),
+            _ => None,
+        };
+        let route = ms.iter().filter_map(annot_of).find(|(a, _)| a == "GlobexRoute").expect("a GlobexRoute matcher");
+        assert_eq!(route.1, "http-route");
+        assert!(!ms.iter().filter_map(annot_of).any(|(a, _)| a == "Audit"), "noise must not become a matcher");
+
+        // …and it EXTRACTS the literal, which is the only reason the matcher is worth minting.
+        let m = ms.iter().find(|m| matches!(m, KeyMatcher::Annotation { annotation, .. } if annotation == "GlobexRoute")).unwrap();
+        let hits = crate::learn::run_matcher_at(m, "R.java", "@GlobexRoute(\"/api/bookings/7\")\npublic void h() {}");
+        assert!(hits.iter().any(|h| h.kind == "http-route" && h.value == "/api/bookings/7" && h.produces), "{hits:?}");
+    }
+}

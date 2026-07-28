@@ -41,7 +41,7 @@ const cmp = (tag: string, a: string, b: string) => {
 // 2. TIER ROUTING — upgrade-only. Import the pass registrations the TS side does at module load, so both
 // sides see the same tags (the Rust registry is a static table mirroring those call sites).
 {
-  await import("../../ts/src/codebase/coupling/receiver_class.js");   // registers classify-receivers (strong)
+  // (classify-receivers is registered by the CORE now — receiver_class.ts is gone)
   await import("../../ts/src/codebase/grow/subject_affinity.js");     // registers affinity (cheap)
   const { run_pass: _rp } = await import("../../ts/src/core/llm.js");
   void _rp;

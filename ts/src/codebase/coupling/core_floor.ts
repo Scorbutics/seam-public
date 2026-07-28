@@ -63,3 +63,12 @@ export function clusterBlindFiles<T extends { file: string; text: string }>(file
   return (core().clusterBlindFiles(rows) as { signature: string; shaped: boolean; rep: number; members: number[] }[])
     .map((c) => ({ signature: c.signature, shaped: c.shaped, rep: files[c.rep], members: c.members.map((i) => files[i]) }));
 }
+
+/// The two CLASSIFICATION teachers — receivers (`userRepository` is a database, `axios` is an http client)
+/// and annotations (a project's own `@GlobexRoute` is a route). Both persist their learned matchers into
+/// `.seam` and return how many they minted; the caller replays them from the store, so nothing crosses back
+/// but a count. Served by the caller's model through the host bus when one is installed.
+export const classifyReceivers = (repo: string, model?: string, claudeBin?: string): number =>
+  core().classifyReceivers(repo, model, claudeBin);
+export const classifyAnnotations = (repo: string, model?: string, claudeBin?: string): number =>
+  core().classifyAnnotations(repo, model, claudeBin);

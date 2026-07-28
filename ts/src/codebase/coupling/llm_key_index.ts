@@ -332,15 +332,18 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   // `claude -p`/copilot path run_pass_async overlaps the subprocesses, so the cold cost is the SLOWEST pass
   // (the matcher synth+retry) instead of their SUM — the sequential `synth(43) + recv(21) + annot(13)` the
   // globex run showed. (The host-bus/MCP path serves serially, so it stays correct, just doesn't overlap.)
-  const { classifyAndPersistRepositories, classifyAndPersistAnnotations } = await import("./receiver_class.js");
+  // BOTH classifiers are the core's now (`seam_couple::learn::receiver_class`). They persist into `.seam` and
+  // the matchers come back through `loadMatchers` below, exactly as before — what changed is that the model
+  // call is served in-process (through the host bus when the caller lent us one).
+  const { classifyReceivers, classifyAnnotations } = await import("./core_floor.js");
   // TEACHERS — each independently LEARNS one matcher kind (below) and only APPENDS to the shared matcher
   // store, so they run concurrently. A registered list (not a bare positional Promise.all) so a future
   // teacher (e.g. the carrier engine, currently gated separately in index.ts) is one more array entry, not
   // an edit to this call site.
   const teachers: Teacher[] = [
     { name: "matcher-synth", learn: () => blindCandidates.length ? learnKeyMatchers(repo, matcherFiles.length ? matcherFiles : blindFiles, opts, ctx) : Promise.resolve([]) },
-    { name: "repository-classifier", learn: () => classifyAndPersistRepositories(repo, opts, ctx) },   // `repository` matchers for database-classified receivers (custom 2-part data layers)
-    { name: "annotation-classifier", learn: () => classifyAndPersistAnnotations(repo, opts, ctx) },     // `annotation` matchers for custom route/queue/event annotations a hardcoded set misses
+    { name: "repository-classifier", learn: async () => { if (opts.llm) classifyReceivers(repo, opts.model, opts.claudeBin ?? undefined); return []; } },   // `repository` matchers for database-classified receivers (custom 2-part data layers)
+    { name: "annotation-classifier", learn: async () => { if (opts.llm) classifyAnnotations(repo, opts.model, opts.claudeBin ?? undefined); return []; } },  // `annotation` matchers for custom route/queue/event annotations a hardcoded set misses
   ];
   await Promise.all(teachers.map((t) => t.learn()));
   const matchers = loadMatchers(repo);                   // cached/shared ∪ what we just learned (one source)
