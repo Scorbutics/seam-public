@@ -212,6 +212,16 @@ pub fn cosine(a: &[f32], b: &[f32]) -> f32 {
 static STR_VEC: Lazy<Mutex<HashMap<String, Vec<f32>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 static INTENT_VEC: Lazy<Mutex<Option<(String, Vec<f32>)>>> = Lazy::new(|| Mutex::new(None));
 
+/// Drop every memo — the built embedder and both vector caches — so a test can control the model state it
+/// asserts about. `EMBEDDER` is built once per PROCESS from `SEAM_EMBED_MODEL`, so without this a test that
+/// points the env var at a missing model still gets whichever embedder another test built first.
+#[cfg(test)]
+fn reset_memos_for_test() {
+    *EMBEDDER.lock().unwrap() = None;
+    STR_VEC.lock().unwrap().clear();
+    *INTENT_VEC.lock().unwrap() = None;
+}
+
 /// value → cosine(intent, value), for the key-ranking hook. Dedupes and embeds only the uncached values in ONE
 /// batched pass, and memoises the intent vector — the caller asks the same intent many times per run.
 /// Port of `embedScoreStrings`. Empty map = no field; the caller falls back to fanout order.
@@ -296,18 +306,29 @@ pub fn cache_path(repo: &str) -> PathBuf {
 mod tests {
     use super::*;
 
+    // `SEAM_EMBED_MODEL` and the built embedder are PROCESS-global, and cargo runs these tests on threads of
+    // one process. Without this lock the model test raced `available()`: whichever ran first won the single
+    // `EMBEDDER` build, so on a machine WITH a model installed the missing-model assertion intermittently saw
+    // a real embedder and got real scores back. Same process-global-state class as the coupling suite's lock.
+    static TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn the_field_is_optional_and_says_so() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // `available()` is the router's gate: it must answer without panicking whether or not a model is there
         let _ = available();
     }
 
     #[test]
     fn scoring_without_a_field_returns_empty_rather_than_guessing() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         std::env::set_var("SEAM_EMBED_MODEL", "does/not-exist");
+        reset_memos_for_test();   // force the probe to re-run against the bogus model id
         // a missing model must not fabricate scores — the caller falls back to the deterministic fanout
-        assert!(embed_score_strings("an intent", &["a".to_string()]).is_empty());
+        let scored = embed_score_strings("an intent", &["a".to_string()]);
         std::env::remove_var("SEAM_EMBED_MODEL");
+        reset_memos_for_test();   // don't leave "absent" cached for whatever runs next
+        assert!(scored.is_empty(), "a missing model fabricated scores: {scored:?}");
     }
 
     #[test]

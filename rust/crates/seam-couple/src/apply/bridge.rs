@@ -126,8 +126,20 @@ pub fn grep_files(repo: &str, value: &str) -> Vec<String> {
         Ok(r) if r.status.code() == Some(1) => return out,
         _ => {} // rg absent / errored → fallback below
     }
-    // fallback: read + substring (no masking/adapters → far cheaper than the floor scan). `source_files` is
-    // already ordered, but sort anyway so the contract holds regardless of which branch produced the list.
+    grep_files_walk(repo, value)
+}
+
+/// The no-ripgrep fallback: read + substring (no masking/adapters → far cheaper than the floor scan). Split out
+/// so it is REACHABLE from a test on a machine that HAS rg — otherwise the branch that serves every user
+/// without ripgrep installed is the one branch never exercised.
+///
+/// Note it filters by `scannable_for_keys` while `rg` does not, so a hit inside a non-source file (a `.txt`,
+/// a lockfile) is visible to the primary branch and invisible here. That asymmetry is inherited from the
+/// TypeScript original and is left as-is: the values grepped are plausible keys, and the callers only consume
+/// hits in files they can subsequently parse.
+fn grep_files_walk(repo: &str, value: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    // `source_files` is already ordered, but sort anyway so the contract holds regardless of the producer.
     for rel in seam_fs::source_files(repo, scannable_for_keys) {
         if let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) {
             if String::from_utf8_lossy(&bytes).contains(value) {
@@ -315,4 +327,79 @@ pub fn anchor_counterparts(repo: &str, file: &str, symbol: Option<&str>) -> Vec<
     // `localeCompare` on the TS side; ASCII paths compare identically byte-wise, and the line breaks ties.
     out.sort_by(|a, b| a.file.cmp(&b.file).then_with(|| a.line.cmp(&b.line)));
     out
+}
+
+#[cfg(test)]
+mod grep_files_tests {
+    use super::{grep_files, grep_files_walk};
+
+    // Fixture whose DIRECTORY order and whose SORTED order differ, so a test that only happened to see the
+    // walk order would still fail if the sort were dropped. Every file is a source extension, so the rg branch
+    // and the walk fallback see the same candidate set (the fallback filters by `scannable_for_keys`; rg does
+    // not — a `.txt` hit would be branch-dependent, which is why the fixture has none).
+    fn fixture() -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "seam-grep-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, body) in [
+            ("z/last.ts", "const t = TOKEN_KEY;\n"),
+            ("a/first.ts", "export const TOKEN_KEY = 1;\n"),
+            ("m/mid.ts", "// mentions TOKEN_KEY in a comment\n"),
+            ("a/absent.ts", "nothing of interest here\n"),
+        ] {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        dir
+    }
+
+    // THE DETERMINISM CONTRACT. `rg -l` emits on a thread pool, so its order is a race; callers CAP the list,
+    // which turns a bounded scan into a lottery unless the list is totally ordered first. Asserting the exact
+    // vector (not a set) is the point — a set assertion would pass against the un-sorted bug this guards.
+    #[test]
+    fn totally_ordered_by_path_with_no_dot_slash_prefix() {
+        let dir = fixture();
+        let hits = grep_files(dir.to_str().unwrap(), "TOKEN_KEY");
+        assert_eq!(hits, vec!["a/first.ts", "m/mid.ts", "z/last.ts"]);
+        assert!(hits.iter().all(|h| !h.starts_with("./")), "paths are repo-relative: {hits:?}");
+        // repeated over an UNCHANGED repo → byte-identical, whichever branch served it
+        assert_eq!(hits, grep_files(dir.to_str().unwrap(), "TOKEN_KEY"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // `rg` exits 1 on "ran fine, matched nothing". That is an ANSWER (empty), not a failure to answer, so it
+    // must NOT fall through to the walk fallback and re-read the tree — the same no-answer/no-such-thing
+    // distinction that bit the learned-adapter caches.
+    #[test]
+    fn no_match_is_an_empty_answer() {
+        let dir = fixture();
+        assert!(grep_files(dir.to_str().unwrap(), "NOT_IN_ANY_FILE").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // THE TWO BRANCHES MUST AGREE. On a dev machine `rg` is installed, so `grep_files` above only ever proves
+    // the ripgrep path; every user without ripgrep gets the walk. Asserting the fallback produces the SAME
+    // vector is what makes the primary test's evidence transfer to them.
+    #[test]
+    fn the_walk_fallback_agrees_with_the_ripgrep_branch() {
+        let dir = fixture();
+        let repo = dir.to_str().unwrap();
+        assert_eq!(grep_files_walk(repo, "TOKEN_KEY"), vec!["a/first.ts", "m/mid.ts", "z/last.ts"]);
+        assert_eq!(grep_files_walk(repo, "TOKEN_KEY"), grep_files(repo, "TOKEN_KEY"));
+        assert!(grep_files_walk(repo, "NOT_IN_ANY_FILE").is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // A repo that does not exist: rg fails to spawn/cd, the fallback walks nothing. Empty, never a panic.
+    #[test]
+    fn missing_repo_yields_empty_not_a_panic() {
+        let missing = std::env::temp_dir().join(format!("seam-grep-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(grep_files(missing.to_str().unwrap(), "TOKEN_KEY").is_empty());
+    }
 }
