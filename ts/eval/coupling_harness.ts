@@ -15,7 +15,7 @@ import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, mkdtem
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { loadAddon, toResolvedGraph } from "../src/codebase/grow/rust_core.js";
+import { loadAddon, toResolvedGraph } from "../src/codebase/rust_core.js";
 import { rustDiscover } from "../src/codebase/grow/rust_discover.js";
 import { isFlowSubject } from "../src/codebase/coupling/subjects.js";
 import { _resetKeyCacheMem } from "../src/codebase/coupling/key_store.js";

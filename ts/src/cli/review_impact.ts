@@ -91,7 +91,7 @@ export async function annotateReviewImpact(
   try { batch = await scan_consumers_batch(repo, allSubjects) as typeof batch; } catch { /* degrade to empty */ }
 
   const cache = new Map<string, Raw>();
-  const { loadAddon } = await import("../codebase/grow/rust_core.js");
+  const { loadAddon } = await import("../codebase/rust_core.js");
   const addon = loadAddon();   // the cross-stack overlay is the core's; its per-repo indices are resident across calls
 
   // analyze = derive a symbol's Raw from the precomputed batch (consumers) + the targeted coupling pass.

@@ -189,7 +189,7 @@ export function promoteKeyAdapter(repo: string, name: string): { ok: boolean; ad
 export function _resetKeyStoreMem(): void {
   _mem.clear();
   try {
-    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
   } catch { /* addon absent or not built — the TS store is the only one there is */ }
 }

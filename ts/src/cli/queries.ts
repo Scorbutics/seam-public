@@ -36,7 +36,7 @@ import { to1 } from "../codebase/grow/project_set.js";
 // or was disabled, not that the repo is unusual.
 async function rustShapeOk(a: Args): Promise<any> {
   if (!a.anchorFile) err("this shape requires --center <file>[#symbol]");
-  const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/grow/rust_core.js");
+  const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/rust_core.js");
   const why = !rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
     : !rustCanParse(a.anchorFile!) ? `no vendored grammar for ${a.anchorFile}`
     : !rustCanServeRepo(a.repo) ? "the repo holds a language the core cannot parse"
@@ -159,7 +159,7 @@ async function couplingOverlay(a: Args, exclude: Set<string>): Promise<{ crossSt
   const none = { crossStack: [] as CrossStackCrossing[], truncations: [] as CouplingTruncation[] };
   if (a.dataCoupling === false || !a.anchorFile || !a.symbol) return none;
   try {
-    const { loadAddon } = await import("../codebase/grow/rust_core.js");
+    const { loadAddon } = await import("../codebase/rust_core.js");
     const { available } = await import("../core/llm.js");
     // AUTO (default) → the LLM key-discovery FLYWHEEL when a backend is present (learn-once, cached → replayed
     // deterministically after), else the deterministic FLOOR. Explicit --data-coupling llm/floor overrides; SEAM_COUPLING=floor

@@ -6,7 +6,7 @@
 // each one was byte-identical to the core before the TypeScript was deleted (rust/parity/{impact,contract,
 // reach,compare,neighborhood}.ts). Trailing options the callers leave unset become `null`, which is how the
 // parity harnesses ran them — the core's defaults ARE the defaults those assertions were written against.
-import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 import {
   rustImpactToModel, rustContractToModel, rustReachToModel,
   rustCompareToModel, rustNeighborhoodToModel, rustRefactorToModel,

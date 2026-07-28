@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 import { available } from "../../src/codebase/atoms.js";
 
-const addonOrNull = (): any => { try { return require("../../src/codebase/grow/rust_core.js").loadAddon(); } catch { return null; } };
+const addonOrNull = (): any => { try { return require("../../src/codebase/rust_core.js").loadAddon(); } catch { return null; } };
 
 describe("the Rust flywheel is scoped to the grown footprint", () => {
   const repo = join(tmpdir(), "seam-rustdisc-" + process.pid);

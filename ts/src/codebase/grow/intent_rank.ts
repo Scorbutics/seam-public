@@ -7,7 +7,7 @@
 // repo. ADDITIVE: it only ANNOTATES seams with a `relevance` score (and a rank-banded `tier`) — it never
 // drops or reorders them. The consumer (the agent, or the concern/agent render) ranks; the engine doesn't.
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
-import { loadAddon as _loadAddon } from "./rust_core.js";
+import { loadAddon as _loadAddon } from "../rust_core.js";
 // The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
 // they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
 const _core = (): any => _loadAddon();

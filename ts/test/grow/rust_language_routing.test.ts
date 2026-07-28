@@ -16,7 +16,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { available } from "../../src/codebase/atoms.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { loadAddon, rustCanParse, rustCanServeRepo, _resetRustRepoCapability } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon, rustCanParse, rustCanServeRepo, _resetRustRepoCapability } from "../../src/codebase/rust_core.js";
 
 const repo = join(tmpdir(), "seam-rustlang-" + process.pid);
 const w = (rel: string, t: string) => { const p = join(repo, rel); mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, t); };

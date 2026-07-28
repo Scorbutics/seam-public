@@ -18,7 +18,7 @@ export interface RouteDecision { shape: string; target?: string; target2?: strin
 export interface ResolvedName { symbol: string; file: string; kind: string; ambiguous: boolean }
 
 const core = async (): Promise<any> => {
-  const { loadAddon } = await import("../codebase/grow/rust_core.js");
+  const { loadAddon } = await import("../codebase/rust_core.js");
   const addon = loadAddon();
   if (!addon) throw new Error("the Seam core (Rust addon) is not available — build it with `make -C rust`");
   return addon;

@@ -16,7 +16,7 @@ import { from_resolved_graph, undirected_adjacency } from "../../core/graph_ir.j
 import { emit, timingOn } from "../../core/progress.js";
 import { run_pass, available, registerPass, ClassifierError as LLMError } from "../../core/llm.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
-import { loadAddon as _loadAddon } from "../grow/rust_core.js";
+import { loadAddon as _loadAddon } from "../rust_core.js";
 // The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
 // they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
 const _core = (): any => _loadAddon();

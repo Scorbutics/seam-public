@@ -7,10 +7,10 @@
 // upstream entry points). Off by default (a flag gates the pipeline integration).
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { loadAddon as _loadAddon } from "./rust_core.js";
+import { loadAddon as _loadAddon } from "../rust_core.js";
 // The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
 // they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
-import { toResolvedGraph as _toResolvedGraph } from "./rust_core.js";
+import { toResolvedGraph as _toResolvedGraph } from "../rust_core.js";
 const _core = (): any => _loadAddon();
 import { run_pass_async, registerPass } from "../../core/llm.js";
 

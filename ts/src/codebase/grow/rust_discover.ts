@@ -7,7 +7,7 @@
 //
 // What is left here is a thin call plus the SETTLING diagnostic, because deciding what to LOG belongs to the
 // shell, not the engine. Learn-once → `.seam/key-adapters.json` is replayed byte-identically forever after.
-import { loadAddon } from "./rust_core.js";
+import { loadAddon } from "../rust_core.js";
 
 // `scopeFiles` = the repo-relative files the flow reaches (a floor pre-grow's footprint). Discovery considers
 // ONLY those: unscoped, a 4-file flow in a 10k-file repo learned from — and paid the LLM over — every blind file.

@@ -26,7 +26,7 @@ const PASS = registerPass({ tag: "discover-keys-batch", tier: "strong", note: "s
 import { walkFiles } from "../../core/resolve/walk.js";
 import { SKIP_DIRS } from "../../core/resolve/languages/index.js";
 import { makeCtx, available, lang_for, _FUNCLIKE, _CLASS_KINDS, _NAME_KINDS } from "../atoms.js";
-import { scan_file_keys, scannableForKeys } from "./adapters/index.js";
+import { scannableForKeys } from "./adapters/index.js";
 import { makeMaskCtx, lineOf } from "./adapters/util.js";
 import { normPath } from "./adapters/http_route.js";
 import { cachedFileKeys, persistFileKeys, hasKeyCache } from "./key_store.js";
@@ -214,11 +214,10 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const llmKeysOf = new Map<string, KeyHit[]>();       // file → cached LLM keys
   const toSynth: { file: string; text: string; ck: string }[] = [];
   const blindFiles: { file: string; text: string }[] = [];   // floor-blind files → matcher-rule synthesis candidates
-  // REUSE the floor scan (computed once per run, disk-cached) instead of re-scanning every file here — that
-  // was a full DUPLICATE repo scan (≈ the whole assemble cost). floorByRel.get(rel) === scan_file_keys(rel,
-  // text) by construction, so behaviour is identical; `??` is a defensive fallback.
-  const { floorContributions } = await import("./index.js");
-  const floorByRel = new Map<string, KeyHit[]>(floorContributions(repo, SKIP_DIRS, ctx).map((c) => [c.rel, c.data.keys]));
+  // The floor comes from the CORE. "Is this file floor-blind?" is the question that decides whether the
+  // flywheel spends a model call on it, so it has to be answered by the floor the PRODUCT uses — a second
+  // TypeScript floor answering it would teach the wheel against evidence nobody else sees.
+  const { fileFloorKeys } = await import("./core_floor.js");
   const blindCandidates: { file: string; text: string; ck: string }[] = [];   // floor-blind in-scope → clustered below
   // The COLLECTION cap must bound COST, not SETTLING. Capping which blind files get COLLECTED (and thus cached
   // as cluster-covered below) made the flywheel SLIDE: with >cap footprint-blind files, cold caches the first
@@ -231,7 +230,7 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
   const unscoped = !opts.scopeFiles && !scope;
   let blindHit = 0, blindScanned = 0;   // settling census (SEAM_FP_DEBUG): floor-blind files already cached vs newly collected
   for (const { rel, text } of walkFiles(repo, SKIP_DIRS, scannableForKeys)) {
-    const floor = floorByRel.get(rel) ?? scan_file_keys(rel, text);
+    const floor = fileFloorKeys(rel, text);
     floorOf.set(rel, new Set(floor.map((h) => `${h.kind} ${h.value}`)));
     if (!inScope(rel)) continue;                     // out-of-module → no per-file LLM (floor + rules still ground it)
     // BRIDGE file: floor-covered ONLY by a DI `binding` (a service wrapper like a Vue plugin) — it almost
@@ -404,8 +403,9 @@ export async function llmKeyIndex(repo: string, opts: KeyIndexOpts = {}, ctx: En
 // appears in the index. ONE hop, dangling-only, grep- and budget-bounded.
 async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opts: KeyIndexOpts, ctx: EngineCtx): Promise<GroundingIndex> {
   const scope = opts.scopeFiles!;
-  const { floor_base_index, grepFiles } = await import("./index.js");
-  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const { floorIndex } = await import("./core_floor.js");
+  const { grepFiles } = await import("./bridge.js");
+  const floor = floorIndex(repo);
   const inScope = (a: { file: string }) => scope.has(a.file);
   // dangling literals: a scope file is the ONLY side present (no counterpart anywhere)
   const dangling = new Map<string, { kind: string; value: string }>();
@@ -466,8 +466,8 @@ async function _reachDanglingCounterparts(repo: string, idx: GroundingIndex, opt
 // each LLM pass — so we can see how many real couplings the per-file pass enables that the matcher pass does
 // not (and vice-versa). Diagnostic only; emits to stderr under SEAM_KEY_AUDIT.
 async function _auditKeySources(repo: string, ctx: EngineCtx, filesIdx: GroundingIndex, matchersIdx: GroundingIndex, ruleCount: number): Promise<void> {
-  const { floor_base_index } = await import("./index.js");
-  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const { floorIndex } = await import("./core_floor.js");
+  const floor = floorIndex(repo);
   const merge = (...idxs: GroundingIndex[]): GroundingIndex => {
     const m: GroundingIndex = new Map();
     for (const ix of idxs) for (const [k, v] of ix) { if (!m.has(k)) m.set(k, { producers: [], consumers: [] }); m.get(k)!.producers.push(...v.producers); m.get(k)!.consumers.push(...v.consumers); }
@@ -494,7 +494,8 @@ export async function anchorProposedKeys(
   repo: string, anchorFile: string, text: string,
   opts: KeyIndexOpts = {}, ctx: EngineCtx = new EngineCtx(),
 ): Promise<KeyHit[]> {
-  const floor = new Set(scan_file_keys(anchorFile, text).map((h) => `${h.kind} ${h.value}`));
+  const { fileFloorKeys: _ffk } = await import("./core_floor.js");
+  const floor = new Set(_ffk(anchorFile, text).map((h) => `${h.kind} ${h.value}`));
   const ck = `${anchorFile} ${createHash("sha1").update(text).digest("hex")}`;
   let keys: KeyHit[];
   const disk = cachedFileKeys(repo, ck);

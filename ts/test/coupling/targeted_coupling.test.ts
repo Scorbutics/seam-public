@@ -116,6 +116,6 @@ describe("couplingOtherSides — targeted value-grep, not a full-repo index", ()
     if (!available()) return;
     w("util/calc.ts", "export function addOne(x: number) {\n  const base = x;\n  return base + 1;\n}\n");
     w("ui/Billing.ts", 'import { supabase } from "../db";\nexport function showBilling() {\n  return supabase.from("payments").select("*");\n}\n');
-    expect(await couplingOtherSides(REPO, "util/calc.ts", "addOne")).toEqual([]);   // no key in the anchor → no grep, no scan
+    expect(await couplingOtherSides(REPO, "util/calc.ts", "addOne")).toHaveLength(0);   // no key in the anchor → no grep, no scan
   });
 });

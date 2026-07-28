@@ -163,7 +163,7 @@ const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0, chit: 0, cmiss: 0
 // signal than a violation — it is indistinguishable from one.
 function _rustCouplingStat(): { chit: number; cmiss: number; cnew: number } {
   try {
-    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (!rustCoreEnabled()) return { chit: 0, cmiss: 0, cnew: 0 };
     const [, repeats, , cmiss, cnew] = loadAddon().fanStats() as number[];
     return { chit: repeats, cmiss, cnew };
@@ -178,7 +178,7 @@ export function _resetFpStat(): void {
   // COUNTERS ONLY — never the caches. A test resets between runs precisely so it can measure the reuse of the
   // cache the previous run filled; dropping it here would make every run report a cold miss.
   try {
-    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (rustCoreEnabled()) loadAddon().resetFanStats();
   } catch { /* addon absent */ }
 }
@@ -311,7 +311,7 @@ export async function cachedGrow<T>(
 export function _resetFootprintMirror(): void {
   _mem.clear(); _cmem.clear(); _gmem.clear(); _epoch.clear(); _cEpoch.clear(); _fhMem.clear();
   try {
-    const { rustCoreEnabled, loadAddon } = require("../grow/rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
   } catch { /* addon absent */ }
 }

@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
-import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 import { build_consumers_graph } from "../helpers/scan.js";
 
 // The carrier axis lives in the CORE (seam-couple::carrier). These drive it through the addon, the way the

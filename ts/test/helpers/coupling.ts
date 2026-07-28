@@ -5,7 +5,7 @@
 //
 // Deliberately NOT a general-purpose wrapper: only what the coupling tests actually call. A helper that grows
 // past its callers becomes a second engine to keep in sync.
-import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 
 const core = () => {
   const a = loadAddon();

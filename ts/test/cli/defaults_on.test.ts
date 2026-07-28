@@ -10,7 +10,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { available } from "../../src/codebase/atoms.js";
-import { rustCoreEnabled } from "../../src/codebase/grow/rust_core.js";
+import { rustCoreEnabled } from "../../src/codebase/rust_core.js";
 
 const TS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 let repo: string;

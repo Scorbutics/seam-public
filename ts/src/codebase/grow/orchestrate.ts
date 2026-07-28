@@ -56,7 +56,7 @@ function _scopeMemoSet(key: string, files: Set<string>): void {
 }
 import type { HubMarker } from "../../core/graph_ir.js";
 
-import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "./rust_core.js";
+import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "../rust_core.js";
 import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
@@ -67,7 +67,7 @@ import { _read, _enclosing, methodPreciseIndex } from "../ast_units.js";
 // field and every def score run in the addon now, so asking the old runtime could answer "yes" for an engine
 // that no longer computes anything (or "no" while the core happily embeds). One source, one answer.
 const transformersAvailable = async (): Promise<boolean> => {
-  try { return !!(await import("./rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
+  try { return !!(await import("../rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
 };
 import { makeCtx, available, type Ctx } from "../atoms.js";
 import type { Unit } from "../ast_units.js";
@@ -90,7 +90,7 @@ const _fcSeen = new Set<string>(); let _fcCalls = 0, _fcRepeats = 0, _fcRepeatMs
 // one ran. (The addon's are process-global, like these; `_resetFileCouplingStats` zeroes both.)
 function _rustFanStats(): { calls: number; repeats: number; repeatMs: number } {
   try {
-    const { rustCoreEnabled, loadAddon } = require("./rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (!rustCoreEnabled()) return { calls: 0, repeats: 0, repeatMs: 0 };
     const [calls, repeats, repeatMs] = loadAddon().fanStats() as number[];
     return { calls, repeats, repeatMs };
@@ -103,7 +103,7 @@ export function _fileCouplingStats() {
 export function _resetFileCouplingStats() {
   _fcSeen.clear(); _fcCalls = 0; _fcRepeats = 0; _fcRepeatMs = 0;
   try {
-    const { rustCoreEnabled, loadAddon } = require("./rust_core.js");
+    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
     if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
   } catch { /* addon absent — nothing else to zero */ }
 }
@@ -332,7 +332,7 @@ function _makeExclusion(opts: { excludeDirs?: string[]; includeTests?: boolean }
 // bounded (A), and the off-intent tail is cropped in tiering (D) — so a bidirectional neighborhood is the right
 // default. (The deepest reach — UI ⇄ backend across an HTTP route — is still the COUPLING overlay's job, P3.)
 async function _phaseSeed(repo: string, anchorFile: string, symbol: string, _opts: any, coStruct: any, prune: (g: any) => any): Promise<any> {
-  const rc = await import("./rust_core.js");
+  const rc = await import("../rust_core.js");
   const core = rc.loadAddon();
   const dc = coStruct?.dataCoupling !== false;
   const foot = (dir: string) => prune(rc.toResolvedGraph(core.buildFootprint(repo, anchorFile, symbol, dir, dc, null, null, null)));

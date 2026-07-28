@@ -145,7 +145,7 @@ async function checkAnchorAddressing(a: Args): Promise<void> {
   // ADDRESS CHECK from the core. The TS implementation and this one are pinned byte-identical by
   // rust/parity/anchoraddress.ts across all three verdicts — declared, not-declared, and unparseable-so-null.
   // The null case is the one that must not drift: absence of evidence is not evidence of a bad address.
-  const { loadAddon } = await import("../codebase/grow/rust_core.js");
+  const { loadAddon } = await import("../codebase/rust_core.js");
   const resolve_anchor_address = async (repo: string, file: string, symbol: string) =>
     loadAddon().resolveAnchorAddress(repo, file, symbol) ?? null;
   // Every ADDRESS the caller spelled out: each --center, the resolved anchor (--anchor-file + --symbol, the
@@ -246,7 +246,7 @@ async function runCodebase(a: Args): Promise<number> {
     if (centers.length === 1 && !centers[0].symbol) {
       try {
         const enumerate_defs = async (repo: string, limit?: number, files?: Set<string>, o?: any) =>
-          (await import("../codebase/grow/rust_core.js")).loadAddon().enumerateDefs(repo, limit ?? null, files ? [...files] : null, o?.moduleDefs ?? false);
+          (await import("../codebase/rust_core.js")).loadAddon().enumerateDefs(repo, limit ?? null, files ? [...files] : null, o?.moduleDefs ?? false);
         const defs = await enumerate_defs(a.repo, 4000, new Set([a.anchorFile]));
         const primary = defs.filter((d: any) => d.enclosing === "" && d.kind !== "method");
         if (primary.length === 1) {
@@ -362,7 +362,7 @@ async function runCodebase(a: Args): Promise<number> {
   // fall back to the deterministic floor and answer with fewer crossings. Scoped to the anchor file, which is
   // the only span this overlay ever reads (a footprint's overlay is the anchor's own, not the flow's).
   const coreFootprint = async (file: string, symbol: string | null, direction: string, opts: { depth?: number; anchorLine?: number | null; verified?: any } = {}): Promise<any> => {
-    const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+    const core = (await import("../codebase/rust_core.js")).loadAddon();
     if (a.dataCoupling && dcLlm) {
       const { rustDiscover } = await import("../codebase/grow/rust_discover.js");
       await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin, scopeFiles: [file] });
@@ -374,17 +374,17 @@ async function runCodebase(a: Args): Promise<number> {
       : null;
     const dto = core.buildFootprint(a.repo, file, symbol, direction, a.dataCoupling, opts.depth ?? null, opts.anchorLine ?? null, rows);
     if (!dto) err(`the Seam core could not build the ${direction} footprint of ${symbol ?? file}`);
-    const { toResolvedGraph } = await import("../codebase/grow/rust_core.js");
+    const { toResolvedGraph } = await import("../codebase/rust_core.js");
     return { ...toResolvedGraph(dto), depth: opts.depth ?? 1 };
   };
 
   if (a.expandGraph) {
     if (!(a.expandFile && a.expandSymbol)) err("--expand-graph requires --expand-file and --expand-symbol");
-    const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+    const core = (await import("../codebase/rust_core.js")).loadAddon();
     try {
       const base = JSON.parse(readFileSync(a.expandGraph, "utf-8"));
       const add = await coreFootprint(a.expandFile!, a.expandSymbol!, a.down ? "down" : "up", { depth: a.depth, anchorLine: a.expandLine ?? null });
-      const rc = await import("../codebase/grow/rust_core.js");
+      const rc = await import("../codebase/rust_core.js");
       data = rc.toResolvedGraph(core.mergeResolved(rc.toGraphDto(base), rc.toGraphDto(add), add.anchor?.id));
       if (a.crossFrom) (data.blindspots ??= []).push({ node: add.anchor?.symbol ?? "", mechanism: "suggested-crossing", evidence: a.crossFrom, candidates: [] });
     } catch (e) { err(`expand failed: ${(e as Error).message}`); }
@@ -436,7 +436,7 @@ async function runCodebase(a: Args): Promise<number> {
     // them, then re-invokes with --attribution).
     if (a.emitCandidates) {
       if (!a.symbol) err("--emit-candidates needs --symbol (a class anchor)");
-      const cands = (await import("../codebase/grow/rust_core.js")).loadAddon()
+      const cands = (await import("../codebase/rust_core.js")).loadAddon()
         .classCallCandidates(a.repo, a.anchorFile!, a.symbol!)
         .map((c: any) => ({ file: c.file, line: c.line, col: c.col, method: c.method }));   // plain objects: napi values are not JSON-stable
       writeFileSync(a.emitCandidates, JSON.stringify(cands));
@@ -481,7 +481,7 @@ async function runCodebase(a: Args): Promise<number> {
       const gOptsFor = (ctx: any, overrides: Record<string, any> = {}) => ({ ...gOpts, ctx, ...overrides });
       process.stderr.write(`[grow] excluding: ${a.includeTests ? "" : "tests"}${a.excludeDirs?.length ? `${a.includeTests ? "" : " + "}dirs[${a.excludeDirs.join(", ")}]` : ""}${a.includeTests && !a.excludeDirs?.length ? "nothing (--include-tests)" : ""}\n`);
       const { EngineCtx } = await import("../codebase/engine_ctx.js");
-      const rcM = await import("../codebase/grow/rust_core.js");
+      const rcM = await import("../codebase/rust_core.js");
       const coreM = rcM.loadAddon();
       const mergeFootprints = (base: any, add: any, at?: string): any =>
         rcM.toResolvedGraph(coreM.mergeResolved(rcM.toGraphDto(base), rcM.toGraphDto(add), at ?? null));
@@ -489,7 +489,7 @@ async function runCodebase(a: Args): Promise<number> {
       // `structural` forces the intent-FREE grow (cache reuses across intents) — set when growing FROM a CONFIRMED
       // center (the mechanism was already picked semantically); left off (env-driven) for a DETECTION grow whose
       // region must stay intent-shaped so center-detection reads the right fan-in.
-      const { rustCoreEnabled } = await import("../codebase/grow/rust_core.js");
+      const { rustCoreEnabled } = await import("../codebase/rust_core.js");
       const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
         // RUST MIDDLE: the Rust core does the grow + coupling REPLAY, so the LLM flywheel runs FIRST (learn-once,
         // persisted to .seam), then grow_to_terminals replays it via the addon. The TS scoped-LLM grow is bypassed.
@@ -509,7 +509,7 @@ async function runCodebase(a: Args): Promise<number> {
             // THE P3 GATE lives in the core (`seam-couple::gate`) — the same grounded signals (floor keys, a JPA
             // wrapper write, param sites, http I/O, a resource route, the handler-file recall net, the learned
             // matchers), applied to the footprint's nodes.
-            const { loadAddon } = await import("../codebase/grow/rust_core.js");
+            const { loadAddon } = await import("../codebase/rust_core.js");
             const gateNodes = (floorData.nodes ?? []).map((n: any) => [String(n.file ?? ""), ...(n.range ? [String(n.range[0]), String(n.range[1])] : [])]);
             const gated = loadAddon()!.footprintTouchesBoundary(a.repo, gateNodes);
             process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scopeFiles.length} files across the flow${gated ? "" : " — no grounded boundary in the footprint, flywheel skipped"}\n`);
@@ -585,7 +585,7 @@ async function runCodebase(a: Args): Promise<number> {
         let relevance: ((n: { symbol: string; file: string }) => number) | undefined;
         if (!explicit && a.intent) {
           try {
-            const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+            const core = (await import("../codebase/rust_core.js")).loadAddon();
             const { normpath } = await import("../core/resolve/walk.js");
             const files = [...new Set<string>((data.nodes as any[]).map((n) => n.file ? normpath(n.file) : "").filter(Boolean))];
             const bySym = new Map<string, number>();    // per-SYMBOL score (`name file`) — sharper than file-max
@@ -713,7 +713,7 @@ async function runCodebase(a: Args): Promise<number> {
   // disables. Bounded: only the anchor's own interfaces.
   if (a.interfaceConsumers !== false && a.symbol && a.anchorFile && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
-      const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+      const core = (await import("../codebase/rust_core.js")).loadAddon();
       const ifaces: string[] = core.implementedInterfaces(a.repo, a.anchorFile, a.symbol);
       let added = 0;
       for (const iface of ifaces) {
@@ -757,7 +757,7 @@ async function runCodebase(a: Args): Promise<number> {
   // agnostic (annotation-PRESENCE or external-interface callback — no per-framework list).
   if (a.symbol && Array.isArray(data?.nodes) && data.nodes.length) {
     try {
-      const core = (await import("../codebase/grow/rust_core.js")).loadAddon();
+      const core = (await import("../codebase/rust_core.js")).loadAddon();
       const hasIncoming = new Set((data.edges ?? []).map((e: any) => e.to));
       for (const n of data.nodes as any[]) {
         if (hasIncoming.has(n.id) || !n.file || !n.symbol) continue;   // only roots (nothing in the footprint calls them)

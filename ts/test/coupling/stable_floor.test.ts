@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { resolveCoupling, persistMatchers, validateMatcher } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
-import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 
 const resetStore = (repo: string) => loadAddon()!.resetCaches(repo);
 

@@ -8,15 +8,15 @@
 import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
-import { resolveStructuralKnobs } from "./structural_knobs.js";
+import { resolveStructuralKnobs } from "./grow/structural_knobs.js";
 
 let _addon: any | undefined; // lazy singleton
 
 function addonPath(): string {
   if (process.env.SEAM_RUST_CORE_PATH) return process.env.SEAM_RUST_CORE_PATH;
-  // default: <repo>/rust/seam_core.node, relative to this module (ts/src/codebase/grow/rust_core.ts)
+  // default: <repo>/rust/seam_core.node, relative to this module (ts/src/codebase/rust_core.ts)
   const here = dirname(fileURLToPath(import.meta.url));
-  return resolve(here, "../../../../rust/seam_core.node");
+  return resolve(here, "../../../rust/seam_core.node");
 }
 
 // DEFAULT-ON. An opt-in flag is a trap for the caller — a harness that forgets it measures the slow TS grow and

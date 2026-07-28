@@ -236,8 +236,8 @@ export async function composeRoutes(repo: string, opts: ComposeOpts, ctx: Engine
   // So a grow only composes the handful of sub-resources ITS flow actually calls (kc_3 → just `users`), and an
   // intent with no route consumers in-footprint composes NOTHING — the composer is lazy, not a repo-wide tax.
   // Falls back to repo-wide when no footprint is set (a whole-repo warm-up).
-  const { floor_base_index } = await import("./index.js");
-  const floor = floor_base_index(repo, SKIP_DIRS, ctx);
+  const { floorIndex } = await import("./core_floor.js");
+  const floor = floorIndex(repo);
   const fp = ctx.footprintFiles;
   const demandSegs = new Set<string>();
   for (const [k, v] of floor) {

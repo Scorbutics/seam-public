@@ -18,7 +18,7 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { available } from "../../src/codebase/atoms.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { loadAddon } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 import { resolveStructuralKnobs } from "../../src/codebase/grow/structural_knobs.js";
 
 const repo = join(tmpdir(), "seam-rustknobs-" + process.pid);

@@ -11,7 +11,7 @@
 // `?? null` would hand these tests a structural graph and fail every coupling assertion in them — and that is
 // the same mistake that silently emptied module mode (see the module-graph overlay fix), so it is spelled out
 // rather than left to the reader.
-import { loadAddon, toResolvedGraph, toGraphDto } from "../../src/codebase/grow/rust_core.js";
+import { loadAddon, toResolvedGraph, toGraphDto } from "../../src/codebase/rust_core.js";
 
 // `process.env` does NOT cross the napi boundary — the addon reads its own process environment. A test that
 // sets SEAM_COPRODUCERS / SEAM_*_CAP and then calls a builder would otherwise measure the environment the
