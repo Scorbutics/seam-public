@@ -21,7 +21,6 @@ const _read = (): Record<string, number> => {
 // they are not a second source of truth, they are what an engine-less shell prints.
 let _t: Record<string, number> | null = null;
 const t = (): Record<string, number> => (_t ??= _read());
-export function _resetCouplingTunables(): void { _t = null; }
 
 export const COUPLING = {
   // max complement nodes materialized per shared key

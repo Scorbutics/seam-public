@@ -22,7 +22,6 @@ export interface MaskCtx { readonly comments: string; readonly strings: string }
 // it — that tag (not a boolean) is what later decides floor-silence vs an ungrounded-proposal blindspot.
 export interface KeyHit { kind: string; value: string; line: number; produces: boolean; label?: string; method?: string; op?: string; recv?: string }   // label = a human boundary name (the endpoint-map op `updateBooking`); method = the HTTP verb for a route key (GET/POST/…), sourced from the framework registry — the prerequisite for method-aware route grounding. op = the write FLAVOUR ("delete" for a destructive write) so the dedup prefers a CREATE site over a DELETE site as a table's representative producer (else `em.remove` masquerades as the create for a "…is created" flow). recv = the RECEIVER token of a member-access chain (`adminClient` in `adminClient.users.create`) — when the flywheel has classified that receiver an HTTP client (a `channel`/http-route matcher), this db-table is a false positive (a REST call, not a `users` write) and is dropped.
 export interface AnchorKey extends KeyHit { source: KeySource }
-export const isFloor = (k: AnchorKey): boolean => k.source !== "llm";   // deterministic floor (scan|carrier) vs LLM proposal
 
 // A KeyKind is a framework ADAPTER: it owns the key's semantics (node label, produce/consume edge labels)
 // and a per-file scan that classifies produce vs consume. The grounding (step 3) is generic — see ./index.

@@ -31,58 +31,11 @@ export const _NAME_KINDS = new Set(["identifier", "property_identifier", "type_i
 export const _NAME_LEAVES = new Set(["identifier", "field_identifier", "qualified_identifier", "destructor_name", "operator_name", "type_identifier", "property_identifier"]);
 export const _MEMBER = new Set(["member_expression", "attribute", "field_access", "selector_expression", "field_expression"]);
 export const _MEMBER_NAME = new Set(["property_identifier", "field_identifier"]);
-// Call-node FIELD names for the (method name, receiver) of a method call on grammars whose call node is
-// FLAT — the callee lives in named fields, NOT a nested member node: Java method_invocation (name/object),
-// Ruby `call` (method/receiver), C# invocation (name). The nested-member grammars (JS/TS/Python/C++) have
-// no such name field, so reading these first cleanly discriminates the shape. Tree-sitter field names are
-// the grammar's stable structural interface — this is the call-shape registry, not a literal-kind guess.
-export const _CALL_NAME_FIELD = ["name", "method"];
-export const _CALL_RECV_FIELD = ["object", "receiver"];
-export const _NEW = new Set(["new_expression", "object_creation_expression"]);
-export const _TYPE_REF = new Set(["type_identifier"]);
-// The declaration FIELD holding a function-like's RETURN TYPE: TS/JS `return_type` (a `type_annotation`
-// wrapper), Java/C#/C/C++ `type`. Reading it turns `const x = makeThing()` — a receiver the type-annotation
-// pass sees as UNRESOLVED — into a provable type, which is what re-arms receiver grounding for a
-// factory/DI-getter-obtained receiver. Field names are the grammar's stable structural interface.
-export const _RETURN_TYPE_FIELD = ["return_type", "type"];
-// Expression wrappers that are TRANSPARENT around a call in an initializer (`const x = await f()`,
-// `(f())`, `f()!`, `f() as T`): unwrapping them lets a binder be tied to the call it is initialised from
-// without ever mistaking a call NESTED inside a bigger expression (`{ a: f() }`) for the whole value.
-export const _CALL_VALUE_UNWRAP = new Set(["await_expression", "parenthesized_expression",
-  "non_null_expression", "as_expression", "type_assertion_expression", "unary_expression"]);
-export const _INSTANCE_BINDER = new Set(["variable_declarator", "required_parameter", "optional_parameter",
-  "public_field_definition", "field_definition", "property_signature"]);
-// Class-member FIELD declarations that can BIND A FUNCTION as a member — the HOF/telemetry-wrapper idiom
-// (`m = withReporting(this._m.bind(this))`, `m = (x) => …`). Such a member is CALLED like a method
-// (`instance.m()`) but is not a method_definition, so `_named_units` never yields it and the anchor has no
-// owning class — which silently disables every receiver-grounding check in the call-site pass. Kept DISTINCT
-// from _INSTANCE_BINDER (vars/params are not members) and from Java/C++ `field_declaration` (a DATA field whose
-// `name` position holds the TYPE, so matching it by name would ground the wrong owner) — the closed set of
-// kinds whose `name` field IS the member name. Registry-sourced, so both the field-fn detection and the
-// owner lookup read ONE list.
-export const _CLASS_FIELD = new Set(["public_field_definition", "field_definition"]);
-// Typed DECLARATION nodes that carry a `type` field + a bound NAME — a field / ctor-param / local whose declared
-// type we read to resolve a method call on that receiver (`RoleMapperModel roleMapper` → follow the interface).
-// Java field_declaration/formal_parameter/local_variable_declaration wrap the name in a variable_declarator child;
-// the TS binders carry their own name. Registry-sourced (concepts, cross-language), not a per-framework list.
-export const _TYPED_DECL = new Set(["field_declaration", "formal_parameter", "local_variable_declaration",
-  "public_field_definition", "field_definition", "property_signature", "required_parameter", "optional_parameter"]);
 export const _VAR_DECL = new Set(["lexical_declaration", "variable_declaration"]);
-export const _INTERFACE = new Set(["interface_declaration"]);
-export const _INTERFACE_MEMBER = new Set(["method_signature", "property_signature", "abstract_method_signature"]);
-// The `extends`-bases clause of a class, cross-language: TS extends_clause, Java superclass, Python
-// argument_list. We read its DIRECT name children only (so a base's generic args / an implements
-// clause are not mistaken for bases). _BASE_NAME = the kinds a base reference can take.
-export const _HERITAGE = new Set(["extends_clause", "superclass", "base_class_clause", "argument_list", "extends_interfaces"]);
-export const _BASE_NAME = new Set(["identifier", "type_identifier", "member_expression", "scoped_identifier", "scoped_type_identifier"]);
 // `implements` clause kinds (a CLASS → the interfaces it implements): Java `super_interfaces` (names
 // nested under a `type_list`), TS `implements_clause` (nested under `class_heritage`). Kept DISTINCT
 // from _HERITAGE (which is `extends` only) so interface→impl resolution reads the implements relation.
 export const _IMPLEMENTS = new Set(["super_interfaces", "implements_clause"]);
-// Annotation / decorator node kinds — the LANGUAGE-level marker that a declaration is wired declaratively
-// (Java `annotation`/`marker_annotation`, TS/Python `decorator`). Framework-AGNOSTIC: presence is the
-// signal (a method the framework invokes), NOT which annotation — so no per-framework list to keep in sync.
-export const _ANNOTATION = new Set(["annotation", "marker_annotation", "decorator"]);
 export const _EXPORT = new Set(["export_statement"]);
 // The RE-EXPORT / export-list forms: `export { a, b }` and `export { a } from "./x"`. The export_statement's
 // child is an export CLAUSE of specifiers, NOT a declaration — so a barrel (an index.* that only re-exports)

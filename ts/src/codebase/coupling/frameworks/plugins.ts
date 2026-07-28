@@ -27,7 +27,6 @@ export interface OrmMethod { method: string; role: "read" | "write"; orm?: strin
 const userRoot = (): string => { const e = process.env.SEAM_CONFIG_HOME; return e && e.trim() ? e : join(homedir(), ".config", "seam"); };
 
 let _loaded = false;
-export function _resetPluginsLoaded(): void { _loaded = false; }
 
 // Load declarative manifests from the trusted user root and the repo root (data is safe from either).
 // Idempotent per process. Never throws — a broken manifest is warned and skipped.
