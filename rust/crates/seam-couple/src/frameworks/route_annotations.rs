@@ -77,3 +77,41 @@ pub fn route_annotation_method_owned(name: &str) -> Option<String> {
 pub fn route_annotation_method(name: &str) -> Option<&'static str> {
     METHOD.get(name).copied()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // The BUILT-IN catalogue is what makes the common frameworks work with no configuration at all, and the
+    // verb map is what stops a GET consumer pairing with a POST handler. A verb-LESS entry (`@Path`,
+    // `@RequestMapping`) is still a route annotation — the composition logic supplies the path, and only the
+    // method is unknown at the name. Ported from `route_annotations_registry.test.ts`.
+    #[test]
+    fn the_builtin_catalogue_is_recognised_and_carries_its_verb_where_the_name_fixes_one() {
+        assert!(is_route_annotation("GetMapping"));
+        assert!(is_route_annotation("Path"), "JAX-RS base — a route annotation…");
+        assert_eq!(route_annotation_method("Path"), None, "…with no verb at the name");
+        assert_eq!(route_annotation_method("GetMapping"), Some("GET"));
+        assert_eq!(route_annotation_method("PostMapping"), Some("POST"));
+        assert!(!is_route_annotation("Roborovski"), "not a framework we know");
+    }
+
+    // THE PLUGIN PATH. "Add a framework" must be data, not an engine edit — a manifest registers a name and its
+    // verb, and the scanner picks it up. Registration is process-global, hence the lock.
+    #[test]
+    fn a_registered_annotation_joins_the_vocabulary_with_its_verb() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_route_annotations();
+        assert!(!is_route_annotation("AcmeHandle"));
+        register_route_annotation("AcmeHandle", Some("GET"));
+        assert!(is_route_annotation("AcmeHandle"));
+        assert_eq!(route_annotation_method_owned("AcmeHandle").as_deref(), Some("GET"));
+        // a verb-less registration is still a route annotation
+        register_route_annotation("AcmeMount", None);
+        assert!(is_route_annotation("AcmeMount"));
+        assert_eq!(route_annotation_method_owned("AcmeMount"), None);
+        reset_route_annotations();
+        assert!(!is_route_annotation("AcmeHandle"), "reset drops extras, never the builtins");
+        assert!(is_route_annotation("GetMapping"));
+    }
+}

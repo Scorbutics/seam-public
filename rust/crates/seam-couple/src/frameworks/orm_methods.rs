@@ -59,3 +59,33 @@ pub fn is_orm_read(method: &str) -> bool {
 pub fn is_orm_write(method: &str) -> bool {
     WRITE.contains(method) || EXTRA.read().unwrap().iter().any(|(m, w)| m == method && *w)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Read vs write decides `produces`, i.e. which SIDE of a table crossing a call sits on. The deliberate
+    // ABSENCES matter as much as the entries: `find` and `save` collide with non-ORM meanings (`File.delete`,
+    // `Model.find`), so classifying them would ground noise. Ported from `http_orm_registry.test.ts`.
+    #[test]
+    fn the_builtins_classify_read_vs_write_and_leave_ambiguous_names_out() {
+        assert!(is_orm_read("where"));
+        assert!(is_orm_write("create!"));
+        assert!(!is_orm_read("find"), "ambiguous — File.delete / Model.find collision");
+        assert!(!is_orm_write("save"));
+    }
+
+    #[test]
+    fn a_registered_orm_method_joins_the_vocabulary_on_the_side_it_declares() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_orm_methods();
+        assert!(!is_orm_read("scan_all"));
+        register_orm_method("scan_all", false);
+        assert!(is_orm_read("scan_all") && !is_orm_write("scan_all"));
+        register_orm_method("blast_all", true);
+        assert!(is_orm_write("blast_all") && !is_orm_read("blast_all"));
+        reset_orm_methods();
+        assert!(!is_orm_read("scan_all"), "reset drops extras, never the builtins");
+        assert!(is_orm_read("where"));
+    }
+}

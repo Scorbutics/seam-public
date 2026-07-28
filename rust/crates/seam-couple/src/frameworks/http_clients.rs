@@ -124,3 +124,39 @@ pub static HTTP_CLIENT_CALL_RE: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r
 
 /// `<client>( <ident.expr> [,)]` — a variable-URL client call (body only). Port of `_buildVar`.
 pub static HTTP_CLIENT_VAR_ARG_RE: Lazy<Regex> = Lazy::new(|| Regex::new(&format!(r#"(?:{})\s*\(\s*([A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*)\s*[,)]"#, alternation())).unwrap());
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn matches(src: &str) -> Option<String> {
+        http_client_call_re().captures(src).map(|c| c[1].to_string())
+    }
+
+    // The built-in catalogue is what makes a plain `fetch("/orders")` ground with no configuration. `verbForms`
+    // is the difference between `axios("/x")` and `axios.get("/x")` — a client called both ways would otherwise
+    // be half-invisible. Ported from `http_orm_registry.test.ts`.
+    #[test]
+    fn the_builtin_clients_match_both_the_bare_and_the_verb_call_forms() {
+        assert_eq!(matches(r#"fetch("/orders")"#).as_deref(), Some("/orders"));
+        assert_eq!(matches(r#"axios.get("/users")"#).as_deref(), Some("/users"));
+        assert!(matches(r#"gotBespoke("/things")"#).as_deref() != Some("/things"), "not a client we know");
+    }
+
+    // THE PLUGIN PATH, and the reason a registration must invalidate the compiled regex rather than patch it:
+    // the pattern is DERIVED state, and a stale one silently keeps answering with the old vocabulary.
+    #[test]
+    fn a_registered_client_is_recognised_and_gets_verb_form_tolerance() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_http_clients();
+        assert!(matches(r#"wretch("/things")"#).as_deref() != Some("/things"));
+        register_http_clients(&["wretch".to_string()]);
+        assert_eq!(matches(r#"wretch("/things")"#).as_deref(), Some("/things"));
+        // every REGISTERED client gets verb-form tolerance, whether or not it asked for it — an extra receiver
+        // name is a plain token, and this recognises more calls rather than fewer
+        assert_eq!(matches(r#"wretch.post("/pay")"#).as_deref(), Some("/pay"));
+        reset_http_clients();
+        assert!(matches(r#"wretch("/things")"#).as_deref() != Some("/things"), "reset drops extras…");
+        assert_eq!(matches(r#"fetch("/orders")"#).as_deref(), Some("/orders"), "…never the builtins");
+    }
+}

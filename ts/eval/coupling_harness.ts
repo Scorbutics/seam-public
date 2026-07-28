@@ -71,6 +71,15 @@ export async function scoreCouplingCase(repo: string, c: CouplingCase, opts: { n
     return { name: c.name, recall: expected.length ? (expected.length - missing.length) / expected.length : 1, recovered, missing, boundaries };
   } finally {
     if (prev === undefined) delete process.env.SEAM_NO_ADAPTERS; else process.env.SEAM_NO_ADAPTERS = prev;
+    // AND PUSH THE RESTORE ACROSS THE BOUNDARY. `process.env` does not cross it — the same fact the sync above
+    // exists for — so restoring only the JS copy left the ADDON pinned in no-adapters mode for the rest of the
+    // process. In the CLI that is invisible (one process per analysis); in a test run it silently unlinked the
+    // adapters for every later case in the same process, measuring a floor nobody asked for.
+    try {
+      const core = loadAddon();
+      core?.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
+      core?.resetCaches(undefined);   // the floor shards are keyed by the env tag — drop what the unlinked run cached
+    } catch { /* no addon → nothing to restore */ }
   }
 }
 
