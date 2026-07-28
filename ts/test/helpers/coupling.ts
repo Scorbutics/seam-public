@@ -140,3 +140,7 @@ export const resolveHttpCallSites = (file: string, text: string, clients: Iterab
     const [kind, value, line, produces] = row.split("|");
     return { kind, value, line: Number(line), produces: produces === "true" };
   });
+
+// STRUCTURAL pre-clustering — re-exported from where the product reads it, so a test and the flywheel can
+// never be clustering by different rules.
+export { clusterBlindFiles, type BlindCluster } from "../../src/codebase/coupling/core_floor.js";

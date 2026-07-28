@@ -204,3 +204,126 @@ pub fn cluster_blind_files(files: &[(String, String)]) -> Vec<BlindCluster> {
     clusters.sort_by(|a, b| b.members.len().cmp(&a.members.len()));
     clusters
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // STRUCTURAL pre-clustering of floor-blind files — the upfront, deterministic half of the flywheel. Files
+    // sharing a data-access SHAPE collapse into ONE cluster so the model reads a single representative and the
+    // rest ground via the learned rule. This is what cuts the LLM INPUT (30 near-identical Prisma files → 1)
+    // rather than merely caching it. Ported from key_cluster.test.ts, shape_gate.test.ts and
+    // cluster_crosslang.test.ts.
+    fn f(file: &str, text: &str) -> (String, String) {
+        (file.to_string(), text.to_string())
+    }
+    /// Cluster member FILES (the Rust API returns indices into the input).
+    fn members<'a>(c: &BlindCluster, files: &'a [(String, String)]) -> Vec<&'a str> {
+        let mut v: Vec<&str> = c.members.iter().map(|&i| files[i].0.as_str()).collect();
+        v.sort();
+        v
+    }
+    fn by_sig<'a>(cs: &'a [BlindCluster], sig: &str) -> Option<&'a BlindCluster> {
+        cs.iter().find(|c| c.signature == sig)
+    }
+
+    #[test]
+    fn collapses_same_shape_files_and_keeps_distinct_shapes_separate() {
+        let files = vec![
+            f("a.ts", "export async function a() { return prisma.eventType.findMany(); }"),
+            f("b.ts", "export async function b(x) { await prisma.user.update({ data: x }); }"),
+            f("c.ts", "export async function c() { return prisma.booking.create({ data: {} }); }"),
+            f("bus.ts", "export function emit() { bus.publish(\"sync.done\", {}); }"), // a distinct shape
+            f("plain.ts", "export function add(a, b) { return a + b; }"),              // no data access at all
+        ];
+        let cs = cluster_blind_files(&files);
+        assert_eq!(cs.len(), 3, "3 prisma → 1, bus → 1, plain → 1");
+
+        // Clustered by the RECEIVER (the data object), NOT the model or the verb: findMany/update/create on
+        // three different models still share `prisma`, and one rule learned off any of them grounds all three.
+        let prisma = by_sig(&cs, "recv:prisma").expect("recv:prisma");
+        assert_eq!(members(prisma, &files), vec!["a.ts", "b.ts", "c.ts"]);
+        assert!(["a.ts", "b.ts", "c.ts"].contains(&files[prisma.rep].0.as_str()));
+
+        assert!(by_sig(&cs, "recv:bus").map(|c| c.members.len()) == Some(1));
+        let shapeless = by_sig(&cs, "").expect("the shapeless singleton");
+        assert_eq!(members(shapeless, &files), vec!["plain.ts"]);
+    }
+
+    #[test]
+    fn a_channels_read_and_write_cluster_together_so_one_rep_teaches_the_pair() {
+        let files = vec![
+            f("r.ts", "export function load() { return JSON.parse(localStorage.getItem(\"draft\")); }"),
+            f("w.ts", "export function save(v) { localStorage.setItem(\"draft\", JSON.stringify(v)); }"),
+        ];
+        let cs = cluster_blind_files(&files);
+        // getItem (consumes) and setItem (produces) share the receiver → ONE cluster. Clustering by METHOD
+        // would split them, and a rep that teaches only one side grounds nothing: a key needs both.
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].signature, "recv:localStorage");
+        assert_eq!(members(&cs[0], &files), vec!["r.ts", "w.ts"]);
+    }
+
+    #[test]
+    fn a_this_chain_is_not_a_distinctive_signature() {
+        let files = vec![
+            f("x.ts", "class X { run() { return this.svc.repo.load(); } }"),
+            f("y.ts", "class Y { go() { return this.api.client.fetch(); } }"),
+        ];
+        // Both are `this.*.*()`, on unrelated receivers. Merging them would have one rep's learned rule
+        // claimed to ground the other's channel — an over-merge is a wrong answer, not just a lost one.
+        assert_eq!(cluster_blind_files(&files).len(), 2);
+    }
+
+    #[test]
+    fn a_single_file_is_one_cluster() {
+        let files = vec![f("a.ts", "export async function a() { return prisma.eventType.findMany(); }")];
+        let cs = cluster_blind_files(&files);
+        assert_eq!(cs.len(), 1);
+        assert_eq!(cs[0].members.len(), 1);
+    }
+
+    #[test]
+    fn the_shape_gate_marks_a_file_with_no_data_access_edge_unshaped() {
+        let files = vec![
+            f("store.ts", "export const read = () => localStorage.getItem('compactMode');\n"), // string-keyed call
+            f("UserDto.ts", "export interface UserDto { id: string; name: string; roles: string[]; }\n"), // pure type
+        ];
+        let cs = cluster_blind_files(&files);
+        let find = |name: &str| cs.iter().find(|c| c.members.iter().any(|&i| files[i].0 == name)).unwrap();
+        assert!(find("store.ts").shaped, "a suspected edge is worth a pass");
+        assert!(!find("UserDto.ts").shaped, "a DTO has nothing for the flywheel to learn — the infra flood");
+    }
+
+    // ── CROSS-LANGUAGE receiver extraction ───────────────────────────────────────────────────────────────
+    // The clustering was once JS/TS-centric: it keyed off a `member_expression` callee, so Java's
+    // `rs.getBytes()` (a `method_invocation` with an `object` field) and Ruby's `Payment.where()` (a `call`
+    // with a `receiver`) had no receiver at all — every blind file became its own singleton, and 40 near-
+    // identical Java serializers cost 40 model calls instead of one.
+    #[test]
+    fn java_serializers_sharing_a_receiver_collapse_to_one_rep() {
+        let files: Vec<(String, String)> = (0..8)
+            .map(|i| {
+                f(
+                    &format!("Ser{i}UserType.java"),
+                    &format!("package m;\npublic class Ser{i}UserType {{\n  public Object get(java.sql.ResultSet rs, String[] n) {{ return rs.getBytes(n[0]); }}\n}}\n"),
+                )
+            })
+            .collect();
+        let cs = cluster_blind_files(&files);
+        assert_eq!(by_sig(&cs, "recv:rs").map(|c| c.members.len()), Some(8), "8 files → 1 rep");
+    }
+
+    #[test]
+    fn ruby_and_js_receivers_are_both_extracted() {
+        let files = vec![
+            f("report.rb", "class R\n def t\n  Payment.where(paid: true)\n end\nend\n"),
+            f("a.ts", "export const f = (id: string) => prisma.booking.findUnique({ where: { id } });\n"),
+            f("b.ts", "export const g = () => localStorage.getItem('k');\n"),
+        ];
+        let cs = cluster_blind_files(&files);
+        assert!(by_sig(&cs, "recv:Payment").is_some(), "Ruby receiver");
+        assert!(by_sig(&cs, "recv:prisma").is_some(), "JS deep chain");
+        assert!(by_sig(&cs, "recv:localStorage").is_some(), "JS string-keyed");
+    }
+}

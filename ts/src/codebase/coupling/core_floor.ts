@@ -48,3 +48,18 @@ export function composedRoutesIndex(repo: string): GroundingIndex {
   }
   return idx;
 }
+
+/// STRUCTURAL pre-clustering of floor-blind files — which of them share a data-access SHAPE, so the model
+/// reads ONE representative and the rest ground via the learned rule.
+///
+/// Reading this from the core matters more than the other shims here: the REPRESENTATIVE decides which file
+/// the model actually sees. Two clusterers disagreeing would have the flywheel learn a rule off one file and
+/// claim it grounds another — a wrong answer, not a missing one.
+///
+/// The addon returns INDICES into the input (the napi boundary carries no object identity), rehydrated here.
+export interface BlindCluster<T> { signature: string; shaped: boolean; rep: T; members: T[] }
+export function clusterBlindFiles<T extends { file: string; text: string }>(files: T[]): BlindCluster<T>[] {
+  const rows = files.map((f) => [f.file, f.text]);
+  return (core().clusterBlindFiles(rows) as { signature: string; shaped: boolean; rep: number; members: number[] }[])
+    .map((c) => ({ signature: c.signature, shaped: c.shaped, rep: files[c.rep], members: c.members.map((i) => files[i]) }));
+}
