@@ -1,7 +1,13 @@
 // Byte-identical harness — Rust grow_centers vs TS grow_centers_scoped(floor) + the mergeOne merge loop.
 import { createRequire } from "node:module";
 import { grow_centers_scoped } from "../../ts/src/codebase/grow/orchestrate.js";
-import { merge_resolved } from "../../ts/src/codebase/scan/index.js";
+// merge_resolved is the CORE's now — this harness imported it from `codebase/scan/`, which the migration
+// deleted, so the harness has not run since. That is worth saying plainly: its "byte-identical" claim went
+// stale the day the scan layer went, and any drift in `grow_centers` between then and now was unmeasured.
+import { loadAddon, toResolvedGraph, toGraphDto } from "../../ts/src/codebase/rust_core.js";
+const _core = (): any => { const a = loadAddon(); if (!a) throw new Error("the Seam core is not available"); return a; };
+const merge_resolved = (base: any, add: any, expandAnchor?: string | null): any =>
+  toResolvedGraph(_core().mergeResolved(toGraphDto(base), toGraphDto(add), expandAnchor ?? null));
 import { EngineCtx } from "../../ts/src/codebase/engine_ctx.js";
 process.env.SEAM_GRAPH_CACHE = "0"; // TS cache conflates same-name symbols
 process.env.SEAM_CENTERS_MERGED = "0"; // the DEFAULT floor path (per-center grow + caller merge)
