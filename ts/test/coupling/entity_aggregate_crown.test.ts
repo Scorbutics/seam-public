@@ -11,8 +11,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { available } from "../../src/codebase/atoms.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { jpaManagerIndex } from "../../src/codebase/coupling/jpa_wrapper.js";
-import { SKIP_DIRS } from "../../src/core/resolve/languages/index.js";
+import { jpaEntityParents } from "../helpers/coupling.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { decompose } from "../../src/codebase/codebase.js";
@@ -37,7 +36,7 @@ async function build(): Promise<{ parents: Map<string, Set<string>>; withFk: str
   const ctx = new EngineCtx();
   const grown: any = await grow_to_terminals(REPO, "src/OrderService.java", "placeOrder", { maxSteps: 20, maxNodes: 80, dataCoupling: true, ctx } as any);
   const data = Array.isArray(grown) ? grown[0] : grown;
-  const parents = jpaManagerIndex(REPO, SKIP_DIRS, ctx).entityParents;
+  const parents = jpaEntityParents(REPO);
   const g = from_resolved_graph(data);
   const model: any = await decompose(g, { repo: REPO, useLlm: false, intent: INTENT, skeleton: true });
   const withoutFk = renderAgent(model, { tokenBudget: 8000, intent: INTENT });   // no ownership signal
@@ -50,7 +49,7 @@ const crown = (out: string): string | undefined => (out.match(/──db-write─
 describe("aggregate-root crown — the FK parent out-crowns its child detail entity", () => {
   test("the JPA FK index maps the child entity to its @ManyToOne parent", () => {
     if (!available()) return;   // needs tree-sitter to grow
-    const { parents } = { parents: jpaManagerIndex(REPO, SKIP_DIRS, new EngineCtx()).entityParents };
+    const parents = jpaEntityParents(REPO);
     expect([...(parents.get("OrderLineEntity") ?? [])]).toEqual(["OrderEntity"]);
   });
 

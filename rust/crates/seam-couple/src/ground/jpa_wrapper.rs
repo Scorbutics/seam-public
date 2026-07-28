@@ -211,3 +211,95 @@ pub fn jpa_wrapper_keys(text0: &str, idx: &ManagerIndex) -> Vec<KeyHit> {
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_repo(tag: &str, files: &[(&str, &str)]) -> std::path::PathBuf {
+        static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "seam-jpa-{tag}-{}-{}",
+            std::process::id(),
+            N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        for (rel, body) in files {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, body).unwrap();
+        }
+        dir
+    }
+
+    // The wrapper fixture: the BASE holds the real EntityManager and a custom-verb write; the manager actually
+    // used EXTENDS it, so it is only reachable through the extends closure. `AuditNote` is deliberately NOT an
+    // `@Entity`, and `NotAManager` deliberately declares a method of the SAME NAME as the wrapper's write.
+    fn wrapper_repo() -> std::path::PathBuf {
+        write_repo("wrapper", &[
+            ("jpa/MemberBooking.java", "package jpa;\nimport jakarta.persistence.Entity;\n@Entity\npublic class MemberBooking { String id; }\n"),
+            ("jpa/AuditNote.java", "package jpa;\npublic class AuditNote { String text; }\n"),
+            ("orm/JpaEntityManager.java", "package orm;\nimport jakarta.persistence.EntityManager;\npublic abstract class JpaEntityManager {\n  protected EntityManager mEntityManager;\n  public <T> T customSave(T e){ mEntityManager.merge(e); return e; }\n  public <T> T find(Class<T> c, Object id){ return mEntityManager.find(c, id); }\n}\n"),
+            ("orm/RequestScopedJpaEntityManager.java", "package orm;\npublic class RequestScopedJpaEntityManager extends JpaEntityManager { }\n"),
+            ("cdi/BookingsBean.java", "package cdi;\nimport orm.RequestScopedJpaEntityManager;\nimport jpa.MemberBooking;\nimport jpa.AuditNote;\npublic class BookingsBean {\n  RequestScopedJpaEntityManager mJpaEntityManager;\n  public MemberBooking createBooking(){ final MemberBooking mb = new MemberBooking(); return mJpaEntityManager.customSave(mb); }\n  public MemberBooking readBooking(final String id){ return mJpaEntityManager.find(MemberBooking.class, id); }\n  public void auditRead(final AuditNote note){ mJpaEntityManager.customSave(note); }\n}\n"),
+            ("cdi/Other.java", "package cdi;\nimport jpa.MemberBooking;\npublic class NotAManager {\n  public MemberBooking go(final MemberBooking mb){ return this.customSave(mb); }\n  MemberBooking customSave(MemberBooking mb){ return mb; }\n}\n"),
+        ])
+    }
+
+    // THE WHOLE POINT of this module: a wrapper's write grounds because its receiver RESOLVES DOWN to a real
+    // jakarta EntityManager, not because the method is called `save`. A verb-name list dies on a rename; this
+    // deduces from the platform primitive. Ported from `jpa_wrapper.test.ts`.
+    #[test]
+    fn the_index_resolves_a_manager_through_extends_and_knows_the_entity_set() {
+        let dir = wrapper_repo();
+        let idx = build(dir.to_str().unwrap());
+        assert!(idx.managers.contains("JpaEntityManager"), "holds the EntityManager directly");
+        assert!(idx.managers.contains("RequestScopedJpaEntityManager"), "extends it → also a manager");
+        assert!(idx.entities.contains("MemberBooking"));
+        assert!(!idx.managers.contains("NotAManager"), "never touches an EntityManager");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_arbitrary_verb_grounds_but_a_jpa_read_and_a_non_entity_arg_do_not() {
+        let dir = wrapper_repo();
+        let idx = build(dir.to_str().unwrap());
+        let bean = std::fs::read_to_string(dir.join("cdi/BookingsBean.java")).unwrap();
+        let keys = jpa_wrapper_keys(&bean, &idx);
+        let writes: Vec<&str> = keys.iter().filter(|k| k.produces).map(|k| k.value.as_str()).collect();
+        assert!(writes.contains(&"MemberBooking"), "customSave(mb): arbitrary verb, manager receiver → grounds");
+        assert!(!writes.contains(&"AuditNote"), "customSave(note): the arg is not an @Entity → filtered");
+        // `find(MemberBooking.class, id)` is a CLOSED-SET JPA read AND its arg is a class literal. Excluding the
+        // read API is what stops a read being mislabelled a write, so the entity must appear exactly ONCE.
+        assert_eq!(keys.iter().filter(|k| k.value == "MemberBooking").count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn the_same_verb_on_a_non_manager_receiver_grounds_nothing() {
+        let dir = wrapper_repo();
+        let idx = build(dir.to_str().unwrap());
+        let other = std::fs::read_to_string(dir.join("cdi/Other.java")).unwrap();
+        assert!(jpa_wrapper_keys(&other, &idx).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // The FK-OWNERSHIP half — the grounded aggregate-root signal. A child holding an owning `@ManyToOne` to a
+    // parent means the parent is the ROOT and the child a detail row, so the render crowns the root. Grounded on
+    // a foreign key, never a name prefix. Ported from `entity_aggregate_crown.test.ts`'s index assertion.
+    #[test]
+    fn an_owning_many_to_one_maps_the_child_entity_to_its_parent() {
+        let dir = write_repo("fk", &[
+            ("src/OrderEntity.java", "package src;\nimport jakarta.persistence.*;\n@Entity\npublic class OrderEntity { @Id Long id; }\n"),
+            ("src/OrderLineEntity.java", "package src;\nimport jakarta.persistence.*;\n@Entity\npublic class OrderLineEntity {\n  @Id Long id;\n  @ManyToOne\n  @JoinColumn(name = \"order_id\")\n  OrderEntity order;\n}\n"),
+            // a @ManyToOne to a NON-entity value type is not an aggregate relation → must be dropped
+            ("src/Embeddable.java", "package src;\npublic class Money { Long cents; }\n"),
+            ("src/PriceEntity.java", "package src;\nimport jakarta.persistence.*;\n@Entity\npublic class PriceEntity {\n  @Id Long id;\n  @ManyToOne\n  Money amount;\n}\n"),
+        ]);
+        let idx = build(dir.to_str().unwrap());
+        let parents: Vec<&String> = idx.entity_parents.get("OrderLineEntity").map(|s| s.iter().collect()).unwrap_or_default();
+        assert_eq!(parents, vec!["OrderEntity"]);
+        assert!(!idx.entity_parents.contains_key("PriceEntity"), "@ManyToOne to a non-entity is not ownership");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}

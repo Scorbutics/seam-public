@@ -201,6 +201,12 @@ export const couplingCapabilities = () => (core().couplingCapabilities() as stri
 export const maskComments = (text: string): string => core().maskComments(text);
 export const stringLiteralsOnly = (text: string): string => core().stringLiteralsOnly(text);
 
+// The JPA FK-ownership map (child entity → its owning `@ManyToOne`/`@OneToOne` parents) — the grounded
+// aggregate-root signal the render crowns by. The core returns sorted `[child, parent…]` rows precisely so the
+// order does not depend on a hash iteration; rebuilt into the Map shape the render tests read.
+export const jpaEntityParents = (repo: string): Map<string, Set<string>> =>
+  new Map((core().jpaEntityParents(repo) as string[][]).map(([child, ...parents]) => [child, new Set(parents)]));
+
 // ── COMMUNITY FRAMEWORK PLUGINS ──────────────────────────────────────────────────────────────────────────
 // Registering a framework the built-in adapters do not know — a project's own route annotation, its ORM's
 // verbs, its http client. The registration lives in the CORE because that is what scans; a test that

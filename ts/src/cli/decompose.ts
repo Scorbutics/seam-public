@@ -648,19 +648,18 @@ async function runCodebase(a: Args): Promise<number> {
       if (llmBorder) model2.llmBorder = true;   // the LLM border ranked the footprint → annotateForEmit skips the embedding pass
       // ENTITY OWNERSHIP (aggregate-root crown signal) — carry the JPA child→FK-parent map into the emitted model so
       // the render crowns/orders a co-written aggregate ROOT (GroupEntity) ahead of its FK-CHILD detail
-      // (GroupAttributeEntity). The map is built + ctx-cached by the coupling scan; but a WARM cache hit restores the
-      // footprint WITHOUT re-running coupling, so build it here when it's missing AND the footprint has Java entities
-      // (a cheap .java walk, ctx-cached, idempotent — so cold==warm). Skipped for non-Java footprints (no cost).
-      let _entParents = _growCtx?.jpaManagers.get(a.repo)?.entityParents as Map<string, Set<string>> | undefined;
+      // (GroupAttributeEntity). Asked of the CORE, which owns the index and memoises it per repo; a warm footprint
+      // cache hit restores the model WITHOUT re-running coupling, so it is asked for here rather than read off a
+      // scan that may not have run. Only when the footprint HAS Java entities — otherwise it is not a .java walk
+      // worth paying for. The rows arrive sorted (see `jpa_entity_parents`), so the emitted object is stable.
       const _hasJavaEntity = (model2.clusters ?? []).some((c: any) => (c.seams ?? []).some((s: any) => (s.hunks ?? []).some((h: any) => h.kind === "db-table" && String(h.file ?? "").endsWith(".java"))));
-      if (!_entParents?.size && _growCtx && _hasJavaEntity) {
+      if (_hasJavaEntity) {
         try {
-          const { jpaManagerIndex } = await import("../codebase/coupling/jpa_wrapper.js");
-          const { SKIP_DIRS } = await import("../core/resolve/languages/index.js");
-          _entParents = jpaManagerIndex(a.repo, SKIP_DIRS, _growCtx).entityParents;
-        } catch { /* index build failed → skip the ordering, render unchanged */ }
+          const { loadAddon } = await import("../codebase/rust_core.js");
+          const rows = (loadAddon()?.jpaEntityParents(a.repo) ?? []) as string[][];
+          if (rows.length) model2.entityParents = Object.fromEntries(rows.map(([child, ...parents]) => [child, parents]));
+        } catch { /* no addon / index build failed → skip the ordering, render unchanged */ }
       }
-      if (_entParents?.size) model2.entityParents = Object.fromEntries([..._entParents].map(([c, ps]: [string, Set<string>]) => [c, [...ps]]));
       if (a.emitGraph) writeFileSync(a.emitGraph, JSON.stringify(data));
       const nSeams = (model2.clusters ?? []).reduce((n: number, c: any) => n + (c.seams?.length ?? 0), 0);
       const usage = get_usage().as_dict();

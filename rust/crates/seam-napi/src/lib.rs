@@ -1471,6 +1471,34 @@ pub fn reset_adapter_ledger() {
     seam_couple::learn::ledger::reset();
 }
 
+/// The JPA FK-OWNERSHIP map for a repo: child entity → the parent entity(ies) it holds an owning
+/// `@ManyToOne`/`@OneToOne` to. The grounded aggregate-root signal — among two co-written entity sinks, the
+/// one the OTHER points to is the ROOT and its child a detail row, so the render crowns the root first.
+///
+/// Returned as SORTED ROWS `[child, parent…]`, not a map, and that shape is the point: the Rust index holds
+/// this in a `HashMap`/`HashSet`, whose iteration order is not stable across processes, and a map crossing the
+/// napi boundary would carry that order into the JS object's KEY order. The value is JSON-serialised into the
+/// emitted model, so an unordered answer would make the same repo emit a different byte string every run.
+/// Rows sort by child, parents sort within a row; the caller builds the object from them in that order.
+/// Consumers only ever look a child up and `.some()` over its parents, so a total order costs nothing.
+#[napi]
+pub fn jpa_entity_parents(repo: String) -> Vec<Vec<String>> {
+    let idx = seam_couple::ground::jpa_wrapper::jpa_manager_index(&repo);
+    let mut rows: Vec<Vec<String>> = idx
+        .entity_parents
+        .iter()
+        .map(|(child, parents)| {
+            let mut row = vec![child.clone()];
+            let mut ps: Vec<String> = parents.iter().cloned().collect();
+            ps.sort();
+            row.extend(ps);
+            row
+        })
+        .collect();
+    rows.sort();
+    rows
+}
+
 // ── COMMUNITY FRAMEWORK PLUGINS ──────────────────────────────────────────────────────────────────────────
 // A declarative manifest teaches the built-in adapters a framework they do not know — a project's own route
 // annotation, its ORM's verbs, its http client — without a code change. Registration is per-PROCESS and
