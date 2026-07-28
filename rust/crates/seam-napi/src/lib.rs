@@ -1315,6 +1315,74 @@ pub fn composed_routes_index(repo: String) -> Vec<Vec<String>> {
     rows
 }
 
+/// Every boundary ARCHETYPE by tier: `[kind, nodeKind, tier, detector, detector, …]` where tier is
+/// "built-in" or "learned". Answers "does Seam handle events/queues?" without a warmed repo.
+#[napi]
+pub fn coupling_capabilities() -> Vec<Vec<String>> {
+    seam_couple::apply::semantics::coupling_capabilities()
+        .into_iter()
+        .map(|(kind, node_kind, built_in, detectors)| {
+            let mut row = vec![kind.to_string(), node_kind.to_string(), if built_in { "built-in".into() } else { "learned".into() }];
+            row.extend(detectors.into_iter().map(String::from));
+            row
+        })
+        .collect()
+}
+
+/// The SHARED adapter store's directory — where `promote` copies to, and the second place every list reads.
+#[napi]
+pub fn shared_seam_dir() -> String {
+    seam_couple::learn::matchers::shared_dir()
+}
+
+// ── THE `seam-adapters` CLI SURFACE ──────────────────────────────────────────────────────────────────────
+// Listing and PROMOTING what the flywheel learned is the human-review half of "learn once, replay forever":
+// a rule deduced for one repo is inspected and, if it generalises, promoted to the shared store so every repo
+// gets it. All four rows carry the SCOPE, because that is what the reviewer is deciding about.
+
+/// Learned MATCHER rules: `[name, shape, kind, role, scope]` (scope = "repo" | "shared").
+#[napi]
+pub fn list_matchers(repo: String) -> Vec<Vec<String>> {
+    seam_couple::learn::key_store::list_matchers(&repo)
+        .into_iter()
+        .map(|s| {
+            let m = &s.matcher;
+            vec![m.display_name(), m.shape(), m.kind().to_string(), m.role().to_string(), if s.shared { "shared".into() } else { "repo".into() }]
+        })
+        .collect()
+}
+
+/// Learned PER-FILE key adapters: `[name, description, contentKey, keyCount, scope]`.
+#[napi]
+pub fn list_key_adapters(repo: String) -> Vec<Vec<String>> {
+    seam_couple::learn::key_store::list_key_adapters(&repo)
+        .into_iter()
+        .map(|s| vec![s.adapter.name, s.adapter.description, s.key, s.adapter.keys.len().to_string(), if s.shared { "shared".into() } else { "repo".into() }])
+        .collect()
+}
+
+/// Learned CARRIER signatures: `[name, description, direction, medium, contentKey, scope]`.
+#[napi]
+pub fn list_learned_carriers(repo: String) -> Vec<Vec<String>> {
+    seam_couple::learn::carrier::list_learned_adapters(&repo)
+        .into_iter()
+        .map(|s| vec![s.sig.name, s.sig.description, s.sig.direction, s.sig.medium, s.key, if s.shared { "shared".into() } else { "repo".into() }])
+        .collect()
+}
+
+/// Promote a repo-learned adapter by name — a matcher rule, a per-file adapter, or a carrier signature.
+/// Returns what KIND was promoted, or "" when the name matched nothing.
+#[napi]
+pub fn promote_adapter(repo: String, name: String) -> String {
+    if seam_couple::learn::carrier::promote_signature(&repo, &name).is_some() {
+        return "carrier".into();
+    }
+    if let Some(kind) = seam_couple::learn::key_store::promote_key_adapter(&repo, &name) {
+        return kind.into();
+    }
+    String::new()
+}
+
 /// Effect inference — the inferred custom http-client receiver tokens across the repo's scannable files, in
 /// insertion order. Port of inferHttpClients (over the full-repo scope). Rows are the raw tokens.
 #[napi]

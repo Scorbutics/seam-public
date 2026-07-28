@@ -369,3 +369,42 @@ mod tests {
         assert!(!src.contains("fn other"), "a nested block must not truncate the method early");
     }
 }
+
+// ── THE ADAPTERS SURFACE (`seam-adapters`) ───────────────────────────────────────────────────────────────
+/// One learned carrier signature with WHERE it lives. `shared` = promoted to `~/.config/seam/adapters`, so it
+/// applies to every repo; the scope is what a reviewer is deciding about.
+pub struct ScopedSignature {
+    pub key: String,
+    pub sig: CarrierSignature,
+    pub shared: bool,
+}
+
+/// Every REAL learned carrier (repo first, then shared). A cached `None` is a known NON-carrier — a genuine
+/// answer worth never re-asking, but not an adapter, so it is not listed or promotable.
+pub fn list_learned_adapters(repo: &str) -> Vec<ScopedSignature> {
+    let mut out = Vec::new();
+    for (shared, path) in [(false, store_path(repo)), (true, shared_path())] {
+        for (k, v) in load_from(&path) {
+            if let Some(sig) = v {
+                out.push(ScopedSignature { key: k, sig, shared });
+            }
+        }
+    }
+    out
+}
+
+/// Promote a repo-learned signature into the shared store by its friendly name. Port of `promoteSignature`.
+pub fn promote_signature(repo: &str, name: &str) -> Option<CarrierSignature> {
+    let repo_store = load_from(&store_path(repo));
+    let (k, sig) = repo_store.iter().find_map(|(k, v)| v.as_ref().filter(|s| s.name == name).map(|s| (k.clone(), s.clone())))?;
+    let path = shared_path();
+    let mut shared = load_from(&path);
+    shared.insert(k, Some(sig.clone()));
+    let wire = StoreWire { schema: SCHEMA, signatures: shared.clone() };
+    if let Some(dir) = std::path::Path::new(&path).parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(&path, serde_json::to_string_pretty(&wire).unwrap_or_default()).ok()?;
+    MEM.lock().unwrap().insert(path, shared);
+    Some(sig)
+}

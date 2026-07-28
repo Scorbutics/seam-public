@@ -38,6 +38,23 @@ pub fn kind_of(kind: &str) -> KindSemantics {
 
 /// Is `kind` a TERMINAL (egress) boundary — self-grounded by its own literal, no in-repo other side? Port of
 /// `TERMINAL_KINDS.has`.
+/// Every boundary ARCHETYPE with the detection adapters that ground it, if any. A kind with no detector is
+/// `learned` — its semantics exist, so a flywheel-deduced matcher grounds with the right boundary and edges,
+/// but nothing finds it offline. This is what makes "does Seam handle events/queues?" answerable WITHOUT
+/// having warmed a repo. Port of `couplingCapabilities`.
+pub fn coupling_capabilities() -> Vec<(&'static str, &'static str, bool, Vec<&'static str>)> {
+    ARCHETYPES
+        .iter()
+        .map(|(kind, sem)| {
+            let detectors: Vec<&'static str> =
+                crate::adapters::builtin_adapters().into_iter().filter(|(_, k, _)| k == kind).map(|(name, _, _)| name).collect();
+            (*kind, sem.node_kind, !detectors.is_empty(), detectors)
+        })
+        .collect()
+}
+
+/// Is `kind` a TERMINAL (egress) boundary — self-grounded by its own literal, no in-repo other side? Port of
+/// `TERMINAL_KINDS.has`.
 pub fn is_terminal_kind(kind: &str) -> bool {
     ARCHETYPES.iter().any(|(k, s)| *k == kind && s.terminal)
 }

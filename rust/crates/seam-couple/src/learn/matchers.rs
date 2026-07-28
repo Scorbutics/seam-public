@@ -134,6 +134,74 @@ struct StoreJson {
 
 impl KeyMatcher {
     /// Stable identity for dedup — the shape + distinguishing fields. Port of `matcherKey`.
+    /// A HUMAN-READABLE rendering of what this rule matches — `cacheA.{read}('<key>')` rather than the
+    /// executable identity. The listing is for review, and a reviewer deciding whether a rule generalises has
+    /// to see the SHAPE, not a colon-joined dedup key. Port of `matcherShape`.
+    pub fn shape(&self) -> String {
+        match self {
+            KeyMatcher::Call { token, arg_index, strip, .. } => {
+                format!("{token}(arg{arg_index}){}", strip.as_ref().map(|s| format!(" strip \"{s}\"")).unwrap_or_default())
+            }
+            KeyMatcher::Assign { token, .. } => format!("{token}.<member> = fn"),
+            KeyMatcher::Method { .. } => "class method def".to_string(),
+            KeyMatcher::Annotation { annotation, element, .. } => {
+                format!("@{annotation}({})", element.as_ref().map(|e| format!("{e}=\"…\"")).unwrap_or_else(|| "\"…\"".into()))
+            }
+            KeyMatcher::Member { token, verbs, .. } => format!("{token}.<member>.{{{}}}()", verbs.join("|")),
+            KeyMatcher::Repository { token, verbs, .. } => format!("{token}.{{{}}}() → table {token}", verbs.join("|")),
+            KeyMatcher::Channel { token, verbs, .. } => format!("{token}.{{{}}}('<key>')", verbs.join("|")),
+            KeyMatcher::Handle { token, verbs, .. } => format!("{token}.{{{}}}() → handle {token}", verbs.join("|")),
+            KeyMatcher::Attr { directive, key_from, .. } => format!("{directive}<name> (key from {key_from})"),
+        }
+    }
+
+    /// The boundary KIND this rule keys (db-table / http-route / event / …) and its side of it. Both are on
+    /// every variant; surfacing them is what makes a listed rule reviewable without reading its regex.
+    pub fn kind(&self) -> &str {
+        match self {
+            KeyMatcher::Call { kind, .. }
+            | KeyMatcher::Assign { kind, .. }
+            | KeyMatcher::Member { kind, .. }
+            | KeyMatcher::Method { kind, .. }
+            | KeyMatcher::Attr { kind, .. }
+            | KeyMatcher::Annotation { kind, .. }
+            | KeyMatcher::Repository { kind, .. }
+            | KeyMatcher::Channel { kind, .. }
+            | KeyMatcher::Handle { kind, .. } => kind,
+        }
+    }
+
+    pub fn role(&self) -> &str {
+        match self {
+            KeyMatcher::Call { role, .. }
+            | KeyMatcher::Assign { role, .. }
+            | KeyMatcher::Member { role, .. }
+            | KeyMatcher::Method { role, .. }
+            | KeyMatcher::Attr { role, .. }
+            | KeyMatcher::Annotation { role, .. }
+            | KeyMatcher::Repository { role, .. }
+            | KeyMatcher::Channel { role, .. }
+            | KeyMatcher::Handle { role, .. } => role,
+        }
+    }
+
+    /// The FRIENDLY name the model gave this rule, if any — what `seam-adapters` lists and promotes by.
+    /// Falls back to the executable identity, so every rule is addressable even when the model named none.
+    pub fn display_name(&self) -> String {
+        let n = match self {
+            KeyMatcher::Call { name, .. }
+            | KeyMatcher::Assign { name, .. }
+            | KeyMatcher::Member { name, .. }
+            | KeyMatcher::Method { name, .. }
+            | KeyMatcher::Attr { name, .. }
+            | KeyMatcher::Annotation { name, .. }
+            | KeyMatcher::Repository { name, .. }
+            | KeyMatcher::Channel { name, .. }
+            | KeyMatcher::Handle { name, .. } => name.clone(),
+        };
+        n.unwrap_or_else(|| self.key())
+    }
+
     pub fn key(&self) -> String {
         match self {
             KeyMatcher::Call { token, arg_index, strip, kind, role, .. } => format!("call:{kind}:{role}:{token}:{arg_index}:{}", strip.as_deref().unwrap_or("")),
@@ -410,7 +478,9 @@ fn load_store_rules(dir: &str) -> Vec<KeyMatcher> {
     rules
 }
 
-pub(crate) fn shared_dir() -> String {
+/// The SHARED adapter store — `SEAM_ADAPTERS_DIR`, else `~/.config/seam/adapters`. Public because the
+/// `seam-adapters` CLI has to TELL the user where promote writes; a path it cannot name is not reviewable.
+pub fn shared_dir() -> String {
     std::env::var("SEAM_ADAPTERS_DIR").ok().filter(|s| !s.trim().is_empty()).unwrap_or_else(|| {
         let home = std::env::var("HOME").unwrap_or_default();
         format!("{home}/.config/seam/adapters")

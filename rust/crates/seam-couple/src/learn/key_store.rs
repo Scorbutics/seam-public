@@ -176,3 +176,75 @@ pub fn persist_file_keys_batch(repo: &str, entries: &[(String, KeyAdapter)]) {
     }
     write_store(&dir, &store);
 }
+
+// ── THE ADAPTERS SURFACE (`seam-adapters`) ───────────────────────────────────────────────────────────────
+// Listing and PROMOTING what the flywheel learned is the human-review half of "learn once, replay forever":
+// a rule the model deduced for one repo is inspected, and if it generalises, promoted to the shared store so
+// every repo gets it. Port of the `listMatchers`/`listKeyAdapters`/`promoteKeyAdapter` trio.
+
+/// One learned entry with WHERE it lives — `repo` (this checkout) or `shared` (promoted, applies everywhere).
+/// The scope is the whole point of the listing: it is what a reviewer is deciding about.
+pub struct ScopedMatcher {
+    pub matcher: KeyMatcher,
+    pub shared: bool,
+}
+
+pub fn list_matchers(repo: &str) -> Vec<ScopedMatcher> {
+    let mut out = Vec::new();
+    for (shared, dir) in [(false, repo_dir(repo)), (true, crate::learn::matchers::shared_dir())] {
+        for m in load_store(&dir).rules {
+            out.push(ScopedMatcher { matcher: m, shared });
+        }
+    }
+    out
+}
+
+pub struct ScopedKeyAdapter {
+    pub key: String,
+    pub adapter: KeyAdapter,
+    pub shared: bool,
+}
+
+/// The per-file learned adapters that actually HOLD keys. An entry with none is a "nothing here" verdict —
+/// real, and worth caching so it is never re-asked, but not something to show a reviewer or promote.
+pub fn list_key_adapters(repo: &str) -> Vec<ScopedKeyAdapter> {
+    let mut out = Vec::new();
+    for (shared, dir) in [(false, repo_dir(repo)), (true, crate::learn::matchers::shared_dir())] {
+        for (k, v) in load_store(&dir).files {
+            if let Ok(a) = serde_json::from_value::<KeyAdapter>(v) {
+                if !a.keys.is_empty() {
+                    out.push(ScopedKeyAdapter { key: k, adapter: a, shared });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Promote a repo-learned adapter — a RULE or a per-file entry — into the shared store by its friendly name.
+/// Rules are deduped by executable identity, so promoting twice is a no-op rather than a duplicate.
+/// What KIND of thing was promoted — a reusable RULE or a per-file adapter. They are promoted through the
+/// same store but they are not the same kind of artefact, and telling the user "key adapter" when it was a
+/// rule misdescribes what they just shared with every repo.
+pub fn promote_key_adapter(repo: &str, name: &str) -> Option<&'static str> {
+    let repo_store = load_store(&repo_dir(repo));
+    let shared_path = crate::learn::matchers::shared_dir();
+    let mut shared = load_store(&shared_path);
+
+    if let Some(rule) = repo_store.rules.iter().find(|m| m.display_name() == name) {
+        if !shared.rules.iter().any(|m| m.key() == rule.key()) {
+            shared.rules.push(rule.clone());
+        }
+        write_store(&shared_path, &shared);
+        return Some("matcher");
+    }
+    for (k, v) in repo_store.files.iter() {
+        let named = serde_json::from_value::<KeyAdapter>(v.clone()).map(|a| a.name == name).unwrap_or(false);
+        if named {
+            shared.files.insert(k.clone(), v.clone());
+            write_store(&shared_path, &shared);
+            return Some("key");
+        }
+    }
+    None
+}
