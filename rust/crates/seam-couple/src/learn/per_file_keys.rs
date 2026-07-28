@@ -316,6 +316,67 @@ mod tests {
     }
 
     #[test]
+    fn the_structural_head_is_always_sent() {
+        // The head carries the class/model/controller context the ActiveRecord and route inference read off.
+        // Dropping it to save tokens would leave the model a pile of attribute lines with nothing to key on.
+        let text = format!("class Payment < ApplicationRecord\n{}end\n", "  attr_accessor :x\n".repeat(500));
+        let p = candidate_passages(&text, 12000, 3, 700);
+        assert!(p.contains("class Payment"), "the head must survive");
+        assert!(p.len() < text.len(), "the big inert middle must not be sent");
+    }
+
+    #[test]
+    fn a_literal_in_a_comment_past_the_head_opens_no_window() {
+        // A commented-out key is not a key. Opening a window on it spends tokens AND invites the model to
+        // propose a channel the code does not touch — a fabricated edge from a dead line.
+        let head = "const x = 1;\n".repeat(70); // > 700 chars → the head ends before the lines below
+        let text = format!(
+            "{head}{}// bus.emit('commented') marker\n{}bus.emit('real-key');\n",
+            "const filler = 0;\n".repeat(40),
+            "const z = 0;\n".repeat(40)
+        );
+        let p = candidate_passages(&text, 20000, 3, 700);
+        assert!(p.contains("real-key"), "a real deep site gets a window");
+        assert!(!p.contains("commented"), "a commented literal past the head is masked");
+    }
+
+    #[test]
+    fn many_blind_files_cost_one_call_not_one_each() {
+        // The batching is the whole economics of the per-file axis: N floor-blind files must cost ONE model
+        // call while they fit the snippet cap, not N. A regression here is invisible in the OUTPUT — the keys
+        // are identical either way — and shows up only as a bill.
+        let dir = std::env::temp_dir().join(format!("seam-batch-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let repo = dir.to_string_lossy().to_string();
+        let files: Vec<(String, String)> = (0..3)
+            .map(|i| (format!("f{i}.ts"), format!("export const r{i} = () => cache{i}.read('k{i}');\n")))
+            .collect();
+
+        let mut answers: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut prompts: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            seam_llm::host_bus::install(answers.clone());
+            batch_synthesize(&repo, &files, None, None);
+            let recorded = seam_llm::host_bus::take_recorded();
+            if recorded.is_empty() {
+                break;
+            }
+            for r in recorded {
+                prompts.push(r.prompt.clone());
+                answers.insert(r.key, "[]".to_string());
+            }
+        }
+        seam_llm::host_bus::uninstall();
+
+        assert_eq!(prompts.len(), 1, "three files, one call — got {} prompts", prompts.len());
+        for i in 0..3 {
+            assert!(prompts[0].contains(&format!("f{i}.ts")), "every file must be in the one prompt");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn the_adapter_name_is_file_derived_and_slug_safe() {
         let keys = vec![KeyHit { kind: "db-table".into(), value: "payments".into(), produces: true, ..Default::default() }];
         let (name, desc) = key_adapter_meta("src/api/Payment_Repo.ts", &keys);

@@ -196,6 +196,39 @@ mod module_scope_tests {
 
 #[cfg(test)]
 mod file_contrib_cache_tests {
+    use super::*;
+
+    // MODULE SCOPE — the smallest enclosing BUILD module, which is what bounds the per-file synthesis pass.
+    // Get it wrong upward and a grow in one package feeds every other package's blind files to the model;
+    // get it wrong downward and the anchor's own module is never warmed. Ported from `key_scope.test.ts`.
+    #[test]
+    fn module_scope_finds_the_nearest_enclosing_manifest() {
+        let dir = std::env::temp_dir().join(format!("seam-modscope-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let w = |rel: &str, text: &str| {
+            let p = dir.join(rel);
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, text).unwrap();
+        };
+        let repo = dir.to_string_lossy().to_string();
+
+        // NEAREST wins: the repo root has a pom too, but the module's own is closer.
+        w("pom.xml", "<project/>");
+        w("modA/pom.xml", "<project/>");
+        w("modA/src/main/java/X.java", "class X {}");
+        assert_eq!(module_scope(&repo, "modA/src/main/java/X.java"), "modA/");
+
+        w("packages/ui/package.json", "{}");
+        w("packages/ui/src/a.ts", "export const a = 1;");
+        assert_eq!(module_scope(&repo, "packages/ui/src/a.ts"), "packages/ui/");
+
+        // no enclosing manifest → "" — the whole repo is one module
+        w("src/a.ts", "export const a = 1;");
+        assert_eq!(module_scope(&repo, "src/a.ts"), "");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     use super::{files_index, reset_file_contrib, sha1_hex};
     use std::fs;
     use std::sync::atomic::{AtomicUsize, Ordering};

@@ -21,6 +21,14 @@ export interface CarrierSignature { direction: "read" | "write"; medium: string;
 // SERVED by the core, but it is registered here so `--list-passes` still advertises what the engine will
 // run — an inventory that silently drops a pass the engine still spends money on is worse than none.
 registerPass({ tag: "carrier-synthesis-batch", tier: "strong", note: "batch carrier read/write classification (semantic, learn-once)" });
+// The rest of the CORE's pass inventory, registered here for the same reason: `--list-passes` must advertise
+// every pass the engine can spend money on, and these are all served by `seam-couple` now — there is no
+// TypeScript module left that owns them to do the registering.
+registerPass({ tag: "discover-keys-batch", tier: "strong", note: "shared-key producer/consumer discovery (semantic, learn-once → .seam)" });
+registerPass({ tag: "discover-key-matchers", tier: "strong", note: "learn a re-executable matcher rule from floor-blind files (learn-once → .seam)" });
+registerPass({ tag: "classify-receivers", tier: "strong", note: "receiver→type classification (database/http/store/…); learn-once → .seam" });
+registerPass({ tag: "classify-annotations", tier: "strong", note: "annotation→type (route/queue/event) — custom route/listener annotations a hardcoded set misses; learn-once → .seam" });
+registerPass({ tag: "compose-subresource-route", tier: "strong", note: "compose a sub-resource handler's full HTTP path from its cross-file mount chain (learn-once → .seam)" });
 
 const SCHEMA = 1;
 const _file = "carrier-signatures.json";

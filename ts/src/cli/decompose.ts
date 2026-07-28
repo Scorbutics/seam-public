@@ -847,7 +847,7 @@ async function main(argv: string[]): Promise<number> {
   if (a.listPasses) {
     await Promise.all([
       import("../diff/engine.js"), import("../codebase/anchor/index.js"), import("../codebase/grow/index.js"),
-      import("../codebase/coupling/llm_key_index.js"), import("../codebase/coupling/carrier/cache.js"),
+      import("../codebase/coupling/carrier/cache.js"),   // registers the CORE's whole pass inventory
     ]);
     const { allPasses } = await import("../core/llm.js");
     const passes = allPasses();
