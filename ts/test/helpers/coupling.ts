@@ -117,3 +117,26 @@ export const resolveCoupling = (repo: string, anchorId: string, file: string, te
 // grounded it" from "a learned matcher did" — the whole point of the stable-floor contract.
 export const validateMatcher = (obj: unknown): unknown | null => JSON.parse(core().validateMatchers(JSON.stringify([obj])))[0];
 export const persistMatchers = (repo: string, matchers: unknown[]): void => core().persistMatchers(repo, JSON.stringify(matchers));
+
+// EFFECT INFERENCE — which receivers are custom http clients, the matchers that key their call sites, and the
+// indirected-route resolution on a proven edge. All three are the core's; these keep the shapes the
+// integration tests read.
+export const inferHttpClients = (files: { rel: string; text: string }[]): Set<string> =>
+  new Set(core().inferHttpClientsOver(files.map((f) => [f.rel, f.text])) as string[]);
+
+export const inferHttpClientMatchers = (files: { rel: string; text: string }[]): any[] =>
+  JSON.parse(core().inferHttpClientMatchers(files.map((f) => [f.rel, f.text])));
+
+export const runMatcher = (matcher: unknown, file: string, text: string): KeyHit[] =>
+  (core().runMatcherJson(JSON.stringify(matcher), file, text) as string[]).map((row) => {
+    const [kind, value, line, produces, op] = row.split("|");
+    const h: KeyHit = { kind, value, line: Number(line), produces: produces === "true" };
+    if (op) h.op = op;
+    return h;
+  });
+
+export const resolveHttpCallSites = (file: string, text: string, clients: Iterable<string>): KeyHit[] =>
+  (core().resolveHttpCallSites(file, text, [...clients]) as string[]).map((row) => {
+    const [kind, value, line, produces] = row.split("|");
+    return { kind, value, line: Number(line), produces: produces === "true" };
+  });

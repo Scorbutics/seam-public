@@ -12,8 +12,7 @@ import { dirname, join } from "node:path";
 import { defs_in_file } from "../helpers/scan.js";
 import { scan as endpointMapScan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
 import { routeMatchSpecificity } from "../helpers/coupling.js";
-import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites } from "../../src/codebase/coupling/effect_inference.js";
-import { runMatcher } from "../../src/codebase/coupling/key_ir.js";
+import { inferHttpClients, inferHttpClientMatchers, resolveHttpCallSites, runMatcher } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), "..", "fixtures", "booking-app");
@@ -52,10 +51,10 @@ describe("booking-app fixture — the declarative-client + route contract", () =
   test("a custom http client (MyFramework.http, wrapping fetch) is detected transitively and grounds its route", async () => {
     if (!available()) return;
     const webFiles = ["web/httpService.js", "web/frameworkClient.js"].map((rel) => ({ rel, text: read(rel) }));
-    const matchers = await inferHttpClientMatchers(webFiles);
+    const matchers = inferHttpClientMatchers(webFiles);
     const m = matchers.find((x: any) => x.token === "MyFramework.http");
     expect(m).toBeDefined();   // deduced via the fetch sink → alias, NOT by the name
-    const hits = await runMatcher(m!, "web/frameworkClient.js", read("web/frameworkClient.js"));
+    const hits = runMatcher(m!, "web/frameworkClient.js", read("web/frameworkClient.js"));
     expect(hits.some((h) => h.kind === "http-route" && h.value === "/acme/rest/member/booking/v1" && !h.produces)).toBe(true);
   });
 
@@ -63,7 +62,7 @@ describe("booking-app fixture — the declarative-client + route contract", () =
     if (!available()) return;
     const text = read("web/frameworkClient.js");
     // the receiver is a proven http client (deduced from httpService's fetch sink) …
-    const clients = await inferHttpClients(["web/httpService.js", "web/frameworkClient.js"].map((rel) => ({ rel, text: read(rel) })));
+    const clients = inferHttpClients(["web/httpService.js", "web/frameworkClient.js"].map((rel) => ({ rel, text: read(rel) })));
     expect(clients.has("MyFramework.http")).toBe(true);
     // … so the descriptor-ref arg — a DYNAMIC verb + a config reference, no literal — resolves against the
     // in-file endpoint map to the route, surfaced at the call line (the calling method owns the crossing).

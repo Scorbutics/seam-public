@@ -1335,6 +1335,36 @@ pub fn resolve_http_call_sites(file: String, text: String, clients: Vec<String>)
         .collect()
 }
 
+/// `infer_http_clients` over a CALLER-SUPPLIED file set rather than the repo walk — `[rel, text]` rows in.
+/// The repo form is the product path; this one lets a test state its corpus exactly, which is the difference
+/// between "no clients found" meaning something and meaning nothing.
+#[napi]
+pub fn infer_http_clients_over(files: Vec<Vec<String>>) -> Vec<String> {
+    let pairs: Vec<(String, String)> = files.into_iter().filter(|r| r.len() >= 2).map(|r| (r[0].clone(), r[1].clone())).collect();
+    seam_couple::learn::infer_http_clients(&pairs)
+}
+
+/// The channel matchers for a repo's INFERRED http clients — `infer_http_clients` ⊕ `http_client_matchers`,
+/// as validated-matcher JSON. The two halves belong together: a client is only useful once its call sites can
+/// be keyed.
+#[napi]
+pub fn infer_http_client_matchers(files: Vec<Vec<String>>) -> String {
+    let pairs: Vec<(String, String)> = files.into_iter().filter(|r| r.len() >= 2).map(|r| (r[0].clone(), r[1].clone())).collect();
+    let ms = seam_couple::learn::http_client_matchers(&seam_couple::learn::infer_http_clients(&pairs));
+    serde_json::to_string(&ms).unwrap_or_else(|_| "[]".into())
+}
+
+/// Run ONE matcher (as validated-matcher JSON) over a file — `kind|value|line|produces|op` rows. The
+/// store-backed `matcher_keys` replays what the repo LEARNED; this executes a matcher you hold.
+#[napi]
+pub fn run_matcher_json(matcher_json: String, file: String, text: String) -> Vec<String> {
+    let Ok(m) = serde_json::from_str::<seam_couple::KeyMatcher>(&matcher_json) else { return Vec::new() };
+    seam_couple::run_matcher_at(&m, &file, &text)
+        .into_iter()
+        .map(|h| format!("{}|{}|{}|{}|{}", h.kind, h.value, h.line, h.produces, h.op.unwrap_or_default()))
+        .collect()
+}
+
 /// The deterministic llmKeyIndex WITHOUT composed routes — `files_index ⊕ apply_matchers` (the union order),
 /// as `key|side|file|line` rows. For validating files_index + apply_matchers against TS llmKeyIndex (residual =
 /// composed routes).

@@ -269,3 +269,142 @@ pub fn resolve_http_call_sites(file: &str, text: &str, clients: &[String]) -> Ve
     }
     out
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // EFFECT INFERENCE (HTTP slice) — a custom http-client receiver is detected TRANSITIVELY: a binding whose
+    // body calls a grounded sink (fetch/axios/$http/…) is http, and a binding aliased to it inherits that. So
+    // `MyFramework.http` is recognised without its NAME mattering, which is the prerequisite for treating its
+    // call sites as data-coupling edges. Ported from `effect_inference.test.ts`.
+    fn f(rel: &str, text: &str) -> (String, String) {
+        (rel.to_string(), text.to_string())
+    }
+
+    #[test]
+    fn a_wrapper_that_calls_fetch_and_an_alias_to_it_are_both_clients() {
+        let files = [
+            f("web/httpService.js", "export const httpService = {\n  get( url ) { return fetch( url ); },\n  post( url, body ) { return fetch( url, { method: 'POST', body } ); }\n};\n"),
+            f("web/setup.js", "import { httpService } from './httpService';\nMyFramework.http = httpService;\n"),
+        ];
+        let clients = infer_http_clients(&files);
+        assert!(clients.iter().any(|c| c == "httpService"), "wraps fetch directly: {clients:?}");
+        assert!(clients.iter().any(|c| c == "MyFramework.http"), "aliased to the wrapper: {clients:?}");
+    }
+
+    #[test]
+    fn a_plain_object_with_no_sink_call_is_not_a_client() {
+        // Named `http*` but touches no sink. NO KEYWORD GUESSING: the name is not evidence.
+        let files = [f("web/svc.js", "export const httpHelper = {\n  get( k ) { return store[k]; },\n  set( k, v ) { store[k] = v; }\n};\n")];
+        assert!(!infer_http_clients(&files).iter().any(|c| c == "httpHelper"));
+    }
+
+    #[test]
+    fn a_function_that_calls_fetch_is_a_caller_not_a_client() {
+        // You never call `getBookings.get('/route')` or `res.get(…)`. Only object/class receivers with sink
+        // METHODS qualify. This is the over-inference that once minted ~90 phantom clients on a large repo —
+        // one per fetch-caller — and every phantom widens the matcher alternation for the whole run.
+        let files = [f("web/page.js", "export async function getBookings(id) {\n  const url = \"/api/bookings\";\n  const res = await fetch(url);\n  return res.json();\n}\n")];
+        let clients = infer_http_clients(&files);
+        assert!(clients.is_empty(), "{clients:?}");
+    }
+
+    #[test]
+    fn a_two_hop_alias_chain_still_inherits_the_effect() {
+        let files = [
+            f("a.js", "const httpService = { get( u ){ return axios.get( u ); } };\n"),
+            f("b.js", "const apiClient = httpService;\nVue.prototype.$http = apiClient;\n"),
+        ];
+        let clients = infer_http_clients(&files);
+        for want in ["httpService", "apiClient", "Vue.prototype.$http"] {
+            assert!(clients.iter().any(|c| c == want), "{want} missing from {clients:?}");
+        }
+    }
+
+    #[test]
+    fn a_wrapper_built_on_any_registered_client_is_recognised_as_a_sink() {
+        // REGRESSION: the sink detector used to hand-maintain its own client-name list, separate from — and
+        // diverging from — the HTTP_CLIENTS registry (it was missing $http/$fetch/useFetch/request entirely).
+        let files = [
+            f("a.js", "const svc1 = { get( u ){ return $http.get( u ); } };\n"),
+            f("b.js", "const svc2 = { get( u ){ return $fetch( u ); } };\n"),
+            f("c.js", "const svc3 = { get( u ){ return useFetch( u ); } };\n"),
+            f("d.js", "const svc4 = { get( u ){ return request( u ); } };\n"),
+        ];
+        let clients = infer_http_clients(&files);
+        for want in ["svc1", "svc2", "svc3", "svc4"] {
+            assert!(clients.iter().any(|c| c == want), "{want} missing from {clients:?}");
+        }
+    }
+
+    #[test]
+    fn a_custom_clients_literal_route_call_emits_an_http_route_key() {
+        // The point of inferring the client at all: its call sites become route CONSUME keys under the same
+        // `http-route <path>` key a backend handler produces, so the two meet. Note the DOTTED receiver —
+        // `MyFramework.http`, not a bare identifier — which the matcher has to key on whole.
+        let files = [
+            f("web/httpService.js", "export const httpService = { get( u ){ return fetch( u ); }, post( u, b ){ return fetch( u, b ); } };\n"),
+            f("web/setup.js", "import { httpService } from './httpService';\nMyFramework.http = httpService;\n"),
+        ];
+        let matchers = http_client_matchers(&infer_http_clients(&files));
+        let m = matchers
+            .iter()
+            .find(|m| matches!(m, crate::learn::KeyMatcher::Channel { token, .. } if token == "MyFramework.http"))
+            .expect("a matcher for the inferred client");
+        let hits = crate::learn::run_matcher_at(m, "web/page.js", "MyFramework.http.get( '/acme/rest/member/booking/v1', state );");
+        assert!(
+            hits.iter().any(|h| h.kind == "http-route" && h.value == "/acme/rest/member/booking/v1" && !h.produces),
+            "{hits:?}"
+        );
+    }
+
+    // ── resolveHttpCallSites: indirected route resolution on a PROVEN edge (no model) ────────────────────
+    const CLIENTS: &[&str] = &["MyFramework.http"];
+    fn clients() -> Vec<String> {
+        CLIENTS.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_descriptor_ref_arg_resolves_against_the_in_file_endpoint_map() {
+        let text = concat!(
+            "const baseUrl = '/acme/rest/member/booking/v1';\n",
+            "const endpoints = { createBooking: { endpoint: baseUrl, method: 'post' }, updateBooking: { endpoint: baseUrl + '/{id}', method: 'put' } };\n",
+            "function create( s ) { return MyFramework.http[ m ]( endpoints.createBooking.endpoint, s ); }\n",
+            "function update( s ) { return MyFramework.http[ m ]( endpoints.updateBooking, s ); }\n", // bare descriptor
+        );
+        let hits = resolve_http_call_sites("web/svc.js", text, &clients());
+        let vals: Vec<&str> = hits.iter().map(|h| h.value.as_str()).collect();
+        assert!(vals.contains(&"/acme/rest/member/booking/v1"), "{vals:?}");
+        assert!(vals.contains(&"/acme/rest/member/booking/v1/*"), "baseUrl + '/{{id}}' normalises to /*: {vals:?}");
+        assert!(hits.iter().all(|h| h.kind == "http-route" && !h.produces));
+    }
+
+    #[test]
+    fn a_literal_resolves_while_an_opaque_arg_and_a_non_client_receiver_are_left_alone() {
+        let text = concat!(
+            "function a() { return MyFramework.http.post( '/acme/rest/x', body ); }\n",  // literal → resolved
+            "function b() { return MyFramework.http.post( someRuntimeVar, body ); }\n", // opaque → the model's job
+            "function c() { return plainHelper.get( '/acme/rest/y' ); }\n",              // not a known client → ignored
+        );
+        let hits = resolve_http_call_sites("web/svc.js", text, &clients());
+        assert_eq!(hits.iter().map(|h| h.value.as_str()).collect::<Vec<_>>(), vec!["/acme/rest/x"]);
+    }
+
+    #[test]
+    fn a_local_var_endpoint_traces_back_so_each_method_gets_its_own_route() {
+        // The endpoint is a LOCAL VAR assigned from the config map (often `.replace('{id}', id)`-chained), not
+        // inline at the call. Without the trace every method collapsed onto the BASE route, so the backend
+        // showed one HTTP path for create/update/cancel/… — a wrong answer that looks like a tidy one.
+        let text = concat!(
+            "const baseUrl = '/acme/rest/member/booking/v1';\n",
+            "const bookingEndpoints = { createBooking: { endpoint: baseUrl, method: 'post' }, cancelBooking: { endpoint: baseUrl + '/{id}/cancel', method: 'del' } };\n",
+            "function createBooking( b ) { const endpoint = bookingEndpoints.createBooking.endpoint; return MyFramework.http.post( endpoint, b ); }\n",
+            "function cancelBooking( id ) { const endpoint = bookingEndpoints.cancelBooking.endpoint.replace( '{id}', id ); return MyFramework.http.del( endpoint ); }\n",
+        );
+        let hits = resolve_http_call_sites("web/bookingService.js", text, &clients());
+        let by_line: std::collections::HashMap<usize, &str> = hits.iter().map(|h| (h.line, h.value.as_str())).collect();
+        assert_eq!(by_line.get(&2), Some(&"/acme/rest/member/booking/v1"));
+        assert_eq!(by_line.get(&3), Some(&"/acme/rest/member/booking/v1/*/cancel"));
+    }
+}
