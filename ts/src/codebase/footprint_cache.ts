@@ -169,19 +169,6 @@ function _rustCouplingStat(): { chit: number; cmiss: number; cnew: number } {
     return { chit: repeats, cmiss, cnew };
   } catch { return { chit: 0, cmiss: 0, cnew: 0 }; }
 }
-export function _fpStat(): Readonly<typeof _fpstat> {
-  const r = _rustCouplingStat();
-  return { ..._fpstat, chit: _fpstat.chit + r.chit, cmiss: _fpstat.cmiss + r.cmiss, cnew: _fpstat.cnew + r.cnew };
-}
-export function _resetFpStat(): void {
-  for (const k of Object.keys(_fpstat) as (keyof typeof _fpstat)[]) _fpstat[k] = 0;
-  // COUNTERS ONLY — never the caches. A test resets between runs precisely so it can measure the reuse of the
-  // cache the previous run filled; dropping it here would make every run report a cold miss.
-  try {
-    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
-    if (rustCoreEnabled()) loadAddon().resetFanStats();
-  } catch { /* addon absent */ }
-}
 if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
 
 const _clone = <T>(g: T): T => JSON.parse(JSON.stringify(g));

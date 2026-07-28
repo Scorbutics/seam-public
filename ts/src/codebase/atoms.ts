@@ -114,7 +114,6 @@ export class Ctx {
 // — the engine runs one decompose per process; files don't change mid-run, so the cache is always valid.
 const _ctxCache = new Map<string, Ctx>();
 const _CTX_CACHE_MAX = 4000;
-export function resetCtxCache(): void { _ctxCache.clear(); }
 
 export async function makeCtx(content: string, grammar: string): Promise<Ctx | null> {
   const key = `${grammar} ${content}`;
