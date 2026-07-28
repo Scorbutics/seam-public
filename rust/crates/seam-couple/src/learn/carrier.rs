@@ -96,11 +96,25 @@ fn shared_path() -> String {
     format!("{}/{FILE}", crate::learn::matchers::shared_dir())
 }
 
+/// Drop the in-memory signature stores so the next read comes off disk. The content-hash key already handles
+/// SOURCE drift (edit the method → new key → miss), but not a store edited from OUTSIDE this process — a
+/// promote into the shared store, a hand-pruned `.seam/`. Without this, `resetCaches` claimed an invalidation
+/// it did not perform, and a promotion stayed invisible for the life of the process.
+pub fn reset_mem() {
+    MEM.lock().unwrap().clear();
+}
+
 /// Has this content key been resolved before? Repo store FIRST, then the shared one. `hit` is true for a cached
 /// `None` as well — that is the "known non-carrier" answer.
 pub fn cached_signature(repo: &str, key: &str) -> (bool, Option<CarrierSignature>) {
-    for p in [store_path(repo), shared_path()] {
+    for (shared, p) in [(false, store_path(repo)), (true, shared_path())] {
         if let Some(v) = load_from(&p).get(key) {
+            // A REPLAYED adapter is the flywheel paying off, so it belongs in the run's ledger — that is what
+            // makes the compounding asset visible and promotable. Only a real signature counts: a cached
+            // non-carrier verdict is a hit, but there is no adapter to name.
+            if let Some(sig) = v {
+                crate::learn::ledger::record_used(&sig.name, shared);
+            }
             return (true, v.clone());
         }
     }
@@ -115,6 +129,9 @@ pub fn has_learned_carrier(repo: &str) -> bool {
 
 /// Persist one signature (or the `None` non-carrier verdict) and keep the in-memory store in step.
 pub fn persist_signature(repo: &str, key: &str, sig: Option<CarrierSignature>) {
+    if let Some(s) = &sig {
+        crate::learn::ledger::record_learned(&s.name); // a real carrier adapter learned this run
+    }
     let path = store_path(repo);
     let mut m = load_from(&path);
     m.insert(key.to_string(), sig);
@@ -358,6 +375,87 @@ mod tests {
         assert!(hit, "a known NON-carrier must be a cache HIT, or it is re-asked every run");
         assert!(sig.is_none());
         assert!(!has_learned_carrier(&r), "a null verdict is not a learned carrier");
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // THE FLYWHEEL MUST BE VISIBLE. A learned carrier that a run synthesizes or replays has to reach the run's
+    // adapter ledger, because that ledger is what the CLI reports and what the user promotes from. This has
+    // already failed silently once: the ledger was fed only by TypeScript store paths no product code took, so
+    // the flywheel kept paying off and the run kept reporting nothing. Pinned here at the store, on both
+    // halves — LEARNED on the write, USED on the replay.
+    #[test]
+    fn a_learned_carrier_reaches_the_run_ledger_on_both_the_write_and_the_replay() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = std::env::temp_dir().join(format!("seam-carrier-ledger-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        let _ = std::fs::create_dir_all(&repo);
+        let r = repo.to_string_lossy().to_string();
+        crate::learn::ledger::reset();
+
+        let ck = content_key("Blob", "put", "fn put(k, v) {}");
+        let sig = CarrierSignature { direction: "write".into(), medium: "blob".into(), key_arg: Some(0), name: "blob-put".into(), description: "writes blob via Blob#put".into() };
+        persist_signature(&r, &ck, Some(sig));
+        assert!(crate::learn::ledger::snapshot().1.contains(&"blob-put".to_string()), "synthesized → LEARNED");
+
+        crate::learn::ledger::reset();
+        MEM.lock().unwrap().clear(); // force a real disk read, as a later offline run would do
+        let (hit, got) = cached_signature(&r, &ck);
+        assert!(hit && got.is_some());
+        let used = crate::learn::ledger::snapshot().0;
+        assert!(used.iter().any(|(n, s)| n == "blob-put" && s == "repo"), "replayed → USED (repo scope): {used:?}");
+
+        // a cached NON-carrier is a hit but names no adapter — it must not pad the ledger
+        crate::learn::ledger::reset();
+        MEM.lock().unwrap().clear();
+        let nk = content_key("Util", "compute", "fn compute() {}");
+        persist_signature(&r, &nk, None);
+        let _ = cached_signature(&r, &nk);
+        let (used, learned) = crate::learn::ledger::snapshot();
+        assert!(used.is_empty() && learned.is_empty(), "a null verdict is not an adapter: {used:?} {learned:?}");
+
+        crate::learn::ledger::reset();
+        let _ = std::fs::remove_dir_all(&repo);
+    }
+
+    // A STORE WRITTEN BY THE OLD TYPESCRIPT ENGINE MUST STILL REPLAY. `.seam/carrier-signatures.json` is a
+    // committed, shared cache: a team runs the learning pass once (often in CI) and every later run replays it
+    // offline. A store the current engine cannot read fails INVISIBLY — nothing errors, the run just silently
+    // re-learns, rewrites, and the LLM bill quietly returns. This is the durable half of the retired
+    // `rust/parity/carrierstore.ts` harness, whose TypeScript oracle no longer exists; the bytes below are
+    // verbatim what that engine wrote (schema 1, `keyArg`, a null value for a known non-carrier).
+    #[test]
+    fn a_store_in_the_legacy_typescript_on_disk_shape_still_replays() {
+        let _g = crate::learn::GLOBAL_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let repo = std::env::temp_dir().join(format!("seam-carrier-compat-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&repo);
+        std::fs::create_dir_all(repo.join(".seam")).unwrap();
+        std::fs::write(repo.join(".seam").join(FILE), r#"{
+  "schema": 1,
+  "signatures": {
+    "VaultStore#writeBlob abc123": {
+      "direction": "write",
+      "medium": "file",
+      "keyArg": 0,
+      "name": "vd-file-writer",
+      "description": "writes file via VaultStore#writeBlob"
+    },
+    "Util#compute def456": null
+  }
+}"#).unwrap();
+        MEM.lock().unwrap().clear();
+        let r = repo.to_string_lossy().to_string();
+
+        let (hit, sig) = cached_signature(&r, "VaultStore#writeBlob abc123");
+        let sig = sig.expect("the learned signature must survive the read");
+        assert!(hit);
+        assert_eq!((sig.direction.as_str(), sig.medium.as_str(), sig.key_arg, sig.name.as_str()), ("write", "file", Some(0), "vd-file-writer"));
+        // the null entry is a HIT with no signature — the cached "not a carrier", never a miss
+        let (hit, sig) = cached_signature(&r, "Util#compute def456");
+        assert!(hit && sig.is_none());
+        assert!(has_learned_carrier(&r));
+
+        MEM.lock().unwrap().clear();
+        crate::learn::ledger::reset();
         let _ = std::fs::remove_dir_all(&repo);
     }
 

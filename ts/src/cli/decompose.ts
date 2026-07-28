@@ -846,9 +846,16 @@ async function main(argv: string[]): Promise<number> {
   if (a.listPasses) {
     await Promise.all([
       import("../diff/engine.js"), import("../codebase/anchor/index.js"), import("../codebase/grow/index.js"),
-      import("../codebase/coupling/carrier/cache.js"),   // registers the CORE's whole pass inventory
     ]);
-    const { allPasses } = await import("../core/llm.js");
+    const { allPasses, registerPass } = await import("../core/llm.js");
+    // The passes whose CALL SITE is in the core have no TypeScript module to self-register on import, so they
+    // are ASKED FOR rather than kept as a hand-copied list here — the copy drifts the first time a tier or a
+    // note changes on the Rust side, and what drifts is a statement about what the engine spends money on.
+    try {
+      const { loadAddon } = await import("../codebase/rust_core.js");
+      for (const [tag, tier, note] of (loadAddon()?.corePasses() ?? []) as string[][])
+        registerPass({ tag, tier: tier as "cheap" | "strong", note });
+    } catch { /* no addon → the TypeScript-declared passes alone, which is still an honest listing */ }
     const passes = allPasses();
     const w = Math.max(...passes.map((p) => p.tag.length));
     process.stdout.write(`${passes.length} LLM pass${passes.length === 1 ? "" : "es"} (strong → upgraded to a stronger model):\n`);

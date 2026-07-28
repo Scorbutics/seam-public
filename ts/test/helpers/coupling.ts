@@ -204,6 +204,25 @@ export const stringLiteralsOnly = (text: string): string => core().stringLiteral
 // The JPA FK-ownership map (child entity → its owning `@ManyToOne`/`@OneToOne` parents) — the grounded
 // aggregate-root signal the render crowns by. The core returns sorted `[child, parent…]` rows precisely so the
 // order does not depend on a hash iteration; rebuilt into the Map shape the render tests read.
+// ── THE LEARNED CARRIER STORE ────────────────────────────────────────────────────────────────────────────
+// `.seam/carrier-signatures.json`, owned by the core. A `hit` with a null `sig` is the cached NON-carrier
+// verdict — an answer, not a miss — which is what stops a known non-carrier being re-asked every run.
+export interface CarrierSignature { direction: "read" | "write"; medium: string; keyArg: number | null; name: string; description: string }
+export const cachedSignature = (repo: string, key: string): { hit: boolean; sig: CarrierSignature | null } => {
+  const r = core().cachedCarrierSignature(repo, key) as { hit: boolean; sig?: CarrierSignature };
+  return { hit: r.hit, sig: r.sig ?? null };
+};
+export const persistSignature = (repo: string, key: string, sig: CarrierSignature | null): void =>
+  core().persistCarrierSignature(repo, key, sig ?? undefined);   // napi Option takes undefined, never null
+export const hasLearnedCarrier = (repo: string): boolean => core().hasLearnedCarrier(repo);
+export const listLearnedAdapters = (repo: string): { key: string; sig: CarrierSignature; scope: "repo" | "shared" }[] =>
+  (core().listLearnedCarriers(repo) as string[][]).map(([name, description, direction, medium, key, scope]) => ({
+    key, scope: scope as "repo" | "shared",
+    sig: { name, description, direction: direction as "read" | "write", medium, keyArg: null },
+  }));
+export const promoteSignature = (repo: string, name: string): { ok: boolean } => ({ ok: core().promoteAdapter(repo, name) === "carrier" });
+export const _resetCarrierCacheMem = (): void => { syncEnv(); core().resetCaches(undefined); };
+
 export const jpaEntityParents = (repo: string): Map<string, Set<string>> =>
   new Map((core().jpaEntityParents(repo) as string[][]).map(([child, ...parents]) => [child, new Set(parents)]));
 

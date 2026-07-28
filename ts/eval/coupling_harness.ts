@@ -18,8 +18,7 @@ import { fileURLToPath } from "node:url";
 import { loadAddon, toResolvedGraph } from "../src/codebase/rust_core.js";
 import { rustDiscover } from "../src/codebase/grow/rust_discover.js";
 import { isFlowSubject } from "../src/codebase/coupling/subjects.js";
-import { _resetKeyCacheMem } from "../test/helpers/coupling.js";
-import { _resetCarrierCacheMem } from "../src/codebase/coupling/carrier/cache.js";
+import { _resetKeyCacheMem, _resetCarrierCacheMem } from "../test/helpers/coupling.js";
 
 const __dir = dirname(fileURLToPath(import.meta.url));
 const CASES = join(__dir, "coupling-cases.json");

@@ -5,7 +5,7 @@ import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { listLearnedAdapters, promoteSignature, _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
+import { listLearnedAdapters, promoteSignature, _resetCarrierCacheMem } from "../helpers/coupling.js";
 
 let REPO: string, SHARED: string;
 const STORE = '{ "schema": 1, "signatures": {' +

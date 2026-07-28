@@ -9,7 +9,6 @@
 // entry cache migrate into this same object in follow-up stages.
 import { COUPLING } from "./coupling/config.js";
 import type { GroundingIndex } from "./coupling/types.js";
-import type { CarrierSignature } from "./coupling/carrier/cache.js";
 
 export class EngineCtx {
   // --- coupling: repo-wide grounding indices (were module-level `_CACHE`/`_IDX_CACHE`/`_RUBY_INDEX`/`_idxCache`) ---
@@ -36,7 +35,6 @@ export class EngineCtx {
   ubiquity = new Map<string, Map<string, number>>();
 
   // --- coupling: learned carrier signatures, in-mem for this run (was synth `_cache`) ---
-  carrierSig = new Map<string, CarrierSignature | null>();   // synth: content-hash → signature|null
 
   // --- coupling: per-FILE key scan (floor + learned matchers), reused across SYMBOLS in that file (the bridge's
   // targeted couplingOtherSides runs per changed symbol, but the file's keys don't change between symbols) ---
@@ -85,7 +83,7 @@ export class EngineCtx {
     const c = new EngineCtx();
     c.sharedKey = this.sharedKey; c.carrierChannel = this.carrierChannel; c.langIndex = this.langIndex;
     c.llmKey = this.llmKey; c.matcherIdx = this.matcherIdx; c.paramKeys = this.paramKeys; c.floorBase = this.floorBase; c.floorContribs = this.floorContribs;
-    c.ubiquity = this.ubiquity; c.carrierSig = this.carrierSig; c.fileKeyScan = this.fileKeyScan;
+    c.ubiquity = this.ubiquity; c.fileKeyScan = this.fileKeyScan;
     c.repoMatchers = this.repoMatchers; c.annotMatchers = this.annotMatchers; c.effectMatchers = this.effectMatchers; c.httpClients = this.httpClients;
     c.composedRoutes = this.composedRoutes;   // share the repo-wide composed-route grounding (built once, read-concurrent-safe)
     c.footprintNodeRanges = this.footprintNodeRanges;   // share the per-file footprint method ranges (the key-cap prioritisation signal)

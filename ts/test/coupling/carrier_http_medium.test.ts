@@ -11,7 +11,7 @@ import { describe, expect, test, afterEach } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { hasLearnedCarrier, _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
+import { hasLearnedCarrier, _resetCarrierCacheMem } from "../helpers/coupling.js";
 
 // AUTO-REUSE GATE — a learned carrier signature must apply on the NEXT (warm) pass WITHOUT --llm and WITHOUT
 // promotion. `hasLearnedCarrier` is the gate that opens the carrier engine for a non-Ruby anchor on a warm

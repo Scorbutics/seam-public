@@ -46,4 +46,7 @@ pub fn reset(repo: Option<&str>) {
     // The carrier memos (per-repo language index + channel index) are keyed by repo but cleared wholesale —
     // they hold parsed-index state, and a stale one serves grounding from before the edit.
     carrier::reset_carrier_indexes();
+    // The learned-signature store too: content hashing covers source drift, but not a store changed from
+    // outside this process (a promote into the shared store, a pruned `.seam/`).
+    learn::carrier::reset_mem();
 }

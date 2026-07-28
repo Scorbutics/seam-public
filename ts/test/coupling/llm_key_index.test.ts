@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { _resetKeyCacheMem } from "../helpers/coupling.js";
-import { _resetCarrierCacheMem } from "../../src/codebase/coupling/carrier/cache.js";
+import { _resetCarrierCacheMem } from "../helpers/coupling.js";
 import { scoreCouplingCase, type CouplingCase } from "../../eval/coupling_harness.js";
 
 const FIXTURE = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "eval", "coupling-fixtures", "psdk-mini");

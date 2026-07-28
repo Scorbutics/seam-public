@@ -66,6 +66,28 @@ pub fn tier_of(tag: &str) -> Tier {
     PASSES.get(tag).copied().unwrap_or(Tier::Cheap)
 }
 
+/// The passes whose CALL SITE is in Rust — the ones the core spends money on with no TypeScript module left to
+/// declare them. `--list-passes` must advertise every pass the engine can run (an inventory that silently
+/// drops one is worse than none), and the TS registry's rule is that a pass is declared next to its call site.
+/// These have no TS call site, so they are declared HERE, beside the code that runs them, and the CLI asks for
+/// them rather than keeping a hand-copied list that drifts the first time a note or a tier changes.
+///
+/// `[tag, tier, note]`, sorted by tag. Every tag here must also be in `PASSES` above — that is the table that
+/// ROUTES the model, and a pass advertised as `strong` while routing `cheap` would be a lie about spend.
+pub fn core_passes() -> Vec<(&'static str, &'static str, &'static str)> {
+    let rows = [
+        ("carrier-synthesis-batch", "batch carrier read/write classification (semantic, learn-once)"),
+        ("classify-annotations", "annotation→type (route/queue/event) — custom route/listener annotations a hardcoded set misses; learn-once → .seam"),
+        ("classify-receivers", "receiver→type classification (database/http/store/…); learn-once → .seam"),
+        ("compose-subresource-route", "compose a sub-resource handler's full HTTP path from its cross-file mount chain (learn-once → .seam)"),
+        ("discover-key-matchers", "learn a re-executable matcher rule from floor-blind files (learn-once → .seam)"),
+        ("discover-keys-batch", "shared-key producer/consumer discovery (semantic, learn-once → .seam)"),
+    ];
+    rows.iter()
+        .map(|(tag, note)| (*tag, if tier_of(tag) == Tier::Strong { "strong" } else { "cheap" }, *note))
+        .collect()
+}
+
 fn strong_model() -> String {
     std::env::var("SEAM_STRONG_MODEL").unwrap_or_else(|_| "claude-sonnet-4-6".to_string())
 }

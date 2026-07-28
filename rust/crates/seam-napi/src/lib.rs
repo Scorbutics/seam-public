@@ -1563,6 +1563,32 @@ pub fn list_learned_carriers(repo: String) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// The passes whose call site is in the CORE — `[tag, tier, note]`, sorted by tag. The CLI registers these so
+/// `--list-passes` advertises every pass the engine can spend money on, including the ones with no TypeScript
+/// module left to declare them. Asked for rather than copied: a hand-kept list drifts the first time a tier or
+/// a note changes on the Rust side, and the thing that drifts is a statement about spend.
+#[napi]
+pub fn core_passes() -> Vec<Vec<String>> {
+    seam_llm::core_passes().into_iter().map(|(tag, tier, note)| vec![tag.to_string(), tier.to_string(), note.to_string()]).collect()
+}
+
+/// Has this content key been resolved before? Repo store first, then the shared one.
+///
+/// A HIT WITH A NULL SIGNATURE IS AN ANSWER, not a miss — it is the cached "this method is NOT a carrier",
+/// and it is what stops a known non-carrier being re-asked on every run. That is why `hit` is returned
+/// separately rather than folded into `sig == null`: collapsing the two would turn "the model said no" and
+/// "nobody has asked yet" into the same value, the defect class this store exists to avoid.
+#[napi]
+pub fn cached_carrier_signature(repo: String, key: String) -> CachedSignatureDto {
+    let (hit, sig) = seam_couple::learn::carrier::cached_signature(&repo, &key);
+    CachedSignatureDto {
+        hit,
+        sig: sig.map(|s| CarrierSignatureDto {
+            direction: s.direction, medium: s.medium, key_arg: s.key_arg, name: s.name, description: s.description,
+        }),
+    }
+}
+
 /// Promote a repo-learned adapter by name — a matcher rule, a per-file adapter, or a carrier signature.
 /// Returns what KIND was promoted, or "" when the name matched nothing.
 #[napi]
@@ -2475,6 +2501,13 @@ pub struct CarrierSignatureDto {
     pub key_arg: Option<i64>,
     pub name: String,
     pub description: String,
+}
+
+/// A store lookup: `hit` distinguishes "asked and the answer was no" (hit, sig undefined) from "never asked".
+#[napi(object)]
+pub struct CachedSignatureDto {
+    pub hit: bool,
+    pub sig: Option<CarrierSignatureDto>,
 }
 
 /// prefetchCarrierSignatures — learn signatures for OPAQUE carrier methods in batched calls and persist every
