@@ -3,7 +3,7 @@
 // and the decision-point frontier.
 import { type Graph, type Node, bfsDistance } from "../../core/graph_ir.js";
 import { RENDER } from "../config.js";
-import { git_lineage } from "../lineage.js";
+import { loadAddon } from "../rust_core.js";
 import { type Seam } from "./clusters.js";
 import { _spine_order, _structural_spine } from "./spine.js";
 import { BOUND_KINDS as _BOUND_KINDS } from "../render/medium_registry.js";
@@ -215,7 +215,10 @@ export function emit_seams(g: Graph, health: any, seams: Seam[], opts: { shape?:
   if (opts.lineageRepo) {
     const files = outSeams.map((s: any) => s.primary?.file).filter(Boolean);
     if (files.length) {
-      const lin = git_lineage(opts.lineageRepo, files);
+      // `[file, sha, subject, author, date]` rows from the core; absent means git could not resolve it, and
+      // absent is what the caller wants — no lineage rather than a blank one.
+      const rows = (loadAddon()?.gitLineage(opts.lineageRepo, files) ?? []) as string[][];
+      const lin = new Map(rows.map(([file, sha, subject, author, date]) => [file, { sha, subject, author, date }]));
       for (const s of outSeams) { const l = s.primary && lin.get(s.primary.file); if (l) s.lineage = l; }
     }
   }

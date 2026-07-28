@@ -254,3 +254,132 @@ fn walk_dir(
         walk_dir(repo, &rel, keep, live, pred, out);
     }
 }
+
+/// GIT LINEAGE — the "why" layer, scoped to a footprint rather than indexed repo-wide. For each file, the
+/// commit that last touched it: short SHA + subject (the human INTENT behind the code) + author + date.
+/// Deterministic: git is ground truth, no model, no variance. An LLM consumer reads "this seam was last
+/// changed by 3e43d16 'feat: edit referral members'" as provenance it can trust, not a retrieval guess.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Lineage {
+    pub sha: String,
+    pub subject: String,
+    pub author: String,
+    pub date: String,
+}
+
+/// One `git log -1` per unique file, scoped to the repo. Files are returned in INPUT order (deduped), and a
+/// file git cannot resolve — untracked, not a git repo, git absent — is simply ABSENT from the result rather
+/// than present-and-empty. The caller then emits nothing for it, so a non-repo (the oracle fixtures) degrades
+/// to no lineage instead of to a wrong one. Port of `git_lineage`.
+pub fn git_lineage(repo: &str, files: &[String]) -> Vec<(String, Lineage)> {
+    let cwd = expanduser(repo);
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut out = Vec::new();
+    for file in files.iter().filter(|f| !f.is_empty()) {
+        if !seen.insert(file.as_str()) {
+            continue;
+        }
+        // \x1f (unit separator) as the field delimiter: it cannot occur in a commit subject, so a subject
+        // containing tabs, pipes or commas still parses. Only the FIRST line is read — `%s` is the subject
+        // alone, but a defensive split keeps a multi-line surprise from corrupting the record.
+        let r = std::process::Command::new("git")
+            .args(["-C", &cwd, "log", "-1", "--no-color", "--format=%h%x1f%s%x1f%an%x1f%as", "--", file])
+            .output();
+        let Ok(r) = r else { continue };
+        if !r.status.success() {
+            continue;
+        }
+        let stdout = String::from_utf8_lossy(&r.stdout);
+        let Some(line) = stdout.lines().next().filter(|l| !l.is_empty()) else { continue };
+        let mut parts = line.split('\x1f');
+        let (sha, subject) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
+        if sha.is_empty() || subject.is_empty() {
+            continue;
+        }
+        out.push((
+            file.clone(),
+            Lineage {
+                sha: sha.to_string(),
+                subject: subject.to_string(),
+                author: parts.next().unwrap_or("").to_string(),
+                date: parts.next().unwrap_or("").to_string(),
+            },
+        ));
+    }
+    out
+}
+
+fn expanduser(p: &str) -> String {
+    match p.strip_prefix('~') {
+        Some(rest) => format!("{}{rest}", std::env::var("HOME").unwrap_or_default()),
+        None => p.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod lineage_tests {
+    use super::*;
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> bool {
+        std::process::Command::new("git")
+            .args(["-C", dir.to_str().unwrap()])
+            .args(args)
+            .env("GIT_AUTHOR_NAME", "Ada")
+            .env("GIT_AUTHOR_EMAIL", "ada@example.com")
+            .env("GIT_COMMITTER_NAME", "Ada")
+            .env("GIT_COMMITTER_EMAIL", "ada@example.com")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    // THE FUNCTIONAL PATH, which the TypeScript test could not reach: it called `git_lineage(".")` against
+    // whatever repo the suite happened to run in, so it could only assert the degradation contract. A real
+    // repo built in a temp dir makes the actual answer — sha, subject, author — assertable and hermetic.
+    #[test]
+    fn the_last_commit_that_touched_a_file_is_reported_with_its_subject() {
+        let dir = std::env::temp_dir().join(format!("seam-lineage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        if !git(&dir, &["init", "-q"]) {
+            return; // no git on this box → the degradation test below still covers the safety contract
+        }
+        std::fs::write(dir.join("a.ts"), "export const a = 1;\n").unwrap();
+        std::fs::write(dir.join("b.ts"), "export const b = 2;\n").unwrap();
+        assert!(git(&dir, &["add", "."]));
+        // a subject with a pipe and a comma — the \x1f delimiter has to survive punctuation a naive
+        // separator would split on
+        assert!(git(&dir, &["commit", "-q", "-m", "feat: edit referral members | phase 1, part 2"]));
+
+        let repo = dir.to_string_lossy().to_string();
+        let got = git_lineage(&repo, &["a.ts".to_string(), "b.ts".to_string()]);
+        assert_eq!(got.len(), 2);
+        let (file, lin) = &got[0];
+        assert_eq!(file, "a.ts", "input order is preserved");
+        assert_eq!(lin.subject, "feat: edit referral members | phase 1, part 2");
+        assert_eq!(lin.author, "Ada");
+        assert!(!lin.sha.is_empty() && lin.sha.len() < 20, "short sha: {}", lin.sha);
+        assert_eq!(lin.date.len(), 10, "%as is YYYY-MM-DD: {}", lin.date);
+
+        // an UNTRACKED file in a real repo is absent, not present-and-empty — the caller emits nothing for
+        // it rather than emitting a blank provenance line
+        let mixed = git_lineage(&repo, &["a.ts".to_string(), "never-added.ts".to_string()]);
+        assert_eq!(mixed.len(), 1);
+        assert_eq!(mixed[0].0, "a.ts");
+
+        // duplicates collapse — one `git log` per unique file is the whole cost model
+        let dupes = git_lineage(&repo, &["a.ts".to_string(), "a.ts".to_string(), String::new()]);
+        assert_eq!(dupes.len(), 1);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // THE SAFETY CONTRACT, ported from `lineage.test.ts`: off a repo this must return nothing and never
+    // fail. It is what keeps the oracle fixtures — which are not git repos — byte-identical.
+    #[test]
+    fn a_non_repo_yields_no_lineage_rather_than_an_error() {
+        let absent = std::env::temp_dir().join(format!("seam-lineage-absent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&absent);
+        assert!(git_lineage(absent.to_str().unwrap(), &["a.ts".to_string(), "b.ts".to_string()]).is_empty());
+    }
+}

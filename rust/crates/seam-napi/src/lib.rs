@@ -1563,6 +1563,17 @@ pub fn list_learned_carriers(repo: String) -> Vec<Vec<String>> {
         .collect()
 }
 
+/// gitLineage — the commit that last touched each file: `[file, sha, subject, author, date]` rows, in input
+/// order, deduped. A file git cannot resolve is ABSENT from the rows rather than present with empty fields:
+/// the caller emits nothing for it, so a non-repo degrades to no provenance instead of to a blank one.
+#[napi]
+pub fn git_lineage(repo: String, files: Vec<String>) -> Vec<Vec<String>> {
+    seam_fs::git_lineage(&repo, &files)
+        .into_iter()
+        .map(|(f, l)| vec![f, l.sha, l.subject, l.author, l.date])
+        .collect()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy
