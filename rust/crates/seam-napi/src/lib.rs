@@ -3117,3 +3117,10 @@ pub fn decompose_detect_shape(graph_json: String) -> napi::Result<String> {
 pub fn decompose_lead_slice(graph_json: String, seams_json: String, shape: String) -> napi::Result<String> {
     Ok(seam_decompose::lead_slice(&dec_graph(&graph_json)?, &dec_seams(&seams_json)?, &shape))
 }
+
+/// boundaryNodeKinds — every BOUNDARY node kind the engine can emit, from the archetype registry. What a
+/// renderer must recognise to name/ground a crossing.
+#[napi]
+pub fn boundary_node_kinds() -> Vec<String> {
+    seam_couple::apply::semantics::boundary_node_kinds()
+}

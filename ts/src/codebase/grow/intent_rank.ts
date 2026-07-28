@@ -8,6 +8,11 @@
 // drops or reorders them. The consumer (the agent, or the concern/agent render) ranks; the engine doesn't.
 // Degrades to a no-op when embeddings are unavailable (the .vsix externalizes transformers) or no intent.
 import { loadAddon as _loadAddon } from "../rust_core.js";
+// The registry's set, not a copy. This was a THIRD hardcoded list of store kinds and the most drifted of
+// them: it never had `service` or `egress` (so a stateful SDK handle and an outbound call never counted as
+// store seams here, while every other reader treated them as such), on top of the stale `file`/`key`/
+// `db-table` names the registry itself had.
+import { STORE_KINDS as _STORE_KINDS } from "../render/medium_registry.js";
 // The def/embedding reads come from the CORE (rust/seam_core.node). Byte-identical to the TypeScript scan
 // they replaced — rust/parity/{deftable,defembed}.ts — and this is the last thing that kept `scan/` alive.
 const _core = (): any => _loadAddon();
@@ -15,7 +20,6 @@ const _core = (): any => _loadAddon();
 // Data-store boundary kinds — a sink of these is a table/queue the flow persists into. Their LABEL (the table
 // name) is the semantic signal, but a `member_access` table (`bookingRepository`) has no matching DEF, so a
 // def-only embed leaves it unscored (rel=-1) and it loses the spine crown to any scored off-subject write.
-const _STORE_KINDS = new Set(["db-table", "table", "queue", "event", "cache", "topic", "file", "key", "binding"]);
 const _isStoreSeam = (s: any): boolean => (s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""));
 const _storeLabel = (s: any): string | undefined => s.primary?.symbol ?? s.label;
 

@@ -157,3 +157,43 @@ mod classify_tests {
         }
     }
 }
+
+/// Every BOUNDARY node kind the engine can emit: the archetype registry's node kinds plus GENERIC's
+/// `resource` (the fallback for any key kind with no adapter). This is what a renderer must recognise to
+/// name/ground a crossing — and it is derived from the registry, so a new archetype joins by existing.
+///
+/// It exists because the TypeScript carried its own hardcoded copy of this list and the copy went stale: the
+/// core renamed `file`→`data-file` and grounds unknown media as `resource`, and neither reached the copy, so
+/// a file-channel or generic boundary was emitted with NO `kind` and the render could not name it.
+pub fn boundary_node_kinds() -> Vec<String> {
+    let mut out: Vec<String> = ARCHETYPES.iter().map(|(_, s)| s.node_kind.to_string()).collect();
+    out.push(GENERIC.node_kind.to_string());
+    out.sort();
+    out.dedup();
+    out
+}
+
+#[cfg(test)]
+mod boundary_kind_tests {
+    use super::*;
+
+    #[test]
+    fn boundary_kinds_cover_every_archetype_and_the_generic_fallback() {
+        let k = boundary_node_kinds();
+        for (_, s) in ARCHETYPES {
+            assert!(k.contains(&s.node_kind.to_string()), "{} missing", s.node_kind);
+        }
+        // the two the TypeScript copy had drifted away from
+        assert!(k.contains(&"data-file".to_string()));
+        assert!(k.contains(&"resource".to_string()));
+    }
+
+    #[test]
+    fn every_boundary_kind_is_a_flow_subject() {
+        // the two sets answer different questions ("can this be named as a crossing" vs "is this a data
+        // subject"), and a kind in one but not the other is a gap in exactly the way this fix repairs
+        for k in boundary_node_kinds() {
+            assert!(is_flow_subject(&k), "{k} is a boundary kind but not a flow subject");
+        }
+    }
+}
