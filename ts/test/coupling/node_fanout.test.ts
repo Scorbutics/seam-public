@@ -6,7 +6,7 @@ import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { build_module_graph } from "../helpers/scan.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const REPO = join(tmpdir(), "seam-nodefan-" + process.pid);

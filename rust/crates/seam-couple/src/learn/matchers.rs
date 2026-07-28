@@ -492,10 +492,13 @@ pub fn shared_dir() -> String {
 pub fn load_matchers(repo: &str) -> Vec<KeyMatcher> {
     let mut out = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
-    for dir in [format!("{repo}/.seam"), shared_dir()] {
+    for (shared, dir) in [(false, format!("{repo}/.seam")), (true, shared_dir())] {
         for m in load_store_rules(&dir) {
             let id = m.key();
             if seen.insert(id) {
+                // LEDGER: a rule REPLAYED from the store is the flywheel paying off — record it so the run can
+                // report the compounding asset it used, and the user can promote it.
+                crate::learn::ledger::record_used(&m.display_name(), shared);
                 out.push(m);
             }
         }

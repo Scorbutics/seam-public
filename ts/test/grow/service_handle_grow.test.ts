@@ -10,7 +10,7 @@ import { spawnSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { validateMatcher, persistMatchers } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 

@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { scannableForKeys, kindOf } from "../helpers/coupling.js";
 import { build_module_graph } from "../helpers/scan.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("structural survivors of deleting event_binding (no detection adapter, but the facts remain)", () => {

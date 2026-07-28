@@ -43,8 +43,34 @@ pub fn load_store(dir: &str) -> Store {
     let mut files: IndexMap<String, serde_json::Value> = IndexMap::new();
     let mut learned_sigs: Vec<String> = Vec::new();
     let mut seen_sig: HashSet<String> = HashSet::new();
+    // LEGACY schema-1 `key-matchers.json` — a store written before the two files were unified. Folded in on
+    // READ and dropped on the next write. Without this an upgrade silently loses every rule the user's
+    // flywheel learned, which is the one failure mode a learn-once cache must not have.
+    if let Ok(txt) = std::fs::read_to_string(format!("{dir}/key-matchers.json")) {
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            if v.get("schema").and_then(|s| s.as_u64()) == Some(1) {
+                if let Some(arr) = v.get("matchers").and_then(|m| m.as_array()) {
+                    for rv in arr {
+                        if let Ok(m) = serde_json::from_value::<KeyMatcher>(rv.clone()) {
+                            rules.push(m);
+                        }
+                    }
+                }
+            }
+        }
+    }
     if let Ok(txt) = std::fs::read_to_string(format!("{dir}/key-adapters.json")) {
         if let Ok(v) = serde_json::from_str::<serde_json::Value>(&txt) {
+            // LEGACY schema-2: the per-file adapters lived under `adapters`, and there were no rules.
+            if v.get("schema").and_then(|s| s.as_u64()) == Some(2) {
+                if let Some(obj) = v.get("adapters").and_then(|f| f.as_object()) {
+                    for (k, val) in obj {
+                        if val.get("keys").map(|k| k.is_array()).unwrap_or(false) {
+                            files.insert(k.clone(), val.clone());
+                        }
+                    }
+                }
+            }
             if v.get("schema").and_then(|s| s.as_u64()) == Some(SCHEMA as u64) {
                 if let Some(arr) = v.get("rules").and_then(|r| r.as_array()) {
                     for rv in arr {
@@ -72,6 +98,10 @@ pub fn load_store(dir: &str) -> Store {
             }
         }
     }
+    // A rule can appear in BOTH the legacy file and the unified one after a partial migration; the store is a
+    // set, so fold by executable identity.
+    let mut seen_rule: HashSet<String> = HashSet::new();
+    rules.retain(|m| seen_rule.insert(m.key()));
     Store { rules, files, learned_sigs }
 }
 
@@ -101,6 +131,7 @@ pub fn persist_matchers(repo: &str, matchers: &[KeyMatcher]) {
     let mut have: HashSet<String> = store.rules.iter().map(|m| m.key()).collect();
     for m in matchers {
         if have.insert(m.key()) {
+            crate::learn::ledger::record_learned(&m.display_name());
             store.rules.push(m.clone());
         }
     }
@@ -145,9 +176,16 @@ pub fn has_key_cache(repo: &str) -> bool {
 /// a COVERED MARKER too (empty keys): the file was examined, so a warm run must skip it rather than re-pay it.
 /// Port of `cachedFileKeys`.
 pub fn cached_file_keys(repo: &str, key: &str) -> (bool, Vec<crate::types::KeyHit>) {
-    for dir in [repo_dir(repo), crate::learn::matchers::shared_dir()] {
+    for (shared, dir) in [(false, repo_dir(repo)), (true, crate::learn::matchers::shared_dir())] {
         if let Some(v) = load_store(&dir).files.get(key) {
             let keys = v.get("keys").and_then(|k| serde_json::from_value::<Vec<crate::types::KeyHit>>(k.clone()).ok()).unwrap_or_default();
+            // A COVERED MARKER (no keys) is a cache hit but not a USED adapter — nothing was applied, the file
+            // was merely known to need nothing. Reporting it would inflate the flywheel's apparent payoff.
+            if !keys.is_empty() {
+                if let Some(name) = v.get("name").and_then(|n| n.as_str()) {
+                    crate::learn::ledger::record_used(name, shared);
+                }
+            }
             return (true, keys);
         }
     }
@@ -158,6 +196,7 @@ pub fn cached_file_keys(repo: &str, key: &str) -> (bool, Vec<crate::types::KeyHi
 pub fn persist_file_keys(repo: &str, key: &str, adapter: &KeyAdapter) {
     let dir = repo_dir(repo);
     let mut store = load_store(&dir);
+    crate::learn::ledger::record_learned(&adapter.name);
     store.files.insert(key.to_string(), serde_json::to_value(adapter).unwrap_or(serde_json::Value::Null));
     write_store(&dir, &store);
 }

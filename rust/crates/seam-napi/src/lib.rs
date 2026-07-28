@@ -1408,6 +1408,69 @@ pub fn scannable_for_keys(file: String) -> bool {
     seam_couple::ground::floor::scannable_for_keys(&file)
 }
 
+// ── THE LEARNED-STORE READ/WRITE SURFACE ─────────────────────────────────────────────────────────────────
+// `.seam/key-adapters.json` — the rules the flywheel learned, the per-file adapters, and the signature set
+// that lets a warm run SKIP asking again. One store, one reader.
+
+/// Every learned rule (repo ∪ shared), as validated-matcher JSON.
+#[napi]
+pub fn load_matchers_json(repo: String) -> String {
+    serde_json::to_string(&seam_couple::load_matchers(&repo)).unwrap_or_else(|_| "[]".into())
+}
+
+/// Does the repo (or the shared store) hold ANY learned rule?
+#[napi]
+pub fn has_matcher_cache(repo: String) -> bool {
+    !seam_couple::load_matchers(&repo).is_empty()
+}
+
+/// The cached keys for a content key — `[hit, keysJson]`. `hit` is true for a COVERED MARKER too (empty
+/// keys): the file was examined, so a warm run must SKIP it rather than re-pay it. Collapsing "examined,
+/// nothing here" into "never examined" is what makes a flywheel re-ask forever and never settle.
+#[napi]
+pub fn cached_file_keys(repo: String, key: String) -> Vec<String> {
+    let (hit, keys) = seam_couple::learn::key_store::cached_file_keys(&repo, &key);
+    vec![hit.to_string(), serde_json::to_string(&keys).unwrap_or_else(|_| "[]".into())]
+}
+
+/// Record one file's adapter (or its covered marker). `keys_json` = a KeyHit array.
+#[napi]
+pub fn persist_file_keys(repo: String, key: String, name: String, description: String, keys_json: String) {
+    let keys = serde_json::from_str(&keys_json).unwrap_or_default();
+    seam_couple::learn::key_store::persist_file_keys(&repo, &key, &seam_couple::learn::key_store::KeyAdapter { name, description, keys });
+}
+
+#[napi]
+pub fn has_key_cache(repo: String) -> bool {
+    seam_couple::learn::key_store::has_key_cache(&repo)
+}
+
+#[napi]
+pub fn has_learned_matchers_for(repo: String, sig: String) -> bool {
+    seam_couple::learn::key_store::has_learned_matchers_for(&repo, &sig)
+}
+
+#[napi]
+pub fn record_learned_matchers(repo: String, sig: String) {
+    seam_couple::learn::key_store::record_learned_matchers(&repo, &sig);
+}
+
+/// The run's ADAPTER LEDGER — which learned adapters were replayed (`[name, scope]`) and which were newly
+/// learned (`[name, ""]`, scope empty). Observability, but the observability IS the claim: learned adapters
+/// are meant to be named, reviewable records a run reports so the user can promote the good ones.
+#[napi]
+pub fn adapter_ledger() -> Vec<Vec<String>> {
+    let (used, learned) = seam_couple::learn::ledger::snapshot();
+    let mut rows: Vec<Vec<String>> = used.into_iter().map(|(n, s)| vec![n, s]).collect();
+    rows.extend(learned.into_iter().map(|n| vec![n, String::new()]));
+    rows
+}
+
+#[napi]
+pub fn reset_adapter_ledger() {
+    seam_couple::learn::ledger::reset();
+}
+
 // ── COMMUNITY FRAMEWORK PLUGINS ──────────────────────────────────────────────────────────────────────────
 // A declarative manifest teaches the built-in adapters a framework they do not know — a project's own route
 // annotation, its ORM's verbs, its http client — without a code change. Registration is per-PROCESS and

@@ -15,7 +15,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { kindOf } from "../../src/codebase/coupling/adapters/index.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("handlerEdge is structural for DISPATCH archetypes (registry, not a heuristic)", () => {

@@ -9,7 +9,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { kindOf } from "../../src/codebase/coupling/adapters/index.js";
 import { build_module_graph } from "../helpers/scan.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("the `cache` kind resolves to its archetype (cache boundary + write/read edges), not GENERIC", () => {

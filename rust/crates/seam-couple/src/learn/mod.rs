@@ -8,6 +8,7 @@ pub mod effect_inference;
 pub mod discover;
 pub mod key_cluster;
 pub mod key_index;
+pub mod ledger;
 pub mod key_store;
 pub mod per_file_keys;
 pub mod compose_learn;

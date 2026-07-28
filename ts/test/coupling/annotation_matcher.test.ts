@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 describe("runMatcher(annotation) — the literal in a decorator/annotation arg is the key", () => {

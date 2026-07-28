@@ -209,3 +209,38 @@ export const registerRouteAnnotation = (name: string, method?: string): void => 
 export const registerOrmMethod = (method: string, write: boolean): void => core().registerOrmMethod(method, write);
 export const registerHttpClients = (names: string[]): void => core().registerHttpClients(names);
 export const resetFrameworkPlugins = (): void => core().resetFrameworkPlugins();
+
+// ── THE LEARNED STORE ────────────────────────────────────────────────────────────────────────────────────
+// `.seam/key-adapters.json`, read and written by the core. The reset hook drops the core's per-repo memos —
+// there is no TypeScript-side store left to clear.
+export const loadMatchers = (repo: string): KeyMatcher[] => JSON.parse(core().loadMatchersJson(repo));
+export const hasMatcherCache = (repo: string): boolean => core().hasMatcherCache(repo);
+export const hasKeyCache = (repo: string): boolean => core().hasKeyCache(repo);
+export const hasLearnedMatchersFor = (repo: string, sig: string): boolean => core().hasLearnedMatchersFor(repo, sig);
+export const recordLearnedMatchers = (repo: string, sig: string): void => core().recordLearnedMatchers(repo, sig);
+// The old TS hooks took no argument (they cleared a module-level Map). The core's caches are per-repo, so an
+// absent repo means "every repo" — which is what a test switching to a fresh tmp dir actually wants.
+export const resetStore = (repo?: string): void => { syncEnv(); core().resetCaches(repo ?? undefined); };
+export const _resetKeyCacheMem = resetStore;
+export const _resetMatcherCacheMem = resetStore;
+export const _resetKeyStoreMem = resetStore;
+
+/// `hit` is true for a COVERED MARKER (empty keys) as well — the file WAS examined. Reading that as "never
+/// examined" is what makes a flywheel re-ask the same file forever and never settle.
+export const cachedFileKeys = (repo: string, key: string): { hit: boolean; keys: KeyHit[] } => {
+  const [hit, keysJson] = core().cachedFileKeys(repo, key) as string[];
+  return { hit: hit === "true", keys: JSON.parse(keysJson) };
+};
+
+export const persistFileKeys = (repo: string, key: string, adapter: { name: string; description: string; keys: KeyHit[] }): void =>
+  core().persistFileKeys(repo, key, adapter.name, adapter.description, JSON.stringify(adapter.keys));
+
+export const listKeyAdapters = (repo: string) =>
+  (core().listKeyAdapters(repo) as string[][]).map(([name, description, key, count, scope]) =>
+    ({ key, adapter: { name, description, keys: new Array(Number(count)) }, scope }));
+
+export const promoteKeyAdapter = (repo: string, name: string): { ok: boolean } => ({ ok: core().promoteAdapter(repo, name) !== "" });
+
+export const listMatchers = (repo: string) =>
+  (core().listMatchers(repo) as string[][]).map(([name, shape, kind, role, scope]) =>
+    ({ matcher: { name, shape, kind, role }, scope }));

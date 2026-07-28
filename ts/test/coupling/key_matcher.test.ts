@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { set_host_bus, HostBus } from "../../src/core/llm.js";
 import { validateMatcher, runMatcher, plausibleKeyValue, type KeyMatcher, applyMatchers } from "../helpers/coupling.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 
 // ---- pure IR: validate + execute --------------------------------------------------------------------

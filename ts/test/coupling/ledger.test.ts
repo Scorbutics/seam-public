@@ -6,7 +6,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ledgerSnapshot, resetLedger } from "../../src/codebase/coupling/ledger.js";
-import { persistFileKeys, cachedFileKeys, _resetKeyCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { persistFileKeys, cachedFileKeys, _resetKeyCacheMem } from "../helpers/coupling.js";
 
 afterEach(() => { resetLedger(); _resetKeyCacheMem(); });
 

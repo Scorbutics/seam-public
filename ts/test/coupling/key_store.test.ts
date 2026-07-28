@@ -10,7 +10,7 @@ import {
   loadMatchers, listMatchers, persistMatchers, hasMatcherCache,
   cachedFileKeys, persistFileKeys, hasKeyCache, listKeyAdapters,
   promoteKeyAdapter, hasLearnedMatchersFor, recordLearnedMatchers, _resetKeyStoreMem,
-} from "../../src/codebase/coupling/key_store.js";
+} from "../helpers/coupling.js";
 import { ledgerSnapshot, resetLedger } from "../../src/codebase/coupling/ledger.js";
 
 let REPO: string, SHARED: string;
@@ -54,7 +54,9 @@ describe("unified store — backward-compat with the two legacy files", () => {
     seam("key-matchers.json", { schema: 1, matchers: [{ via: "assign", token: "$scope", kind: "binding", role: "produces", name: "ng" }] });
     seam("key-adapters.json", { schema: 2, adapters: { "f.rb h": { name: "f-keys", description: "", keys: [{ kind: "db-table", value: "members", line: 2, produces: false }] } } });
     _resetKeyStoreMem();
-    expect(listMatchers(REPO).map((x) => (x.matcher as any).token)).toEqual(["$scope"]);   // from the legacy matchers file
+    // the listing renders a rule by its SHAPE (what it matches), which is what a reviewer reads; the legacy
+    // rule is identified by `$scope` appearing in it
+    expect(listMatchers(REPO).map((x) => x.matcher.shape)).toEqual(["$scope.<member> = fn"]);   // from the legacy matchers file
     expect(listKeyAdapters(REPO).map((x) => x.key)).toEqual(["f.rb h"]);                    // from the legacy adapters file
   });
 

@@ -14,7 +14,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { grow_to_terminals, _fileCouplingStats, _resetFileCouplingStats } from "../../src/codebase/grow/orchestrate.js";
 import { _resetFootprintMirror } from "../helpers/scan.js";
-import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
+import { _resetMatcherCacheMem } from "../helpers/coupling.js";
 import { available } from "../../src/codebase/atoms.js";
 
 const MATCHERS = { schema: 1, matchers: [
