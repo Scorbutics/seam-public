@@ -9,24 +9,15 @@
 import { type Graph } from "../../core/graph_ir.js";
 import { RENDER } from "../config.js";
 import { type Seam } from "./clusters.js";
-import { core, toWire } from "./wire.js";
+import { core, toWire, seamsToCore } from "./wire.js";
 
-// The core's snake_case seam ↔ this module's camelCase one. Only the fields the spine passes READ cross;
-// everything else stays on the TS object, which is why these functions merge rather than rebuild.
-const toCore = (s: Seam) => ({
-  id: s.id, label: s.label, link_only: s.linkOnly, node_ids: s.node_ids, proposed_by: s.proposedBy,
-  ...(s.suggested ? { suggested: true } : {}),
-  ...(s.tier ? { tier: s.tier } : {}),
-  ...(s.selected ? { selected: true } : {}),
-});
-const sw = (seams: Seam[]) => JSON.stringify(seams.map(toCore));
 
 export function _spine_order(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
-  return core().decomposeSpineOrder(toWire(g), sw(seams), lead) as string[];
+  return core().decomposeSpineOrder(toWire(g), seamsToCore(seams), lead) as string[];
 }
 
 export function _seam_path(g: Graph, seams: Seam[], fromId: string, toId: string): string[] {
-  return core().decomposeSeamPath(toWire(g), sw(seams), fromId, toId) as string[];
+  return core().decomposeSeamPath(toWire(g), seamsToCore(seams), fromId, toId) as string[];
 }
 
 // A PATH through one data-flow CROSSING: the ordered seam-chain anchor → … → crossing → … → sink.
@@ -36,21 +27,21 @@ export interface SeamPath { id: string; label: string; crossingKind?: string; cr
 // a load path, a create path — each crossing the UI⇄DB boundary once, so a single linear spine can't
 // represent it. Returns [] when there is no crossing, and the caller keeps its single spine.
 export function extract_paths(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): SeamPath[] {
-  return JSON.parse(core().decomposeExtractPaths(toWire(g), sw(seams), lead)) as SeamPath[];
+  return JSON.parse(core().decomposeExtractPaths(toWire(g), seamsToCore(seams), lead)) as SeamPath[];
 }
 
 // The data-flow BACKBONE, decided by topology not text: the seam-path from the anchor to the CULMINATION.
 // Tier-independent (the main path holds with no LLM tiers) and path-bounded (an off-concern hanging off the
 // side is excluded however domain-relevant its identifiers read). [] when there is no boundary crossing.
 export function _structural_spine(g: Graph, seams: Seam[], lead?: "forward" | "backward" | "both"): string[] {
-  return core().decomposeStructuralSpine(toWire(g), sw(seams), lead) as string[];
+  return core().decomposeStructuralSpine(toWire(g), seamsToCore(seams), lead) as string[];
 }
 
 // Promote the SUPPORTING seams on the anchor→culmination path up to spine. The core returns the ids to
 // PROMOTE rather than a new seam list, so this stays promote-only at the wire: there is no demotion for a
 // caller to apply by accident, and the model's own tier calls are never overwritten.
 export function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toId: string): void {
-  const ids = new Set(core().decomposePromoteSpinePath(toWire(g), sw(seams), fromId, toId) as string[]);
+  const ids = new Set(core().decomposePromoteSpinePath(toWire(g), seamsToCore(seams), fromId, toId) as string[]);
   for (const s of seams) if (ids.has(s.id)) s.tier = "spine";
 }
 
@@ -62,7 +53,7 @@ export function _promote_spine_path(g: Graph, seams: Seam[], fromId: string, toI
 // roll-up). A CLI/human renderer that wants the capped view calls this.
 export const _OFF_CAP = RENDER.offCap;
 export function collapse_off_seams(seams: Seam[], cap = _OFF_CAP): Seam[] {
-  const rows = JSON.parse(core().decomposeCollapseOffSeams(sw(seams), cap)) as any[];
+  const rows = JSON.parse(core().decomposeCollapseOffSeams(seamsToCore(seams), cap)) as any[];
   const byId = new Map(seams.map((s) => [s.id, s]));
   return rows.map((r) => byId.get(r.id) ?? {          // the only unmatched row is the synthesized roll-up
     id: r.id, label: r.label, linkOnly: Boolean(r.link_only), node_ids: r.node_ids ?? [],
@@ -92,5 +83,5 @@ export function _detect_shape(g: Graph): "policy" | "flow" {
 // intent string — it reads what the LLM already decided (the seam that ANSWERS the question) and takes that
 // seam's slice direction. Offline / no pick → the default by shape.
 export function _lead_slice(g: Graph, seams: Seam[], shape: "policy" | "flow"): "backward" | "forward" {
-  return core().decomposeLeadSlice(toWire(g), sw(seams), shape) as "backward" | "forward";
+  return core().decomposeLeadSlice(toWire(g), seamsToCore(seams), shape) as "backward" | "forward";
 }

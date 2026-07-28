@@ -3144,3 +3144,20 @@ pub fn decompose_emit_seams(
     let res = seam_decompose::emit_seams(&g, &health, &mut seams, &opts);
     serde_json::to_string(&res).map_err(|e| napi::Error::from_reason(format!("emit serialise: {e}")))
 }
+
+/// decomposeIntentPrompt — the DETERMINISTIC half of the seam-intent pass: the priors, the pre-tier floor,
+/// and the assembled prompt. The LLM call stays on the caller's side; see the note in intent.rs for why
+/// (the host bus is record-and-replay, so a pass owned here cannot call back into a blocked JS thread).
+#[napi]
+pub fn decompose_intent_prompt(
+    graph_json: String,
+    seams_json: String,
+    intent: String,
+    verbose: bool,
+    no_pretier: bool,
+) -> napi::Result<String> {
+    let g = dec_graph(&graph_json)?;
+    let seams = dec_seams(&seams_json)?;
+    let p = seam_decompose::build_intent_prompt(&g, &seams, &intent, verbose, no_pretier);
+    serde_json::to_string(&p).map_err(|e| napi::Error::from_reason(format!("intent prompt serialise: {e}")))
+}

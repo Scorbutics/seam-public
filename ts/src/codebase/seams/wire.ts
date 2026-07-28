@@ -65,3 +65,19 @@ export const applyNodes = (g: Graph, json: string, fields: readonly string[]): v
     for (const f of fields) (live as any)[f] = n[f];
   }
 };
+
+// THE seam projection for the core. One function, not one per caller: spine, emit and the intent pass each
+// grew their own copy of this mapping, and three copies of a field-name translation is how `direction` went
+// missing from the graph wire — silently, because every copy looked right on its own.
+//
+// A superset: a pass that does not read `culmination` simply ignores it, whereas a pass that DOES read a
+// field the caller's copy forgot gets a wrong answer with no error.
+export const seamsToCore = (seams: readonly any[]): string => JSON.stringify(seams.map((s) => ({
+  id: s.id, label: s.label, link_only: s.linkOnly, node_ids: s.node_ids, proposed_by: s.proposedBy,
+  ...(s.suggested ? { suggested: true } : {}),
+  ...(s.tier ? { tier: s.tier } : {}),
+  ...(s.selected ? { selected: true } : {}),
+  ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
+  ...(s.writes ? { writes: s.writes } : {}),
+  ...(s.dir ? { dir: s.dir } : {}),
+})));

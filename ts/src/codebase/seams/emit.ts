@@ -10,7 +10,7 @@
 import { type Graph } from "../../core/graph_ir.js";
 import { loadAddon } from "../rust_core.js";
 import { type Seam } from "./clusters.js";
-import { core, toWire } from "./wire.js";
+import { core, toWire, seamsToCore } from "./wire.js";
 
 // `wellformedness` returns JS Maps. They cross as ROWS, not as objects: an object would lose the ordering,
 // and for numeric-looking node ids `JSON.stringify` would hoist those keys to the front.
@@ -20,20 +20,10 @@ const healthWire = (health: any): string => JSON.stringify({
   postures: health?.postures ?? {},
 });
 
-const seamWire = (seams: Seam[]): string => JSON.stringify(seams.map((s) => ({
-  id: s.id, label: s.label, link_only: s.linkOnly, node_ids: s.node_ids, proposed_by: s.proposedBy,
-  ...(s.suggested ? { suggested: true } : {}),
-  ...(s.tier ? { tier: s.tier } : {}),
-  ...(s.selected ? { selected: true } : {}),
-  ...(s.culmination !== undefined ? { culmination: s.culmination } : {}),
-  ...(s.writes ? { writes: s.writes } : {}),
-  ...(s.dir ? { dir: s.dir } : {}),
-})));
-
 export function emit_seams(g: Graph, health: any, seams: Seam[],
     opts: { shape?: "policy" | "flow"; lead?: "backward" | "forward" | "both"; lineageRepo?: string; intent?: boolean } = {}): any {
   const res = JSON.parse(core().decomposeEmitSeams(
-    toWire(g), healthWire(health), seamWire(seams),
+    toWire(g), healthWire(health), seamsToCore(seams),
     JSON.stringify({ intent: Boolean(opts.intent), ...(opts.shape ? { shape: opts.shape } : {}), ...(opts.lead ? { lead: opts.lead } : {}) }),
   ));
   const model = res.model;
