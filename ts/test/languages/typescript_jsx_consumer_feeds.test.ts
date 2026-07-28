@@ -1,30 +1,51 @@
-// REGRESSION: extract_consumer_feeds (codebase/atoms.ts) used to hardcode JSX tree-sitter node kinds
-// directly in that cross-language file. Moved to languages/typescript/jsx.ts, dispatched via the
-// LanguageProvider registry's `consumerFeeds` field (keyed on FILE now, not a raw grammar-name string).
-// Proves both ends of that dispatch: a JSX file still extracts prop feeds, and a language with no
-// consumerFeeds capability (Java) returns nothing rather than throwing.
+// CONSUMER FEEDS across the napi boundary — what a caller binds into the anchor's props.
+//
+// The extraction and its dispatch now live in the core: `seam_lang::atoms::extract_consumer_feeds` asks the
+// file's LanguageProvider, and only the TypeScript one implements it (JSX node kinds are one grammar's, which
+// is why they never belonged in the cross-language atoms module). Those claims are pinned in Rust, plus a
+// differential harness over `test/fixtures/jsx-feeds` (`rust/parity/feeds.ts`).
+//
+// Asserted HERE is the wire: the flat `[prop, value, line, valLine, valCol]` row order that
+// `detect_consumer_feeds` reads POSITIONALLY, and the one field that must stay EMPTY rather than zero.
 import { describe, expect, test } from "bun:test";
-import { extract_consumer_feeds, available } from "../../src/codebase/atoms.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
+import { available } from "../../src/codebase/atoms.js";
 
-describe("extract_consumer_feeds — registry-dispatched JSX prop feeds", () => {
-  test("a JSX tag matching the anchor yields its bound prop values", async () => {
-    if (!available()) return;
+const addon = loadAddon();
+const feeds = (content: string, file: string, anchor: string): string[][] =>
+  (addon?.extractConsumerFeeds(content, file, anchor) ?? []) as string[][];
+
+describe("consumer feeds — the registry-dispatched JSX rows detect_consumer_feeds reads", () => {
+  test("a matching tag yields its bound prop values, positionally", () => {
+    if (!available() || !addon) return;
     const content = `function Page() {\n  return <Booking id={selectedId} confirmed />;\n}\n`;
-    const fed = await extract_consumer_feeds(content, "web/Page.tsx", "Booking");
-    expect(fed.id?.[0]?.value).toBe("selectedId");
-    expect(fed.confirmed?.[0]?.value).toBe("true");
+    const rows = feeds(content, "web/Page.tsx", "Booking");
+    const byProp = new Map(rows.map((r) => [r[0], r]));
+
+    const id = byProp.get("id")!;
+    expect(id[1]).toBe("selectedId");        // value, braces unwrapped
+    expect(Number(id[2])).toBe(1);           // the attribute's line
+    expect(id[3]).not.toBe("");              // a value expression exists → it has a position
+    expect(Number(id[4])).toBeGreaterThan(0);
+
+    // A BARE attribute is JSX shorthand for `true` and has NO value node. valLine/valCol must be EMPTY, not
+    // "0" — `detect_consumer_feeds` tests `valLine !== ""` to decide whether to attach a position, and a zero
+    // there would send a reader to line 0 of the consumer, which is real code and the wrong code.
+    const confirmed = byProp.get("confirmed")!;
+    expect(confirmed[1]).toBe("true");
+    expect(confirmed[3]).toBe("");
+    expect(confirmed[4]).toBe("");
   });
 
-  test("a non-matching tag contributes nothing", async () => {
-    if (!available()) return;
-    const content = `function Page() {\n  return <Other id={x} />;\n}\n`;
-    const fed = await extract_consumer_feeds(content, "web/Page.tsx", "Booking");
-    expect(Object.keys(fed)).toEqual([]);
+  test("a non-matching tag contributes nothing", () => {
+    if (!available() || !addon) return;
+    expect(feeds(`function Page() {\n  return <Other id={x} />;\n}\n`, "web/Page.tsx", "Booking")).toEqual([]);
   });
 
-  test("a language with no consumerFeeds capability (Java) returns {} instead of throwing", async () => {
-    const content = `class Page { void render() { new Booking(id); } }\n`;
-    const fed = await extract_consumer_feeds(content, "src/Page.java", "Booking");
-    expect(fed).toEqual({});
+  test("a language with no attribute-binding concept returns nothing rather than throwing", () => {
+    if (!addon) return;
+    // Java passes arguments positionally — there is no tag whose attributes name the callee's parameters, so
+    // an empty answer is the honest one, not a gap
+    expect(feeds(`class Page { void render() { new Booking(id); } }\n`, "src/Page.java", "Booking")).toEqual([]);
   });
 });

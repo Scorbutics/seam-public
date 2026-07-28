@@ -98,7 +98,6 @@ export interface LanguageProvider {
   // {prop: [{value, line}]}), from a pre-built parse ctx (duck-typed, like `entrypoint` above — atoms owns
   // parsing, the language module owns the tree-walk). Currently TS/JS (JSX) only; other languages have no
   // such attribute-binding form. undefined ⇒ no feeds for this language.
-  consumerFeeds?: (ctx: any, anchorName: string) => Record<string, any[]>;
   // the interface named by a class-LITERAL argument in a call's arg-list text (Java `X.class`, the
   // grounding for a service-locator DI lookup — `getProvider(X.class)`). null ⇒ no class literal in the
   // text. undefined ⇒ this language has no such reflection-literal form (TS/Ruby/Python).

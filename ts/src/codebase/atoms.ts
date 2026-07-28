@@ -4,7 +4,6 @@
 // callables. Offsets are UTF-16 code units; line/col are counted in the string (matches per the
 // tree-sitter facts reasoning — line counts are unit-agnostic).
 import { available as isAvailable, getParser, langForExt } from "../core/treesitter.js";
-import { provider_for } from "../core/resolve/languages/index.js";
 const langForExtAtoms = langForExt;
 
 // --- per-grammar node-kind registry (concepts, never literal TSX kinds) ----------------------
@@ -175,28 +174,4 @@ export async function makeCtx(content: string, grammar: string): Promise<Ctx | n
   if (_ctxCache.size >= _CTX_CACHE_MAX) { const oldest = _ctxCache.keys().next().value; if (oldest !== undefined) _ctxCache.delete(oldest); }
   _ctxCache.set(key, ctx);
   return ctx;
-}
-
-// Anchors to the function enclosing startLine, then collects its nested function-like nodes
-// ("atoms") that fall entirely inside [startLine, endLine], each tagged with the identifier names
-// it references. Used to decompose a changed region into its nested-function-sized sub-units.
-// Anchors to the function enclosing startLine and derives its "contract": the external names the
-// function's boundary depends on — plain params, destructured signature fields, and fields pulled
-// out of a param via a body-level destructure (`const { a, b } = paramName`), where the source param
-// is dropped once it's just a pass-through. Each contract member records where it's used (merged
-// line ranges) and whether it's ever invoked as a call.
-// What a CALLER binds into an anchor tag/attribute form — JSX (`<Anchor prop={value} />`) for TS/JS today.
-// Dispatches to the file's LanguageProvider.consumerFeeds (undefined ⇒ that language has no such attribute-
-// binding concept, e.g. Java/Ruby/Python ⇒ {}). Kept OUT of this generic file's own logic — see
-// languages/typescript/jsx.ts for the actual tree-walk (a language-separation audit flagged the raw
-// jsx_opening_element/jsx_attribute node kinds as a leak into this cross-language module).
-export async function extract_consumer_feeds(content: string, file: string, anchorName: string): Promise<Record<string, any[]>> {
-  const feedsFor = provider_for(file)?.consumerFeeds;
-  if (!feedsFor) return {};
-  if (!isAvailable()) return {};
-  const lang = lang_for(file);
-  if (!lang) return {};
-  const ctx = await makeCtx(content, lang);
-  if (!ctx) return {};
-  return feedsFor(ctx, anchorName);
 }

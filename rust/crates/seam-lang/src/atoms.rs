@@ -324,6 +324,17 @@ pub fn extract_contract(content: &str, lang: &str, start_line: usize, end_line: 
         .collect()
 }
 
+/// What a CALLER binds into the anchor's tag/attribute form, dispatched to the file's language provider.
+/// A language with no such concept (Java, Ruby, Python — arguments are positional there, and no tag names the
+/// callee's parameters) returns nothing, which is the honest answer rather than a gap. Port of
+/// `extract_consumer_feeds`.
+pub fn extract_consumer_feeds(content: &str, file: &str, anchor_name: &str) -> Vec<(String, crate::types::Feed)> {
+    let Some(provider) = crate::provider_for(file) else { return Vec::new() };
+    let Some(lang) = crate::grammar_for(file) else { return Vec::new() };
+    let Some(ctx) = Ctx::parse(content, lang) else { return Vec::new() };
+    provider.consumer_feeds(&ctx, anchor_name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -417,6 +428,55 @@ export function godObject(input) {
         assert_eq!(out.len(), 11);
         let ids: Vec<&str> = out.iter().map(|s| s.id.as_str()).collect();
         assert_eq!(ids[..4], ["g1", "g10", "g11", "g2"], "lexicographic, not numeric: {ids:?}");
+    }
+
+    const JSX: &str = "export function Page({ user }) {\n  return (\n    <div>\n      <Widget id={user.id} label=\"hello\" flag onSave={() => save(user)} />\n      <ns.Widget id={user.id} />\n      <widget id={user.id} />\n    </div>\n  );\n}\n";
+
+    // A CONSUMER'S BINDINGS are how a reader gets from "this prop exists" to "here is what is passed, at this
+    // position". The three attribute shapes each carry a different amount of information and all three are
+    // load-bearing.
+    #[test]
+    fn jsx_attributes_become_feeds_with_the_value_expression_unwrapped() {
+        let feeds = extract_consumer_feeds(JSX, "page.tsx", "Widget");
+        let by = |n: &str| feeds.iter().find(|(p, _)| p == n).map(|(_, f)| f.clone());
+
+        // EXPRESSION: the braces are unwrapped, so the feed reads the expression a human would type
+        let id = by("id").expect("id");
+        assert_eq!(id.value, "user.id", "not the braced form");
+        assert_eq!((id.val_line, id.val_col), (Some(3), Some(18)));
+
+        // STRING: quotes are KEPT — the value is a literal, and stripping them would make it indistinguishable
+        // from an identifier of the same text
+        assert_eq!(by("label").unwrap().value, "\"hello\"");
+
+        // BARE: JSX shorthand for `true`. Recorded, because the consumer really did bind it — but with NO
+        // value position, since there is no value expression to point at. Absent, never 0: line 0 is a real
+        // line, and a reader sent there would land on the wrong code.
+        let flag = by("flag").expect("a valueless attribute is still a binding");
+        assert_eq!(flag.value, "true");
+        assert_eq!((flag.val_line, flag.val_col), (None, None));
+
+        // an arrow value keeps its whole expression, which is what makes the feed worth reading
+        assert_eq!(by("onSave").unwrap().value, "() => save(user)");
+    }
+
+    // The tag must match the anchor EXACTLY. `ns.Widget` is a different component reached through a namespace,
+    // and `widget` is a DOM element — attributing either one's props to the anchor would put a stranger's
+    // bindings in its contract.
+    #[test]
+    fn only_an_exactly_matching_tag_contributes_feeds() {
+        assert_eq!(extract_consumer_feeds(JSX, "page.tsx", "Widget").len(), 4);
+        assert_eq!(extract_consumer_feeds(JSX, "page.tsx", "ns.Widget").len(), 1);
+        assert!(extract_consumer_feeds(JSX, "page.tsx", "Nothing").is_empty());
+    }
+
+    // A language with no attribute-binding concept returns NOTHING rather than guessing. Java, Ruby and Python
+    // pass arguments positionally; there is no tag whose attributes name the callee's parameters, so an empty
+    // answer is the honest one.
+    #[test]
+    fn a_language_without_the_concept_yields_no_feeds() {
+        assert!(extract_consumer_feeds("class A { void f(B b) { b.g(1); } }", "A.java", "g").is_empty());
+        assert!(extract_consumer_feeds(JSX, "page.rb", "Widget").is_empty());
     }
 
     // A BODY-DESTRUCTURED PARAM DROPS OUT in favour of its fields. `props` was only ever a pass-through, and

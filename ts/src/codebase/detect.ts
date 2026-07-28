@@ -194,15 +194,17 @@ export async function detect_consumer_feeds(g: Graph, repo: string): Promise<voi
     if (!lang) continue;
     const content = readRepoFile(repo, cn.file);
     if (content === null) continue;
-    const fed = await atoms.extract_consumer_feeds(content, cn.file, anchorName);
-    for (const [pname, binds] of Object.entries(fed)) {
+    // `[prop, value, line, valLine, valCol]` from the core, in source order. A prop the anchor does not
+    // declare is dropped: a feed is only meaningful against a contract member it binds to.
+    const rows = ((await import("./rust_core.js")).loadAddon()?.extractConsumerFeeds(content, cn.file, anchorName) ?? []) as string[][];
+    for (const [pname, value, line, valLine, valCol] of rows) {
       const member = byName.get(pname);
       if (!member) continue;
-      for (const b of binds) {
-        const feed: any = { from: cn.file, value: b.value, line: b.line };
-        if ("valLine" in b) { feed.valLine = b.valLine; feed.valCol = b.valCol; }
-        (member.feeds ??= []).push(feed);
-      }
+      const feed: any = { from: cn.file, value, line: Number(line) };
+      // ABSENT, not zero — a bare attribute has no value expression to point at, and line 0 is a real line a
+      // reader would be sent to wrongly.
+      if (valLine !== "") { feed.valLine = Number(valLine); feed.valCol = Number(valCol); }
+      (member.feeds ??= []).push(feed);
     }
   }
 }

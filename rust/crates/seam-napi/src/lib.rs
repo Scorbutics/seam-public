@@ -1622,6 +1622,25 @@ pub fn extract_contract(content: String, lang: String, start_line: u32, end_line
         .collect()
 }
 
+/// extractConsumerFeeds — what a CALLER binds into the anchor's tag/attribute form, as
+/// `[prop, value, line, valLine, valCol]` rows in source order. `valLine`/`valCol` are empty for a bare
+/// attribute (a valueless prop), where there is no value expression to point at.
+#[napi]
+pub fn extract_consumer_feeds(content: String, file: String, anchor_name: String) -> Vec<Vec<String>> {
+    seam_lang::atoms::extract_consumer_feeds(&content, &file, &anchor_name)
+        .into_iter()
+        .map(|(prop, f)| {
+            vec![
+                prop,
+                f.value,
+                f.line.to_string(),
+                f.val_line.map(|v| v.to_string()).unwrap_or_default(),
+                f.val_col.map(|v| v.to_string()).unwrap_or_default(),
+            ]
+        })
+        .collect()
+}
+
 /// The coupling tunables the SHELL has to agree with — `[name, value]` rows. `hubFan` is the load-bearing one:
 /// the render excludes crossings the coupling damped as over-fanned, and if it applies a different threshold
 /// than the coupling did, it excludes a different set. Asked for rather than duplicated — the TypeScript copy

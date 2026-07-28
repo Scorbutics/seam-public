@@ -100,6 +100,16 @@ pub trait LanguageProvider: Send + Sync {
     /// Query-builder table accesses (`.from('t').verb`) — Supabase/PostgREST/Knex. Provider-optional, like the
     /// TS hook: only TS/JS has the shape, so the default returns none and the TypeScript provider overrides.
     /// Port of the optional `tableAccess` provider hook.
+    /// What a CALLER binds into an anchor's tag/attribute form — JSX (`<Anchor prop={value} />`) for TS/JS.
+    /// Returns `(prop, feed)` pairs in source order.
+    ///
+    /// Defaults to NOTHING because most languages have no attribute-binding concept at all: Java, Ruby and
+    /// Python pass arguments positionally, and there is no tag whose attributes name the callee's parameters.
+    /// An empty default is the honest answer for them, not a gap.
+    fn consumer_feeds(&self, _ctx: &crate::treesitter::Ctx, _anchor_name: &str) -> Vec<(String, crate::types::Feed)> {
+        Vec::new()
+    }
+
     fn table_access(&self, text: &str) -> Vec<crate::types::TableAccess> {
         let _ = text;
         Vec::new()

@@ -40,3 +40,14 @@ pub struct TableAccess {
     pub verb: String,
     pub line: usize,
 }
+
+/// One value a consumer binds into an anchor's parameter at a call/tag site. `val_line`/`val_col` point at the
+/// VALUE expression rather than the attribute, so a reader jumps to what was passed and not to the prop name;
+/// they are absent for a bare attribute (`<A flag />`), where there is no value node to point at.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Feed {
+    pub value: String,
+    pub line: usize,
+    pub val_line: Option<usize>,
+    pub val_col: Option<usize>,
+}
