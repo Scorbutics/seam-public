@@ -4,10 +4,10 @@
 // member:prisma rule + 15 real models it missed); these tests pin the structural contract: any receiver
 // matches, the 3-part chain + distinctive-verb guards keep precision, and it's wired into the floor scan.
 import { describe, expect, test } from "bun:test";
-import { MEMBER_ACCESS } from "../../src/codebase/coupling/adapters/member_access.js";
+import { adapterKeys } from "../helpers/coupling.js";
 import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
 
-const keys = (text: string) => MEMBER_ACCESS.scan("x.ts", text).map((h) => `${h.value}:${h.produces ? "P" : "C"}`).sort();
+const keys = (text: string) => adapterKeys("member-access", "x.ts", text).map((h) => `${h.value}:${h.produces ? "P" : "C"}`).sort();
 
 describe("member-access adapter — framework-agnostic ORM coupling", () => {
   test("ANY receiver matches; the member is the table, the verb gives the role", () => {

@@ -172,3 +172,40 @@ export const applyMatchers = (repo: string, matchers: unknown[]): GroundingIndex
   }
   return idx;
 };
+
+// ── THE ADAPTER REGISTRY ─────────────────────────────────────────────────────────────────────────────────
+// One adapter's keys in a file (`adapterKeys`), the boundary semantics of a kind, the scannable-file gate,
+// and the two mask primitives every adapter shares. The registry itself is the core's.
+export const adapterKeys = (name: string, file: string, text: string): KeyHit[] =>
+  (core().adapterKeys(name, file, text) as string[][]).map(([kind, value, line, produces, op, label, method, recv]) => {
+    const h: KeyHit = { kind, value, line: Number(line), produces: produces === "true" };
+    if (op) h.op = op;
+    if (label) h.label = label;
+    if (method) h.method = method;
+    if (recv) h.recv = recv;
+    return h;
+  });
+
+export interface KindSemantics { nodeKind: string; produceEdge: string; consumeEdge: string; handlerEdge?: string; terminal?: boolean }
+export const kindOf = (kind: string): KindSemantics => {
+  const [nodeKind, produceEdge, consumeEdge, handlerEdge, terminal] = core().kindOf(kind) as string[];
+  const k: KindSemantics = { nodeKind, produceEdge, consumeEdge };
+  if (handlerEdge) k.handlerEdge = handlerEdge;
+  if (terminal === "true") k.terminal = true;
+  return k;
+};
+
+export const scannableForKeys = (file: string): boolean => core().scannableForKeys(file);
+export const couplingCapabilities = () => (core().couplingCapabilities() as string[][])
+  .map(([kind, nodeKind, tier, ...detectedBy]) => ({ kind, nodeKind, tier: tier as "built-in" | "learned", detectedBy }));
+export const maskComments = (text: string): string => core().maskComments(text);
+export const stringLiteralsOnly = (text: string): string => core().stringLiteralsOnly(text);
+
+// ── COMMUNITY FRAMEWORK PLUGINS ──────────────────────────────────────────────────────────────────────────
+// Registering a framework the built-in adapters do not know — a project's own route annotation, its ORM's
+// verbs, its http client. The registration lives in the CORE because that is what scans; a test that
+// registered only with a TypeScript registry would assert against a scanner that never heard about it.
+export const registerRouteAnnotation = (name: string, method?: string): void => core().registerRouteAnnotation(name, method);
+export const registerOrmMethod = (method: string, write: boolean): void => core().registerOrmMethod(method, write);
+export const registerHttpClients = (names: string[]): void => core().registerHttpClients(names);
+export const resetFrameworkPlugins = (): void => core().resetFrameworkPlugins();

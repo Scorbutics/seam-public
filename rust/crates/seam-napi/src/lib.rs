@@ -1388,6 +1388,55 @@ pub fn coupling_vocabulary() -> Vec<Vec<String>> {
     out
 }
 
+/// A kind's BOUNDARY SEMANTICS — `[nodeKind, produceEdge, consumeEdge, handlerEdge, terminal]` (handlerEdge
+/// empty when the archetype declares none). The archetype registry, else GENERIC. Port of `kindOf`.
+#[napi]
+pub fn kind_of(kind: String) -> Vec<String> {
+    let s = seam_couple::apply::semantics::kind_of(&kind);
+    vec![
+        s.node_kind.into(),
+        s.produce_edge.into(),
+        s.consume_edge.into(),
+        s.handler_edge.unwrap_or_default().into(),
+        s.terminal.to_string(),
+    ]
+}
+
+/// "Is this file worth scanning for shared keys?" — a source file, or (adapters on) a template/extra ext.
+#[napi]
+pub fn scannable_for_keys(file: String) -> bool {
+    seam_couple::ground::floor::scannable_for_keys(&file)
+}
+
+// ── COMMUNITY FRAMEWORK PLUGINS ──────────────────────────────────────────────────────────────────────────
+// A declarative manifest teaches the built-in adapters a framework they do not know — a project's own route
+// annotation, its ORM's verbs, its http client — without a code change. Registration is per-PROCESS and
+// additive: a plugin extends the vocabulary, it never rewrites the builtins, and each reset drops only the
+// extras.
+
+#[napi]
+pub fn register_route_annotation(name: String, method: Option<String>) {
+    seam_couple::frameworks::route_annotations::register_route_annotation(&name, method.as_deref());
+}
+
+#[napi]
+pub fn register_orm_method(method: String, write: bool) {
+    seam_couple::frameworks::orm_methods::register_orm_method(&method, write);
+}
+
+#[napi]
+pub fn register_http_clients(names: Vec<String>) {
+    seam_couple::frameworks::http_clients::register_http_clients(&names);
+}
+
+/// Drop every registered plugin extra (the test / edit-loop reset). The builtins are untouched.
+#[napi]
+pub fn reset_framework_plugins() {
+    seam_couple::frameworks::route_annotations::reset_route_annotations();
+    seam_couple::frameworks::orm_methods::reset_orm_methods();
+    seam_couple::frameworks::http_clients::reset_http_clients();
+}
+
 // ── THE `seam-adapters` CLI SURFACE ──────────────────────────────────────────────────────────────────────
 // Listing and PROMOTING what the flywheel learned is the human-review half of "learn once, replay forever":
 // a rule deduced for one repo is inspected and, if it generalises, promoted to the shared store so every repo

@@ -6,14 +6,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { routeSuffixMatch, routeMatchSpecificity, otherSideOver as otherSide } from "../helpers/coupling.js";
-import { HTTP_ROUTE } from "../../src/codebase/coupling/adapters/http_route.js";
+import { adapterKeys } from "../helpers/coupling.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 
 // REVERSE CROSS-EDGE — the JHipster/Angular indirection `resourceUrl = getEndpointFor('api/operations')` then
 // `http.post(this.resourceUrl)`: the fetch SITE has a variable, so the site-based scan grounds nothing, but the
 // route literal is in the file one carrier hop away. We ground it directly and let routeMatchSpecificity bridge.
 describe("http-route reverse cross-edge — indirected route literals", () => {
-  const consume = (js: string) => HTTP_ROUTE.scan("app/entities/op/op.service.ts", js).filter((h) => !h.produces).map((h) => h.value);
+  const consume = (js: string) => adapterKeys("next-route", "app/entities/op/op.service.ts", js).filter((h) => !h.produces).map((h) => h.value);
   test("a route literal stashed in a field (not at the fetch site) is grounded as a consumer", () => {
     expect(consume(`protected resourceUrl = this.cfg.getEndpointFor('api/operations');\n post(x){ return this.http.post(this.resourceUrl, x); }`)).toContain("api/operations");
   });
@@ -21,7 +21,7 @@ describe("http-route reverse cross-edge — indirected route literals", () => {
     expect(consume(`const a = 'lib/format.ts'; const b = 'operations'; const c = 'just a sentence';`)).toEqual([]);
   });
   test("a fetch-site literal is not double-grounded", () => {
-    expect(HTTP_ROUTE.scan("a.ts", `$http.get('/api/orders');`).filter((h) => !h.produces).map((h) => h.value)).toEqual(["/api/orders"]);
+    expect(adapterKeys("next-route", "a.ts", `$http.get('/api/orders');`).filter((h) => !h.produces).map((h) => h.value)).toEqual(["/api/orders"]);
   });
 });
 

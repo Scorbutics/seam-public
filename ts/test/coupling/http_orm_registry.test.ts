@@ -5,9 +5,10 @@
 import { describe, expect, test, afterEach } from "bun:test";
 import { httpClientCallRegex, registerHttpClients, _resetHttpClients } from "../../src/codebase/coupling/frameworks/http_clients.js";
 import { isOrmRead, isOrmWrite, registerOrmMethods, _resetOrmMethods } from "../../src/codebase/coupling/frameworks/orm_methods.js";
-import { scan_file_keys } from "../../src/codebase/coupling/adapters/index.js";
+import { registerOrmMethod, registerHttpClients as coreRegisterHttpClients, resetFrameworkPlugins } from "../helpers/coupling.js";
+import { scan_file_keys } from "../helpers/coupling.js";
 
-afterEach(() => { _resetHttpClients(); _resetOrmMethods(); });
+afterEach(() => { _resetHttpClients(); _resetOrmMethods(); resetFrameworkPlugins(); });
 
 const routeConsumers = (file: string, src: string) => scan_file_keys(file, src).filter((k) => k.kind === "http-route" && !k.produces);
 // NB: single-segment paths (`/orders`) isolate the client-NAME gate — a multi-segment route-shaped literal
@@ -24,11 +25,13 @@ describe("http-client framework registry", () => {
     const src = 'wretch("/things")';
     expect(routeConsumers("app.js", src).length).toBe(0);
     registerHttpClients([{ name: "wretch", framework: "wretch" }]);
+    coreRegisterHttpClients(["wretch"]);   // …and with the CORE, which is what scans
     expect(routeConsumers("app.js", src).some((k) => k.value === "/things")).toBe(true);
   });
 
   test("a verb-form client matches its member call form", () => {
     registerHttpClients([{ name: "gaxios", verbForms: true, framework: "gaxios" }]);
+    coreRegisterHttpClients(["gaxios"]);
     expect(routeConsumers("app.js", 'gaxios.post("/pay")').some((k) => k.value === "/pay")).toBe(true);
   });
 });
@@ -45,6 +48,7 @@ describe("ORM-method framework registry", () => {
     const src = "Payment.scan_all\n";
     expect(scan_file_keys("m.rb", src).some((k) => k.kind === "db-table")).toBe(false);
     registerOrmMethods([{ method: "scan_all", role: "read", orm: "acme" }]);
+    registerOrmMethod("scan_all", false);
     const hits = scan_file_keys("m.rb", src).filter((k) => k.kind === "db-table" && k.value === "payments");
     expect(hits.length).toBe(1);
     expect(hits[0].produces).toBe(false);   // read

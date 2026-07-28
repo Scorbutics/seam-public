@@ -5,7 +5,7 @@
 //! a class-level route with each method's. Port of annotation_route.ts.
 
 use crate::adapters::http_route::{http_route_meta, norm_path};
-use crate::frameworks::route_annotations::{is_route_annotation, route_annotation_method};
+use crate::frameworks::route_annotations::{is_route_annotation, route_annotation_method_owned};
 use crate::key_ir::line_of;
 use crate::mask::MaskCtx;
 use crate::types::{CouplingAdapter, KeyHit, KindMeta};
@@ -77,7 +77,7 @@ fn composed_routes(text: &str) -> Vec<KeyHit> {
             continue;
         }
         let full = if lit.starts_with('/') { norm_path(lit) } else { join(class_base.as_deref().unwrap_or(""), lit) };
-        let method = route_annotation_method(name);
+        let method = route_annotation_method_owned(name);
         if !full.is_empty() && full != "/" {
             out.push(KeyHit { kind: "http-route".into(), value: full, line: line_of(text, m.get(0).unwrap().start()), produces: true, method: method.map(String::from), ..Default::default() });
         }
@@ -104,7 +104,7 @@ impl CouplingAdapter for AnnotationRoute {
                 continue;
             }
             let last = m[1].rsplit('.').next().unwrap_or(&m[1]);
-            let method = route_annotation_method(last);
+            let method = route_annotation_method_owned(last);
             out.push(KeyHit { kind: "http-route".into(), value: path, line: line_of(text, m.get(0).unwrap().start()), produces: true, method: method.map(String::from), ..Default::default() });
         }
         // ⊕ composed class@Path + method@Path endpoints

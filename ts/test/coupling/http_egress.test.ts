@@ -8,7 +8,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan_file_keys, TERMINAL_KINDS } from "../../src/codebase/coupling/adapters/index.js";
+import { scan_file_keys, isTerminalKind } from "../helpers/coupling.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 import { validateMatcher, runMatcher, type KeyMatcher } from "../helpers/coupling.js";
@@ -81,6 +81,6 @@ describe("flywheel vocabulary — a learned egress matcher is valid, terminal, a
     expect(hits[0]?.produces).toBe(true);
   });
   test("egress is a TERMINAL kind (registry-sourced) → grounds from the producer alone, no complement", () => {
-    expect(TERMINAL_KINDS.has("egress")).toBe(true);
+    expect(isTerminalKind("egress")).toBe(true);
   });
 });

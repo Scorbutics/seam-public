@@ -8,7 +8,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scannableForKeys, kindOf } from "../../src/codebase/coupling/adapters/index.js";
+import { scannableForKeys, kindOf } from "../helpers/coupling.js";
 import { build_module_graph } from "../helpers/scan.js";
 import { _resetMatcherCacheMem } from "../../src/codebase/coupling/key_store.js";
 import { available } from "../../src/codebase/atoms.js";

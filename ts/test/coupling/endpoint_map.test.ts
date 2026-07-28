@@ -6,7 +6,7 @@ import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { scan } from "../../src/codebase/coupling/adapters/endpoint_map.js";
+import { adapterKeys } from "../helpers/coupling.js";
 import { grow_to_terminals } from "../../src/codebase/grow/orchestrate.js";
 import { available } from "../../src/codebase/atoms.js";
 
@@ -20,7 +20,7 @@ describe("endpoint_map adapter — config-driven routes as consume keys", () => 
   };
   const routerCfg = { path: '/home', component: X };   // a UI router config — NOT an HTTP route (no method)
 } };`;
-  const keys = scan("web/bookingService.js", src);
+  const keys = adapterKeys("endpoint-map", "web/bookingService.js", src);
   test("resolves baseUrl + suffix into route consume keys (a {id} template doesn't truncate)", () => {
     const vals = keys.map((k) => k.value);
     expect(vals).toContain("/acme/rest/member/booking/v1");        // createBooking (bare base)
@@ -36,12 +36,12 @@ describe("endpoint_map adapter — config-driven routes as consume keys", () => 
     // so the whole client failed to ground. The enclosing-{} check accepts it; a multi-line router config (no
     // method/verb anywhere in the entry) is still rejected.
     const ml = `const baseUrl = '/acme/rest/member/booking/v1';\nconst eps = {\n  createBooking: {\n    endpoint: baseUrl,\n    method: 'post'\n  }\n};\nconst routes = {\n  home: {\n    path: '/home',\n    component: Home\n  }\n};\n`;
-    const vals = scan("web/bookingService.js", ml).map((k) => k.value);
+    const vals = adapterKeys("endpoint-map", "web/bookingService.js", ml).map((k) => k.value);
     expect(vals).toContain("/acme/rest/member/booking/v1");   // multi-line API descriptor grounds
     expect(vals).not.toContain("/home");                    // multi-line router config still rejected
   });
   test("only client (JS/TS/Vue) files are scanned", () => {
-    expect(scan("BookingsService.java", src)).toEqual([]);
+    expect(adapterKeys("endpoint-map", "BookingsService.java", src)).toEqual([]);
   });
 });
 

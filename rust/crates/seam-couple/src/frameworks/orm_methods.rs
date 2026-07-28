@@ -34,9 +34,28 @@ const ORM_METHODS: &[(&str, bool)] = &[
 static READ: Lazy<HashSet<&'static str>> = Lazy::new(|| ORM_METHODS.iter().filter(|(_, w)| !w).map(|(m, _)| *m).collect());
 static WRITE: Lazy<HashSet<&'static str>> = Lazy::new(|| ORM_METHODS.iter().filter(|(_, w)| *w).map(|(m, _)| *m).collect());
 
+// COMMUNITY PLUGINS — an ORM manifest registers its own read/write verbs at runtime (see route_annotations
+// for why the extras sit beside the built-in table rather than in it).
+static EXTRA: Lazy<std::sync::RwLock<Vec<(String, bool)>>> = Lazy::new(|| std::sync::RwLock::new(Vec::new()));
+
+/// Register an ORM method and whether it WRITES (idempotent).
+pub fn register_orm_method(method: &str, write: bool) {
+    if method.is_empty() {
+        return;
+    }
+    let mut e = EXTRA.write().unwrap();
+    if !e.iter().any(|(m, _)| m == method) {
+        e.push((method.to_string(), write));
+    }
+}
+
+pub fn reset_orm_methods() {
+    EXTRA.write().unwrap().clear();
+}
+
 pub fn is_orm_read(method: &str) -> bool {
-    READ.contains(method)
+    READ.contains(method) || EXTRA.read().unwrap().iter().any(|(m, w)| m == method && !w)
 }
 pub fn is_orm_write(method: &str) -> bool {
-    WRITE.contains(method)
+    WRITE.contains(method) || EXTRA.read().unwrap().iter().any(|(m, w)| m == method && *w)
 }

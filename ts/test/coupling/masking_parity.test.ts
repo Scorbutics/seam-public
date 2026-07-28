@@ -4,7 +4,7 @@
 // spread of representative + fuzzed inputs (strings, escapes, line/block comments, comment-shaped text
 // inside strings, unterminated forms, newlines for line-offset preservation).
 import { describe, expect, test } from "bun:test";
-import { maskComments, stringLiteralsOnly, makeMaskCtx } from "../../src/codebase/coupling/adapters/util.js";
+import { maskComments, stringLiteralsOnly } from "../helpers/coupling.js";
 
 // --- reference oracles: the pre-rewrite split("") versions, verbatim ---
 function maskCommentsOld(text: string): string {
@@ -101,17 +101,10 @@ describe("maskComments / stringLiteralsOnly — rewrite matches the old split() 
 // makeMaskCtx — the per-file mask cache shared across every adapter (and the param pass) in one scan, so a
 // multi-MB file is masked ONCE not 4×. Contract: .comments / .strings equal the standalone maskers; lazily
 // memoized (repeated access returns the same cached string).
-describe("makeMaskCtx (shared per-file mask cache)", () => {
-  const src = 'var q = "SELECT id FROM users"; // a note\n/* block */ url.getParameter(TOKEN);';
-  test(".comments and .strings match the standalone maskers", () => {
-    const m = makeMaskCtx(src);
-    expect(m.comments).toBe(maskComments(src));
-    expect(m.strings).toBe(stringLiteralsOnly(src));
-  });
-  test("repeated access is memoized (same cached value)", () => {
-    const m = makeMaskCtx(src);
-    const a = m.comments, b = m.comments;
-    expect(a).toBe(b);
-    expect(m.strings).toBe(m.strings);
-  });
-});
+// The `makeMaskCtx` block retired with the TypeScript adapters. It asserted that a shared per-file mask cache
+// returns what the standalone maskers do, and that repeated access is memoized — a cache that existed because
+// four adapters each re-masked the same file. In the core there is ONE `MaskCtx`, built once per file by the
+// floor scan and handed to every adapter, so there is no second path for it to disagree with and no separate
+// object whose identity a test could observe across the napi boundary. What remains asserted above is the part
+// that can still be wrong: what the maskers PRODUCE.
+

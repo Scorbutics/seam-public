@@ -3,7 +3,7 @@
 // having warmed a repo. It is derived STRUCTURALLY from the registry (ARCHETYPES ∩ ADAPTERS), so adding a
 // detection adapter for a learned archetype flips it to built-in with no list to keep in sync.
 import { describe, expect, test } from "bun:test";
-import { couplingCapabilities, kindOf } from "../../src/codebase/coupling/adapters/index.js";
+import { couplingCapabilities, kindOf } from "../helpers/coupling.js";
 
 describe("couplingCapabilities — tier is derived from whether a detection adapter owns the kind", () => {
   const caps = couplingCapabilities();
