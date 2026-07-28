@@ -1,11 +1,25 @@
-// Unit tests for the consumers-of SET projection (grow/project_set.ts). Pure over a hand-built
-// ResolvedGraph — no tree-sitter / fixture scan — so the projection + noStructure logic is pinned
-// deterministically and fast.
+// Unit tests for the consumers-of SET projection. Pure over a hand-built ResolvedGraph — no tree-sitter /
+// fixture scan — so the projection + noStructure logic is pinned deterministically and fast.
+//
+// POINTED AT THE CORE. These used to exercise a TypeScript copy of the projection that production had
+// already stopped calling: cli/queries.ts and cli/route.ts both go through `addon.projectConsumerSet`, and
+// the comment there even says the TypeScript scan it fell back to is gone. So the copy was maintained, and
+// tested, while the engine that answers real questions was neither. `projectSetFromGraph` exposes the same
+// `seam_shapes::project_*_set` those production entries call, given a graph instead of building one.
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { makeGraph, type ResolvedGraph } from "../../src/codebase/graph.js";
-import { projectConsumerSet, projectDependencySet } from "../../src/codebase/grow/project_set.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
+import type { ConsumerSet } from "../../src/codebase/grow/project_set.js";
+// THE SAME normalisation production applies (cli/queries.ts) — the DTO always carries
+// `noStructure: false`, and rustSetToModel is what turns that back into "absent". Testing the raw
+// DTO would pin a shape no caller ever sees.
+import { rustSetToModel } from "../../src/cli/queries.js";
 import { build_footprint } from "../helpers/scan.js";
+
+const _core = (): any => { const a = loadAddon(); if (!a) throw new Error("the Seam core is not available"); return a; };
+const projectConsumerSet = (g: any): ConsumerSet => rustSetToModel(_core().projectSetFromGraph(JSON.stringify(g), "up"));
+const projectDependencySet = (g: any): ConsumerSet => rustSetToModel(_core().projectSetFromGraph(JSON.stringify(g), "down"));
 
 const repo = join("test", "fixtures", "class-repo");
 

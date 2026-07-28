@@ -27,7 +27,15 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../helpers/scan.js";
 import { projectContract } from "../helpers/shapes.js";
-import { projectConsumerSet } from "../../src/codebase/grow/project_set.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
+import type { ConsumerSet } from "../../src/codebase/grow/project_set.js";
+import { rustSetToModel } from "../../src/cli/queries.js";
+// The CORE's projection — the one production calls (cli/queries.ts, cli/route.ts), normalised the
+// same way production normalises it.
+const projectConsumerSet = (g: any): ConsumerSet =>
+  rustSetToModel(((): any => { const a = loadAddon(); if (!a) throw new Error("the Seam core is not available"); return a; })()
+    .projectSetFromGraph(JSON.stringify(g), "up"));
+
 import { renderContract, renderConsumerSet } from "../../src/codebase/render/shapes.js";
 import { countUnits } from "../../src/core/units.js";
 import { resetRepoImports } from "../../src/core/resolve/consumers.js";

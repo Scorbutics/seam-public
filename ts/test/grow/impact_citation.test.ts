@@ -14,7 +14,14 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { build_footprint } from "../helpers/scan.js";
-import { projectConsumerSet } from "../../src/codebase/grow/project_set.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
+import type { ConsumerSet } from "../../src/codebase/grow/project_set.js";
+// THE SAME normalisation production applies (cli/queries.ts) — the DTO always carries
+// `noStructure: false`, and rustSetToModel is what turns that back into "absent". Testing the raw
+// DTO would pin a shape no caller ever sees.
+import { rustSetToModel } from "../../src/cli/queries.js";
+// the CORE's projection — the one production calls; see test/grow/project_set.test.ts
+const projectConsumerSet = (g: any): ConsumerSet => rustSetToModel((loadAddon() as any).projectSetFromGraph(JSON.stringify(g), "up"));
 import { projectImpact } from "../helpers/shapes.js";
 import { findReach } from "../helpers/shapes.js";
 import { renderImpact, renderReach } from "../../src/codebase/render/shapes.js";

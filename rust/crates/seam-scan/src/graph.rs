@@ -15,13 +15,24 @@ pub struct HubMarker {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GraphNode {
     pub id: String,
+    // EVERY field but `id` defaults. A ResolvedGraph arriving from a caller that set only what it cared
+    // about — a test fixture, a hand-built projection, an older persisted model — must still parse. Without
+    // this, a node missing `coupling` (a field nothing outside the coupling rung ever sets) made the whole
+    // graph unparseable, which is why the projection was only reachable through the build-and-project path.
+    #[serde(default)]
     pub symbol: String,
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub file: String,
+    #[serde(default)]
     pub range: (usize, usize), // [start line, end line]
+    #[serde(default)]
     pub enclosing: String,     // owning class/module symbol, or ""
+    #[serde(default)]
     pub complexity: usize,
     /// A data-coupling node (boundary/complement) — false for structural call/import nodes.
+    #[serde(default)]
     pub coupling: bool,
     /// Grow expansion hint on a coupling complement ("backward" ⇒ downstream); None otherwise.
     pub direction: Option<String>,
@@ -39,8 +50,11 @@ pub struct GraphNode {
 pub struct GraphEdge {
     pub from: String,
     pub to: String,
+    #[serde(default)]
     pub kind: String,
+    #[serde(default)]
     pub provenance: String, // "RESOLVED_FULL" | "RESOLVED_PARTIAL" | …
+    #[serde(default)]
     pub line: Option<usize>,
     /// A write crossing's op-class (create/update/delete); None on structural edges.
     pub op: Option<String>,
@@ -51,8 +65,11 @@ pub struct GraphEdge {
 /// `candidates` shapes.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Candidate {
+    #[serde(default)]
     pub symbol: String,
+    #[serde(default)]
     pub file: Option<String>,
+    #[serde(default)]
     pub provenance: Option<String>,
 }
 
@@ -61,9 +78,14 @@ pub struct Candidate {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Blindspot {
     pub node: String,
+    // as with GraphNode: a caller that set only what it cared about must still parse
+    #[serde(default)]
     pub mechanism: String,
+    #[serde(default)]
     pub evidence: String,
+    #[serde(default)]
     pub candidates: Vec<Candidate>,
+    #[serde(default)]
     pub persists: bool,
 }
 
@@ -71,7 +93,9 @@ pub struct Blindspot {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Unresolved {
     pub node: String,
+    #[serde(default)]
     pub query: String,
+    #[serde(default)]
     pub reason: String,
 }
 

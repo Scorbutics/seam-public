@@ -1,21 +1,21 @@
-// PROJECTION — the "consumers-of" SET shape. Where grow/orchestrate.ts turns a footprint into an ordered
-// SPINE (a flow), this stops at the resolved in-edge SET and refuses (honestly) when there is no
-// structural answer. A spine is one projection of the ResolvedGraph; this is its sibling — the set of
-// who actually consumes the anchor, each member carrying its resolution tier (RESOLVED_FULL/PARTIAL/
-// SUGGESTED) so the answer is self-describing about how much is verified vs assumed.
+// THE CONSUMERS-OF / DEPENDENCIES-OF SET SHAPE — the wire TYPES only.
 //
-// The point is the SHORT-CIRCUIT: a consumers-of question is a set, not a path. Feeding it through grow →
-// cluster → spine over-structures a set into a flow that isn't there. This reads the resolved in-edges
-// build_consumers_graph already produced and presents them as what they are.
+// The PROJECTION itself is the core's (`seam_shapes::project_consumer_set` / `project_dependency_set`), and
+// has been for a while: cli/queries.ts and cli/route.ts both call `addon.projectConsumerSet`, and the note
+// there says the TypeScript scan they fell back to is gone. What stayed here was a SECOND implementation
+// that only the tests still ran — so the copy was maintained and pinned while the engine answering real
+// questions was neither. Deleted; the tests now go through `projectSetFromGraph`, which exposes the very
+// function those production entries call.
 //
-// `noStructure` is the dual of anchor_select's `noFlow`: when no caller resolves structurally, Seam says
-// so and routes the asker to grep/RAG — owning that boundary honestly is what earns the redirect. SUGGESTED
-// (ungrounded) members are leads, not verified consumers, so they do NOT count as structure.
-import type { ResolvedGraph, GraphNode, Provenance } from "../graph.js";
+// The interfaces stay, for the same reason graph.ts does: they are the TypeScript-side description of what
+// the core returns, not a second definition of how it is computed.
+//
+// A consumers-of question is a SET, not a path — feeding it through grow → cluster → spine over-structures
+// a set into a flow that is not there. `noStructure` is the honest refusal: when no caller resolves
+// structurally, Seam says so and routes the asker to grep/RAG. SUGGESTED members are leads, not verified
+// consumers, so they do NOT count as structure.
+import type { Provenance } from "../graph.js";
 
-// One resolved (or suggested) consumer of the anchor. `line` is 1-BASED (see `to1`) and is the grounded
-// USAGE/CALL site when the edge carries one — the line the engineer must actually edit — falling back to the
-// member's own declaration start only when no call line was grounded.
 export interface ConsumerMember {
   symbol: string;
   file: string;
@@ -54,98 +54,7 @@ export interface ConsumerSet {
   resolutionQuality: string;
 }
 
-// Tier order: the verified floor first, the ungrounded lead last. Drives member sorting + the noStructure
-// test (only RESOLVED_* counts as structure).
-const TIER_RANK: Record<string, number> = { RESOLVED_FULL: 0, RESOLVED_PARTIAL: 1, SUGGESTED: 2 };
-const isResolved = (p: Provenance): boolean => p === "RESOLVED_FULL" || p === "RESOLVED_PARTIAL";
-
-// THE LINE CONTRACT — 0-BASED inside the engine, 1-BASED in anything rendered as `file:line`. The helper now
-// lives in `core/lines.ts` because the SEAM-MODEL front (`from_resolved_graph`) converts through it too — the
-// grow renders (`--format agent` / `concern`) were the last shape still citing raw 0-based scan values.
-// RE-EXPORTED here because this is the import site every structural shape already knows (impact/reaches/
-// writers/coupling project the SAME 0-based scan values and convert HERE).
-// (impact was the one shape that didn't: it cited `getUserAvailability.ts:581` — the line ABOVE the real call
-// on 582 — while `consumers` on the same anchor said 582. One helper, one convention, no per-shape drift.)
+// THE LINE CONTRACT — 0-BASED inside the engine, 1-BASED in anything rendered as `file:line`. The helper
+// lives in `core/lines.ts`; re-exported here because this is the import site every structural shape already
+// knows (impact/reaches/writers/coupling project the SAME 0-based scan values and convert through it).
 export { to1 } from "../../core/lines.js";
-import { to1 } from "../../core/lines.js";
-// A node's declaration start, or `undefined` when the node is UNLOCATED (its `range` is the [0,0] sentinel
-// the up-scan places when no real site was grounded). Shared by every projection that cites a node — see
-// GraphNode.unlocated. A projected `line` of 0 means "no line": renderers must print no location at all.
-export const _start = (n: { range?: number[]; unlocated?: true } | null | undefined): number | undefined =>
-  (!n || n.unlocated) ? undefined : n.range?.[0];
-
-// Project the anchor's direct edges in ONE direction into a SET. `in` = consumers (edges TO the anchor →
-// the from-node is a member); `out` = dependencies (edges FROM the anchor → the to-node is a member).
-// Reads ONLY the anchor's direct edges + the anchor's blindspots — NOT the depth-2 ripple or coupling
-// crossings (those target other nodes and belong to a flow, not the direct set). The two public
-// projections below are this with the direction + shape label fixed — symmetric by construction.
-function projectEdgeSet(graph: ResolvedGraph, dir: "in" | "out", shape: ConsumerSet["shape"]): ConsumerSet {
-  const anchorId = graph.anchor.id;
-  const byId = new Map<string, GraphNode>(graph.nodes.map((n) => [n.id, n]));
-
-  const members: ConsumerMember[] = [];
-  for (const e of graph.edges) {
-    const onAnchor = dir === "in" ? e.to === anchorId : e.from === anchorId;
-    const otherId = dir === "in" ? e.from : e.to;
-    if (!onAnchor || otherId === anchorId) continue;   // direct edges in this direction; never a self-loop
-    const n = byId.get(otherId);
-    if (!n) continue;
-    members.push({
-      symbol: n.symbol,
-      file: n.file,
-      // LOCATION must belong to the MEMBER's own file. `edge.line` is the USAGE/CALL line recorded in the
-      // CONSUMER's file, so it is right for `in` (the member IS the consumer — its usage sits in its own file)
-      // but WRONG for `out` (the member is the DEP; pairing its file with the anchor's usage line printed
-      // impossible locations like `getCalendar.ts:260` for a 121-line file). For `out`, use the dep's own
-      // declaration range. See `to1` for the 0-based → 1-based contract.
-      // `unlocated` nodes carry the [0,0] SENTINEL, not a range — never fall back to it (that is how a bare
-      // barrel re-export got cited as `index.ts:1`). `to1(null)` → 0 = "no line", which the renderer omits.
-      line: to1(dir === "in" ? e.line ?? _start(n) : _start(n) ?? e.line),
-      kind: n.kind,
-      enclosing: n.enclosing ?? "",
-      edgeKind: e.kind,
-      provenance: e.provenance,
-    });
-  }
-  members.sort((a, b) =>
-    (TIER_RANK[a.provenance] ?? 9) - (TIER_RANK[b.provenance] ?? 9)
-    || a.file.localeCompare(b.file)
-    || a.line - b.line
-    || a.symbol.localeCompare(b.symbol));
-
-  const unresolved: UnresolvedCaller[] = graph.blindspots
-    .filter((b) => b.node === anchorId)
-    .map((b) => ({
-      mechanism: b.mechanism,
-      evidence: b.evidence,
-      candidates: [...new Set((b.candidates ?? []).map((c: any) => c?.symbol).filter(Boolean))] as string[],
-    }));
-
-  const set: ConsumerSet = {
-    shape,
-    anchor: { symbol: graph.anchor.symbol, file: graph.anchor.file },
-    members,
-    unresolved,
-    resolutionQuality: graph.resolutionQuality,
-  };
-
-  // noStructure: no member resolved structurally. SUGGESTED/blindspot-only means edges exist but can't be
-  // grounded here → route to grep (opaque); nothing at all → a leaf / entry / dead / dispatched (none).
-  if (!members.some((m) => isResolved(m.provenance))) {
-    set.noStructure = true;
-    set.reason = (members.length || unresolved.length) ? "opaque" : "none";
-  }
-  return set;
-}
-
-// CONSUMERS — the anchor's resolved IN-edges (who calls/uses it). See projectEdgeSet.
-export function projectConsumerSet(graph: ResolvedGraph): ConsumerSet {
-  return projectEdgeSet(graph, "in", "set");
-}
-
-// DEPENDENCIES — the anchor's resolved OUT-edges (what it calls/uses). The symmetric peer of consumers;
-// build with a DOWN footprint (`direction: "down"`). `noStructure` reason `none` = a leaf (no deps).
-export function projectDependencySet(graph: ResolvedGraph): ConsumerSet {
-  return projectEdgeSet(graph, "out", "deps");
-}
-

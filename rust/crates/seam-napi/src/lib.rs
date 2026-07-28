@@ -3161,3 +3161,78 @@ pub fn decompose_intent_prompt(
     let p = seam_decompose::build_intent_prompt(&g, &seams, &intent, verbose, no_pretier);
     serde_json::to_string(&p).map_err(|e| napi::Error::from_reason(format!("intent prompt serialise: {e}")))
 }
+
+/// projectSetFromGraph — project a GIVEN ResolvedGraph into a consumers ("up") or dependencies ("down") SET.
+///
+/// The build-and-project entries above own the whole pipeline, which is right for production but leaves the
+/// PROJECTION itself unreachable on its own — so a test that wants to pin projection behaviour on a
+/// hand-built graph had to use the TypeScript copy instead, and that copy went on being maintained after
+/// production stopped calling it. This exposes the same `seam_shapes::project_*_set` production runs.
+///
+/// It takes the SHELL's ResolvedGraph shape (a nested `anchor: {id, symbol, file, range}`), not the core's
+/// flat `anchor_*` fields — that is the JSON a TypeScript caller actually holds, and making the caller
+/// pre-flatten it would just move the same translation somewhere less visible.
+#[derive(serde::Deserialize)]
+struct WireAnchor {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    symbol: String,
+    #[serde(default)]
+    file: String,
+    #[serde(default)]
+    range: (usize, usize),
+}
+
+#[derive(serde::Deserialize)]
+struct WireResolvedGraph {
+    #[serde(default)]
+    anchor: WireAnchor,
+    #[serde(default)]
+    language: String,
+    #[serde(default)]
+    nodes: Vec<seam_scan::graph::GraphNode>,
+    #[serde(default)]
+    edges: Vec<seam_scan::graph::GraphEdge>,
+    #[serde(default)]
+    blindspots: Vec<seam_scan::graph::Blindspot>,
+    #[serde(default)]
+    unresolved: Vec<seam_scan::graph::Unresolved>,
+    #[serde(default)]
+    anchors: Vec<String>,
+}
+
+impl Default for WireAnchor {
+    fn default() -> Self {
+        WireAnchor { id: String::new(), symbol: String::new(), file: String::new(), range: (0, 0) }
+    }
+}
+
+#[napi]
+pub fn project_set_from_graph(graph_json: String, direction: String) -> napi::Result<ConsumerSetDto> {
+    let w: WireResolvedGraph = serde_json::from_str(&graph_json)
+        .map_err(|e| napi::Error::from_reason(format!("bad ResolvedGraph JSON: {e}")))?;
+    let g = seam_scan::graph::ResolvedGraph {
+        anchor_id: w.anchor.id,
+        anchor_symbol: w.anchor.symbol,
+        anchor_file: w.anchor.file,
+        anchor_range: w.anchor.range,
+        language: w.language,
+        nodes: w.nodes,
+        edges: w.edges,
+        blindspots: w.blindspots,
+        unresolved: w.unresolved,
+        anchors: w.anchors,
+        resolved_methods: Vec::new(),
+        frontier: Vec::new(),
+        history: Vec::new(),
+        cache_verdict: String::new(),
+        cache_key: String::new(),
+        cache_epoch: String::new(),
+    };
+    Ok(if direction == "down" {
+        seam_shapes::project_dependency_set(&g).into()
+    } else {
+        seam_shapes::project_consumer_set(&g).into()
+    })
+}

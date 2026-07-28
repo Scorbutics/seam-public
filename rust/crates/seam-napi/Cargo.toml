@@ -21,6 +21,7 @@ seam-couple = { path = "../seam-couple" }
 seam-llm = { path = "../seam-llm" }
 seam-embed = { path = "../seam-embed" }
 seam-fs = { path = "../seam-fs" }
+serde = { workspace = true }
 serde_json = { workspace = true }
 indexmap = { workspace = true }
 

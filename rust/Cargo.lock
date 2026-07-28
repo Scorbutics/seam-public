@@ -1094,6 +1094,7 @@ dependencies = [
  "seam-resolve",
  "seam-scan",
  "seam-shapes",
+ "serde",
  "serde_json",
 ]
 

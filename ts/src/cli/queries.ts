@@ -14,7 +14,7 @@ import { type Args } from "./args.js";
 // THE line contract (see grow/project_set.ts): every line the scan/coupling floor produces is 0-BASED; a line
 // that will be RENDERED as `file:line` is 1-BASED. The writers/coupling shapes below project coupling-floor
 // hits (`lineOf` = newline count → 0-based), so they convert HERE, exactly like every other shape.
-import { to1 } from "../codebase/grow/project_set.js";
+import { to1 } from "../core/lines.js";
 
 // ── STEP 4: ROUTING A SHAPE TO THE RUST CORE ───────────────────────────────────────────────────────────────
 // The guard is the GROW's guard (orchestrate.ts), minus its intent condition — a `--query` shape is structural
