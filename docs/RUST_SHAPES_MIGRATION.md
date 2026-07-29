@@ -898,3 +898,37 @@ So every test importing the name from the helper got the insufficient reset. `ce
 says it drops the in-process mirrors "so the 2nd call proves a genuine DISK reuse"; it was measuring a
 surviving in-process memo. Now re-exports the real function. All 1019 tests still pass with the stronger
 reset — the tests were weaker than they claimed, but their conclusions hold.
+
+### Porting the LLM-coupling grow: what is left, and the one contract it breaks
+
+After routing deterministic coupling, `dataCouplingLlm` is the ONLY path still orchestrated in TypeScript.
+The engine work is already done — the core turns its own flywheel (`seam-llm`), and `discoverLearn(repo,
+keyBudget, scopeFiles, model, claudeBin)` already ACCEPTS a scope. `grow/rust_discover.ts` is a 30-line
+wrapper whose remaining job is the settling diagnostic, which is a shell concern by design.
+
+What the shell still OWNS is the SCOPING PRE-GROW, in `grow_centers_scoped`:
+
+    1. grow each center structurally (bordered, coupling OFF) — a cheap floor pass
+    2. union the files those footprints touch  -> ctx.footprintFiles
+    3. discover with that union as `scopeFiles` (so a 4-file flow in a 10k-file repo does not
+       learn from — and pay the LLM over — every blind file)
+    4. grow for real, coupling ON, sharing ONE EngineCtx so the flywheel writes once
+
+Every component of 1–4 exists in the core: `grow_centers(repo, centers, data_coupling=false, …)` is step 1,
+the file union is a fold over its nodes, and `discover` is step 3. What is missing is the CHAINING — a
+`grow_centers_scoped` in `seam-grow::orchestrate` that runs pre-grow → discover → grow and returns the graph.
+Plus an in-memory scope memo, which TypeScript keys on `repo#centerKey#epochOf(repo)` so the flywheel's own
+settling runs (which keep bumping the coupling epoch) do not re-pay for the probe.
+
+**THE CONTRACT THAT BREAKS.** `test/grow/centers_merged_scope.test.ts` asserts `ctx.footprintFiles` is the
+union — an EngineCtx field, i.e. a TypeScript implementation detail. Once the scoping lives in the core that
+field is never set, and the test cannot be repaired by adjusting it; the thing it names stops existing.
+
+The PRODUCT behaviour behind it is real and worth keeping assertable: *discovery is scoped to the concern's
+union, not to each center's whole module*. So the core must REPORT the scope it used — the same treatment the
+per-center cache verdicts just got, and for the same reason (the shell owns I/O, and a caller capturing
+stderr cannot see a Rust `eprintln!`). Then the test asserts on the reported scope, which is a stronger claim
+than the current one: it pins what discovery was actually GIVEN rather than what a field happened to hold.
+
+Do that reporting FIRST, rewrite the test against it, and only then move the orchestration — otherwise the
+port lands with its one behavioural guard deleted rather than replaced.
