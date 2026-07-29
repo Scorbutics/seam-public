@@ -27,6 +27,7 @@
 // (I6 is not referenced anywhere in this file; I2 above is inferred from its one occurrence — treat it as
 // directional, not authoritative.)
 import { emit, dbg, timingOn, addStage } from "../../core/progress.js";
+import { warn as warnDegraded } from "../../core/progress.js";
 
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
@@ -501,7 +502,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
     // because the merged path collapses N results into ONE — so its
     // "[multi-anchor] node budget reached" line was unreachable on the default path.
     if (data && (data.nodes?.length ?? 0) >= _maxNodes) {
-      process.stderr.write(`[centers] node budget ${_maxNodes} reached — skipping remaining mechanism(s)\n`);
+      warnDegraded(`[centers] node budget ${_maxNodes} reached — skipping remaining mechanism(s)`);
       break;
     }
     // per-center closure — P5-cached by SYMBOL (the reused unit across concerns). Sequential so the shared ctx has a

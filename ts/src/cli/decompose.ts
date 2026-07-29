@@ -5,6 +5,7 @@
 // the `det` engine: --git/--file, --repo, --emit-seams, --format ascii|llm, --emit-hunks,
 // --dump-classified/--from-classified, --facts.
 import { writeFileSync, existsSync } from "node:fs";
+import { warn as warnDegraded } from "../core/progress.js";
 import { basename, resolve as resolvePath } from "node:path";
 import * as diff_source from "../diff/diff_source.js";
 import { parse, hunksToJson, hunksFromJson, type Hunk } from "../diff/parser.js";
@@ -394,7 +395,10 @@ async function runCodebase(a: Args): Promise<number> {
     // mark it — the concern re-anchor + render engage below. `--center file#symbol` PINS the mechanism (zero LLM).
     // CONCERN-first fires when the caller named CENTER(s) (--center = "these are the concern's mechanisms") OR gave
     // no symbol at all (detect them). An explicit --symbol (the legacy single-anchor path) opts OUT into a plain grow.
-    if (a.auto && a.intent && (a.center || !a.symbol)) {
+    // An INTENT is what DETECTS the centers. When the caller PINS them with --center there is nothing to
+    // detect, so requiring an intent as well was busywork — `--center X#y --format concern` errored with
+    // "--auto requires --intent and an anchor" for a command that named everything it needed.
+    if (a.auto && (a.center || (a.intent && !a.symbol))) {
       const _centers = a.center ? parseCenters(a.center) : null;
       // A SINGLE `--center File#method` (an explicit symbol) with NO `--concern` is a DIRECT line-trace anchor —
       // pin it like `--symbol` and grow from THAT method; do NOT force a concern STAR. The star re-centers to the
@@ -417,14 +421,19 @@ async function runCodebase(a: Args): Promise<number> {
         // Picking the mechanism from an intent PHRASE is a SEMANTIC mapping → ask the LLM over a lexical recall
         // net (offline → the deterministic lexical floor). The picked mechanism(s) ARE the anchors; the loop
         // below grows from them (coupling ON).
+        // Reached only when no --center was pinned, so an intent MUST be here — the branch above requires
+        // one of the two. Narrowed explicitly rather than asserted, so a moved invariant is a message, not
+        // a crash.
+        if (!a.intent) err("--intent is what finds the mechanism. Either give one, or pin it: --center <file>[#symbol]");
+        const intent = a.intent as string;
         const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
         const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
-        emit(`Picking the concern's mechanism for "${a.intent}"…`);
+        emit(`Picking the concern's mechanism for "${intent}"…`);
         const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
         const _tDet = Date.now();
-        const picked = await detectCentersRepoWide(a.repo, a.intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
+        const picked = await detectCentersRepoWide(a.repo, intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
         addStage("detection", Date.now() - _tDet);
-        if (!picked.length) err(`center-first: no mechanism found for "${a.intent}" — pass --center <file>#<symbol> (one or a comma-separated list)`);
+        if (!picked.length) err(`center-first: no mechanism found for "${intent}" — pass --center <file>#<symbol> (one or a comma-separated list)`);
         a.anchorFile = picked[0].file; a.symbol = picked[0].symbol;
         anchorSet = picked.map((c) => ({ name: c.symbol, file: c.file, kind: "function" }));
         centerPicked = true;
@@ -447,7 +456,15 @@ async function runCodebase(a: Args): Promise<number> {
       // AUTO-GROW — deterministically follow the resolved crossings to the terminals, then decompose. A BARE-FILE
       // --center (no #symbol) is a valid MODULE anchor — the concern path set `anchorSet` (kind "module") and the
       // grow below handles the empty symbol (build_module_graph) — so require an anchor, not specifically a symbol.
-      if (!a.intent || (!a.symbol && !anchorSet && !fileAnchor)) err("--auto requires --intent and an anchor: --center <file>[#symbol]");
+      // The message names what the CALLER can change. `--auto` is usually INFERRED (from --scan plus an intent
+    // or a map format), so telling someone "--auto requires ..." points at a flag they never typed.
+    if (!a.symbol && !anchorSet && !fileAnchor)
+      err("nothing to grow from. Give me one of:\n"
+        + "       --center <file>[#symbol]     pin the mechanism(s) yourself\n"
+        + "       --intent \"<question>\"        let Seam detect them\n"
+        + "       --symbol <name> --anchor-file <file>   a single known anchor");
+    if (!a.intent && !a.center)
+      err("--intent is what finds the mechanism. Either give one, or pin it: --center <file>[#symbol]");
       const orch = await import("../codebase/grow/index.js");
       // Grow is deterministic (the intent is used downstream by the tier pass, not to pick moves). The
       // former LLM move-picker (`--grow llm`) was removed — the deterministic frontier walk reproduces it.
@@ -550,12 +567,33 @@ async function runCodebase(a: Args): Promise<number> {
           // MULTI-CENTER concern: discover coupling ONCE over the union scope, grow the mechanisms in PARALLEL
           // (each a forked ctx sharing the warmed flywheel read-only), then merge sequentially under the budget.
           const centers = anchors.map((anc) => ({ file: anc.file, symbol: symOf(anc), name: anc.name }));
+          // DRIVE THE FLYWHEEL. This path used to compute a discovery scope, LOG it, and never discover:
+          // `grow_centers_scoped` set `ctx.footprintFiles`, nothing read it, and no `rustDiscover` call existed
+          // here — so `--data-coupling llm` on a concern silently degraded to the deterministic floor while
+          // printing "footprint-scoped LLM discovery: N files". Measured on a cold booking-app: the
+          // single-anchor path emitted `[rust-discover]` and wrote key-adapters.json; this one did neither.
+          //
+          // Mirrors the single-anchor branch above, P3 GATE included: a flow with no grounded boundary must
+          // not pay for a synth pass. The floor pre-grow is the core's, and it is the SAME call
+          // grow_centers_scoped makes for its scope — answer-cached, so computing it here is not a second grow.
+          if (dcForCenters && dcLlm) {
+            const coreC = (await import("../codebase/rust_core.js")).loadAddon();
+            const floor = coreC?.growCenters(a.repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })), false,
+              { maxSteps: growSteps, maxNodes, structuralGrow: true });
+            const fNodes = (floor?.nodes ?? []) as any[];
+            const scopeFiles = [...new Set(fNodes.map((n) => n.file).filter(Boolean) as string[])];
+            ctx.footprintFiles = new Set(scopeFiles);
+            const gateNodes = fNodes.map((n) => [String(n.file ?? ""), ...(n.range ? [String(n.range[0]), String(n.range[1])] : [])]);
+            const gated = !!coreC?.footprintTouchesBoundary(a.repo, gateNodes);
+            process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scopeFiles.length} files across the concern${gated ? "" : " — no grounded boundary in the footprint, flywheel skipped"}\n`);
+            if (gated) { const { rustDiscover } = await import("../codebase/grow/rust_discover.js"); await rustDiscover(a.repo, { model: a.model, claudeBin: a.claudeBin, scopeFiles }); }
+          }
           // center-first (centerPicked): the mechanisms are CONFIRMED → grow them STRUCTURALLY (intent-free →
           // the answer cache reuses across intent rewordings that pick the same centers). A plain multi-anchor
           // covering set (non-concern) keeps the env-driven default.
           const results = await orch.grow_centers_scoped(a.repo, centers, gOptsFor(ctx, { dataCoupling: dcForCenters, dataCouplingLlm: dcForCenters && dcLlm, structuralGrow: centerPicked || undefined }));
           for (let i = 0; i < results.length; i++) {
-            if (data && (data.nodes?.length ?? 0) >= maxNodes) { process.stderr.write(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)\n`); break; }
+            if (data && (data.nodes?.length ?? 0) >= maxNodes) { warnDegraded(`[multi-anchor] node budget ${maxNodes} reached — skipping remaining mechanism(s)`); break; }
             mergeOne(results[i], centers[i].name);
           }
         } else {
@@ -592,8 +630,8 @@ async function runCodebase(a: Args): Promise<number> {
             const byFile = new Map<string, number>();    // file-max fallback for a symbol embeddings didn't score
             for (const { def, score } of core.embedScoreDefs(a.repo, a.intent, files) as any[]) { const f = normpath(def.file); bySym.set(`${def.name} ${f}`, score); byFile.set(f, Math.max(byFile.get(f) ?? -1, score)); }
             if (bySym.size) relevance = (n) => bySym.get(`${n.symbol} ${normpath(n.file)}`) ?? byFile.get(normpath(n.file)) ?? 0;
-            else process.stderr.write(`[concern] no def embeddings for the region — centers fall back to raw fan-in (may pick a ubiquitous entity)\n`);
-          } catch { process.stderr.write(`[concern] embeddings unavailable — centers fall back to raw fan-in\n`); }
+            else warnDegraded(`[concern] no def embeddings for the region — centers fall back to raw fan-in (may pick a ubiquitous entity)`);
+          } catch { warnDegraded(`[concern] embeddings unavailable — centers fall back to raw fan-in`); }
         }
         const k = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
         // GROUNDED prior: pass the anchor id so the center pick is proximity-weighted toward the anchor's flow

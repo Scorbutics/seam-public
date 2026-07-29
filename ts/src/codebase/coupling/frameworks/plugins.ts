@@ -13,6 +13,7 @@
 // SECURITY: the manifest is DATA and loads from any root. Code adapters are a different matter — see the note
 // on `_loadCodeAdapters` below; they are no longer loadable at all, and say so loudly.
 import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { warn as warnDegraded } from "../../../core/progress.js";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import { loadAddon } from "../../rust_core.js";
@@ -54,7 +55,7 @@ function _loadManifest(path: string): void {
     if (clients.length) core.registerHttpClients(clients);
     for (const o of (j.ormMethods ?? []) as OrmMethod[])
       if (o && typeof o.method === "string" && (o.role === "read" || o.role === "write")) core.registerOrmMethod(o.method, o.role === "write");
-  } catch (e) { process.stderr.write(`[plugins] skipped invalid manifest ${path}: ${(e as Error).message}\n`); }
+  } catch (e) { warnDegraded(`[plugins] skipped invalid manifest ${path}: ${(e as Error).message}`); }
 }
 
 // CODE ADAPTERS ARE NO LONGER LOADABLE. A code plugin is a JavaScript module exporting a full `KeyKind`

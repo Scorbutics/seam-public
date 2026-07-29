@@ -33,10 +33,28 @@ export function dbg(message: string): void { if (verbose()) process.stderr.write
 // runs (timing is recorded); only the visible line is suppressed.
 let _quiet = false;
 export function quiet(): boolean { return _quiet; }
+// The stderr write captured BEFORE the quiet filter replaced it — `warn()` uses this so a degradation
+// notice cannot be swallowed by the filter that exists to hide progress chatter.
+let _rawErr: ((s: string) => void) | null = null;
+
+/// A DEGRADED OR TRUNCATED ANSWER — always shown, quiet filter or not.
+///
+/// The filter drops every `[tag] ` line so a plain-CLI reader gets only the map. That is right for progress
+/// chatter and wrong for "your answer is smaller than you asked for" or "this ran without the model": those
+/// are the difference between an answer and a partial answer, and a user who cannot see them cannot tell
+/// which one they got. Silent degradation is the exact failure this engine refuses everywhere else — it
+/// should not be reintroduced by a display filter.
+export function warn(msg: string): void {
+  const line = msg.endsWith("\n") ? msg : msg + "\n";
+  if (_rawErr) _rawErr(line);
+  else process.stderr.write(line);
+}
+
 export function installQuietFilter(): void {
   if (_quiet) return;
   _quiet = true;
   const orig = process.stderr.write.bind(process.stderr);
+  _rawErr = (s: string) => { (orig as any)(s); };
   const isDiag = (s: string): boolean => s.startsWith(PREFIX) || s.startsWith(TIMING_PREFIX) || /^\[[a-z][\w-]*\] /.test(s);
   (process.stderr.write as any) = (chunk: any, ...rest: any[]): boolean =>
     (typeof chunk === "string" && isDiag(chunk)) ? true : (orig as any)(chunk, ...rest);
