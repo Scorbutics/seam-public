@@ -198,7 +198,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // calls are reached too; TYPE/FILE refs (line 0), boundary/sink nodes (shown as sinks elsewhere), and nodes
   // already ON the crowned spine path drop out. Purely structural — the anchor's resolved calls, intent-free.
   const _mechOn = process.env.SEAM_MECHANISM !== "0" || process.env.SEAM_PIPELINE === "1";
-  const _mechDepth = Math.max(1, parseInt(process.env.SEAM_MECHANISM_DEPTH ?? "3", 10) || 3);
+  const _mechDepth = 3;
   const _PRODUCE_MECH = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert", "db-read", "service-read", "consume", "read"]);
   const pipeline: { id: string; line: number; depth: number; sink?: string; caller?: string }[] = [];
   if (_mechOn) {
@@ -752,7 +752,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // Those crossings are ALREADY rolled up in the shared-key-fanout Blindspot, so keep ONE occurrence per hub label
     // and fold the rest into a single pointer line. Gated on a label carried by ≥K region seams — real code almost
     // never repeats a label that many times across distinct files, so it's the hub fan (opt out: SEAM_REGION_HUB_COLLAPSE=0).
-    const _HUB_K = Math.max(3, parseInt(process.env.SEAM_REGION_HUB_K ?? "6", 10) || 6);
+    const _HUB_K = 6;
     const _hubCollapse = process.env.SEAM_REGION_HUB_COLLAPSE !== "0";
     const collapseHubs = (list: Seam[]): { kept: Seam[]; hubs: Map<string, number> } => {
       if (!_hubCollapse) return { kept: list, hubs: new Map() };
@@ -987,7 +987,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // names the class, so they were invisible — the dev saw a bare `BookingsBean` and none of its operations.
   // List the methods the region holds under each mechanism (structural: hunk.enclosing === the center's label),
   // capped + counted so a fat bean stays scannable. A leading `→` marks the intent-relevant ones (spine tier).
-  const _OPS_CAP = Math.max(4, parseInt(process.env.SEAM_CONCERN_OPS ?? "16", 10) || 16);
+  const _OPS_CAP = 16;
   const opsOf = (label: string): string[] => {
     if (!label) return [];
     const ops: { name: string; spine: boolean }[] = [];
@@ -1169,7 +1169,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // not just the one computeSpine crowns. `● mechanism` heads the block; each `⇒ [delegate chain] ──verb──▶
       // boundary` is one outcome. The delegate bean is on each chain (delegationChain), so an orchestrator reads
       // its full fan-out. Single-outcome mechanisms stay compact (the ⇒ folds onto the ● line).
-      const _culmCap = Math.max(3, parseInt(process.env.SEAM_CONCERN_CULM_STEPS ?? "6", 10) || 6);
+      const _culmCap = 6;
       const _renderChain = (chain: string[]): string => {   // qualify + cap the delegate chain (drop the leading mechanism — it's the ●)
         let ids = chain[0] === cid ? chain.slice(1) : chain;
         if (ids.length > _culmCap) ids = [...ids.slice(0, _culmCap - 2), `…(+${ids.length - _culmCap})`, ids[ids.length - 1]];
@@ -1213,7 +1213,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
             rows.push(chainNames.length ? `      ← ${ui} ${chainNames.join(" → ")} → ●` : `      ← ${ui} ●`);
           } else if (chainNames.length) rows.push(`      ← ${chainNames.join(" → ")} → ●`);
         }
-        const _entryCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_ENTRIES ?? "6", 10) || 6);
+        const _entryCap = 6;
         const shown = [...new Set(rows)].slice(0, _entryCap);
         spineLines.push(...shown);
         if (rows.length > shown.length) spineLines.push(`      ← (+${rows.length - shown.length} more way(s) in — raise SEAM_CONCERN_ENTRIES)`);

@@ -20,7 +20,7 @@ import { annotateForEmit } from "../codebase/grow/intent_rank.js";
 // anchors to re-run on. Uses the relevance the annotate pass already set: if the BEST seam is below the floor
 // (nothing in the grown flow matches), flag it and attach the runner-up anchors (their own scores separate
 // "wrong anchor" — an alt scores high — from "intent has no home here" — all low). No-op without relevance.
-const _INTENT_FLOOR = Number(process.env.SEAM_INTENT_FLOOR ?? 0.15);
+const _INTENT_FLOOR = 0.15;
 function applyIntentMatch(model: any, alternatives?: { name: string; file: string; score: number }[]): void {
   const rels = (model.clusters ?? []).flatMap((c: any) => (c.seams ?? []).map((s: any) => s.relevance)).filter((r: any) => typeof r === "number");
   if (!rels.length) return;   // embeddings unavailable → no honest signal to give
@@ -268,7 +268,7 @@ async function runCodebase(a: Args): Promise<number> {
           // attributes every method's boundary per-method). A class with <2 methods (a value/DTO class, a single
           // exported fn/component) has no fan → keep the single structural pin. Cap so a fat bean stays scannable.
           const owner = primary[0].name;
-          const _METHOD_FAN_CAP = Math.max(2, parseInt(process.env.SEAM_CLASS_FAN_CAP ?? "24", 10) || 24);
+          const _METHOD_FAN_CAP = 24;
           const methods = defs.filter((d: any) => d.kind === "method" && d.enclosing === owner).map((d: any) => d.name);
           const uniq = [...new Set(methods)];
           if (uniq.length >= 2) {

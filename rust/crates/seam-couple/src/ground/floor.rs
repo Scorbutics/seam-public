@@ -46,7 +46,7 @@ pub fn scannable_for_keys(file: &str) -> bool {
 }
 
 fn max_scan_bytes() -> usize {
-    std::env::var("SEAM_MAX_SCAN_BYTES").ok().and_then(|s| s.trim().parse::<i64>().ok()).map(|n| n.max(0) as usize).unwrap_or(0)
+    0
 }
 fn no_adapters() -> bool {
     std::env::var("SEAM_NO_ADAPTERS").as_deref() == Ok("1")
@@ -123,9 +123,6 @@ pub fn floor_contributions(repo: &str) -> Vec<(String, FloorContribution)> {
 /// JPA persistence-WRAPPER contributions — repo-wide (a `mgr.customSave(entity)` grounds because `mgr` resolves
 /// to a manager type deduced repo-wide). Port of `jpaWrapperContributions`.
 pub fn jpa_wrapper_contributions(repo: &str) -> Vec<(String, FloorContribution)> {
-    if std::env::var("SEAM_JPA_WRAPPER").as_deref() == Ok("0") {
-        return Vec::new();
-    }
     let idx = jpa_manager_index(repo);
     if idx.managers.is_empty() || idx.entities.is_empty() {
         return Vec::new();

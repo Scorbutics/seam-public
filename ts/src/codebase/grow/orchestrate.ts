@@ -137,7 +137,7 @@ const _UPCLIMB_MIN_DIST = 2;   // legacy hop-distance up-climb gate (fallback wh
 // frontier, while CLOSENESS still orders nodes of SIMILAR relevance. Raw intent-before-closeness would let a
 // hair-more-relevant FAR node thrash the budget (and undo the bound); banding only promotes a clearly-relevant
 // one. Env-tunable; the default (8) buckets typical MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent).
-const _INTENT_BANDS = (() => { const v = parseInt(process.env.SEAM_INTENT_BANDS ?? "", 10); return Number.isFinite(v) && v > 0 ? v : 8; })();
+const _INTENT_BANDS = 8;
 
 // FOOTPRINT EXCLUSION (a P4 prune, applied EARLY so an excluded subtree is never re-anchored — no wasted
 // budget): drop test files (default; opt back with includeTests) and any node under an --exclude folder
@@ -217,7 +217,7 @@ function _callerFilesFor(data: any, next: any, down: boolean): string[] | undefi
 const _envFlag = (v: string | undefined): boolean | undefined => (v === undefined || v === "") ? undefined : (v === "1" || v === "true");
 // Read once at module load (process.env doesn't change mid-process) — was `_envFlag(process.env.SEAM_X) ?? default`
 // re-evaluated inline at 3 call sites for SEAM_PROBE_INCLUSIVE and 2 for SEAM_PROJECT.
-const _PROBE_INCLUSIVE = _envFlag(process.env.SEAM_PROBE_INCLUSIVE) ?? false;   // opt back to the old fully-inclusive floor probe
+const _PROBE_INCLUSIVE = false;   // opt back to the old fully-inclusive floor probe
 
 // Say the intent-field state out loud — whether embeddings SHAPE this grow (keyed per-intent) or the grow
 // is intent-independent (structural / no embeddings; intent only crops at render, cache reuses across
@@ -456,8 +456,7 @@ export async function scoping_pre_grow(repo: string, anchorFile: string, symbol:
   // diminishing consumer files to that scope. So cap the probe far below the real grow's maxNodes: when the seed
   // already exceeds the cap the wave loop does 0 expansion, halving the operation. A narrower LLM-discovery scope
   // is the accepted trade (fewer residual learned keys; the floor crossings are unaffected).
-  const _pc = process.env.SEAM_PROBE_MAX_NODES;
-  const _probeCap = _pc === "0" ? 0 : (parseInt(_pc ?? "120", 10) || 120);
+  const _probeCap = 120;
   const _probeOpts = _probeCap ? { ...opts, maxNodes: Math.min(opts.maxNodes ?? 80, _probeCap) } : opts;
   const [floorData] = await grow_to_terminals(repo, anchorFile, symbol, { ..._probeOpts, dataCouplingLlm: false, ctx });
   ctx.stableFloor = false;

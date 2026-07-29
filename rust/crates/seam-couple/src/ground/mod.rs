@@ -58,11 +58,11 @@ static CACHE: Lazy<Mutex<std::collections::HashMap<String, Arc<FloorIndices>>>> 
 // the key. (TS carried the same knobs in `couplingEnvHash`; the Rust shard was keyed on source only.)
 fn floor_env_tag() -> String {
     let noadapt = std::env::var("SEAM_NO_ADAPTERS").unwrap_or_default();
-    let cap = std::env::var("SEAM_MAX_SCAN_BYTES").unwrap_or_default();
-    if noadapt.is_empty() && cap.is_empty() {
+    if noadapt.is_empty() {
         return String::new();
     }
-    format!("-na{noadapt}-mb{cap}")
+    // the trailing `-mb` is kept so the tag is byte-identical to the form that also carried a scan-byte cap
+    format!("-na{noadapt}-mb")
 }
 
 fn floor_shard(repo: &str, epoch: &str) -> String {

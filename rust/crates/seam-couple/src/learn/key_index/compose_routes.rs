@@ -119,9 +119,6 @@ fn has_sub_resource(text: &str) -> bool {
 /// key cache. Port of `composeRoutes` (llm-off branch; the demand-gate/locators are dead there — learn=false).
 pub fn compose_routes(repo: &str) -> GroundingIndex {
     let mut idx: GroundingIndex = GroundingIndex::new();
-    if std::env::var("SEAM_COMPOSE_ROUTES").as_deref() == Ok("0") {
-        return idx;
-    }
     let store = store_files(repo);
     if store.is_empty() {
         return idx; // !hasKeyCache → zero-cost

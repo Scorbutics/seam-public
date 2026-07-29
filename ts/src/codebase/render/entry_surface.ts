@@ -174,7 +174,7 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   // The cone can only ever GAIN members as the region grows, so a node that was the entry at a smaller
   // --max-nodes is still in it at a larger one, and the section NAMES it. Memoised per start, capped, purely
   // structural. BREADTH-first so each member carries its HOP DISTANCE from the interaction (a tiebreak below).
-  const _CONE_CAP = Math.max(8, parseInt(process.env.SEAM_ENTRY_CONE ?? "256", 10) || 256);
+  const _CONE_CAP = 256;
   const _coneCache = new Map<string, Map<string, number>>();
   const upstreamConeOf = (start: string): Map<string, number> => {
     const hit = _coneCache.get(start); if (hit) return hit;
@@ -311,7 +311,7 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   // A grow-from handle needs a real SYMBOL. A file/module node's label is the filename (`provisioning.ts`), so
   // `file#provisioning.ts` is not a valid anchor — render the interaction, but omit the broken deepen handle.
   const symLike = (l: unknown): l is string => typeof l === "string" && /^[A-Za-z_$][\w$]*$/.test(l);
-  const _VIA_CAP = Math.max(1, parseInt(process.env.SEAM_CONCERN_VIAS ?? "8", 10) || 8);
+  const _VIA_CAP = 8;
   const viasStr = (r: EntryRay): string => {
     const self = qual(hunkById.get(r.entry));
     // DROP the raw "the /X boundary" vias — the crossing is rendered as the flow EDGE, so repeating it is noise.
@@ -331,7 +331,7 @@ export function buildEntrySurface(model: any, seams: Seam[], opts: {
   // other capped section in this render ranks (render-time crop only — the grow stays intent-free). Then NEAREST
   // the mechanism: hop distance can only stay or shrink as the region grows, while the nodes a bigger --max-nodes
   // ADDS arrive at the far end, so it is a stable tiebreak rather than a churning one.
-  const _THROUGH_CAP = Math.max(1, parseInt(process.env.SEAM_ENTRY_CHAIN ?? "20", 10) || 20);
+  const _THROUGH_CAP = 20;
   const _wayIn = (id: string) => ((callIn.get(id)?.size ?? 0) === 1 ? 1 : 0);   // 0 = root/join, 1 = pass-through link
   const upstreamOf = (shown: EntryRay[]): { ids: string[]; rest: number } => {
     const cited = new Set(shown.map((r) => r.entry));       // already printed as a row — never repeat it here

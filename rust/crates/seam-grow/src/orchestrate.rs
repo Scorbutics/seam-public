@@ -709,7 +709,7 @@ fn reach_phrases(n: &GraphNode, edges: &[GraphEdge], is_reacher: impl Fn(&str) -
 // budget and undo the closeness bound, so only a CLEARLY-relevant node is promoted. 8 buckets covers typical
 // MiniLM cosine spreads (~0.1 generic .. ~0.5 on-intent). Mirrors TS `_INTENT_BANDS` / `band`.
 fn intent_bands() -> f32 {
-    std::env::var("SEAM_INTENT_BANDS").ok().and_then(|v| v.parse::<f32>().ok()).filter(|v| *v > 0.0).unwrap_or(8.0)
+    8.0f32
 }
 
 fn order_moves(mut moves: Vec<Move>, crossings: &HashSet<String>, type_ref_only: &HashSet<String>, dist: &IndexMap<String, usize>, is_hub: &impl Fn(&GraphNode) -> bool, iscore: &impl Fn(&GraphNode) -> f32) -> Vec<Move> {

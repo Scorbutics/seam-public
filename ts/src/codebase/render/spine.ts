@@ -220,8 +220,8 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // (payments state). The closure follows CALLS ONLY (a resolved `import` carrying a use-line is a call; TYPE/FILE
     // refs and the sideways store-fan are NOT) and is bounded (SEAM_SPINE_CLOSURE_DEPTH, default 5) so an
     // orchestrator's subtree can't flood back in. Purely STRUCTURAL (resolved edges) — intent-free, per CLAUDE.md.
-    const _closureMax = Math.max(1, parseInt(process.env.SEAM_SPINE_CLOSURE_DEPTH ?? "5", 10) || 5);
-    const _delegateMax = Math.max(1, parseInt(process.env.SEAM_SPINE_DELEGATE_HOPS ?? "3", 10) || 3);   // pure-delegate borrow: hops to follow through pass-throughs to the first writer
+    const _closureMax = 5;
+    const _delegateMax = 3;   // pure-delegate borrow: hops to follow through pass-throughs to the first writer
     const callDepth = new Map<string, number>([[anchorNode, 0]]);
     for (const q2 = [anchorNode]; q2.length; ) {
       const c = q2.shift()!; const d = callDepth.get(c)!;
@@ -311,7 +311,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // write is TRUSTED when it's the anchor's OWN write, a DI PROVIDER write, or written by a FOCUSED writer
     // (< K stores) — the legit delegate borrow (a handler → interface-impl/call → an impl that persists ONE entity)
     // survives; only the many-table bleed is demoted (it stays in "Also writes"). (Tune: SEAM_SPINE_OVERATTRIB_K.)
-    const _overAttribK = Math.max(2, parseInt(process.env.SEAM_SPINE_OVERATTRIB_K ?? "3", 10) || 3);
+    const _overAttribK = 3;
     const writesOf = new Map<string, Set<string>>();   // writer node → the distinct store tables it is credited writing
     for (const e of edges) if (_PRODUCE.has(e.kind)) {   // PRODUCE targets ARE store boundaries — count distinct table labels
       const tbl = label.get(String(e.to)) ?? String(e.to);

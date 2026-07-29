@@ -67,10 +67,6 @@ fn gate_touches_boundary(repo: &str, file: &str, text: &str, lo: usize, hi: usiz
     if crate::carrier::engine::carrier_provider_for(file).is_some() {
         return true; // carrier (Ruby) coupling isn't span-local
     }
-    // SEAM_ANCHOR_KEYS=1 restores the always-probe bypass (a test asserting a signal-less implicit key sets it).
-    if env_is("SEAM_ANCHOR_KEYS", "1") {
-        return true;
-    }
     let in_span = |line: usize| line >= lo && line <= hi;
 
     let mask = MaskCtx::new(text);
@@ -78,7 +74,7 @@ fn gate_touches_boundary(repo: &str, file: &str, text: &str, lo: usize, hi: usiz
         return true; // 1 — floor keys
     }
     // 1b — a JPA persistence-wrapper write in the span (`mgr.customSave(entity)`)
-    if !env_is("SEAM_JPA_WRAPPER", "0") && file.ends_with(".java") {
+    if file.ends_with(".java") {
         let jm = jpa_manager_index(repo);
         if !jm.managers.is_empty() && !jm.entities.is_empty() && jpa_wrapper_keys(text, &jm).iter().any(|h| in_span(h.line)) {
             return true;

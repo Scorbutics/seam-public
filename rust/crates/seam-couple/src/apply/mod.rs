@@ -49,7 +49,7 @@ fn complement_budget() -> i64 {
     if per_node > 0 {
         return per_node;
     }
-    std::env::var("SEAM_COMPLEMENT_BUDGET").ok().and_then(|s| s.trim().parse::<i64>().ok()).unwrap_or(250)
+    250
 }
 
 // The inferred http-clients for a repo (FULL scope — no footprint), memoized: a pure function of repo source,

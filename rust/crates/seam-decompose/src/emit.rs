@@ -242,12 +242,7 @@ pub struct EmitOpts {
 }
 
 fn default_frontier_cap() -> usize {
-    std::env::var("SEAM_FRONTIER_CAP")
-        .ok()
-        .and_then(|v| v.trim().parse::<usize>().ok())
-        .filter(|n| *n > 0)
-        .unwrap_or(20)
-        .max(1)
+    20
 }
 
 /// Hop-distance BFS over the undirected resolved graph.

@@ -115,7 +115,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // prompt without deadlocking. Moving `run_pass` across would mean making the whole decompose pipeline
   // re-runnable across bus rounds — a design decision, not a port. So: facts there, model call here.
   const _p = JSON.parse(core().decomposeIntentPrompt(
-    toWire(g), seamsToCore(ranked), intent, Boolean(process.env.SEAM_VERBOSE_TIER), Boolean(process.env.SEAM_NO_PRETIER)));
+    toWire(g), seamsToCore(ranked), intent, Boolean(process.env.SEAM_VERBOSE_TIER), false));
   // The facts come back STRUCTURED as well as rendered, and the verdict loop below uses those rather than
   // re-deriving them on this side — a second derivation is the drift this port exists to remove.
   const _facts = new Map<string, { writes: string[]; dir?: "forward" | "backward"; repComplexity: number }>(

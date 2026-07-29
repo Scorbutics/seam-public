@@ -50,15 +50,15 @@ export function resolveStructuralKnobs(opts: KnobOpts = {}, stableFloor = false,
     hubGate: (opts.hubGate ?? false) || hubCollapse,
     ubiquity: (opts.ubiquity ?? true) || hubCollapse,
     hubFan: Math.max(2, opts.hubFan ?? _int(process.env.SEAM_HUB_FAN, 12)),
-    hubUbiquity: Math.max(2, opts.hubUbiquity ?? _int(process.env.SEAM_HUB_UBIQUITY, 12)),
-    hubTypeFan: Math.max(2, opts.hubTypeFan ?? _int(process.env.SEAM_HUB_TYPE_FAN, 5)),
-    ubiquityFan: Math.max(2, opts.ubiquityFan ?? _int(process.env.SEAM_UBIQUITY_FAN, 12)),
+    hubUbiquity: Math.max(2, opts.hubUbiquity ?? 12),
+    hubTypeFan: Math.max(2, opts.hubTypeFan ?? 5),
+    ubiquityFan: Math.max(2, opts.ubiquityFan ?? 12),
     // 0 = off. A STRUCTURAL grow defaults K=2: with the intent field absent it is the SOLE container.
-    upHop: Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : _int(process.env.SEAM_UP_HOP, 0))),
+    upHop: Math.max(0, opts.upHop ?? (opts.structuralGrow ? 2 : 0)),
     // Unset → 1; a non-numeric value → 0 (off), matching the original `parseInt(env ?? "1", 10) || 0`.
-    complementUpHop: Math.max(0, parseInt(process.env.SEAM_COMPLEMENT_UP_HOP ?? "1", 10) || 0),
+    complementUpHop: 1,
     // Inert unless coupling is on (the sink set is built from db-table crossing edges) — I1.
-    couplingHubContain: process.env.SEAM_COUPLING_HUB_CONTAIN !== "0" && opts.dataCoupling !== false,
+    couplingHubContain: opts.dataCoupling !== false,
     excludeDirs: opts.excludeDirs ?? [],
     includeTests: !!opts.includeTests,
     // THE INTENT KNOBS. Resolved HERE like every other knob so the two engines cannot disagree about what one

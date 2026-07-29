@@ -279,8 +279,8 @@ fn split_seams(
     uses: &IndexMap<String, IndexSet<String>>,
     consumers: &[Node],
 ) -> Vec<Seam> {
-    let hub_frac = env_f64("SEAM_HUB_FRAC", 0.25);
-    let cooc_merge = env_f64("SEAM_COOC_MERGE", 2.0);
+    let hub_frac = 0.25;
+    let cooc_merge = 2.0;
 
     let mut deg: IndexMap<String, f64> = IndexMap::new();
     for u in uses.values() {

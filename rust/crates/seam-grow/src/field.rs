@@ -203,10 +203,10 @@ impl IntentField {
 /// The complement-fan margin (`SEAM_COUPLING_MARGIN`, default 0.25) and the marker fan threshold
 /// (`SEAM_COUPLING_FAN`, default 1 — a 1:1 crossing is a TERMINAL, never field-gated).
 pub fn coupling_margin() -> f32 {
-    std::env::var("SEAM_COUPLING_MARGIN").ok().and_then(|v| v.parse().ok()).filter(|v: &f32| *v != 0.0).unwrap_or(0.25)
+    0.25f32
 }
 pub fn coupling_fan() -> usize {
-    std::env::var("SEAM_COUPLING_FAN").ok().and_then(|v| v.parse().ok()).filter(|v: &usize| *v >= 1).unwrap_or(1).max(1)
+    1usize
 }
 
 /// DETERMINISTIC COUPLING BORDER — the intent gate the data-coupling fan bypasses. Port of

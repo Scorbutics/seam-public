@@ -22,10 +22,10 @@ fn reader_cap() -> usize {
     6
 }
 fn hub_fan() -> usize {
-    env_num("SEAM_COUPLING_HUB_FAN", 16) as usize
+    16usize
 }
 fn hub_reader_cap() -> usize {
-    env_num("SEAM_HUB_READER_CAP", 1) as usize
+    1usize
 }
 
 /// The tunables a caller OUTSIDE the core needs to agree with — `[name, value]`. The render decides which

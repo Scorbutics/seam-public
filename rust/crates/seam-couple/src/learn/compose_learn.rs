@@ -28,7 +28,7 @@ const POOL: usize = 3; // in-flight model calls; the demanded set is repo-sized,
 fn max_classes() -> usize {
     // The demand gate is the real bound; this is a safety net for a pathological repo, kept well ABOVE the
     // demanded set so it never truncates a genuinely consumed handler by arbitrary walk order.
-    std::env::var("SEAM_COMPOSE_CAP").ok().and_then(|v| v.parse().ok()).filter(|v| *v > 0).unwrap_or(250).max(60)
+    250
 }
 
 fn sha1_hex(s: &str) -> String {
@@ -342,7 +342,7 @@ pub struct ComposeOutcome {
 /// read from route consumers inside it); `None` = repo-wide. Port of the `learn` branch of `composeRoutes`.
 pub fn compose_learn(repo: &str, scope: Option<&HashSet<String>>, model: Option<&str>, claude_bin: Option<&str>) -> ComposeOutcome {
     let mut outcome = ComposeOutcome::default();
-    if std::env::var("SEAM_COMPOSE_ROUTES").as_deref() == Ok("0") || !seam_llm::available(claude_bin) {
+    if !seam_llm::available(claude_bin) {
         return outcome;
     }
     // DEMAND: the segments named by route consumers the floor already keyed, inside the scope. No consumer ⇒

@@ -29,7 +29,7 @@ pub struct DepOpts {
 }
 
 fn impl_cap() -> usize {
-    std::env::var("SEAM_IMPL_CAP").ok().and_then(|v| v.parse::<i64>().ok()).map(|c| c.max(0) as usize).unwrap_or(3)
+    3usize
 }
 
 struct DepScan {

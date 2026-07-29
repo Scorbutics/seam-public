@@ -531,7 +531,7 @@ impl CompiledMatcher {
 }
 
 fn prefilter_on() -> bool {
-    std::env::var("SEAM_MATCHER_PREFILTER").as_deref() != Ok("0")
+    true
 }
 
 // A matcher's constant look-back regex (ROOT / this-field guard) — compiled ONCE, not per call.

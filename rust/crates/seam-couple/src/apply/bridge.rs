@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 /// Materialise at most this many complement nodes per key (`COUPLING.readerCap`). 20 of 26 writers staying
 /// unlisted on a hot key is BY DESIGN — the truncation below is what keeps that honest.
 fn reader_cap() -> usize {
-    std::env::var("SEAM_READER_CAP").ok().and_then(|v| v.parse().ok()).unwrap_or(6)
+    6
 }
 
 /// Max DISTINCT candidate files key-scanned per run (`COUPLING.candidateScanBudget`, $SEAM_CAND_SCAN_BUDGET).
@@ -41,7 +41,7 @@ fn reader_cap() -> usize {
 /// — and consume it in grep order, which is TOTAL (see `grep_files`), so the stopping point is a pure function
 /// of the repo rather than of a thread race.
 fn candidate_scan_budget() -> i64 {
-    std::env::var("SEAM_CAND_SCAN_BUDGET").ok().and_then(|v| v.parse().ok()).unwrap_or(4000)
+    4000
 }
 
 /// One resolved crossing: the anchor and `file` share `kind value` with opposite roles, and NOTHING links them

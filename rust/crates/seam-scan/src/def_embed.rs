@@ -16,7 +16,7 @@ fn def_limit() -> usize {
     env_int("SEAM_DEF_LIMIT", 15000)
 }
 fn prefilter_m() -> usize {
-    env_int("SEAM_EMBED_PREFILTER", 800)
+    800
 }
 
 static CAMEL: Lazy<Regex> = Lazy::new(|| Regex::new(r"([a-z0-9])([A-Z])").unwrap());
