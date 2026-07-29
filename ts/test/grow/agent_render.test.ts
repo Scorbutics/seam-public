@@ -862,8 +862,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
   // MECHANISM (default-ON) — a direct-writer orchestrator's spine collapses to anchor→sink and buries the
   // mechanism; surface the anchor's downstream call fan, flow-ordered by call-site line, types excluded.
   test("mechanism: the anchor's sequential delegations, in call order, types dropped", () => {
-    const prev = process.env.SEAM_PIPELINE; process.env.SEAM_PIPELINE = "1";
-    try {
+    {
       const model = {
         mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
         clusters: [{ id: "g1", intent: "how is it processed", seams: [
@@ -887,7 +886,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       expect(pipe.indexOf("runPhase1")).toBeLessThan(pipe.indexOf("runPhase2"));   // flow order by call-site line…
       expect(pipe.indexOf("runPhase2")).toBeLessThan(pipe.indexOf("runPhase3"));   // …not edge-list order
       expect(pipe).toContain("called at orch.ts:140");   // the call site in the anchor
-    } finally { if (prev === undefined) delete process.env.SEAM_PIPELINE; else process.env.SEAM_PIPELINE = prev; }
+    }
   });
 
   // MECHANISM default-on + sink annotation + TRANSITIVE reach — the anchor writes a bookkeeping table (crowned

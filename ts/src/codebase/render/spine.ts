@@ -147,7 +147,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     // sink, not a through-node. Safe by construction for the DI case (keycloak createUser→UserEntity is reached by
     // writing INTO UserEntity, a code→store edge — kept; the store just doesn't fan further) and for cross-stack
     // (a route is a RELAY, not a _STORE kind, so route→consumer hops are untouched). (Opt out: SEAM_SPINE_STORE_TERMINAL=0.)
-    const _storeTerminal = process.env.SEAM_SPINE_STORE_TERMINAL !== "0";
+    const _storeTerminal = true;
     const storeSeamIds = new Set<string>();   // seams holding a data-store boundary hunk — TERMINAL in the spine
     if (_storeTerminal) for (const s of seams) if ((s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""))) storeSeamIds.add(s.id);
     const _trustGate = process.env.SEAM_SPINE_TRUST_GATE !== "0";

@@ -148,7 +148,7 @@ pub struct BlindCluster {
 /// text). Returns clusters sorted by member count DESC (stable — insertion order kept within a size). Shapeless
 /// files stay singletons, marked `shaped:false` so the caller drops them (the shape gate, default-on).
 pub fn cluster_blind_files(files: &[(String, String)]) -> Vec<BlindCluster> {
-    let gate = std::env::var("SEAM_COUPLING_SHAPE_GATE").as_deref() != Ok("0");
+    let gate = true;
     struct Entry {
         sig: String,
         richness: usize,

@@ -13,7 +13,7 @@ fn env_int(k: &str, d: usize) -> usize {
     std::env::var(k).ok().and_then(|v| v.parse::<usize>().ok()).filter(|&v| v > 0).unwrap_or(d)
 }
 fn def_limit() -> usize {
-    env_int("SEAM_DEF_LIMIT", 15000)
+    15000
 }
 fn prefilter_m() -> usize {
     800

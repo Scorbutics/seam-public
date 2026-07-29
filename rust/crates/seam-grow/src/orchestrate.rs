@@ -880,7 +880,7 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     if seam_fs::debug_on("wave") {
         eprintln!("[phase] after wave+fan_couple: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }
-    let border_det = std::env::var("SEAM_COUPLING_BORDER_DET").map(|v| v != "0").unwrap_or(true);
+    let border_det = true;
     if data_coupling && border_det && !opts.structural_grow {
         if let Some(intent) = opts.intent.as_deref().filter(|s| !s.is_empty()) {
             // Complements need a HIGHER bar than call-graph pivots: they are sibling consumers of a shared key,

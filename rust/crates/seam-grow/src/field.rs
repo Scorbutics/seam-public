@@ -19,7 +19,7 @@ use std::collections::{HashMap, HashSet};
 
 /// The def-enumeration cap, `SEAM_DEF_LIMIT` (TS `DEF_LIMIT`).
 fn def_limit() -> usize {
-    std::env::var("SEAM_DEF_LIMIT").ok().and_then(|v| v.parse().ok()).unwrap_or(15000)
+    15000
 }
 
 /// The tier-2 on-intent pivot floor, `SEAM_TIER_MARGIN` (harness-derived, Phase 2.4).

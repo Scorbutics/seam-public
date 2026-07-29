@@ -190,7 +190,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // real line (>0) so top-level file-refs (line 0) and pure type-refs drop out; order by line = execution order.
   const _CALL_KINDS = new Set(["call", "import", "invokes", "dispatch"]);
   const _TYPE_KINDS = new Set(["interface", "type", "enum", "type-alias"]);   // pure type-refs — not execution steps
-  // MECHANISM (default-ON; opt-out SEAM_MECHANISM=0; SEAM_PIPELINE=1 kept as a back-compat alias). The anchor's
+  // MECHANISM (always on; the SEAM_MECHANISM opt-out and its SEAM_PIPELINE back-compat alias). The anchor's
   // downstream CALL fan — the operations it drives — flow-ordered (depth, then call-site line = execution order),
   // each annotated with the grounded sink it reaches (if any). The SINK deepening surfaces the DATA outcomes (spine
   // + also-reaches); this surfaces the CALL operations that ARE the mechanism yet write NO db-table themselves: cal
@@ -198,7 +198,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // buries. TRANSITIVE (bounded depth) over call edges carrying a real use-line, so a CLASS anchor's method-body
   // calls are reached too; TYPE/FILE refs (line 0), boundary/sink nodes (shown as sinks elsewhere), and nodes
   // already ON the crowned spine path drop out. Purely structural — the anchor's resolved calls, intent-free.
-  const _mechOn = process.env.SEAM_MECHANISM !== "0" || process.env.SEAM_PIPELINE === "1";
+  const _mechOn = true;
   const _mechDepth = 3;
   const _PRODUCE_MECH = new Set(["db-write", "service-write", "produce", "write", "save", "persist", "insert", "db-read", "service-read", "consume", "read"]);
   const pipeline: { id: string; line: number; depth: number; sink?: string; caller?: string }[] = [];
