@@ -3,6 +3,7 @@
 // mode knowledge. The CLI subprocess backend is what lets the TS port be byte-verified against
 // Python via the host-bus contract (the same prompt both phases rebuild).
 import { spawn, spawnSync } from "node:child_process";
+import { debugValue } from "./progress.js";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -362,9 +363,17 @@ async function _run_backend_async(kind: string, binary: string, prompt: string, 
 // Env-only (the library reads no files): the COMPOSITION ROOT (CLI main / MCP server) applies the provisioned
 // `~/.seam/slm.json` to these env vars at startup via applySlmConfigToEnv(), so tests + library callers that
 // don't set them get the default (Ollama OFF) and never see a host's config.
+// The managed Ollama binary to auto-start, handed over by the composition root. Was SEAM_OLLAMA_BIN — an
+// env round-trip to pass a value between two modules in the SAME process, and never a user knob (the user
+// surface is slm.json / SEAM_OLLAMA_MODEL + SEAM_OLLAMA_URL, which still win).
+let _ollamaBin: string | undefined;
+export function setOllamaBin(bin: string | undefined): void { _ollamaBin = bin; }
+export function ollamaBin(): string | undefined { return _ollamaBin; }
+
 const _ollamaUrl = (): string => process.env.SEAM_OLLAMA_URL ?? "http://127.0.0.1:11434";
 const _ollamaModel = (): string => process.env.SEAM_OLLAMA_MODEL ?? "";   // empty ⇒ Ollama disabled
-const _ollamaTimeoutS = (): string => String(Math.max(2, Math.ceil(Number(process.env.SEAM_OLLAMA_TIMEOUT ?? 120000) / 1000)));
+// 120s, fixed. Was SEAM_OLLAMA_TIMEOUT, which nothing anywhere set.
+const _ollamaTimeoutS = (): string => "120";
 let _ollamaOk: boolean | null = null;
 export function _resetOllamaProbe(): void { _ollamaOk = null; }   // tests toggle the env between cases
 const _sleep = (ms: number): void => { try { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); } catch { /* SAB unavailable → skip */ } };
@@ -376,7 +385,7 @@ function _probeOllama(): boolean {   // server reachable AND the model is pulled
 // so a provisioned SLM "just works" after a reboot without the user re-running `ollama serve`. Best-effort:
 // spawn detached, wait ~6s for the PORT (not the model load), degrade to claude if it never comes up.
 function _ensureManagedServer(): void {
-  const bin = process.env.SEAM_OLLAMA_BIN;   // set from slm.json by the composition root; absent ⇒ reuse a server the user runs
+  const bin = _ollamaBin;   // handed over by the composition root (slm.json); absent => reuse a server the user runs
   if (!bin || !existsSync(bin)) return;
   try {
     const host = _ollamaUrl().replace(/^https?:\/\//, "");
@@ -447,13 +456,13 @@ function _emitTiming(t0: number, tag: string, model: string, promptLen: number):
 }
 
 // Log EVERY LLM pass at the moment it's called, with the data injected into its prompt. At --verbose: a line
-// per call (#seq, tag, model, prompt size). Set SEAM_LLM_DUMP=<dir> to also write each pass's FULL prompt to
+// per call (#seq, tag, model, prompt size). Set SEAM_DEBUG=llmdump=<dir> to also write each pass's FULL prompt to
 // `<dir>/NNN-<tag>.txt` — so you can read exactly what each pass was asked (debugging + granularity tuning).
 let _passSeq = 0;
 function _logPass(tag: string, model: string, prompt: string): void {
   const seq = ++_passSeq;
   _USAGE.bumpTag(tag);   // per-tag pass-invocation count (the §3 LLM-call metric), independent of backend metering
-  const dir = process.env.SEAM_LLM_DUMP;
+  const dir = debugValue("llmdump") || undefined;
   if (verbose() || dir) process.stderr.write(`[llm] #${seq} ${tag} (${model}) ← ${prompt.length} chars${dir ? ` → ${tag}` : ""}\n`);
   if (dir) {
     try { mkdirSync(dir, { recursive: true }); writeFileSync(join(dir, `${String(seq).padStart(3, "0")}-${tag}.txt`), `# pass #${seq}: ${tag}\n# model: ${model}\n# prompt: ${prompt.length} chars\n\n${prompt}`); }

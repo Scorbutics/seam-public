@@ -31,7 +31,7 @@ describe("cross-concern reuse — a center shared by two concerns is a cache HIT
   test("concern {mechB, shared} reuses `shared`'s closure grown for concern {mechA, shared}", async () => {
     if (!available()) return;
     process.env.SEAM_CENTERS_MERGED = "1";
-    process.env.SEAM_FP_DEBUG = "1";
+    process.env.SEAM_DEBUG = "fp";
     delete process.env.SEAM_GROW_STRUCTURAL;   // concern centers grow STRUCTURALLY (intent-free) by default here
     const orig = process.stderr.write.bind(process.stderr);
     let cap: string[] = [];
@@ -47,7 +47,7 @@ describe("cross-concern reuse — a center shared by two concerns is a cache HIT
     } finally {
       (process.stderr as any).write = orig;
       delete process.env.SEAM_CENTERS_MERGED;
-      delete process.env.SEAM_FP_DEBUG;
+      delete process.env.SEAM_DEBUG;
     }
     const line = (frag: string, verdict: string) => cap.some((l) => l.startsWith("[grow]") && l.includes(frag) && l.includes(verdict));
     expect(line("shared.ts", "HIT (skip wave)")).toBe(true);   // the shared center is REUSED, not re-grown

@@ -8,7 +8,7 @@ export interface Args {
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
   // codebase mode:
-  scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number;
+  scan: boolean; graph?: string; anchorFile?: string; symbol?: string; depth: number; centers?: number;
   emitGraph?: string; intent?: string; fromSeams?: string; promoteSpinePath?: boolean; lineage?: boolean; anchorRecall?: string; anchorSelect?: string; skeleton?: boolean;
   expandGraph?: string; expandFile?: string; expandSymbol?: string; expandLine?: number;
   growFrom?: string;   // --grow-from <file>#<symbol>: DEEPEN — re-anchor the wave grow at a frontier node (+ optional --intent redirect)
@@ -83,6 +83,9 @@ export function parseArgs(argv: string[]): Args {
       case "--anchor-file": a.anchorFile = next(); break;
       case "--symbol": a.symbol = next(); break;
       case "--depth": a.depth = parseInt(next() ?? "1", 10); break;
+    // how many MECHANISMS a concern grows around (was SEAM_CONCERN_CENTERS, an env var for something a
+    // caller may legitimately want to choose per run).
+    case "--centers": a.centers = Math.max(1, parseInt(next() ?? "4", 10) || 4); break;
       case "--emit-graph": a.emitGraph = next(); break;
       case "--intent": a.intent = next(); break;
       case "--from-seams": a.fromSeams = next(); break;   // render an already-emitted seams.json (e.g. --format llm-context)

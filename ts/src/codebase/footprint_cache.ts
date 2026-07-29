@@ -6,7 +6,7 @@
 // content fingerprint of the engine, the repo, and the learned key-adapter state), the SEAM_* env snapshot
 // those epochs are keyed with, and the P5 settled-grow answer cache the merged-centers path wraps itself in.
 import { statSync, readFileSync } from "node:fs";
-import { debugOn } from "../core/progress.js";
+import { debugOn, debugValue } from "../core/progress.js";
 import { fileURLToPath } from "node:url";
 import { join, relative, dirname } from "node:path";
 import { loadShard, saveShard, graphCacheEnabled } from "../core/resolve/index_cache.js";
@@ -150,7 +150,7 @@ export function couplingEpochOf(repo: string): string {
 // Per-run depsig cache counters — a structural contract the granular-invalidation test asserts (an unrelated edit
 // must cause 0 rebuilds; a dependency edit must cause >0). Always counted (negligible); optionally exit-flushed.
 const _fpstat = { hit: 0, miss: 0, new: 0, taint: 0, whole: 0, chit: 0, cmiss: 0, cnew: 0, ctaint: 0, cwhole: 0 };
-if (process.env.SEAM_FP_STAT) process.on("exit", () => { try { require("fs").appendFileSync(process.env.SEAM_FP_STAT!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
+if (debugValue("fpstat")) process.on("exit", () => { try { require("fs").appendFileSync(debugValue("fpstat")!, `[fpstat] fp hit=${_fpstat.hit} miss=${_fpstat.miss} new=${_fpstat.new} taint=${_fpstat.taint} whole=${_fpstat.whole} | coupling hit=${_fpstat.chit} miss=${_fpstat.cmiss} new=${_fpstat.cnew} taint=${_fpstat.ctaint} whole=${_fpstat.cwhole}\n`); } catch { /* ignore */ } });
 
 // The CURRENT content-hash of one source file — the per-footprint sig's read side. Memoised by (mtime,size) so a
 // warm lookup re-reads a file ONLY when it moved (mirrors CONTENT_MEMO's re-read trigger). A deleted/unreadable

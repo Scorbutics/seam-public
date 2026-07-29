@@ -18,8 +18,8 @@ function concern(centers = "1"): { out: string; graph: any } {
   const graphPath = join("/tmp", "booking-app-concern-" + process.pid + "-" + centers + ".json");
   const out = execFileSync("bun", ["src/cli/decompose.ts", "--repo", REPO, "--scan", "--auto",
     "--anchor-file", "ejb/BookingsBean.java", "--symbol", "BookingsBean", "--concern",
-    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "concern", "--emit-graph", graphPath],
-    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0", SEAM_CONCERN_CENTERS: centers }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    "--intent", "how are bookings managed", "--data-coupling", "floor", "--format", "concern", "--centers", centers, "--emit-graph", graphPath],
+    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "0" }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
   const graph = JSON.parse(require("node:fs").readFileSync(graphPath, "utf-8"));
   require("node:fs").rmSync(graphPath, { force: true });
   return { out, graph };
@@ -82,10 +82,10 @@ describe("booking-app concern grow reaches both route families' front-ends", () 
     expect(interactions).toContain("bookingsCalendar.js");       // manage calendar screen
   });
 
-  // MULTI-CENTER (SEAM_CONCERN_CENTERS>1): `detectCenters` finds a mechanism CLUSTER (structural fan-in,
+  // MULTI-CENTER (--centers >1): `detectCenters` finds a mechanism CLUSTER (structural fan-in,
   // DETERMINISTIC — no LLM), and the re-anchor grows the whole cluster through grow_centers_scoped (the
   // parallel + shared-union path). This is the deterministic end-to-end cover for the multi-center grow the
-  // single-center default (SEAM_CONCERN_CENTERS=1) can't reach. The cluster grow merges ON TOP of the anchor's
+  // single-center default (--centers 1) can't reach. The cluster grow merges ON TOP of the anchor's
   // region, so the cross-stack footprint must be a SUPERSET — never lose a UI family under the parallel path.
   test("a mechanism cluster (>1 center) grows via grow_centers_scoped, cross-stack footprint intact", () => {
     if (!available()) return;

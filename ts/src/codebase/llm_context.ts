@@ -896,10 +896,13 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
 // `BookingsBean` every interaction delegates through. Its consumers (each walked up to its entry point) are the
 // INTERACTIONS, ranked by intent tier. Pure projection of an already-grown model (no re-grow) — validates whether
 // the star FRAMING reads better than the flow map on a concern; the full plan re-anchors the grow on the center.
-// NOTE: unlike renderAgent, this view crops by 3 independent env-tunable caps (SEAM_CONCERN_CAP/_VIAS/_OPS)
+// NOTE: unlike renderAgent, this view crops by 3 independent caps (interactionCap/_VIAS/_OPS)
 // rather than a token budget — there is no `opts.tokenBudget` here (a prior version declared but never read
 // one; if real token-budget cropping is wanted for this view, it needs its own degrade loop, not a bare flag).
-export function renderConcern(model: any, opts: { intent?: string; centers?: { file: string; symbol: string }[] } = {}): string {
+export function renderConcern(model: any, opts: { intent?: string; centers?: { file: string; symbol: string }[];
+    // Render bounds — PARAMETERS, not environment. They were SEAM_CONCERN_CAP / SEAM_CONCERN_SPINE_CAP,
+    // which only this render read and only its tests set.
+    interactionCap?: number; spineCap?: number } = {}): string {
   if (!model || model.mode !== "codebase") return "(not a codebase seam model)";
   const cl = (model.clusters ?? [])[0];
   if (!cl) return "(empty footprint)";
@@ -957,10 +960,10 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     if (mechNodes.has(f) && isBoundaryNode(t)) outCross.push({ mech: f, verb: _CROSS_SOURCE.has(e.kind) ? "writes" : "reads", bid: t });
     else if (mechNodes.has(t) && isBoundaryNode(f)) outCross.push({ mech: t, verb: _CROSS_SINK.has(e.kind) ? "reads" : "writes", bid: f });
   }
-  const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "50", 10) || 50);   // a big concern stays scannable
+  const cap = Math.max(1, opts.interactionCap ?? 50);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
   // DIAGNOSTIC (SEAM_DEBUG=fp): the FULL interaction list before the cap + which are CUT. "Why is X missing":
-  // absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; in a `via` list =
+  // absent here = not enumerated (grow/coupling gap); present-but-CUT = raise interactionCap; in a `via` list =
   // it reaches the mechanism through that entry (now shown, not silently folded away).
   if (debugOn("fp")) {
     const w = (s: string) => process.stderr.write(s + "\n");
@@ -1020,7 +1023,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   // portal, the member portal, a login-setup, an XPlan sync); WHICH one matters is the agent's semantic call, so
   // the engine ENUMERATES them all deterministically (capped) rather than picking one. Top-N mechanism by fan-in
   // (`centerIds` is fan-sorted, and reflects `opts.centers`' order when the caller pinned a set).
-  const _spineCap = Math.max(1, parseInt(process.env.SEAM_CONCERN_SPINE_CAP ?? "5", 10) || 5);
+  const _spineCap = Math.max(1, opts.spineCap ?? 5);
   // CROSS-STACK FRONT-END of a backend entry node — the "screen" end of "screen → … → database". The per-mechanism
   // call-graph climb (entryChainOf) reaches the top BACKEND node (a REST method), but stops there — `callIn` is
   // call-graph only, so it never crosses the HTTP boundary to the UI that actually triggers the flow. This adds the
@@ -1225,7 +1228,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
     // section that's ALL "(+N more … raise the cap)" with no path above it would be a misleading empty promise.
     if (spineLines.length) {
       const _spineRest = centerIds.length - _spineCenters.length;
-      if (_spineRest > 0) spineLines.push(`  (+${_spineRest} more mechanism(s) not shown — raise SEAM_CONCERN_SPINE_CAP)`);
+      if (_spineRest > 0) spineLines.push(`  (+${_spineRest} more mechanism(s) not shown)`);
     }
   }
   if (spineLines.length) out.push("", "## Flows — every distinct way in to each mechanism (● = the mechanism; ← = a way in; the agent picks which to trace)", ...spineLines);

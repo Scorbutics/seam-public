@@ -61,15 +61,14 @@ describe("renderConcern — ## Flows (each mechanism's culmination + every way i
     } finally { if (prev === undefined) delete process.env.SEAM_SPINE_ENTRY; else process.env.SEAM_SPINE_ENTRY = prev; }
   });
 
-  test("SEAM_CONCERN_SPINE_CAP caps the shown mechanisms and rolls up the rest", () => {
-    const prev = process.env.SEAM_CONCERN_SPINE_CAP; process.env.SEAM_CONCERN_SPINE_CAP = "1";
-    try {
-      const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
+  test("spineCap caps the shown mechanisms and rolls up the rest", () => {
+    {
+      const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers, spineCap: 1 });
       const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
       expect(seg).toContain("BookingsBean.createBooking");
       expect(seg).not.toContain("BookingsBean.updateProfile ──writes");   // capped out
-      expect(seg).toContain("+1 more mechanism(s) not shown — raise SEAM_CONCERN_SPINE_CAP");
-    } finally { if (prev === undefined) delete process.env.SEAM_CONCERN_SPINE_CAP; else process.env.SEAM_CONCERN_SPINE_CAP = prev; }
+      expect(seg).toContain("+1 more mechanism(s) not shown");
+    }
   });
 
   test("a single-mechanism concern (mechCount 1) omits the Flows section — one --format agent away", () => {

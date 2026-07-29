@@ -110,16 +110,12 @@ describe("Rust core — SEAM_* env reaches the addon after a runtime flip", () =
 
 // The resolver is the single source of truth both engines read; if it drifts, they drift together rather than
 // apart, which is the whole point. These pin the precedence rules that were previously inline in the TS wave.
-describe("structural knobs — opts beat env beat default", () => {
-  test("an explicit opt wins over the env var", () => {
-    const saved = process.env.SEAM_HUB_FAN;
-    process.env.SEAM_HUB_FAN = "7";
-    try {
-      expect(resolveStructuralKnobs({}).hubFan).toBe(7);
-      expect(resolveStructuralKnobs({ hubFan: 20 }).hubFan).toBe(20);
-    } finally {
-      if (saved === undefined) delete process.env.SEAM_HUB_FAN; else process.env.SEAM_HUB_FAN = saved;
-    }
+describe("structural knobs — opts beat default", () => {
+  // WAS "opts beat env beat default". The env tier is gone: SEAM_HUB_FAN was set by nothing but this test,
+  // and `opts.hubFan` already carried the same value, so the env layer was a second way to say one thing.
+  test("an explicit opt wins over the default", () => {
+    expect(resolveStructuralKnobs({}).hubFan).toBe(12);
+    expect(resolveStructuralKnobs({ hubFan: 20 }).hubFan).toBe(20);
   });
 
   test("a structural grow defaults upHop to 2 — it is the sole container once the intent field is gone", () => {

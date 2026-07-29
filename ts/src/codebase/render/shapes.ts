@@ -259,7 +259,11 @@ export function renderRefactorFacts(model: any, sr?: SnippetReader): string {
 // IMPACT projection — the transitive blast radius: the affected symbols (hop-sorted), a file rollup, the
 // SURFACE (outermost callers — where the change ripples to), and the GAPS (opaque callers where the view
 // is incomplete). The refactoring safety net. See grow/impact.ts.
-export function renderImpact(model: any, sr?: SnippetReader): string {
+/// Render bounds for the impact shape. Defaults match the shipped render; `bounded: false` renders
+/// everything (the model always keeps everything — only this human/agent-facing render is bounded).
+export type ImpactCaps = { files?: number; symsPerFile?: number; surface?: number; bounded?: boolean };
+
+export function renderImpact(model: any, sr?: SnippetReader, caps: ImpactCaps = {}): string {
   if (!model || model.shape !== "impact") return "(not an impact model)";
   const sym = model.anchor?.symbol ?? "?";
   const out: string[] = [];
@@ -280,11 +284,12 @@ export function renderImpact(model: any, sr?: SnippetReader): string {
   // put together. The MODEL keeps everything (--emit-seams is unaffected); only this human/agent-facing render
   // is bounded, and it says exactly what it elided so the reader is never misled into thinking the set is small.
   // Nearest hops are kept — they're the sites a change actually has to touch. `SEAM_IMPACT_RENDER_CAP=0` = unbounded.
-  const capOf = (env: string, dflt: number) => { const v = parseInt(process.env[env] ?? "", 10); return Number.isFinite(v) ? v : dflt; };
-  const cap = capOf("SEAM_IMPACT_RENDER_CAP", 1);                      // 0 disables ALL the caps below
-  const FILES = cap ? capOf("SEAM_IMPACT_FILE_CAP", 60) : 0;
-  const PER_FILE = cap ? capOf("SEAM_IMPACT_SYMS_PER_FILE", 12) : 0;
-  const SURFACE = cap ? capOf("SEAM_IMPACT_SURFACE_CAP", 40) : 0;
+  // The caps are PARAMETERS, not environment. They were four SEAM_IMPACT_* vars that only this render read
+  // and only its test set — an env round-trip to pass an argument one stack frame.
+  const cap = caps.bounded === false ? 0 : 1;                          // false disables ALL the caps below
+  const FILES = cap ? (caps.files ?? 60) : 0;
+  const PER_FILE = cap ? (caps.symsPerFile ?? 12) : 0;
+  const SURFACE = cap ? (caps.surface ?? 40) : 0;
   const byHop = (a: any, b: any) => (a.hop ?? 0) - (b.hop ?? 0) || String(a.symbol).localeCompare(String(b.symbol));
 
   const files: any[] = model.files ?? [];

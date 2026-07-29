@@ -4,13 +4,14 @@
 // env the engine reads while NEVER overriding an explicit SEAM_OLLAMA_* (env wins — the file is a default).
 // SEAM_SLM_CONFIG points the path at a tmp file, so the test is hermetic regardless of a host's real config.
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
+import { ollamaBin } from "../../src/core/llm.js";
 import { mkdtempSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { readSlmConfig, writeSlmConfig, applySlmConfigToEnv, resetSlmConfig } from "../../src/core/slm_config.js";
 
 let DIR: string;
-const OLLAMA_ENV = ["SEAM_OLLAMA_MODEL", "SEAM_OLLAMA_URL", "SEAM_OLLAMA_BIN"] as const;
+const OLLAMA_ENV = ["SEAM_OLLAMA_MODEL", "SEAM_OLLAMA_URL"] as const;
 beforeEach(() => {
   DIR = mkdtempSync(join(tmpdir(), "slm-cfg-"));
   process.env.SEAM_SLM_CONFIG = join(DIR, "slm.json");
@@ -43,7 +44,7 @@ describe("slm config — provisioned local-SLM defaults", () => {
     applySlmConfigToEnv();
     expect(process.env.SEAM_OLLAMA_MODEL).toBe("qwen2.5:1.5b");
     expect(process.env.SEAM_OLLAMA_URL).toBe("http://127.0.0.1:11434");
-    expect(process.env.SEAM_OLLAMA_BIN).toBe("/x/ollama");
+    expect(ollamaBin()).toBe("/x/ollama");   // handed over in-process, not via SEAM_OLLAMA_BIN
   });
 
   test("an explicit env var WINS over the file (the file is only a default)", () => {

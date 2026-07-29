@@ -4,6 +4,7 @@
 // cheap-tier passes to it (and auto-starts the managed binary when the server isn't up). Env vars
 // (SEAM_OLLAMA_MODEL / SEAM_OLLAMA_URL) still WIN over this file — it's the zero-config default, not an override.
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { setOllamaBin } from "./llm.js";
 import { homedir } from "node:os";
 import { join, dirname } from "node:path";
 
@@ -45,5 +46,5 @@ export function applySlmConfigToEnv(): void {
   if (!cfg) return;
   if (process.env.SEAM_OLLAMA_MODEL === undefined) process.env.SEAM_OLLAMA_MODEL = cfg.model;
   if (process.env.SEAM_OLLAMA_URL === undefined) process.env.SEAM_OLLAMA_URL = cfg.url;
-  if (cfg.bin && process.env.SEAM_OLLAMA_BIN === undefined) process.env.SEAM_OLLAMA_BIN = cfg.bin;
+  if (cfg.bin) setOllamaBin(cfg.bin);
 }

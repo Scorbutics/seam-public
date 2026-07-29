@@ -438,7 +438,7 @@ async function runCodebase(a: Args): Promise<number> {
         const { detectCentersRepoWide } = await import("../codebase/grow/center_repo.js");
         const { centerJudgeLlm, centerDirJudgeLlm } = await import("../codebase/grow/center_judge.js");
         emit(`Picking the concern's mechanism for "${intent}"…`);
-        const kC = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+        const kC = a.centers ?? 4;
         const _tDet = Date.now();
         const picked = await detectCentersRepoWide(a.repo, intent, { k: kC, excludeDirs: a.excludeDirs, includeTests: a.includeTests, dirJudge: centerDirJudgeLlm(a.model, a.claudeBin), judge: centerJudgeLlm(a.model, a.claudeBin), debug: (l) => process.stderr.write(l + "\n") });
         addStage("detection", Date.now() - _tDet);
@@ -642,7 +642,7 @@ async function runCodebase(a: Args): Promise<number> {
             else warnDegraded(`[concern] no def embeddings for the region — centers fall back to raw fan-in (may pick a ubiquitous entity)`);
           } catch { warnDegraded(`[concern] embeddings unavailable — centers fall back to raw fan-in`); }
         }
-        const k = Math.max(1, parseInt(process.env.SEAM_CONCERN_CENTERS ?? "4", 10) || 4);
+        const k = a.centers ?? 4;
         // GROUNDED prior: pass the anchor id so the center pick is proximity-weighted toward the anchor's flow
         // (not a distant hub), and DON'T hard-exclude the anchor — a good anchor (createBooking) IS the mechanism.
         const centers = (explicit as any) ?? detectCenters(data, { anchorId: data.anchor?.id, relevance, debug: (l) => process.stderr.write(l + "\n") }, k);

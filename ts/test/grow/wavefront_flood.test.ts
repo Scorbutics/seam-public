@@ -35,13 +35,13 @@ describe("wavefront flood — coverage, the honest safety cap, and the soft inte
   });
   afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
+  // the tolerance rides in on OPTS, not the environment — `borderTol` is a first-class grow option and the
+  // env fallback that used to shadow it (SEAM_GROW_BORDER_TOL) was set by nothing but this test.
   const grow = async (env: { tol?: string }) => {
-    if (env.tol != null) process.env.SEAM_GROW_BORDER_TOL = env.tol; else delete process.env.SEAM_GROW_BORDER_TOL;
-    try {
-      const [data]: any = await grow_to_terminals(repo, "web/bookingUI.js", "cancelBooking",
-        { maxSteps: 40, maxNodes: 200, dataCoupling: true, intent: "cancel a booking", ctx: new EngineCtx(), ...noContainment } as any);
-      return data;
-    } finally { delete process.env.SEAM_GROW_BORDER_TOL; }
+    const [data]: any = await grow_to_terminals(repo, "web/bookingUI.js", "cancelBooking",
+      { maxSteps: 40, maxNodes: 200, dataCoupling: true, intent: "cancel a booking", ctx: new EngineCtx(),
+        ...(env.tol != null ? { borderTol: parseFloat(env.tol) } : {}), ...noContainment } as any);
+    return data;
   };
 
   test("the flood reaches the coupling-reached resource (coverage)", async () => {

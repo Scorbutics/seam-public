@@ -1,7 +1,7 @@
 // CONCERN FOLDED VIAS — many operations (createBooking/updateBooking/…) climb to the SAME entry point (an
 // orchestrator `book()` that calls them), and the interaction map keyed rays by entry keeping only ONE `via`,
 // so the operations folded into `book` lost their identity — the dev saw `book` but not `createBooking`
-// (Acme, confirmed by the SEAM_FP_DEBUG `folded createBooking → shown under entry book` trace). The map
+// (Acme, confirmed by the SEAM_DEBUG=fp `folded createBooking → shown under entry book` trace). The map
 // now ACCUMULATES the distinct vias per entry. Hermetic tmp Java repo; tree-sitter guarded.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { mkdirSync, writeFileSync, rmSync } from "node:fs";

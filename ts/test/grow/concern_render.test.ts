@@ -120,12 +120,11 @@ describe("renderConcern — center-first star (pure model)", () => {
   });
 
   test("a big concern caps the interaction list (with a +N more note)", () => {
-    const prev = process.env.SEAM_CONCERN_CAP; process.env.SEAM_CONCERN_CAP = "2";
-    try {
-      const out = renderConcern(makeConcernModel(), { intent: "how are bookings managed" });   // 4 interactions, cap 2
+    {
+      const out = renderConcern(makeConcernModel(), { intent: "how are bookings managed", interactionCap: 2 });   // 4 interactions, cap 2
       expect((out.match(/ {3}grow: /g) ?? []).length).toBe(2);   // per-line deepen handles (the recipe line is separate)
       expect(out).toContain("+2 more interaction(s)");
-    } finally { if (prev === undefined) delete process.env.SEAM_CONCERN_CAP; else process.env.SEAM_CONCERN_CAP = prev; }
+    }
   });
 });
 
