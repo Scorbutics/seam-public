@@ -16,11 +16,10 @@ Seam decomposes code into **seams** (units of one intent), each part labelled by
 (**core / link / environment / test / noise**) with its wiring, so you review/understand *by intent*
 instead of file-by-file.
 
-**Run it as a CLI, not via MCP.** Copilot is unreliable with MCP servers (request timeouts, dropped
-tool-call namespaces), so this skill drives the **`seam` command** directly with your shell tool. The CLI
-has no host request-deadline and no MCP round-trip — it's faster and reproducible. The engine's own LLM
-passes (used by `grow`) are served by your local `copilot`/`claude` binary automatically — no API key, no
-MCP sampling.
+**Run it as a CLI.** That is how Seam is driven: this skill invokes the **`seam` command** directly with
+your shell tool. There is no host request-deadline and no tool-call round-trip, so a run is faster and
+reproducible. The engine's own LLM passes (used by `grow`) are served by your local `copilot`/`claude`
+binary automatically — no API key needed.
 
 ## The command
 

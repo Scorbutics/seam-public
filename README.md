@@ -28,7 +28,7 @@ a relation genuinely needs a framework's API name to even *find*, it falls to th
 a `SUGGESTED` lead, never asserted.
 
 The engine is a **stateless TypeScript library** (`ts/`). Every surface — the CLI, the VS Code
-extension, the MCP server, a future IntelliJ plugin — is a thin client over **one versioned JSON
+extension, a future IntelliJ plugin — is a thin client over **one versioned JSON
 contract** (`--emit-seams`). See [`ARCHITECTURE.md`](ARCHITECTURE.md) for the full model and the
 reasoning.
 
@@ -63,7 +63,7 @@ view (spine · region · collapsed hubs · a ranked *decision-point frontier*, e
 `--grow-from` command to deepen it · unresolved gaps) — NOT a raw JSON dump: the useful thing for a human
 or an LLM at the terminal is the map that says WHERE to re-query or grep, not the full closure. The raw
 model is one flag away — `--format json` (stdout) or `--emit-seams <file>` (the machine contract the
-extension/MCP use). Two more agent additions: **`--grow-from <file>#<symbol>`** — deepen from a frontier
+extension use). Two more agent additions: **`--grow-from <file>#<symbol>`** — deepen from a frontier
 node (re-anchors the wave grow, warm on the `.seam` indices; `--intent` redirects the branch);
 **`--stream`** — NDJSON per settled wave on stdout, EPIPE-graceful for early stop. Two deterministic,
 zero-LLM containment mechanisms back them, **ON by default in wave mode** (validated recall-safe on
@@ -83,16 +83,16 @@ do A and B differ.* Each is a **projection over the same resolved graph**, deter
 with an **honest negative** when structure genuinely can't answer (then it tells you to use grep/RAG
 rather than fabricating a result):
 
-| Shape | Question | `--query` | MCP tool |
-|---|---|---|---|
-| **consumers** | who actually calls / uses X — resolved, so no grep false-positives (comments, strings, same-named symbols), and cross-language / cross-package where a project-scoped LSP is blind | `consumers` | `find_consumers` |
-| **dependencies** | what X depends on / calls / uses — the symmetric inverse of consumers (out-edges) | `dependencies` | `find_dependencies` |
-| **impact** | the **transitive** blast radius — everything affected if X changes (the refactoring safety net), with the surface it ripples to and the opaque gaps where the view is incomplete | `impact` | `impact_of` |
-| **refactor** | the FACTS bundle for *"how to refactor X"* — impact + dependencies + contract in one call (the *plan* over them stays a judgement for you/the model) | `refactor` | `refactor_facts` |
-| **reaches** | can A reach B? — a verified yes/no **+ a witness path**; or is X dead | `reaches` | `can_reach` |
-| **contract** | a module's boundary — used exports + their consumers, **dead exports**, outbound deps, fan-in/out | `contract` | `module_contract` |
-| **neighborhood** | the cohesive subsystem around X — core vs periphery by the parameter-free weak-community rule | `neighborhood` | `subsystem` |
-| **compare** | how A and B differ by what they depend on (shared / A-only / B-only) | `compare` | `compare_symbols` |
+| Shape | Question | `--query` |
+|---|---|---|
+| **consumers** | who actually calls / uses X — resolved, so no grep false-positives (comments, strings, same-named symbols), and cross-language / cross-package where a project-scoped LSP is blind | `consumers` |
+| **dependencies** | what X depends on / calls / uses — the symmetric inverse of consumers (out-edges) | `dependencies` |
+| **impact** | the **transitive** blast radius — everything affected if X changes (the refactoring safety net), with the surface it ripples to and the opaque gaps where the view is incomplete | `impact` |
+| **refactor** | the FACTS bundle for *"how to refactor X"* — impact + dependencies + contract in one call (the *plan* over them stays a judgement for you/the model) | `refactor` |
+| **reaches** | can A reach B? — a verified yes/no **+ a witness path**; or is X dead | `reaches` |
+| **contract** | a module's boundary — used exports + their consumers, **dead exports**, outbound deps, fan-in/out | `contract` |
+| **neighborhood** | the cohesive subsystem around X — core vs periphery by the parameter-free weak-community rule | `neighborhood` |
+| **compare** | how A and B differ by what they depend on (shared / A-only / B-only) | `compare` |
 
 The discriminator for *"is this a Seam question?"* is **not "is it a flow"** — it's **"does the
 answer's correctness need resolved edges?"** A lexical one-fact lookup is grep's job; a
@@ -106,7 +106,7 @@ verified set).
 
 ### Ask Seam anything — the router
 
-You don't have to pick the shape. **`--ask "<question>"`** (MCP: **`ask`**) routes a natural-language
+You don't have to pick the shape. **`--ask "<question>"`** routes a natural-language
 question to the right shape and runs it — or routes it **away** to grep (lexical) / RAG (semantic)
 when structure isn't the right tool. Same split as everywhere: choosing the shape is a **semantic
 judgement** (an LLM pass, built from a shape *registry* so it's never a hardcoded list); resolving the
@@ -119,7 +119,7 @@ bun ts/src/cli/decompose.ts --scan --repo . --ask "who calls stampSeamModel?"
 bun ts/src/cli/decompose.ts --scan --repo . --ask "can decompose reach build_footprint?"
 ```
 
-When you already know the shape, call `--query <shape>` (or the matching MCP tool) directly to skip
+When you already know the shape, call `--query <shape>` directly to skip
 the routing round-trip — those stay offline and instant.
 
 ## The bridge — review a change against the structure it perturbs
@@ -127,7 +127,7 @@ the routing round-trip — those stay offline and instant.
 A diff is a **Δ on the codebase graph.** Seam holds *both* — the change decomposition (diff mode) and
 the resolved structure (codebase mode) — so it can do the one thing a diff-only review tool *and* a
 codebase-only graph tool each can't: judge a change against the whole it touches. **`--review-impact`**
-(diff mode; MCP `decompose_diff impact:true`) annotates each seam with:
+(diff mode) annotates each seam with:
 
 - **external impact** — the change's transitive consumers in files **not in the PR** (what it ripples to);
 - **cross-stack coupling** — a data-flow boundary the change crosses whose other side **isn't in the PR**:
@@ -277,7 +277,7 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
   render uses to order and dim. The query↔passage design (what gets embedded) is in
   [`docs/INTENT_RELEVANCE.md`](docs/INTENT_RELEVANCE.md).
 - **Distribution** — a one-line [`install.sh`](install.sh) sets up the `seam` CLI + the Claude/Copilot
-  skills + the MCP server from source (`curl … | bash`); run the engine directly from a checkout (`bun`);
+  skills from source (`curl … | bash`); run the engine directly from a checkout (`bun`);
   or ship the **esbuilt bundle** (`bun run build` → `ts/dist/seam.cjs` + a grammar pack, run via bun/node
   with `SEAM_WASM_DIR`). [`docs/DISTRIBUTION.md`](docs/DISTRIBUTION.md) covers each path and the
   tree-sitter-grammar caveat.
@@ -286,26 +286,24 @@ The engine holds **no resident state** — there is **no daemon**; each invocati
 - **The LLM seam** — `det` runs fully offline. For `hybrid`/`llm`, the engine either spawns a
   subscription-backed CLI (`claude`/`copilot`, no API key) **or** hands its prompts back to a host
   that already has a model, via the host-bus contract (`--emit-prompts` → answer → `--inject-llm`).
-  That seam is what lets the `seam` Claude skill and the MCP server **borrow the caller's model**.
+  That seam is what lets the `seam` Claude skill **borrow the caller's model**.
 
 ## Install & run
 
-### Quick install — the Claude skill + MCP server (one line)
+### Quick install — the Claude skill (one line)
 
-To *use* Seam (not develop it), install the **Claude Code skill** and/or the **MCP server** straight
-from `curl` — it bootstraps `bun`, fetches the engine, and wires both up so Seam works from any project:
+To *use* Seam (not develop it), install the **Claude Code skill** straight from `curl` — it bootstraps
+`bun`, fetches the engine, and wires it up so Seam works from any project:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | bash
-#   …| bash -s -- --skill        # only the skills (Claude + Copilot) + the `seam` CLI
-#   …| bash -s -- --mcp          # only the MCP server (registers with `claude`; not Copilot)
-#   …| bash -s -- --copilot-mcp  # ALSO register the MCP with Copilot (off by default)
+#   …| bash -s -- --skill          # the skills (Claude + Copilot) + the `seam` CLI
+#   …| bash -s -- --branch <ref>   # install/track a specific branch or tag
 ```
 
 It also installs a **`seam` CLI** shim (`~/.local/bin/seam`) — the recommended way to drive Seam
-directly. The **Copilot** skill drives that CLI (not the MCP): Copilot is unreliable with MCP servers,
-so **Copilot MCP registration is off by default** (`--copilot-mcp` to opt in); the CLI has no host
-request-deadline or tool-call round-trip. Claude Code MCP registration is unaffected.
+directly. Both skills drive that CLI: it has no host request-deadline and no tool-call round-trip, so a
+run is faster and reproducible.
 
 Re-run it any time to update (it tracks `main`). It installs from **source** — so you keep full
 tree-sitter facts for all five languages, not the regex fallback a single compiled binary would force.
@@ -337,7 +335,7 @@ README-command audit + offline smoke over the sample diffs + the `.vsix` build);
 proves the whole thing installs and runs **from zero inside a vanilla Docker container** — the
 "works on a clean machine" check. See [`docs/RELEASE.md`](docs/RELEASE.md) for the release checklist.
 
-You can also build the engine into a **self-contained CJS bundle** (what the MCP server prefers over
+You can also build the engine into a **self-contained CJS bundle** (preferred over
 re-transpiling the source per call):
 
 ```bash
@@ -347,8 +345,8 @@ SEAM_WASM_DIR="$PWD/dist/wasm" bun dist/seam.cjs --file ../sample.patch --classi
 
 This uses esbuild (keeping web-tree-sitter external so it loads its own wasm) — **not**
 `bun build --compile`, which produces a binary that drops the core tree-sitter wasm and aborts on the
-first parse. The bundle still needs a `bun`/`node` runtime to execute; the MCP locator runs it with
-`SEAM_WASM_DIR` set automatically.
+first parse. The bundle still needs a `bun`/`node` runtime to execute, with `SEAM_WASM_DIR` pointed at
+the grammars.
 
 The **default (hybrid) uses the LLM for clustering**, so it needs a subscription-backed LLM CLI (no
 API key) — prefers the Claude Code `claude` CLI (auto-detected from PATH, `$CLAUDE_BIN`, or the
@@ -588,7 +586,7 @@ in-repo blast radius that a bare `--file <patch>` run can't supply.
 [`.claude/skills/seam/`](.claude/skills/seam/SKILL.md) bundles Seam as a Claude Code **skill** so you
 can decompose **inside a session** with no `claude` binary, no PATH, no API key — the engine's LLM
 passes are **served by the running session** via spawned subagents (the host-bus contract again, with
-a subagent standing in for the MCP server's sampling). It covers **both** modes:
+a subagent lending the session's model). It covers **both** modes:
 
 - **Diff review** — *"review by seam"*, *"decompose this diff"* → emit prompts → subagent per pass →
   inject → render.
@@ -601,7 +599,7 @@ when there's no model CLI on PATH; if `claude` *is* available, plain `decompose.
 also works.
 
 Install it into any project in one line (`curl … | bash -s -- --skill` — see
-[§Quick install](#quick-install--the-claude-skill--mcp-server-one-line)); the installer pins the
+[§Quick install](#quick-install--the-claude-skill-one-line)); the installer pins the
 checkout path so the skill resolves the engine from wherever Claude Code runs.
 
 ## Learned adapters — transparent, named, promotable (`seam-adapters`)
@@ -693,13 +691,13 @@ Seam is strong — and Seam's edge is **verifiable**, not probabilistic.
 **Where Seam is behind:** scale (no 100M-line real-time index), learned embeddings, and the non-code
 sources. The honest read is **same goal, opposite philosophy** — learned-embedding / always-on /
 invisible-plumbing vs deterministic-structural / on-demand / transparent-and-honest — so the two are
-arguably **complementary** (both speak MCP), not strictly competing.
+arguably **complementary**, not strictly competing.
 
 **The broader placement.** The whole index/RAG camp — Augment, **Sourcegraph** (Zoekt + SCIP) —
 **composes** with Seam rather than competing: a different layer (they *retrieve*, Seam *traces*), so
 concede scale and consume their index for anchor recall where it helps. The genuine head-to-head is
 the **agentic coding tool reconstructing a flow with grep + read** — Cursor, Copilot, Claude Code
-itself; Seam's play is to be the tool that agent **calls** (over MCP), doing the
+itself; Seam's play is to be the tool that agent **calls** — as a CLI, from a skill — doing the
 [cross-boundary trace](#cross-boundary-coupling--where-the-symbol-graph-goes-dark) its lexical grep
 can't see, deterministically, at a fraction of the model cost of four exploratory greps. AI code-review
 tools (CodeRabbit, Greptile, …) play an **adjacent** game — they *find bugs*; Seam *decomposes by

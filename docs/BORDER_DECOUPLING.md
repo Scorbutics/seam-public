@@ -129,8 +129,8 @@ parked frontier, coupling-node handling.
 - **Gate:** Acme warm concern **< a few seconds** (target ms once the map is warm), faithful to the
   grow; the "2-min warm" is gone.
 
-### Phase 6 — Wire into the CLI/MCP concern path, flip defaults
-- Route the concern/`--concern` path and the MCP `grow_intent` through `projectOrGrow`.
+### Phase 6 — Wire into the CLI concern path, flip defaults
+- Route the concern/`--concern` path through `projectOrGrow`.
 - Re-run the cal.com + Dubbo + Acme matrix. **Flip `SEAM_PROJECT` (and its friends) default-on only
   when** warm is ms-to-seconds AND `project == grow` on all three.
 

@@ -1,6 +1,6 @@
 # The Seam JSON contract (`--emit-seams`)
 
-This is the **stable boundary every client consumes** — the VS Code extension, the MCP server, and
+This is the **stable boundary every client consumes** — the VS Code extension, the skills, and
 (later) an IntelliJ plugin. The engine stays a stateless library/binary; clients are thin and talk
 to it only through this JSON. Treat the shape here as a product surface, not an internal detail.
 

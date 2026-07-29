@@ -1,6 +1,6 @@
 # Distributing the Seam engine
 
-The engine is a **stateless TypeScript library + CLI**. Clients (VS Code extension, MCP server, a
+The engine is a **stateless TypeScript library + CLI**. Clients (VS Code extension, the Claude/Copilot skills, a
 future IntelliJ plugin) are thin and reach it one of two ways. There is **no daemon** — the engine
 holds no resident state; each invocation is independent.
 
@@ -17,14 +17,14 @@ bun ts/src/cli/decompose.ts --git HEAD~1 --classifier det --emit-seams /tmp/seam
 
 `bun run build` (= `bun build.mjs`) esbuilds the engine into one **`ts/dist/seam.cjs`** plus a grammar
 pack at `ts/dist/wasm/`. It needs a `bun`/`node` runtime to execute, but no source checkout and no
-`bun install`. This is what the MCP server prefers over re-transpiling the source CLI per call.
+`bun install`. Preferred over re-transpiling the source CLI per call.
 
 ```sh
 cd ts && bun run build          # → ts/dist/seam.cjs  (+ dist/wasm/ grammar pack)
 SEAM_WASM_DIR="$PWD/dist/wasm" bun dist/seam.cjs --file change.patch --classifier det --emit-seams /tmp/seams.json
 ```
 
-`dist/` is gitignored (reproducible). Build it in CI and ship it alongside each client. The MCP
+`dist/` is gitignored (reproducible). Build it in CI and ship it alongside each client. A client
 locator runs it with `SEAM_WASM_DIR` set automatically.
 
 ### Why not `bun build --compile`?
@@ -43,7 +43,7 @@ or an IntelliJ plugin's PSI), grammar embedding is moot — the host supplies th
 
 For LLM passes (hybrid/llm engines) the engine normally spawns a `claude -p` / `copilot` subprocess
 ([`ts/src/core/llm.ts`](../ts/src/core/llm.ts)). When the *caller already has a model* (a Claude Code
-skill, or an MCP client that supports sampling), use the **host-bus** contract instead — the engine
+skill, or the VS Code extension lending the editor's model), use the **host-bus** contract instead — the engine
 emits the prompts it would send and applies nothing, the caller answers them, and the engine replays
 the answers:
 
@@ -61,6 +61,6 @@ caller's LLM. The VS Code extension uses the same two-phase host-bus handshake.
 | Client            | Reach            | Default engine | Facts source                |
 |-------------------|------------------|----------------|-----------------------------|
 | VS Code extension | bun from source  | hybrid         | editor LSP (`--facts external`) |
-| MCP server        | single binary    | det (offline)  | regex floor; sampling for intent |
+| Claude/Copilot skill | bun from source | hybrid       | tree-sitter; host-bus for intent |
 | IntelliJ (future) | single binary    | det → hybrid   | PSI via `--facts external`  |
 | CLI / scripts     | either           | hybrid         | tree-sitter or regex        |

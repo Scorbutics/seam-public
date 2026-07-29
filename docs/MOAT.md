@@ -6,7 +6,7 @@ the implementation end-to-end and dogfooding it on real fixtures.
 
 The relevant code: [`ts/src/cli/review_impact.ts`](../ts/src/cli/review_impact.ts) (the bridge),
 [`ts/src/cli/review_relevance.ts`](../ts/src/cli/review_relevance.ts) (the relevance floor), wired into
-`decompose.ts` (`--review-impact` / `--triage`), exposed via MCP `decompose_diff` and the VS Code diff
+`decompose.ts` (`--review-impact` / `--triage`), exposed via the CLI and the VS Code diff
 review (two-step background reveal, `seam.reviewImpact`).
 
 ---
@@ -174,7 +174,7 @@ passes) dominates. Keep the honest `truncated` signal regardless — never silen
    in explicitly. Review-impact learning is safe by contrast (additive "verify" leads, not a gated region,
    and it warms the cache). `--data-coupling floor|off` opts out; the pass degrades to floor with no backend
    (offline suite unaffected — it no-ops). Validated: floor-blind homemade-ORM learns→persists→replays
-   offline + surfaced in `model.adapters`; MCP keeps an explicit floor/llm contract (independent of the
+   offline + surfaced in `model.adapters`; the CLI keeps an explicit floor/llm contract (independent of the
    default). The flywheel turns by default where it's safe (reviews); the grow stays deterministic.
 4. **Budget headroom + prioritisation** (Gap 4) — ✅ SHIPPED. 60→120, core-first then change-size ordering.
 

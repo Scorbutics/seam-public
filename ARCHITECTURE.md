@@ -43,7 +43,7 @@ their own folder — **never from each other**, and `core/*` imports neither. Th
 independently evolvable; adding a third mode is a new folder, no core surgery.
 
 **The one deliberate cross-mode composition** lives at the **CLI/composition root**: `cli/review_impact.ts`
-(`--review-impact`, MCP `decompose_diff impact:true`) is the *bridge* — it annotates a classified **diff**
+(`--review-impact`) is the *bridge* — it annotates a classified **diff**
 (diff mode) with the **codebase** impact + cross-stack coupling of the changed symbols. It must sit in
 `cli/` precisely because the layering forbids `diff/`↔`codebase/` imports; the bridge belongs above both,
 not inside either. This is the structural embodiment of "a diff is a Δ on the codebase graph" — the
@@ -320,7 +320,7 @@ Two notes that bit real repos and shaped the code:
 
 ### The router (`grow/route.ts`) — the semantic front door
 
-`--ask "<question>"` (MCP `ask`) turns a natural-language question into a run shape. The split is the
+`--ask "<question>"` turns a natural-language question into a run shape. The split is the
 project's invariant applied to routing itself:
 
 1. **`SHAPES` registry** = the source of truth (id · `needs` · hint). The router prompt is **built from
@@ -333,7 +333,7 @@ project's invariant applied to routing itself:
    ambiguity-flagged — the structural half.
 4. **`ask`** = route → resolve → run; dispatches to the five shapes + `flow` (grow + decompose), and
    routes **away** to `grep` (lexical) / `rag` (semantic) as an honest decline. Guard: `get_host_bus()
-   || available()` — `available()` alone misses the MCP sampling bridge and would wrongly reject it.
+   || available()` — `available()` alone misses the HOST BUS (a caller lending its model) and would wrongly reject it.
 
 So `ask` is the realization of the "turn `noFlow` into shape-dispatch" idea: every codebase question
 has a home, and Seam says so when the home is grep or RAG rather than itself — which is what makes
