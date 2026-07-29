@@ -151,8 +151,19 @@ index is ever wrong.
     $ bun rust/parity/depgraph.ts
     error: Cannot find module '../../ts/src/codebase/scan/down/dependency_graph.js'
 
-Each was the gate for one port and did its job; deleting the TypeScript retired them. They are not harmful,
-but they are misleading — they look like a runnable gate and are not, and they were the only thing "setting"
-three flags. Recommendation: delete them (git history keeps the record, and each one's numbers are already
-in its port's commit message). Not done here: 33 files is a bigger call than a flag cleanup, and it is the
-kind of deletion worth making deliberately rather than as a side effect.
+Each was the gate for one port and did its job; deleting the TypeScript retired them.
+
+**DONE — and the real number was 39, not 33.** The 33 were found by checking whether their imports RESOLVE.
+Actually RUNNING the survivors found six more in the same category: `atoms`, `contract`, `feeds`,
+`subcores` and `grammars` import TypeScript exports that were deleted (`extract_atoms`,
+`extract_contract`, `extract_consumer_feeds`, `makeCtx`), and `warm_hubs` calls `rankHubs` with the Map
+signature it had before the warm port — it is also tautological now, since the TypeScript it compares
+against became a wrapper around the very Rust it is testing. Import resolution was too weak a test; a
+harness can resolve every module and still be dead.
+
+Two others are broken but NOT retired, because their oracle still exists: `perf_grow` and
+`transp_coupling` call `addon.growToTerminals(repo, file, sym, true, 12, 80)` positionally against a napi
+signature that has since changed. Those are benchmarks worth fixing rather than deleting. They were not merely inert: `rust/parity/stream.ts` (which does run) still
+switched engines with `SEAM_RUST_CORE`, so its two arms executed identical code, and `ripple.ts` was the only
+thing keeping `SEAM_RIPPLE_INDEX` alive — an "escape hatch" reachable from nothing. Their measured results
+live in each port's commit message and in `rust/README.md`; the harnesses themselves are in git history.

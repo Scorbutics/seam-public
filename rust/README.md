@@ -69,7 +69,13 @@ reports. The harness classifies this as 🟡 *structure-identical* (exit 1) vs �
 cd rust && cargo test --release            # all crate unit tests
 cargo build --release                       # → target/release/libseam_napi.so
 cp target/release/libseam_napi.so seam_core.node
-# byte-identical harnesses (need ../ts/node_modules — symlink the main checkout's, or `bun install`):
+# byte-identical harnesses (need ../ts/node_modules — symlink the main checkout's, or `bun install`).
+#
+# NOTE: a harness compares the core against the TYPESCRIPT it replaced, so it retires when that TypeScript is
+# deleted. 33 of them went that way and have been removed — they imported `ts/src/codebase/scan/*`,
+# `coupling/index.js` and friends, and had been failing at module resolution rather than comparing anything.
+# Their results are the numbers quoted above and in each port's commit message; the harnesses themselves are
+# in git history. The ones listed below still resolve and still run.
 bun parity/parity.ts      [file.java]      # native vs web-tree-sitter AST
 bun parity/imports_any.ts <files…>         # imports, any language (importsOf dispatches by ext)
 bun parity/resolve.ts     [repo]           # Java floor_resolve vs TS
