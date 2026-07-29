@@ -932,3 +932,23 @@ than the current one: it pins what discovery was actually GIVEN rather than what
 
 Do that reporting FIRST, rewrite the test against it, and only then move the orchestration — otherwise the
 port lands with its one behavioural guard deleted rather than replaced.
+
+### Measured: the core's scope needs NO memo — one planned step deleted
+
+The TypeScript keeps a `_SCOPE_MEMO` keyed on `repo#centerKey#epochOf(repo)`, and the plan above listed
+porting it as step 2. Measured, it is unnecessary:
+
+    grow_centers_scope, booking-app, 3 centers
+      cold                                      38 ms
+      warm                                       0 ms
+      warm2                                      0 ms
+      after coupling-epoch churn + resetCaches   9 ms   (vs 11 ms cold)
+
+The reason is structural, not luck. The TypeScript memo exists because its probe was expensive AND because
+the flywheel's settling runs keep bumping the COUPLING epoch, so anything keyed on that epoch misses on every
+settling pass. The core's pre-grow runs coupling-OFF, so each center's `grow_to_terminals` is answer-cached
+under the SOURCE epoch — which coupling churn does not move. The union is then a fold over cached results.
+
+So the scope stays cheap across exactly the runs the TypeScript memo was built to survive, and the port drops
+from three steps to two: chain pre-grow → discover → grow, and report the scope so the test can assert on
+what discovery was GIVEN.
