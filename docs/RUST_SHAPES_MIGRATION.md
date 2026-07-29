@@ -1059,9 +1059,18 @@ failing toward "unused". Instead: a **side-effect tripwire** (an `appendFileSync
     inside a `try/catch` looks identical while still being reached. The side-effect version is the
     one that counts.
 
-### The gap the 69-path gate does not cover
+### The gap the gate did not cover
 
-The gate exercises 22 flags; it does **not** cover the DI-enrichment query or the field-facts path.
+CORRECTION to the first version of this section: the gate DID already run `--query dependencies` (it is in
+the query loop). What it did not cover was the DI code path — because it ran that query only against
+`route-repo`, where the answer is "none resolved — a leaf", so the enrichment loop never iterated. The flag
+was covered; the code was not. A gap in the FIXTURE, not the flag list, which is the harder kind to notice.
+
+Now closed: `test/fixtures/di-repo` (a minimal ioctopus surface) plus a `q_di` case using
+`--format llm-context` — the default output for this query is a one-line count that renders no members, so
+the four `↳ DI:` lines only appear there. Verified to bite: stubbing `diBindingForClass` to return null
+removes exactly those four lines from the snapshot.
+
 Run directly, with tripwires armed:
 
     seam --query dependencies --repo <ts repo> ...   ->  10x atoms.makeCtx, 2x di.diBindingForClass

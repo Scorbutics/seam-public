@@ -60,6 +60,14 @@ SEAM_GRAPH_CACHE=0 timeout 300 bun src/cli/decompose.ts --repo test/fixtures/met
 echo "$?" >"$OUT/candidates.code"
 cat "$OUT/cand.json" >>"$OUT/candidates.out" 2>/dev/null; rm -f "$OUT/cand.json"
 sed -i -E 's|/tmp/[a-zA-Z0-9_./-]+||g' "$OUT/candidates.out" "$OUT/candidates.err"   # the emit path names $OUT
+# DI-BINDING ENRICHMENT on --query dependencies (default-ON via SEAM_DI_RESOLVE). The gate ALREADY ran that
+# query — but only against route-repo, where the answer is "none resolved — a leaf", so the enrichment loop
+# never iterated and the entire DI code path sat outside the guarantee while LOOKING covered. That path is
+# the last TypeScript tree-sitter engine reachable on a default-on user query, so it needs a real case before
+# it can be ported. `--format llm-context` because the default output is a one-line COUNT that renders no
+# members at all; the four `↳ DI:` lines only appear there. Verified to bite: with SEAM_DI_RESOLVE=0 exactly
+# those four lines disappear.
+run q_di        --repo test/fixtures/di-repo --scan --query dependencies --anchor-file service.ts --symbol BookingService --format llm-context
 run q_recall    --repo "$R" --scan --query consumers --anchor-file "$A" --symbol "$S" --recall name --data-coupling floor
 run q_ask       --repo "$R" --scan --query ask --ask "who calls $S" --data-coupling floor
 echo "snapshot: $OUT ($(ls "$OUT" | wc -l) files)"
