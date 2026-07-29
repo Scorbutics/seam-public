@@ -775,9 +775,6 @@ impl DepScan {
 
     /// 2d) QUALIFIED CROSS-FILE CALLEE pass. Port of `_qualifiedCalleePass`.
     fn qualified_callee_pass(&mut self) {
-        if std::env::var("SEAM_QUALIFIED_CALLS").as_deref() == Ok("0") {
-            return;
-        }
         let Some(actx) = &self.actx else { return };
         let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
         if anchor.kind != "method" && anchor.kind != "function" {
@@ -974,9 +971,6 @@ impl DepScan {
     /// DI PROVIDER-FACTORY pass — a chained `session.groups().createGroup()` / `getProvider(X.class).create()`.
     /// Port of `_providerFactoryPass`.
     fn provider_factory_pass(&mut self) {
-        if std::env::var("SEAM_PROVIDER_HOP").as_deref() == Ok("0") {
-            return;
-        }
         let Some(actx) = &self.actx else { return };
         let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
         let (alo, ahi) = (anchor.start, anchor.end);

@@ -1,8 +1,5 @@
-// Byte-identical harness — Rust build_dependency_graph vs TS (STRUCTURAL: dataCoupling OFF, and
-// SEAM_QUALIFIED_CALLS=0 + SEAM_PROVIDER_HOP=0 since those two passes land next). Java anchors: class + method
+// Byte-identical harness — Rust build_dependency_graph vs TS (STRUCTURAL: dataCoupling OFF). Java anchors: class + method
 // + function. Compares anchor, nodes, edges(+line), blindspots(node|mechanism|evidence|candidates|persists), anchors.
-process.env.SEAM_QUALIFIED_CALLS = "0";
-process.env.SEAM_PROVIDER_HOP = "0";
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createRequire } from "node:module";

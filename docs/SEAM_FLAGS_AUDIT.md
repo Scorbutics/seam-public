@@ -100,3 +100,59 @@ work it is not:
    what it actually locks (per-node-budget reproducibility). Leaving it is a green test guarding nothing.
 2. The six documented-but-unimplemented flags — a doc that lists a knob that does nothing is worse than no
    doc, because it is followed.
+
+## Phase 4 — the test-only seams, and where "delete it" is the wrong call
+
+After phases 1–3 the test-only set is **16**, not 35 (the earlier figure counted flags since inlined or
+folded). They are not one kind of thing, and the disposition differs:
+
+### Deleted — migration scaffolds (2)
+
+`SEAM_PROVIDER_HOP` and `SEAM_QUALIFIED_CALLS` were kill-switches whose only job was to turn a whole pass
+off so a parity harness could compare the core against a TypeScript version where, in the harness's own
+words, *"those two passes land next"*. Both passes are now unconditional; the `if env == "0" { return; }`
+guards are gone.
+
+### Kept as config, not knobs (4)
+
+`SEAM_ADAPTERS_DIR`, `SEAM_CACHE_DIR`, `SEAM_SLM_CONFIG`, `SEAM_LLM_TIMEOUT_MS` — a directory redirect or a
+timeout. Tests are simply the only *in-repo* caller; they are legitimate deployment configuration and are in
+the keep-set.
+
+### Kept deliberately — deleting them would delete COVERAGE, not a branch (9)
+
+`SEAM_CONCERN_CAP`, `SEAM_CONCERN_CENTERS`, `SEAM_CONCERN_SPINE_CAP`, `SEAM_IMPACT_FILE_CAP`,
+`SEAM_IMPACT_SURFACE_CAP`, `SEAM_IMPACT_SYMS_PER_FILE`, `SEAM_NODE_KEY_CAP`, `SEAM_HUB_FAN`,
+`SEAM_GROW_BORDER_TOL`.
+
+Every one is a NUMERIC CAP that a test lowers to drive the product's **truncation** path — "a big concern
+stays scannable", "the impact render caps its hub fan-out". The flag is not guarding a branch that exists
+only for the test; the truncation logic is real product behaviour on a real repo. Removing the flag does not
+remove a code path, it removes the test's ability to reach that path without a synthetic fixture large
+enough to blow the real cap.
+
+So "delete the flag and the branch it covers" does not apply here: there is no test-only branch to delete,
+and doing it anyway would silently drop truncation coverage. The right fix is to convert these specific ones
+to explicit options the test passes in — which was the other choice on the table, and is real work in the
+render and concern paths. Left as-is pending that call.
+
+### Kept as an escape hatch (1)
+
+`SEAM_RIPPLE_INDEX=0` restores the whole-repo walk behind the ripple index. Nothing sets it — which is
+exactly the point of an escape hatch for an optimisation whose claim is "changes nothing but the cost". The
+harness that verified that claim can no longer run (below), so the hatch is now the only recourse if the
+index is ever wrong.
+
+## Separate finding: 33 parity harnesses cannot run
+
+`rust/parity/` holds 68 harnesses. **33 import TypeScript that has since been deleted** — `scan/index.js`,
+`scan/def_table.js`, `coupling/index.js`, `grow/compare.js` and friends — so they fail at module resolution:
+
+    $ bun rust/parity/depgraph.ts
+    error: Cannot find module '../../ts/src/codebase/scan/down/dependency_graph.js'
+
+Each was the gate for one port and did its job; deleting the TypeScript retired them. They are not harmful,
+but they are misleading — they look like a runnable gate and are not, and they were the only thing "setting"
+three flags. Recommendation: delete them (git history keeps the record, and each one's numbers are already
+in its port's commit message). Not done here: 33 files is a bigger call than a flag cleanup, and it is the
+kind of deletion worth making deliberately rather than as a side effect.
