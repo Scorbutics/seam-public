@@ -3380,3 +3380,37 @@ pub fn grow_detect_centers(
     let out = seam_grow::center::detect_centers(&g, &opts, k.unwrap_or(4) as usize);
     serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
+
+/// growBandTiers — band seams into spine/supporting/off by position in the relevance ordering.
+///
+/// Takes the relevance vector as NATIVE doubles (`undefined` for an unscored seam) and returns only the
+/// TIERS, parallel to the input. Deliberately not a DTO round-trip: measured, a f64 that goes out through
+/// `JSON.stringify` and back through `serde_json` returns 1 ULP low (`3fbd94ed22000000` -> `...21ffffff`),
+/// and `relevance` is compared with `>=` downstream. Not echoing the values cannot lose them.
+///
+/// `tiers` is the pre-existing tier vector — a seam already tiered `spine` structurally is left alone, and
+/// its presence switches the remainder to a two-way split.
+#[napi]
+pub fn grow_band_tiers(relevance: Vec<Option<f64>>, tiers: Vec<Option<String>>) -> napi::Result<String> {
+    let mut seams: Vec<seam_grow::intent_rank::Banded> = relevance
+        .into_iter()
+        .zip(tiers.into_iter().map(Some).chain(std::iter::repeat(None)))
+        .map(|(relevance, tier)| seam_grow::intent_rank::Banded { relevance, tier: tier.flatten() })
+        .collect();
+    seam_grow::intent_rank::band_tiers(&mut seams);
+    let out: Vec<Option<String>> = seams.into_iter().map(|s| s.tier).collect();
+    serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}
+
+/// growMarkSpineMembers — flag the above-mean, capped members of ONE seam as its intent spine.
+/// Same shape as `grow_band_tiers`: doubles in, flags out, no value echoed back.
+#[napi]
+pub fn grow_mark_spine_members(relevance: Vec<Option<f64>>) -> napi::Result<String> {
+    let mut hunks: Vec<seam_grow::intent_rank::Member> = relevance
+        .into_iter()
+        .map(|relevance| seam_grow::intent_rank::Member { relevance, spine: None })
+        .collect();
+    seam_grow::intent_rank::mark_spine_members(&mut hunks);
+    let out: Vec<Option<bool>> = hunks.into_iter().map(|h| h.spine).collect();
+    serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}

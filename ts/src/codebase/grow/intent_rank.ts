@@ -39,47 +39,32 @@ export async function annotateForEmit(repo: string, intent: string | undefined, 
   }
 }
 
-// Rank-banded tier from a seam's position in the relevance ordering — threshold-free (no magic cosine
-// cutoff that drifts per repo/model): the top band is the spine, the middle is supporting, the tail is off.
-// Deterministic given the scores. A coarse 3-band split — the consumer refines if it wants.
-// Fraction of the run's TOP relevance below which a seam is OFF-intent regardless of its rank. RELATIVE (to
-// this run's best seam), NOT an absolute cosine — so it's reproducible and does NOT drift per repo/model. It
-// only ever DEMOTES (crops the long mildly-relevant tail out of supporting); the top seam is always kept.
-const _OFF_INTENT_FLOOR = 0.5;
-export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
-  // A STRUCTURAL spine (the crossing backbone, locked in emit_seams — tier-independent) takes precedence:
-  // never re-band a spine seam, and don't mint MORE spine from text similarity. The embeddings then only
-  // split the REMAINDER into supporting/off (a 2-band). Only when there's NO structural spine (a policy fan
-  // / a same-language flow with no boundary) does the embedding band define the spine itself (the 3-band).
-  const lockedSpine = seams.some((s) => (s as any).tier === "spine");
-  const scored = seams.filter((s) => typeof s.relevance === "number" && (s as any).tier !== "spine").sort((a, b) => (b.relevance! - a.relevance!));
-  const n = scored.length;
-  if (!n) return;
-  // RELATIVE off-intent floor: a seam far below the most-relevant one is off-intent however it ranks — so a
-  // long tail of mildly-related infrastructure lands in OFF (croppable) instead of bloating supporting.
-  const floor = scored[0].relevance! * _OFF_INTENT_FLOOR;
-  const isOff = (s: T) => (s.relevance ?? 0) < floor;
-  const band = lockedSpine
-    ? (i: number) => (i < Math.ceil(n / 2) ? "supporting" : "off")
-    : (i: number) => (i < Math.ceil(n / 3) ? "spine" : i < Math.ceil((2 * n) / 3) ? "supporting" : "off");
-  scored.forEach((s, i) => { (s as any).tier = isOff(s) ? "off" : band(i); });
+// Rank-banded tiering and intent-spine member marking now live in the CORE
+// (rust/crates/seam-grow/src/intent_rank.rs) — see rust/parity/intent_rank.ts for the differential.
+//
+// Both cross as NAKED VECTORS (doubles in, tiers/flags out) rather than as seam DTOs. Measured: a f64 that
+// goes out through `JSON.stringify` and back through `serde_json` returns 1 ULP low, and `relevance` is
+// compared with `>=` on the far side. Not sending the values back is the only way that cannot bite.
+function _core_or_die(): any {
+  const a = _loadAddon();
+  if (!a) throw new Error("the Seam core (Rust addon) is not available — build it with `cargo build --release` in rust/");
+  return a;
 }
 
+export function bandTiers<T extends { relevance?: number }>(seams: T[]): void {
+  if (!seams.length) return;
+  const tiers: (string | null)[] = JSON.parse(_core_or_die().growBandTiers(
+    seams.map((s) => (typeof s.relevance === "number" ? s.relevance : undefined)),
+    seams.map((s) => (s as any).tier ?? undefined)));
+  // an unscored seam comes back null and keeps whatever tier it had — it is not a LOW-scoring seam
+  seams.forEach((s, i) => { if (tiers[i] != null) (s as any).tier = tiers[i]; });
+}
 
-// Within a SEAM, flag the most intent-relevant MEMBERS as the spine. The structural floor collapses a
-// tangled (god-object / DI-heavy) closure into one big seam, so seam-level tiering has nothing to separate
-// — but the embedding still tells us WHICH members of that blob answer the intent. Mark the top relevance
-// band (≥ the seam's mean of scored members; capped) as `spine`, so a consumer can surface the intent path
-// inside the tangle. Deterministic, no LLM. No-op on a seam with <2 scored members (nothing to rank).
-const _SPINE_MEMBER_CAP = 12;   // "the path" inside a blob is a handful, not the top third — cap hard
 export function markSpineMembers(hunks: any[]): void {
-  const scored = hunks.filter((h) => typeof h.relevance === "number");
-  if (scored.length < 2) { if (scored.length === 1) scored[0].spine = true; return; }
-  const mean = scored.reduce((a, h) => a + h.relevance, 0) / scored.length;
-  const cap = Math.min(_SPINE_MEMBER_CAP, Math.max(1, Math.ceil(scored.length / 4)));
-  const top = [...scored].sort((a, b) => b.relevance - a.relevance);
-  let n = 0;
-  for (const h of top) h.spine = h.relevance >= mean && n++ < cap;   // top, above-average members only
+  if (!hunks.length) return;
+  const flags: (boolean | null)[] = JSON.parse(_core_or_die().growMarkSpineMembers(
+    hunks.map((h) => (typeof h.relevance === "number" ? h.relevance : undefined))));
+  hunks.forEach((h, i) => { if (flags[i] != null) h.spine = flags[i]; });
 }
 
 // Annotate every seam (and its MEMBERS) with a deterministic `relevance` (0..1 cosine, embed vs intent) and a
