@@ -1082,8 +1082,24 @@ default-ON (`SEAM_DI_RESOLVE !== "0"`), so this is a live user-facing path.
   * `codebase/ast_units.ts` (110) — exists **solely** for `di/index.ts`; no other source importer.
   * `codebase/atoms.ts` (129) — the tree-sitter substrate under both.
 
-That is **~315 lines of genuine second-copy engine** (the core already vendors 7 grammars and has
-`defs_in_file_treesitter`), reachable on one default-on query. It is the remaining in-scope debt.
+That was **~315 lines of genuine second-copy engine** (the core already vendors 7 grammars and has
+`defs_in_file_treesitter`), reachable on one default-on query.
+
+**CLOSED.** The ioctopus grammar moved to `seam-lang::di_bindings` and the walk to `seam-scan::di_index`;
+`ast_units.ts` and `makeCtx` are deleted. Both were verified unreachable BEFORE removal with a side-effect
+tripwire under the full test suite and the 72-path gate. `atoms.ts` keeps its node-kind vocabulary and the
+`Ctx` class, which `cli/field_facts.ts` still constructs.
+
+### Where that leaves it
+
+In-scope `ts/src/codebase` is ~2,850 lines across 32 files, and re-running the tripwire sweep finds **no
+engine logic on any measured path**. What remains is types, glue, by-design config, LLM passes that cannot
+move, and thin wrappers. The strangler's *porting* phase is done for the stated scope; what is left is a
+judgement call about how much of the remaining wrapper layer is worth collapsing, not more porting.
+
+Known remaining TypeScript that still parses source, both OUTSIDE `ts/src/codebase`:
+  * `cli/field_facts.ts` — builds a `Ctx` off `core/treesitter` on the diff-review path.
+  * `core/treesitter.ts` — the parser host it uses.
 
 Also noted, but OUT of scope: `cli/field_facts.ts` parses with `core/treesitter` directly on the
 diff-review path. It lives in `ts/src/cli/`, not `ts/src/codebase`.
