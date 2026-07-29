@@ -3337,3 +3337,46 @@ pub fn grow_merge_coupling_overlay(graph_json: String, overlay_json: String) -> 
     seam_grow::coupling::merge_coupling_overlay(&mut g, &delta);
     serde_json::to_string(&g).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
+
+#[napi(object)]
+pub struct CenterDetectDto {
+    pub id: String,
+    pub file: String,
+    pub symbol: String,
+    pub fan_in: u32,
+}
+
+/// growDetectCenters — the concern's mechanism cluster, ranked by log-fan-in x relevance x proximity.
+///
+/// `relevance` arrives as `[["<symbol> <file>", "<score>"], …]` rather than being computed here: the caller
+/// already holds the embedding scores (it needs them for its own ranking), and recomputing them inside would
+/// be a second embed pass over the same files. An EMPTY list means no intent field was available — a
+/// documented degradation to raw fan-in, not an error.
+#[napi]
+pub fn grow_detect_centers(
+    graph_json: String,
+    relevance: Vec<Vec<String>>,
+    k: Option<u32>,
+    min_fan_in: Option<u32>,
+    min_relevance: Option<f64>,
+    exclude_file: Option<String>,
+    exclude_symbol: Option<String>,
+    anchor_id: Option<String>,
+) -> napi::Result<String> {
+    let g = dec_resolved_graph(&graph_json)?;
+    let rel: indexmap::IndexMap<String, f64> = relevance
+        .into_iter()
+        .filter(|r| r.len() >= 2)
+        .map(|r| (r[0].clone(), r[1].parse::<f64>().unwrap_or(0.0)))
+        .collect();
+    let opts = seam_grow::center::CenterOpts {
+        min_fan_in: min_fan_in.unwrap_or(2) as usize,
+        min_relevance: min_relevance.unwrap_or(0.18),
+        exclude_file: exclude_file.as_deref(),
+        exclude_symbol: exclude_symbol.as_deref(),
+        anchor_id: anchor_id.as_deref(),
+        relevance: if rel.is_empty() { None } else { Some(&rel) },
+    };
+    let out = seam_grow::center::detect_centers(&g, &opts, k.unwrap_or(4) as usize);
+    serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}

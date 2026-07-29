@@ -7,6 +7,7 @@
 
 pub mod affinity;
 pub mod border_policies;
+pub mod center;
 pub mod coupling;
 pub mod exclude;
 pub mod field;
