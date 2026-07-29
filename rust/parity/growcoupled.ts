@@ -16,7 +16,6 @@ const files = execFileSync("git", ["-C", repo, "ls-files", "-z", glob], { maxBuf
 // Force TS sequential coupling (no worker pool): the pool's _renumberCoupleDelta mints `dc{n}` ids where the
 // sequential path mints `fc{n}` — a transient raw-id difference normalized away in rendering. The Rust core is
 // sequential, so the sequential TS path is the byte-identical baseline.
-process.env.SEAM_PARALLEL_GROW = "0";
 process.env.SEAM_GRAPH_CACHE = "0"; // compare pure-compute vs pure-compute (TS build_footprint_cached conflates same-name symbols)
 
 // The maxNodes:1 oracle runs a 0-wave _phaseExpand, which still appends a `flood-safety-cap` blindspot

@@ -1,8 +1,7 @@
 // Byte-identical harness (G5) — Rust grow_to_terminals vs TS grow_to_terminals (structuralGrow:true,
-// SEAM_PARALLEL_GROW=0). Default dataCoupling:false isolates the STRUCTURAL WAVE (_phaseExpand); pass "1" as
+// Default dataCoupling:false isolates the STRUCTURAL WAVE (_phaseExpand); pass "1" as
 // arg 6 to also run the coupling overlay. Compares the grown node/edge/blindspot/anchor set (hub markers +
 // frontier are additive annotations the ser doesn't read yet).
-process.env.SEAM_PARALLEL_GROW = "0";
 process.env.SEAM_GRAPH_CACHE = "0"; // compare pure-compute vs pure-compute (TS build_footprint_cached conflates same-name symbols)
 import { readFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";

@@ -1,4 +1,4 @@
-// PER-FILE COUPLING CACHE (SEAM_COUPLING_FILE_CACHE) — the fan couples each reached boundary file's whole-file
+// PER-FILE COUPLING CACHE (unconditional) — the fan couples each reached boundary file's whole-file
 // crossings, and re-ran resolveCoupling (floor deduce + grounding + flywheel) for that file on EVERY grow that
 // reaches it. This memoises the FLOOR delta per (file, coupling-epoch) — the reused unit is one file's crossings
 // (small), NOT a closure (no bloat). Two contracts are pinned:
@@ -54,20 +54,19 @@ const grow = () => grow_to_terminals(REPO, "producer/com/x/OrderService.java", "
   { bidirectional: true, dataCoupling: true, intent: "place an order via the queue" });
 
 describe("per-file coupling cache — identity + reuse", () => {
-  test("crossings are IDENTICAL with the cache ON vs OFF", async () => {
+  // WAS "crossings are IDENTICAL with the cache ON vs OFF". SEAM_COUPLING_FILE_CACHE has no reader — the
+  // cache is unconditional now — so both halves ran the same code and the comparison could not fail. What
+  // survives is the half that never depended on the flag: the queue crossing is actually produced.
+  test("the queue crossing is produced by a coupled grow", async () => {
     if (!available()) return;
-    process.env.SEAM_COUPLING_FILE_CACHE = "0"; _resetFootprintMirror(); _resetMatcherCacheMem();
-    const off = xsig((await grow())[0]);
-    process.env.SEAM_COUPLING_FILE_CACHE = "1"; _resetFootprintMirror(); _resetMatcherCacheMem();
-    const on = xsig((await grow())[0]);
-    delete process.env.SEAM_COUPLING_FILE_CACHE;
-    expect(on).toEqual(off);
-    expect(off.some((s) => s.includes("order.queue"))).toBe(true);   // the queue crossing is actually present (not an empty-equals)
+    _resetFootprintMirror(); _resetMatcherCacheMem();
+    const sig = xsig((await grow())[0]);
+    expect(sig.some((s) => s.includes("order.queue"))).toBe(true);
   });
 
   test("a DIFFERENT grow reaching the same boundary file is served from the cache (no re-resolve)", async () => {
     if (!available()) return;
-    process.env.SEAM_COUPLING_FILE_CACHE = "1"; _resetFootprintMirror(); _resetMatcherCacheMem(); _resetFileCouplingStats();
+    _resetFootprintMirror(); _resetMatcherCacheMem(); _resetFileCouplingStats();
     // 1st grow (placeOrder) — fans + couples OrderConsumer.java (the queue's consumer), populating the file cache.
     await grow_to_terminals(REPO, "producer/com/x/OrderService.java", "placeOrder", { bidirectional: true, dataCoupling: true, intent: "place an order" });
     const s0 = _fileCouplingStats();   // snapshot the cross-grow history BEFORE grow 2 (do NOT reset — repeats span grows)
@@ -75,7 +74,6 @@ describe("per-file coupling cache — identity + reuse", () => {
     // fan reaches OrderConsumer.java, already resolved in grow 1 → a per-file cache HIT (repeat), costing ~0.
     await grow_to_terminals(REPO, "producer/com/x/RushService.java", "rushOrder", { bidirectional: true, dataCoupling: true, intent: "rush an order" });
     const s1 = _fileCouplingStats();
-    delete process.env.SEAM_COUPLING_FILE_CACHE;
     expect(s1.repeats - s0.repeats).toBeGreaterThan(0);   // grow 2 re-reached a file grow 1 already coupled → reused
     expect(s1.repeatMs - s0.repeatMs).toBeLessThan(50);   // the reuse is a cache read, not a re-resolve
   });

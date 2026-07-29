@@ -4,8 +4,10 @@ Seam's framework knowledge is **data + small adapters**, not engine internals. Y
 without forking or recompiling, via two extension points loaded at startup. Both live under a plugin root:
 
 - **User-global (trusted):** `~/.config/seam/` — always loaded (override with `SEAM_CONFIG_HOME`).
-- **Repo-local:** `<repo>/.seam/` — the **manifest** (data) always loads; **code adapters** load only under
-  `SEAM_REPO_PLUGINS=1` (a repo you clone could ship a malicious plugin, so code from a repo is opt-in).
+- **Repo-local:** `<repo>/.seam/` — the **manifest** (data) always loads. **Code adapters no longer load at
+  all**: the floor that scans is the Rust core and a JS module cannot extend it. An adapter left in a plugins
+  dir is reported inert on stderr rather than silently ignored. The old `SEAM_REPO_PLUGINS=1` opt-in is gone
+  with it — it guarded against a cloned repo running arbitrary JS, and there is no longer any JS to run.
 
 ## 1. Declarative manifest — `frameworks.json` (the 80% case)
 

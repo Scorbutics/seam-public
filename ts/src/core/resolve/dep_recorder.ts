@@ -13,7 +13,8 @@
 //     record the query's (kind, args) + a hash of its result set, and on lookup RE-RUN the query (cheap: a warm
 //     index is an in-memory map lookup) and compare. A new/removed member flips the result hash → miss.
 // Together these are COMPLETE for source-content changes by construction: every content dependency flows through a
-// recorded read, every membership dependency through a recorded query. The SEAM_DEP_VERIFY guard (below) proves it.
+// recorded read, every membership dependency through a recorded query. (A SEAM_DEP_VERIFY fs guard used to
+// assert this at runtime; it was removed, so the claim rests on the wiring rather than on a live check.)
 import { AsyncLocalStorage } from "node:async_hooks";
 
 // FNV-1a → base36, matching scan/footprint_cache.ts so hashes are comparable across the layer.
@@ -58,8 +59,8 @@ export function recordQuery(kind: string, args: string[], resultKeys: string[], 
 }
 
 // TAINT — an input reached the build through a path the recorder does not cover, so the sig is INCOMPLETE and must
-// not be trusted. The entry falls back to the repo epoch (conservative: never stale). Fired by the SEAM_DEP_VERIFY
-// fs guard and by any wired primitive that can't fully express its dependency.
+// not be trusted. The entry falls back to the repo epoch (conservative: never stale). Fired by any wired
+// primitive that can't fully express its dependency.
 export function taint(): void { const r = _als.getStore(); if (r) r.tainted = true; }
 
 export function hashSet(keys: string[]): string {

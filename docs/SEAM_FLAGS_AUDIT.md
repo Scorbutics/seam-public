@@ -1,7 +1,8 @@
 # SEAM_* flag audit
 
 Measured 2026-07-29. 147 `SEAM_*` tokens exist across the repo. **116 are live flags with a real reader.**
-The other 31 break down below — 19 are genuinely dead, 12 are not env flags at all.
+The other 31 break down below — **16 are genuinely dead**, 12 are not env flags at all, and 3 were
+misclassified by the first pass (corrected below).
 
 ## Method, and why it is not a grep
 
@@ -49,8 +50,20 @@ runs. Both branches execute identical code, and that half of the assertion canno
 vacuous: `SEAM_PER_NODE_BUDGET` is live, so it still asserts that a per-node-budget grow is reproducible
 across two runs. But the parallel-vs-sequential contract it claims to lock is no longer tested by anything.
 
-Also dead, test-only: `SEAM_PARITY_PROBE`, `SEAM_STABLE`, `SEAM_LSP_IT` (the last is a deliberate opt-in
-switch for an integration test, so it is dead by design, not by accident).
+`SEAM_LSP_IT` is also test-only, but by design: it is the opt-in switch for an integration test.
+
+### Three flags this audit got WRONG, in the usual direction
+
+The first pass counted a READ only in `src`/`rust`, which misses readers that live elsewhere. Corrected:
+
+  * **`SEAM_AUDIT_LLM` / `SEAM_AUDIT_OFFLINE` are LIVE.** `scripts/readme-audit.sh:25-26` reads them itself
+    (`[ "${SEAM_AUDIT_OFFLINE:-}" = "1" ]`). A script-local flag is still a flag.
+  * **`SEAM_STABLE` is LIVE.** `rust/parity/resolvecoupling.ts:34,36` reads it and passes it to
+    `addon.resolveCoupling`. A harness-local knob, but read.
+  * **`SEAM_PARITY_PROBE` is not a flag at all.** It is an arbitrary NAME used in
+    `rust_parity_knobs.test.ts` to test the env-sync mechanism itself.
+
+Same failure direction as every other sweep in this repo: toward "dead".
 
 ## Dead: documented but never implemented
 

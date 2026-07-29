@@ -16,7 +16,6 @@ process.env.SEAM_GRAPH_CACHE = "0"; // TS cache conflates same-name symbols
 // (155 nodes for a 2-center concern at --max-nodes 80) while Rust enforced it, and this harness stayed green
 // throughout because it never grew that path. Both are compared now, default FIRST.
 const MERGED_MODES = (process.argv[6] ?? "1,0").split(",");
-process.env.SEAM_PARALLEL_GROW = "0"; // Rust core is sequential (fc-ids); TS's couple_pool mints dc-ids in parallel
 const require = createRequire(import.meta.url);
 const addon = require("/home/scorbutics/seam-phase0/rust/seam_core.node");
 const repo = process.argv[2] ?? "/home/scorbutics/dev/keycloak";

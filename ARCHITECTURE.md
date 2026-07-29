@@ -400,7 +400,7 @@ is genuinely out of the structural floor's reach → LLM).
 
 **Lazy, module-scoped warming.** The per-file LLM synthesis is bounded to the anchor's build module
 (`module_scope`, from the registry's root markers), not the whole repo — other modules warm only when
-a grow re-anchors into them (`SEAM_WARM_ADAPTERS=1` forces whole-repo). The **rules** tier applies
+a grow re-anchors into them (whole-repo warming is not currently switchable). The **rules** tier applies
 repo-wide regardless: a rule learned in one module grounds the same pattern elsewhere with zero further
 LLM. (The two flywheel passes are in the §8.5 map; everything downstream of them is deterministic.)
 

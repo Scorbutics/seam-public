@@ -21,10 +21,10 @@ now() { date +%s%3N; }
 echo "=== (a) SEAM: shallow grow + deepen + agent render ==="
 t0=$(now)
 if [ -n "$ANCHOR" ]; then
-  SEAM_GROW_WAVE=1 SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --grow-from "$ANCHOR" --intent "$INTENT" \
+  SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --grow-from "$ANCHOR" --intent "$INTENT" \
     --format agent --token-budget 4000 --emit-seams /tmp/bench_seam.json >/tmp/bench_agent.txt 2>/dev/null
 else
-  SEAM_GROW_WAVE=1 SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --scan --auto --intent "$INTENT" \
+  SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --scan --auto --intent "$INTENT" \
     --format agent --token-budget 4000 --emit-seams /tmp/bench_seam.json >/tmp/bench_agent.txt 2>/dev/null
 fi
 t1=$(now)
@@ -32,7 +32,7 @@ t1=$(now)
 DEEP=$(python3 -c "import json;m=json.load(open('/tmp/bench_seam.json'));f=(m.get('frontier') or [{}])[0];print(f.get('file','')+'#'+f.get('symbol','') if f.get('symbol') else '')" 2>/dev/null)
 t2=$(now)
 if [ -n "$DEEP" ] && [ "$DEEP" != "#" ]; then
-  SEAM_GROW_WAVE=1 SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --grow-from "$DEEP" --intent "$INTENT" \
+  SEAM_TIER_GROW=1 SEAM_HUB_COLLAPSE=1 $CLI --repo "$REPO" --grow-from "$DEEP" --intent "$INTENT" \
     --format agent --token-budget 2000 >/tmp/bench_deep.txt 2>/dev/null
 fi
 t3=$(now)
