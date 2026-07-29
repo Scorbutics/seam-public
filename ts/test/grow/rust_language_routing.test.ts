@@ -36,7 +36,7 @@ afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 
 // THE TS ENGINE IS GONE, so this can no longer be a DIFFERENTIAL test — there is no second implementation to
 // diff against. What survives is the claim that actually mattered: the addon reads Ruby correctly. Keeping the
-// SEAM_RUST_CORE=0 arm would only assert that the engine throws when disabled, which is a property of the
+// A disabled-engine arm would only assert that the engine throws when disabled, which is a property of the
 // router, not of the answer.
 async function grow(): Promise<string[]> {
   const [data] = await grow_to_terminals(repo, "app/core.rb", "save", { maxNodes: 40, dataCoupling: false, structuralGrow: true } as any);

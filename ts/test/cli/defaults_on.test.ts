@@ -1,7 +1,7 @@
 // DEFAULTS ARE PART OF THE CONTRACT. Both the Rust core and the DI-binding enrichment shipped behind opt-in env
 // flags, and the flags silently degraded every caller that didn't know them: a harness that forgot
 // `SEAM_DI_RESOLVE=1` got deps output with NO binding/condition line and concluded "Seam can't answer that", and one
-// that forgot `SEAM_RUST_CORE=1` measured the slow TS grow as Seam's speed. A capability nobody knows to turn on is
+// that forgot to enable the core measured the slow TS grow as Seam's speed. A capability nobody knows to turn on is
 // a capability that doesn't exist — so these lock the DEFAULT (no env vars set at all) and the explicit `=0` escape.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
 import { spawnSync } from "node:child_process";
@@ -10,7 +10,6 @@ import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { available } from "../../src/codebase/atoms.js";
-import { rustCoreEnabled } from "../../src/codebase/rust_core.js";
 
 const TS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 let repo: string;
@@ -41,32 +40,10 @@ beforeAll(() => {
 });
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
-// SEAM_RUST_CORE is DEFAULT-ON now that the boundary divergences are closed (options crossing the napi
-// boundary, the tableAccess stub, the forced structuralGrow, and the env mirror). The flag survives only as a
-// kill switch: `=0` puts a caller back on the TS engine, which stays the reference implementation. Note this
-// locks the FLAG's default, not the routing — `grow_to_terminals` still declines the addon for an
-// intent-shaped grow or an unvendored language (see rust_language_routing.test.ts).
-describe("SEAM_RUST_CORE defaults on", () => {
-  test("unset env → ON (an opt-in engine is one nobody measures)", () => {
-    const saved = process.env.SEAM_RUST_CORE;
-    delete process.env.SEAM_RUST_CORE;
-    try {
-      expect(rustCoreEnabled()).toBe(true);
-    } finally {
-      if (saved !== undefined) process.env.SEAM_RUST_CORE = saved;
-    }
-  });
-
-  test("=0 opts back out to the TS grow", () => {
-    const saved = process.env.SEAM_RUST_CORE;
-    process.env.SEAM_RUST_CORE = "0";
-    try {
-      expect(rustCoreEnabled()).toBe(false);
-    } finally {
-      if (saved === undefined) delete process.env.SEAM_RUST_CORE; else process.env.SEAM_RUST_CORE = saved;
-    }
-  });
-});
+// The "SEAM_RUST_CORE defaults on" pair that lived here is GONE with the flag. Both tests asserted the
+// behaviour of a toggle back to a TypeScript engine that no longer exists -- and the second one pinned the
+// footgun: `=0` made the grow fail outright rather than degrade. What routing the core declines (an
+// unvendored language, an intent-shaped grow) is still covered by rust_language_routing.test.ts.
 
 describe("DI-binding enrichment defaults on", () => {
   test("dependencies prints the DI binding with SEAM_DI_RESOLVE UNSET", () => {

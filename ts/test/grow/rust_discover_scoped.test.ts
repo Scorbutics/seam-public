@@ -73,16 +73,15 @@ describe("the Rust flywheel is scoped to the grown footprint", () => {
   });
 
   // One COLD `--data-coupling llm` CLI grow against `dir` with the recording backend → the argv line of every
-  // backend invocation it made. `engine` selects the grow core ("1" = Rust middle, "0" = TS), so the same
-  // harness measures BOTH and the assertions can compare them instead of hardcoding an engine-specific number.
-  const runCli = (dir: string, anchorFile: string, engine: "0" | "1" = "1"): string[] => {
+  // backend invocation it made.
+  const runCli = (dir: string, anchorFile: string): string[] => {
     rmSync(claudeLog, { force: true });
     rmSync(join(dir, ".seam"), { recursive: true, force: true });
     const cli = join(import.meta.dir, "..", "..", "src", "cli", "decompose.ts");
     execFileSync(process.execPath, [cli, "--repo", dir, "--scan", "--auto", "--anchor-file", anchorFile,
       "--symbol", "handle", "--intent", "how is the payload saved", "--data-coupling", "llm",
       "--claude-bin", fakeClaude, "--format", "json"],
-      { env: { ...process.env, SEAM_RUST_CORE: engine, SEAM_GRAPH_CACHE: "1" }, stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
+      { env: { ...process.env, SEAM_GRAPH_CACHE: "1" }, stdio: ["ignore", "pipe", "pipe"], timeout: 120_000 });
     return existsSync(claudeLog) ? readFileSync(claudeLog, "utf-8").trim().split("\n").filter(Boolean) : [];
   };
   const modelsOf = (argv: string[]): string[] => argv.map((l) => /--model\s+(\S+)/.exec(l)?.[1] ?? "<none>");
@@ -136,7 +135,7 @@ describe("the Rust flywheel is scoped to the grown footprint", () => {
     if (!available()) return;
     const addon = addonOrNull();
     if (!addon || typeof addon.findBlindReps !== "function") return;
-    const rust = runCli(gated, "controllers/handler.ts", "1");
+    const rust = runCli(gated, "controllers/handler.ts");
     expect(rust.length).toBeGreaterThan(0);            // the fixture really does exercise the flywheel
     expect(rust.length).toBe(2);                       // the fixture's measured cost — no extra passes
     expect(new Set(modelsOf(rust)).has("<none>")).toBe(false);

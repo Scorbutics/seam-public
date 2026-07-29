@@ -1,16 +1,27 @@
 // Port of src/core/progress.py — phase-progress side-channel. A one-line, machine-parseable marker
 // on STDERR (stdout carries the --emit-seams / report payload). The VS Code host strips PREFIX and
 // shows `message` verbatim. Markers are unconditional (not gated on --verbose); the host needs them.
+const _debugSpec = (): string => (process.env.SEAM_DEBUG ?? "").trim();
+export const debugOn = (topic: string): boolean =>
+  _debugSpec().split(",").some((p) => { const n = p.trim().split("=")[0].trim(); return n === "all" || n === topic; });
+export const debugValue = (topic: string): string | undefined => {
+  for (const p of _debugSpec().split(",")) {
+    const [n, ...rest] = p.trim().split("=");
+    if (n.trim() === topic) return rest.join("=").trim();
+    if (n.trim() === "all") return "";
+  }
+  return undefined;
+};
+
 export const PREFIX = "@@SEAM_PROGRESS@@";
 // A final machine-parseable timing summary, emitted once at the end of a run, so a client (MCP / the
 // skill) can tell the user how long each phase took. Separate marker so the per-phase PREFIX lines stay
 // byte-identical (no UX/test change). Carries every emit()'d phase with its delta + cumulative time.
 export const TIMING_PREFIX = "@@SEAM_TIMING@@";
 
-// USER-FACING DIAGNOSTICS SWITCH. The `--verbose` CLI flag sets SEAM_VERBOSE=1; every "explain what
+// USER-FACING DIAGNOSTICS SWITCH. The `--verbose` CLI flag adds the `verbose` topic; every "explain what
 // happened" site (coupling-debug, anchor-debug, sub-step timing) consults this single predicate, so the
-// user has ONE flag instead of N undocumented env vars. The granular SEAM_*_DEBUG / SEAM_TIMING vars
-// still work as dev-only narrow toggles (e.g. coupling-debug WITHOUT the timing firehose). The engine is
+// user has ONE flag instead of N undocumented env vars. The engine is
 // threaded over `process` for these cross-cutting stderr channels (as PROGRESS/TIMING already are), so a
 // flag → env hand-off keeps the diagnostic sites loose-coupled (no opts threading through every layer).
 // THREE diagnostic levels, so the firehose stops drowning the signal:
@@ -18,8 +29,12 @@ export const TIMING_PREFIX = "@@SEAM_TIMING@@";
 //   --verbose  — + one IMPORTANT debug line per grow STEP and per coupling STAGE (dbg() below): the
 //                "what did each step decide, and why" view you read to DEBUG a footprint
 //   --trace    — + the per-NODE timing firehose (build-timing/dep-pass/dc-timing): a dev deep-dive
-export const verbose = (): boolean => process.env.SEAM_VERBOSE === "1";
-export const timingOn = (): boolean => !!process.env.SEAM_TIMING;   // the --trace per-node firehose ONLY (no longer fired by --verbose)
+// Both levels are TOPICS of the one diagnostic switch: `--verbose` sets SEAM_DEBUG=verbose and `--trace`
+// adds `trace`. They were SEAM_VERBOSE and SEAM_TIMING — two env vars for the same concept, and neither was
+// ever a user surface (the user types --verbose / --trace; the env var was just how the CLI reached the
+// engine). Folding them in also means they inherit the `_DEBUG` cache-key exemption for free.
+export const verbose = (): boolean => debugOn("verbose") || debugOn("trace");
+export const timingOn = (): boolean => debugOn("trace");
 // Important, human-readable debug — one line per grow step / coupling stage, at --verbose. NOT the
 // @@PROGRESS@@ marker the extension parses, and NOT the per-node timing firehose (that is --trace).
 export function dbg(message: string): void { if (verbose()) process.stderr.write(`${message}\n`); }
@@ -117,14 +132,3 @@ export function stageSummary(): string {
 // optionally carrying a value: `SEAM_DEBUG=fp,tierprompt` or `SEAM_DEBUG=border=BookingsBean`, `=all` for all.
 // The NAME matters: seam_env_snapshot excludes any key ending `_DEBUG` from the grow cache key, so turning
 // diagnostics on cannot silently bust the cache.
-const _debugSpec = (): string => (process.env.SEAM_DEBUG ?? "").trim();
-export const debugOn = (topic: string): boolean =>
-  _debugSpec().split(",").some((p) => { const n = p.trim().split("=")[0].trim(); return n === "all" || n === topic; });
-export const debugValue = (topic: string): string | undefined => {
-  for (const p of _debugSpec().split(",")) {
-    const [n, ...rest] = p.trim().split("=");
-    if (n.trim() === topic) return rest.join("=").trim();
-    if (n.trim() === "all") return "";
-  }
-  return undefined;
-};

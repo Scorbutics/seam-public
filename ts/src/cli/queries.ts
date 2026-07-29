@@ -36,9 +36,8 @@ import { to1 } from "../core/lines.js";
 // or was disabled, not that the repo is unusual.
 async function rustShapeOk(a: Args): Promise<any> {
   if (!a.anchorFile) err("this shape requires --center <file>[#symbol]");
-  const { rustCoreEnabled, loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/rust_core.js");
-  const why = !rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
-    : !rustCanParse(a.anchorFile!) ? `no vendored grammar for ${a.anchorFile}`
+  const { loadAddon, rustCanParse, rustCanServeRepo } = await import("../codebase/rust_core.js");
+  const why = !rustCanParse(a.anchorFile!) ? `no vendored grammar for ${a.anchorFile}`
     : !rustCanServeRepo(a.repo) ? "the repo holds a language the core cannot parse"
     : null;
   if (why) err(`the Seam core (Rust addon) cannot serve this shape: ${why}. Build it with \`make -C rust\` — there is no TypeScript engine to fall back to.`);

@@ -99,7 +99,7 @@ pub fn chain_route_consumers(repo: &str, nodes: &mut Vec<GraphNode>, edges: &mut
 /// symbol, find ITS importers and wire them in (role=environment downstream). Returns (newNodes, newEdges,
 /// counter). Port of `_depth2_ripple`.
 ///
-/// REVERSE-INDEX CANDIDATES (SEAM_RIPPLE_INDEX, ON by default; =0 kill-switch → the old full walk) — the walk
+/// REVERSE-INDEX CANDIDATES — the walk
 /// below would otherwise re-read + text-scan EVERY repo source file to find who imports a target consumer,
 /// which was the dominant cost of a cold structural UP-grow (measured on cal.com: the walk alone was 76s →
 /// 3.5s once replaced, 21×). `file_importers` already maps target-file → its importer files, so the read+scan
@@ -135,7 +135,7 @@ pub fn depth2_ripple(
         return (Vec::new(), Vec::new(), counter);
     }
     let target_syms: HashSet<&str> = targets.iter().map(|(k, _)| k.split(' ').next().unwrap_or("")).collect();
-    let candidates: Option<HashSet<String>> = if std::env::var("SEAM_RIPPLE_INDEX").ok().as_deref() != Some("0") {
+    let candidates: Option<HashSet<String>> = {
         let importers = ws.file_importers();
         let mut set = HashSet::new();
         for (k, _) in &targets {
@@ -145,8 +145,6 @@ pub fn depth2_ripple(
             }
         }
         Some(set)
-    } else {
-        None // whole-repo walk-read → not per-file expressible; the caller's depsig falls back to the epoch
     };
 
     let mut new_nodes: Vec<GraphNode> = Vec::new();

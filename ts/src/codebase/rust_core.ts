@@ -1,5 +1,5 @@
 // RUST-CORE STRANGLER (Phase 1) — route the deterministic STRUCTURAL grow through the Rust addon
-// (rust/seam_core.node) instead of the TS `_growToTerminalsImpl`. Enabled by SEAM_RUST_CORE=1. The addon does the
+// (rust/seam_core.node). It is the only engine — there is no TypeScript grow to fall back to. The addon does the
 // intent-free structural grow + coupling (floor + learned-matcher REPLAY); it is byte-identical to the TS grow in
 // structural mode (SEAM_GROW_STRUCTURAL), which is the config this path forces. Rendering + flywheel DISCOVERY stay
 // in TS for now (later phases move discovery into Rust). The converter maps the addon's GraphDto onto the exact
@@ -33,9 +33,11 @@ function addonPath(): string {
 // of the repo's) — an intent-shaped grow has no embedding field over there, and an unvendored grammar returns
 // an empty AST rather than an error. Everything else stays on the TS engine, which remains the reference
 // implementation, not a fallback. `=0` forces the TS path outright.
-export function rustCoreEnabled(): boolean {
-  return process.env.SEAM_RUST_CORE !== "0" && process.env.SEAM_RUST_CORE !== "false";
-}
+// NOTE there is no "is the core enabled" switch. This was SEAM_RUST_CORE, a toggle back to a TypeScript
+// wave that no longer exists -- setting it to 0 did not degrade to anything, it made the grow fail with
+// "there is no TypeScript engine to fall back to". A flag whose only remaining effect is to break the tool
+// is a footgun, not a knob. What the core CAN serve is still asked per repo and per file by `rustCanParse`
+// / `rustCanServeRepo` below -- those are capability probes, not configuration.
 
 // Can the addon PARSE this file's language? The Rust core links only a subset of the grammars the TS engine
 // loads as wasm (java/typescript/tsx/javascript today), and a missing grammar fails SILENTLY: tree-sitter

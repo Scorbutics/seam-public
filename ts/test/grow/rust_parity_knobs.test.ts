@@ -40,13 +40,10 @@ afterAll(() => { rmSync(repo, { recursive: true, force: true }); });
 // The grow runs with SEAM_RUST_CORE forced ON, whatever the ambient default is — these assertions are about the
 // ADDON's behaviour, so they must not quietly become assertions about the TS engine if the default ever moves.
 async function growRust(opts: Record<string, unknown>): Promise<any> {
-  const saved = process.env.SEAM_RUST_CORE;
-  process.env.SEAM_RUST_CORE = "1";
   try {
     const [data] = await grow_to_terminals(repo, "src/core.ts", "core", { maxNodes: 40, dataCoupling: false, structuralGrow: true, ...opts } as any);
     return data;
   } finally {
-    if (saved === undefined) delete process.env.SEAM_RUST_CORE; else process.env.SEAM_RUST_CORE = saved;
   }
 }
 

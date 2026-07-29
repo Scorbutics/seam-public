@@ -49,7 +49,7 @@ const _key = (n: any): string => `${n.file ?? ""}#${(n.range ?? [0])[0] ?? 0}#${
 
 import type { HubMarker } from "../../core/graph_ir.js";
 
-import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "../rust_core.js";
+import { growViaRust, rustCanParse, rustCanServeRepo } from "../rust_core.js";
 import { resolveStructuralKnobs } from "./structural_knobs.js";
 import { normpath } from "../../core/resolve/walk.js";
 import { isTestFile, } from "../../core/resolve/consumers.js";
@@ -81,8 +81,7 @@ const _fcSeen = new Set<string>(); let _fcCalls = 0, _fcRepeats = 0, _fcRepeatMs
 // one ran. (The addon's are process-global, like these; `_resetFileCouplingStats` zeroes both.)
 function _rustFanStats(): { calls: number; repeats: number; repeatMs: number } {
   try {
-    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
-    if (!rustCoreEnabled()) return { calls: 0, repeats: 0, repeatMs: 0 };
+    const { loadAddon } = require("../rust_core.js");
     const [calls, repeats, repeatMs] = loadAddon().fanStats() as number[];
     return { calls, repeats, repeatMs };
   } catch { return { calls: 0, repeats: 0, repeatMs: 0 }; }
@@ -94,8 +93,8 @@ export function _fileCouplingStats() {
 export function _resetFileCouplingStats() {
   _fcSeen.clear(); _fcCalls = 0; _fcRepeats = 0; _fcRepeatMs = 0;
   try {
-    const { rustCoreEnabled, loadAddon } = require("../rust_core.js");
-    if (rustCoreEnabled()) loadAddon().resetCaches(undefined);
+    const { loadAddon } = require("../rust_core.js");
+    loadAddon().resetCaches(undefined);
   } catch { /* addon absent — nothing else to zero */ }
 }
 // PER-FILE COUPLING CACHE (SEAM_COUPLING_FILE_CACHE, default ON): the fan couples EACH reached boundary file's
@@ -324,8 +323,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   // STREAMING grows route here too now: the addon emits a record per settled wave through a synchronous
   // callback (`growToTerminalsStreaming`), so `--stream` no longer pins a query to the TS engine.
   //
-  // SEAM_RUST_CORE=0 falls back to the TS wave.
-  if (rustCoreEnabled() && rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
+  if (rustCanParse(anchorFile) && rustCanServeRepo(repo)) {
     return growViaRust(repo, anchorFile, symbol, opts);
   }
   // NO TS WAVE TO FALL BACK TO — it lives in the Rust core (seam-grow) and the TypeScript one is gone. A query
@@ -335,8 +333,7 @@ export async function grow_to_terminals(repo: string, anchorFile: string, symbol
   void deterministic;
   throw new Error(
     "the Seam core (Rust addon) could not serve this grow: " +
-    (!rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
-      : !rustCanParse(anchorFile) ? `no vendored grammar for ${anchorFile}`
+    (!rustCanParse(anchorFile) ? `no vendored grammar for ${anchorFile}`
       : "the repo holds a language the core cannot parse") +
     ". Build it with `make -C rust` — there is no TypeScript engine to fall back to.");
 }
@@ -384,7 +381,7 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // `rustDiscover` called ahead of the grow, the matchers are learned by the time the wave runs and the grow's
   // job IS replay. Measured: booking-app concern with --data-coupling llm, 35 nodes / 8 files through either
   // engine, identical node sets.
-  if (rustCoreEnabled() && rustCanServeRepo(repo)
+  if (rustCanServeRepo(repo)
       && centers.every((c) => rustCanParse(c.file))) {
     const rc = await import("../rust_core.js");
     const g: any = rc.loadAddon()?.growCenters(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
@@ -411,14 +408,12 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // through `grow_to_terminals`, which itself throws when the core cannot serve; the loop caught each throw
   // and returned `{nodes: [], edges: [], anchors: []}`. So a concern on an unservable repo answered NOTHING
   // instead of erroring, while the single-anchor path on the same repo threw. Measured with
-  // SEAM_RUST_CORE=0: merged -> 0 nodes, single-anchor -> "the Seam core could not serve this grow".
   //
   // A silent empty answer is the failure this engine refuses everywhere else. Same message as the
   // single-anchor path, so the two agree about what an unservable query is.
   throw new Error(
     "the Seam core (Rust addon) could not serve this concern grow: " +
-    (!rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
-      : !rustCanServeRepo(repo) ? "the repo holds a language the core cannot parse"
+    (!rustCanServeRepo(repo) ? "the repo holds a language the core cannot parse"
       : `no vendored grammar for ${centers.find((c) => !rustCanParse(c.file))?.file ?? "a center"}`) +
     ". Build it with `make -C rust` — there is no TypeScript engine to fall back to.");
 }

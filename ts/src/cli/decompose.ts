@@ -515,11 +515,10 @@ async function runCodebase(a: Args): Promise<number> {
       // `structural` forces the intent-FREE grow (cache reuses across intents) — set when growing FROM a CONFIRMED
       // center (the mechanism was already picked semantically); left off (env-driven) for a DETECTION grow whose
       // region must stay intent-shaped so center-detection reads the right fan-in.
-      const { rustCoreEnabled } = await import("../codebase/rust_core.js");
-      const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
+          const growAnchorFootprint = async (af: string, sym: string, ctx: any, dc: boolean = a.dataCoupling, structural = false): Promise<[any, any[]]> => {
         // RUST MIDDLE: the Rust core does the grow + coupling REPLAY, so the LLM flywheel runs FIRST (learn-once,
         // persisted to .seam), then grow_to_terminals replays it via the addon. The TS scoped-LLM grow is bypassed.
-        if (rustCoreEnabled()) {
+        {
           // FLYWHEEL, FOOTPRINT-SCOPED — same contract as the TS branch's `grow_footprint_scoped` below: a cheap
           // deterministic FLOOR pre-grow enumerates the flow's files, and the LLM key-discovery is bounded to
           // THOSE (never the whole repo). REUSE that pre-grow (`scoping_pre_grow`, phase 1 of
@@ -865,8 +864,11 @@ async function main(argv: string[]): Promise<number> {
   const a = parseArgs(argv);
   // --verbose is the single user-facing diagnostics surface: hand it to the cross-cutting stderr sites
   // (coupling-debug, anchor-debug, sub-step timing) via SEAM_VERBOSE, which `verbose()`/`timingOn()` read.
-  if (a.verbose) process.env.SEAM_VERBOSE = "1";
-  if (a.trace) process.env.SEAM_TIMING = "1";   // --trace adds the per-node timing firehose on top of --verbose
+  // --verbose / --trace are TOPICS of the one diagnostic switch (see core/progress.ts). Appended, so an
+  // explicit SEAM_DEBUG from the environment is kept rather than clobbered.
+  const _dbgTopics = (t: string) => { const cur = (process.env.SEAM_DEBUG ?? "").split(",").map((x) => x.trim()).filter(Boolean); if (!cur.includes(t)) cur.push(t); process.env.SEAM_DEBUG = cur.join(","); };
+  if (a.verbose) _dbgTopics("verbose");
+  if (a.trace) _dbgTopics("trace");   // --trace adds the per-node timing firehose on top of --verbose
   // QUIET BY DEFAULT for a plain-CLI stdout consumer (an agent reading `--format agent` etc.): drop the
   // @@SEAM_PROGRESS@@ markers + `[tag]` diagnostics so only the map lands on the reader. NOT when --verbose
   // (the user asked to see them), NOR for the extension/bridge paths (--emit-seams / --emit-prompts /
