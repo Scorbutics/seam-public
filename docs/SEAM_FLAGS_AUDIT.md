@@ -192,3 +192,45 @@ outside `test/fixtures` is touched — never `node_modules`, which holds the dow
 byte-identical to the cached baseline, so the caches were serving correct answers throughout. The gate's
 verdicts were right; it was its ABILITY TO FAIL that was compromised, and only for logic behind that one
 cache. The mutation above is now caught, which is the property that makes the other 107 paths worth trusting.
+
+
+## Final state: 116 -> 36
+
+| | start | end |
+|---|---|---|
+| live flags | 116 | **36** |
+| dead (no reader anywhere) | 16 | 0 |
+| never-set knobs (a constant with an untested branch) | 62 | 4 (all deployment config) |
+| diagnostic flags | 12 | 1 (`SEAM_DEBUG=<topic>`) |
+| render/pipeline behaviour flags | 9 | 1 (`SEAM_RENDER=<topic>`) |
+
+### What the 36 are
+
+  * **~11 deployment config** — `WASM_DIR`, `EMBED_MODEL`, `EMBED_DIR`, `CONFIG_HOME`, `RUST_CORE_PATH`,
+    `ADAPTERS_DIR`, `CACHE_DIR`, `SLM_CONFIG`, `OLLAMA_MODEL`/`URL`, `STRONG_MODEL`, `LLM_TIMEOUT_MS`. Paths,
+    model names, a timeout. Four are set by nothing in-repo, which is correct: an override exists to be unset
+    until a deployment needs it.
+  * **~9 documented user knobs** — `COUPLING`, `TIER_GROW`, `TIER_MARGIN`, `KEY_BUDGET`, `HUB_COLLAPSE`,
+    `EMBED_QUANTIZED`, `GROW_BORDER_FIELD`, `CENTERS_MERGED`, `DI_RESOLVE`.
+  * **4 switches** — `SEAM_DEBUG`, `SEAM_RENDER`, `GRAPH_CACHE`, `INDEX_CACHE`.
+  * **2 escape hatches** — `COPILOT_ISOLATE` (shadows the user's Copilot auth config; its value is that
+    nobody sets it until isolation breaks a login), `NO_GITIGNORE`.
+  * **~10 cross-engine A/B seams** — `SPLIT`, `UNREACHED_KEYS`, `PER_FILE_KEYS`, `PER_NODE_BUDGET`,
+    `NODE_KEY_CAP`, `WRITERS_COLUMNS`, `NO_ADAPTERS`, `GROW_STRUCTURAL`, `PROBE_COUPLING`. Each is flipped by a
+    test to prove a feature CAUSES what it claims.
+
+### Why this is the floor, not fatigue
+
+The remaining reduction would be merging those ~10 A/B seams into one switch, the way the nine render toggles
+became `SEAM_RENDER`. Deliberately not done:
+
+  * Most are Rust-side, and `SEAM_RENDER` proved that class of merge half-lands — `coproducers` and
+    `subject-readers` are read on BOTH sides of napi, and converting only the TypeScript broke a coupling
+    assertion. Each of these needs the same both-engines treatment, and `NO_ADAPTERS` additionally feeds
+    `floor_env_tag()`, a cache KEY.
+  * `GROW_STRUCTURAL` carries a measured justification in its own comment — defaulting it on fails 14
+    behavioural tests, and "turning it off by flag is not a migration, it is a silent capability deletion".
+  * The payoff is naming, not capability: ten justified switches would become one switch with ten topics.
+
+That is a real improvement and a reasonable next pass, but it is churn against a cache key and two engines for
+no behaviour change — worth doing deliberately rather than as the tail of a cleanup.
