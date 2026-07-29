@@ -12,6 +12,7 @@ pub mod coupling;
 pub mod exclude;
 pub mod field;
 pub mod graph_ir;
+pub mod center_repo;
 pub mod intent_rank;
 pub mod grow_index;
 pub mod orchestrate;

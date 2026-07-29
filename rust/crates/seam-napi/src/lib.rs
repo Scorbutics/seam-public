@@ -3414,3 +3414,40 @@ pub fn grow_mark_spine_members(relevance: Vec<Option<f64>>) -> napi::Result<Stri
     let out: Vec<Option<bool>> = hunks.into_iter().map(|h| h.spine).collect();
     serde_json::to_string(&out).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
+
+/// growSourceDirs — the repo's source directories with sample basenames, the whole input to the
+/// center-first stage-1 dir judge. Excludes SKIP_DIRS (walk), `.d.ts`, tests (unless `includeTests`) and
+/// the dev's `--exclude`.
+#[napi]
+pub fn grow_source_dirs(
+    repo: String,
+    exclude_dirs: Vec<String>,
+    include_tests: Option<bool>,
+) -> napi::Result<String> {
+    let dirs = seam_grow::center_repo::source_dirs(&repo, &exclude_dirs, include_tests.unwrap_or(false));
+    serde_json::to_string(&dirs).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}
+
+/// growCenterCandidates — the bounded mechanism-candidate set for the center-first pass.
+///
+/// `scopeDirs` present = the stage-1 judge already picked the domain directory: enumerate only under it
+/// (no whole-repo def cap) and offer mechanism-level defs ranked type-first then fan-in. Absent = the
+/// offline lexical floor over the capped whole repo. The judges themselves stay caller-side.
+#[napi]
+pub fn grow_center_candidates(
+    repo: String,
+    intent: String,
+    scope_dirs: Option<Vec<String>>,
+    exclude_dirs: Vec<String>,
+    include_tests: Option<bool>,
+    cap: Option<u32>,
+) -> napi::Result<String> {
+    let opts = seam_grow::center_repo::RecallOpts {
+        scope_dirs: scope_dirs.as_deref(),
+        exclude_dirs: &exclude_dirs,
+        include_tests: include_tests.unwrap_or(false),
+        cap: cap.unwrap_or(0) as usize,
+    };
+    let cands = seam_grow::center_repo::center_candidates(&repo, &intent, &opts);
+    serde_json::to_string(&cands).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}
