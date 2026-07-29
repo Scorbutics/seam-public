@@ -952,3 +952,31 @@ under the SOURCE epoch — which coupling churn does not move. The union is then
 So the scope stays cheap across exactly the runs the TypeScript memo was built to survive, and the port drops
 from three steps to two: chain pre-grow → discover → grow, and report the scope so the test can assert on
 what discovery was GIVEN.
+
+### OPEN QUESTION: does the multi-center concern path ever drive discovery?
+
+Established by reading, not yet by measurement:
+
+  - There are exactly TWO `rustDiscover` call sites, both in `cli/decompose.ts`: one inside `coreFootprint`
+    (scoped to a single file) and one in the SINGLE-ANCHOR `dc && dcLlm` branch (scoped to the flow's files).
+    NEITHER is on the multi-center path, which goes through `orch.grow_centers_scoped`.
+  - `growViaRust` passes `repo, anchorFile, symbol, dataCoupling, knobs` — no scope. So `ctx.footprintFiles`
+    never crosses to the core.
+  - Searching every read of `ctx.footprintFiles`: a `!ctx.footprintFiles` guard, a `.size` in a log line, and
+    fork propagation in `engine_ctx`. No reader scopes anything with it.
+
+Which suggests `grow_centers_scoped` computes a discovery scope that nothing consumes, and that its log line
+("footprint-scoped LLM discovery: N files across the concern") announces a scoping that does not happen.
+
+NOT CONFIRMED, and deliberately not asserted. Two things block it:
+  - A CLI concern run with `--data-coupling llm` on booking-app emitted ZERO stderr lines — not even the
+    `[grow]`/`[auto]` diagnostics a direct library call produces. Something silences that path and I have not
+    isolated what, so "no discovery line appeared" is not yet evidence that no discovery ran.
+  - The alternative explanation is benign: the CLI auto-grows from the anchor FIRST (the single-anchor branch
+    at decompose.ts:505, which DOES discover, scoped to that flow), and the concern re-anchor then replays the
+    learned matchers. If so the concern path is right not to re-discover, and only the log line is misleading.
+
+To settle it: run a concern on a repo whose `.seam` is cold, with a backend, and count `[rust-discover]`
+lines and their scope; or instrument `learn_matchers` to record its scope per call. Do that BEFORE touching
+`ctx.footprintFiles` — the field looks vestigial, and removing a vestigial-looking field is exactly how the
+`_expanded` and `resetCtxCache` cases would have gone wrong if they had not been checked first.
