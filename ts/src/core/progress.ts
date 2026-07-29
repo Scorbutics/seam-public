@@ -44,10 +44,21 @@ let _rawErr: ((s: string) => void) | null = null;
 /// are the difference between an answer and a partial answer, and a user who cannot see them cannot tell
 /// which one they got. Silent degradation is the exact failure this engine refuses everywhere else — it
 /// should not be reintroduced by a display filter.
+let _hintedVerbose = false;
+
 export function warn(msg: string): void {
   const line = msg.endsWith("\n") ? msg : msg + "\n";
   if (_rawErr) _rawErr(line);
   else process.stderr.write(line);
+  // ONCE PER RUN, and only when the filter is actually hiding things: a reader who just learned their answer
+  // was cut short has no way to know there is more detail available — `--verbose` is not discoverable from an
+  // empty stderr. Say it beside the first degradation, not on every line, and never when nothing is hidden.
+  if (_quiet && !_hintedVerbose) {
+    _hintedVerbose = true;
+    const hint = "       (--verbose shows the full step-by-step diagnostics)\n";
+    if (_rawErr) _rawErr(hint);
+    else process.stderr.write(hint);
+  }
 }
 
 export function installQuietFilter(): void {

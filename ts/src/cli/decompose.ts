@@ -208,9 +208,18 @@ async function runCodebase(a: Args): Promise<number> {
   // covers every codebase mode, since they all address their node through --center.
   if (a.center) {
     for (const c of parseCenters(a.center)) {
-      if (!existsSync(resolvePath(a.repo ?? ".", c.file)))
-        err(`--center path not found under --repo ${a.repo ?? "."}: ${c.file}\n` +
-            `       (pass --repo <path-to-repo>, or make the path relative to it)`);
+      if (!existsSync(resolvePath(a.repo ?? ".", c.file))) {
+        // NAME THE LIKELY MISTAKE. The separator is `#`, and `file:symbol` is the natural guess — it is what
+        // editors and stack traces print. Written with `:`, the whole string parses as a PATH, so the user is
+        // told their file does not exist: true, and useless. Detect the shape and say what to type instead.
+        const colon = /^(.*\.[A-Za-z0-9]+):([A-Za-z_]\w*)$/.exec(c.file);
+        if (colon && existsSync(resolvePath(a.repo ?? ".", colon[1])))
+          err("--center separates file and symbol with '#', not ':'\n"
+            + `       you wrote: ${c.file}\n`
+            + `       try:       ${colon[1]}#${colon[2]}`);
+        err(`--center path not found under --repo ${a.repo ?? "."}: ${c.file}\n`
+          + `       (pass --repo <path-to-repo>, or make the path relative to it)`);
+      }
     }
   }
   // SAME GUARD, ONE LEVEL DEEPER — the path exists but the SYMBOL is not declared in it. Growing from an

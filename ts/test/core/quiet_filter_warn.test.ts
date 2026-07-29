@@ -22,5 +22,21 @@ describe("the quiet filter hides progress but never a degraded answer", () => {
     expect(joined).toContain("node budget 4 reached");   // the truncation is visible
     expect(joined).not.toContain("a progress step");     // the chatter is not
     expect(joined).not.toContain("[grow] src/x.ts");
+    // and the reader is told how to see the rest — ONCE, not per warning
+    expect(joined).toContain("--verbose");
+  });
+
+  test("the --verbose hint appears once per run, not per warning", () => {
+    const orig = process.stderr.write.bind(process.stderr);
+    const seen: string[] = [];
+    (process.stderr as any).write = (s: any) => { seen.push(String(s)); return true; };
+    try {
+      installQuietFilter();
+      warn("[a] first degradation");
+      warn("[b] second degradation");
+      warn("[c] third degradation");
+    } finally { (process.stderr as any).write = orig; }
+    const hints = seen.join("").split("--verbose").length - 1;
+    expect(hints).toBeLessThanOrEqual(1);   // noise about noise is still noise
   });
 });
