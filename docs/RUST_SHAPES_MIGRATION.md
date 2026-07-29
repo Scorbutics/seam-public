@@ -953,7 +953,7 @@ So the scope stays cheap across exactly the runs the TypeScript memo was built t
 from three steps to two: chain pre-grow → discover → grow, and report the scope so the test can assert on
 what discovery was GIVEN.
 
-### OPEN QUESTION: does the multi-center concern path ever drive discovery?
+### SETTLED (was: open question): the concern path computes a discovery scope and never uses it
 
 Established by reading, not yet by measurement:
 
@@ -981,8 +981,37 @@ lines and their scope; or instrument `learn_matchers` to record its scope per ca
 `ctx.footprintFiles` — the field looks vestigial, and removing a vestigial-looking field is exactly how the
 `_expanded` and `resetCtxCache` cases would have gone wrong if they had not been checked first.
 
-STILL UNSETTLED after four attempts, and the attempts themselves are worth recording so the next one is not
-spent rediscovering them:
+**SETTLED — and it is a defect.** What silenced every earlier attempt was `installQuietFilter`
+(`core/progress.ts`), installed by default in `cli/decompose.ts` for any run that is not `--verbose` or an
+extension/bridge path. It REPLACES `process.stderr.write` and drops anything matching `/^\[[a-z][\w-]*\] /`
+— i.e. exactly `[center-first]`, `[grow]`, `[data-coupling]`, `[rust-discover]`. `--verbose` is the opt-out.
+Four attempts were spent guessing at invocations when reading the dispatch would have found it immediately.
+
+With `--verbose`, on a COLD `.seam`, same repo and flags, only the path differing:
+
+    center-first concern:  [data-coupling] footprint-scoped LLM discovery: 4 files across the concern
+                           (no [rust-discover] line)          key-adapters.json: NO
+    single-anchor CONTROL: [data-coupling] footprint-scoped LLM discovery: 8 files across the flow
+                           [rust-discover] nothing to learn: learned=0 reps=0 marked(shapeless=1)
+                           key-adapters.json: YES
+
+The control rules out "this fixture has nothing to learn": the single-anchor path runs discovery anyway and
+WRITES the store — it marks the shapeless file, which is how a repo settles. The concern path does neither.
+
+So on the center-first concern path, `--data-coupling llm` computes a discovery scope, LOGS it, and never
+runs discovery. The flywheel never fires, the run degrades silently to the deterministic floor, and the log
+line says the opposite of what happened. Nothing marks either, so that path could never settle even if
+discovery were added naively.
+
+NOT FIXED HERE, deliberately. The fix is to call `rustDiscover` with the computed scope, mirroring the
+single-anchor branch (decompose.ts:505-517) INCLUDING its P3 gate — `footprintTouchesBoundary`, which exists
+so a flow with no grounded boundary does not pay for a synth pass. That change makes concern runs start
+calling the model where today they do not, which is a cost decision, not a cleanup.
+
+It also reframes the LLM-coupling PORT: there may be little to port on the concern path, because that path
+does not currently do LLM coupling at all.
+
+The dead ends below are kept — they are the invocation facts, still true:
 
   - `dcForCenters = a.concern && !centerPicked ? false : a.dataCoupling` (decompose.ts:541). With an explicit
     `--anchor-file`/`--symbol` plus `--concern`, `centerPicked` stays FALSE, so coupling is switched OFF for
