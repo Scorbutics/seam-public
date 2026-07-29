@@ -3451,3 +3451,21 @@ pub fn grow_center_candidates(
     let cands = seam_grow::center_repo::center_candidates(&repo, &intent, &opts);
     serde_json::to_string(&cands).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
+
+/// growRankHubs — the hub files `seam --warm` should pre-grow, ranked by fan-in (importer count) and
+/// capped. Ranking happens core-side so the repo-wide reverse-import map never crosses the boundary.
+#[napi]
+pub fn grow_rank_hubs(
+    repo: String,
+    top: Option<u32>,
+    include_tests: Option<bool>,
+    exclude_dirs: Option<Vec<String>>,
+) -> napi::Result<String> {
+    let hubs = seam_grow::warm::rank_hubs(
+        &repo,
+        top.unwrap_or(40) as usize,
+        include_tests.unwrap_or(false),
+        &exclude_dirs.unwrap_or_default(),
+    );
+    serde_json::to_string(&hubs).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
+}

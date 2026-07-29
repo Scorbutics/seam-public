@@ -88,10 +88,17 @@ impl Workspace {
     /// The repo-wide REVERSE-IMPORT map: `normpath(target file) → the files that import it`. Every file's
     /// import sources (named/namespace/default) are resolved to their target; a file importing itself is
     /// skipped. The ubiquity prior derives cross-module fan-in from this. Port of `fileImporters`.
-    pub fn file_importers(&self) -> HashMap<String, HashSet<String>> {
-        let mut out: HashMap<String, HashSet<String>> = HashMap::new();
+    ///
+    /// INSERTION-ORDERED (first-seen target first), because the TypeScript's `Map` is and a consumer that
+    /// RANKS these — `warm`'s hub selection — breaks ties by that order before capping. A HashMap here would
+    /// leak Rust's hash order into which hubs get warmed.
+    pub fn file_importers(&self) -> indexmap::IndexMap<String, HashSet<String>> {
+        let mut out: indexmap::IndexMap<String, HashSet<String>> = indexmap::IndexMap::new();
         for fi in self.index.files() {
-            let mut sources: HashSet<String> = HashSet::new();
+            // INSERTION-ORDERED, like the TypeScript's `Set`. A HashSet here decides which of a file's
+            // targets is inserted into `out` FIRST, which is the tie-break `warm`'s hub ranking cuts on —
+            // measured, it reordered the fan-in-7 plateau of this repo's own tree.
+            let mut sources: indexmap::IndexSet<String> = indexmap::IndexSet::new();
             for r in &fi.refs {
                 if let Some(s) = &r.source {
                     sources.insert(s.clone());

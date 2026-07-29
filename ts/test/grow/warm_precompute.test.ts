@@ -30,19 +30,18 @@ beforeAll(() => {
 
 afterAll(() => { try { rmSync(repo, { recursive: true, force: true }); } catch { /* best effort */ } });
 
-describe("rankHubs — fan-in ranking (pure)", () => {
-  test("most-imported first; tests excluded; capped", () => {
-    const imp = new Map<string, Set<string>>([
-      ["src/hub.ts", new Set(["src/a.ts", "src/b.ts", "src/c.ts"])],          // fan-in 3
-      ["src/util.ts", new Set(["src/a.ts"])],                                  // fan-in 1
-      ["src/big.test.ts", new Set(["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"])], // fan-in 4 but a TEST
-    ]);
-    const ranked = rankHubs(imp, 10, false, undefined);
+describe("rankHubs — fan-in ranking", () => {
+  // The ranking itself is the core's (rust/crates/seam-grow/src/warm.rs), where the full ordering contract —
+  // including a high-fan-in TEST file being promoted to #1 under includeTests — is unit-tested against an
+  // on-disk repo, and rust/parity/warm_hubs.ts compares it to the old TypeScript over 20 repos. What this
+  // asserts is the WIRING: that a repo path, the cap, includeTests and excludeDirs all reach the core.
+  test("most-imported first; tests excluded; cap and excludeDirs honoured", () => {
+    const ranked = rankHubs(repo, 10, false, undefined);
     expect(ranked[0].file).toBe("src/hub.ts");                                 // highest NON-test fan-in first
-    expect(ranked.map((h) => h.file)).not.toContain("src/big.test.ts");        // test excluded despite fan-in 4
-    expect(rankHubs(imp, 1, false, undefined)).toHaveLength(1);                // cap honoured
-    expect(rankHubs(imp, 10, true, undefined)[0].file).toBe("src/big.test.ts"); // includeTests → test kept, now #1
-    expect(rankHubs(imp, 10, false, ["src"])[0]).toBeUndefined();              // --exclude-dirs src → nothing left
+    expect(ranked[0].fanIn).toBe(3);                                           // a/b/c import it
+    expect(ranked.map((h) => h.file)).not.toContain("src/hub.test.ts");        // test convention exclusion
+    expect(rankHubs(repo, 1, false, undefined)).toHaveLength(1);               // cap honoured
+    expect(rankHubs(repo, 10, false, ["src"])[0]).toBeUndefined();             // --exclude-dirs src → nothing left
   });
 });
 

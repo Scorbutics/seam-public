@@ -38,7 +38,7 @@ pub fn module_key(repo: &str, file: &str) -> String {
 /// The per-repo ubiquity derivation: the reverse-import map (target → importers) + the fan-in count map
 /// (norm(target) → distinct consumer-module count).
 pub struct Ubiquity {
-    importers: HashMap<String, HashSet<String>>,
+    importers: indexmap::IndexMap<String, HashSet<String>>,
     fan_in: HashMap<String, usize>,
 }
 

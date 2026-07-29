@@ -7,8 +7,8 @@
 // a covered region is served warm. Hub-seeded (not all-exports) trades complete coverage for a minutes-not-hours
 // build; cold corners simply pay the normal first-touch cost. Complements the COUPLING FLYWHEEL warm-up
 // (learned matchers): this warms the STRUCTURAL footprint, that warms the coupling adapters.
-import { fileImporters } from "../../core/resolve/consumers.js";
 import { graphCacheEnabled } from "../../core/resolve/index_cache.js";
+import { loadAddon as _loadAddon } from "../rust_core.js";
 import { EngineCtx } from "../engine_ctx.js";
 import { grow_to_terminals } from "./orchestrate.js";
 
@@ -27,20 +27,17 @@ export interface WarmResult {
   hubs: { file: string; fanIn: number }[];
 }
 
-// A hub file is EXCLUDED from the warm set when it's a test/mock (unless includeTests) or under an --exclude-dir.
-function _excluded(file: string, includeTests: boolean, excludeDirs?: string[]): boolean {
-  if (!includeTests && /(^|\/)(__tests__|__mocks__)(\/)|\.(test|spec)\.[cm]?[jt]sx?$|(^|\/)tests?\//i.test(file)) return true;
-  return !!excludeDirs?.some((d) => file === d || file.startsWith(d.endsWith("/") ? d : d + "/"));
-}
-
-// RANK candidate hubs by fan-in (importer count), most-imported first, excluded files dropped, capped at `top`.
-// Pure over the (disk-cached) reverse-import map, so it's unit-testable without a grow.
-export function rankHubs(importers: Map<string, Set<string>>, top: number, includeTests: boolean, excludeDirs?: string[]): { file: string; fanIn: number }[] {
-  return [...importers.entries()]
-    .map(([file, set]) => ({ file, fanIn: set.size }))
-    .filter((h) => !_excluded(h.file, includeTests, excludeDirs))
-    .sort((x, y) => y.fanIn - x.fanIn)
-    .slice(0, Math.max(1, top));
+// RANK candidate hubs by fan-in (importer count), most-imported first, excluded files dropped, capped at
+// `top`. Ranked in the CORE (rust/crates/seam-grow/src/warm.rs; differential: rust/parity/warm_hubs.ts) so
+// the repo-wide reverse-import map — every target file with its full importer set — never crosses napi.
+//
+// The tie order matters and is not cosmetic: fan-in counts collide constantly and the list is CUT to `top`,
+// so equal-fan-in files are separated only by the import map's insertion order. Porting this surfaced two
+// places where the Rust leaked its own hash order into that tie-break; both are IndexMap/IndexSet now.
+export function rankHubs(repo: string, top: number, includeTests: boolean, excludeDirs?: string[]): { file: string; fanIn: number }[] {
+  const a = _loadAddon();
+  if (!a) throw new Error("the Seam core (Rust addon) is not available — build it with `cargo build --release` in rust/");
+  return JSON.parse(a.growRankHubs(repo, Math.max(1, top), includeTests, excludeDirs ?? []));
 }
 
 export async function warmRepo(repo: string, opts: WarmOpts = {}): Promise<WarmResult> {
@@ -50,8 +47,7 @@ export async function warmRepo(repo: string, opts: WarmOpts = {}): Promise<WarmR
   if (!graphCacheEnabled()) return { cacheOff: true, grown: 0, failed: 0, covered: 0, hubs: [] };
 
   log("[warm] ranking hub files by fan-in (importer count)…");
-  const importers = await fileImporters(repo);
-  const hubs = rankHubs(importers, opts.top ?? 40, includeTests, opts.excludeDirs);
+  const hubs = rankHubs(repo, opts.top ?? 40, includeTests, opts.excludeDirs);
   if (!hubs.length) { log("[warm] no importable files found — nothing to warm (an isolated / single-file repo?)."); return { cacheOff: false, grown: 0, failed: 0, covered: 0, hubs }; }
 
   log(`[warm] warming ${hubs.length} hub file(s) (structural module grow${dataCoupling ? " + data-coupling" : ""}); each warms its footprint transitively…`);
