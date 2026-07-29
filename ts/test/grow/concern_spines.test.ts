@@ -5,6 +5,7 @@
 // `renderAgent` runs for its single anchor. Pure hand-built model (no tree-sitter needed) — mirrors the existing
 // renderConcern pure-model tests in this file's sibling `concern_render.test.ts`.
 import { describe, expect, test } from "bun:test";
+import { renderTopic } from "../helpers/scan.js";
 import { renderConcern } from "../../src/codebase/llm_context.js";
 
 const hunk = (id: string, label: string, file: string, extra: any = {}) => ({ id, label, file, start: 1, role: "core", tier: "supporting", ...extra });
@@ -50,15 +51,15 @@ describe("renderConcern — ## Flows (each mechanism's culmination + every way i
     expect(seg).toMatch(/← editProfile → ●/);
   });
 
-  test("SEAM_SPINE_ENTRY=0 drops the way-in fan, leaving only the culmination", () => {
-    const prev = process.env.SEAM_SPINE_ENTRY; process.env.SEAM_SPINE_ENTRY = "0";
+  test("SEAM_RENDER=no-spine-entry drops the way-in fan, leaving only the culmination", () => {
+    const _restore_prev = renderTopic("no-spine-entry");
     try {
       const out = renderConcern(makeFanModel(), { intent: "how are bookings managed", centers });
       const seg = out.slice(out.indexOf("## Flows"), out.indexOf("## In"));
       expect(seg).toMatch(/● BookingsBean\.createBooking ──writes──▶ db "MemberBooking"/);
       // no way-in ROWS when opted out (the header legend still mentions `←`, so match the indented row form)
       expect(seg).not.toMatch(/\n\s+← /);
-    } finally { if (prev === undefined) delete process.env.SEAM_SPINE_ENTRY; else process.env.SEAM_SPINE_ENTRY = prev; }
+    } finally { _restore_prev?.(); }
   });
 
   test("spineCap caps the shown mechanisms and rolls up the rest", () => {

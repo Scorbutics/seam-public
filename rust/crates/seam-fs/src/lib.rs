@@ -401,6 +401,29 @@ fn debug_spec() -> Option<String> {
     std::env::var("SEAM_DEBUG").ok().filter(|s| !s.trim().is_empty())
 }
 
+/// SEAM_RENDER — the render/coupling behaviour switch, mirroring `renderFlag` in ts/src/core/progress.ts.
+///
+/// Comma-separated topics; `topic` forces on, `no-topic` forces off, absent takes `dflt`. Two of the topics
+/// (`coproducers`, `subject-readers`) are read on BOTH sides of the napi boundary, which is exactly why they
+/// share one name: the TypeScript render and this pipeline must agree about what a topic means.
+pub fn render_flag(topic: &str, dflt: bool) -> bool {
+    let Ok(spec) = std::env::var("SEAM_RENDER") else { return dflt };
+    let spec = spec.trim();
+    if spec.is_empty() {
+        return dflt;
+    }
+    for raw in spec.split(',') {
+        let t = raw.trim();
+        if t == topic {
+            return true;
+        }
+        if t.strip_prefix("no-") == Some(topic) {
+            return false;
+        }
+    }
+    dflt
+}
+
 // The parse is a PURE function of the spec string so it is testable without touching process-global env
 // (which would race across parallel test threads).
 fn spec_on(spec: &str, topic: &str) -> bool {
@@ -433,6 +456,50 @@ pub fn debug_on(topic: &str) -> bool {
 /// enabled, or `None` when it is off.
 pub fn debug_value(topic: &str) -> Option<String> {
     debug_spec().and_then(|s| spec_value(&s, topic))
+}
+
+#[cfg(test)]
+mod render_flag_tests {
+    // `render_flag` reads process-global env, so these drive the PARSE through a local mirror of it rather
+    // than mutating the environment (which races across parallel test threads).
+    fn spec_flag(spec: &str, topic: &str, dflt: bool) -> bool {
+        if spec.trim().is_empty() {
+            return dflt;
+        }
+        for raw in spec.split(',') {
+            let t = raw.trim();
+            if t == topic {
+                return true;
+            }
+            if t.strip_prefix("no-") == Some(topic) {
+                return false;
+            }
+        }
+        dflt
+    }
+
+    #[test]
+    fn absent_topic_takes_the_call_sites_default_either_way() {
+        assert!(spec_flag("", "subject-dim", true));
+        assert!(!spec_flag("", "subject-readers", false));
+        assert!(spec_flag("other", "subject-dim", true));
+    }
+
+    #[test]
+    fn a_topic_forces_on_and_no_topic_forces_off_against_either_default() {
+        assert!(!spec_flag("no-subject-dim", "subject-dim", true));
+        assert!(spec_flag("subject-readers", "subject-readers", false));
+        // forcing ON a default-ON topic is a no-op, not an error -- several tests did exactly this
+        assert!(spec_flag("subject-dim", "subject-dim", true));
+    }
+
+    #[test]
+    fn topics_compose_and_a_prefix_is_not_a_match() {
+        assert!(!spec_flag("no-subject-fold,no-subject-dim", "subject-dim", true));
+        assert!(!spec_flag("no-subject-fold,no-subject-dim", "subject-fold", true));
+        // `subject` must not match `subject-dim`, nor `no-subject` switch it off
+        assert!(spec_flag("no-subject", "subject-dim", true));
+    }
 }
 
 #[cfg(test)]

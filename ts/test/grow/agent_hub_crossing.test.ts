@@ -10,6 +10,7 @@
 // agent_render.test.ts and agent_subject_fold.test.ts do — this is tested against a hand-crafted model. Hermetic
 // and fully deterministic everywhere, including offline (nothing to guard on).
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { renderTopic } from "../helpers/scan.js";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 import { COUPLING } from "../../src/codebase/coupling/config.js";
 
@@ -77,12 +78,9 @@ const makeModel = () => {
 describe("agent render — ubiquitous-key co-access is folded, narrow keys and the mechanism are not", () => {
   // These fixtures carry no module/route subject, so the (separately tested) subject fold/dim would claim their
   // region seams first. Disable both so the hub rule is what is under test.
-  const _fold = process.env.SEAM_SUBJECT_FOLD, _dim = process.env.SEAM_SUBJECT_DIM;
-  beforeAll(() => { process.env.SEAM_SUBJECT_FOLD = "0"; process.env.SEAM_SUBJECT_DIM = "0"; });
-  afterAll(() => {
-    if (_fold === undefined) delete process.env.SEAM_SUBJECT_FOLD; else process.env.SEAM_SUBJECT_FOLD = _fold;
-    if (_dim === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _dim;
-  });
+  let _restore: (() => void) | undefined;
+  beforeAll(() => { _restore = renderTopic("no-subject-fold", "no-subject-dim"); });
+  afterAll(() => { _restore?.(); });
 
   test("(a) the hub co-accesses collapse to ONE example + an honest named roll-up; the narrow crossing stays", () => {
     const out = renderAgent(makeModel(), { tokenBudget: 8000, intent: INTENT });
@@ -109,10 +107,10 @@ describe("agent render — ubiquitous-key co-access is folded, narrow keys and t
     expect(out).not.toContain("more step(s)");
   });
 
-  test("(a) SEAM_HUB_CROSSING=1 opts out — every co-access returns (the deterministic escape hatch)", () => {
-    const prev = process.env.SEAM_HUB_CROSSING; process.env.SEAM_HUB_CROSSING = "1";
+  test("(a) SEAM_RENDER=hub-crossing opts out — every co-access returns (the deterministic escape hatch)", () => {
+    const _restore_prev = renderTopic("hub-crossing");
     const out = renderAgent(makeModel(), { tokenBudget: 8000, intent: INTENT });
-    if (prev === undefined) delete process.env.SEAM_HUB_CROSSING; else process.env.SEAM_HUB_CROSSING = prev;
+    _restore_prev?.();
     expect((out.match(/^ +adminOp\d \(/gm) ?? []).length).toBe(HUB_CROSSINGS);
   });
 

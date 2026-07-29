@@ -96,3 +96,21 @@ export const _resetDefTableMem = resetCallIndex;
 // centers_merged_cache says it drops the in-process mirrors "so the 2nd call proves a genuine DISK reuse",
 // and it was measuring a surviving in-process memo instead. Re-export the real one.
 export { _resetFootprintMirror } from "../../src/codebase/footprint_cache.js";
+
+// ── SEAM_RENDER topic helpers ──────────────────────────────────────────────────────────────────────────────
+// The nine per-behaviour render env vars became topics of one SEAM_RENDER list (see core/progress.ts), so a
+// test that used to set two of them independently now has to COMPOSE rather than assign. This adds topics in
+// place and returns a restore closure — what the old per-variable save-and-restore dance was doing.
+export function renderTopic(...topics: string[]): () => void {
+  const prev = process.env.SEAM_RENDER;
+  const cur = (prev ?? "").split(",").map((t) => t.trim()).filter(Boolean);
+  for (const t of topics) {
+    // adding `x` must drop a previously-set `no-x` and vice versa, else whichever was set first would win
+    const opposite = t.startsWith("no-") ? t.slice(3) : `no-${t}`;
+    const i = cur.indexOf(opposite);
+    if (i >= 0) cur.splice(i, 1);
+    if (!cur.includes(t)) cur.push(t);
+  }
+  process.env.SEAM_RENDER = cur.join(",");
+  return () => { if (prev === undefined) delete process.env.SEAM_RENDER; else process.env.SEAM_RENDER = prev; };
+}

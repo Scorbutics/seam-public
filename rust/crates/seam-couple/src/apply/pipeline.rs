@@ -346,7 +346,7 @@ pub fn run_pipeline(ctx: &PipelineCtx, state: &mut PipelineState, node: &Pipelin
         wire_near(&mut state.graph, &node.id, &boundary_id, &g.key); // STEP 5 (near)
         cross_boundary(ctx, state, &boundary_id, &g.key, &g.complement_files, depth, &co_occurrence, &surfaced_keys); // STEP 5 (far) + chain
         // STEP 5b — the SAME-SIDE co-accessors (draw once per grow).
-        if std::env::var("SEAM_COPRODUCERS").as_deref() != Ok("0") {
+        if seam_fs::render_flag("coproducers", true) {
             let kid = key_id(&g.key.kind, &g.key.value);
             if !state.same_side_drawn.contains(&kid) {
                 state.same_side_drawn.insert(kid);
@@ -375,7 +375,7 @@ fn cross_boundary(ctx: &PipelineCtx, state: &mut PipelineState, boundary_id: &st
     let complement_produces = !key.produces;
     let ranked = order_complements_by_relevance(complement_files, co);
     let is_reader_side = !complement_produces;
-    let subject_readers = std::env::var("SEAM_SUBJECT_READERS").as_deref() == Ok("1") && is_reader_side;
+    let subject_readers = seam_fs::render_flag("subject-readers", false) && is_reader_side;
     let cap = if complement_files.len() > hub_fan() {
         hub_reader_cap()
     } else if subject_readers {

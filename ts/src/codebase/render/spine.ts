@@ -8,6 +8,7 @@
 // overattrib-K heuristics, env var names/defaults) is an untouched, oracle-tuned CONTRACT — see the inline
 // comments below (kept verbatim) for why each rule exists.
 import { type Hunk, type Seam, filesOf } from "./vocab.js";
+import { renderFlag } from "../../core/progress.js";
 import { CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./medium_registry.js";
 import { COUPLING } from "../coupling/config.js";
 
@@ -109,7 +110,7 @@ const tierOf = (s: Seam) => s.tier ?? "";
 // hand-built render models in the tests carry none). The lead itself does NOT vanish: it still surfaces as the
 // "possibly called by" reach phrase, in the region, and in the entry surface — it is DEMOTED out of the
 // authoritative path, not dropped from the output. (Opt out: SEAM_SPINE_GROUNDED_ONLY=0.)
-const _groundedOnly = () => process.env.SEAM_SPINE_GROUNDED_ONLY !== "0";
+const _groundedOnly = () => renderFlag("spine-grounded-only", true);
 export const groundedHop = (e: any): boolean =>
   !(_groundedOnly() && e?.kind === "call" && e?.provenance != null && e.provenance !== "RESOLVED_FULL");
 
@@ -150,7 +151,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     const _storeTerminal = true;
     const storeSeamIds = new Set<string>();   // seams holding a data-store boundary hunk — TERMINAL in the spine
     if (_storeTerminal) for (const s of seams) if ((s.hunks ?? []).some((h: any) => _STORE_KINDS.has(h.kind ?? ""))) storeSeamIds.add(s.id);
-    const _trustGate = process.env.SEAM_SPINE_TRUST_GATE !== "0";
+    const _trustGate = renderFlag("spine-trust-gate", true);
     for (const e of (model.edges ?? []) as any[]) {
       if (e.kind === "contains") continue;
       if (!groundedHop(e)) continue;   // a PARTIAL (name-match) call is a LEAD, never a spine hop — see groundedHop
@@ -338,7 +339,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
     const _anchorDir = (fileOfId.get(anchorNode) ?? "").replace(/\/[^/]*$/, "");
     const _moduleTbls = new Set<string>();
     for (const s of seams) { const f = s.primary?.file; if (f && _anchorDir && f.startsWith(_anchorDir + "/") && isBoundarySeam(s)) { const t = _tblOf(s); if (t) _moduleTbls.add(t); } }
-    const _onSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM === "0" || !_tblOf(s) || _moduleTbls.has(_tblOf(s));
+    const _onSubject = (s: Seam) => !renderFlag("subject-dim", true) || !_tblOf(s) || _moduleTbls.has(_tblOf(s));
     // how many distinct call-closure nodes write this boundary's table (see _flowWritersByTbl) — the flow-subject signal.
     const _flowWriters = (s: Seam) => _flowWritersByTbl.get(_tblOf(s))?.size ?? 0;
     // SINK RANK — a real DATA-STORE persistence (db-table/queue/cache/topic/file: a PERSISTED row) is the culmination
@@ -442,7 +443,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
   // dropping the drift. When the anchor didn't resolve to a seam (reachSet empty — a hand-built model whose anchor id
   // isn't a hunk, or a fully-opaque center) we can't compute flow, so trust the emit's band as-is. (SEAM_SPINE_TRUST_GATE=0 opts out.)
   const _downSpine = _spine.path.length ? _spine.path
-    : (process.env.SEAM_SPINE_TRUST_GATE !== "0" && _spine.reachSet.size
+    : (renderFlag("spine-trust-gate", true) && _spine.reachSet.size
         ? seams.filter((s) => tierOf(s) === "spine" && _spine.reachSet.has(s.id))
         : seams.filter((s) => tierOf(s) === "spine"));
   // ENTRY-ROOTED SPINE (SEAM_SPINE_ENTRY, default-off) — the core spine is DOWNSTREAM-only (anchor → sink), so a
@@ -454,7 +455,7 @@ export function computeSpine(model: any, anchorId: string, seams: Seam[], idx: D
   // deepest reached CODE seam (has source files, not boundary/store), preferring one across a crossing (the UI).
   // ADDITIVE: the tuned down-only core is untouched; only prepends, only when a grounded downstream spine exists.
   const _entryChain = (): Seam[] => {
-    if (process.env.SEAM_SPINE_ENTRY !== "1" || !_downSpine.length) return [];
+    if (!renderFlag("spine-entry", false) || !_downSpine.length) return [];   // the AGENT spine defaults it OFF
     const anchorSid = seamOfId.get(String(anchorId));
     if (!anchorSid) return [];
     const byId = new Map(seams.map((s) => [s.id, s]));

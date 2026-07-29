@@ -34,11 +34,11 @@ beforeAll(() => {
 afterAll(() => rmSync(repo, { recursive: true, force: true }));
 
 // Center on the BARE bean class → the concern/star view. The entry-rooted Spines (screen → REST → bean → DB) are
-// ON BY DEFAULT for the concern view — deliberately NOT setting SEAM_SPINE_ENTRY here pins that default.
+// ON BY DEFAULT for the concern view — deliberately NOT setting SEAM_RENDER here pins that default.
 function concernSpines(center: string): string {
   return execFileSync("bun", ["src/cli/decompose.ts", "--repo", repo, "--scan", "--auto", "--center", center,
     "--intent", "how are bookings managed by a member", "--data-coupling", "floor", "--format", "concern"],
-    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_SPINE_ENTRY: undefined }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
+    { cwd: TS_DIR, env: { ...process.env, SEAM_GRAPH_CACHE: "1", SEAM_RENDER: undefined }, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
 }
 const BEAN = "ejb/src/main/java/com/acme/bookings/CsBookingsBean.java";
 const REST = "web-manage/src/main/java/com/acme/rest/CsBookingsService.java";

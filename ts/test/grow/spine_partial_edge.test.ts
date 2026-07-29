@@ -21,9 +21,10 @@
 //     DOES land on a table. Pre-fix the walk rode the name match into it; post-fix it must not.
 //   • GROUNDED anchor `CheckoutService.checkout` — a real FULL call chain into a repository that writes a
 //     table. Its spine must still render (no over-correction).
-// Expectations are derived from the fixture; the documented opt-out (SEAM_SPINE_GROUNDED_ONLY=0) is used to
+// Expectations are derived from the fixture; the documented opt-out (SEAM_RENDER=no-spine-grounded-only) is used to
 // prove the assertion is NON-VACUOUS against the pre-fix walk. Guarded on tree-sitter (`available()`).
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { renderTopic } from "../helpers/scan.js";
 import { execSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -170,14 +171,13 @@ describe("spine — a RESOLVED_PARTIAL (name-match) call edge is a LEAD, never a
     for (const l of steps(spine).slice(1)) expect(l).toContain("src/paymentRepository.ts");
   });
 
-  test("NON-VACUOUS — the pre-fix walk (SEAM_SPINE_GROUNDED_ONLY=0) DOES ride the name match into it", async () => {
+  test("NON-VACUOUS — the pre-fix walk (SEAM_RENDER=no-spine-grounded-only) DOES ride the name match into it", async () => {
     if (!available()) return;
-    const prev = process.env.SEAM_SPINE_GROUNDED_ONLY;
-    process.env.SEAM_SPINE_GROUNDED_ONLY = "0";
+    const _restore_prev = renderTopic("no-spine-grounded-only");
     try {
       const { spine } = await build("src/paymentService.ts", "create");
       expect(spine).toContain("handleInternalNote");
-    } finally { if (prev === undefined) delete process.env.SEAM_SPINE_GROUNDED_ONLY; else process.env.SEAM_SPINE_GROUNDED_ONLY = prev; }
+    } finally { _restore_prev?.(); }
   });
 
   test("the LEAD does not vanish — the PARTIAL call edge is still in the model, only demoted off the path", async () => {

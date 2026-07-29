@@ -13,6 +13,33 @@ export const debugValue = (topic: string): string | undefined => {
   return undefined;
 };
 
+// ── SEAM_RENDER — the one render-behaviour switch ──────────────────────────────────────────────────────────
+//
+// Replaces nine env vars that only the render read and only its tests set: SEAM_COPRODUCERS,
+// SEAM_HUB_CROSSING, SEAM_REGION_HUB_COLLAPSE, SEAM_SPINE_ENTRY, SEAM_SPINE_GROUNDED_ONLY,
+// SEAM_SPINE_TRUST_GATE, SEAM_SUBJECT_DIM, SEAM_SUBJECT_FOLD, SEAM_SUBJECT_READERS. Each was an A/B seam a
+// test flips to prove the feature CAUSES the behaviour it claims, so the switches earn their keep — nine
+// separate undocumented names did not.
+//
+//     SEAM_RENDER=no-subject-fold              turn a default-ON behaviour off
+//     SEAM_RENDER=hub-crossing,subject-readers turn default-OFF behaviours on
+//     SEAM_RENDER=no-subject-dim,no-subject-fold   compose freely
+//
+// The DEFAULT is passed at each call site rather than encoded in the name, which makes one real oddity
+// visible instead of hidden: `spine-entry` defaults ON for the concern render (llm_context) and OFF for the
+// agent spine (render/spine.ts). That asymmetry was already there — one env var read with two polarities in
+// two files — and is now written down where both callers can see it.
+export function renderFlag(topic: string, dflt: boolean): boolean {
+  const spec = (process.env.SEAM_RENDER ?? "").trim();
+  if (!spec) return dflt;
+  for (const raw of spec.split(",")) {
+    const t = raw.trim();
+    if (t === topic) return true;
+    if (t === `no-${topic}`) return false;
+  }
+  return dflt;
+}
+
 export const PREFIX = "@@SEAM_PROGRESS@@";
 // A final machine-parseable timing summary, emitted once at the end of a run, so a client (MCP / the
 // skill) can tell the user how long each phase took. Separate marker so the per-phase PREFIX lines stay

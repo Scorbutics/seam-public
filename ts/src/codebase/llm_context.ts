@@ -9,6 +9,7 @@
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, WAVE_RANK as _WAVE_RANK, CROSS_SOURCE as _CROSS_SOURCE, CROSS_SINK as _CROSS_SINK, CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./render/medium_registry.js";
+import { renderFlag } from "../core/progress.js";
 import { debugOn } from "../core/progress.js";
 import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf, buildNodeIndex } from "./render/vocab.js";
 import { buildDerivedIndex, computeSpine, hubKeysOf } from "./render/spine.js";
@@ -154,7 +155,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // test/fixture files that write the table are NOT alternate entry points. Mirrors core/resolve/consumers
   // `_TEST_RE` (llm_context is import-free by design — a pure projection); keep the two in sync if that changes.
   const _isTest = (f?: string) => !!f && /(\.(test|spec|e2e|e2e-spec|integration|integration-test)\.[a-z0-9]+$)|(-(test|spec|e2e)\.[a-z0-9]+$)|([-_.](testing|fixture|mock)\.[a-z0-9]+$)|((^|\/)(tests?|__tests__|__mocks__|mocks?|fixtures?|testing|spec|e2e|cypress|playwright)\/)|((^|\/)seed[-_.][^/]*$)/i.test(f);
-  const coProducers = (process.env.SEAM_COPRODUCERS !== "0" && writtenTables.size)   // default-ON; opt-OUT via SEAM_COPRODUCERS=0
+  const coProducers = (renderFlag("coproducers", true) && writtenTables.size)   // default-ON; opt-OUT via SEAM_COPRODUCERS=0
     ? seams.filter((s) => !spineSet.has(s.id) && !altSet.has(s.id) && !crossSet.has(s) && producesInto(s)
         && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
     : [];
@@ -171,7 +172,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // NOTE: NOT excluded by altSet — a file that both READS the subject AND reached a hub boundary as a sink (private-app
   // admin/payments/[id]: reads `payments`, joins `members`) belongs in "## Also read" on its SUBJECT read, not
   // swallowed into a `members` sink in "## Also reaches". The reader claim wins; alsoReaches drops readerSet below.
-  const readers = (process.env.SEAM_SUBJECT_READERS === "1" && writtenTables.size)
+  const readers = (renderFlag("subject-readers", false) && writtenTables.size)
     ? seams.filter((s) => !spineSet.has(s.id) && !coProdSet.has(s.id) && !crossSet.has(s) && readsFrom(s)
         && !!s.primary?.file && !_isTest(s.primary!.file) && !(anchorDir && (s.primary!.file!).startsWith(anchorDir + "/")))
     : [];
@@ -274,7 +275,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   const _tableOf = (s: Seam) => (isBoundarySeam(s) ? ((primaryHunk(s) as any)?.label ?? "") : "");
   const subjectTables = new Set<string>(writtenTables);
   for (const s of seams) { const f = s.primary?.file; if (f && anchorDir && f.startsWith(anchorDir + "/")) { const t = _tableOf(s); if (t) subjectTables.add(t); } }
-  const offSubject = (s: Seam) => process.env.SEAM_SUBJECT_DIM !== "0" && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
+  const offSubject = (s: Seam) => renderFlag("subject-dim", true) && !!_tableOf(s) && !subjectTables.has(_tableOf(s));
 
   // HUB-KEY CROSSINGS (default-ON; opt-OUT SEAM_HUB_CROSSING=1 keeps them expanded) — "these two functions both
   // touch the `user` table" is NOT a relationship in a large app: a UBIQUITOUS key is shared by a hundred unrelated
@@ -289,7 +290,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   // damped (hubKeysOf — see render/spine.ts), and only for a seam that entered the footprint BY that crossing
   // (`proposedBy === "crossing"`, the same gate the spine's crown exclusion uses) and by NOTHING narrower.
   // HONESTY: every folded crossing is counted and its hub key(s) named, with the recipe to get them back.
-  const _hubSuppress = process.env.SEAM_HUB_CROSSING !== "1";
+  const _hubSuppress = !renderFlag("hub-crossing", false);
   const _hubKeys = hubKeysOf(model);
   // Every label that NAMES a shared key in this footprint — a boundary-kinded node's label, per the media registry.
   // Needed because the coupling labels a write-SITE by its table too (a `user`-labelled node of no boundary kind),
@@ -403,7 +404,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
   for (const w of subjectTables) for (const t of _subjToks(String(w))) if (!_isContainer(t)) _mainTopic.add(t);
   const _MAIN_MIN = Math.max(2, Math.floor(0.08 * _N));                         // shared by ≥8% of the footprint = a real topic
   for (const [t, n] of _freq) if (n >= _MAIN_MIN && !_isContainer(t)) _mainTopic.add(t);
-  const _foldSubject = process.env.SEAM_SUBJECT_FOLD !== "0";
+  const _foldSubject = renderFlag("subject-fold", true);
   const _offSubjTok = (s: Seam): string | null => {   // the subject to FOLD this seam under, or null to KEEP it
     if (!_foldSubject || !_mainTopic.size || spineSet.has(s.id)) return null;                          // never fold the spine
     const toks = _seamSubj(s); if (!toks.length) return null;                                          // no subject to judge → keep
@@ -754,7 +755,7 @@ export function renderAgent(model: any, opts: { tokenBudget?: number; intent?: s
     // and fold the rest into a single pointer line. Gated on a label carried by ≥K region seams — real code almost
     // never repeats a label that many times across distinct files, so it's the hub fan (opt out: SEAM_REGION_HUB_COLLAPSE=0).
     const _HUB_K = 6;
-    const _hubCollapse = process.env.SEAM_REGION_HUB_COLLAPSE !== "0";
+    const _hubCollapse = renderFlag("region-hub-collapse", true);
     const collapseHubs = (list: Seam[]): { kept: Seam[]; hubs: Map<string, number> } => {
       if (!_hubCollapse) return { kept: list, hubs: new Map() };
       const cnt = new Map<string, number>();
@@ -1197,7 +1198,7 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
       // route handler (no in-repo caller — the concern centered on the REST layer), its cross-stack front-end(s)
       // ARE the way in (frontEndsOf on the mechanism). This is what links the front-end into the flow instead of
       // leaving it stranded in "## In". (Default differs from the single-anchor agent spine — see render/spine.ts.)
-      if (process.env.SEAM_SPINE_ENTRY !== "0") {
+      if (renderFlag("spine-entry", true)) {   // the CONCERN render defaults it ON
         const flows = entryFlowsOf(cid);
         // each way in = an entry ROOT + the backend chain from it down to the mechanism ([] when the mechanism is
         // its own root). front-ends attach to the ROOT (or to the mechanism itself when it has no in-repo caller).

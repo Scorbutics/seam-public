@@ -2,8 +2,9 @@
 // is disjoint from the ANCHOR's subject into a per-subject count, keeping the on-subject ones expanded. The grow
 // is intent-free so a broad anchor grounds to many off-subject crossings (every admin route sharing an auth hub);
 // this keeps the map on the anchor's domain. Deterministic (structural subject, no embeddings) + recall-safe (a
-// count, not a drop). Opt out: SEAM_SUBJECT_FOLD=0.
+// count, not a drop). Opt out: SEAM_RENDER=no-subject-fold.
 import { describe, expect, test } from "bun:test";
+import { renderTopic } from "../helpers/scan.js";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 
 const seam = (id: string, tier: string, file: string, symbol: string, extra: any = {}) => ({
@@ -36,10 +37,10 @@ describe("subject fold — off-subject region seams collapse to a count", () => 
     expect(out).toMatch(/sessions|directory|scoring/);            // the fold names the folded subjects
   });
 
-  test("opts out under SEAM_SUBJECT_FOLD=0 — the raw region returns (deterministic escape hatch)", () => {
-    const prev = process.env.SEAM_SUBJECT_FOLD; process.env.SEAM_SUBJECT_FOLD = "0";
+  test("opts out under SEAM_RENDER=no-subject-fold — the raw region returns (deterministic escape hatch)", () => {
+    const _restore_prev = renderTopic("no-subject-fold");
     const out = renderAgent(model(), { tokenBudget: 20000, intent: "how payments are processed" });
-    if (prev === undefined) delete process.env.SEAM_SUBJECT_FOLD; else process.env.SEAM_SUBJECT_FOLD = prev;
+    _restore_prev?.();
     expect(out).toContain("listSessions");                        // no fold → the off-subject seam is shown
     expect(out).not.toMatch(/off-subject region seam/);
   });

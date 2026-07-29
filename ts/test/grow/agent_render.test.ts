@@ -4,6 +4,7 @@
 // tight budget the OFF/supporting region lines crop (with a note) while the exempt sections — spine, hubs,
 // frontier, blindspots — stay INTACT (I3); (3) with no spine tier it falls back to shell ordering.
 import { describe, expect, test, beforeAll, afterAll } from "bun:test";
+import { renderTopic } from "../helpers/scan.js";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 
 // a rich model: a spine seam, several supporting + many off seams (so the full render is large), a collapsed hub,
@@ -36,9 +37,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
   // These assert render MECHANICS (hub-collapse, budget-crop, dedup) on minimal fixtures that carry no anchor
   // module/route subject — so the subject-fold (a separate feature, tested in agent_subject_fold.test.ts) would
   // fold their region seams. Disable it here to test each mechanism in isolation.
-  const _fold = process.env.SEAM_SUBJECT_FOLD;
-  beforeAll(() => { process.env.SEAM_SUBJECT_FOLD = "0"; });
-  afterAll(() => { if (_fold === undefined) delete process.env.SEAM_SUBJECT_FOLD; else process.env.SEAM_SUBJECT_FOLD = _fold; });
+  let _restoreFold: (() => void) | undefined;
+  beforeAll(() => { _restoreFold = renderTopic("no-subject-fold"); });
+  afterAll(() => { _restoreFold?.(); });
   test("full render: header · spine · region · hubs · frontier · blindspots, in order", () => {
     const out = renderAgent(makeModel(), { tokenBudget: 4000, intent: "how are bookings created" });
     for (const h of ["# Agent map", "## Spine", "## Region", "## Collapsed hubs", "## Frontier", "## Blindspots"])
@@ -151,15 +152,15 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(out).toMatch(/\+6 more file\(s\) folded as shared-key hub crossings over:.*user/);   // …the other 6 rolled up, honestly, pointing to Blindspots
   });
 
-  test("hub-table collapse opts out under SEAM_REGION_HUB_COLLAPSE=0 (all N lines return)", () => {
+  test("hub-table collapse opts out under SEAM_RENDER=no-region-hub-collapse (all N lines return)", () => {
     const model = makeModel({ offN: 0 });
     for (let i = 0; i < 7; i++) model.clusters[0].seams.push({
       id: `hub${i}`, label: "acct", tier: "supporting", relevance: 0.3, region: { shell: 2, direction: "down" },
       primary: { file: `svc/g${i}.ts`, line: 1, symbol: "acct" }, hunks: [{ id: `gh${i}`, file: `svc/g${i}.ts`, start: 1, role: "link", label: "acct" }],
     } as any);
-    process.env.SEAM_REGION_HUB_COLLAPSE = "0";
+    const _r = renderTopic("no-region-hub-collapse");
     const out = renderAgent(model, { tokenBudget: 20000, intent: "how are accounts handled" });
-    delete process.env.SEAM_REGION_HUB_COLLAPSE;
+    _r();
     expect((out.match(/acct \(svc\/g\d\.ts:1\)/g) ?? []).length).toBe(7);   // opted out → the raw fan (deterministic escape hatch)
   });
 
@@ -429,7 +430,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
   // TIER-BAND DRIFT — with no grounded/frontier terminal the emit's `tier==="spine"` band is a RELEVANCE ranking,
   // not a flow: it drifts to embedding-adjacent seams NOT on the anchor's resolved path (private-app `signIn` → `signUp`, a
   // file-adjacent sibling it never calls). When the anchor seam RESOLVED, the inferred band keeps only seams
-  // structurally reachable from it, dropping the drift. (SEAM_SPINE_TRUST_GATE=0 restores the raw band.)
+  // structurally reachable from it, dropping the drift. (SEAM_RENDER=no-spine-trust-gate restores the raw band.)
   test("inferred spine drops a tier-spine seam that is NOT on the anchor's resolved flow (drift)", () => {
     const model = {
       mode: "codebase", anchor: "ah", resolutionQuality: "FULL", lead: "forward",
@@ -445,9 +446,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(spine).toContain("signIn");         // the resolved anchor stays
     expect(spine).not.toContain("signUp");     // the unreachable drift sibling is dropped
     // without the gate the raw relevance band restores the drift (proving it's the reach filter doing the work)
-    process.env.SEAM_SPINE_TRUST_GATE = "0";
+    const _r = renderTopic("no-spine-trust-gate");
     const raw = renderAgent(model as any, { tokenBudget: 8000, intent: "how does a user sign in" });
-    delete process.env.SEAM_SPINE_TRUST_GATE;
+    _r();
     expect(raw.slice(raw.indexOf("## Spine"), raw.indexOf("## ", raw.indexOf("## Spine") + 5))).toContain("signUp");
   });
 
@@ -488,9 +489,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     };
     // pin subject-continuity OFF: this asserts the base intent-pick / also-reaches contract, and `AuditEntity` is
     // deliberately off-subject (subject-dim, now default-on, would legitimately drop it — tested separately).
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserEntity");                    // the intent-relevant sink is the spine outcome…
     expect(spine).not.toContain("AuditEntity");               // …NOT the deeper, off-intent audit sink
@@ -548,9 +549,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
         { from: "mid", to: "deep", kind: "call", line: 15 }, { from: "deep", to: "memh", kind: "db-write", line: 20 }],
       blindspots: [],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";   // pin subject-dim off (both tables on-flow)
+    const _restore__sd = renderTopic("no-subject-dim");   // pin subject-dim off (both tables on-flow)
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is the member tier updated" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const alsoIdx = out.indexOf("## Also reaches");
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("payments");            // the anchor's OWN write stays crowned (precedence preserved)
@@ -584,9 +585,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       ],
       blindspots: [],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "assign a realm role to a user" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserRoleMapping");        // the higher-relevance sibling wins the crown…
     expect(spine).not.toContain("GroupRoleMapping");   // …the in-body one-hop sibling no longer out-ranks it on the directSink prior
@@ -612,9 +613,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       ],
       blindspots: [],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a new booking created and persisted" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("──▶ booking");        // the earlier (parent) create is crowned — structure, not cosine…
     expect(spine).not.toContain("bookingSeat");    // …not the later FK child, despite its higher embedding relevance
@@ -634,9 +635,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       edges: [{ from: "cb", to: "clh", kind: "db-write", line: 1076 }],
       blindspots: [{ node: "clh", mechanism: "shared-key-fanout", evidence: "'clients' (db-table) is read in 26 files (showing 1 — infra)", candidates: [] }],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does assigning a realm role to a user persist the mapping" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).not.toContain("──▶ clients");   // the coincidental `clients` hub crossing is NOT crowned…
     expect(spine).toMatch(/inferred|no grounded boundary|partial/);   // …the spine stays honest instead
@@ -665,9 +666,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
         { node: "payh", mechanism: "shared-key-fanout", evidence: "'payments' (db-table) is written in 10 files", candidates: [] },
         { node: "refh", mechanism: "shared-key-fanout", evidence: "'member_referrals' (db-table) is written in 3 files", candidates: [] }],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a payment processed and recorded" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("──▶ payments");        // the flow-written hub IS crowned (2 closure writers)
     expect(spine).not.toContain("member_referrals"); // the write-light side table is NOT
@@ -712,9 +713,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
         evidence: "UserProvider has 4 implementations (followed 3, structurally-ranked) — the runtime DI binding can't be picked statically",
         candidates: [{ symbol: "JpaUserProvider", file: "jpa/JpaUserProvider.java" }], persists: true }],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does creating a user persist it to the database" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## Mechanism") > -1 ? out.indexOf("## Mechanism") : out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("interface-multiple-impls");   // the DI wall is disclosed as the honest terminus…
     expect(spine).toContain("JpaUserProvider");            // …naming the persisting candidate to --grow-from…
@@ -738,9 +739,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       ],
       blindspots: [],
     };
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how does assigning a realm role to a user persist the mapping" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("──▶ UserRoleMapping");   // the real db-store persistence is crowned…
     expect(spine).not.toContain("──▶ session");       // …not the service-state crossing, despite its earlier id
@@ -767,9 +768,9 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     };
     // pin subject-continuity OFF (default-on) — this asserts the base delegate-prior contract; AuditEntity is
     // off-subject and would be legitimately dropped by subject-dim (tested separately).
-    const _sd = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "0";
+    const _restore__sd = renderTopic("no-subject-dim");
     const out = renderAgent(model as any, { tokenBudget: 8000, intent: "how is a user persisted" });
-    if (_sd === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = _sd;
+    _restore__sd?.();
     const spine = out.slice(out.indexOf("## Spine"), out.indexOf("## ", out.indexOf("## Spine") + 5));
     expect(spine).toContain("UserEntity");        // svc (the anchor's sole delegate) writes it → borrowed as the direct sink
     expect(spine).not.toContain("AuditEntity");   // written by audit, TWO hops from ctrl (not a direct callee) → not borrowed; stays an alternate
@@ -826,11 +827,10 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
   });
 
   // CO-PRODUCERS ("## Also writes") — the OTHER writers of the table this flow writes (a table's alternate ENTRY
-  // POINTS: a Stripe/Wix webhook writing `payments`, not just the routes that READ it). Gated (SEAM_COPRODUCERS);
+  // POINTS: a Stripe/Wix webhook writing `payments`, not just the routes that READ it). Gated (SEAM_RENDER=coproducers);
   // focused on the spine's SINK table; excludes the anchor's own module (its in-flow writes are the main path).
   test("also-writes: surfaces external co-producers of the spine's sink table, excluding the anchor's own module", () => {
-    const prev = process.env.SEAM_COPRODUCERS;
-    process.env.SEAM_COPRODUCERS = "1";
+    const _restore_prev = renderTopic("coproducers");
     try {
       const model = {
         mode: "codebase", anchor: "ph", resolutionQuality: "FULL",
@@ -850,7 +850,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       const aw = out.slice(out.indexOf("## Also writes"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
       expect(aw).toContain("app/hooks/stripe.ts");     // the external webhook co-producer is surfaced…
       expect(aw).not.toContain("app/pay/phase.ts");    // …but the anchor's OWN module's write is not (it's the main flow)
-    } finally { if (prev === undefined) delete process.env.SEAM_COPRODUCERS; else process.env.SEAM_COPRODUCERS = prev; }
+    } finally { _restore_prev?.(); }
   });
 
   test("also-writes: silent when the flow writes no shared table with other producers", () => {
@@ -926,11 +926,11 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
     expect(mech.indexOf("payCharge")).toBeLessThan(mech.indexOf("persistRem"));
   });
 
-  // ALSO READ (gated SEAM_SUBJECT_READERS) — the symmetric of "## Also writes": an external file that READS the
+  // ALSO READ (gated SEAM_RENDER) — the symmetric of "## Also writes": an external file that READS the
   // subject table surfaces in "## Also read" (correctly labelled by the subject, not a co-touched hub); the
   // anchor's own module is excluded (its reads are the mechanism).
   test("also-read: external readers of the subject table surface, anchor's own module excluded (gated)", () => {
-    const prev = process.env.SEAM_SUBJECT_READERS; process.env.SEAM_SUBJECT_READERS = "1";
+    const _restore_prev = renderTopic("subject-readers");
     try {
       const model = {
         mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
@@ -950,13 +950,13 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       expect(out).toContain("## Also read");
       expect(read).toContain("app/admin/list.ts");     // external payments reader surfaced (the display side)
       expect(read).not.toContain("svc/pay/phase.ts");  // the anchor's own module read is the mechanism, not a consumer
-    } finally { if (prev === undefined) delete process.env.SEAM_SUBJECT_READERS; else process.env.SEAM_SUBJECT_READERS = prev; }
+    } finally { _restore_prev?.(); }
   });
 
-  // SUBJECT-CONTINUITY (gated SEAM_SUBJECT_DIM) — an off-subject sink (a table the flow's own module never
+  // SUBJECT-CONTINUITY (gated SEAM_RENDER) — an off-subject sink (a table the flow's own module never
   // touches, reached only via a shared hub) is dropped from "## Also reaches"; an on-subject one is kept.
   test("subject-continuity: off-subject sink dropped from also-reaches, on-subject kept (gated)", () => {
-    const prev = process.env.SEAM_SUBJECT_DIM; process.env.SEAM_SUBJECT_DIM = "1";
+    const _restore_prev = renderTopic("subject-dim");
     try {
       const model = {
         mode: "codebase", anchor: "ah", resolutionQuality: "FULL",
@@ -979,7 +979,7 @@ describe("renderAgent — sections, ordering, budget cropping, fallback", () => 
       const head = out.slice(out.indexOf("## Spine"), out.indexOf("## Region") > -1 ? out.indexOf("## Region") : undefined);
       expect(head).toContain("svc/admin/x.ts");      // members sink (on-subject) surfaced (crown or also-reaches)
       expect(head).not.toContain("bug_reports");     // bug_reports sink (off-subject) dropped
-    } finally { if (prev === undefined) delete process.env.SEAM_SUBJECT_DIM; else process.env.SEAM_SUBJECT_DIM = prev; }
+    } finally { _restore_prev?.(); }
   });
 
   test("pipeline: silent for a lone delegate (needs >=2 sequential steps) and off by default", () => {

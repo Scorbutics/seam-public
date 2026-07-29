@@ -6,7 +6,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { build_dependency_graph } from "../helpers/scan.js";
+import { build_dependency_graph, renderTopic } from "../helpers/scan.js";
 import { scan_file_keys } from "../helpers/coupling.js";
 import { from_resolved_graph } from "../../src/core/graph_ir.js";
 import { _is_crossing } from "../../src/codebase/codebase.js";
@@ -51,12 +51,12 @@ describe("shared-key (data-flow) coupling", () => {
     // BASE frontier: the anchor's own write + its readers. Co-producers (writer↔co-writer) are default-ON but an
     // ADDITIVE layer with its own tests (the "## Also writes" render contracts) — pin them off so this unit asserts
     // the base crossing set in isolation (a second payments writer in the fixture would otherwise add db-writes).
-    const prev = process.env.SEAM_COPRODUCERS; process.env.SEAM_COPRODUCERS = "0";
+    const _restore_prev = renderTopic("no-coproducers");
     try {
       const g = from_resolved_graph(await build_dependency_graph(repo, "src/backend/persist.ts", "persistPayment"));
       const crossings = g.resolved_edges().filter(_is_crossing).map((e) => e.kind).sort();
       expect(crossings).toEqual(["db-read", "db-read", "db-write"]);
-    } finally { if (prev === undefined) delete process.env.SEAM_COPRODUCERS; else process.env.SEAM_COPRODUCERS = prev; }
+    } finally { _restore_prev?.(); }
   });
 
   test("LLM-proposed key (Prisma write, invisible to the regex floor) grounds through the SAME index", async () => {

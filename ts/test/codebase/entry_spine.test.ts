@@ -1,4 +1,4 @@
-// ENTRY-ROOTED SPINE (SEAM_SPINE_ENTRY) — when the anchor sits MID-flow, the spine's core is downstream-only
+// ENTRY-ROOTED SPINE (SEAM_RENDER=spine-entry) — when the anchor sits MID-flow, the spine's core is downstream-only
 // (anchor → sink), so the flow's ENTRY (the member's UI action / the REST endpoint) lands in the region, not the
 // spine. With the flag on, the render traces UP to the entry and PREPENDS it, so anchoring on the BEAN still shows
 // the whole cross-stack flow `UI → REST → bean → ──db-write──▶ entity`. Default-off (a hand-built merged-anchor
@@ -35,10 +35,10 @@ const spineOf = (env: Record<string, string>): string => {
   return i >= 0 ? out.slice(i, j > i ? j : undefined) : "";
 };
 
-describe("entry-rooted spine prepends the cross-stack entry (SEAM_SPINE_ENTRY)", () => {
+describe("entry-rooted spine prepends the cross-stack entry (SEAM_RENDER=spine-entry)", () => {
   test("anchored on the BEAN, the spine runs UI → REST → bean → db-write (entry prepended)", () => {
     if (!available()) return;   // needs tree-sitter
-    const spine = spineOf({ SEAM_SPINE_ENTRY: "1" });
+    const spine = spineOf({ SEAM_RENDER: "spine-entry" });
     // the whole cross-stack flow is present, in order: UI first, the anchor's db-write last
     const iUi = spine.indexOf("bookingService.createBooking");
     const iRest = spine.indexOf("AcmeCheckBookingsService.createBooking");
