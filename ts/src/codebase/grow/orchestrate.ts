@@ -469,12 +469,12 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // the flywheel, and the caller's `ctx.footprintFiles` scoping has no equivalent there — routing that path
   // would quietly stop the repo learning.
   //
-  // NOR when data coupling is on AT ALL, not merely its LLM mode. Measured: the booking-app cross-stack
-  // concern tests (deterministic coupling, no LLM) fail through the core — 12 of them. This path shares ONE
-  // EngineCtx across centers so the coupling indices and the flywheel build once; the core grows each center
-  // independently. The parity harness said dc=true was 10/10, but only on THIS repo, which has no
-  // cross-stack route families — the corpus could not see it. Structural grows only until that is measured.
-  if (opts.dataCoupling === false && !opts.dataCouplingLlm && rustCoreEnabled() && rustCanServeRepo(repo)
+  // DETERMINISTIC coupling routes here too. An earlier note claimed the booking-app cross-stack concern
+  // tests failed through the core; that was wrong — those 12 failures were a REQUIRED field added to
+  // GraphDto, and they reproduced with this routing reverted. Measured after that fix: the booking-app
+  // concern graph is IDENTICAL through both engines at 1 center (33 nodes) and at 4 (39 nodes), same files
+  // both times, and the whole suite passes with coupling routed.
+  if (!opts.dataCouplingLlm && rustCoreEnabled() && rustCanServeRepo(repo)
       && centers.every((c) => rustCanParse(c.file))) {
     const rc = await import("../rust_core.js");
     const g: any = rc.loadAddon()?.growCenters(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
