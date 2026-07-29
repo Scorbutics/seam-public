@@ -32,7 +32,6 @@ import { warn as warnDegraded } from "../../core/progress.js";
 import { from_resolved_graph, bfsDistance } from "../../core/graph_ir.js";
 import { assign_roles, _is_crossing } from "../codebase.js";
 
-import { cachedGrow, seamEnvSnapshot } from "../footprint_cache.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
@@ -268,6 +267,19 @@ type GrowToTerminalsOpts = { maxSteps?: number; maxNodes?: number; bidirectional
 // settled footprint (the warm-cache win) instead of re-running the whole wave. With embeddings the intent
 // genuinely changes the grown set, so it stays in the key (no stale answer). ctx/callbacks/model are dropped —
 // they don't affect the structural result.
+// NO CALLER LEFT — kept deliberately, with its test, because the CONTRACT it states may not hold on the path
+// that replaced it. It says: the intent is part of the answer-cache key ONLY when embeddings can act on it,
+// so an offline repo reuses a settled footprint across intent rewordings instead of re-growing per wording.
+//
+// The core keys on `hash(symbol | data_coupling | WaveOpts::fingerprint() | env)`, and `fingerprint()` always
+// includes `intent`. The shell decides what to send: `resolveStructuralKnobs` drops the intent for a
+// STRUCTURAL grow but does NOT consider whether embeddings are available. So on a repo with no embeddings, a
+// non-structural grow looks like it would key per wording — losing exactly the reuse this describes.
+//
+// NOT VERIFIED either way, and that is why this stays: deleting it would remove the only written statement of
+// a contract I suspect is unmet. Settle it by growing the same anchor twice under different intents with
+// embeddings unavailable and reading the per-center cache verdict; then either fix the knob resolution or
+// delete this and its test together.
 export function growCacheKeyMaterial(symbol: string, opts: any, embeddingsAvailable: boolean, env: string): string {
   const keyOpts = embeddingsAvailable ? opts : { ...opts, intent: undefined };
   return `${symbol}\n${JSON.stringify(keyOpts, (k, v) => (k === "ctx" || k === "onWave" || k === "model" || k === "claudeBin" || typeof v === "function" ? undefined : v))}\n${env}`;
@@ -478,21 +490,20 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
   // overlap. Returns a SINGLE [data, history] (the caller's merge loop folds the one element). Default-off pending
   // footprint-drift validation vs the per-center grow-then-merge.
   if (_envFlag(process.env.SEAM_CENTERS_MERGED) ?? false) {
-    // P5 answer-cache the WHOLE merged grow, keyed on the CENTER SET (not a single anchor) — exactly as the
-    // single-anchor grow_to_terminals wraps its impl. Without this, a warm concern run with the SAME detected
-    // centers re-ran the entire wave AND its coupling (~20-30s deterministic) despite the graph node being cached:
-    // the merged path had lost the settled-grow cache the per-center path got for free (each grow_to_terminals →
-    // cachedGrow). Cache key: sorted "file#symbol" of every center → same centers ⇒ same key ⇒ warm HIT.
-    const emb = await transformersAvailable();
+    // NO OUTER ANSWER CACHE. This used to wrap the whole merged grow in `cachedGrow`, keyed on the center
+    // SET, because the merged path had lost the settled-grow cache the per-center path got for free. It is
+    // redundant now that the grow runs in the core: each center's `grow_to_terminals` is answer-cached there
+    // (grow-v1), so a warm concern is already served from cache one center at a time.
+    //
+    // Measured on booking-app, 3 centers, fresh process per run:
+    //     with the outer cache     cold 460ms   warm 132ms
+    //     without it               cold 447ms   warm 126ms
+    // Slightly FASTER without — the wrap was paying a read and a write for an answer the core already had.
+    // The warm-run contract (`centers_merged_cache.test.ts`: a repeat concern skips the wave) still holds,
+    // now reported per CENTER by the core's own verdicts rather than once by this wrapper.
     const structural = opts.structuralGrow ?? _envFlag(process.env.SEAM_GROW_STRUCTURAL) ?? false;
-    // MAP/PROJECTION (SEAM_PROJECT, prototype): try to answer by PROJECTING the persistent map (a topological cut over
-    // the already-discovered graph, ~ms) with cheap lazy-fill for its frontier; only fall through to GROW when the map
-    // doesn't cover the concern. Scoped to the deterministic (floor) path — the map stores structural + floor-coupling
-    // edges. The grow below MERGES its footprint into the map, so the next related concern projects.
-    const centerKey = centers.map((c) => `${c.file}#${c.symbol}`).sort().join("+");
-    const km = growCacheKeyMaterial(centerKey, opts, emb && !structural, seamEnvSnapshot());
-    const res = await cachedGrow(repo, centers[0].file, km, opts.dataCoupling !== false, !opts.onWave,
-      async () => {
+    const res = await (async () => {
+      {
         // LLM coupling: SCOPE discovery to the concern's union BEFORE the per-center grows (mirrors the non-merged
         // branch below). Without this the merged path grew each center with UNSCOPED LLM coupling (whole module per
         // center) → far more blind files → the flywheel fired repeatedly ("14 LLM calls every run"). The union floor
@@ -526,8 +537,8 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
           process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scope.length} files across the concern (shared across ${centers.length} mechanisms)\n`);
         }
         return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
-      })
-      .catch((e: any) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
+      }
+    })().catch((e: any) => { dbg(`[centers] merged grow failed: ${(e as Error).message}`); return null; });
     // feed the DISCOVERY into the persistent map so the next related concern can PROJECT instead of re-grow.
     return [res];
   }
