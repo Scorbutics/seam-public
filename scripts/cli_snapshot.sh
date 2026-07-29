@@ -19,14 +19,27 @@
 # 7 cases answering nothing, and 5 cases byte-identical to each other. Hence the `b_*` family below, which
 # re-runs the query shapes against an anchor that has real fan-out.
 #
-# KNOWN HOLE, measured not assumed: `--query writers` (reverse data-coupling) cannot be exercised. No
-# fixture yields a non-empty writers set — booking-app has a shared key but zero counterpart sites — so
-# q_writers pins "reads no resolvable DB table". Closing it needs a new fixture where one file READS a
-# table another WRITES; until then that shape is outside the guarantee.
+# That hole is CLOSED: `test/fixtures/writers-repo` is a reader plus two writers (one create, one update) of
+# the same table, so `--query writers` and the coupling counterpart set both have something to answer. It was
+# real: no natural fixture yielded a non-empty writers set (booking-app has a shared key with zero counterpart
+# sites), so q_writers pinned "reads no resolvable DB table" and the whole reverse-coupling shape sat outside
+# the guarantee while its case looked covered.
 set -u
 OUT="/tmp/seam-snap/${1:?usage: cli_snapshot.sh <before|after>}"
 rm -rf "$OUT"; mkdir -p "$OUT"
 cd "$(dirname "$0")/../ts" || exit 1
+# COLD-START THE RUST-SIDE FIXTURE CACHES.
+#
+# Found the hard way: SEAM_GRAPH_CACHE=0 does NOT disable the coupling floor-index cache, which lives in each
+# fixture's `.seam/rust/`. A fixture that kept one between runs served the index from disk, so a change to the
+# code BEHIND it produced no output change and this gate reported byte-identical. Verified: deleting "update"
+# from the db-table adapter's WRITE_VERBS was invisible with the cache present (2 write sites either way) and
+# caught immediately without it (2 -> 1). A gate that cannot see a code change is not a gate.
+#
+# Only the UNTRACKED `.seam/rust/` indices are removed. The tracked `.seam/*.json` fixtures stay (tests assert
+# on them), and nothing outside test/fixtures is touched -- in particular never node_modules, which holds the
+# downloaded embedding model.
+find test/fixtures -maxdepth 3 -type d -name rust -path '*/.seam/*' -prune -exec rm -rf {} + 2>/dev/null
 R="test/fixtures/route-repo"
 A="backend/persist.ts"; S="persistPayment"
 run() { # run <name> <args...>
@@ -110,6 +123,12 @@ done
 # members at all; the four `↳ DI:` lines only appear there. Verified to bite: with SEAM_DI_RESOLVE=0 exactly
 # those four lines disappear.
 run q_di        --repo test/fixtures/di-repo --scan --query dependencies --anchor-file service.ts --symbol BookingService --format llm-context
+# REVERSE DATA-COUPLING with a real answer: two write sites behind a table the anchor reads, no import or call
+# edge linking them. llm-context because the one-line form prints a count, not the sites.
+run w_writers   --repo test/fixtures/writers-repo --scan --query writers \
+  --anchor-file src/reader.ts --symbol listBookings --data-coupling floor --format llm-context
+run w_coupling  --repo test/fixtures/writers-repo --scan --query coupling \
+  --anchor-file src/reader.ts --symbol listBookings --data-coupling floor --format llm-context
 run q_recall    --repo "$R" --scan --query consumers --anchor-file "$A" --symbol "$S" --recall name --data-coupling floor
 # ...on an anchor that HAS callers. The case above answers "no resolved callers" — name-grounded recall was
 # being exercised against an empty consumer set, so the grounding step asserted nothing.

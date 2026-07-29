@@ -167,3 +167,28 @@ signature that has since changed. Those are benchmarks worth fixing rather than 
 switched engines with `SEAM_RUST_CORE`, so its two arms executed identical code, and `ripple.ts` was the only
 thing keeping `SEAM_RIPPLE_INDEX` alive — an "escape hatch" reachable from nothing. Their measured results
 live in each port's commit message and in `rust/README.md`; the harnesses themselves are in git history.
+
+
+## Postscript: the gate had a blind spot
+
+Closing the `--query writers` hole turned up something bigger than the hole. The new fixture's gate case
+looked correct, so it was falsified the usual way — delete `"update"` from the db-table adapter's
+`WRITE_VERBS` and check the snapshot moves. **It did not move.** Two write sites either way.
+
+The cause is not the fixture. `SEAM_GRAPH_CACHE=0`, which the gate sets, does **not** disable the coupling
+FLOOR-INDEX cache — that lives in each fixture's `.seam/rust/floor-indices-v1/`, keyed on repo source and not
+on engine source. A fixture that kept an index between runs served it from disk, so a change to the code
+behind it produced no output change at all. Verified both ways: with the cache present the mutation is
+invisible, with it cleared the same mutation is caught immediately (2 write sites -> 1).
+
+That is a gate that cannot see a code change, and 20 of the fixtures carry such a cache — `route-repo`, the
+main one, included.
+
+`scripts/cli_snapshot.sh` now cold-starts them: it removes the UNTRACKED `.seam/rust/` indices under
+`test/fixtures` before each run. Tracked `.seam/*.json` fixtures stay (tests assert on them) and nothing
+outside `test/fixtures` is touched — never `node_modules`, which holds the downloaded embedding model.
+
+**Was the session's evidence wrong?** No, and that was checked rather than assumed: a cold snapshot is
+byte-identical to the cached baseline, so the caches were serving correct answers throughout. The gate's
+verdicts were right; it was its ABILITY TO FAIL that was compromised, and only for logic behind that one
+cache. The mutation above is now caught, which is the property that makes the other 107 paths worth trusting.
