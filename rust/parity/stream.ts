@@ -28,13 +28,16 @@ if (!repo) {
   w("chain/h5.ts", `export function step5() { return "terminal"; }\n`);
 }
 
-const run = async (rust: boolean) => {
-  if (rust) delete process.env.SEAM_RUST_CORE; else process.env.SEAM_RUST_CORE = "0";
+// WAS an A/B between the Rust core and the TypeScript wave, selected with SEAM_RUST_CORE. That flag is gone
+// with the engine it switched to, so the two arms would now run IDENTICAL code and the comparison could not
+// fail. What survives is the half that still means something: the wave stream is REPRODUCIBLE — the same
+// grow, twice, emits the same records in the same order.
+const run = async () => {
   const recs: any[] = [];
   await grow_to_terminals(repo!, file, symbol, { dataCoupling: false, onWave: (r: any) => recs.push(r) } as any);
   return recs;
 };
-const rs = await run(true), ts = await run(false);
+const rs = await run(), ts = await run();
 if (temp) rmSync(temp, { recursive: true, force: true });
 
 // A record's identity: its wave number and the CONTENT it carries (ids are engine-local, so compare by
