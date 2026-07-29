@@ -1035,3 +1035,60 @@ described, and the file counts came from a different center set than the one nam
 Re-run with the actual paths (`ejb/BookingsBean.java`, `ejb/BookingsService.java`,
 `ejb/ManageBookingsService.java`): TS and the core agree, 4 files at both 2 and 3 centers. The equivalence
 holds; the description of what was compared did not.
+
+## Port accounting — is the core all Rust?
+
+Measured 2026-07-29, after the intent-rank / center-repo / warm ports.
+
+`ts/src/codebase` is **2,963 lines across 33 files** in scope (`render/`, `anchor/`, `llm_context.ts`
+and `rust_core.ts` are out of scope by decision — the renderer is explicitly not being ported).
+
+**Answer: almost, but not entirely — and the gap is real, not bookkeeping.**
+
+### How this was checked
+
+Not by reading the import graph — that is how the earlier dead-code sweeps got it wrong, all four
+failing toward "unused". Instead: a **side-effect tripwire** (an `appendFileSync`, not a `throw`, so a
+`try/catch` cannot hide a hit) was armed on every remaining TypeScript engine entry point —
+`atoms.makeCtx`, `ast_units._named_units`, `ast_units._read`, `di.diBindingForClass`,
+`di.diBindingForToken` — and the whole 69-path CLI surface was run.
+
+  * **Zero hits across all 69 paths**, with output still byte-identical (so the tripwire measured
+    reachability, not behaviour).
+  * A first attempt used a `throw` and also reported clean. That result was **not trusted**: a throw
+    inside a `try/catch` looks identical while still being reached. The side-effect version is the
+    one that counts.
+
+### The gap the 69-path gate does not cover
+
+The gate exercises 22 flags; it does **not** cover the DI-enrichment query or the field-facts path.
+Run directly, with tripwires armed:
+
+    seam --query dependencies --repo <ts repo> ...   ->  10x atoms.makeCtx, 2x di.diBindingForClass
+
+So `--query dependencies` runs the **TypeScript** tree-sitter substrate, not the core. It is
+default-ON (`SEAM_DI_RESOLVE !== "0"`), so this is a live user-facing path.
+
+  * `codebase/di/index.ts` (76) — repo walk + per-file cache around the ioctopus binding grammar.
+  * `codebase/ast_units.ts` (110) — exists **solely** for `di/index.ts`; no other source importer.
+  * `codebase/atoms.ts` (129) — the tree-sitter substrate under both.
+
+That is **~315 lines of genuine second-copy engine** (the core already vendors 7 grammars and has
+`defs_in_file_treesitter`), reachable on one default-on query. It is the remaining in-scope debt.
+
+Also noted, but OUT of scope: `cli/field_facts.ts` parses with `core/treesitter` directly on the
+diff-review path. It lives in `ts/src/cli/`, not `ts/src/codebase`.
+
+### The rest of the 2,963 lines is correctly TypeScript
+
+  * **Types only** — `graph.ts` (98), `coupling/types.ts` (95).
+  * **Glue / per-run cache** — `engine_ctx.ts` (92), `codebase.ts` (69, barrel), `seams/util.ts`,
+    `grow/config.ts`, `grow/index.ts`.
+  * **Config by design** — `grow/structural_knobs.ts` (76). Deliberately TS-side: it resolves
+    opts->env->default ONCE and hands both engines finished values, so Rust holds no defaulting logic
+    and the two cannot drift.
+  * **LLM, and cannot move** — `seams/intent_llm.ts` (194), `grow/center_judge.ts` (60), the judge
+    halves of `center_repo.ts` and `subject_affinity.ts`. The host bus is record-and-replay: a
+    core-owned pass calling back into the JS thread blocked inside the napi call is a deadlock.
+  * **Thin wrappers over the core** — everything else; `orchestrate.ts` (567) is the largest and is
+    routing plus the host-bus round loop.
