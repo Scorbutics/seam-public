@@ -33,7 +33,6 @@ import { assign_roles, _is_crossing } from "../codebase.js";
 
 import { cachedGrow, seamEnvSnapshot } from "../footprint_cache.js";
 import { recordRead } from "../../core/resolve/dep_recorder.js";
-import { epochOf } from "../footprint_cache.js";
 
 // CONCERN-SCOPE MEMO (in-memory, BOUNDED, NEVER persisted) — the LLM-coupling path floor-PROBES the concern to get
 // its file scope before the real grow (the "second grow"). That scope is STRUCTURAL — it depends only on source
@@ -48,12 +47,6 @@ import { epochOf } from "../footprint_cache.js";
 // `scan/expand.ts::_key`, inlined here with its last two callers.
 const _key = (n: any): string => `${n.file ?? ""}#${(n.range ?? [0])[0] ?? 0}#${n.kind ?? ""}`;
 
-const _SCOPE_MEMO = new Map<string, Set<string>>();
-const _SCOPE_CAP = 64;
-function _scopeMemoSet(key: string, files: Set<string>): void {
-  if (_SCOPE_MEMO.size >= _SCOPE_CAP) _SCOPE_MEMO.delete(_SCOPE_MEMO.keys().next().value as string);   // evict oldest
-  _SCOPE_MEMO.set(key, files);
-}
 import type { HubMarker } from "../../core/graph_ir.js";
 
 import { rustCoreEnabled, growViaRust, rustCanParse, rustCanServeRepo } from "../rust_core.js";
@@ -619,30 +612,31 @@ export async function grow_centers_scoped(repo: string, centers: { file: string;
         // pre-grow (cheap, deterministic, forks write no flywheel) yields ctx.footprintFiles once; the per-center
         // grows inside _growCentersMergedImpl (sequential, shared ctx) then learn ONCE and reuse.
         if (opts.dataCouplingLlm && !ctx.footprintFiles) {
-          // reuse the concern's floor SCOPE if we've computed it for this cluster on this source (in-memory memo) —
-          // skips the whole floor PROBE (the "second grow"). Structural key = source epoch, so it survives the
-          // flywheel's settling runs where the answer cache (coupling-epoch keyed) keeps missing.
-          const scopeKey = `${repo}#${centerKey}#${epochOf(repo)}`;
-          const memo = _SCOPE_MEMO.get(scopeKey);
-          if (memo) {
-            ctx.footprintFiles = new Set(memo);
-            process.stderr.write(`[data-coupling] footprint scope reused from memo (${memo.size} files) — probe skipped\n`);
-          } else {
-            emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
-            // BORDERED probe (default): the scope only needs the answer's OWN files — the LLM discovers THEIR keys and
-            // complements are matched against the REPO-WIDE floor index, so a same-stack structural flood (the old
-            // inclusive stableFloor probe, 8-19s on Acme) buys nothing but cost. Grow each center bordered + coupling-off
-            // (≈ the answer's structural pass). SEAM_PROBE_INCLUSIVE=1 restores the fully-inclusive floor probe.
-            const floors = await Promise.all(centers.map((c) => {
-              const fc = ctx.fork(); fc.footprintFiles = undefined; if (_PROBE_INCLUSIVE) fc.stableFloor = true;
-              return grow_to_terminals(repo, c.file, c.symbol, { ...opts, dataCoupling: _PROBE_INCLUSIVE ? opts.dataCoupling : false, dataCouplingLlm: false, structuralGrow: true, ctx: fc }).then(([d]) => d).catch(() => null);
-            }));
-            const union = new Set<string>();
-            for (const d of floors) if (d) for (const n of (d.nodes ?? []) as any[]) if (n.file) union.add(n.file);
-            ctx.footprintFiles = union;
-            _scopeMemoSet(scopeKey, new Set(union));
-            process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${union.size} files across the concern (shared across ${centers.length} mechanisms)\n`);
-          }
+          // THE SCOPE IS THE CORE'S (`seam_grow::orchestrate::grow_centers_scope`) — the same floor pre-grow:
+          // each center structurally, coupling OFF, union the files. Pinned equal to the TypeScript union it
+          // replaces in centers_merged_scope.test.ts, and checked on booking-app's cross-stack families at 2
+          // and 3 centers.
+          //
+          // NO MEMO. The TypeScript kept one keyed on `repo#centerKey#epochOf(repo)` because its probe was
+          // expensive AND because the flywheel's settling runs bump the COUPLING epoch, missing anything keyed
+          // on it. The core's pre-grow is coupling-OFF, so each center's grow is answer-cached under the
+          // SOURCE epoch — which settling does not move. Measured on booking-app/3 centers: 38ms cold, 0ms
+          // warm, 9ms after coupling-epoch churn plus a cache reset. The memo was an artifact of the
+          // TypeScript's cost, not a requirement of the contract.
+          //
+          // DISCOVERY IS DELIBERATELY NOT CHAINED IN. It runs as its own pumped call (`rustDiscover`), because
+          // `withHostBus` re-invokes its callback once per bus ROUND — so folding the grows in here would
+          // re-run them up to MAX_ROUNDS times for no gain.
+          emit(`Floor pre-grow to scope coupling discovery to the concern (${centers.length} mechanisms)…`);
+          const rcS = await import("../rust_core.js");
+          // SEAM_PROBE_INCLUSIVE is honoured, not dropped: it restores the old fully-inclusive floor probe
+          // (coupling as the caller set it, stableFloor on). It costs 8-19s on a large repo, which is why
+          // bordered is the default — but it is a documented escape hatch, so the core takes both flags.
+          const scope = (rcS.loadAddon()?.growCentersScope(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
+            { maxSteps: opts.maxSteps ?? 12, maxNodes: opts.maxNodes ?? 80, structuralGrow: true },
+            opts.dataCoupling !== false, _PROBE_INCLUSIVE) ?? []) as string[];
+          ctx.footprintFiles = new Set(scope);
+          process.stderr.write(`[data-coupling] footprint-scoped LLM discovery: ${scope.length} files across the concern (shared across ${centers.length} mechanisms)\n`);
         }
         return _growCentersMergedImpl(repo, centers, { ...opts, structuralGrow: structural } as any);
       })

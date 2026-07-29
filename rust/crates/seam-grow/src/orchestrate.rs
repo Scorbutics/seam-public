@@ -33,6 +33,7 @@ const UPCLIMB_MIN_DIST: usize = 2; // legacy hop-distance up-climb gate (the fal
 /// the TS path honoured `opts.hubFan`/`opts.upHop`, so the two returned different graphs for the same call.
 /// Reading env HERE would reintroduce that drift a second way, since bun's `process.env` writes never reach
 /// this process's `std::env` (see `sync_seam_env` at the napi boundary).
+#[derive(Clone)]
 pub struct WaveOpts {
     pub max_steps: usize,
     pub max_nodes: usize,
@@ -903,11 +904,20 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
 ///
 /// Deterministic and model-free, which is the point: the expensive, LLM-shaped part of the coupling path is
 /// scoped by a pass that needs no model at all, so this half can be verified on its own.
-pub fn grow_centers_scope(repo: &str, centers: &[Center], opts: &WaveOpts) -> Vec<String> {
+/// `inclusive` restores the OLD fully-inclusive floor probe (`SEAM_PROBE_INCLUSIVE`): coupling left as the
+/// caller set it and `stable_floor` on, which floods the same stack structurally. It is an escape hatch and
+/// costs 8-19s on a large repo, which is why the bordered probe is the default — but it is a documented knob,
+/// so the port honours it rather than quietly dropping it.
+pub fn grow_centers_scope(repo: &str, centers: &[Center], data_coupling: bool, inclusive: bool, opts: &WaveOpts) -> Vec<String> {
+    let mut probe: WaveOpts = opts.clone();
+    if inclusive {
+        probe.stable_floor = true;
+    }
+    let dc = inclusive && data_coupling;
     let mut scope: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for c in centers {
-        // coupling OFF and structural: the cheap floor pass, never the answer
-        if let Some(d) = grow_to_terminals(repo, &c.file, &c.symbol, false, opts) {
+        // coupling OFF (unless the inclusive escape hatch is set) and structural: the cheap floor pass
+        if let Some(d) = grow_to_terminals(repo, &c.file, &c.symbol, dc, &probe) {
             for n in &d.nodes {
                 if !n.file.is_empty() {
                     scope.insert(n.file.clone());
