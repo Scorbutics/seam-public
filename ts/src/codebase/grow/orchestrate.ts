@@ -107,66 +107,9 @@ export function _resetFileCouplingStats() {
 // source and REHYDRATE on reuse: renumber the delta's own node ids into a fresh range and remap the placeholder to
 // the real source id. NO closure — the delta is just that ONE file's crossings, so no bloat. LLM path stays live.
 const _FAN_SRC = "__FANSRC__";
-function _rehydrateFanDelta(delta: { nodes: any[]; edges: any[]; blindspots: any[] }, srcId: string, counter: number): { nodes: any[]; edges: any[]; blindspots: any[]; counter: number } {
-  const idmap = new Map<string, string>();
-  // Renumber into the DISTINCT `fc` (fan-cache) namespace — NOT `dc`: `_mergeCouplingOverlay` re-ids id collisions
-  // by minting `dc${data.nodes.length++}`, the SAME space a `dc`-renumber would use, so it would stomp our ids onto
-  // other overlay nodes (an INVENTORY event node inheriting a queue node's consumer edges — the discriminator leak).
-  // `fc<counter>` (counter threaded monotonically across the grow's fan) can't collide with `dc`/`n`/`x` ids.
-  const nodes = delta.nodes.map((n) => { const nid = `fc${counter++}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
-  const rid = (x: string) => x === _FAN_SRC ? srcId : (idmap.get(x) ?? x);
-  const edges = delta.edges.map((e) => ({ ...e, from: rid(e.from), to: rid(e.to) }));
-  const blindspots = (delta.blindspots ?? []).map((b) => ({ ...b, node: rid(b.node) }));
-  return { nodes, edges, blindspots, counter };
-}
 
 
-// Merge the coupling overlay onto the settled footprint. DEDUP BY CONTENT (`_key` = file#line#kind), like
-// merge_resolved: `_chain_route_consumers` re-derives the SAME route→consumer crossing every time any file
-// sharing that route base is coupled (seed, fan, deep-fan), each pass minting a fresh `dc` id — so the same
-// synthetic node was appended N× and `_extract_suggested_seams` minted N duplicate seams from it (the region
-// showed loadBookings/install/every route literal 12-18×). A content-equal node already present REUSES its id
-// (edges remap onto it); only genuinely new complements are pushed. Kind stays in the key so a synthetic
-// boundary node never collapses onto the real method at the same line. Re-id still guards raw id collisions.
-// Re-number a worker-resolved coupling delta's minted ids to a DISJOINT range [start+1, …] in node order —
-// reproducing _fileCouplingDelta's threaded-counter id assignment. The parallel _fanCouple resolves every file
-// from the SAME base counter (workers can't thread), so their deltas' ids COLLIDE; _mergeCouplingOverlay's remap
-// is keyed by id string alone and would conflate two files' same-id nodes (dropping crossings). Relabelling each
-// delta to its own range before merge makes the parallel merge byte-identical to the sequential threaded one.
-// Edges referencing ids OUTSIDE this delta (the anchor / existing data nodes) are left untouched (not in idmap).
-function _renumberCoupleDelta(d: { nodes: any[]; edges: any[]; blindspots?: any[] }, start: number): { delta: { nodes: any[]; edges: any[]; blindspots: any[] }; counter: number } {
-  const idmap = new Map<string, string>();
-  let k = start;
-  const nodes = d.nodes.map((n) => { const nid = `dc${++k}`; idmap.set(n.id, nid); return { ...n, id: nid }; });
-  const edges = d.edges.map((e) => ({ ...e, from: idmap.get(e.from) ?? e.from, to: idmap.get(e.to) ?? e.to }));
-  const blindspots = (d.blindspots ?? []).map((b) => ({ ...b, node: idmap.get(b.node) ?? b.node }));
-  return { delta: { nodes, edges, blindspots }, counter: k };
-}
 
-export function _mergeCouplingOverlay(data: any, overlay: { nodes: any[]; edges: any[]; blindspots: any[] }): void {
-  if (!overlay?.nodes?.length) return;
-  const used = new Set<string>((data.nodes ?? []).map((n: any) => n.id));
-  const byKey = new Map<string, string>((data.nodes ?? []).map((n: any) => [_key(n), n.id]));
-  const remap = new Map<string, string>();
-  let k = (data.nodes ?? []).length;
-  for (const n of overlay.nodes) {
-    const ck = _key(n);
-    const dupe = byKey.get(ck);
-    if (dupe !== undefined) { if (dupe !== n.id) remap.set(n.id, dupe); continue; }   // content-equal → reuse it
-    let id = n.id;
-    while (used.has(id)) id = `dc${k++}`;
-    if (id !== n.id) remap.set(n.id, id);
-    used.add(id); byKey.set(ck, id); data.nodes.push({ ...n, id });
-  }
-  const eset = new Set<string>((data.edges ?? []).map((e: any) => `${e.from} ${e.to} ${e.kind ?? ""}`));
-  for (const e of overlay.edges) {
-    const from = remap.get(e.from) ?? e.from, to = remap.get(e.to) ?? e.to;
-    const ek = `${from} ${to} ${e.kind ?? ""}`;
-    if (eset.has(ek)) continue;                          // the re-derived crossing brings the same edge back
-    eset.add(ek); data.edges.push({ ...e, from, to });
-  }
-  (data.blindspots ??= []).push(...(overlay.blindspots ?? []));
-}
 
 const _MOVE_CAP = GROW.moveCap;   // a single move adding more than this is "too broad" (a widely-used class) → skipped
 

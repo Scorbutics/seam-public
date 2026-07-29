@@ -3227,6 +3227,30 @@ impl Default for WireAnchor {
     }
 }
 
+fn dec_resolved_graph(json: &str) -> napi::Result<seam_scan::graph::ResolvedGraph> {
+    let w: WireResolvedGraph = serde_json::from_str(json)
+        .map_err(|e| napi::Error::from_reason(format!("bad ResolvedGraph JSON: {e}")))?;
+    Ok(seam_scan::graph::ResolvedGraph {
+        anchor_id: w.anchor.id,
+        anchor_symbol: w.anchor.symbol,
+        anchor_file: w.anchor.file,
+        anchor_range: w.anchor.range,
+        language: w.language,
+        nodes: w.nodes,
+        edges: w.edges,
+        blindspots: w.blindspots,
+        unresolved: w.unresolved,
+        anchors: w.anchors,
+        resolved_methods: Vec::new(),
+        frontier: Vec::new(),
+        history: Vec::new(),
+        center_verdicts: Vec::new(),
+        cache_verdict: String::new(),
+        cache_key: String::new(),
+        cache_epoch: String::new(),
+    })
+}
+
 #[napi]
 pub fn project_set_from_graph(graph_json: String, direction: String) -> napi::Result<ConsumerSetDto> {
     let w: WireResolvedGraph = serde_json::from_str(&graph_json)
@@ -3287,4 +3311,29 @@ pub fn grow_centers_scope(repo: String, centers: Vec<CenterDto>, opts: GrowOptsD
     let cs: Vec<seam_grow::orchestrate::Center> =
         centers.into_iter().map(|c| seam_grow::orchestrate::Center { file: c.file, symbol: c.symbol }).collect();
     seam_grow::orchestrate::grow_centers_scope(&repo, &cs, data_coupling.unwrap_or(false), inclusive.unwrap_or(false), &o)
+}
+
+/// growMergeCouplingOverlay — merge a coupling overlay onto a settled footprint, dedup BY CONTENT, minting
+/// `dc{n}` for a raw id collision and remapping edges/blindspots onto the survivor.
+///
+/// Exposed because the TypeScript twin of this (`_mergeCouplingOverlay`) had no production caller left —
+/// only tests — so the copy was being pinned while the engine that actually merges overlays was not.
+#[napi]
+pub fn grow_merge_coupling_overlay(graph_json: String, overlay_json: String) -> napi::Result<String> {
+    #[derive(serde::Deserialize)]
+    struct OverlayWire {
+        #[serde(default)]
+        nodes: Vec<seam_scan::graph::GraphNode>,
+        #[serde(default)]
+        edges: Vec<seam_scan::graph::GraphEdge>,
+        #[serde(default)]
+        blindspots: Vec<seam_scan::graph::Blindspot>,
+    }
+    let mut g = dec_resolved_graph(&graph_json)?;
+    let o: OverlayWire = serde_json::from_str(&overlay_json)
+        .map_err(|e| napi::Error::from_reason(format!("bad overlay JSON: {e}")))?;
+    let counter = g.nodes.len();
+    let delta = seam_grow::coupling::Delta { nodes: o.nodes, edges: o.edges, blindspots: o.blindspots, counter };
+    seam_grow::coupling::merge_coupling_overlay(&mut g, &delta);
+    serde_json::to_string(&g).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }

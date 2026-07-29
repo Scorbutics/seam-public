@@ -7,7 +7,19 @@
 // `_key` (file#line#kind) at that single funnel, mirroring merge_resolved. Pure unit test of the funnel — no
 // repo/cache/concurrency (mirrors coupling_border.test.ts's direct-call style).
 import { describe, expect, test } from "bun:test";
-import { _mergeCouplingOverlay } from "../../src/codebase/grow/orchestrate.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
+
+// THE CORE'S MERGE. The TypeScript `_mergeCouplingOverlay` this used to call had no production caller left —
+// only this test — so the copy was being pinned while the engine that actually merges overlays was not.
+// `seam_grow::coupling::merge_coupling_overlay` says "Port of `_mergeCouplingOverlay`" and agrees with it on
+// every case here (re-derived crossing, genuinely new node, raw id collision, empty overlay).
+// Mutates `data` in place, as the old function did, so the assertions below are unchanged.
+const _mergeCouplingOverlay = (data: any, overlay: any): void => {
+  const a = loadAddon();
+  if (!a) throw new Error("the Seam core is not available");
+  const out = JSON.parse((a as any).growMergeCouplingOverlay(JSON.stringify(data), JSON.stringify(overlay)));
+  data.nodes = out.nodes; data.edges = out.edges; data.blindspots = out.blindspots ?? [];
+};
 
 // A settled structural footprint: the anchor + one already-present route node the overlay will re-derive.
 const settled = () => ({
