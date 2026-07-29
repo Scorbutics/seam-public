@@ -747,3 +747,16 @@ Known limits:
   sparse and the one real code core lands with low (~50%) confidence.
 - **No GitHub PR ingestion yet**, no line-level roles, no chunking for very large diffs (the
   classifier warns near the context window, default 200k).
+
+## Environment flags
+
+`ts/src/core/seam_env.ts` is the reference for every `SEAM_*` flag the engine reads — default, effect, and
+read site, classified as deployment **config**, a documented **knob**, a consolidated **switch**
+(`SEAM_DEBUG=<topic>`, `SEAM_RENDER=<topic>`), an escape **hatch**, or an A/B **seam** a test flips to prove
+a feature causes what it claims. It is enforced by a test, so it cannot drift from the code: adding a flag
+without documenting it fails `test/core/env_documented.test.ts`.
+
+Most tuning is NOT an environment variable. Render bounds are parameters (`renderImpact(model, undefined,
+{files: 2})`), grow knobs are options (`opts.hubFan`), and how many mechanisms a concern grows around is a CLI
+flag (`--centers <n>`). See `docs/SEAM_FLAGS_AUDIT.md` for why — 116 flags became 36, and most of the
+difference was knobs nothing ever set.

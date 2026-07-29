@@ -1,5 +1,10 @@
 # SEAM_* flag audit
 
+> **Looking for what a flag DOES?** `ts/src/core/seam_env.ts` is the reference — every flag with its default,
+> its effect, and where it is read, classified as config / knob / switch / hatch / seam. It is enforced by
+> `test/core/env_documented.test.ts`, which fails on an undocumented flag OR a documented one nothing reads.
+> This file is the AUDIT that produced that list: how 116 flags became 36, and what was wrong with the rest.
+
 Measured 2026-07-29. 147 `SEAM_*` tokens exist across the repo. **116 are live flags with a real reader.**
 The other 31 break down below — **16 are genuinely dead**, 12 are not env flags at all, and 3 were
 misclassified by the first pass (corrected below).
