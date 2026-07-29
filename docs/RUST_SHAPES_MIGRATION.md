@@ -980,3 +980,29 @@ To settle it: run a concern on a repo whose `.seam` is cold, with a backend, and
 lines and their scope; or instrument `learn_matchers` to record its scope per call. Do that BEFORE touching
 `ctx.footprintFiles` — the field looks vestigial, and removing a vestigial-looking field is exactly how the
 `_expanded` and `resetCtxCache` cases would have gone wrong if they had not been checked first.
+
+STILL UNSETTLED after four attempts, and the attempts themselves are worth recording so the next one is not
+spent rediscovering them:
+
+  - `dcForCenters = a.concern && !centerPicked ? false : a.dataCoupling` (decompose.ts:541). With an explicit
+    `--anchor-file`/`--symbol` plus `--concern`, `centerPicked` stays FALSE, so coupling is switched OFF for
+    the center grows entirely and the `dataCouplingLlm` branch cannot run. That alone explains why the
+    obvious invocation shows nothing, and it is NOT a defect.
+  - The center-first branch needs `a.auto && a.intent && (a.center || !a.symbol)` (decompose.ts:397), and
+    `--center` takes `file#symbol`, not `file:symbol`.
+  - Even satisfying all of that, the run exits 0 with ZERO stderr — including the branch's own
+    `[center-first] pinned N center(s)` write. So it is still unconfirmed that the branch was ever reached,
+    and "no discovery line" remains uninterpretable. Find out what silences that path FIRST; every reading
+    downstream of it is unusable until then.
+
+### Correction: the booking-app scope evidence
+
+An earlier note here (and a commit message) said the core's scope was checked on booking-app "at 2 centers
+(5 files) and 3 centers (6 files)". Those runs named `rest/BookingsService.java` and
+`rest-manage/ManageBookingsService.java` — paths that DO NOT EXIST in that fixture; everything is under
+`ejb/`. The grows resolved those centers by SYMBOL instead, so the check was real but it was not the check
+described, and the file counts came from a different center set than the one named.
+
+Re-run with the actual paths (`ejb/BookingsBean.java`, `ejb/BookingsService.java`,
+`ejb/ManageBookingsService.java`): TS and the core agree, 4 files at both 2 and 3 centers. The equivalence
+holds; the description of what was compared did not.
