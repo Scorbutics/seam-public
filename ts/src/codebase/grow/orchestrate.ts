@@ -183,11 +183,6 @@ async function _phaseSeed(repo: string, anchorFile: string, symbol: string, _opt
 
 
 
-// The `[grow]` log prefix, tagged `·probe` when this grow is the throwaway footprint-scoping pre-grow
-// (`grow_footprint_scoped` sets ctx.stableFloor). The probe runs a FULL grow — seed → coupling → wave
-// expansion — to discover the flow's files, then discards the footprint; its wave lines are otherwise
-// indistinguishable from the real grow's, so it reads as "the grow is still growing" (see [coupling·probe]).
-const _gtag = (ctx?: EngineCtx): string => (ctx?.stableFloor ? "grow·probe" : "grow");
 
 // ── P2 STRUCTURAL EXPANSION (docs/grow-architecture.md) ──────────────────────────────────────────────────
 // Reach the flow's terminals via consumer/dependency edges, bounded by budget. The frontier is INTENT-GUIDED
@@ -195,47 +190,6 @@ const _gtag = (ctx?: EngineCtx): string => (ctx?.stableFloor ? "grow·probe" : "
 // NOTE: per the contract this should be intent-GUIDED, not intent-PRUNED; today the ranking + exclusion still
 // live in the loop (the discover-vs-prune split is the Step-2 change). Structural builds only — never couples.
 
-// Apply ONE (node, direction) expansion to the footprint: build that node's directional footprint, reject a
-// flood (a widely-used util), and merge. The wavefront flood calls this for every ready head in a wave.
-// Returns the (possibly unchanged) footprint and how many nodes it added.
-// The wave's incremental graph index — the node/edge identity maps carried ACROSS moves so the footprint is
-// ASSEMBLED ONCE (the graph is built incrementally, per Brice's model) instead of re-derived each move. `merge_resolved`
-// deep-CLONES the whole footprint AND rebuilds these maps on EVERY move → O(n²) cloning that dominated the warm
-// re-walk on a large repo (the multi-second cost). Here they persist and each move APPENDS in place → O(total nodes).
-export type GrowIndex = { byKey: Map<string, string>; usedIds: Set<string>; eset: Set<string> };
-export const _mkIndex = (data: any): GrowIndex => ({
-  byKey: new Map<string, string>((data.nodes as any[]).map((n) => [_key(n), n.id])),
-  usedIds: new Set<string>((data.nodes as any[]).map((n) => n.id)),
-  eset: new Set<string>((data.edges as any[]).map((e) => `${e.from} ${e.to} ${e.kind ?? ""}`)),
-});
-// MUTATE `data` in place with `add`, updating `idx` incrementally. Semantically identical to merge_resolved(data, add)
-// by node/edge identity (same id-collision rename, same key dedup) — but no structuredClone and no per-move map rebuild.
-export function _mergeInto(data: any, add: any, idx: GrowIndex, expandAnchor?: string | null): number {
-  const { byKey, usedIds, eset } = idx;
-  const idmap = new Map<string, string>();
-  let added = 0;
-  for (const n of add.nodes as any[]) {
-    const k = _key(n);
-    const ex = byKey.get(k);
-    if (ex) { idmap.set(n.id, ex); continue; }
-    let nid = n.id;
-    if (usedIds.has(nid)) { nid = `x${usedIds.size}`; while (usedIds.has(nid)) nid = `x${usedIds.size}_${nid}`; }
-    idmap.set(n.id, nid); usedIds.add(nid); byKey.set(k, nid);
-    data.nodes.push({ ...n, id: nid }); added++;
-  }
-  for (const e of add.edges as any[]) {
-    const f = idmap.get(e.from) ?? e.from, t = idmap.get(e.to) ?? e.to;
-    const key = `${f} ${t} ${e.kind ?? ""}`;
-    if (usedIds.has(f) && usedIds.has(t) && !eset.has(key)) { eset.add(key); data.edges.push({ ...e, from: f, to: t }); }
-  }
-  for (const bs of add.blindspots ?? []) (data.blindspots ??= []).push({ ...bs, node: idmap.get(bs.node) ?? bs.node });
-  for (const u of add.unresolved ?? []) (data.unresolved ??= []).push({ ...u, node: idmap.get(u.node) ?? u.node });
-  const addAnchors = (add.anchors ?? [add.anchor?.id]).map((a: string) => idmap.get(a) ?? a);
-  const extra = expandAnchor ? [idmap.get(expandAnchor) ?? expandAnchor] : [];
-  data.anchors = [...new Set([...(data.anchors ?? [data.anchor?.id]), ...addAnchors, ...extra].filter((a) => a))];
-  data.complete = Boolean(data.complete ?? true) && Boolean(add.complete ?? true);
-  return added;
-}
 
 // The DOWN-into-class de-noise input: the files that REACHED this class/interface (so its down footprint
 // surfaces only the methods those callers invoke — see _applyMove). Derived from the LIVE `data` graph.
@@ -411,7 +365,14 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // GraphDto, and they reproduced with this routing reverted. Measured after that fix: the booking-app
   // concern graph is IDENTICAL through both engines at 1 center (33 nodes) and at 4 (39 nodes), same files
   // both times, and the whole suite passes with coupling routed.
-  if (!opts.dataCouplingLlm && rustCoreEnabled() && rustCanServeRepo(repo)
+  //
+  // THE LLM PATH ROUTES TOO, now that discovery runs BEFORE the grow. The old reason not to was that the core
+  // replays learned matchers without turning the flywheel, so routing would stop the repo learning — but that
+  // was true only while this path never discovered at all (it computed a scope and dropped it). With
+  // `rustDiscover` called ahead of the grow, the matchers are learned by the time the wave runs and the grow's
+  // job IS replay. Measured: booking-app concern with --data-coupling llm, 35 nodes / 8 files through either
+  // engine, identical node sets.
+  if (rustCoreEnabled() && rustCanServeRepo(repo)
       && centers.every((c) => rustCanParse(c.file))) {
     const rc = await import("../rust_core.js");
     const g: any = rc.loadAddon()?.growCenters(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
@@ -434,38 +395,20 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
     }
   }
 
-  let data: any = null; let idx: GrowIndex | null = null;
-  const history: any[] = [];
-  const expUnion = new Set<string>();   // union each center's map-completeness set (survives the _mergeInto that drops it)
-  const _maxNodes = opts.maxNodes ?? 80;
-  for (const c of centers) {
-    // GLOBAL node budget. Measured missing: with SEAM_CENTERS_MERGED=1 (the CLI default) this loop merged
-    // every center's full closure, so `--max-nodes 80` returned 155 nodes for 2 centers, 168 for 3, 179 for
-    // 4. The caller's own check (`decompose.ts`: `if (data && nodes >= maxNodes) break`) cannot fire here
-    // because the merged path collapses N results into ONE — so its
-    // "[multi-anchor] node budget reached" line was unreachable on the default path.
-    if (data && (data.nodes?.length ?? 0) >= _maxNodes) {
-      warnDegraded(`[centers] node budget ${_maxNodes} reached — skipping remaining mechanism(s)`);
-      break;
-    }
-    // per-center closure — P5-cached by SYMBOL (the reused unit across concerns). Sequential so the shared ctx has a
-    // single flywheel writer; a cached center returns instantly (HIT skip wave), so this is cheap once warm.
-    const r = await grow_to_terminals(repo, c.file, c.symbol, { ...opts, ctx })
-      .catch((e) => { dbg(`[centers] merged center ${c.symbol} failed: ${(e as Error).message}`); return null; });
-    if (!r) continue;
-    const [cd, ch] = r;
-    for (const x of (cd._expanded ?? []) as string[]) expUnion.add(x);
-    if (!data) { data = cd; idx = _mkIndex(data); }
-    else _mergeInto(data, cd, idx!, cd.anchor?.id);   // dedup shared nodes ONCE, in place (O(n))
-    history.push(...ch);
-  }
-  if (!data) return [{ nodes: [], edges: [], anchors: [] }, []];
-  // mark the CENTER node ids (matched by file+symbol — robust to id remapping) so the render's center-first shape
-  // roots the star on the whole cluster.
-  const _norm = (f?: string) => String(f ?? "").replace(/^\.\//, "");
-  data.centerAnchors = centers.map((c) => (data.nodes as any[]).find((n) => _norm(n.file).endsWith(_norm(c.file)) && n.symbol === c.symbol)?.id).filter(Boolean);
-  data._expanded = [...expUnion];   // map completeness for the projection's frontier detection
-  return [data, history];
+  // NO TYPESCRIPT FALLBACK — and this is a FIX, not a restriction. What used to be here looped the centers
+  // through `grow_to_terminals`, which itself throws when the core cannot serve; the loop caught each throw
+  // and returned `{nodes: [], edges: [], anchors: []}`. So a concern on an unservable repo answered NOTHING
+  // instead of erroring, while the single-anchor path on the same repo threw. Measured with
+  // SEAM_RUST_CORE=0: merged -> 0 nodes, single-anchor -> "the Seam core could not serve this grow".
+  //
+  // A silent empty answer is the failure this engine refuses everywhere else. Same message as the
+  // single-anchor path, so the two agree about what an unservable query is.
+  throw new Error(
+    "the Seam core (Rust addon) could not serve this concern grow: " +
+    (!rustCoreEnabled() ? "SEAM_RUST_CORE is disabled"
+      : !rustCanServeRepo(repo) ? "the repo holds a language the core cannot parse"
+      : `no vendored grammar for ${centers.find((c) => !rustCanParse(c.file))?.file ?? "a center"}`) +
+    ". Build it with `make -C rust` — there is no TypeScript engine to fall back to.");
 }
 
 // FOOTPRINT-SCOPED grow (the `--data-coupling llm` path). A cheap deterministic FLOOR pre-grow yields the
