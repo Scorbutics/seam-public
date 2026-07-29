@@ -866,3 +866,35 @@ instantly. The shell CONSTRUCTS that DTO too (`toGraphDto`, feeding `mergeResolv
 does not supply is a breaking change to every existing producer. `Option<Vec<…>>` fixes it. Same shape as the
 `Seam`/`ResolvedGraph` serde-default work: on a wire type crossing napi, new fields are optional or they are
 a break.
+
+### `resetCaches` does NOT invalidate a source edit — only `_resetFootprintMirror` does
+
+Chasing the double-`[grow]`-line signal led to a real staleness, measured end to end. One process, one repo,
+a source file edited between grows (a new import + a new dependency, so the grown set MUST change):
+
+    before edit                       nodes=3
+    after edit, no reset              nodes=3   <- STALE
+    after edit + core resetCaches()   nodes=3   <- STILL STALE
+    after edit + _resetFootprintMirror() nodes=4  <- correct
+
+Cause: BOTH engines memoise the content epoch for the PROCESS LIFETIME —
+`seam_cache::epoch_of` (`EPOCH`) and `footprint_cache.ts::epochOf` (`_epoch`) each return early on a hit.
+The doc above `epoch_of` promises "ANY real source add/edit/delete bumps the epoch → the whole warm cache
+invalidates"; that is true only of the FIRST call in a process. `core.resetCaches()` clears the Rust memo but
+cannot see the TypeScript one, so it is not sufficient on its own.
+`footprint_cache.ts::_resetFootprintMirror` clears both (`_epoch`, `_cEpoch`, `_mem`, `_gmem`, `_fhMem`, then
+the core's) and IS sufficient.
+
+Impact today is LOW: the CLI is a fresh process per invocation, and this repo no longer hosts a long-lived
+server (the TS MCP server was deleted). It is a trap for anything long-lived — the external MCP server, the
+VS Code extension, a future watch mode — where a user edits code and keeps getting the pre-edit footprint.
+The correct reset is also underscore-prefixed, so it READS as private/test-only while being the only one that
+works.
+
+### The test helper shadowed that reset with a core-only one (fixed)
+
+`test/helpers/scan.ts` had `export const _resetFootprintMirror = resetCallIndex` — i.e. `core.resetCaches`.
+So every test importing the name from the helper got the insufficient reset. `centers_merged_cache.test.ts`
+says it drops the in-process mirrors "so the 2nd call proves a genuine DISK reuse"; it was measuring a
+surviving in-process memo. Now re-exports the real function. All 1019 tests still pass with the stronger
+reset — the tests were weaker than they claimed, but their conclusions hold.

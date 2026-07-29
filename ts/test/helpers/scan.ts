@@ -90,4 +90,9 @@ export async function transformersAvailable(): Promise<boolean> {
 export const resetCallIndex = (repo?: string): void => core().resetCaches(repo ?? null);
 export const _resetImplIndexMem = resetCallIndex;
 export const _resetDefTableMem = resetCallIndex;
-export const _resetFootprintMirror = resetCallIndex;
+// NOT an alias of the core reset. footprint_cache.ts owns TypeScript-side memos the core cannot see —
+// `_epoch`, `_cEpoch`, `_mem`, `_gmem`, `_fhMem` — and its OWN `_resetFootprintMirror` clears those AND calls
+// the core's reset. Aliasing this name to the core-only reset silently defeated every test that used it:
+// centers_merged_cache says it drops the in-process mirrors "so the 2nd call proves a genuine DISK reuse",
+// and it was measuring a surviving in-process memo instead. Re-export the real one.
+export { _resetFootprintMirror } from "../../src/codebase/footprint_cache.js";
