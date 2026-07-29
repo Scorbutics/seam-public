@@ -2,6 +2,7 @@
 //! build_callsite_graph (a class/method's call-site consumers).
 
 mod builder;
+pub mod di_index;
 pub mod def_resolve;
 pub mod receiver_types;
 pub mod callsite_graph;

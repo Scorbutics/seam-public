@@ -2,6 +2,7 @@
 //! deterministic resolution is ported, a `ModuleResolver`). The rest of the engine dispatches only through the
 //! `provider_for` registry — it never names a language.
 
+pub mod di_bindings;
 pub mod ast;
 pub mod atoms;
 pub mod dispatch;

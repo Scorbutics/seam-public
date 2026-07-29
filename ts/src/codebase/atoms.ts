@@ -115,15 +115,12 @@ export class Ctx {
 const _ctxCache = new Map<string, Ctx>();
 const _CTX_CACHE_MAX = 4000;
 
-export async function makeCtx(content: string, grammar: string): Promise<Ctx | null> {
-  const key = `${grammar} ${content}`;
-  const hit = _ctxCache.get(key);
-  if (hit) { _ctxCache.delete(key); _ctxCache.set(key, hit); return hit; }   // LRU bump
-  const parser = await getParser(grammar);
-  if (!parser) return null;
-  let ctx: Ctx;
-  try { ctx = new Ctx(content, parser.parse(content).rootNode); } catch { return null; }
-  if (_ctxCache.size >= _CTX_CACHE_MAX) { const oldest = _ctxCache.keys().next().value; if (oldest !== undefined) _ctxCache.delete(oldest); }
-  _ctxCache.set(key, ctx);
-  return ctx;
-}
+// `makeCtx` is GONE — the tree-sitter PARSE moved to the core along with the DI binding index, which was the
+// last caller that built one. Verified unreachable before removal with a side-effect tripwire (not a throw,
+// which a try/catch can hide) under BOTH the whole 1020-test suite and the 72-path CLI gate: zero hits.
+//
+// The `Ctx` class above stays: cli/field_facts.ts constructs one directly off `core/treesitter`'s parser on
+// the diff-review path. That file is outside the codebase/ migration scope, so it keeps its own parse.
+//
+// `available` is the tree-sitter availability guard that 105 test files gate on, and the only thing any of
+// them imports from here.

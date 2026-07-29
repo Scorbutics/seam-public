@@ -61,7 +61,7 @@ import { isFlowSubject, isHandlerEdge, isProduceEdge } from "../coupling/subject
 const transformersAvailable = async (): Promise<boolean> => {
   try { return !!(await import("../rust_core.js")).loadAddon()?.embedAvailable(); } catch { return false; }
 };
-import { makeCtx, available, type Ctx } from "../atoms.js";
+
 
 import { EngineCtx } from "../engine_ctx.js";
 import { GROW } from "./config.js";

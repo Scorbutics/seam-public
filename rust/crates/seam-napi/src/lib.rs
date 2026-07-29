@@ -3469,3 +3469,32 @@ pub fn grow_rank_hubs(
     );
     serde_json::to_string(&hubs).map_err(|e| napi::Error::from_reason(format!("serialise: {e}")))
 }
+
+/// diBindingForClass — the DI binding that produces class `cls`, or undefined. JSON so the optional
+/// `condition`/`deps` keep the TypeScript's shape exactly.
+#[napi]
+pub fn di_binding_for_class(repo: String, cls: String) -> napi::Result<Option<String>> {
+    match seam_scan::di_index::binding_for_class(&repo, &cls) {
+        None => Ok(None),
+        Some(b) => serde_json::to_string(&b)
+            .map(Some)
+            .map_err(|e| napi::Error::from_reason(format!("serialise: {e}"))),
+    }
+}
+
+/// diBindingForToken — the DI binding registered under a bare token name, or undefined.
+#[napi]
+pub fn di_binding_for_token(repo: String, token: String) -> napi::Result<Option<String>> {
+    match seam_scan::di_index::binding_for_token(&repo, &token) {
+        None => Ok(None),
+        Some(b) => serde_json::to_string(&b)
+            .map(Some)
+            .map_err(|e| napi::Error::from_reason(format!("serialise: {e}"))),
+    }
+}
+
+/// diResetIndex — drop the per-repo memo so an edited fixture rebuilds.
+#[napi]
+pub fn di_reset_index() {
+    seam_scan::di_index::reset();
+}
