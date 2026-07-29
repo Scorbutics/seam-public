@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { grow_centers_scoped } from "../../src/codebase/grow/orchestrate.js";
 import { EngineCtx } from "../../src/codebase/engine_ctx.js";
 import { available } from "../../src/codebase/atoms.js";
+import { loadAddon } from "../../src/codebase/rust_core.js";
 
 describe("merged concern grow — LLM coupling discovery is scoped to the concern's union", () => {
   const repo = join(tmpdir(), "seam-merged-scope-" + process.pid);
@@ -38,6 +39,18 @@ describe("merged concern grow — LLM coupling discovery is scoped to the concer
       expect(ctx.footprintFiles).toBeDefined();
       expect(ctx.footprintFiles!.has("web/a.js")).toBe(true);
       expect(ctx.footprintFiles!.has("web/b.js")).toBe(true);
+
+      // THE SAME SCOPE, COMPUTED BY THE CORE. `growCentersScope` runs the identical floor pre-grow — each
+      // center structurally, coupling off, union the files — so the orchestration can move to Rust without
+      // changing WHICH files discovery is scoped to.
+      //
+      // Both halves are asserted ON PURPOSE. The `ctx.footprintFiles` half guards the behaviour while the
+      // TypeScript still owns it; this half pins the replacement as equivalent BEFORE the move. When the
+      // orchestration lands in the core, the ctx assertion is the only one that goes — and it goes because
+      // the field stops existing, not because the guard was dropped to make a port pass.
+      const coreScope = (loadAddon() as any).growCentersScope(repo, centers,
+        { maxSteps: 40, maxNodes: 200, structuralGrow: true }) as string[];
+      expect([...coreScope].sort()).toEqual([...ctx.footprintFiles!].sort());
     } finally { delete process.env.SEAM_CENTERS_MERGED; }
   }, 30_000);
 });

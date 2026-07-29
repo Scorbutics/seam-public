@@ -3278,3 +3278,13 @@ pub fn grow_affinity_prompt(
     );
     serde_json::to_string(&p).map_err(|e| napi::Error::from_reason(format!("affinity prompt serialise: {e}")))
 }
+
+/// growCentersScope — the files a multi-center concern reaches, per a structural floor pre-grow. This is what
+/// LLM key discovery is scoped to; deterministic and model-free, so it can be checked on its own.
+#[napi]
+pub fn grow_centers_scope(repo: String, centers: Vec<CenterDto>, opts: GrowOptsDto) -> Vec<String> {
+    let o = opts.to_wave_opts();
+    let cs: Vec<seam_grow::orchestrate::Center> =
+        centers.into_iter().map(|c| seam_grow::orchestrate::Center { file: c.file, symbol: c.symbol }).collect();
+    seam_grow::orchestrate::grow_centers_scope(&repo, &cs, &o)
+}

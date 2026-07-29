@@ -890,3 +890,33 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     }
     Some(data)
 }
+
+/// THE CONCERN'S DISCOVERY SCOPE — the files a multi-center flow reaches, as a floor pre-grow computes them.
+///
+/// Port of the union step in `grow_centers_scoped`'s `dataCouplingLlm` branch. LLM key discovery is scoped to
+/// these: unscoped, a four-file flow in a ten-thousand-file repo learns from — and pays the model over —
+/// every floor-blind file in the repo.
+///
+/// Each center is grown BORDERED and coupling-OFF: the scope only needs the answer's OWN files, because the
+/// keys discovered in them are matched against the repo-wide floor index anyway, so a same-stack structural
+/// flood buys nothing but cost. The probe's footprints are DISCARDED — only their file set is kept.
+///
+/// Deterministic and model-free, which is the point: the expensive, LLM-shaped part of the coupling path is
+/// scoped by a pass that needs no model at all, so this half can be verified on its own.
+pub fn grow_centers_scope(repo: &str, centers: &[Center], opts: &WaveOpts) -> Vec<String> {
+    let mut scope: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    for c in centers {
+        // coupling OFF and structural: the cheap floor pass, never the answer
+        if let Some(d) = grow_to_terminals(repo, &c.file, &c.symbol, false, opts) {
+            for n in &d.nodes {
+                if !n.file.is_empty() {
+                    scope.insert(n.file.clone());
+                }
+            }
+        }
+    }
+    // SORTED, so the scope is a reproducible input to discovery. The TypeScript builds a Set and hands it
+    // over in insertion order; discovery treats it as a set, but a stable order makes the reported scope
+    // diffable and keeps any downstream hash of it from moving for no reason.
+    scope.into_iter().collect()
+}
