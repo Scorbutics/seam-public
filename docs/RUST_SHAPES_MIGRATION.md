@@ -1117,3 +1117,44 @@ diff-review path. It lives in `ts/src/cli/`, not `ts/src/codebase`.
     core-owned pass calling back into the JS thread blocked inside the napi call is a deadlock.
   * **Thin wrappers over the core** — everything else; `orchestrate.ts` (567) is the largest and is
     routing plus the host-bus round loop.
+
+
+## Gate coverage audit
+
+Measured 2026-07-29. The 69-path gate was trusted for every deletion in this migration, and twice it looked
+complete when it was not. So: an audit of what each path's output actually ASSERTS, rather than which flags
+it runs.
+
+**Exercised is not asserted.** A case whose answer is "none resolved" runs the flag and pins an EMPTY
+result — every line of logic behind it stays unguarded. That is exactly how the DI code path stayed
+invisible while `--query dependencies` sat in the gate the whole time.
+
+| | before | after |
+|---|---|---|
+| output paths | 24 | 34 |
+| cases answering nothing | 7 | 5 |
+| cases failing to run at all | 1 | 0 |
+
+What the audit found:
+
+  * **`--query compare` never ran.** It was in the query loop, which supplies only `--symbol`/`--anchor-file`,
+    so it exited 2 on "requires --to-symbol and --to-file" on every run since the loop was written. The gate
+    was pinning an argument-validation error, and `runCompare` + `renderComparison` had ZERO coverage for the
+    entire migration. Fixed, and moved out of the loop; it now asserts a real comparison.
+  * **Seven cases answered nothing.** route-repo has no anchor with more than three consumers, so `impact`,
+    `dependencies`, `recall`, `refactor`, `writers` and both `contract` cases all pinned an empty result.
+    Added a `b_*` family running the same shapes against booking-app/BookingsBean (impact 5 across 2 files,
+    2 resolved dependencies, a 3-file subsystem). 10 of the 11 query shapes now have a non-null case.
+  * **`--depth` changed no output anywhere.** `q_depth1`, `q_depth2`, `q_reach`, `q_set` and `expand` are all
+    byte-identical, so the "environment ripple" the script claimed to cover was never observable. The flag IS
+    wired (decompose.ts:749); the raw footprint closure just saturates at depth 1 on every fixture. `neighborhood`
+    is where depth is visible (it passes `--depth` straight through) — depth 1 gives 3 core files / 1 expanded,
+    depth 3 gives 8 / 18. Covered there instead.
+
+**Remaining hole, measured not assumed:** `--query writers` (reverse data-coupling) cannot be exercised by
+any fixture — none yields a non-empty writers set, and booking-app has a shared key with zero counterpart
+sites. Closing it needs a fixture where one file READS a table another WRITES. Until then that shape is
+outside the guarantee and should not be leaned on for a deletion.
+
+The remaining byte-identical groups are a PRODUCT fact rather than gate redundancy: `reach`/`set` and
+`grow`/`growfrom` share a renderer summary line, so they print the same thing by design.
