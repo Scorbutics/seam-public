@@ -458,6 +458,45 @@ async function _growCentersMergedImpl(repo: string, centers: { file: string; sym
   // without this a structural cluster re-grow would print no diagnostic.
   if (opts.intent) _logIntentFieldState(opts.intent, await transformersAvailable(), opts.structuralGrow);
   const ctx = opts.ctx ?? new EngineCtx();   // ONE shared ctx: the coupling indices/flywheel build once across centers
+
+  // RUST ROUTE (deterministic path only). `seam_grow::orchestrate::grow_centers` is the same algorithm — grow
+  // each center via the answer-cached grow_to_terminals, merge sequentially under the global node budget —
+  // and rust/parity/growcenters.ts compares them byte-for-byte on the DEFAULT SEAM_CENTERS_MERGED=1 path,
+  // 24/24 at two different budgets. Measured worth doing: on keycloak the core COLD (122ms) beats this
+  // path's answer-cached WARM (375ms).
+  //
+  // NOT taken when `dataCouplingLlm` is on. The core replays learned matchers from `.seam` but does not turn
+  // the flywheel, and the caller's `ctx.footprintFiles` scoping has no equivalent there — routing that path
+  // would quietly stop the repo learning.
+  //
+  // NOR when data coupling is on AT ALL, not merely its LLM mode. Measured: the booking-app cross-stack
+  // concern tests (deterministic coupling, no LLM) fail through the core — 12 of them. This path shares ONE
+  // EngineCtx across centers so the coupling indices and the flywheel build once; the core grows each center
+  // independently. The parity harness said dc=true was 10/10, but only on THIS repo, which has no
+  // cross-stack route families — the corpus could not see it. Structural grows only until that is measured.
+  if (opts.dataCoupling === false && !opts.dataCouplingLlm && rustCoreEnabled() && rustCanServeRepo(repo)
+      && centers.every((c) => rustCanParse(c.file))) {
+    const rc = await import("../rust_core.js");
+    const g: any = rc.loadAddon()?.growCenters(repo, centers.map((c) => ({ file: c.file, symbol: c.symbol })),
+      opts.dataCoupling !== false,
+      { maxSteps: opts.maxSteps ?? 12, maxNodes: opts.maxNodes ?? 80,
+        excludeDirs: opts.excludeDirs, includeTests: opts.includeTests, structuralGrow: opts.structuralGrow });
+    if (g) {
+      // THE PER-CENTER WARM VERDICTS. Emitted here, not in the core: a caller asserting on this contract
+      // captures `process.stderr.write`, which a Rust `eprintln!` bypasses entirely (it goes straight to
+      // fd 2). Reporting them across the boundary and printing HERE is the same division the single-anchor
+      // grow already uses. Without it a HIT on a shared center is reported nowhere, and the reuse that IS
+      // the warm/learned-repo contract becomes invisible.
+      for (const v of (g.centerVerdicts ?? []) as { file: string; key: string; epoch: string; verdict: string }[])
+        process.stderr.write(`[grow] ${v.file} ${v.key} epoch=${v.epoch} ${v.verdict}\n`);
+      const rd = rc.toResolvedGraph(g);
+      // computed HERE, as the TypeScript impl does — the core returns a graph, not the cluster's roots
+      const _n = (f?: string) => String(f ?? "").replace(/^\.\//, "");
+      rd.centerAnchors = centers.map((c) => (rd.nodes as any[]).find((n) => _n(n.file).endsWith(_n(c.file)) && n.symbol === c.symbol)?.id).filter(Boolean);
+      return [rd, g.history ?? []];
+    }
+  }
+
   let data: any = null; let idx: GrowIndex | null = null;
   const history: any[] = [];
   const expUnion = new Set<string>();   // union each center's map-completeness set (survives the _mergeInto that drops it)
