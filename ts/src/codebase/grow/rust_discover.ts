@@ -8,6 +8,7 @@
 // What is left here is a thin call plus the SETTLING diagnostic, because deciding what to LOG belongs to the
 // shell, not the engine. Learn-once → `.seam/key-adapters.json` is replayed byte-identically forever after.
 import { loadAddon } from "../rust_core.js";
+import { debugOn } from "../../core/progress.js";
 import { withHostBus } from "../../core/host_bridge.js";
 
 // `scopeFiles` = the repo-relative files the flow reaches (a floor pre-grow's footprint). Discovery considers
@@ -24,7 +25,7 @@ export async function rustDiscover(repo: string, opts: DiscoverOpts = {}): Promi
   // SETTLING CENSUS — on a truly warm run this must read `replayed` (or 0 reps): every floor-blind file is
   // already marked, nothing is learned, key-adapters.json is untouched, the coupling epoch holds and the answer
   // cache hits. New reps on a REPEAT run pinpoint a settling leak, which is why the marks are counted at all.
-  if (process.env.SEAM_FP_DEBUG)
+  if (debugOn("fp"))
     process.stderr.write(`[rust-discover] ${o.note}: learned=${o.learned} reps=${o.reps} keyed=${o.keyedFiles} marked(covered=${o.coveredMarked}, shapeless=${o.shapelessMarked})\n`);
   return o.learned;
 }

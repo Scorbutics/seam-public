@@ -143,7 +143,7 @@ pub fn resolve_coupling_scoped(repo: &str, anchor_id: &str, anchor_file: &str, a
     // CACHE — the LEARNED matcher store (replayed warm) + the deterministic effect-inference matchers. The
     // pipeline step-1c matchers = persisted ∪ httpClientMatchers; the GROUND index augmentation uses the
     // PERSISTED matchers only (llmKeyIndex → applyMatchers(loadMatchers)). Empty on the stable-floor probe.
-    let _perf = std::env::var("SEAM_PERF").is_ok();
+    let _perf = seam_fs::debug_on("perf");
     let _ts = std::time::Instant::now();
     let (matchers, http_clients, learned): (Vec<KeyMatcher>, Arc<Vec<String>>, Arc<GroundingIndex>) = if stable_floor {
         (Vec::new(), Arc::new(Vec::new()), Arc::new(GroundingIndex::new()))

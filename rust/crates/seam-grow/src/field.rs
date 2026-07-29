@@ -275,11 +275,11 @@ pub fn border_coupling_det(repo: &str, data: &mut seam_scan::graph::ResolvedGrap
             *e = e.max(*v);
         }
     }
-    // WHY-TRACE — `SEAM_BORDER_WHY=<path substring>` reports this border's decision for the matching
+    // WHY-TRACE — `SEAM_DEBUG=border=<path substring>` reports this border's decision for the matching
     // complements: candidacy, the fan width of every marker that reached it, and the score actually looked up.
     // A drop has three independent causes (not a candidate at all / an unscored file / a score under the
     // margin) and the OUTPUT looks the same for all three, so the only way to tell them apart is to ask here.
-    if let Ok(want) = std::env::var("SEAM_BORDER_WHY") {
+    if let Some(want) = seam_fs::debug_value("border") {
         for id in &fan_comps {
             let file = comp_by_id.get(*id).cloned().unwrap_or_default();
             if !file.contains(&want) {

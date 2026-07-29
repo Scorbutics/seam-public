@@ -101,7 +101,7 @@ for (const { name, data } of corpus) {
   if (base.length >= 16) floorEligible++;
 
   for (const verbose of [false, true]) {
-    if (verbose) process.env.SEAM_VERBOSE_TIER = "1"; else delete process.env.SEAM_VERBOSE_TIER;
+    if (verbose) process.env.SEAM_DEBUG = "tierprompt"; else delete process.env.SEAM_DEBUG;
     captured = null;
     const tsSeams: Seam[] = JSON.parse(JSON.stringify(base));
     set_host_bus(new CaptureBus({}));
@@ -123,7 +123,7 @@ for (const { name, data } of corpus) {
     else { bad++; if (fails.length < 5) fails.push(`${name}[verbose=${verbose}] ${firstLineDiff(captured, rs.prompt)}`); }
   }
 }
-delete process.env.SEAM_VERBOSE_TIER;
+delete process.env.SEAM_DEBUG;
 
 console.log(`intent-prompt parity: ${ok} ok / ${bad} bad   (graphs ${graphs}, prompts ${prompts}, with-tables ${withTables}, with-WRITES ${withWrites}, with-ENDPOINT ${withEndpoint}, trivial ${trivial})`);
 console.log(`  floor: eligible ${floorEligible} (>=16 seams), fired ${floored}; largest footprint ${maxSeams} seams`);

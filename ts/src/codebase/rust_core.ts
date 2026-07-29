@@ -6,6 +6,7 @@
 // ResolvedGraph `data` shape that `from_resolved_graph` consumes.
 
 import { createRequire } from "node:module";
+import { debugOn } from "../core/progress.js";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
 import { resolveStructuralKnobs } from "./grow/structural_knobs.js";
@@ -67,7 +68,7 @@ export function rustCanServeRepo(repo: string): boolean {
       else {
         const missing: string[] = addon.unparseableLanguages(repo) ?? [];
         ok = missing.length === 0;
-        if (!ok && process.env.SEAM_FP_DEBUG)
+        if (!ok && debugOn("fp"))
           process.stderr.write(`[grow] rust-core OFF for this repo — unvendored grammar(s): ${missing.join(", ")}\n`);
       }
     } catch { ok = false; }
@@ -209,7 +210,7 @@ export function growViaRust(repo: string, anchorFile: string, symbol: string, op
   // The addon answer-caches internally (grow-v1 shards) instead of going through the TS `cachedGrow`, so it
   // reports its warm-path verdict back and we emit the SAME line cachedGrow does — through process.stderr, which
   // is both the TS shell's job and the only stream a caller intercepting process.stderr.write can observe.
-  if (process.env.SEAM_FP_DEBUG && dto?.cacheVerdict)
+  if (debugOn("fp") && dto?.cacheVerdict)
     process.stderr.write(`[grow] ${anchorFile} ${dto.cacheKey} epoch=${dto.cacheEpoch} ${dto.cacheVerdict}\n`);
   const data = toResolvedGraph(dto);
   // THE MOVE HISTORY, from the addon rather than reconstructed. It used to be synthesized here from the

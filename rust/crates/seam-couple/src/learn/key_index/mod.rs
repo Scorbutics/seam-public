@@ -105,7 +105,7 @@ pub fn key_index(repo: &str, matchers: &[KeyMatcher], anchor_file: &str) -> Arc<
     if let Some(hit) = KEY_INDEX_CACHE.lock().unwrap().get(&ck) {
         return hit.clone();
     }
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     let t0 = std::time::Instant::now();
     let files = files_index(repo, anchor_file);
     let t1 = std::time::Instant::now();

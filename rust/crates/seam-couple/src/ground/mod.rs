@@ -81,7 +81,7 @@ pub fn floor_indices(repo: &str) -> Arc<FloorIndices> {
     if let Some(hit) = CACHE.lock().unwrap().get(&repo_key) {
         return hit.clone();
     }
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     let epoch = seam_cache::epoch_of(repo);
     if !epoch.is_empty() {
         let t = std::time::Instant::now();

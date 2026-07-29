@@ -6,6 +6,7 @@
 // content fingerprint of the engine, the repo, and the learned key-adapter state), the SEAM_* env snapshot
 // those epochs are keyed with, and the P5 settled-grow answer cache the merged-centers path wraps itself in.
 import { statSync, readFileSync } from "node:fs";
+import { debugOn } from "../core/progress.js";
 import { fileURLToPath } from "node:url";
 import { join, relative, dirname } from "node:path";
 import { loadShard, saveShard, graphCacheEnabled } from "../core/resolve/index_cache.js";
@@ -137,7 +138,7 @@ export function couplingEpochOf(repo: string): string {
   // WHAT it's made of (source epoch ⊕ the learned-store hashes) + the parsed store counts, so two runs can be
   // diffed: a changing source hash = a source edit (or an mtime-only touch); a changing learned hash with the
   // SAME counts = a rewrite with reordered content; growing counts = a pass still learning (see [key-store]).
-  if (process.env.SEAM_FP_DEBUG) {
+  if (debugOn("fp")) {
     let sum = "";
     try { const j = JSON.parse(readFileSync(join(repo, ".seam", "key-adapters.json"), "utf-8")); sum = ` adapters{rules:${(j.rules ?? []).length},files:${Object.keys(j.files ?? {}).length},learnedSigs:${(j.learnedSigs ?? []).length}}`; } catch { sum = " adapters{∅}"; }
     process.stderr.write(`[coupling-epoch] source=${src} | ${learned.join(" ")}${sum} → epoch=${e}\n`);

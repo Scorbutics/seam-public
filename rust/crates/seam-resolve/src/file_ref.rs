@@ -77,7 +77,7 @@ fn file_ref_index(repo: &str) -> Arc<RefIndex> {
             }
         }
     }
-    if std::env::var("SEAM_PERF").is_ok() {
+    if seam_fs::debug_on("perf") {
         eprintln!("[perf] file_ref_index build {:.2}s", _t.elapsed().as_secs_f64());
     }
     let arc = Arc::new(idx);

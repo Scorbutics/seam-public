@@ -29,7 +29,7 @@ describe("centers-merged — the merged concern grow is P5 answer-cached on the 
   test("a second merged grow with the SAME centers is served from the grow cache (HIT, no re-wave)", async () => {
     if (!available()) return;
     process.env.SEAM_CENTERS_MERGED = "1";
-    process.env.SEAM_FP_DEBUG = "1";
+    process.env.SEAM_DEBUG = "fp";
     delete process.env.SEAM_GRAPH_CACHE;   // cache must be enabled (default) for this contract to hold
     const orig = process.stderr.write.bind(process.stderr);
     const lines: string[] = [];
@@ -47,7 +47,7 @@ describe("centers-merged — the merged concern grow is P5 answer-cached on the 
     } finally {
       (process.stderr as any).write = orig;
       delete process.env.SEAM_CENTERS_MERGED;
-      delete process.env.SEAM_FP_DEBUG;
+      delete process.env.SEAM_DEBUG;
     }
     // the 2nd call short-circuited on the grow cache — a HIT was recorded for the merged answer.
     expect(lines.some((l) => l.includes("HIT (skip wave)"))).toBe(true);

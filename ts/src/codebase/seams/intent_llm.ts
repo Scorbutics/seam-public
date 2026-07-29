@@ -2,6 +2,7 @@
 // FINAL seams by intent (label_focus_relevance_llm). Both build a prompt, call run_pass, parse the JSON
 // verdicts back onto the seams — structure supplies the facts, the model only judges label/tier/culmination.
 import { type Graph, type Node, bfsDistance } from "../../core/graph_ir.js";
+import { debugOn } from "../../core/progress.js";
 import { isFlowSubject, isDomainSubject, isProduceEdge } from "../coupling/subjects.js";
 import { run_pass, ClassifierError as LLMError } from "../../core/llm.js";
 import { emit } from "../../core/progress.js";
@@ -115,7 +116,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   // prompt without deadlocking. Moving `run_pass` across would mean making the whole decompose pipeline
   // re-runnable across bus rounds — a design decision, not a port. So: facts there, model call here.
   const _p = JSON.parse(core().decomposeIntentPrompt(
-    toWire(g), seamsToCore(ranked), intent, Boolean(process.env.SEAM_VERBOSE_TIER), false));
+    toWire(g), seamsToCore(ranked), intent, debugOn("tierprompt"), false));
   // The facts come back STRUCTURED as well as rendered, and the verdict loop below uses those rather than
   // re-deriving them on this side — a second derivation is the drift this port exists to remove.
   const _facts = new Map<string, { writes: string[]; dir?: "forward" | "backward"; repComplexity: number }>(
@@ -125,7 +126,7 @@ export function label_focus_relevance_llm(g: Graph, seams: Seam[], intent: strin
   const repCx = (s: Seam): number => _facts.get(s.id)?.repComplexity ?? 1;
   const floored = new Set<Seam>(ranked.filter((s) => (_p.floored ?? []).includes(s.id)));
   if (floored.size) emit(`pre-tier floor: ${floored.size}/${ranked.length} far off-domain seams marked off deterministically (saved from the LLM pass)`);
-  const _verbose = !!process.env.SEAM_VERBOSE_TIER;
+  const _verbose = debugOn("tierprompt");
 
   emit(`Tiering ${ranked.length} seam(s) by intent (LLM — output-bound, scales with footprint size)…`);
   let out: Map<string, any>;

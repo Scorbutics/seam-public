@@ -40,7 +40,7 @@ impl CallsiteIndex {
     /// serde_json Value round-trip) instead of re-parsing the whole repo. A near center has the same epoch →
     /// disk HIT; any source edit bumps the epoch (a new filename) → rebuild.
     fn load_or_build(repo: &str) -> Self {
-        let perf = std::env::var("SEAM_PERF").is_ok();
+        let perf = seam_fs::debug_on("perf");
         let epoch = seam_cache::epoch_of(repo);
         if !epoch.is_empty() {
             let t = std::time::Instant::now();

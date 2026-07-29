@@ -31,7 +31,7 @@ pub fn apply_matchers(repo: &str, matchers: &[KeyMatcher]) -> GroundingIndex {
     if matchers.is_empty() {
         return idx;
     }
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     if perf {
         READ_NS.store(0, Ordering::Relaxed);
         MATCH_NS.store(0, Ordering::Relaxed);
@@ -45,7 +45,7 @@ pub fn apply_matchers(repo: &str, matchers: &[KeyMatcher]) -> GroundingIndex {
     let partials: Vec<Vec<(String, usize, bool)>> = files
         .par_iter()
         .map(|rel| {
-            let perf = std::env::var("SEAM_PERF").is_ok();
+            let perf = seam_fs::debug_on("perf");
             let mut out: Vec<(String, usize, bool)> = Vec::new();
             let _tr = std::time::Instant::now();
             let Ok(bytes) = std::fs::read(format!("{repo}/{rel}")) else { return out };

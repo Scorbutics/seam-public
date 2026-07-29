@@ -9,6 +9,7 @@
 //      roles + tables + blindspot candidates, never hunk bodies or render chrome.
 
 import { MEDIA as _MEDIA, WAVE_VERB as _WAVE_VERB, WAVE_RANK as _WAVE_RANK, CROSS_SOURCE as _CROSS_SOURCE, CROSS_SINK as _CROSS_SINK, CROSS_KINDS as _CROSS_KINDS, STORE_KINDS as _STORE_KINDS, BOUND_KINDS as _BOUND_KINDS } from "./render/medium_registry.js";
+import { debugOn } from "../core/progress.js";
 import { type Hunk, type Seam, type Ranked, rolesOf, filesOf, _container, where, facts, lineageOf, memberLines, _shellOf, buildNodeIndex } from "./render/vocab.js";
 import { buildDerivedIndex, computeSpine, hubKeysOf } from "./render/spine.js";
 import { buildEntrySurface, INVOKE_KINDS, type EntryRay } from "./render/entry_surface.js";
@@ -958,10 +959,10 @@ export function renderConcern(model: any, opts: { intent?: string; centers?: { f
   }
   const cap = Math.max(1, parseInt(process.env.SEAM_CONCERN_CAP ?? "50", 10) || 50);   // a big concern stays scannable
   const q = opts.intent ? ` --intent "${opts.intent}"` : "";
-  // DIAGNOSTIC (SEAM_FP_DEBUG): the FULL interaction list before the cap + which are CUT. "Why is X missing":
+  // DIAGNOSTIC (SEAM_DEBUG=fp): the FULL interaction list before the cap + which are CUT. "Why is X missing":
   // absent here = not enumerated (grow/coupling gap); present-but-CUT = raise SEAM_CONCERN_CAP; in a `via` list =
   // it reaches the mechanism through that entry (now shown, not silently folded away).
-  if (process.env.SEAM_FP_DEBUG) {
+  if (debugOn("fp")) {
     const w = (s: string) => process.stderr.write(s + "\n");
     w(`[concern] mechanisms: ${[...mechNodes].filter((c) => centerSet.has(c)).map((c) => qual(hunkById.get(c))).join(", ")} | +${mechNodes.size - centerSet.size} method node(s) in scope`);
     w(`[concern] interactions: ${rayList.length} enumerated, cap ${cap}`);

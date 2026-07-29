@@ -383,3 +383,89 @@ mod lineage_tests {
         assert!(git_lineage(absent.to_str().unwrap(), &["a.ts".to_string(), "b.ts".to_string()]).is_empty());
     }
 }
+
+// ── SEAM_DEBUG — the one diagnostic switch ────────────────────────────────────────────────────────────────
+//
+// Replaces the per-topic flags (SEAM_PERF, SEAM_FP_DEBUG, SEAM_BORDER_WHY, SEAM_TIER_WHY, SEAM_WAVE_WHY,
+// SEAM_VERBOSE_TIER). One comma-separated list of topics, each optionally carrying a value:
+//
+//     SEAM_DEBUG=perf,wave            two topics on
+//     SEAM_DEBUG=border=BookingsBean  a topic with a filter (the old SEAM_BORDER_WHY=<substring>)
+//     SEAM_DEBUG=all                  everything
+//
+// NOTE the name is load-bearing: `seam_env_snapshot`'s `is_diag` treats any key ending `_DEBUG` as
+// observability-only and EXCLUDES it from the grow cache key. `SEAM_DEBUG` ends with `_DEBUG`, so turning
+// diagnostics on does not silently bust the cache — which is exactly what the per-topic flags did NOT all
+// get right (SEAM_BORDER_WHY, SEAM_TIER_WHY and SEAM_WAVE_WHY were all cache-key inputs).
+fn debug_spec() -> Option<String> {
+    std::env::var("SEAM_DEBUG").ok().filter(|s| !s.trim().is_empty())
+}
+
+// The parse is a PURE function of the spec string so it is testable without touching process-global env
+// (which would race across parallel test threads).
+fn spec_on(spec: &str, topic: &str) -> bool {
+    spec.split(',').any(|p| {
+        let name = p.trim().split('=').next().unwrap_or("").trim();
+        name == "all" || name == topic
+    })
+}
+
+fn spec_value(spec: &str, topic: &str) -> Option<String> {
+    for p in spec.split(',') {
+        let mut it = p.trim().splitn(2, '=');
+        let name = it.next().unwrap_or("").trim();
+        if name == topic {
+            return Some(it.next().unwrap_or("").trim().to_string());
+        }
+        if name == "all" {
+            return Some(String::new());
+        }
+    }
+    None
+}
+
+/// Is `topic` enabled? `SEAM_DEBUG=all` enables everything.
+pub fn debug_on(topic: &str) -> bool {
+    debug_spec().map(|s| spec_on(&s, topic)).unwrap_or(false)
+}
+
+/// The value attached to `topic` (`border=Foo` -> `Some("Foo")`), or `Some("")` when the topic is bare and
+/// enabled, or `None` when it is off.
+pub fn debug_value(topic: &str) -> Option<String> {
+    debug_spec().and_then(|s| spec_value(&s, topic))
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use super::*;
+
+    #[test]
+    fn a_topic_list_enables_each_topic_and_nothing_else() {
+        assert!(spec_on("fp", "fp"));
+        assert!(spec_on("fp,wave", "wave"));
+        assert!(!spec_on("perf", "fp"));
+        assert!(!spec_on("", "fp"));
+        assert!(spec_on(" fp , wave ", "wave"), "surrounding whitespace must not defeat a topic");
+    }
+
+    #[test]
+    fn all_enables_every_topic_including_ones_not_named() {
+        assert!(spec_on("all", "anything"));
+        assert_eq!(spec_value("all", "border").as_deref(), Some(""));
+    }
+
+    #[test]
+    fn a_topic_can_carry_a_value_the_old_border_why_filter() {
+        assert_eq!(spec_value("border=BookingsBean", "border").as_deref(), Some("BookingsBean"));
+        // a bare enabled topic yields Some("") -- distinguishable from None (off), which is what lets a
+        // value-carrying topic also work as a plain on/off switch
+        assert_eq!(spec_value("border", "border").as_deref(), Some(""));
+        assert_eq!(spec_value("perf", "border"), None);
+    }
+
+    #[test]
+    fn a_value_containing_an_equals_sign_survives_intact() {
+        // splitn(2) -- otherwise a path or expression filter would be truncated at its first `=`
+        assert_eq!(spec_value("border=a=b", "border").as_deref(), Some("a=b"));
+    }
+}

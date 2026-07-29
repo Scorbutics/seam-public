@@ -475,7 +475,7 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
                         continue;
                     }
                     let fs = field.field_score(n);
-                    if std::env::var("SEAM_TIER_WHY").is_ok() {
+                    if seam_fs::debug_on("tier") {
                         eprintln!("[tier-why] {} {} score={fs:.4} margin={tier_margin} scored_files={}", n.symbol, n.file, field.scored_files_len());
                     }
                     if fs < tier_margin {
@@ -529,10 +529,10 @@ pub fn phase_expand(repo: &str, mut data: ResolvedGraph, ex: &Exclusion, opts: &
             let added = apply_move(repo, &mut data, mv, ex, &mut idx, &mut why);
             // THE MOVE HISTORY, one record per applied move — what the TS grow returns alongside the graph.
             history.push(seam_scan::graph::MoveRecord { node: mv.node.id.clone(), added, skipped: why });
-            // WAVE TRACE — `SEAM_WAVE_WHY=1` reports every APPLIED move and what it added. The move LIST is
+            // WAVE TRACE — `SEAM_DEBUG=wave` reports every APPLIED move and what it added. The move LIST is
             // easy to reason about; the sequence the flood actually runs, under a budget that the ordering
             // itself perturbs, is not — and a containment difference lives in the sequence.
-            if std::env::var("SEAM_WAVE_WHY").is_ok() {
+            if seam_fs::debug_on("wave") {
                 eprintln!("[wave-why] step={step} {} {} {} +{added} (total {})", if mv.dir == Dir::Up { "up" } else { "down" }, mv.node.symbol, mv.node.file, data.nodes.len());
             }
             wave_added += added;
@@ -846,7 +846,7 @@ pub fn grow_centers(repo: &str, centers: &[Center], data_coupling: bool, opts: &
 }
 
 fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coupling: bool, opts: &WaveOpts, on_wave: Option<OnWave<'_>>) -> Option<ResolvedGraph> {
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     macro_rules! phase {
         ($label:expr, $body:expr) => {{
             let t = std::time::Instant::now();
@@ -864,11 +864,11 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     if data_coupling {
         phase!("phase_coupling", crate::coupling::phase_coupling(repo, &mut data, &ws, &mut coupled, false)); // P3 seed coupling
     }
-    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+    if seam_fs::debug_on("wave") {
         eprintln!("[phase] after seed+phase_coupling: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }
     data = phase!("phase_expand", phase_expand(repo, data, &ex, opts, on_wave)); // P2 structural wave
-    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+    if seam_fs::debug_on("wave") {
         eprintln!("[phase] after phase_expand: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }
     if data_coupling {
@@ -877,7 +877,7 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     // DETERMINISTIC COUPLING BORDER — crop the off-intent shared-key fan the overlay auto-kept. Runs after the
     // deep couple (it judges the complements that phase materialised) and only on an intent-shaped grow; the
     // structural path skips it entirely, so a structural answer is untouched. SEAM_COUPLING_BORDER_DET=0 opts out.
-    if std::env::var("SEAM_WAVE_WHY").is_ok() {
+    if seam_fs::debug_on("wave") {
         eprintln!("[phase] after wave+fan_couple: {} nodes ({} coupling)", data.nodes.len(), data.nodes.iter().filter(|n| n.coupling).count());
     }
     let border_det = std::env::var("SEAM_COUPLING_BORDER_DET").map(|v| v != "0").unwrap_or(true);

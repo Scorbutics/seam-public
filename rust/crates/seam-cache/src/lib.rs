@@ -202,7 +202,8 @@ fn ensure_gitignore(repo: &str) {
 /// not the result. Port of `seamEnvSnapshot`.
 pub fn seam_env_snapshot() -> String {
     let is_diag = |k: &str| {
-        k.ends_with("_DEBUG") || k.ends_with("_TRACE") || matches!(k, "SEAM_TIMING" | "SEAM_VERBOSE" | "SEAM_PROGRESS" | "SEAM_GRAPH_CACHE" | "SEAM_INDEX_CACHE" | "SEAM_FP_DEBUG" | "SEAM_PERF")
+        // `_DEBUG` covers SEAM_DEBUG, the single diagnostic switch the per-topic flags folded into.
+        k.ends_with("_DEBUG") || k.ends_with("_TRACE") || matches!(k, "SEAM_TIMING" | "SEAM_VERBOSE" | "SEAM_GRAPH_CACHE" | "SEAM_INDEX_CACHE")
     };
     let mut kv: Vec<String> = std::env::vars().filter(|(k, _)| k.starts_with("SEAM_") && !is_diag(k)).map(|(k, v)| format!("{k}={v}")).collect();
     kv.sort();

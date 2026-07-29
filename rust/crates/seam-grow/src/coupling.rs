@@ -18,7 +18,7 @@ use std::collections::{HashMap, HashSet};
 
 const FAN_SRC: &str = "__FANSRC__";
 
-// SEAM_PERF fan-phase accumulators (ns): the compute_delta cache path, the mp-index parse cache, and the
+// SEAM_DEBUG=perf fan-phase accumulators (ns): the compute_delta cache path, the mp-index parse cache, and the
 // method-precise rehydration — reset + reported per fan_couple to localise the coupling cost.
 use std::sync::atomic::{AtomicU64, Ordering};
 static COMPUTE_NS: AtomicU64 = AtomicU64::new(0);
@@ -172,7 +172,7 @@ fn cached_delta_depsig(repo: &str, file: &str, key: &str, compute: impl FnOnce()
 const FAN_CACHE: &str = "coupling-fan-v2"; // v2: per-delta signatures, not the repo-wide coupling epoch
 
 fn compute_delta(repo: &str, src_id: &str, file: &str, text: &str, lo: usize, hi: usize, counter: usize, stable_floor: bool, fp_ranges: &HashMap<String, Vec<(usize, usize)>>, ws: &Workspace) -> Delta {
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     let t0 = std::time::Instant::now();
     let r = resolve_coupling_scoped(repo, src_id, file, text, lo, hi, counter as u64, stable_floor, fp_ranges);
     let t1 = std::time::Instant::now();
@@ -269,7 +269,7 @@ pub fn phase_coupling(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coup
     }
     merge_coupling_overlay(data, &overlay);
     coupled.insert(normpath(&anchor_file));
-    if std::env::var("SEAM_PERF").is_ok() {
+    if seam_fs::debug_on("perf") {
         eprintln!("[perf]     anchor_coupling_delta {:.2}s", _ta.elapsed().as_secs_f64());
     }
     fan_couple(repo, data, ws, coupled, stable_floor);
@@ -278,7 +278,7 @@ pub fn phase_coupling(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coup
 /// FAN — couple each distinct REACHED boundary file not yet coupled (whole-file), so a boundary on a reached
 /// node crosses to its consumers. Port of `_fanCouple` (sequential path — byte-identical to the parallel pool).
 pub fn fan_couple(repo: &str, data: &mut ResolvedGraph, ws: &Workspace, coupled: &mut HashSet<String>, stable_floor: bool) {
-    let perf = std::env::var("SEAM_PERF").is_ok();
+    let perf = seam_fs::debug_on("perf");
     if perf {
         COMPUTE_NS.store(0, Ordering::Relaxed);
         REPEATS.store(0, Ordering::Relaxed);

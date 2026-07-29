@@ -43,7 +43,7 @@ impl InterfaceIndex {
     /// DISK-persisted (per-repo content epoch) via direct bincode — a fresh process LOADS instead of re-parsing
     /// the whole repo. Same scheme as CallsiteIndex.
     fn load_or_build(repo: &str) -> Self {
-        let perf = std::env::var("SEAM_PERF").is_ok();
+        let perf = seam_fs::debug_on("perf");
         let epoch = seam_cache::epoch_of(repo);
         if !epoch.is_empty() {
             let t = std::time::Instant::now();

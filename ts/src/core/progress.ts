@@ -111,3 +111,20 @@ export function stageSummary(): string {
   const parts = [..._stageAcc.entries()].sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k} ${v}ms`);
   return `[stage-summary] ${parts.join(" | ")} | total ${total}ms`;
 }
+
+// ── SEAM_DEBUG — the one diagnostic switch (mirrors seam_fs::debug_on/debug_value) ─────────────────────────
+// Replaces SEAM_FP_DEBUG / SEAM_VERBOSE_TIER and their Rust-side siblings. Comma-separated topics, each
+// optionally carrying a value: `SEAM_DEBUG=fp,tierprompt` or `SEAM_DEBUG=border=BookingsBean`, `=all` for all.
+// The NAME matters: seam_env_snapshot excludes any key ending `_DEBUG` from the grow cache key, so turning
+// diagnostics on cannot silently bust the cache.
+const _debugSpec = (): string => (process.env.SEAM_DEBUG ?? "").trim();
+export const debugOn = (topic: string): boolean =>
+  _debugSpec().split(",").some((p) => { const n = p.trim().split("=")[0].trim(); return n === "all" || n === topic; });
+export const debugValue = (topic: string): string | undefined => {
+  for (const p of _debugSpec().split(",")) {
+    const [n, ...rest] = p.trim().split("=");
+    if (n.trim() === topic) return rest.join("=").trim();
+    if (n.trim() === "all") return "";
+  }
+  return undefined;
+};

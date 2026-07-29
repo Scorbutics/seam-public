@@ -48,7 +48,7 @@ impl Workspace {
         }
         let t = std::time::Instant::now();
         let ws = Arc::new(Self::new(repo));
-        if std::env::var("SEAM_PERF").is_ok() {
+        if seam_fs::debug_on("perf") {
             eprintln!("[perf] workspace(import_index) build {:.2}s", t.elapsed().as_secs_f64());
         }
         CACHE.lock().unwrap().insert(repo.to_string(), ws.clone());
