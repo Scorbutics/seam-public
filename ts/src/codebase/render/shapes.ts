@@ -409,7 +409,30 @@ export function renderContract(model: any): string {
   if ((model.provides ?? []).length) {
     out.push("## Provides (inbound — exports consumed elsewhere)");
     for (const p of model.provides) {
-      out.push(`- ${p.symbol} [${p.kind}] — ${plural(countUnits(p.consumers ?? []).files, "consuming file")}`);
+      // THE CONTRACT LINE — declared signature, then what call sites actually do with it. A consumer list alone
+      // told a reader WHO imports a symbol and nothing about how to call it, which is what sent the benchmark's
+      // agent grepping (bench/grep-vs-seam, run 1). `sig` is omitted, not faked, when the export is not funclike.
+      // Capped: a wide destructured parameter object runs to hundreds of characters, and the point of the line
+      // is that a reader sees the SHAPE of the call without opening the file. `--emit-seams` carries it in full.
+      const full = p.signature ? `${p.symbol}${p.signature}` : p.symbol;
+      const sig = full.length > 220 ? `${full.slice(0, 217)}...` : full;
+      out.push(`- ${sig} [${p.kind}] — ${plural(countUnits(p.consumers ?? []).files, "consuming file")}`);
+      const ob = p.observed;
+      if (ob?.callSites) {
+        // Arity is spelled as `Nx(argc)` per bucket: one bucket means every caller agrees, several means the
+        // optional tail is unevenly used, and a `0` bucket is a reference passed rather than a call.
+        const arity = (ob.arity ?? []).map(([argc, n]: number[]) => `${n}×${argc}arg`).join(", ");
+        const asRecv = ob.receiverSites ? `, plus ${plural(ob.receiverSites, "site")} using it as a receiver` : "";
+        out.push(`    observed: ${plural(ob.callSites, "call site")}${arity ? ` — ${arity}` : ""}${asRecv}`);
+      } else if (ob?.receiverSites) {
+        // An exported CLIENT OBJECT (`supabase.from(…)`) is never itself called. Reporting that as "never
+        // invoked" was flatly wrong on the first fixture it met, so the receiver case gets its own sentence.
+        out.push(`    observed: never called directly — used as a receiver at ${plural(ob.receiverSites, "call site")} (\`x.method(…)\`)`);
+      } else if (p.signature) {
+        // A funclike export with consumers but NO call site is imported for its type or re-exported onward —
+        // worth saying, because "8 consumers" otherwise reads as "8 callers".
+        out.push("    observed: no call site — imported but never invoked (a type-only import, or re-exported)");
+      }
       for (const c of p.consumers) out.push(`    ← ${c.symbol} (${c.file})`);
     }
     out.push("");
@@ -422,7 +445,16 @@ export function renderContract(model: any): string {
     for (const d of model.depends) out.push(`- ${d.symbol} → ${d.file}${d.source ? `  (from '${d.source}')` : ""}`);
     out.push("");
   }
+  if ((model.gaps ?? []).length) {
+    out.push("## Gaps (what the observed counts could NOT see — grep these)");
+    for (const g of model.gaps) out.push(`- ${g.mechanism} — ${g.evidence}`);
+    out.push("");
+  }
   out.push("## How to use",
+    "Each provided symbol carries its DECLARED signature and its OBSERVED call sites; where the two disagree is",
+    "the actionable part — parameters no caller passes are safe to narrow, and a symbol with consumers but no",
+    "call site is imported for its type, not invoked. Observed counts are CALL-SITE grained (unlike the",
+    "consuming-file counts below) and are matched by callee NAME, so read the gaps before trusting a total.",
     "Provides is the module's real public surface (declared exports that are ACTUALLY imported), with each",
     "consumer. Unused exports are dead public API — safe-to-narrow candidates. Depends is the outbound cut.",
     "fan-in (afferent) / fan-out (efferent) are the coupling pair: high fan-in = changing this ripples wide.",

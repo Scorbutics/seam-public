@@ -41,6 +41,14 @@ a field the map omits.
 | *"How is &lt;X&gt; MANAGED / handled across the app?"* (a STAR — one mechanism, many entry points) | **pick the center FIRST (see below), then** `seam --scan --auto --concern --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format concern` | a center-first map: In (entry ──HTTP/db──▶ ●) / Out (● ──writes──▶ db) |
 | *"How does &lt;X&gt; FLOW / where does it culminate?"* (a LINE — trace one path) | **pick the center FIRST, then** `seam --scan --auto --repo <repo> --center <f>#<s> --intent "<q>" --skeleton --format agent` (several: `--center <f1>#<s1>,<f2>#<s2>`) | an auto-grown spine → culmination |
 | *who calls X · what X depends on · blast radius · can A reach B · a module boundary · the subsystem around X · how A and B differ* | `seam --scan --query consumers\|dependencies\|impact\|reaches\|contract\|neighborhood\|compare --repo <repo> --center <f>#<s> [--to-symbol <t>] --format llm-context` | the resolved SET / shape (deterministic, no LLM) |
+| *"what does this module export, how do I call it, and how do callers actually use it?"* | `seam --scan --query contract --repo <repo> --center <file> --format llm-context` | per export: its DECLARED signature + OBSERVED call sites (count + argument-count histogram) + its consumers |
+
+**`--query contract` replaces the grep-for-the-signature step.** For each export it prints the declared parameter
+list and return type — resolved through a wrapper, so `export const f = withReporting(_impl)` reports `_impl`'s
+signature — plus what the real call sites do: how many there are and how many arguments each passes. Where the two
+disagree is the actionable part: a declared parameter no caller passes is safe to narrow, and an export with
+consumers but ZERO call sites is imported for its type or re-exported, never invoked. Observed counts are matched
+by callee NAME, so read the `## Gaps` section before trusting a total.
 
 Read what it prints on stdout. (`--emit-seams <file>` is available for the VS Code extension — a big JSON
 model, not for reading in-CLI.)

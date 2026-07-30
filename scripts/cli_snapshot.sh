@@ -79,6 +79,17 @@ run q_compare   --repo test/fixtures/booking-app --scan --query compare \
 # symbols to 2 while the render still said "resolution: FULL", and nothing here noticed.
 run module      --repo "$R" --scan --anchor-file "$A" --data-coupling floor
 run q_contract2 --repo "$R" --scan --query contract --anchor-file "$A" --data-coupling floor
+# CONTRACT with a NON-EMPTY `provides`. Every other contract case here answers `provides: 0` — measured, all
+# three — so the entire "## Provides" block, and with it the declared-signature and observed-call-site halves
+# of the shape, sat OUTSIDE the guarantee while three cases made it look covered. Exactly the null-answer trap
+# this file's header warns about, found again by adding the enrichment and watching the gate not move.
+# Two centers, because the two report DIFFERENT things and one alone would pin only half:
+#   chain-repo/src/b.ts   — a plain funclike export: declared signature + a real call site with an arity bucket
+#   crossstack-repo/lib/db.ts — an exported client OBJECT: no signature, never called, used as a RECEIVER
+#     (`supabase.from(…)`) by 4 files. This case caught two live bugs: a bogus `(t)` signature read off an
+#     inner property, and "imported but never invoked" asserted about a symbol used at 4 sites.
+run q_contract_provides --repo test/fixtures/chain-repo --scan --query contract --anchor-file src/b.ts --data-coupling floor
+run q_contract_recv     --repo test/fixtures/crossstack-repo --scan --query contract --anchor-file lib/db.ts --data-coupling floor
 run q_depth2    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 2 --data-coupling floor
 # ...and a case where --depth ACTUALLY CHANGES THE ANSWER. It does not above: measured, q_depth1, q_depth2,
 # q_reach, q_set and expand are all BYTE-IDENTICAL, so the "environment ripple" the comment above claims to

@@ -81,6 +81,19 @@ never contained the prisma transaction that actually creates the booking row —
 This is worse than a miss: grep surfaces both candidates and the agent disambiguates, whereas Seam picked one
 confidently and silently. Precision over grep is the core claim, and this is a case where the claim inverts.
 
+**FIXED** (regression: `ts/test/codebase/dep_name_binding.test.ts`). An import is the file's module-scope
+binding, so a bare `name(...)` there is provably the import and not a same-named method — the guard that
+already existed on the CALLER side (`consumers_graph`) now also runs on the CALLEE side
+(`dependency_graph::intra_file_callee_pass`). It is proof-gated: an unresolvable module leaves the old
+behaviour, so no false positive is traded for a false negative.
+
+Fixing it exposed a SECOND defect underneath, which is why the first fix alone would have made things worse:
+`export const createBooking = withReporting(_createBooking, ...)` is a const binding, not a `named_units` unit,
+so the import pass had been dropping that dependency ENTIRELY and silently. Removing the false edge left the
+anchor with NO edge at all. Both halves are fixed; the dep now lands on `_createBooking`'s body (the real
+implementation) rather than the wrapper line. On the benchmark anchor, `handler`'s resolved dependencies went
+91 -> 116: 25 const-bound imports that had never been reported.
+
 ### What Seam did contribute
 
   * cal.com: the entry-point fan-in — including the API v2 controllers and a non-HTTP caller
@@ -96,3 +109,21 @@ The single-hop case said Seam answers a NARROWER question (set, not usage) — t
 returns 81 consumer names and zero signature/argument facts. The multi-hop case says the resolution has a
 precision hole on same-name shadowing. Neither is a "bad product" verdict; both are specific and fixable, and
 the benchmark existing is what turned "feels slower" into two actionable defects.
+
+### Both are now fixed — what to measure on the next run
+
+  * `--query contract` carries a DECLARED signature (resolved through a wrapper) and OBSERVED call-site facts
+    (call sites edge-grained, an argument-count histogram, receiver-only uses counted separately), plus gaps.
+    Regression: `ts/test/codebase/contract_observed.test.ts`.
+  * The same-name shadowing hole is closed, along with the const-bound-export hole it was hiding.
+
+The number to watch is Seam's TOOL CALLS on the single-hop case: 31 vs grep's 24, with 28 of Seam's arm spent
+grepping for signatures the shape did not carry. If the contract enrichment works, that gap should close. Token
+and wall-clock cost are the harder claims and should NOT be assumed to improve — nothing here made the engine
+faster, and the measured slopes (grep 2.75x, Seam 2.6x) are unchanged.
+
+Note also that the CLI snapshot gate could not see EITHER defect: all three of its contract cases answered
+`provides: 0`, so the whole "## Provides" block was outside the guarantee while looking covered. Two cases with
+real fan-out were added (`q_contract_provides`, `q_contract_recv`); the second immediately caught two live bugs
+in the new code (a signature read off an inner property, and "never invoked" asserted about a symbol used at
+four sites). Null-answer gate cases are the recurring trap in this repo.

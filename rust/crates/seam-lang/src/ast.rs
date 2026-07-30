@@ -522,6 +522,153 @@ pub fn wrapped_def_span(ctx: &Ctx, symbol: &str, units: &[Unit]) -> Option<(usiz
     None
 }
 
+/// One observed CALL of a named symbol: where, and with how many arguments.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CallFact {
+    pub name: String,
+    pub line: usize,
+    pub argc: usize,
+    /// The name was the call's RECEIVER (`name.m(…)`), not its callee. A client object is USED at such a site
+    /// without being invoked, and conflating the two makes an actively-used export read as dead.
+    pub recv: bool,
+}
+
+/// The argument COUNT of a call node — named children of the argument list, so punctuation and comments do not
+/// inflate it. A call whose argument list is unparseable counts 0, same as `f()`; the two are indistinguishable
+/// here and neither is a claim about the callee's arity.
+fn arg_count(ctx: &Ctx, call: Node) -> usize {
+    let args = call
+        .child_by_field_name("arguments")
+        .or_else(|| ctx.children(call).into_iter().find(|c| c.kind().contains("arguments") || c.kind().contains("argument_list")));
+    let Some(an) = args else { return 0 };
+    (0..an.named_child_count()).filter_map(|i| an.named_child(i)).filter(|c| !c.kind().contains("comment")).count()
+}
+
+/// OBSERVED call facts for a set of names — every call site in this file whose callee is one of `names`, with
+/// its argument count.
+///
+/// Includes BARE calls (`f(a, b)`), unlike `call_sites`, which requires a receiver: an imported function is
+/// called bare, so a receiver-only scan sees none of the calls that matter to a module's contract.
+///
+/// NAME-GRAINED, deliberately: matching is by callee name, so a same-named local in the consuming file is
+/// counted too. The contract shape declares that as a blindspot rather than resolving each site (which would
+/// cost a full resolution pass per call), and the consuming file's own declarations are what let it detect
+/// when the risk is real.
+pub fn call_facts(ctx: &Ctx, names: &HashSet<String>) -> Vec<CallFact> {
+    let mut out = Vec::new();
+    for call in ctx.collect(ctx.root(), nk::is_call) {
+        let Some(c) = callee(ctx, call) else { continue };
+        let line = ctx.span(call).0;
+        if names.contains(&c.name) {
+            out.push(CallFact { name: c.name.clone(), line, argc: arg_count(ctx, call), recv: false });
+        }
+        // `name.m(…)` — the export is the RECEIVER. Recorded because an exported client object (`supabase.from
+        // (…)`) is never itself called, and reporting that as "imported but never invoked" is simply false.
+        if let Some(obj) = c.obj {
+            if obj.kind() == "identifier" {
+                let r = ctx.text(obj);
+                if names.contains(r) {
+                    out.push(CallFact { name: r.to_string(), line, argc: arg_count(ctx, call), recv: true });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// The DECLARED signature of a named function/method — its parameter list and return type AS WRITTEN, so a
+/// consumer can see how to call it without reading the body. This is the half of a "contract" that a reader
+/// otherwise has to open the file for.
+///
+/// Resolves a const-bound definition through `const_def_spans`, so `export const createBooking = withReporting(
+/// _createBooking, …)` reports `_createBooking`'s signature rather than nothing — the wrapper is not what a
+/// caller has to satisfy.
+///
+/// `None` when the name has no funclike declaration in this file (a class, a value export, an opaque wrapper
+/// over an imported function). Absence is reported as absence; nothing is synthesised.
+pub fn signature_of(ctx: &Ctx, name: &str, units: &[Unit]) -> Option<String> {
+    // ONE LINE. A destructured parameter object is written across a dozen source lines, and a signature is a
+    // label here, not a source excerpt — every consumer of this renders it inline.
+    let flat = |s: &str| -> String { s.split_whitespace().collect::<Vec<_>>().join(" ") };
+    let funclike = |n: Node| -> String {
+        let params = n.child_by_field_name("parameters").map(|p| flat(ctx.text(p))).unwrap_or_else(|| "()".into());
+        match n.child_by_field_name("return_type").or_else(|| n.child_by_field_name("type")) {
+            // TS writes the return type as `: T` (the colon is part of the node); Java/Go put a bare type
+            // elsewhere, so it is joined with an arrow to stay readable in one line.
+            Some(t) => {
+                let r = flat(ctx.text(t));
+                if r.starts_with(':') {
+                    format!("{params}{r}")
+                } else {
+                    format!("{params} -> {r}")
+                }
+            }
+            None => params,
+        }
+    };
+    let fns: Vec<Node> = ctx.collect(ctx.root(), |k| nk::is_funclike(k) || nk::is_method_kind(k));
+    if let Some(&n) = fns.iter().find(|n| name_of(ctx, **n).as_deref() == Some(name)) {
+        return Some(funclike(n));
+    }
+    // CONST-BOUND. Resolved from the declarator's own initializer, NOT by matching a span against
+    // `const_def_spans`: that map falls back to the DECLARATOR span for a non-call initializer, and a
+    // line-based match then picked up any function nested inside it — `export const supabase = { from: (t)
+    // => … }` reported the signature `(t)`, which is the shape of an inner property, not of `supabase`.
+    // A binding whose initializer is neither a funclike nor a wrapper call has no signature, and says so.
+    let d = ctx.collect(ctx.root(), nk::is_var_declarator).into_iter().find(|d| {
+        ctx.children(*d).first().is_some_and(|c0| nk::is_name_kind(c0.kind()) && ctx.text(*c0) == name)
+    })?;
+    let ch = ctx.children(d);
+    if let Some(&f) = ch.iter().find(|c| nk::is_funclike(c.kind())) {
+        return Some(funclike(f)); // `const f = (a, b) => …`
+    }
+    // `const f = withReporting(_impl, …)` — the caller must satisfy the IMPLEMENTATION, not the wrapper.
+    let &call = ch.iter().find(|c| nk::is_call(c.kind()))?;
+    match wrapped_impl(ctx, call, units, 0)? {
+        Wrapped::Inline(n) => Some(funclike(n)),
+        Wrapped::Named(i) => {
+            let (s, e) = (units[i].start, units[i].end);
+            fns.iter().find(|n| ctx.span(**n) == (s, e)).map(|&n| funclike(n))
+        }
+    }
+}
+
+/// EVERY top-level `const NAME = …` binding in the file, with the span of what it really names — bulk form of
+/// `wrapped_def_span`, so a caller resolving MANY names pays one tree walk instead of one per name.
+///
+/// Wider than `wrapped_def_span` in one deliberate way: a NON-call initializer (`export const X = {…}`) is not a
+/// "wrapped def" and that function rightly declines it, but it IS a real declaration at a real line, and a
+/// caller asking "where does this imported name live?" needs an answer for it too. Those map to the declarator
+/// span. Call initializers resolve through the shared `wrapped_impl` rule, so a wrapped export lands on the
+/// IMPLEMENTATION (`export const createBooking = withReporting(_createBooking, …)` → `_createBooking`'s body)
+/// rather than the wrapper line.
+///
+/// First declarator wins, matching `wrapped_def_span`'s first-match behaviour.
+pub fn const_def_spans(ctx: &Ctx, units: &[Unit]) -> HashMap<String, (usize, usize)> {
+    let mut out: HashMap<String, (usize, usize)> = HashMap::new();
+    for d in ctx.collect(ctx.root(), nk::is_var_declarator) {
+        let ch = ctx.children(d);
+        let Some(&c0) = ch.first() else { continue };
+        if !nk::is_name_kind(c0.kind()) {
+            continue;
+        }
+        let name = ctx.text(c0).to_string();
+        if out.contains_key(&name) {
+            continue;
+        }
+        let span = match ch.iter().find(|c| nk::is_call(c.kind())) {
+            Some(&call) => match wrapped_impl(ctx, call, units, 0) {
+                Some(Wrapped::Inline(n)) => ctx.span(n),
+                Some(Wrapped::Named(i)) => (units[i].start, units[i].end),
+                None => ctx.span(d),
+            },
+            None => ctx.span(d),
+        };
+        out.insert(name, span);
+    }
+    out
+}
+
 /// Which argument of a wrapper CALL is the real implementation.
 enum Wrapped<'t> {
     Inline(Node<'t>), // an inline funclike argument IS the body

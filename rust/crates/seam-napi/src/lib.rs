@@ -895,6 +895,15 @@ pub struct ContractConsumerDto {
     pub symbol: String,
 }
 
+/// Wire form of a `seam_shapes::Observed` — the call-site half of a symbol's contract. `arity` is a flat
+/// `[argc, sites]` pair list rather than a map, because a HashMap over the boundary leaks Rust hash order.
+#[napi(object)]
+pub struct ObservedDto {
+    pub call_sites: u32,
+    pub arity: Vec<Vec<u32>>,
+    pub receiver_sites: u32,
+}
+
 /// Wire form of a `seam_shapes::ProvidedSymbol`.
 #[napi(object)]
 pub struct ProvidedSymbolDto {
@@ -902,6 +911,15 @@ pub struct ProvidedSymbolDto {
     pub kind: String,
     pub consumers: Vec<ContractConsumerDto>,
     pub consumer_count: u32,
+    pub signature: Option<String>,
+    pub observed: ObservedDto,
+}
+
+/// Wire form of a `seam_shapes::ContractGap`.
+#[napi(object)]
+pub struct ContractGapDto {
+    pub mechanism: String,
+    pub evidence: String,
 }
 
 /// Wire form of a `seam_shapes::ExternalDep`.
@@ -923,6 +941,7 @@ pub struct ModuleContractDto {
     pub efferent: u32,
     pub no_structure: bool,
     pub reason: Option<String>,
+    pub gaps: Vec<ContractGapDto>,
 }
 
 impl From<seam_shapes::ModuleContract> for ModuleContractDto {
@@ -937,6 +956,12 @@ impl From<seam_shapes::ModuleContract> for ModuleContractDto {
                     kind: p.kind,
                     consumers: p.consumers.into_iter().map(|x| ContractConsumerDto { file: x.file, symbol: x.symbol }).collect(),
                     consumer_count: p.consumer_count as u32,
+                    signature: p.signature,
+                    observed: ObservedDto {
+                        call_sites: p.observed.call_sites as u32,
+                        arity: p.observed.arity.into_iter().map(|(a, n)| vec![a as u32, n as u32]).collect(),
+                        receiver_sites: p.observed.receiver_sites as u32,
+                    },
                 })
                 .collect(),
             unused_exports: c.unused_exports,
@@ -945,6 +970,7 @@ impl From<seam_shapes::ModuleContract> for ModuleContractDto {
             efferent: c.efferent as u32,
             no_structure: c.no_structure,
             reason: c.reason,
+            gaps: c.gaps.into_iter().map(|g| ContractGapDto { mechanism: g.mechanism, evidence: g.evidence }).collect(),
         }
     }
 }

@@ -17,12 +17,43 @@ pub struct Consumer {
     pub symbol: String,
 }
 
+/// What the call sites of one export actually look like — the OBSERVED half of its contract.
+///
+/// The declared signature says what a caller MAY pass; this says what callers DO pass. The gap between them is
+/// the actionable part: a 5-parameter function every call site invokes with 2 arguments has three parameters
+/// nobody exercises, and a name whose `call_sites` is 0 while `consumer_count` is 8 is imported for its TYPE or
+/// re-exported, never invoked.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Observed {
+    /// Call sites, EDGE-grained — one per invocation, not per consuming file (see the counting-unit note on
+    /// `consumer_count`). This is the figure that answers "how heavily is this used".
+    pub call_sites: usize,
+    /// (argument count, how many sites passed that many), ascending by argument count.
+    pub arity: Vec<(usize, usize)>,
+    /// Sites where the export is the RECEIVER of a call (`client.query(…)`) rather than the callee. An exported
+    /// object is used heavily this way and invoked never, so without this it reads as dead.
+    pub receiver_sites: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProvidedSymbol {
     pub symbol: String,
     pub kind: String,
     pub consumers: Vec<Consumer>,
     pub consumer_count: usize,
+    /// The declared parameter list + return type, as written. `None` for a non-funclike export (a class, a
+    /// value, an opaque wrapper) — absence, not an empty signature.
+    pub signature: Option<String>,
+    /// Facts read off the real call sites. Zeroed for a symbol nobody calls.
+    pub observed: Observed,
+}
+
+/// A statically-opaque edge in the contract — a SUGGESTED lead, never an asserted fact, same contract as the
+/// `gaps` on the impact shape.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ContractGap {
+    pub mechanism: String,
+    pub evidence: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,6 +73,8 @@ pub struct ModuleContract {
     pub efferent: usize,
     pub no_structure: bool,
     pub reason: Option<String>, // "no-exports" | None
+    /// What the observed half could NOT see. Empty when nothing was skipped.
+    pub gaps: Vec<ContractGap>,
 }
 
 pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
@@ -72,7 +105,7 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
                     // same relationship is the `consumers` shape. Mirrors `countUnits(cons).files`
                     // (ts/src/core/units.ts), the single counting-unit contract both fronts derive from.
                     let count = cons.iter().map(|c| c.file.as_str()).collect::<HashSet<_>>().len();
-                    provides.push(ProvidedSymbol { symbol: m.symbol.clone(), kind: m.kind.clone(), consumers: cons, consumer_count: count });
+                    provides.push(ProvidedSymbol { symbol: m.symbol.clone(), kind: m.kind.clone(), consumers: cons, consumer_count: count, signature: None, observed: Observed::default() });
                 }
                 _ => unused_exports.push(m.symbol.clone()),
             }
@@ -171,10 +204,96 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
             }
             cons.sort_by(|a, b| locale_compare(&a.file, &b.file));
             let count = cons.iter().map(|c| c.file.as_str()).collect::<HashSet<_>>().len();
-            provides.push(ProvidedSymbol { symbol: name.clone(), kind: kind.clone(), consumers: cons, consumer_count: count });
+            provides.push(ProvidedSymbol { symbol: name.clone(), kind: kind.clone(), consumers: cons, consumer_count: count, signature: None, observed: Observed::default() });
         }
         provides.sort_by(|a, b| b.consumer_count.cmp(&a.consumer_count).then_with(|| locale_compare(&a.symbol, &b.symbol)));
         unused_exports.sort(); // JS default Array.sort = codepoint order (NOT localeCompare)
+    }
+
+    // ── THE OBSERVED CONTRACT ───────────────────────────────────────────────────────────────────────────────
+    //
+    // WHY: the shape above answers "who imports this" and stops. Measured in `bench/grep-vs-seam` (run 1), that
+    // is not enough to act on — the agent got 81 consumer NAMES with no argument-level information and then made
+    // 28 grep calls to recover what it could have been handed: what each export takes, and what callers actually
+    // pass. Naming a consumer is not describing a boundary.
+    //
+    // Two halves, kept separate because they can DISAGREE and the disagreement is the useful part:
+    //   DECLARED — the signature as written. One parse of the module file.
+    //   OBSERVED — argument counts read off the real call sites. One parse per consuming file.
+    //
+    // Cost: one extra parse per consuming file, bounded by the fan-in already being listed. Both halves are
+    // skipped entirely for a module with no consumed exports.
+    let mut gaps: Vec<ContractGap> = Vec::new();
+    if !provides.is_empty() {
+        // DECLARED half
+        if let Some(ctx) = seam_scan::read(repo, module_file).and_then(|(t, g)| seam_lang::Ctx::parse(&t, &g)) {
+            let units = seam_lang::ast::named_units(&ctx);
+            for p in provides.iter_mut() {
+                p.signature = seam_lang::ast::signature_of(&ctx, &p.symbol, &units);
+            }
+        }
+
+        // OBSERVED half. Every consuming file is scanned ONCE for calls to ALL provided names — the consumer
+        // lists overlap heavily, so per-symbol scanning would re-parse the same files repeatedly.
+        let names: HashSet<String> = provides.iter().map(|p| p.symbol.clone()).collect();
+        let mut consumer_files: Vec<String> = Vec::new();
+        let mut seen_cf: HashSet<String> = HashSet::new();
+        for p in &provides {
+            for c in &p.consumers {
+                if seen_cf.insert(normpath(&c.file)) {
+                    consumer_files.push(c.file.clone());
+                }
+            }
+        }
+        // name → argc → sites. BTreeMap so the arity histogram comes out ascending without a sort, and so the
+        // result does not depend on hash order (the ordering rule the whole core follows).
+        let mut hist: HashMap<String, std::collections::BTreeMap<usize, usize>> = HashMap::new();
+        let mut recv: HashMap<String, usize> = HashMap::new();
+        let mut unparsed = 0usize;
+        // consuming files that declare a same-named symbol of their OWN — the one case where name-grained
+        // counting can overcount, detected from the parse already being done rather than assumed away.
+        let mut shadowed: Vec<String> = Vec::new();
+        for cf in &consumer_files {
+            let Some(ctx) = seam_scan::read(repo, cf).and_then(|(t, g)| seam_lang::Ctx::parse(&t, &g)) else {
+                unparsed += 1;
+                continue;
+            };
+            for f in seam_lang::ast::call_facts(&ctx, &names) {
+                if f.recv {
+                    *recv.entry(f.name).or_insert(0) += 1;
+                } else {
+                    *hist.entry(f.name).or_default().entry(f.argc).or_insert(0) += 1;
+                }
+            }
+            if seam_lang::ast::named_units(&ctx).iter().any(|u| names.contains(&u.name)) {
+                shadowed.push(cf.clone());
+            }
+        }
+        for p in provides.iter_mut() {
+            let h = hist.get(&p.symbol);
+            p.observed = Observed {
+                call_sites: h.map(|h| h.values().sum()).unwrap_or(0),
+                arity: h.map(|h| h.iter().map(|(a, n)| (*a, *n)).collect()).unwrap_or_default(),
+                receiver_sites: recv.get(&p.symbol).copied().unwrap_or(0),
+            };
+        }
+        if unparsed > 0 {
+            gaps.push(ContractGap {
+                mechanism: "contract-unparsed-consumer".into(),
+                evidence: format!("{unparsed} consuming file(s) have no vendored grammar — their call sites are NOT in the observed counts (grep these)"),
+            });
+        }
+        if !shadowed.is_empty() {
+            shadowed.sort_by(|a, b| locale_compare(a, b));
+            gaps.push(ContractGap {
+                mechanism: "contract-shadowed-name".into(),
+                evidence: format!(
+                    "observed call sites are matched by NAME, and {} declare(s) a symbol of the same name locally, so their counts may be high: {}",
+                    if shadowed.len() == 1 { "1 consuming file".to_string() } else { format!("{} consuming files", shadowed.len()) },
+                    shadowed.join(", ")
+                ),
+            });
+        }
     }
 
     let afferent = provides.iter().flat_map(|p| p.consumers.iter().map(|c| normpath(&c.file))).collect::<HashSet<_>>().len();
@@ -184,5 +303,5 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
     let no_structure = provides.is_empty() && unused_exports.is_empty();
     let reason = if no_structure { Some("no-exports".into()) } else { None };
 
-    ModuleContract { module: module_file.to_string(), provides, unused_exports, depends, afferent, efferent, no_structure, reason }
+    ModuleContract { module: module_file.to_string(), provides, unused_exports, depends, afferent, efferent, no_structure, reason, gaps }
 }

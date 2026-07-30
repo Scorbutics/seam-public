@@ -62,7 +62,7 @@ export const rustImpactToModel = (r: any): any => ({
 });
 export const rustContractToModel = (r: any): any => ({
   shape: "contract", module: r.module, provides: r.provides, unusedExports: r.unusedExports,
-  depends: r.depends, afferent: r.afferent, efferent: r.efferent, ...nz(r),
+  depends: r.depends, afferent: r.afferent, efferent: r.efferent, gaps: r.gaps ?? [], ...nz(r),
 });
 export const rustNeighborhoodToModel = (r: any): any => ({
   shape: "neighborhood", anchor: anchorOf(r), members: r.members, coreFiles: r.coreFiles,

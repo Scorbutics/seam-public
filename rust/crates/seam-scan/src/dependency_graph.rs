@@ -32,6 +32,14 @@ fn impl_cap() -> usize {
     3usize
 }
 
+/// One dependency file's addressable definitions: `named_units` (functions/classes/methods) plus the top-level
+/// const bindings `named_units` does not model.
+#[derive(Default)]
+struct FileDefs {
+    units: Vec<Unit>,
+    consts: HashMap<String, (usize, usize)>,
+}
+
 struct DepScan {
     repo: String,
     anchor_file: String,
@@ -43,7 +51,7 @@ struct DepScan {
     blindspots: Vec<Blindspot>,
     counter: usize,
     seen: HashSet<String>,
-    dep_units: HashMap<String, Vec<Unit>>,
+    dep_units: HashMap<String, FileDefs>,
     external_pkgs: Vec<String>,
     called_types: HashSet<String>,
     ws: Arc<Workspace>,
@@ -59,12 +67,26 @@ impl DepScan {
         }
     }
 
-    fn units_of<'a>(dep_units: &'a mut HashMap<String, Vec<Unit>>, repo: &str, dep_file: &str) -> &'a [Unit] {
+    /// One parse of a dependency file, memoised: its named units AND its top-level const bindings. Both are
+    /// collected together because the file is parsed once either way and the second lookup is what makes a
+    /// const-bound export addressable (see `add_dep`).
+    fn defs_of<'a>(dep_units: &'a mut HashMap<String, FileDefs>, repo: &str, dep_file: &str) -> &'a FileDefs {
         if !dep_units.contains_key(dep_file) {
-            let units = read(repo, dep_file).and_then(|(t, l)| Ctx::parse(&t, &l).map(|c| ast::named_units(&c))).unwrap_or_default();
-            dep_units.insert(dep_file.to_string(), units);
+            let d = read(repo, dep_file)
+                .and_then(|(t, l)| Ctx::parse(&t, &l))
+                .map(|c| {
+                    let units = ast::named_units(&c);
+                    let consts = ast::const_def_spans(&c, &units);
+                    FileDefs { units, consts }
+                })
+                .unwrap_or_default();
+            dep_units.insert(dep_file.to_string(), d);
         }
         dep_units.get(dep_file).unwrap()
+    }
+
+    fn units_of<'a>(dep_units: &'a mut HashMap<String, FileDefs>, repo: &str, dep_file: &str) -> &'a [Unit] {
+        &Self::defs_of(dep_units, repo, dep_file).units
     }
 
     /// Turn one (referenced symbol → target file) into a dep node + edge. Port of `_addDep`.
@@ -73,12 +95,25 @@ impl DepScan {
         if self.seen.contains(&key) || normpath(dep_file) == normpath(&self.anchor_file) {
             return;
         }
-        let defu = Self::units_of(&mut self.dep_units, &self.repo, dep_file).iter().find(|u| u.name == ref_name).cloned();
+        let defs = Self::defs_of(&mut self.dep_units, &self.repo, dep_file);
+        let defu = defs.units.iter().find(|u| u.name == ref_name).cloned();
+        // CONST-BOUND EXPORT. `named_units` models functions/classes/methods, so `export const X = …` is no unit
+        // — and with `dep_line` None (the import pass has no line to fall back on) the dep was DROPPED ENTIRELY,
+        // silently. The import RESOLVED, the file is known, the declaration is right there: dropping it is a
+        // false negative with no signal. Measured on cal.com: `export const createBooking = withReporting(
+        // _createBooking, …)` meant `handler`'s import of `createBooking` produced NO edge at all, so the
+        // prisma transaction behind it was unreachable from the mechanism list. `const_def_spans` resolves the
+        // wrapper to the IMPLEMENTATION's span, so the edge lands on the real body, not the wrapper line.
+        let cspan = defs.consts.get(ref_name).copied();
+        // the kind is READ OFF the resolved span rather than assumed — if it landed on a real unit that unit
+        // says what it is; otherwise it is an opaque value binding and "symbol" is the honest label.
+        let ckind = cspan.map(|sp| defs.units.iter().find(|u| (u.start, u.end) == sp).map(|u| u.kind.clone()));
         let (kind, rng) = match defu {
             Some(d) => (d.kind, (d.start, d.end)),
-            None => match dep_line {
-                Some(dl) => (kind_hint.unwrap_or("symbol").to_string(), (dl, dl)),
-                None => return,
+            None => match (cspan, ckind, dep_line) {
+                (Some(sp), Some(k), _) => (k.unwrap_or_else(|| kind_hint.unwrap_or("symbol").to_string()), sp),
+                (_, _, Some(dl)) => (kind_hint.unwrap_or("symbol").to_string(), (dl, dl)),
+                _ => return,
             },
         };
         self.seen.insert(key);
@@ -208,7 +243,23 @@ impl DepScan {
     }
 
     /// 2c) INTRA-FILE CALLEE pass — same-file functions the anchor body calls. Port of `_intraFileCalleePass`.
-    fn intra_file_callee_pass(&mut self) {
+    ///
+    /// NAME COLLISION with an IMPORT — the CALLEE side of the same defect `add_intra_file_callers` guards on the
+    /// CALLER side (consumers_graph.rs). `call_lines` is bare-name only by construction, and a file that IMPORTS
+    /// `name` has bound that name at module scope, so a bare `name(...)` in the anchor body is PROVABLY the
+    /// import — never a same-named method of a class declared in the same file (a method is not a module
+    /// binding, so the two coexist meaning different things). Emitting the same-file unit here is a false
+    /// RESOLVED_FULL "verified edge", and worse than a miss: the import pass already emitted the CORRECT edge,
+    /// so the anchor ends up with two contradictory verified callees and no way to tell which is real.
+    ///
+    /// Measured on cal.com: `RegularBookingService.ts` imports `createBooking` from `../handleNewBooking/
+    /// createBooking` (:122) and also declares a method `createBooking` (:3061); the bare call at :1939 is the
+    /// import, but this pass attributed it to the method — so the prisma transaction that actually creates the
+    /// booking row never appeared in the mechanism list.
+    ///
+    /// Proof-gated, like the caller side: an unresolvable module leaves the old behaviour intact, so no false
+    /// positive is traded for a false negative.
+    fn intra_file_callee_pass(&mut self, anchor_src: &str) {
         let Some(actx) = &self.actx else { return };
         let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
         let (alo, ahi) = (anchor.start, anchor.end);
@@ -219,6 +270,10 @@ impl DepScan {
             .filter(|u| u.name != self.symbol && !(u.start >= alo && u.start <= ahi))
             .filter_map(|u| {
                 let call = ast::call_lines(actx, &u.name).into_iter().find(|&ln| ln >= alo && ln <= ahi)?;
+                // checked only for units that actually matched a call line — a handful per anchor, not per unit
+                if crate::def_resolve::import_binds_elsewhere(&self.repo, &self.anchor_file, anchor_src, &u.name) {
+                    return None;
+                }
                 Some((u.name.clone(), u.kind.clone(), u.start, u.end, Some(call)))
             })
             .collect();
@@ -558,7 +613,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
             s.type_methods_pass(opts.caller_files.as_deref());
         } else {
             s.same_package_pass();
-            s.intra_file_callee_pass();
+            s.intra_file_callee_pass(anchor_src);
             s.self_member_pass();
             s.qualified_callee_pass();
         }
