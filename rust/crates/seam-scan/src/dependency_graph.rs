@@ -54,11 +54,33 @@ struct DepScan {
     dep_units: HashMap<String, FileDefs>,
     external_pkgs: Vec<String>,
     called_types: HashSet<String>,
+    /// The anchor's RESOLVED span. Not always a `named_units` unit: `export const f = withReporting(_impl, …)`
+    /// resolves through `wrapped_def_span` to `_impl`'s body. Passes must scope to THIS, not re-look-up a unit
+    /// by name — see `anchor_span`.
+    arange: (usize, usize),
     ws: Arc<Workspace>,
     idx: Arc<InterfaceIndex>,
 }
 
 impl DepScan {
+    /// The span to scope a body pass to. A unit of that name if one exists, else the anchor span the builder
+    /// already resolved.
+    ///
+    /// Every body pass used to do `aunits.find(|u| u.name == symbol)` and RETURN when it missed. For a
+    /// const-bound anchor there is no such unit, so the passes bailed even though the builder had resolved the
+    /// span correctly two hundred lines earlier — the anchor pointed at the right code and nothing read it.
+    /// Measured on cal.com: `--query dependencies` on `createBooking.ts#createBooking` (`export const
+    /// createBooking = withReporting(_createBooking, …)`) returned its imports but NOT `saveBooking`, the
+    /// same-file callee holding the prisma transaction. Multi-hop traversal dead-ended there too, so
+    /// `handler -> createBooking -> saveBooking` was only reachable via a data-coupling hop.
+    fn anchor_span(&self) -> Option<(usize, usize)> {
+        match self.aunits.iter().find(|u| u.name == self.symbol) {
+            Some(u) => Some((u.start, u.end)),
+            None if self.arange != (0, 0) => Some(self.arange),
+            None => None,
+        }
+    }
+
     fn dep_edge_kind(&self, name: &str) -> &'static str {
         if self.called_types.contains(name) {
             "import"
@@ -261,8 +283,7 @@ impl DepScan {
     /// positive is traded for a false negative.
     fn intra_file_callee_pass(&mut self, anchor_src: &str) {
         let Some(actx) = &self.actx else { return };
-        let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
-        let (alo, ahi) = (anchor.start, anchor.end);
+        let Some((alo, ahi)) = self.anchor_span() else { return };
         // snapshot the units + call lines (immutable borrow) before mutating
         let candidates: Vec<(String, String, usize, usize, Option<usize>)> = self
             .aunits
@@ -307,11 +328,14 @@ impl DepScan {
     /// unresolved, not guessed. Port of `_selfMemberPass`.
     fn self_member_pass(&mut self) {
         let Some(actx) = &self.actx else { return };
-        let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
-        if anchor.kind != "method" && anchor.kind != "function" {
-            return;
+        // a const-bound anchor has no unit and so no kind; `wrapped_def_span` only resolves to a funclike body,
+        // so reaching here without a unit already means "function".
+        if let Some(u) = self.aunits.iter().find(|u| u.name == self.symbol) {
+            if u.kind != "method" && u.kind != "function" {
+                return;
+            }
         }
-        let (alo, ahi) = (anchor.start, anchor.end);
+        let Some((alo, ahi)) = self.anchor_span() else { return };
         let cls = ast::enclosing_class(&self.aunits, alo, ahi);
         if cls.is_empty() {
             return;
@@ -604,6 +628,7 @@ pub fn build_dependency_graph(repo: &str, anchor_file: &str, symbol: &str, opts:
             dep_units: HashMap::new(),
             external_pkgs: Vec::new(),
             called_types,
+            arange,
             ws: Workspace::cached(repo),
             idx: InterfaceIndex::cached(repo),
         };
@@ -831,11 +856,14 @@ impl DepScan {
     /// 2d) QUALIFIED CROSS-FILE CALLEE pass. Port of `_qualifiedCalleePass`.
     fn qualified_callee_pass(&mut self) {
         let Some(actx) = &self.actx else { return };
-        let Some(anchor) = self.aunits.iter().find(|u| u.name == self.symbol) else { return };
-        if anchor.kind != "method" && anchor.kind != "function" {
-            return;
+        // a const-bound anchor has no unit and so no kind; `wrapped_def_span` only resolves to a funclike body,
+        // so reaching here without a unit already means "function".
+        if let Some(u) = self.aunits.iter().find(|u| u.name == self.symbol) {
+            if u.kind != "method" && u.kind != "function" {
+                return;
+            }
         }
-        let (alo, ahi) = (anchor.start, anchor.end);
+        let Some((alo, ahi)) = self.anchor_span() else { return };
 
         let mut preresolved: HashMap<String, String> = HashMap::new();
         for n in &self.nodes {

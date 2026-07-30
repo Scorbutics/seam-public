@@ -42,7 +42,7 @@ beforeAll(() => {
   w("src/createBooking.ts", `function withReporting<T>(fn: T, _name: string): T { return fn; }
 
 const _createBooking = async (input: { uid: string }) => {
-  return prismaTransaction(input);
+  return prismaTransaction(input);   // the same-file callee the ANCHOR test below looks for
 };
 
 function prismaTransaction(i: { uid: string }) { return { id: 1, uid: i.uid }; }
@@ -99,6 +99,22 @@ describe("a bare call resolves to the module binding, not a same-named local", (
     expect(deps.some((d) => d.startsWith("localHelper@src/plain.ts"))).toBe(true);
     // ...while `createBooking`, which IS imported, still resolves out of the file
     expect(deps.some((d) => d.startsWith("createBooking@src/createBooking.ts"))).toBe(true);
+  });
+});
+
+describe("a const-bound symbol works as an ANCHOR, not just as a target", () => {
+  test("its OWN same-file callees resolve", async () => {
+    // The other half of the same defect, and the reason the first fix was not enough. `add_dep` made a
+    // const-bound export addressable as a dependency TARGET; the body passes still bailed when it was the
+    // ANCHOR, because each re-looked-up a `named_units` unit by name and returned on the miss -- even though
+    // the builder had already resolved the span through `wrapped_def_span`. The anchor pointed at the right
+    // code and nothing read it.
+    //
+    // Measured on cal.com: `--query dependencies` on `createBooking.ts#createBooking` returned its imports but
+    // NOT `saveBooking`, the same-file callee holding the prisma transaction (4 edges -> 8 after the fix), and
+    // multi-hop traversal dead-ended on that node.
+    const deps = await depsOf("src/createBooking.ts", "createBooking");
+    expect(deps.some((d) => d.startsWith("prismaTransaction@src/createBooking.ts"))).toBe(true);
   });
 });
 
