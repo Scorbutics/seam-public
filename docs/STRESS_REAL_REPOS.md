@@ -146,3 +146,46 @@ flag-reference enforcement doing its job.
    would both attack it.
 3. **Key the caches on engine source.** Include the addon's build id / a hash of the Rust sources in the
    epoch, so a rebuilt core invalidates. This also restores the CLI gate's ability to see core changes.
+
+## DEFECT 4 — `--query impact` times out: a COUNT bound on unbounded work
+
+The last Keycloak failure. Profiled by instrumenting the expansion loop (`SEAM_DEBUG=perf`), because the shape
+had no instrumentation and `perf record` / `gdb` are both blocked in this environment (paranoid + ptrace_scope).
+
+On `KeycloakSession`, 200 s in:
+
+| | |
+|---|---|
+| expansions completed | 43 of the 80 budget |
+| `build_consumers_graph` total | **198.8 s** (min 0.00 s, median 2.47 s, max 12.44 s, mean 4.62 s) |
+| edge-scan total | **0.4 s** |
+
+### What it is NOT
+
+  * **Not the quadratic lookup.** The inner loop does `g.nodes.iter().find(|x| x.id == e.from)` per edge — an
+    O(edges x nodes) scan that looks like the obvious culprit on a 9,926-node / 10,013-edge graph. It costs
+    0.4 s of 198.8 s. Fixing it would buy 0.2%.
+  * **Not a fixed per-call cost.** Expansions returning 1 node cost 0.00 s, so nothing repo-wide is being
+    recomputed per call; cost tracks the consumer count of the symbol being expanded.
+
+### What it is
+
+`ImpactOpts::default()` is `depth: 6, max_expansions: 80`. `max_expansions` bounds the NUMBER of expansions,
+never their cost — and on a ubiquitous interface every expansion is itself a hub. `KeycloakSession`'s hop-1
+frontier is its own methods (`clients`, `clientScopes`, `getAttribute`…), each with hundreds of consumers, so
+the shape pays 80 x (cost of a hub consumer scan). At a 2.47 s median that is ~200 s by construction.
+
+The same budget is free on a narrow anchor: 80 expansions of 1-consumer symbols cost ~0 s. So the bound does
+not correlate with the work, which is why it holds everywhere except exactly where it is needed.
+
+### Fix directions (not implemented — needs a policy decision)
+
+1. **Budget the WORK, not the count.** Carry a deadline (or a cumulative-nodes budget) through the loop and
+   stop when it is spent. The shape already has a `truncated` flag and an `ImpactGap` channel, so the honest
+   report costs nothing new — same contract as the `seed-safety-cap` blindspot.
+2. **Do not expand a hub.** The ubiquity prior already exists (`seam-grow/src/ubiquity.rs`, fan-in from the
+   reverse-import map). A frontier node above the ubiquity threshold adds breadth, not insight — skipping it
+   and naming it as a gap is likely both faster AND a better answer.
+3. Adaptive `max_expansions` from the hop-1 frontier size. Cheapest to write, weakest justification.
+
+(1)+(2) are the real fix; (3) alone would just move the timeout.

@@ -106,7 +106,14 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
             }
             hops += 1;
             let cons_opts = ConsumersOpts { anchor_line: None, skip_callsite: opts.skip_callsite, data_coupling: false, ..Default::default() };
+            // PER-EXPANSION TIMING. `max_expansions` bounds the COUNT of expansions, not their cost, and on a
+            // ubiquitous anchor every expansion is itself a hub — measured on Keycloak's KeycloakSession, 43
+            // expansions cost 198.8s (median 2.47s, max 12.44s) while the edge scan cost 0.4s total. Without
+            // this line that attribution is invisible: the shape has no other instrumentation and simply hangs.
+            let t_build = std::time::Instant::now();
             let Some(g) = build_consumers_graph(repo, &node.0, &node.1, &cons_opts) else { continue };
+            let build_s = t_build.elapsed().as_secs_f64();
+            let t_scan = std::time::Instant::now();
             let aid = &g.anchor_id;
             let mut any = false;
             for e in &g.edges {
@@ -130,6 +137,10 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
                 let line = crate::project_set::to1(e.line.or_else(|| crate::project_set::start_of(n)));
                 impacted.insert(k, ImpactedSymbol { symbol: n.symbol.clone(), file: n.file.clone(), line, kind: n.kind.clone(), hop: node.2 + 1 });
                 next.push((n.file.clone(), n.symbol.clone(), node.2 + 1));
+            }
+            if seam_fs::debug_on("perf") {
+                eprintln!("[perf] impact hop{} {}#{} build={build_s:.2}s edge_scan={:.2}s nodes={} edges={}",
+                    node.2, node.0, node.1, t_scan.elapsed().as_secs_f64(), g.nodes.len(), g.edges.len());
             }
             if !any {
                 no_further.insert(key(&node.0, &node.1));
