@@ -1,6 +1,11 @@
 // MECHANICAL scoring for one case. No LLM judge: an LLM asked "which answer is better" carries exactly the
 // bias the harness exists to control. Everything here is countable.
 //
+// NAMING: the arms are reported as ARM GREP / ARM SEAM, but the FILES stay `.A` / `.B`. That split is
+// deliberate — the subagent writes its own answer to that path, so a file called `.seam.md` would tell it the
+// run is about Seam and invite it to try harder or editorialise. The readable names are applied HERE, at
+// scoring time, where no agent can see them.
+//
 //   bun score.ts <case-id> <ground-truth.txt> <armA.md> <armB.md> [armA.trace] [armB.trace]
 //
 // Ground truth is one `file#symbol` per line, established INDEPENDENTLY of either tool (tsc/LSP, or exhaustive
@@ -53,12 +58,12 @@ const score = (label: string, path: string, tracePath?: string) => {
 };
 
 console.log(`═══ ${caseId}   ground truth: ${truth.size} symbols`);
-const A = score("ARM A (grep/rg)", aPath, aTrace);
-const B = score("ARM B (seam)", bPath, bTrace);
+const A = score("ARM GREP", aPath, aTrace);
+const B = score("ARM SEAM", bPath, bTrace);
 console.log(`\n── verdict (mechanical, no judgement applied)`);
-console.log(`   recall            A ${(A.recall * 100).toFixed(0)}%  vs  B ${(B.recall * 100).toFixed(0)}%`);
-console.log(`   silent misses     A ${A.silent}  vs  B ${B.silent}`);
-console.log(`   total tokens      A ~${A.tokens}  vs  B ~${B.tokens}`);
-console.log(`   tool calls        A ${A.calls}  vs  B ${B.calls}`);
+console.log(`   recall            grep ${(A.recall * 100).toFixed(0)}%  vs  seam ${(B.recall * 100).toFixed(0)}%`);
+console.log(`   silent misses     grep ${A.silent}  vs  seam ${B.silent}`);
+console.log(`   total tokens      grep ~${A.tokens}  vs  seam ~${B.tokens}`);
+console.log(`   tool calls        grep ${A.calls}  vs  seam ${B.calls}`);
 console.log(`\n   NOT scored here: whether a declared gap was ACCURATE, and which CLI levers arm B reached for.`);
 console.log(`   Both are judgement and belong in the write-up, named as such.`);
