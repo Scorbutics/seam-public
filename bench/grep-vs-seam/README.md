@@ -96,10 +96,19 @@ be used as the baseline: nothing in `results/` can reproduce them, and the call 
 | keycloak, cross-language | 90,099 | 93,804 | 58 | 48 | 347s | 670s |
 | cal.com, multi-hop | 128,852 | 145,539 | 62 | 66 | 456s | 593s |
 
-**The call counts in that table are wrong.** The traces say 42/52, 55/46 and 59/60. The correction also flips a
-conclusion that was published off it: "Seam lost on tokens 3/3" is false on the recomputable measure — it lost
-2 of 3 and won the hardest case. Wall clock has no recomputable counterpart (the traces carry no timing), so
-Seam losing 3/3 there stands but cannot be re-derived either; time it explicitly on the next run.
+**These call counts are NOT wrong — they are a different metric, and an earlier edit to this file wrongly
+called them an error.** Run 2 settled it. The harness counts TOOL USES (one per Bash invocation); the trace
+counts SHELL COMMANDS (`^\$ ` lines, self-reported by the agent). One Bash call can carry several chained
+commands, and non-shell tool uses (Read/Write) never appear in a trace at all — so the two disagree in EITHER
+direction. Run 2 measured both for both arms: Arm Seam 29 tool uses vs 59 trace lines; Arm Grep 34 tool uses
+vs 27 trace lines. Opposite directions, same run.
+
+TOOL USES IS THE AUTHORITATIVE COUNT: it is harness-measured, not agent-reported. Trace lines remain useful for
+reading METHOD (what was actually run, and in what order), not for counting cost.
+
+The token correction stands: the table's figures are live subagent usage, which the stored `.md`/`.trace` cannot
+reproduce, and `score.ts`'s proxy is ~10x smaller. Both are legitimate; only one is re-derivable from
+`results/`. Wall clock has no recomputable counterpart either — record it per run.
 
 LESSON, and the reason this section exists rather than being quietly overwritten: a benchmark whose headline
 numbers cannot be recomputed from its own stored artifacts is not re-runnable, whatever its README claims. Every
@@ -177,3 +186,62 @@ Note also that the CLI snapshot gate could not see EITHER defect: all three of i
 real fan-out were added (`q_contract_provides`, `q_contract_recv`); the second immediately caught two live bugs
 in the new code (a signature read off an inner property, and "never invoked" asserted about a symbol used at
 four sites). Null-answer gate cases are the recurring trap in this repo.
+
+## Run 2 results (2026-07-30) — private-app single-hop only
+
+Re-run of case 1 after three changes landed together: the same-name-shadowing resolution fix, the const-bound
+export fix, the `--query contract` enrichment (declared signature + observed call-site facts), and `seam --help`.
+Deliberately NOT a clean A/B — run 1's Seam arm was measured with a broken documentation control, so preserving
+comparability would have meant preserving the handicap.
+
+| metric | Arm GREP | Arm SEAM | run 1 (grep / seam) |
+|---|---|---|---|
+| recall vs ground truth | 46/81 (**57%**) | **81/81 (100%)** | 81/81 / 81/81 |
+| **silent misses** | **35** | **0** | 0 / 0 |
+| declared as gaps | 0 of 35 | — | — |
+| tool uses (harness) | 34 | **29** | 24 / 31 |
+| live tokens | **53,829** | 61,268 | 46,818 / 55,793 |
+| score.ts proxy tokens | 5,346 | **4,907** | 4,820 / 5,939 |
+| wall clock | 400s | **378s** | 281s / 323s |
+
+### The prediction FAILED
+
+The stated prediction was that the contract enrichment would cut Seam's grep fallback. It did not: rg/grep as
+the command went **26 -> 35**. Seam invocations stayed flat (7 -> 6, including one `--query contract`).
+
+And it did not fail because the shape came up short. It delivered exactly the intended facts:
+
+    - cn(...inputs: ClassValue[]) [function] - 81 consuming files
+        observed: 313 call sites - 9x1arg, 253x2arg, 37x3arg, 7x4arg, 3x5arg, 1x6arg, 2x7arg, 1x8arg
+
+That is the whole answer to "what breaks if the signature changes" — variadic, 1 to 8 arguments, mostly 2 — and
+the arm USED it (its answer reasons from the histogram to "narrowing variadic -> fixed arity breaks the 51 sites
+with >=3 arguments"). Then it grepped anyway, to CHECK. Its own words: the histogram was "reproduced exactly by
+an independent string-aware scan".
+
+So the harness's question — did the agent fall back because the output did not answer, or because it did not
+think to use the tool? — has a THIRD answer this run: **it answered, the agent used it, and the agent verified
+it anyway.** That is grep-trained distrust, and better output does not remove it. Do not expect tool-call count
+to be driven down by richer shapes alone. The verification did, however, CONFIRM Seam's counts by an independent
+method, which is worth more to the tool's credibility than the saved calls would have been.
+
+### What actually moved
+
+Completeness diverged for the first time. Arm Grep answered 57% of the ground truth and declared NONE of the
+gap — 35 files silently absent from an answer that reads as complete. Arm Seam enumerated all 81.
+
+CAVEAT, and it matters: Arm Grep scored 81/81 in run 1. This is a single sample in which the comparator
+underperformed its own prior run, so this is NOT evidence that Seam beats grep on recall. What it IS evidence
+of: grep's completeness is RUN-DEPENDENT — it is capable of 100% and does not reliably deliver it, and when it
+falls short it does not say so. Seam's came from a shape that enumerates by construction, and was stable across
+both runs. On the axis defined as value here (completeness and honesty TOGETHER) that difference is the finding.
+
+Note the two token measures point OPPOSITE ways: Seam used more live tokens (61,268 vs 53,829) but produced a
+smaller artifact (4,907 vs 5,346 proxy). The proxy measures the answer, not the consumption. Report both.
+
+### New defect found by this run
+
+Arm Seam flagged that `--query consumers` and `--query contract` disagree on the site count for the same symbol
+(**247 vs 313**). Both renders state their counting unit, and the agent still had to stop and reconcile them.
+Two shapes giving two numbers for one relationship is a real usability defect even when both are defensible.
+Not yet fixed.
