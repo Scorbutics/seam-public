@@ -1,0 +1,15 @@
+[
+  {
+    "id": "private-app-cn-narrow-arity",
+    "repo": "/home/scorbutics/dev/private-app",
+    "file": "lib/utils.ts",
+    "symbol": "cn",
+    "tsconfig": "tsconfig.json",
+    "mutation": {
+      "find": "export function cn(...inputs: ClassValue[]) {\n  return twMerge(clsx(inputs))\n}",
+      "replace": "export function cn(a: ClassValue, b: ClassValue) {\n  return twMerge(clsx([a, b]))\n}"
+    },
+    "acceptsArgc": [2],
+    "why": "The variadic-to-fixed-arity narrowing is the archetypal 'what would break if the signature changed' question, and it is the exact question bench/grep-vs-seam case 1 asks in prose. Here tsc answers it instead of an agent. Every call site passing other than 2 arguments must break; Seam can predict the COUNT from its arity histogram, which is a claim that is either right or wrong."
+  }
+]

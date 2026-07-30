@@ -298,3 +298,44 @@ though seam invocations halved — the budget went into reading files instead. W
 
 Seam still loses tool uses to grep on this case (66 vs 54). The private-app case (run 2) plus this one together say:
 tool-call count is not the axis the enrichment moves, and it should stop being quoted as the target.
+
+## The data-coupling flywheel was NEVER exercised (found after run 3)
+
+Checked rather than assumed, because the LLM-learned coupling layer is the differentiator and no run had ever
+verified it engaged.
+
+**It engaged, and contributed nothing.** No arm passed `--data-coupling`, so the default (`auto`) applied, and a
+`claude` backend does resolve in this environment — so the LEARN phase ran. Its artefacts:
+
+    cal.com  .seam/key-adapters.json: 17 files examined, 3 learned signatures, 0 rules, 0 KEYS DISCOVERED
+    private-app     .seam/key-adapters.json: 1 file examined, 0 rules, 0 keys
+
+Every cal.com file it looked at came back `"floor-blind but no data-access shape — no edge to learn"`.
+
+WHY, and it is a coherent design rather than a bug: the LEARN phase only examines files the DETERMINISTIC FLOOR
+is blind to. Files that actually touch the database are exactly the ones the floor's db-table adapter already
+resolves, so they are never floor-blind and never reach the LLM. What was left for it to learn was type
+declarations and utility modules, which have no data access at all.
+
+So the data coupling that DID show up in these runs — e.g. `reaches handler -> saveBooking` answering `via
+db-table booking` — came from the FLOOR, not from the flywheel. The moat is untested, and the benchmark cannot
+currently test it.
+
+### Protocol change (do this before the next Seam-arm run)
+
+The skill documents warming as an explicit ONE-TIME repo step, and the benchmark never did it:
+
+    SEAM_KEY_BUDGET=500 seam --scan --repo <repo> --center <anyfile> --data-coupling llm
+
+Run it per repo BEFORE the arm starts, record its wall clock and token cost SEPARATELY as a one-time setup
+cost, and then measure query-time behaviour against the warmed index. That is how the product is meant to be
+driven, and it is the only way the learned adapters get a fair test. Not doing it means every run so far
+measured the deterministic floor alone.
+
+### And a harder problem, stated rather than solved
+
+There is no `tsc` for cross-stack coupling. A learned event/queue/cache key has no compiler that can confirm it,
+which is precisely why the engine surfaces those as SUGGESTED blindspots. Measuring the flywheel therefore needs
+a hand-built fixture with known cross-stack pairs and a deliberately floor-blind carrier — not a real repo,
+because on a real repo we cannot enumerate the truth. Until that exists, no claim about the learned layer's
+accuracy is backed by evidence.
