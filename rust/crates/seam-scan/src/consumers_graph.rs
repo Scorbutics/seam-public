@@ -257,13 +257,18 @@ pub fn build_consumers_graph(repo: &str, anchor_file: &str, symbol: &str, opts: 
         !is_interface && (is_field_fn || ast::named_units(&ctx).iter().any(|u| u.name == symbol && u.kind == "method"));
     let is_class = !is_interface && !is_method && ctx.collect(ctx.root(), nk::is_class_kind).iter().any(|c| ast::name_of(&ctx, *c).as_deref() == Some(symbol));
 
+    let __perf = seam_fs::debug_on("perf");
+    let __t = std::time::Instant::now();
     if !opts.skip_callsite && (is_interface || is_method || is_class) {
         let cs_opts = CallsiteOpts {
             anchor_line: opts.anchor_line,
             method_names: if is_method { Some(vec![symbol.to_string()]) } else { None },
             owner_class: if is_class { Some(symbol.to_string()) } else { None },
         };
+        let __t_cs = std::time::Instant::now();
         let Some(mut callsite) = build_callsite_graph(repo, anchor_file, symbol, &cs_opts) else { return Some(base) };
+        let __cs = __t_cs.elapsed().as_secs_f64();
+        let __t_rest = std::time::Instant::now();
         if is_class {
             callsite = callsite_new_consumers_only(&base, callsite, symbol);
         }
@@ -271,6 +276,10 @@ pub fn build_consumers_graph(repo: &str, anchor_file: &str, symbol: &str, opts: 
         if is_class {
             let methods: Vec<String> = ast::class_methods(&ctx, symbol).into_iter().map(|(n, _, _)| n).collect();
             reconcile_class_attribution(&mut base, &callsite, symbol, &methods);
+        }
+        if __perf {
+            eprintln!("[perf]   consumers_graph {symbol}: callsite_graph={__cs:.2}s merge+reconcile={:.2}s total={:.2}s nodes={}",
+                __t_rest.elapsed().as_secs_f64(), __t.elapsed().as_secs_f64(), base.nodes.len());
         }
     }
     Some(base)

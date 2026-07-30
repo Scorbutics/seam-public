@@ -22,6 +22,45 @@ pub struct CallsiteOpts {
     pub owner_class: Option<String>,
 }
 
+/// PER-FILE CALL-SITE FACTS, memoised across calls.
+///
+/// THE bottleneck, measured. Every `build_callsite_graph` call re-read and re-parsed EVERY candidate consumer
+/// file with tree-sitter. On Keycloak's `KeycloakSession` that is ~3,000 Java parses for one call (12.05s of a
+/// 12.07s total — merge/reconcile was 0.02s), and `--query impact` calls it once per frontier symbol over
+/// heavily OVERLAPPING candidate sets, so the same files were parsed dozens of times.
+///
+/// Cached: the extracted FACTS (`call_sites`, `instance_types`), never the `Ctx`. An AST is ~10-20x the source
+/// and would trade this for the memory problem the embed batching just fixed; the facts are a few hundred bytes
+/// a file. Both are computed on a miss even when only one is wanted, because the second caller usually wants
+/// the other and a second parse is the thing being eliminated.
+///
+/// Keyed on (path, mtime, len) so an edit invalidates. Process-scoped, like the other index memos.
+type FileFacts = std::sync::Arc<(Vec<CallSite>, HashMap<String, HashSet<String>>, Vec<seam_lang::ast::Unit>, HashSet<String>)>;
+static FACTS: once_cell::sync::Lazy<std::sync::Mutex<HashMap<String, FileFacts>>> =
+    once_cell::sync::Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+fn file_facts(repo: &str, rel: &str) -> Option<FileFacts> {
+    let abs = join(repo, rel);
+    let stamp = std::fs::metadata(&abs).ok().map(|m| {
+        let mt = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_millis()).unwrap_or(0);
+        format!("{rel}\0{mt}\0{}", m.len())
+    })?;
+    if let Some(hit) = FACTS.lock().unwrap().get(&stamp) {
+        return Some(hit.clone());
+    }
+    let (text, lang) = read(repo, rel)?;
+    let ctx = Ctx::parse(&text, &lang)?;
+    let facts: FileFacts =
+        std::sync::Arc::new((ast::call_sites(&ctx), ast::instance_types(&ctx), ast::named_units(&ctx), ast::type_names(&ctx)));
+    FACTS.lock().unwrap().insert(stamp, facts.clone());
+    Some(facts)
+}
+
+/// Drop the per-file fact memo — for a long-lived process that has seen the tree change under it.
+pub fn reset_callsite_facts() {
+    FACTS.lock().unwrap().clear();
+}
+
 pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &CallsiteOpts) -> Option<ResolvedGraph> {
     let (text, lang) = read(repo, anchor_file)?;
     let actx = Ctx::parse(&text, &lang)?;
@@ -108,32 +147,43 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         if normpath(&join(repo, rel)) == anchor_abs {
             continue;
         }
-        let Some((ctext, clang)) = read(repo, rel) else { continue };
-        let Some(cctx) = Ctx::parse(&ctext, &clang) else { continue };
-        let sites: Vec<CallSite> = ast::call_sites(&cctx).into_iter().filter(|s| methods.contains(&s.method)).collect();
+        let Some(facts) = file_facts(repo, rel) else { continue };
+        let sites: Vec<CallSite> = facts.0.iter().filter(|s| methods.contains(&s.method)).cloned().collect();
         if !sites.is_empty() {
-            let inst = if owner.is_some() { ast::instance_types(&cctx) } else { HashMap::new() };
+            let inst = if owner.is_some() { facts.1.clone() } else { HashMap::new() };
             // FACTORY-NARROWED receivers: a receiver the type pass could NOT resolve, bound from a call whose
             // callee declares a return type (`const svc = getThingService();`). Resolved only for the receivers
             // that actually appear at a matched call site and only when an owner is set (the narrowing is off
             // otherwise), so the two module hops are paid for a handful of binders per file, memoised.
             let mut fac: HashMap<String, String> = HashMap::new();
+            let mut lazy_ctx: Option<Ctx> = None;
             if owner.is_some() {
                 for st in &sites {
                     let Some(ri) = &st.recv_id else { continue };
                     if st.recv_new.is_some() || fac.contains_key(ri) || inst.get(ri).is_some_and(|t| !t.is_empty()) {
                         continue;
                     }
-                    if let Some(t) = factory_receiver_type(repo, rel, &cctx, ri, &st.method) {
+                    // the ONLY consumer that still needs a live AST. Parsed lazily and once per file, so a
+                    // file with no unresolved receiver never pays for it at all.
+                    let ctx_for_factory = match &lazy_ctx {
+                        Some(c) => c,
+                        None => {
+                            let Some((t2, l2)) = read(repo, rel) else { continue };
+                            let Some(c) = Ctx::parse(&t2, &l2) else { continue };
+                            lazy_ctx = Some(c);
+                            lazy_ctx.as_ref().unwrap()
+                        }
+                    };
+                    if let Some(t) = factory_receiver_type(repo, rel, ctx_for_factory, ri, &st.method) {
                         fac.insert(ri.clone(), t);
                     }
                 }
             }
             pending.push(Pending {
                 rel: rel.clone(),
-                units: ast::named_units(&cctx),
+                units: facts.2.clone(),
                 inst,
-                type_names: if owner.is_some() { ast::type_names(&cctx) } else { HashSet::new() },
+                type_names: if owner.is_some() { facts.3.clone() } else { HashSet::new() },
                 fac,
                 self_kinds: seam_lang::provider_for(rel).map(|p| p.self_receiver()).unwrap_or(&[]),
                 sites,
