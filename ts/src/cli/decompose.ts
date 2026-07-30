@@ -862,6 +862,14 @@ async function main(argv: string[]): Promise<number> {
   // `seam slm …` — provision/inspect the local fast SLM (Ollama) that serves the cheap-tier grow-border judge.
   // A subcommand, not a flag, so it's claimed before parseArgs.
   if (argv[0] === "slm") { const { runSlm } = await import("./slm.js"); return runSlm(argv.slice(1)); }
+  // --help is claimed BEFORE parseArgs, and anywhere in argv — an incomplete command line is exactly when a
+  // caller asks for help, so it must not be reachable only via a valid one. It went to stdout-and-exit-0
+  // because a caller that pipes help into a reader is the normal case, not an error.
+  if (argv.includes("--help") || argv.includes("-h")) {
+    const { helpText } = await import("./help.js");
+    process.stdout.write(helpText(Object.keys(QUERY_HANDLERS)));
+    return 0;
+  }
   // Apply the provisioned local-SLM config (seam slm install) to the env the engine reads — the CLI is a
   // composition root, so this is where zero-config defaults are wired (env still wins). Library/tests skip it.
   (await import("../core/slm_config.js")).applySlmConfigToEnv();
