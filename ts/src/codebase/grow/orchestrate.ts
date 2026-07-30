@@ -226,6 +226,34 @@ function _logIntentFieldState(intent: string | undefined, emb: boolean, structur
   if (!intent) return;
   const shapesGrow = emb && !structuralGrow;
   process.stderr.write(`[grow] intent field: ${shapesGrow ? "ON (embeddings shape the grow → keyed per-intent)" : `OFF (${structuralGrow ? "structural grow" : "no embeddings"}; intent only crops the output → cache reuses across intents)`}\n`);
+  // A MISSING MODEL IS AN INSTALL FAULT, NOT A MODE. The line above says "OFF (no embeddings)" for both cases,
+  // and those two are nothing alike: `--structural` is a deliberate choice, while an absent model silently
+  // changes what the grow returns. Cost me an hour in this repo — `git checkout` removed ts/node_modules, `bun
+  // install` restored the packages but NOT the transformers.js model cache the Rust embedder reads from, and two
+  // grow-dependent tests then failed in a way I first blamed on CPU contention.
+  //
+  // WARN, not refuse — and the difference is principled. A missing tree-sitter grammar makes every answer a
+  // FALSE NEGATIVE ("nothing calls this"), so the engine refuses outright. A missing embedder degrades
+  // RELEVANCE RANKING: the grow still resolves real edges, it just orders and crops them worse. Wrong ordering
+  // is recoverable by a reader; a fabricated empty set is not. So this is loud, names the remedy, and continues.
+  // Gated on `!emb` ALONE, not on `!emb && !structuralGrow`. The caller passed an --intent, which means it
+  // expects the intent to matter; whether this particular grow also happens to be structural is a second
+  // question. Gating on both made the warning unreachable on the paths that default to structural — which are
+  // exactly the paths where a missing model hides most easily.
+  if (!emb) {
+    process.stderr.write(
+      "warning: the embedding model is NOT available, so this intent-guided grow is running WITHOUT the intent"
+      + " field — relevance ranking, tiering and centre selection are degraded and the result WILL differ from a"
+      + " machine that has it. This is an install fault, not a mode.\n"
+      + "  Fix: re-download it into the cache the core reads —\n"
+      + "    cd ts && bun -e 'const {pipeline,env}=await import(\"./node_modules/@xenova/transformers/src/transformers.js\");"
+      + "env.cacheDir=\"./node_modules/@xenova/transformers/.cache\";"
+      + "for (const q of [true,false]) await pipeline(\"feature-extraction\",\"Xenova/all-MiniLM-L6-v2\",{quantized:q});'\n"
+      + "  Or point SEAM_EMBED_DIR at a directory holding tokenizer.json + onnx/.\n"
+      + "  Note:"
+      + " a structural grow does not use the field, but this warning is about the INSTALL, not the mode, so it is"
+      + " not silenced by --structural.\n");
+  }
 }
 
 // REGION REACH — the resolved relation(s) that REACHED a candidate from a node ALREADY IN the region (the flood

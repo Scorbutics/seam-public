@@ -334,6 +334,18 @@ async function runCodebase(a: Args): Promise<number> {
   // flow, and forcing it through the spine machinery over-structures it. Offline/deterministic; reuses the
   // consumers footprint build_consumers_graph already produces. See codebase/grow/project_set.ts.
   if (a.ask) return runAsk(a);
+  // --include-tests IS A GROW KNOB, and saying so is the fix. It is threaded into structural_knobs/warm and
+  // reaches the grow's exclusion filter; NO shape reads it (`projectContract(repo, file)` takes no such
+  // parameter, and none of the other shape entries do either). Accepted-and-ignored is the failure mode this
+  // repo keeps finding, so refuse instead of pretending.
+  //
+  // And the shapes do not NEED it: measured, `--query contract` already lists test-file consumers and counts
+  // their call sites. The undercount that sent me looking here was re-export BARRELS, not test filtering — a
+  // symbol re-exported through a barrel has importers the declaring file's contract never sees.
+  if (a.query && a.includeTests) {
+    err("--include-tests is a GROW knob and has no effect on --query shapes (they already include test files). "
+      + "Drop it, or use it on a footprint/grow run.");
+  }
   if (a.query && QUERY_HANDLERS[a.query]) return QUERY_HANDLERS[a.query](a);
   // A blast-radius/find-usages intent handed to the FLOW grow → route it to its structural shape instead (opt-in;
   // the agent entry sets --auto-route). A genuine flow intent (or no backend) falls through to the grow below.
