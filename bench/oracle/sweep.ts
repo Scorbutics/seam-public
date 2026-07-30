@@ -22,87 +22,21 @@
 //
 // The baseline compile is run ONCE for the repo, not once per symbol (9.7s each on private-app; 30 symbols would
 // otherwise waste five minutes proving the repo still has its 23 pre-existing errors).
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
-import { execSync } from "node:child_process";
+//
+// THE PROBE ITSELF LIVES IN `probe.ts`, shared with `compare.ts`. It used to live here, and two harnesses with
+// two copies of their own truth definition is one that eventually disagrees with itself and blames the tool.
+// Every false-accusation comment that justified the TS2554/TS2345 rule moved there with it.
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join, dirname } from "node:path";
+import { openProbe, sh } from "./probe.ts";
 
 const [repo, tsconfig, limitArg] = process.argv.slice(2);
 if (!repo || !tsconfig) { console.error("usage: sweep.ts <repo> <tsconfig> [limit]"); process.exit(2); }
 const LIMIT = Number(limitArg ?? 25);
 const HERE = dirname(new URL(import.meta.url).pathname);
 
-const sh = (cmd: string, cwd: string, timeout = 900_000): string => {
-  try { return execSync(cmd, { cwd, encoding: "utf-8", timeout, maxBuffer: 128 * 1024 * 1024, stdio: ["ignore", "pipe", "pipe"] }); }
-  catch (e: any) { return `${e.stdout ?? ""}${e.stderr ?? ""}`; }
-};
-const errorsNow = (): Set<string> => {
-  const out = sh(`node_modules/.bin/tsc --noEmit -p ${tsconfig}`, repo);
-  const s = new Set<string>();
-  for (const m of out.matchAll(/^(.+?)\((\d+),(\d+)\): (error TS\d+)/gm)) s.add(`${m[1]}(${m[2]},${m[3]}): ${m[4]}`);
-  return s;
-};
-
-/// ONLY THE ARITY ERROR COUNTS AS A CALL SITE.
-///
-/// The first version of this counted every fresh error, and immediately produced a FALSE ACCUSATION: it scored
-/// `useSocialMediaVerification` as claimed-2-actual-4, i.e. Seam missing two call sites. It was not. There are
-/// exactly two calls; breaking each one ALSO produced a downstream `TS7006 Parameter implicitly has an 'any'
-/// type` where the caller destructured the now-untyped result. Two call sites, four errors.
-///
-/// TWO codes, and it took a second false accusation to learn why. Filtering to TS2554 alone then scored
-/// `deriveMemberStatus` as claimed-3-actual-0 — Seam inventing three call sites. It had not: the function is
-/// `(a, b, c?, d = …, e?)`, so it accepts 2..5 arguments and prepending a 6th REQUIRED parameter breaks no
-/// arity at all. Each of the three real call sites instead reported TS2345 ("Argument of type 'boolean' is not
-/// assignable to parameter of type 'number'") as its first argument slid onto the probe.
-///
-/// So a broken call site announces itself as EITHER:
-///   TS2554 — too few arguments (the callee had no optional tail)
-///   TS2345 — the first argument no longer type-checks against the probe
-/// Both are the direct consequence at the call site; everything else (TS7006 and friends) is cascade downstream
-/// of it and is excluded. Deduped by (file, line) so one call site counts once whichever way it complains.
-///
-/// TWICE NOW this harness accused the engine of a defect it did not have. Both accusations were artefacts of the
-/// truth definition, and both looked entirely plausible. An oracle is only an oracle once its own failure modes
-/// have been falsified — do that before believing any row it prints.
-const CALL_SITE_ERROR = /error TS(2554|2345)$/;
-const fileOf = (e: string) => e.slice(0, e.indexOf("(")).replace(/^\.\//, "");
-
-if (sh("git status --porcelain", repo).split("\n").some((l) => l.trim() && !l.includes(".gitignore"))) {
-  // Recovery is spelled out because the most likely cause is a PREVIOUS sweep that was KILLED mid-mutation:
-  // the restore lives in a `finally`, and SIGKILL does not run finally blocks. Ask before assuming it was you.
-  console.error("ABORT: repo has uncommitted changes beyond .gitignore — refusing to mutate.");
-  console.error("  If a previous sweep was interrupted, a probe may be left behind. Check and recover with:");
-  console.error(`    cd ${repo} && rg -l __oracleProbe -g '!node_modules' . && git checkout -- <those files>`);
-  process.exit(2);
-}
-
-process.stderr.write("baseline compile…\n");
-const BASE = errorsNow();
-process.stderr.write(`baseline: ${BASE.size} pre-existing error(s)\n`);
-
-// ── candidates: exported functions, one per (file, name) ────────────────────────────────────────────────────
-const decl = sh(`rg -n --no-heading '^export (async )?function [A-Za-z_$][A-Za-z0-9_$]*\\(' -g '*.ts' -g '*.tsx' -g '!node_modules' . || true`, repo);
-const candidates: { file: string; name: string }[] = [];
-for (const line of decl.split("\n").filter(Boolean)) {
-  const m = /^(.+?):\d+:export (?:async )?function ([A-Za-z_$][A-Za-z0-9_$]*)\(/.exec(line);
-  if (m) candidates.push({ file: m[1].replace(/^\.\//, ""), name: m[2] });
-}
-// SKIP WHAT TSC CANNOT SEE. private-app' tsconfig excludes `backend`, so every call site under it is invisible to the
-// oracle — and the sweep scored that as Seam OVER-CLAIMING. All 19 over-claims in the n=200 run traced to this:
-// `handleCors` claimed 4 and tsc said 0 because all four callers live under `backend/`, which is never compiled.
-// The tool was right and the judge was blind. A judge that cannot see the evidence must recuse itself, not rule.
-const tscExclude: string[] = (() => {
-  // `tsc --showConfig` and NOT a hand-parse of tsconfig.json: stripping comments with a regex corrupted the
-  // JSON (`JSON Parse error: Expected ':'`), the catch swallowed it, and the filter silently matched nothing --
-  // which is how the first attempt at this fix reported "908 of 908 inside tsc's program" and changed no result.
-  // --showConfig is authoritative, resolves `extends`, and cannot drift from what the compiler actually does.
-  const out = sh(`node_modules/.bin/tsc -p ${tsconfig} --showConfig`, repo, 120_000);
-  try { return (JSON.parse(out).exclude ?? []).filter((x: string) => !x.includes("*")); }
-  catch { console.error("WARNING: could not read tsc --showConfig; excluded-path candidates will NOT be skipped"); return []; }
-})();
-if (tscExclude.length) process.stderr.write(`tsconfig excludes ${tscExclude.join(", ")} — candidates there are SKIPPED (the oracle is blind to them)\n`);
-const visible = candidates.filter((c) => !tscExclude.some((x) => c.file === x || c.file.startsWith(`${x}/`)));
-process.stderr.write(`${candidates.length} exported function(s) found, ${visible.length} inside tsc's program; sweeping up to ${LIMIT}\n`);
+const probe = openProbe(repo, tsconfig);
+process.stderr.write(`sweeping up to ${LIMIT}\n`);
 
 // contract is per FILE and lists every export, so cache it rather than re-running per symbol
 const SEAM = "cd /home/scorbutics/seam-phase0/ts && bun src/cli/decompose.ts";
@@ -131,37 +65,18 @@ const seamClaim = (file: string, name: string): number | null => {
 
 const rows: any[] = [];
 let done = 0;
-for (const c of visible) {
+for (const c of probe.candidates) {
   if (done >= LIMIT) break;
-  const abs = join(repo, c.file);
-  const original = readFileSync(abs, "utf-8");
-  const re = new RegExp(`(export (?:async )?function ${c.name})\\(`);
-  if (!re.test(original)) continue;
-
   const claim = seamClaim(c.file, c.name);
   if (claim === null) continue;          // Seam lists no consumed export by that name — no claim to score
+
+  const truth = probe.truthFor(c.file, c.name);
+  if (!truth) continue;                  // the declaration is not where the candidate scan said it was
   done++;
 
-  let truth = 0, truthFiles = 0;
-  try {
-    writeFileSync(abs, original.replace(re, `$1(__oracleProbe: number, `));
-    const after = errorsNow();
-    const fresh = [...after].filter((e) => !BASE.has(e));
-    const external = fresh.filter((e) => fileOf(e) !== c.file && CALL_SITE_ERROR.test(e));
-    // Dedupe by FULL POSITION — file, line AND COLUMN. The first version dropped the column to collapse
-    // "one site, two codes", and thereby collapsed TWO CALLS ON ONE LINE into one. `expect(bucketDisplayRank(
-    // "actu", 28)).toBeLessThan(bucketDisplayRank("private-app", 28))` is two call sites on line 491; there are 16 of
-    // them across 9 lines, and the sweep scored Seam's correct 16 as a +7 over-claim. TS2554 and TS2345 are
-    // mutually exclusive at a given position, so keeping the column costs nothing and stops the undercount.
-    const sites = new Set(external.map((e) => e.replace(/: error TS\d+$/, "")));
-    truth = sites.size;
-    truthFiles = new Set(external.map(fileOf)).size;
-  } finally {
-    writeFileSync(abs, original);
-  }
-  const delta = claim - truth;
-  rows.push({ file: c.file, name: c.name, claimed: claim, actual: truth, files: truthFiles, delta });
-  console.log(`${delta === 0 ? "OK  " : "DIFF"} ${c.name.padEnd(28)} claimed ${String(claim).padStart(4)}  tsc ${String(truth).padStart(4)}  (${delta > 0 ? "+" : ""}${delta})  ${c.file}`);
+  const delta = claim - truth.sites.size;
+  rows.push({ file: c.file, name: c.name, claimed: claim, actual: truth.sites.size, files: truth.files.size, delta });
+  console.log(`${delta === 0 ? "OK  " : "DIFF"} ${c.name.padEnd(28)} claimed ${String(claim).padStart(4)}  tsc ${String(truth.sites.size).padStart(4)}  (${delta > 0 ? "+" : ""}${delta})  ${c.file}`);
 }
 
 // Nothing scored means the run proved nothing. Say so and FAIL, rather than printing a 0/0 that reads as a pass.

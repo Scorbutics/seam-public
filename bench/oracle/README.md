@@ -111,3 +111,51 @@ Both accusations looked completely plausible and both were artefacts of the trut
 an oracle once its own failure modes have been falsified — and note that the failure was asymmetric in a
 dangerous way: version 1 under-reported the tool's accuracy, version 2 over-reported a defect. A harness trusted
 after one run would have produced a bug report against working code.
+
+## `compare.ts` — correct compared to WHAT
+
+`bun bench/oracle/compare.ts <repo> <tsconfig> [limit]`
+
+The sweep answers "is Seam correct?" and answers it well. It cannot answer the question that actually decides
+where the work goes. **A tool that is 98% right at something `rg` also gets right, or that a language server gets
+right in 40ms, has proven its correctness and not its value.**
+
+So the same probe now scores three arms on the identical question:
+
+| arm | what it is |
+|---|---|
+| `grep` | the floor. Line-grained, no resolution. Included because it is what agents actually reach for |
+| `lsp` | the TypeScript **language service** — `getReferencesAtPosition`, the machinery behind "Find All References", filtered to references in CALLEE POSITION so it answers the call-site question and not the reference question |
+| `seam` | `--query contract`'s `observed: N call sites` |
+
+### The lsp arm is here to be able to win
+
+Beating naked `rg` on a TypeScript monorepo proves nothing — any competent agent can reach the compiler, and a
+result that only clears that bar dies to one sentence from a skeptic. Smoke-tested on private-app, the language service
+returns **8 / 19 / 8** for `platformLabel` / `computeWeekAnchor` / `mapTasksToReceivedMissions` — exactly the
+oracle's numbers, and exactly Seam's after the barrel fix.
+
+If it holds at n, the conclusion is that on TS call-site questions Seam's value is **not capability**. It is cost,
+cross-language reach, and questions a language service has no concept of — which is what `bench/coupling`
+measures. That is a finding, not a failure, and it is unobtainable without building the arm that might win.
+
+### Cost is measured honestly
+
+The language service's program build is ~3.0s on private-app and **dominates any single query**, so asking one symbol per
+process would report a price no real user pays: an editor keeps the program warm. So the build is timed once and
+reported separately — measured, it is 3.0s once, then **~40ms per symbol**. Seam is cached per module file for the
+same reason (one `contract` call answers every export of that file) and its per-file cost is reported that way.
+Collapsing either into a per-query average is how a warm-program tool gets slandered, or flattered.
+
+### Stratified, because the aggregate hid the answer
+
+The sweep's four residual misses were **all barrel-reached**, which "195/200" never showed. Every row is labelled
+by the mechanism standing between the declaration and its callers (`plain` / `barrel` / `alias`) and the summary is
+per stratum. The label is NAME-BASED and therefore approximate — two modules exporting one name can mislabel a
+row. It steers attention; the score in the row is the evidence.
+
+### One definition of truth
+
+`probe.ts` holds the mutate/compile/restore cycle and the TS2554/TS2345 rule, and both `sweep.ts` and `compare.ts`
+use it. A benchmark with two copies of its own truth definition is one that will eventually disagree with itself
+and blame the tool.

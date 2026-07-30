@@ -1,0 +1,75 @@
+[
+  {
+    "kind": "positive",
+    "id": "db-table-ts-write-java-read",
+    "expected": 1,
+    "seamFound": 1,
+    "grepFound": 1,
+    "grepNoise": 2,
+    "missed": [],
+    "keys": [
+      "work_orders"
+    ],
+    "knownGap": null
+  },
+  {
+    "kind": "positive",
+    "id": "db-table-java-write-ruby-read",
+    "expected": 1,
+    "seamFound": 1,
+    "grepFound": 1,
+    "grepNoise": 0,
+    "missed": [],
+    "keys": [
+      "invoices"
+    ],
+    "knownGap": null
+  },
+  {
+    "kind": "positive",
+    "id": "http-route-tsx-to-java",
+    "expected": 1,
+    "seamFound": 1,
+    "grepFound": 1,
+    "grepNoise": 0,
+    "missed": [],
+    "keys": [
+      "/api/technicians"
+    ],
+    "knownGap": null
+  },
+  {
+    "kind": "positive",
+    "id": "shared-config-key",
+    "expected": 1,
+    "seamFound": 0,
+    "grepFound": 1,
+    "grepNoise": 0,
+    "missed": [
+      "backend/NotifyWorker.java"
+    ],
+    "keys": [],
+    "knownGap": "2026-07-30: there is NO config-key adapter. The coupling layer's adapters are db-table, http-route, data-file, egress, binding and member-access — a shared environment variable is not a key it can form, so this resolves nothing. Found by this benchmark on its FIRST run, which is what it is for. Left as a failing-but-declared row rather than deleted: a gap removed from the fixture is a gap nobody measures."
+  },
+  {
+    "kind": "decoy",
+    "id": "same-column-different-table",
+    "seamFalse": 0,
+    "grepFalse": 1,
+    "vacuous": false
+  },
+  {
+    "kind": "decoy",
+    "id": "table-name-in-prose-only",
+    "seamFalse": 0,
+    "grepFalse": 1,
+    "vacuous": false
+  },
+  {
+    "kind": "decoy",
+    "id": "same-file-write-and-read",
+    "seamFalse": 0,
+    "grepFalse": 0,
+    "vacuous": false
+  }
+]

@@ -1,0 +1,1 @@
+export const db: any = { from: (_t: string) => ({ insert: (_r: any) => null, update: (_r: any) => ({ eq: (_a: string, _b: string) => null }), select: (_c: string) => ({ eq: (_a: string, _b: string) => null }) }) };

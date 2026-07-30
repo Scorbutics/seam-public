@@ -1,12 +1,22 @@
 # Benchmarks — which one answers which question
 
-Two harnesses. They are NOT redundant and they are NOT interchangeable. Picking the wrong one is how three runs
+Three harnesses. They are NOT redundant and they are NOT interchangeable. Picking the wrong one is how three runs
 of noisy conclusions happened.
 
 | you want to know | use | cost | judge |
 |---|---|---|---|
-| **Is the engine correct and honest?** Did a change break resolution? Does a shape claim more than it knows? | [`oracle/`](oracle/) | a compile | `tsc` |
+| **Is the engine correct and honest?** Did a change break resolution? Does a shape claim more than it knows? | [`oracle/`](oracle/) — `sweep.ts` | a compile per symbol | `tsc` |
+| **Correct compared to WHAT?** Would `rg` or a language server have answered this already? | [`oracle/`](oracle/) — `compare.ts` | a compile per symbol + one LSP program build | `tsc` |
+| **Does the differentiator work at all?** Cross-stack coupling no compiler has a concept of | [`coupling/`](coupling/) | seconds | a hand-written `truth.json` + decoys |
 | **Does it help an agent in practice?** Is the CLI legible? Does the output get used or worked around? | [`grep-vs-seam/`](grep-vs-seam/) | 2 subagents/case, ~100-150k tokens each | ground truth where it exists, else judgement |
+
+## The question that reframed all of this
+
+`sweep.ts` reached **195/200 exact** against `tsc`, and that is a good number that answers half a question.
+A tool that is 98% right at something `rg` also gets right, or that a language server gets right in 40ms, has
+proven its correctness and **not its value**. `compare.ts` exists to close that: same probe, same judge, three
+arms — `grep`, the TypeScript **language service**, and Seam. The LSP arm is deliberately built to be able to
+win, because a claim that only clears the naked-`rg` bar dies to one sentence from a skeptic.
 
 ## The rule
 
@@ -42,15 +52,28 @@ README). Falsify a harness before believing it.
 so every Seam arm read the engine's source to find the flags. None of those were reachable from the oracle —
 they are about what a consumer experiences, which is exactly what that harness is for.
 
-## The gap neither harness covers
+## The moat, now measured — `coupling/`
 
-**The LLM-learned data-coupling layer.** Verified after run 3: it engages by default (`auto` + a resolvable
-`claude` backend) and discovered ZERO keys on both benchmark repos, because it only examines files the
-deterministic floor is blind to — and those were type/util files with no data access. Every data-coupling edge
-in every run so far came from the FLOOR.
+`tsc` cannot judge a cross-stack key, so the oracle structurally cannot cover the data-coupling layer. That made
+the differentiator a claim rather than a measurement. [`coupling/`](coupling/) is the smallest honest instrument:
+a hand-built fixture with declared ground truth, three arms, and — the important half — **decoys**, since a
+fixture written by the tool's own author proves nothing without them.
 
-`tsc` cannot judge a cross-stack key, so the oracle cannot cover it. A real repo cannot either, because the
-truth is not enumerable. It needs a third, small thing: a hand-built fixture with known cross-stack pairs and a
-deliberately floor-blind carrier. Until that exists, treat any claim about the learned layer as unmeasured.
+First result: `seam 3/4 mechanisms, 0/3 false discoveries` vs `grep 4/4 mechanisms, 2/3 false discoveries`, and
+`lsp` structurally 0/4 (a table name, a route literal and an env var are opaque strings to a language service —
+there is no reference request to send). Read that honestly: **grep matched everything Seam did and more.** On a
+fixture this size a name search cannot miss. What it cannot do is tell which matches are real. So Seam's measured
+value on data coupling is **precision, not reach**.
+
+It also found a real gap on its first run: **there is no config-key adapter**, so two stacks reading the same
+environment variable — coupling with no code edge of any kind — resolves nothing. Declared with a date in
+`truth.json`, printed as `GAP`, and deliberately left in the fixture: a gap deleted from a benchmark is a gap
+nobody measures.
+
+**Still unmeasured: the LLM-LEARNED layer, as opposed to the floor.** Verified after run 3, it engages by default
+and discovered ZERO keys on both benchmark repos, because it only examines files the deterministic floor is blind
+to — and those were type/util files with no data access. Every coupling edge in every run so far came from the
+FLOOR. `coupling/`'s fixture does not yet include a deliberately floor-blind carrier, so treat any claim about
+the learned layer as unmeasured.
 
 Keep both. Use the cheap one constantly and the expensive one deliberately.
