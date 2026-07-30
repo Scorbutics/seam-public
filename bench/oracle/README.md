@@ -159,3 +159,41 @@ row. It steers attention; the score in the row is the evidence.
 `probe.ts` holds the mutate/compile/restore cycle and the TS2554/TS2345 rule, and both `sweep.ts` and `compare.ts`
 use it. A benchmark with two copies of its own truth definition is one that will eventually disagree with itself
 and blame the tool.
+
+## WHAT THE ORACLE DOES NOT COVER — read before quoting 200/200
+
+Three bounds, all measured rather than assumed. None of them makes the number wrong; all of them make it narrower
+than it sounds.
+
+**1. ONE LANGUAGE.** The judge is `tsc`, so every result here is about TypeScript. Seam supports seven languages,
+and the correctness of the Java / Ruby / Python / C / C++ sides is **unmeasured by this harness and cannot be
+measured by it**. The equivalent instrument is `javac` on the same probe — the mutate/compile/diff method is
+language-agnostic and `probe.ts` is already the shared definition it would plug into. It is not built because this
+machine has a **JRE, not a JDK** (`/usr/lib/jvm/java-21-openjdk-amd64/bin` holds `java`, `jpackage`, `keytool`,
+`rmiregistry` — no `javac`), and the Java corpus (keycloak, 8141 files, Maven) is unbuilt. Both are installs, not
+code. Until then: **the multi-language claim rests on `bench/coupling`, not on this directory.**
+
+**2. ONE DECLARATION FORM.** The candidate scan matches `^export (async )?function NAME(`. An arrow export
+(`export const f = (…) => …`) is invisible to it, and so is a wrapped one
+(`export const f = withReporting(_impl)`) — the latter deliberately, since prepending a parameter there mutates
+the WRAPPER call and not the export's signature. Measured on private-app: 912 `export function` against **2** arrow
+exports, so the bound costs nothing on this corpus. On a codebase that prefers arrows it would cost most of the
+sample, and the wrapped form is exactly where a signature-resolution defect once lived.
+
+**3. THE STRATA ARE SMALL BECAUSE THE REPO IS.** `barrel=9` and `alias=1` are not a sampling limit — that is the
+entire population of private-app. Those two strata carry the whole argument for structural resolution over name search
+(the alias row is the only place `grep` under-claims), and raising their n needs a different corpus. cal.com would
+provide it and cannot run: it has **no installed `typescript`**, so neither `tsc` nor the language-service arm can
+be built there without a `pnpm install` of a 10k-file monorepo.
+
+## Cost at scale — the one number that is NOT private-app-sized
+
+Measured after the barrel change, on cal.com (10k files, 343 star barrels), because the multi-hop barrel walk was
+a real cost risk and an unmeasured risk is a defect waiting:
+
+    --query contract, packages/lib/availability.ts:  2.6s cold, 2.5s warm
+
+No blow-up: the frontier is keyed by module so a hop costs one pass over the import index regardless of how many
+barrels are in it. For scale, the language service needed **2.5s just to build its program on private-app**, which is a
+far smaller tree — but the comparison at cal.com scale is blocked on the same missing `node_modules`, so it stays
+an observation rather than a result.
