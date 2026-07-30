@@ -60,6 +60,40 @@ per bucket:  seam   same-dir 8/11   same-top 7/16   cross-top 53/58
 anything — Seam's pairs co-changed **53/58 (91%)** against a base rate of **5/58 (8.6%)**, and against the name
 search's 43%. That is the claim, on real engineering history, with a judge that predates the tool.
 
+### keycloak — 2881 commits, and the first CROSS-LANGUAGE number
+
+The corpus that was missing. It was a 1-commit snapshot; `git fetch --deepen=3000` (not `--unshallow` — 3000
+commits is far more than this needs, and cost 44MB) turned it into 2881 usable commits of Java + TypeScript.
+
+```
+arm      pairs   co-changed   rate
+seam      178           56    31.5%
+token     851          136    16.0%
+random    166            6     3.6%
+
+LIFT vs matched random   8.70x
+LIFT vs token            1.97x
+
+CROSS-LANGUAGE pairs only (different language each side):
+seam       7/42    16.7%
+token     30/457    6.6%
+random     1/51     2.0%
+cross-language LIFT vs matched random   8.50x   (and 2.5x vs the name search)
+```
+
+**The aggregate replicates private-app almost exactly** — 8.70x/1.97x against 9.71x/1.77x — on a different repo, a
+different language mix and 7x the history. Two independent corpora agreeing on both ratios is worth more than
+either number alone.
+
+**The cross-language row is the first tool-independent evidence for the half of the claim that `bench/coupling`
+could only test on a fixture I wrote myself.** These are pairs with a Java file on one side and a TypeScript file
+on the other: no import, no call, no reference request any language service can answer. They co-changed at 16.7%
+against a 2.0% matched base rate.
+
+**But n=42, with 7 hits.** That is a real signal and a thin one. It is enough to say the effect points the same
+way as the aggregate; it is not enough to quote 8.5x as a stable figure. Widening it means more cross-language
+keys, which means either more history or a repo where the two stacks interleave more than keycloak's do.
+
 ### cal.com — 124 usable commits, sparse history, small n
 
 ```
@@ -84,11 +118,11 @@ the window), this corpus supports the token comparison and little else. Do not a
 - **No recall.** A real coupling nobody has edited is invisible here. This measures precision-in-practice only.
 - **Small n on the seam arm** (85 and 33). The effect sizes are large enough to be unambiguous on private-app; they are
   not large enough on cal.com to say anything beyond the token comparison.
-- **Not cross-language, on any corpus available here.** private-app is effectively single-language (249 `.tsx` + 187
-  `.ts`, one `.sql`), cal.com is TS + SQL, and keycloak — the one genuinely multi-language corpus — is a **1-commit
-  snapshot** with no history to read. So what is measured here is the DATA-COUPLING half of the plus value. The
-  cross-language half still rests on `bench/coupling`, whose fixture the author wrote. Getting a real number for it
-  needs a multi-language repo with real history; that is the single most valuable corpus this project is missing.
+- **Cross-language rests on ONE corpus and 42 pairs.** keycloak is the only repo here with two real languages and
+  real history. private-app is effectively single-language (249 `.tsx` + 187 `.ts`, one `.sql`) and correctly reports
+  `—` rather than a zero for its cross-language row — an empty cut is a fact about the corpus, never a result.
+  cal.com is TS + SQL. So the cross-language claim is directionally supported and thinly sampled; treat it as a
+  signal to widen, not a figure to quote.
 
 ## Keeping it honest
 

@@ -1,0 +1,76 @@
+{
+  "repo": "/home/scorbutics/dev/keycloak",
+  "usedCommits": 2881,
+  "seam": {
+    "n": 178,
+    "hit": 56,
+    "rate": 0.3146067415730337,
+    "perBucket": [
+      [
+        "same-dir",
+        24,
+        35
+      ],
+      [
+        "same-top",
+        22,
+        93
+      ],
+      [
+        "cross-top",
+        10,
+        50
+      ]
+    ],
+    "xn": 42,
+    "xhit": 7
+  },
+  "token": {
+    "n": 851,
+    "hit": 136,
+    "rate": 0.1598119858989424,
+    "perBucket": [
+      [
+        "same-dir",
+        33,
+        52
+      ],
+      [
+        "same-top",
+        57,
+        244
+      ],
+      [
+        "cross-top",
+        46,
+        555
+      ]
+    ],
+    "xn": 457,
+    "xhit": 30
+  },
+  "rand": {
+    "n": 166,
+    "hit": 6,
+    "rate": 0.03614457831325301,
+    "perBucket": [
+      [
+        "same-dir",
+        4,
+        23
+      ],
+      [
+        "same-top",
+        2,
+        93
+      ],
+      [
+        "cross-top",
+        0,
+        50
+      ]
+    ],
+    "xn": 51,
+    "xhit": 1
+  }
+}
