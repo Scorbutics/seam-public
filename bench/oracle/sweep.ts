@@ -68,7 +68,11 @@ const CALL_SITE_ERROR = /error TS(2554|2345)$/;
 const fileOf = (e: string) => e.slice(0, e.indexOf("(")).replace(/^\.\//, "");
 
 if (sh("git status --porcelain", repo).split("\n").some((l) => l.trim() && !l.includes(".gitignore"))) {
-  console.error("ABORT: repo has uncommitted changes beyond .gitignore — refusing to mutate");
+  // Recovery is spelled out because the most likely cause is a PREVIOUS sweep that was KILLED mid-mutation:
+  // the restore lives in a `finally`, and SIGKILL does not run finally blocks. Ask before assuming it was you.
+  console.error("ABORT: repo has uncommitted changes beyond .gitignore — refusing to mutate.");
+  console.error("  If a previous sweep was interrupted, a probe may be left behind. Check and recover with:");
+  console.error(`    cd ${repo} && rg -l __oracleProbe -g '!node_modules' . && git checkout -- <those files>`);
   process.exit(2);
 }
 
@@ -83,7 +87,22 @@ for (const line of decl.split("\n").filter(Boolean)) {
   const m = /^(.+?):\d+:export (?:async )?function ([A-Za-z_$][A-Za-z0-9_$]*)\(/.exec(line);
   if (m) candidates.push({ file: m[1].replace(/^\.\//, ""), name: m[2] });
 }
-process.stderr.write(`${candidates.length} exported function(s) found; sweeping up to ${LIMIT}\n`);
+// SKIP WHAT TSC CANNOT SEE. private-app' tsconfig excludes `backend`, so every call site under it is invisible to the
+// oracle — and the sweep scored that as Seam OVER-CLAIMING. All 19 over-claims in the n=200 run traced to this:
+// `handleCors` claimed 4 and tsc said 0 because all four callers live under `backend/`, which is never compiled.
+// The tool was right and the judge was blind. A judge that cannot see the evidence must recuse itself, not rule.
+const tscExclude: string[] = (() => {
+  // `tsc --showConfig` and NOT a hand-parse of tsconfig.json: stripping comments with a regex corrupted the
+  // JSON (`JSON Parse error: Expected ':'`), the catch swallowed it, and the filter silently matched nothing --
+  // which is how the first attempt at this fix reported "908 of 908 inside tsc's program" and changed no result.
+  // --showConfig is authoritative, resolves `extends`, and cannot drift from what the compiler actually does.
+  const out = sh(`node_modules/.bin/tsc -p ${tsconfig} --showConfig`, repo, 120_000);
+  try { return (JSON.parse(out).exclude ?? []).filter((x: string) => !x.includes("*")); }
+  catch { console.error("WARNING: could not read tsc --showConfig; excluded-path candidates will NOT be skipped"); return []; }
+})();
+if (tscExclude.length) process.stderr.write(`tsconfig excludes ${tscExclude.join(", ")} — candidates there are SKIPPED (the oracle is blind to them)\n`);
+const visible = candidates.filter((c) => !tscExclude.some((x) => c.file === x || c.file.startsWith(`${x}/`)));
+process.stderr.write(`${candidates.length} exported function(s) found, ${visible.length} inside tsc's program; sweeping up to ${LIMIT}\n`);
 
 // contract is per FILE and lists every export, so cache it rather than re-running per symbol
 const SEAM = "cd /home/scorbutics/seam-phase0/ts && bun src/cli/decompose.ts";
@@ -96,6 +115,15 @@ const contractOf = (file: string): string => {
 /** Seam's claimed call-site count for `name`, or null when it makes no claim (not a listed export). */
 const seamClaim = (file: string, name: string): number | null => {
   const out = contractOf(file);
+  // A BROKEN TOOL IS NOT A TOOL MAKING NO CLAIM. This distinction cost a whole run: `git checkout` had deleted
+  // ts/node_modules, so every seam invocation died with "tree-sitter grammars unavailable" — the engine failing
+  // LOUDLY, exactly as designed — and this function read the absence of a claim and returned null for all 200
+  // candidates. The sweep then printed "0 symbols swept, EXACT 0/0" and exited 0, as if that were a clean
+  // result. A harness that reports success when the thing under test never ran is worse than no harness.
+  if (/^error:|grammars unavailable|could not be built/m.test(out)) {
+    console.error(`\nABORT: the seam CLI is not answering — the engine, not the benchmark, is broken:\n  ${out.split("\n").find((l) => l.trim()) ?? "(no output)"}`);
+    process.exit(3);
+  }
   const re = new RegExp(`^- ${name}\\b[^\\n]*\\n\\s+observed: (\\d+) call sites?`, "m");
   const m = re.exec(out);
   return m ? Number(m[1]) : null;
@@ -103,7 +131,7 @@ const seamClaim = (file: string, name: string): number | null => {
 
 const rows: any[] = [];
 let done = 0;
-for (const c of candidates) {
+for (const c of visible) {
   if (done >= LIMIT) break;
   const abs = join(repo, c.file);
   const original = readFileSync(abs, "utf-8");
@@ -120,8 +148,12 @@ for (const c of candidates) {
     const after = errorsNow();
     const fresh = [...after].filter((e) => !BASE.has(e));
     const external = fresh.filter((e) => fileOf(e) !== c.file && CALL_SITE_ERROR.test(e));
-    // one call site can emit both codes in principle; collapse to the SITE, which is the unit being counted
-    const sites = new Set(external.map((e) => e.slice(0, e.lastIndexOf(","))));
+    // Dedupe by FULL POSITION — file, line AND COLUMN. The first version dropped the column to collapse
+    // "one site, two codes", and thereby collapsed TWO CALLS ON ONE LINE into one. `expect(bucketDisplayRank(
+    // "actu", 28)).toBeLessThan(bucketDisplayRank("private-app", 28))` is two call sites on line 491; there are 16 of
+    // them across 9 lines, and the sweep scored Seam's correct 16 as a +7 over-claim. TS2554 and TS2345 are
+    // mutually exclusive at a given position, so keeping the column costs nothing and stops the undercount.
+    const sites = new Set(external.map((e) => e.replace(/: error TS\d+$/, "")));
     truth = sites.size;
     truthFiles = new Set(external.map(fileOf)).size;
   } finally {
@@ -132,6 +164,11 @@ for (const c of candidates) {
   console.log(`${delta === 0 ? "OK  " : "DIFF"} ${c.name.padEnd(28)} claimed ${String(claim).padStart(4)}  tsc ${String(truth).padStart(4)}  (${delta > 0 ? "+" : ""}${delta})  ${c.file}`);
 }
 
+// Nothing scored means the run proved nothing. Say so and FAIL, rather than printing a 0/0 that reads as a pass.
+if (rows.length === 0) {
+  console.error("ABORT: 0 symbols scored. Either no candidate is a consumed export, or the tool made no claims. Not a result.");
+  process.exit(3);
+}
 const exact = rows.filter((r) => r.delta === 0).length;
 const over = rows.filter((r) => r.delta > 0);
 const under = rows.filter((r) => r.delta < 0);

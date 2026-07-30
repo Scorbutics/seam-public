@@ -30,7 +30,7 @@ export interface Args {
   // --snippets[=N] / --snippets N: embed the cited SOURCE LINE + N lines of context under each citation
   // (shape member lists, and the region render's ## Mechanism steps). OPT-IN — undefined = off, which is the
   // default: --skeleton's whole premise is ~1/3 the tokens, so this may never be spent implicitly.
-  snippets?: number;
+  snippets?: number; snippetsExplicit?: boolean;
   warm?: boolean; warmTop?: number;   // --warm: pre-grow the top-N highest-fan-in hub files to populate the per-node shards (footprint-v1 / coupling-delta-v1), so a later FIRST query on a covered region is served warm. --warm-top N caps the hub set (default 40).
 }
 
@@ -51,7 +51,7 @@ export function parseArgs(argv: string[]): Args {
     const v = argv[i];
     const next = () => argv[++i];
     // `--snippets=N` — the only `=`-form flag, handled here rather than reshaping the whole switch's arity rules.
-    if (v.startsWith("--snippets=")) { const n = parseInt(v.slice("--snippets=".length), 10); a.snippets = Number.isFinite(n) && n >= 0 ? n : SNIPPET_CTX; continue; }
+    if (v.startsWith("--snippets=")) { const n = parseInt(v.slice("--snippets=".length), 10); a.snippets = Number.isFinite(n) && n >= 0 ? n : SNIPPET_CTX; a.snippetsExplicit = true; continue; }
     switch (v) {
       case "--file": a.file = next(); break;
       case "--git": a.git = next(); break;
@@ -60,7 +60,9 @@ export function parseArgs(argv: string[]): Args {
       case "--repo": a.repo = next(); break;
       // --snippets [N]: bare = SNIPPET_CTX lines of context; a following BARE INTEGER is consumed as N (a flag
       // or a positional never is, so `--snippets --format agent` still parses).
-      case "--snippets": { const n = argv[i + 1]; a.snippets = /^\d+$/.test(n ?? "") ? parseInt(argv[++i], 10) : SNIPPET_CTX; break; }
+      case "--snippets": { const n = argv[i + 1]; a.snippets = /^\d+$/.test(n ?? "") ? parseInt(argv[++i], 10) : SNIPPET_CTX; a.snippetsExplicit = true; break; }
+      // --no-snippets: the opt-OUT, now that snippets are default-on for the reading formats (see below).
+      case "--no-snippets": a.snippets = undefined; a.snippetsExplicit = true; break;
       case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
       case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
       case "--format": a.format = next(); a.formatExplicit = true; break;   // codebase: llm-context (DEFAULT — the full region) | agent (token-budgeted map) | concern | json (raw model) | none (the one-line summary). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
@@ -155,6 +157,19 @@ export function parseArgs(argv: string[]): Args {
   // whole run on a slow backend). Default them OFF (the det skeleton: spine + structural labels + blindspots).
   // `--rank` / `--no-skeleton` forces them back on.
   if (a.format === "llm-context" && a.skeleton === undefined) a.skeleton = true;
+  // SNIPPETS DEFAULT ON for the formats a human or agent READS, because locating without showing only moves the
+  // cost. Measured, `bench/grep-vs-seam` run 2 on cal.com: the Seam arm spent ~40 of its commands re-reading
+  // files Seam had already pinpointed. The reader is capped (MAX_SNIPPET_CITATIONS) so a 247-entry set degrades
+  // to the old output instead of exploding, and `--no-snippets` restores it outright.
+  //
+  // NOT for the machine paths: `json` is a raw model, and --emit-seams/--emit-prompts/--inject-llm/--llm-bridge
+  // are PARSED by the extension and the bridge, so decorating them would corrupt a contract nobody asked to
+  // change. `agent` is included: it is token-budgeted, and the budget is what bounds it.
+  const READS = new Set(["llm-context", "agent", "concern"]);
+  if (!a.snippetsExplicit && a.snippets === undefined && READS.has(a.format)
+      && !a.emitSeams && !a.emitPrompts && !a.injectLlm && !a.llmBridge) {
+    a.snippets = SNIPPET_CTX;
+  }
   // --center is the UNIVERSAL node address (supersedes --anchor-file/--symbol). Expand the FIRST center into the
   // internal anchor so EVERY mode — static footprint (§B), structural shapes (§D), single-anchor + concern grow
   // (§C) — accepts --center. A bare `file` is a MODULE anchor (no symbol); `file#symbol` pins one node. An

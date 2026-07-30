@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { renderAgent } from "../../src/codebase/llm_context.js";
 import { renderConsumerSet, renderImpact } from "../../src/codebase/render/shapes.js";
-import { makeSnippetReader } from "../../src/codebase/render/snippets.js";
+import { makeSnippetReader, snippetsTruncated, MAX_SNIPPET_CITATIONS } from "../../src/codebase/render/snippets.js";
 
 let REPO = "";
 
@@ -195,5 +195,42 @@ describe("snippets in the region render — budget-aware, and never at a mechani
   test("deterministic: same model + same budget + same N renders byte-identically", () => {
     const r = () => renderAgent(agentModel(), { tokenBudget: 40000, snippet: makeSnippetReader(REPO, 2) });
     expect(r()).toBe(r());
+  });
+});
+
+// ── DEFAULT-ON (2026-07-30) ─────────────────────────────────────────────────────────────────────────────────
+//
+// Snippets became default-on for the READING formats because locating without showing only moves the cost:
+// measured in bench/grep-vs-seam run 2, the Seam arm spent ~40 of its commands re-reading files Seam had already
+// pinpointed. These pin the two halves that make default-on safe rather than merely louder.
+describe("the citation cap that makes default-on safe", () => {
+  test("the cap counts DISTINCT citations, so a re-render is free", () => {
+    // THE BUG THIS PINS: the first cap counted CALLS. The budget-aware agent render re-renders at several crop
+    // rungs to find one that fits, so probing consumed the budget and the final pass dropped snippets it had
+    // already decided to keep — step 1 shown, steps 2-12 silently lost. Twelve citations of ONE line must cost
+    // one unit of budget however many times they are rendered.
+    const r = makeSnippetReader(REPO, 2);
+    const first = r("src/orders/computeQuote.ts", 12);
+    expect(first.length).toBeGreaterThan(0);
+    for (let i = 0; i < MAX_SNIPPET_CITATIONS * 3; i++) {
+      expect(r("src/orders/computeQuote.ts", 12)).toEqual(first);   // same citation, still emitted
+    }
+    expect(snippetsTruncated(r)).toBe(false);
+  });
+
+  test("DISTINCT citations past the cap are dropped, and the reader SAYS so", () => {
+    // Its OWN fixture, long enough to hold more distinct citations than the cap. `computeQuote.ts` has 20 lines,
+    // so citations past it hit the EOF guard and — correctly — consume no budget, which made an earlier version
+    // of this test unable to reach the cap at all. The rule being pinned is that only a REAL emitted snippet
+    // spends budget; an unlocated or past-EOF citation is free.
+    writeFileSync(join(REPO, "src/orders/long.ts"),
+      Array.from({ length: MAX_SNIPPET_CITATIONS + 10 }, (_, i) => `const l${i + 1} = ${i + 1};`).join("\n"));
+    const r = makeSnippetReader(REPO, 2);
+    // distinct lines, one per call — the shape of a 247-entry consumer set
+    for (let line = 1; line <= MAX_SNIPPET_CITATIONS; line++) r("src/orders/long.ts", line);
+    expect(snippetsTruncated(r)).toBe(false);
+    expect(r("src/orders/long.ts", MAX_SNIPPET_CITATIONS + 1)).toEqual([]);
+    // the flag is what lets the RENDER explain the tail instead of looking arbitrary
+    expect(snippetsTruncated(r)).toBe(true);
   });
 });

@@ -8,7 +8,7 @@
 // Honest about the floor: resolved members are the verified answer; suggested are leads; the unresolved
 // bucket is "grep these"; noStructure routes the asker away entirely. The two public renderers below fix
 // the direction-specific wording. See grow/project_set.ts.
-import { type SnippetReader } from "./snippets.js";
+import { type SnippetReader, snippetsTruncated, MAX_SNIPPET_CITATIONS } from "./snippets.js";
 // COUNTING UNITS — one shared derivation for every "how many consumers" figure this module prints, so the
 // edge-grained (`consumers`) and file-grained (`contract`) answers to the SAME relationship are named, not
 // merely numbered. See core/units.ts.
@@ -55,6 +55,16 @@ function crossStackTruncationLines(truncs: any[] | undefined): string[] {
       + `; grep -F "${t.value}" for the full set`);
   out.push("");
   return out;
+}
+
+/// Snippets are CAPPED (see render/snippets.ts). Without this line the output looks arbitrary — the first 25
+/// citations carry source text and the rest do not, with nothing saying why. Naming the cap turns an apparent
+/// inconsistency into a documented budget the reader can override.
+function snippetCapLines(sr?: SnippetReader): string[] {
+  return sr && snippetsTruncated(sr)
+    ? ["", `(source text shown for the first ${MAX_SNIPPET_CITATIONS} citations only — the budget cap.`
+      + ` Re-run with \`--snippets\` on a narrower anchor, or \`--no-snippets\` to drop it entirely.)`]
+    : [];
 }
 
 function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string {
@@ -135,6 +145,7 @@ function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string
     for (const c of crossStack) out.push(`- ${c.symbol} (${c.file})  [${c.edgeKind} · via ${c.via}]  {RESOLVED_PARTIAL}`);
     out.push("");
   }
+  out.push(...snippetCapLines(sr));
   out.push(...crossStackTruncationLines(model.crossStackTruncations));
   out.push("## How to use",
     `COUNTING UNIT: one entry = one ${L.unit}, so \`resolved\` counts ${L.unit}s, NOT ${L.nounSg}s or files —`,
