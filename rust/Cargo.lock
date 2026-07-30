@@ -1119,6 +1119,7 @@ name = "seam-scan"
 version = "0.0.0"
 dependencies = [
  "once_cell",
+ "rayon",
  "regex",
  "seam-couple",
  "seam-embed",

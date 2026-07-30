@@ -5,6 +5,7 @@
 //! callsite index; the receiver logic is the same, just assembled here.
 
 use crate::graph::{make_graph, GraphEdge, GraphNode, ResolvedGraph};
+use rayon::prelude::*;
 use crate::receiver_types::factory_receiver_type;
 use crate::util::{complexity, kind_for, read};
 use seam_fs::{join, normpath, stem};
@@ -142,12 +143,21 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
         self_kinds: &'static [&'static str],
         sites: Vec<CallSite>,
     }
-    let mut pending: Vec<Pending> = Vec::new();
-    for rel in &candidates {
+    // PARALLEL over candidate files. Each iteration is a pure function of (repo, rel, methods, owner) into one
+    // optional `Pending` — the loop's only mutation was the push — so the work fans out cleanly. The remaining
+    // shared state is `file_facts`' memo, whose lock is held only around a map get/insert; two threads missing
+    // the same file race to parse it once each, which is wasted work but not wrong.
+    //
+    // ORDER IS PRESERVED, and that is not incidental: node ids are assigned by first encounter downstream, so a
+    // reordered `pending` would not merely shuffle the output, it would RELABEL every node. `par_iter().
+    // filter_map().collect()` keeps input order.
+    let pending: Vec<Pending> = candidates
+        .par_iter()
+        .filter_map(|rel| {
         if normpath(&join(repo, rel)) == anchor_abs {
-            continue;
+            return None;
         }
-        let Some(facts) = file_facts(repo, rel) else { continue };
+        let Some(facts) = file_facts(repo, rel) else { return None };
         let sites: Vec<CallSite> = facts.0.iter().filter(|s| methods.contains(&s.method)).cloned().collect();
         if !sites.is_empty() {
             let inst = if owner.is_some() { facts.1.clone() } else { HashMap::new() };
@@ -168,8 +178,8 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                     let ctx_for_factory = match &lazy_ctx {
                         Some(c) => c,
                         None => {
-                            let Some((t2, l2)) = read(repo, rel) else { continue };
-                            let Some(c) = Ctx::parse(&t2, &l2) else { continue };
+                            let Some((t2, l2)) = read(repo, rel) else { break };
+                            let Some(c) = Ctx::parse(&t2, &l2) else { break };
                             lazy_ctx = Some(c);
                             lazy_ctx.as_ref().unwrap()
                         }
@@ -179,7 +189,7 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                     }
                 }
             }
-            pending.push(Pending {
+            return Some(Pending {
                 rel: rel.clone(),
                 units: facts.2.clone(),
                 inst,
@@ -189,7 +199,9 @@ pub fn build_callsite_graph(repo: &str, anchor_file: &str, symbol: &str, opts: &
                 sites,
             });
         }
-    }
+        None
+        })
+        .collect();
 
     // provenance context
     let family: Option<HashSet<String>> = owner.as_ref().map(|o| index.subclass_family(o));
