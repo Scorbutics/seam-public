@@ -69,14 +69,22 @@ fn onnx_path(dir: &PathBuf) -> Option<PathBuf> {
     // WHICH WEIGHTS decides whether the two engines agree. transformers.js loads the INT8-quantized file by
     // default, and int8 kernels differ between execution providers (onnxruntime-web/WASM vs native ORT) by
     // ~1e-2 on a cosine — enough to swap near-ties in the ranking, which is the only thing the grow reads.
-    // fp32 is the DEFAULT; `SEAM_EMBED_QUANTIZED=1` selects int8. Both engines must make the SAME choice.
-    // FP32 BY DEFAULT. int8 inference is shape-dependent: the same text embeds differently depending on how
-    // long its longest batch-mate was, which moved 3 of the top 10 intent-ranked defs (top-10 overlap 7/10,
-    // max rank shift 24 of 120) — and bandTiers splits spine/supporting/off BY RANK, so it changed which defs
-    // the answer called the spine. fp32 is padding-invariant (asserted in tests) and measured at +8% time /
-    // +10% RSS on a cold Keycloak embed, paid once per repo because the vectors are disk-cached.
-    // `SEAM_EMBED_QUANTIZED=1` opts back into int8 for anyone who wants the speed and not the stability.
-    let quantized = std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("1");
+    // int8 is the DEFAULT; `SEAM_EMBED_QUANTIZED=0` selects fp32. Both engines must make the SAME choice.
+    // INT8 BY DEFAULT — and this is a KNOWN, MEASURED trade, not an oversight. See `a_vector_does_not_depend_
+    // _on_its_batch_mates`: int8 inference is shape-dependent, so a text embeds differently depending on its
+    // batch-mates, which moves 3 of the top 10 intent-ranked defs and therefore changes which defs the answer
+    // calls the spine. fp32 fixes that exactly.
+    //
+    // fp32 was made the default and REVERTED, because the cost was mis-measured. On ONE `embedScoreDefs` call
+    // it is +8% (470 MB/14.7s -> 518 MB/15.9s), which is what the switch was argued on. But the GROW densifies
+    // the field once per wave, so the cost compounds: the same Keycloak grow goes 42.6s -> 94.3s, 2.2x, and
+    // cold it exceeds the 300s the stress harness allows. Paying 2.2x on every intent grow to stabilise a
+    // ranking is not a trade worth making silently.
+    //
+    // `SEAM_EMBED_QUANTIZED=0` selects fp32 for a caller who wants reproducible scores and can afford it. The
+    // real fix is to stop re-embedding per wave (the disk cache should make densify near-free once warm), at
+    // which point fp32's cost collapses back toward the +8% and the default should flip.
+    let quantized = std::env::var("SEAM_EMBED_QUANTIZED").as_deref() != Ok("0");
     let order: &[&str] = if quantized {
         &["onnx/model_quantized.onnx", "onnx/model.onnx", "model_quantized.onnx", "model.onnx"]
     } else {
@@ -405,12 +413,12 @@ mod tests {
         let unchunked = worst(&embed_one_batch(&texts));
         let chunked = worst(&embed_many(&texts));
 
-        if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("1") {
-            // opted back into int8: drift is expected; chunking must not amplify it
+        if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() != Ok("0") {
+            // int8 (the default): drift is expected; chunking must not amplify it
             assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
             return;
         }
-        assert!(unchunked < 1e-5, "the DEFAULT must be padding-invariant, saw {unchunked} — is fp32 still the default?");
+        assert!(unchunked < 1e-5, "fp32 must be padding-invariant, saw {unchunked}");
         assert!(chunked < 1e-5, "chunked embedding must be exact under fp32, saw {chunked}");
     }
 
