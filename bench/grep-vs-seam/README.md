@@ -24,7 +24,9 @@ what I could not resolve".
   that path, so a file named `.seam.md` would tell it what the run is about. Readable names are applied at
   scoring time only. `A` = grep/rg, `B` = seam.
 - Symmetric documentation. Both arms get standard tool knowledge plus `--help`. Asymmetric doc quality is the
-  sneakiest bias vector.
+  sneakiest bias vector. **This control FAILED in run 1** — `seam --help` did not exist, so the Seam arm read
+  the engine's source to find the flags. See "A bias control that was broken the whole time" below. Before any
+  future run, VERIFY the control holds rather than assuming it: run `seam --help` and check it answers.
 - Ripgrep, not crippled grep, and no step cap. Capping favours whichever tool is faster — that is choosing the winner.
 - No LLM judge. `score.ts` is mechanical. An LLM asked "which is better" carries the bias we are controlling.
 - Cases fixed in `cases.json` BEFORE any result was seen, including one deliberately grep-favourable case.
@@ -46,7 +48,11 @@ record WHY: the tool's output did not answer, or the agent did not think to use 
    `results/<case>.<arm>.md` and the tool transcript to `results/<case>.<arm>.trace`.
 3. `bun score.ts <case> results/<case>.truth.txt results/<case>.A.md results/<case>.B.md \
       results/<case>.A.trace results/<case>.B.trace`
-4. Write up the two things the script deliberately does NOT score, naming them as judgement: whether a
+4. Record WALL CLOCK per arm. The traces carry no timing, so a run that does not note it leaves that axis
+   permanently unrecomputable (run 1 did exactly this).
+5. Report the `score.ts` series as THE result. Live subagent usage, if collected, is a separate labelled
+   column — and if it disagrees with the traces, investigate before publishing.
+6. Write up the two things the script deliberately does NOT score, naming them as judgement: whether a
    declared gap was ACCURATE, and which levers arm B reached for.
 
 ## Keeping it honest over time
@@ -57,19 +63,63 @@ record WHY: the tool's output did not answer, or the agent did not think to use 
 
 ## Run 1 results (2026-07-30)
 
+### The comparable series (recomputed from the stored artifacts by `score.ts`)
+
+THIS is the baseline to compare future runs against, because it can be RE-DERIVED from what is in `results/`.
+Regenerate with the `score.ts` line in "Running it" above.
+
+| case | grep tok | seam tok | grep calls | seam calls | recall | silent misses |
+|---|---|---|---|---|---|---|
+| private-app, single-hop | **4,820** | 5,939 | **42** | 52 | 81/81 both | 0 both |
+| keycloak, cross-language | 7,664 | **7,977**<sup>+</sup> | 55 | **46** | no ground truth | — |
+| cal.com, multi-hop | 9,965 | **9,049** | **59** | 60 | no ground truth | — |
+
+<sup>+</sup> grep is lower on tokens here but took 9 MORE tool calls.
+
+Tokens are `score.ts`'s proxy: `(answer + trace) / 4` characters. It is a PROXY, and its absolute value is not
+an API bill — but it is mechanical, reproducible, and applied identically to both arms, which is what a baseline
+needs. Tool calls are counted from `^\$ ` lines in the trace.
+
+Read as: Seam lost the single-hop case on both cost axes; won tool calls on cross-language; and on the hardest
+case (cal.com multi-hop) was **level on calls and cheaper on tokens**. Completeness tied wherever ground truth
+existed.
+
+### Live-usage figures (NOT recomputable — recorded for the record only)
+
+The first write-up of this run reported the subagents' live token usage and a tool-call count taken from the
+run rather than the traces. Those figures are kept here because they were what was observed, but they must NOT
+be used as the baseline: nothing in `results/` can reproduce them, and the call counts CONTRADICT the traces.
+
 | case | grep tok | seam tok | grep calls | seam calls | grep wall | seam wall |
 |---|---|---|---|---|---|---|
-| private-app, single-hop | **46,818** | 55,793 | **24** | 31 | **281s** | 323s |
-| keycloak, cross-language | **90,099** | 93,804 | 58 | **48** | **347s** | 670s |
-| cal.com, multi-hop | **128,852** | 145,539 | **62** | 66 | **456s** | 593s |
+| private-app, single-hop | 46,818 | 55,793 | 24 | 31 | 281s | 323s |
+| keycloak, cross-language | 90,099 | 93,804 | 58 | 48 | 347s | 670s |
+| cal.com, multi-hop | 128,852 | 145,539 | 62 | 66 | 456s | 593s |
 
-Seam lost on tokens 3/3 and on wall clock 3/3; it won tool-call count once. Recall and silent misses tied
-where ground truth was mechanical (private-app: 81/81 both, 0 silent misses both).
+**The call counts in that table are wrong.** The traces say 42/52, 55/46 and 59/60. The correction also flips a
+conclusion that was published off it: "Seam lost on tokens 3/3" is false on the recomputable measure — it lost
+2 of 3 and won the hardest case. Wall clock has no recomputable counterpart (the traces carry no timing), so
+Seam losing 3/3 there stands but cannot be re-derived either; time it explicitly on the next run.
 
-**A hypothesis this killed.** The expectation was that grep's cost would scale steeply with structural
-complexity while a structural tool stayed flat. It did not: grep 2.75x from easiest to hardest case, Seam
-2.6x. Nearly the same slope. Whatever Seam's value is, "it gets cheaper than grep as the question gets
-harder" is not currently it.
+LESSON, and the reason this section exists rather than being quietly overwritten: a benchmark whose headline
+numbers cannot be recomputed from its own stored artifacts is not re-runnable, whatever its README claims. Every
+future run reports the `score.ts` series FIRST. If live usage is also recorded, it goes in a separate, clearly
+labelled column, and any disagreement with the traces is investigated before it is published.
+
+### A bias control that was broken the whole time
+
+"Both arms get standard tool knowledge plus `--help`" is listed above as an eliminated bias. It was not
+eliminated: `seam --help` DID NOT EXIST. It hit an unknown-flag warning and the run died with "No diff source
+given". All three Seam arms opened with it, and then read the engine's own source to recover the flag surface
+(`grep -n '"--' src/cli/decompose.ts`, `sed -n 380,500p …`). First real query at call 8 of 52 (private-app), 9 of 60
+(cal.com), 6 of 46 (keycloak).
+
+So run 1's Seam arm was measured with a documentation handicap the harness explicitly claims to control for,
+and 5-8 calls per run of CLI archaeology were charged to Seam as though they were analysis. `--help` now exists.
+Run 2 is therefore NOT a clean A/B against run 1 -- it changes the resolution fix, the contract enrichment, and
+discoverability together. That is accepted deliberately: run 1 was not a clean measurement of Seam's value
+either, and leaving a known-broken control in place to protect a comparison would be measuring the wrong thing
+twice.
 
 ### DEFECT FOUND (verified in source, not just reported)
 
