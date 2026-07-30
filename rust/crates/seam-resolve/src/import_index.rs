@@ -3,7 +3,7 @@
 //! scan into one file behind module-global caches; here the index is a plain immutable value the `Workspace`
 //! owns and builds once. Language-agnostic: it dispatches to each file's provider for its imports.
 
-use seam_lang::{provider_for, DefaultImport, ImportRef, NamespaceImport};
+use seam_lang::{provider_for, DefaultImport, ImportRef, NamespaceImport, StarReexport};
 use std::collections::{HashMap, HashSet};
 
 /// One source file's import contribution.
@@ -14,6 +14,9 @@ pub struct FileImports {
     pub refs: Vec<ImportRef>,
     pub ns: Vec<NamespaceImport>,
     pub defs: Vec<DefaultImport>,
+    /// `export * from "m"` — a barrel that forwards every name of `m` under its own name. Nameless, so it cannot
+    /// live in `refs`; the module-consumer walk consults it to follow the hop.
+    pub stars: Vec<StarReexport>,
 }
 
 /// binding name → the files importing something under that name; plus the per-file contributions, and the
@@ -40,8 +43,9 @@ impl ImportIndex {
                 let refs = provider.imports(&text);
                 let ns = provider.namespace_imports(&text);
                 let defs = provider.default_imports(&text);
+                let stars = provider.star_reexports(&text);
                 let norm = seam_fs::normpath(&format!("{repo}/{rel}"));
-                Some(FileImports { rel: rel.clone(), norm, refs, ns, defs })
+                Some(FileImports { rel: rel.clone(), norm, refs, ns, defs, stars })
             })
             .collect();
         let mut files = Vec::new();

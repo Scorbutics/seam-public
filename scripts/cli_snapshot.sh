@@ -98,6 +98,14 @@ run q_contract2 --repo "$R" --scan --query contract --anchor-file "$A" --data-co
 #     inner property, and "imported but never invoked" asserted about a symbol used at 4 sites.
 run q_contract_provides --repo test/fixtures/chain-repo --scan --query contract --anchor-file src/b.ts --data-coupling floor
 run q_contract_recv     --repo test/fixtures/crossstack-repo --scan --query contract --anchor-file lib/db.ts --data-coupling floor
+# RE-EXPORT BARRELS. Added because this gate showed ZERO diffs for a fix that moved real counts on private-app: not one
+# case in this file contained a barrel, so the whole mechanism sat outside the guarantee while the shapes it
+# breaks were all "covered". `barrel-repo` makes each of the three forms the only path to a number — named
+# (`export { x } from`), RENAMING (`export { a as b } from`, where the call sites spell `b`), and STAR
+# (`export * from`, which names nothing at all and so was structurally invisible). See its README.
+run q_contract_barrel  --repo test/fixtures/barrel-repo --scan --query contract --anchor-file src/decl.ts --data-coupling floor
+run q_consumers_barrel --repo test/fixtures/barrel-repo --scan --query consumers \
+                       --anchor-file src/decl.ts --symbol mapTasks --data-coupling floor
 run q_depth2    --repo "$R" --scan --anchor-file "$A" --symbol "$S" --depth 2 --data-coupling floor
 # ...and a case where --depth ACTUALLY CHANGES THE ANSWER. It does not above: measured, q_depth1, q_depth2,
 # q_reach, q_set and expand are all BYTE-IDENTICAL, so the "environment ripple" the comment above claims to

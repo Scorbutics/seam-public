@@ -69,7 +69,8 @@ export async function checkout(total: number): Promise<Receipt> {
 }
 `);
 
-  // imports auditHook but never calls it; ALSO declares its own \`charge\` → the shadowed-name gap
+  // imports auditHook but never calls it; ALSO declares its own top-level `charge`, which has NOTHING to do
+  // with the export of the same name — this file never imports it. Its `charge(1)` must not be counted.
   w("src/registry.ts", `import { auditHook } from "./api";
 import type { Receipt } from "./api";
 
@@ -80,6 +81,19 @@ function charge(n: number) { return n; }
 export function registered(): number { return hooks.length + charge(1); }
 
 export function receiptOf(): Receipt { return { id: "y" }; }
+`);
+
+  // THE LIVE SHADOWING CASE: this file DOES import `charge` and nests a declaration of the same name inside a
+  // function scope. That is legal TS (the top-level form would be a duplicate-binding error), and it is the one
+  // shape a name-grained call-site count can still inflate — so the gap must name this file.
+  w("src/shadow.ts", `import { charge } from "./api";
+
+export function discounted(total: number): number {
+  function charge(n: number) { return n * 2; }   // shadows the import inside THIS scope only
+  return charge(total);
+}
+
+export function plain(total: number): boolean { return charge(total, "EUR"); }
 `);
 
   contract = await projectContract(REPO, "src/api.ts");
@@ -117,11 +131,11 @@ describe("declared half — the signature a caller has to satisfy", () => {
 describe("observed half — what the call sites actually do", () => {
   test("call sites are EDGE-grained, and the arity histogram shows the unused tail", () => {
     const ob = provided("charge").observed;
-    // `src/checkout.ts` calls it twice; `src/registry.ts` calls its OWN local `charge` once, which is counted
-    // too (see the gap test below) — so 3 sites, and the render says so rather than pretending otherwise.
-    expect(ob.callSites).toBe(3);
-    // ascending by argument count: 1 arg twice (checkout + registry's local), 2 args once
-    expect(ob.arity).toEqual([[1, 2], [2, 1]]);
+    // `src/checkout.ts` calls it twice and `src/shadow.ts` twice. `src/registry.ts` calls its own unrelated
+    // local `charge` — NOT counted, because it never imports the export (see the test below).
+    expect(ob.callSites).toBe(4);
+    // ascending by argument count: 1 arg twice, 2 args twice
+    expect(ob.arity).toEqual([[1, 2], [2, 2]]);
     // THE ACTIONABLE FACT: 3 declared parameters, no call site passes more than 2 — the 3rd is unexercised.
     expect(Math.max(...ob.arity.map(([argc]: number[]) => argc))).toBe(2);
   });
@@ -147,11 +161,21 @@ describe("observed half — what the call sites actually do", () => {
 });
 
 describe("the observed half declares its own grain", () => {
-  test("a consuming file that declares the same name locally is reported as a GAP", () => {
+  test("a consuming file that shadows an IMPORTED name is reported as a GAP", () => {
     const g = (contract.gaps ?? []).find((x: any) => x.mechanism === "contract-shadowed-name");
     expect(g).toBeDefined();
     // it names the file, so the reader can check the one place the count could be high
-    expect(g.evidence).toContain("src/registry.ts");
+    expect(g.evidence).toContain("src/shadow.ts");
+  });
+
+  test("a same-named local in a file that does NOT import the export is not counted, and not a gap", () => {
+    // `src/registry.ts` declares its own `charge` and imports only `auditHook`. Counting call sites by the
+    // EXPORT name found that unrelated function and charged it to the module's contract — a straight overcount,
+    // and the gap above then pointed at an innocent file. Attributing sites through each consumer's own LOCAL
+    // binding removed the whole class: a file that never imported the name is never scanned for it.
+    const g = (contract.gaps ?? []).find((x: any) => x.mechanism === "contract-shadowed-name");
+    expect(g.evidence).not.toContain("src/registry.ts");
+    expect(provided("charge").consumers.map((c: any) => c.file)).not.toContain("src/registry.ts");
   });
 });
 
@@ -160,8 +184,10 @@ describe("the reproduction command (verify hint)", () => {
     const t = renderContract({ ...contract, noStructure: false } as any);
     const line = t.split("\n").find((l) => l.includes("verify:") && l.includes("charge"));
     expect(line).toBeDefined();
-    // 3 call sites in the fixture (2 in checkout + 1 same-named local in registry) + the declaration
-    expect(line).toContain("expect 4 textual hits");
+    // 4 call sites in the fixture (2 in checkout + 2 in shadow) + the declaration. The repo has MORE textual
+    // hits than that — registry's unrelated local and shadow's nested one — which is exactly the case the
+    // hint's own "a LARGER number means same-named symbols elsewhere" clause exists to explain.
+    expect(line).toContain("expect 5 textual hits");
   });
 
   test("the regex is REAL — literal \\b and \\(, not template-literal escapes", () => {

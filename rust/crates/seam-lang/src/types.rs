@@ -23,6 +23,14 @@ pub struct NamespaceImport {
     pub line: u32,
 }
 
+/// A STAR RE-EXPORT (`export * from "m"`, TS/JS only): only the module `source` and its `line` — there is no
+/// binding name, which is exactly why it cannot be modelled as an `ImportRef`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StarReexport {
+    pub source: String,
+    pub line: u32,
+}
+
 /// A default import (`import X from "m"`, TS/JS only): the `local` binding and the module `source`. Port of
 /// `DefaultImport`.
 #[derive(Clone, Debug, PartialEq, Eq)]

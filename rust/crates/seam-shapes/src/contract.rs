@@ -235,16 +235,20 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
 
         // OBSERVED half. Every consuming file is scanned ONCE for calls to ALL provided names — the consumer
         // lists overlap heavily, so per-symbol scanning would re-parse the same files repeatedly.
+        //
+        // COUNTED BY THE CONSUMER'S OWN NAME FOR IT, not by the export name. A renaming barrel
+        // (`export { computeWeekAnchor as getWeekStartForPreference } from …`) exists precisely so callers can
+        // spell a name differently, and matching the export name in their source found zero of four real calls —
+        // measured on private-app, 15 claimed against tsc's 19. So the walk hands back each consumer's LOCAL
+        // binding and every fact is attributed back through it.
         let names: HashSet<String> = provides.iter().map(|p| p.symbol.clone()).collect();
-        let mut consumer_files: Vec<String> = Vec::new();
-        let mut seen_cf: HashSet<String> = HashSet::new();
-        for p in &provides {
-            for c in &p.consumers {
-                if seen_cf.insert(normpath(&c.file)) {
-                    consumer_files.push(c.file.clone());
-                }
-            }
-        }
+        // (consumer file, local name → the member it binds). One file can bind one member twice (imported
+        // directly AND through an aliasing barrel), which is why this is a map keyed by local.
+        let consumer_files: Vec<(String, HashMap<String, String>)> = Workspace::cached(repo)
+            .module_consumer_locals(module_file, &names)
+            .into_iter()
+            .map(|(rel, pairs)| (rel, pairs.into_iter().map(|(member, local)| (local, member)).collect()))
+            .collect();
         // name → argc → sites. BTreeMap so the arity histogram comes out ascending without a sort, and so the
         // result does not depend on hash order (the ordering rule the whole core follows).
         let mut hist: HashMap<String, std::collections::BTreeMap<usize, usize>> = HashMap::new();
@@ -253,19 +257,24 @@ pub fn project_contract(repo: &str, module_file: &str) -> ModuleContract {
         // consuming files that declare a same-named symbol of their OWN — the one case where name-grained
         // counting can overcount, detected from the parse already being done rather than assumed away.
         let mut shadowed: Vec<String> = Vec::new();
-        for cf in &consumer_files {
+        for (cf, local_to_member) in &consumer_files {
             let Some(ctx) = seam_scan::read(repo, cf).and_then(|(t, g)| seam_lang::Ctx::parse(&t, &g)) else {
                 unparsed += 1;
                 continue;
             };
-            for f in seam_lang::ast::call_facts(&ctx, &names) {
+            let locals: HashSet<String> = local_to_member.keys().cloned().collect();
+            for f in seam_lang::ast::call_facts(&ctx, &locals) {
+                // attribute the site back to the EXPORT the local binds — two locals can name one member
+                let Some(member) = local_to_member.get(&f.name) else { continue };
                 if f.recv {
-                    *recv.entry(f.name).or_insert(0) += 1;
+                    *recv.entry(member.clone()).or_insert(0) += 1;
                 } else {
-                    *hist.entry(f.name).or_default().entry(f.argc).or_insert(0) += 1;
+                    *hist.entry(member.clone()).or_default().entry(f.argc).or_insert(0) += 1;
                 }
             }
-            if seam_lang::ast::named_units(&ctx).iter().any(|u| names.contains(&u.name)) {
+            // shadowing is judged on the LOCAL too: a file declaring its own `getWeekStartForPreference` is what
+            // would make ITS counts high, whatever the export is called upstream.
+            if seam_lang::ast::named_units(&ctx).iter().any(|u| locals.contains(&u.name)) {
                 shadowed.push(cf.clone());
             }
         }

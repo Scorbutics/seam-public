@@ -7,7 +7,7 @@
 //!
 //! A provider is the factory for its resolver, so adding a language is: one small module implementing these.
 
-use crate::types::{DefaultImport, ImportRef, NamespaceImport};
+use crate::types::{DefaultImport, ImportRef, NamespaceImport, StarReexport};
 
 /// A module's DEFAULT export slot: the local declaration that fills it (`None` = unprovable/anonymous) and the
 /// raw slot expression (`None` = the module has no default export).
@@ -47,6 +47,16 @@ pub trait LanguageProvider: Send + Sync {
     }
     /// Namespace imports (`import * as ns from "m"`) — TS/JS only; other languages have none.
     fn namespace_imports(&self, text: &str) -> Vec<NamespaceImport> {
+        let _ = text;
+        Vec::new()
+    }
+    /// STAR RE-EXPORTS (`export * from "m"`) — the module sources whose every export this file forwards under its
+    /// own name. TS/JS only.
+    ///
+    /// Distinct from `imports`, which is name-keyed and therefore structurally unable to represent this: a star
+    /// barrel names nothing. cal.com has 343 of them, so a reverse-import walk that ignores the mechanism does not
+    /// merely miss an edge case — it silently loses every consumer behind a package's `index.ts`.
+    fn star_reexports(&self, text: &str) -> Vec<StarReexport> {
         let _ = text;
         Vec::new()
     }

@@ -10,6 +10,11 @@ static IMPORT_RE: Lazy<Regex> = Lazy::new(|| {
 });
 static REEXPORT_RE: Lazy<Regex> =
     Lazy::new(|| Regex::new(r#"(?s)export\s+(?:type\s+)?\{([^}]*)\}\s*from\s*["']([^"']+)["']"#).unwrap());
+// `export * from "m"` / `export * as ns from "m"`. The `as ns` form is DELIBERATELY excluded from the star set:
+// it binds the module under a name and re-exports THAT name, so its members are reached as `ns.member`, not by
+// their own names — treating it as a transparent forward would invent bindings no caller can write.
+static STAR_REEXPORT_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?m)^[ \t]*export\s+\*\s+from\s*["']([^"']+)["']"#).unwrap());
 static DYNIMPORT_RE: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r#"(?s)(?:const|let|var)\s+(?:\{([^}]*)\}|([A-Za-z_$][\w$]*))\s*=\s*(?:await\s+)?import\s*\(\s*["']([^"']+)["']\s*\)"#).unwrap()
 });
@@ -65,6 +70,13 @@ fn emit(text: &str, named: &str, source: &str, idx: usize, reexport: bool, out: 
     }
 }
 
+pub fn star_reexports(text: &str) -> Vec<crate::types::StarReexport> {
+    STAR_REEXPORT_RE
+        .captures_iter(text)
+        .map(|m| crate::types::StarReexport { source: m[1].to_string(), line: line_at(text, m.get(0).unwrap().start()) })
+        .collect()
+}
+
 pub fn imports(text: &str) -> Vec<ImportRef> {
     let mut out = Vec::new();
     for m in IMPORT_RE.captures_iter(text) {
@@ -114,6 +126,18 @@ mod tests {
                 "z|z|3|./z|false",   // single-binding dynamic import
             ]
         );
+    }
+
+    #[test]
+    fn star_reexports_only_the_transparent_form() {
+        let src = "export * from \"./a\";\nexport * as ns from \"./b\";\nexport { c } from \"./c\";\nimport * as d from \"./d\";\n// export * from \"./commented\"\n";
+        let got: Vec<String> = star_reexports(src).iter().map(|s| format!("{}|{}", s.source, s.line)).collect();
+        // ONLY `export * from`. `export * as ns from` binds a namespace, so its members are reached as `ns.member`
+        // and never by their own names — following it as a transparent hop would invent bindings no caller can
+        // write. The named re-export and the namespace IMPORT belong to the other two passes.
+        assert_eq!(got, vec!["./a|0"]);
+        // and the star form must not also leak into `imports()`, which is name-keyed
+        assert!(imports(src).iter().all(|r| r.source.as_deref() != Some("./a")));
     }
 }
 

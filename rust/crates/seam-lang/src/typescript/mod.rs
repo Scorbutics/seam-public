@@ -83,6 +83,9 @@ impl LanguageProvider for TypeScriptProvider {
     fn namespace_imports(&self, text: &str) -> Vec<crate::types::NamespaceImport> {
         imports::namespace_imports(text)
     }
+    fn star_reexports(&self, text: &str) -> Vec<crate::types::StarReexport> {
+        imports::star_reexports(text)
+    }
     fn default_imports(&self, text: &str) -> Vec<crate::types::DefaultImport> {
         imports::default_imports(text)
     }

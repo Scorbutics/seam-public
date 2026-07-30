@@ -20,7 +20,7 @@ mod typescript;
 pub use provider::{LanguageProvider, ModuleResolver, NullResolver};
 pub use treesitter::Ctx;
 pub use tree_sitter::Node;
-pub use types::{DefaultImport, ImportRef, NamespaceImport, TableAccess};
+pub use types::{DefaultImport, ImportRef, NamespaceImport, StarReexport, TableAccess};
 
 static PROVIDERS: &[&dyn LanguageProvider] = &[
     &java::JAVA,

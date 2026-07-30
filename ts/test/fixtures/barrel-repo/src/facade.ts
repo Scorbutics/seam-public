@@ -1,0 +1,1 @@
+export { mapTasks } from "./service"
