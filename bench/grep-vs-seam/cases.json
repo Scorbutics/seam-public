@@ -1,0 +1,41 @@
+{
+  "_comment": "FIXED BEFORE ANY RESULTS WERE SEEN. Adding a case after seeing an outcome is how a benchmark becomes an advert — append with a dated note saying why, never edit one to fit a result.",
+  "cases": [
+    {
+      "id": "private-app-cn-consumers",
+      "repo": "~/dev/private-app",
+      "kind": "single-hop, single-language, small repo",
+      "task": "Which components use the `cn` class-name helper, and what would break if its signature changed?",
+      "anchor": "lib/utils.ts#cn",
+      "ground_truth": "exhaustive: small enough to enumerate by hand and cross-check with tsc",
+      "why": "Seam should win on precision here (grep matches `cn` in strings/comments/other identifiers), but the flow is ONE hop so grep is not badly disadvantaged."
+    },
+    {
+      "id": "grep-favourable-unique-symbol",
+      "repo": "~/dev/private-app",
+      "kind": "DELIBERATELY GREP-FAVOURABLE",
+      "task": "Where is `IntegrityReport` defined and used?",
+      "anchor": "lib/types/index.ts#IntegrityReport",
+      "ground_truth": "exhaustive by hand",
+      "why": "A long, unique, unambiguous identifier in one language, one hop. grep should do very well. Included so the suite cannot come out one-sided by construction — if Seam loses here, that is the honest result."
+    },
+    {
+      "id": "cal-booking-flow",
+      "repo": "~/dev/cal.com",
+      "kind": "multi-hop TS flow in a 10k-file monorepo",
+      "task": "How does a booking get created end to end — which modules participate, and where does it hit the database?",
+      "anchor": null,
+      "ground_truth": "LSP/tsc-assisted for the call edges; DB writes verified against the prisma schema",
+      "why": "grep's home ground (one language) but multi-hop, so the agent LOOP cost is what is really being measured."
+    },
+    {
+      "id": "keycloak-cross-language",
+      "repo": "~/dev/keycloak",
+      "kind": "CROSS-LANGUAGE, 12.9k files",
+      "task": "How does the admin UI read and update a realm — trace it from the TypeScript admin client to the Java server side.",
+      "anchor": "server-spi/src/main/java/org/keycloak/models/RealmModel.java#RealmModel",
+      "ground_truth": "partial and DECLARED as partial: the Java side is verifiable, the TS-to-Java hop is by REST route and is exactly what neither tool can resolve by symbol",
+      "why": "Where a symbol graph goes dark. Also the case where a HONEST blindspot is worth more than a confident wrong answer."
+    }
+  ]
+}
