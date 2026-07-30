@@ -144,7 +144,41 @@ pub fn available() -> bool {
 /// Embed a batch: tokenize → run → MEAN-POOL over the attention mask → L2-normalise. That pooling is the
 /// contract `pipeline(..., { pooling: "mean", normalize: true })` implements on the TS side; changing it would
 /// change every score while still "working".
+/// How many texts go into ONE forward pass.
+///
+/// MEASURED, not guessed. Embedding is called with every cache MISS at once -- up to the 800-def prefilter
+/// cap -- and one pass allocates activations proportional to `batch x heads x seq^2`. On Keycloak (800
+/// misses, seq 199, MiniLM 6 layers x 12 heads) a single attention matrix is already ~1.5 GB and the pass
+/// peaked at 7.2 GB, which on a 15 GB machine is what turned a slow grow into an OOM kill. Chunked: the same
+/// call now peaks at 470 MB (15x less) and the whole grow at 1.9 GB instead of 14.2 GB.
+const EMBED_BATCH: usize = 32;
+
+/// Embed a batch: tokenize -> run -> MEAN-POOL over the attention mask -> L2-normalise. That pooling is the
+/// contract `pipeline(..., { pooling: "mean", normalize: true })` implements on the TS side; changing it would
+/// change every score while still "working".
+///
+/// Chunked at `EMBED_BATCH`. Padding is per-CHUNK (`seq` is the chunk's own longest text), so chunking also
+/// stops one 199-token def from padding 799 short ones. NOTE it therefore changes vectors slightly -- but a
+/// vector already depended on its batch-mates before this (see `chunk_tests`), so the baseline was never
+/// stable; this narrows the padding, it does not introduce the sensitivity.
 pub fn embed_many(texts: &[String]) -> Vec<Vec<f32>> {
+    if texts.len() <= EMBED_BATCH {
+        return embed_one_batch(texts);
+    }
+    let mut out: Vec<Vec<f32>> = Vec::with_capacity(texts.len());
+    for chunk in texts.chunks(EMBED_BATCH) {
+        let got = embed_one_batch(chunk);
+        // the caller zips `missing` with this result POSITIONALLY, so a short return would misattribute every
+        // vector after the gap -- worse than returning nothing.
+        if got.len() != chunk.len() {
+            return Vec::new();
+        }
+        out.extend(got);
+    }
+    out
+}
+
+fn embed_one_batch(texts: &[String]) -> Vec<Vec<f32>> {
     if texts.is_empty() {
         return Vec::new();
     }
@@ -335,5 +369,47 @@ mod tests {
     fn cosine_of_normalised_vectors_is_the_dot_product() {
         assert!((cosine(&[1.0, 0.0], &[1.0, 0.0]) - 1.0).abs() < 1e-6);
         assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
+    }
+
+    /// A vector DEPENDS ON ITS BATCH-MATES, and chunking did not introduce that.
+    ///
+    /// `encode_batch` pads every text to the batch's longest and the pooled output moves with that padding:
+    /// measured, one pass over 70 mixed-length texts vs one text at a time differs by ~0.03 per component on
+    /// vectors whose components are ~0.05. The batch is "whatever missed the cache this run", so an intent
+    /// score is already not reproducible across runs. This pins the FACT rather than a false invariant --
+    /// chunking must stay within the drift the old batching had. If the padding sensitivity is ever fixed,
+    /// the first assert fails loudly and this should tighten to exact equality.
+    #[test]
+    fn chunking_drifts_no_more_than_the_batching_it_replaces() {
+        if !available() {
+            return; // no embedding runtime here
+        }
+        let texts: Vec<String> = (0..70)
+            .map(|i| if i % 7 == 0 {
+                format!("function handlePaymentIntent{i} validates the booking, charges the card, and writes the ledger row for reconciliation")
+            } else {
+                format!("fn f{i}")
+            })
+            .collect();
+        let single: Vec<Vec<f32>> = texts.iter().map(|t| embed_one_batch(std::slice::from_ref(t)).pop().unwrap_or_default()).collect();
+        let worst = |a: &[Vec<f32>]| -> f32 {
+            a.iter().zip(&single).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0f32, f32::max)
+        };
+        let unchunked = worst(&embed_one_batch(&texts));
+        let chunked = worst(&embed_many(&texts));
+        assert!(unchunked > 0.0, "padding stopped mattering — tighten this to exact equality");
+        assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
+    }
+
+    #[test]
+    fn every_input_gets_its_own_vector_across_chunk_boundaries() {
+        if !available() {
+            return;
+        }
+        let texts: Vec<String> = (0..EMBED_BATCH * 2 + 5).map(|i| format!("fn symbol{i}")).collect();
+        let out = embed_many(&texts);
+        assert_eq!(out.len(), texts.len());
+        assert!(out.iter().all(|v| !v.is_empty()));
+        assert_ne!(out[0], out[EMBED_BATCH + 1], "distinct inputs collapsed to one vector");
     }
 }

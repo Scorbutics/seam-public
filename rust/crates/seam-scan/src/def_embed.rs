@@ -96,7 +96,7 @@ pub fn embed_score_defs(repo: &str, intent: &str, files: Option<&[String]>) -> V
     // recall — name the knob. (A footprint-scoped run is already bounded, so skip it there.)
     if !scoped && defs.len() >= def_limit() {
         eprintln!(
-            "[anchor] WARNING: def enumeration hit the {}-def cap (alphabetical) — modules sorted after the cut are NOT recalled. Raise it with SEAM_DEF_LIMIT=<n>.",
+            "[anchor] WARNING: def enumeration hit the {}-def cap (alphabetical) — modules sorted after the cut are NOT recalled.",
             def_limit()
         );
     }

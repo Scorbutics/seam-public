@@ -28,7 +28,7 @@ graph") — but on a hub anchor the seed IS the answer, so the cap does nothing 
 Measured, same anchor, coupling on: `--max-nodes 5` -> 14.4 GB, `20` -> 14.2 GB, `80` -> 14.4 GB. Memory is
 **independent of the cap**.
 
-## DEFECT 2 — per-node memory ~2 MB, so a hub anchor exhausts the machine
+## DEFECT 2 — FIXED: one unbatched embed pass held 7.2 GB
 
 6,365 nodes -> 14.2 GB RSS. For contrast, on the SAME anchor a plain `--scan` decompose emits **9,926
 symbols in 805 MB**, i.e. 18x less memory for a larger result. So it is not the graph size as such — the grow
@@ -46,6 +46,48 @@ Memory tracks the anchor's consumer set, not the answer:
 Coupling roughly doubles the small case but is NOT the cause; the large case is ~14 GB either way. On a 15 GB
 machine, whether the OOM killer fires is luck — which is why the same command was seen to exit 0, exit 137
 (SIGKILL) and exit 135 (SIGBUS) across runs. The non-determinism is a symptom, not a separate bug.
+
+### Root cause and fix (bisected, not guessed)
+
+The per-node figure was a red herring. Bisecting by phase:
+
+| what | RSS |
+|---|---|
+| `grow_to_terminals` called directly, **no intent** | 914 MB (6,365 nodes, 3 MB payload) |
+| same call **with intent** | 14.0 GB, killed |
+| `enumerateDefs` alone (15,000 defs) | 86 MB |
+| `embedScoreDefs` alone, **cold** | **7.2 GB** |
+| `embedScoreDefs` alone, warm cache | 138 MB |
+
+So it is the embedding pass, and the DTO/node count is irrelevant (the wire payload is 3 MB). `embed_many`
+built **one tensor for every cache miss at once** — up to the 800-def prefilter cap — and transformer
+activations scale as `batch x heads x seq^2`. At batch 800, seq 199, 12 heads, a single attention matrix is
+~1.5 GB before the 6 layers and the FFN.
+
+Note the prefilter was already in the right place: it narrows 15,000 defs to 800 BEFORE embedding. The bug was
+purely that those 800 went through in one pass.
+
+**Fix:** chunk `embed_many` at `EMBED_BATCH = 32`.
+
+| case | before | after |
+|---|---|---|
+| `embedScoreDefs` cold, Keycloak | 7.2 GB / 19.2 s | **470 MB / 13.9 s** |
+| the original OOM grow (`--max-nodes 5`) | 14.2 GB, killed | **1.92 GB, completes** |
+
+15x on the embed call, 7.4x on the grow. The 108-path CLI gate is byte-identical, and 1022 tests pass.
+
+## DEFECT 2b — a vector depends on its batch-mates (pre-existing, NOT fixed)
+
+Found while verifying the fix, and it is worth separating: chunking changes vectors slightly, so the obvious
+test is "chunked == unchunked". That test FAILS — but so does "one big batch == one text at a time", by ~0.03
+per component on vectors whose components are ~0.05. `encode_batch` pads to the batch's longest text and the
+pooled output moves with the padding.
+
+Since a batch is "whatever missed the cache this run", **an intent score is not reproducible across runs
+today**, independently of chunking. Chunking narrows the padding (per-chunk instead of per-run) rather than
+introducing the sensitivity. `chunk_tests::chunking_drifts_no_more_than_the_batching_it_replaces` pins that
+relationship and is written to fail loudly if the padding sensitivity is ever fixed, so it can tighten to
+exact equality then.
 
 ## DEFECT 3 — a Rust-core change does not invalidate the on-disk cache
 
