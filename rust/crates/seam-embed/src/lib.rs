@@ -415,6 +415,44 @@ mod tests {
         assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
     }
 
+    /// DOES THE int8 DRIFT ACTUALLY CHANGE THE ANSWER? Per-component drift is not the product question —
+    /// the scores feed a RANKING (spine/supporting/off), and 384 dimensions of noise partly cancel in a
+    /// cosine. So measure the ranking, not the vector. Diagnostic: prints top-k overlap and max rank shift.
+    #[test]
+    fn report_whether_int8_drift_reorders_the_ranking() {
+        if !available() || std::env::var("SEAM_EMBED_RANK_REPORT").is_err() {
+            return; // opt-in diagnostic, not an assertion
+        }
+        let corpus: Vec<String> = (0..120)
+            .map(|i| match i % 4 {
+                0 => format!("fn createBooking{i}(memberId: string) persists a booking row and emits confirmation"),
+                1 => format!("fn renderChart{i}(data) draws the analytics histogram for the dashboard"),
+                2 => format!("class PaymentProcessor{i} captures the card charge and reconciles the ledger"),
+                _ => format!("fn util{i}(x)"),
+            })
+            .collect();
+        let intent = embed_one_batch(&[format!("{}how is a booking confirmed", query_prefix())]).pop().unwrap_or_default();
+        let cos = |v: &[f32]| -> f32 { v.iter().zip(&intent).map(|(a, b)| a * b).sum() };
+        let rank = |vs: &[Vec<f32>]| -> Vec<usize> {
+            let mut idx: Vec<usize> = (0..vs.len()).collect();
+            idx.sort_by(|a, b| cos(&vs[*b]).partial_cmp(&cos(&vs[*a])).unwrap_or(std::cmp::Ordering::Equal));
+            idx
+        };
+        let a = rank(&embed_one_batch(&corpus));                       // one big batch
+        let b = rank(&embed_many(&corpus));                            // chunks of 32
+        let c: Vec<Vec<f32>> = corpus.iter().map(|t| embed_one_batch(std::slice::from_ref(t)).pop().unwrap_or_default()).collect();
+        let c = rank(&c);                                              // one at a time
+        let overlap = |x: &[usize], y: &[usize], k: usize| -> usize {
+            let sy: std::collections::HashSet<_> = y[..k].iter().collect();
+            x[..k].iter().filter(|i| sy.contains(i)).count()
+        };
+        let pos = |r: &[usize]| -> Vec<usize> { let mut p = vec![0; r.len()]; for (rank, &i) in r.iter().enumerate() { p[i] = rank; } p };
+        let (pa, pc) = (pos(&a), pos(&c));
+        let max_shift = pa.iter().zip(&pc).map(|(x, y)| (*x as i64 - *y as i64).abs()).max().unwrap_or(0);
+        eprintln!("RANK REPORT (n={}): top10 overlap big-vs-single={}/10  chunked-vs-single={}/10  top25={}/25  max rank shift={}",
+            corpus.len(), overlap(&a, &c, 10), overlap(&b, &c, 10), overlap(&a, &c, 25), max_shift);
+    }
+
     #[test]
     fn every_input_gets_its_own_vector_across_chunk_boundaries() {
         if !available() {
