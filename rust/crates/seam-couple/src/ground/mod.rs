@@ -65,8 +65,26 @@ fn floor_env_tag() -> String {
     format!("-na{noadapt}-mb")
 }
 
+/// THE CORE'S OWN IDENTITY joins the shard key.
+///
+/// MEASURED BUG: the shard was keyed on the repo source epoch, so a rebuilt core loaded a floor computed by
+/// the PREVIOUS one. Demonstrated by dropping `update` from the db-table WRITE_VERBS — a warm run still
+/// answered "2 write sites" and only a cleared cache gave the correct 1. Same root cause made the CLI snapshot
+/// gate unable to see a core change at all (docs/STRESS_REAL_REPOS.md).
+///
+/// The stamp comes from the TS composition root (`SEAM_CORE_STAMP` = the addon's mtime:size, shipped by
+/// syncEnv) rather than being computed here: the addon is relinked whenever ANY crate changes, so one stat of
+/// the .so covers the whole workspace, where a per-crate build constant would miss a change in a sibling.
+/// Absent (a caller that never set it) degrades to the old source-only key rather than failing.
+fn core_stamp_tag() -> String {
+    match std::env::var("SEAM_CORE_STAMP") {
+        Ok(v) if !v.trim().is_empty() => format!("-c{}", v.trim().replace(':', "_")),
+        _ => String::new(),
+    }
+}
+
 fn floor_shard(repo: &str, epoch: &str) -> String {
-    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}{}.bin", floor_env_tag())
+    format!("{repo}/.seam/rust/floor-indices-v1/{epoch}{}{}.bin", floor_env_tag(), core_stamp_tag())
 }
 
 /// Build (or fetch cached) the deterministic floor indices for `repo`. Port of `build_floor_indices` +

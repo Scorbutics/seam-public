@@ -6,6 +6,7 @@
 // ResolvedGraph `data` shape that `from_resolved_graph` consumes.
 
 import { createRequire } from "node:module";
+import { _coreStamp } from "./footprint_cache.js";
 import { debugOn } from "../core/progress.js";
 import { fileURLToPath } from "node:url";
 import { dirname, resolve } from "node:path";
@@ -86,6 +87,17 @@ export function loadAddon(): any {
   if (_addon === undefined) {
     const require = createRequire(import.meta.url);
     _addon = require(addonPath());
+    // SYNC ON FIRST LOAD, not just before a grow. The core keys its floor-index shard on SEAM_CORE_STAMP so a
+    // rebuilt addon cannot serve a floor the previous one computed — but bun's `process.env` writes never reach
+    // the native env, so the value has to be pushed across. `syncEnv` was only called from the grow and wire
+    // paths, which left every SHAPE query (`--query writers` et al) reading a stale floor. Doing it here, in the
+    // one funnel every core consumer passes through, is what makes the invalidation actually cover them.
+    if (_addon) {
+      try {
+        if (!process.env.SEAM_CORE_STAMP) process.env.SEAM_CORE_STAMP = _coreStamp();
+        syncEnv(_addon);
+      } catch { /* a caller with no env access still gets the addon; the key degrades to source-only */ }
+    }
   }
   return _addon;
 }
@@ -190,6 +202,9 @@ export function toGraphDto(g: any): any {
 // unconditionally: it is a few dozen string compares, and skipping it when "nothing changed" would require
 // tracking exactly the state this exists to distrust.
 export function syncEnv(addon: any): void {
+  // The core keys its floor-index shard on this, so a rebuilt addon cannot load a floor the previous one
+  // computed. Set here (the one place the boundary is crossed) rather than at every call site.
+  if (!process.env.SEAM_CORE_STAMP) process.env.SEAM_CORE_STAMP = _coreStamp();
   addon.syncSeamEnv(Object.entries(process.env).filter(([k, v]) => k.startsWith("SEAM_") && v !== undefined) as [string, string][]);
 }
 

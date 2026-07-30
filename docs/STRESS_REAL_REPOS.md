@@ -89,7 +89,7 @@ introducing the sensitivity. `chunk_tests::chunking_drifts_no_more_than_the_batc
 relationship and is written to fail loudly if the padding sensitivity is ever fixed, so it can tighten to
 exact equality then.
 
-## DEFECT 3 — a Rust-core change does not invalidate the on-disk cache
+## DEFECT 3 — FIXED: a Rust-core change did not invalidate the on-disk cache
 
 `engineEpoch()` (footprint_cache.ts) hashes `ts/src/{codebase,core,languages}/**/*.ts`. The engine is now
 Rust, so a core change leaves the epoch untouched and cached answers computed by the PREVIOUS core are served
@@ -103,6 +103,26 @@ as current. Demonstrated on `writers-repo`:
 
 This is the same root cause as the CLI-gate blind spot found earlier (docs/SEAM_FLAGS_AUDIT.md): caches keyed
 on repo source, never on engine source. It means a user who upgrades Seam keeps the old engine's answers.
+
+**FIXED, and it took three passes because there are TWO cache layers with independent keys:**
+
+1. `engineEpoch()` (footprint_cache.ts) now folds in a `_coreStamp()` — the addon's `mtime:size`. mtime+size
+   rather than hashing the 61 MB `.so`, which would cost more per run than the cache saves; a rebuild always
+   moves mtime, and a copy that moves mtime without a content change just recomputes (the safe direction).
+2. The RUST floor-index shard (`ground/mod.rs`) had its own key, on the repo epoch alone. Fixing only (1) left
+   the writers query still stale — so the shard path now carries the same stamp, shipped across as
+   `SEAM_CORE_STAMP`. The stamp is computed on the TS side deliberately: the addon is relinked whenever ANY
+   crate changes, so one stat of the `.so` covers the whole workspace where a per-crate build constant would
+   miss a sibling's change.
+3. It still did not bite, because `syncEnv` was only called from the grow and wire paths — and bun's
+   `process.env` writes never reach the native env. Every SHAPE query therefore read a stale floor. The sync now
+   happens in `loadAddon`, the one funnel every core consumer passes through.
+
+Verified end to end: warm cache + current core -> 2 write sites; warm cache + MUTATED core -> **1** (correctly
+invalidated); core restored -> 2 again from its own shard. Three shards coexist, one per core build.
+
+The new `SEAM_CORE_STAMP` was caught undocumented by `test/core/env_documented.test.ts` on the first run — the
+flag-reference enforcement doing its job.
 
 ## What is NOT wrong
 

@@ -47,6 +47,25 @@ export function _hashEngineSource(srcRoot: string): string {
   }
   return parts.length ? _hash(parts.sort().join("\n")) : "";
 }
+// The RUST CORE'S identity, folded into the engine epoch below.
+//
+// MEASURED BUG, not defensiveness: the epoch used to hash `ts/src/**/*.ts` only. The engine is Rust now, so a
+// core change left the epoch untouched and every cached answer computed by the PREVIOUS core was served as
+// current. Demonstrated by dropping `update` from the db-table WRITE_VERBS: a warm run still answered
+// "2 write sites" (the old core's answer) and only a cleared cache gave the correct 1.
+//
+// mtime+size rather than a content hash of the .so: the addon is ~61 MB, and hashing it on every run to answer
+// "did the core change" would cost more than the cache saves. A rebuild always moves mtime; a copy or reinstall
+// that moves mtime WITHOUT a content change just recomputes, which is the safe direction.
+export function _coreStamp(): string {
+  try {
+    const p = process.env.SEAM_RUST_CORE_PATH
+      ?? join(dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "rust", "seam_core.node");
+    const st = statSync(p);
+    return `${Math.round(st.mtimeMs)}:${st.size}`;
+  } catch { return "no-core"; }   // absent addon → a stable stamp; the TS hash still varies the epoch
+}
+
 function engineEpoch(): string {
   if (_engineEpoch != null) return _engineEpoch;
   _engineEpoch = _ENGINE_EPOCH_FALLBACK;
@@ -55,6 +74,9 @@ function engineEpoch(): string {
     const h = _hashEngineSource(srcRoot);
     if (h) _engineEpoch = h;
   } catch { /* source tree not walkable (bundled) → keep the fallback constant */ }
+  // The core is part of the engine, so it is part of the epoch. Applied even on the fallback path: a bundled
+  // install has no walkable TS tree, and that is exactly where the addon is the ONLY thing that varies.
+  _engineEpoch = _hash(`${_engineEpoch}|core:${_coreStamp()}`);
   return _engineEpoch;
 }
 type Entry = { e?: string; sig?: DepSig; g: ResolvedGraph };   // e = legacy repo-epoch key; sig = per-footprint deps (v2)

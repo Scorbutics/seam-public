@@ -71,6 +71,12 @@ export const SEAM_FLAGS: readonly FlagDoc[] = [
     effect: "Where the TypeScript side loads tree-sitter grammars from (the .vsix externalizes them).",
     readAt: "ts/src/core/treesitter.ts" },
 
+  { name: "SEAM_CORE_STAMP", cls: "config", dflt: "the addon's mtime:size, set by loadAddon",
+    effect: "The Rust core's identity, folded into the floor-index shard key so a REBUILT core cannot serve a " +
+            "floor the previous one computed. Set by the TS side (not by a user) because bun's process.env " +
+            "writes never reach the native env; it crosses via syncEnv. Absent degrades to a source-only key.",
+    readAt: "rust/crates/seam-couple/src/ground/mod.rs" },
+
   // ── knob: documented product choices ────────────────────────────────────────────────────────────────────
   { name: "SEAM_CENTERS_MERGED", cls: "knob", dflt: "off (the CLI turns it on for --concern)",
     effect: "Merge a concern's per-center grows into ONE answer instead of returning them separately.",
