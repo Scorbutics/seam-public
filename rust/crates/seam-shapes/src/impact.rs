@@ -65,6 +65,16 @@ pub struct Impact {
 pub struct ImpactOpts {
     pub depth: usize,
     pub max_expansions: usize,
+    /// WALL-CLOCK budget for the expansion loop, seconds. `max_expansions` bounds the COUNT of expansions and
+    /// never their cost: on a ubiquitous anchor every expansion is itself a hub, so 80 of them cost ~200s on
+    /// Keycloak while 80 on a narrow anchor cost ~0s. A count bound therefore holds everywhere except where it
+    /// is needed. 0 disables the deadline.
+    pub budget_secs: f64,
+    /// Do not EXPAND a frontier symbol whose caller fan-in is at or above this. Such a symbol contributes
+    /// breadth, not insight — its consumers are "everything", which is what made the blast radius both slow
+    /// and unreadable. It is still REPORTED as impacted; only the walk THROUGH it stops, and the stop is named
+    /// as a gap. 0 disables the ceiling.
+    pub ubiquity_fan: usize,
     pub skip_callsite: bool,
     /// Attach the CROSS-STACK overlay (default ON, matching TS `couplingOverlay`). The structural closure is a
     /// call graph; without this the blast radius silently omits every consumer reached through shared state.
@@ -76,7 +86,7 @@ pub struct ImpactOpts {
 
 impl Default for ImpactOpts {
     fn default() -> Self {
-        Self { depth: 6, max_expansions: 80, skip_callsite: false, coupling_overlay: true, llm: false, model: None, claude_bin: None }
+        Self { depth: 6, max_expansions: 80, budget_secs: 20.0, ubiquity_fan: 120, skip_callsite: false, coupling_overlay: true, llm: false, model: None, claude_bin: None }
     }
 }
 
@@ -93,6 +103,16 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
     let mut frontier: Vec<(String, String, usize)> = vec![(anchor_file.to_string(), symbol.to_string(), 0)];
     let mut hops = 0usize;
     let mut truncated = false;
+    let started = std::time::Instant::now();
+    let mut over_budget = false;
+    // Caller fan-in per symbol NAME, from the callsite index the consumers scan already builds — so the
+    // ubiquity check costs a map lookup, not a second analysis.
+    let fan: HashMap<String, usize> = if opts.ubiquity_fan > 0 {
+        seam_resolve::CallsiteIndex::cached(repo).callers_map().into_iter().map(|(k, v)| (k, v.len())).collect()
+    } else {
+        HashMap::new()
+    };
+    let mut skipped_hubs: Vec<(String, usize)> = Vec::new();
 
     for _ in 0..opts.depth {
         if frontier.is_empty() {
@@ -103,6 +123,23 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
             if hops >= opts.max_expansions {
                 truncated = true;
                 break;
+            }
+            // WORK budget, checked before paying for the next expansion rather than after.
+            if opts.budget_secs > 0.0 && started.elapsed().as_secs_f64() >= opts.budget_secs {
+                truncated = true;
+                over_budget = true;
+                break;
+            }
+            // UBIQUITY CEILING — expanding a symbol whose callers are "everything" buys breadth, not insight.
+            // The node is already recorded as impacted by whoever queued it; this only declines to walk THROUGH
+            // it, and the decline is reported below instead of silently shrinking the radius.
+            if opts.ubiquity_fan > 0 {
+                let f = fan.get(&node.1).copied().unwrap_or(0);
+                if f >= opts.ubiquity_fan {
+                    skipped_hubs.push((node.1.clone(), f));
+                    truncated = true;
+                    continue;
+                }
             }
             hops += 1;
             let cons_opts = ConsumersOpts { anchor_line: None, skip_callsite: opts.skip_callsite, data_coupling: false, ..Default::default() };
@@ -159,6 +196,43 @@ pub fn project_impact(repo: &str, anchor_file: &str, symbol: &str, opts: &Impact
             truncated = true;
         }
         frontier = next;
+    }
+    // NAME EVERY STOP. A blast radius that quietly stopped early reads as "this is the whole radius", which is
+    // the one way this shape can mislead. `truncated` alone is a bool the render can under-sell, so each reason
+    // gets its own gap with the number that caused it.
+    if over_budget {
+        let gk = "impact-work-budget\0".to_string();
+        if gap_seen.insert(gk) {
+            gaps.push(ImpactGap {
+                mechanism: "impact-work-budget".to_string(),
+                evidence: format!(
+                    "the walk stopped after {:.0}s: this anchor's consumers are themselves widely-used, so each \
+                     expansion costs a full consumer scan. The radius below is real but INCOMPLETE. Narrow the \
+                     anchor, or raise the budget.",
+                    opts.budget_secs
+                ),
+            });
+        }
+    }
+    if !skipped_hubs.is_empty() {
+        skipped_hubs.sort_by(|a, b| b.1.cmp(&a.1));
+        skipped_hubs.dedup_by(|a, b| a.0 == b.0);
+        let shown: Vec<String> = skipped_hubs.iter().take(6).map(|(s, f)| format!("{s} ({f} callers)")).collect();
+        let gk = format!("impact-ubiquitous-hub\0{}", shown.join(","));
+        if gap_seen.insert(gk) {
+            gaps.push(ImpactGap {
+                mechanism: "impact-ubiquitous-hub".to_string(),
+                evidence: format!(
+                    "{} symbol(s) were NOT walked through because their callers are effectively the whole repo \
+                     (>= {} callers): {}{}. They ARE in the radius; what is missing is what lies beyond them, \
+                     which for a symbol this ubiquitous is everything and tells you nothing.",
+                    skipped_hubs.len(),
+                    opts.ubiquity_fan,
+                    shown.join(", "),
+                    if skipped_hubs.len() > shown.len() { ", …" } else { "" }
+                ),
+            });
+        }
     }
     if !frontier.is_empty() {
         truncated = true;

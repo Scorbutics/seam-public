@@ -831,6 +831,9 @@ pub fn project_impact(repo: String, anchor_file: String, symbol: String, depth: 
     let opts = seam_shapes::ImpactOpts {
         depth: depth.map(|d| d as usize).unwrap_or(6),
         max_expansions: max_expansions.map(|m| m as usize).unwrap_or(80),
+        // defaults live in ImpactOpts::default(); a caller that wants them off passes 0
+        budget_secs: seam_shapes::ImpactOpts::default().budget_secs,
+        ubiquity_fan: seam_shapes::ImpactOpts::default().ubiquity_fan,
         skip_callsite: false,
         coupling_overlay: coupling_overlay.unwrap_or(true),
         llm: llm.unwrap_or(false),
