@@ -6,7 +6,7 @@
 //
 // THE MUTATION, and why it is this one. Prepend a required parameter to the declaration:
 //
-//     export function foo(a: string)  ->  export function foo(__oracleProbe: number, a: string)
+//     export function foo(a: string)  ->  export function foo(__oracleProbe: never, a: string)
 //
 // Every call site now fails to compile — wrong arity, and wrong type in the first position. So `tsc`'s error set
 // IS the complete call-site set, which is precisely the number `--query contract` claims in its `observed:`

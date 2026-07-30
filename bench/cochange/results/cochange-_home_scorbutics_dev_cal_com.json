@@ -1,0 +1,70 @@
+{
+  "repo": "/home/scorbutics/dev/cal.com",
+  "usedCommits": 124,
+  "seam": {
+    "n": 33,
+    "hit": 15,
+    "rate": 0.45454545454545453,
+    "perBucket": [
+      [
+        "same-dir",
+        6,
+        7
+      ],
+      [
+        "same-top",
+        6,
+        13
+      ],
+      [
+        "cross-top",
+        3,
+        13
+      ]
+    ]
+  },
+  "token": {
+    "n": 508,
+    "hit": 42,
+    "rate": 0.08267716535433071,
+    "perBucket": [
+      [
+        "same-dir",
+        9,
+        29
+      ],
+      [
+        "same-top",
+        19,
+        148
+      ],
+      [
+        "cross-top",
+        14,
+        331
+      ]
+    ]
+  },
+  "rand": {
+    "n": 33,
+    "hit": 8,
+    "rate": 0.24242424242424243,
+    "perBucket": [
+      [
+        "same-dir",
+        7,
+        7
+      ],
+      [
+        "same-top",
+        1,
+        13
+      ],
+      [
+        "cross-top",
+        0,
+        13
+      ]
+    ]
+  }
+}

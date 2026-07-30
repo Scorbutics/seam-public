@@ -8,7 +8,18 @@ of noisy conclusions happened.
 | **Is the engine correct and honest?** Did a change break resolution? Does a shape claim more than it knows? | [`oracle/`](oracle/) — `sweep.ts` | a compile per symbol | `tsc` |
 | **Correct compared to WHAT?** Would `rg` or a language server have answered this already? | [`oracle/`](oracle/) — `compare.ts` | a compile per symbol + one LSP program build | `tsc` |
 | **Does the differentiator work at all?** Cross-stack coupling no compiler has a concept of | [`coupling/`](coupling/) | seconds | a hand-written `truth.json` + decoys |
+| **Does a reported coupling correspond to anything REAL?** | [`cochange/`](cochange/) | a `git log` | **git history** — a judge that is neither Seam nor a compiler |
 | **Does it help an agent in practice?** Is the CLI legible? Does the output get used or worked around? | [`grep-vs-seam/`](grep-vs-seam/) | 2 subagents/case, ~100-150k tokens each | ground truth where it exists, else judgement |
+
+## The answer, as it currently stands
+
+On TypeScript call sites Seam and the TypeScript **language service** are at parity — `120/120` each at n=120
+under the corrected probe, against grep's `102/120` with 6 silent under-claims. So Seam's value on that question
+is not capability. It is cost, cross-language reach, and questions an LSP does not model.
+
+`cochange/` is the first tool-independent evidence for the second half. On private-app (396 commits), pairs Seam calls
+coupled co-changed **80%** of the time against a **8.2%** matched base rate and **45%** for a name search — and
+for pairs in DIFFERENT top-level directories, where proximity explains nothing, **91% vs 8.6%**.
 
 ## The question that reframed all of this
 

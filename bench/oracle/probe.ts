@@ -5,11 +5,25 @@
 //
 // THE METHOD. Prepend a required parameter to an exported function's declaration:
 //
-//     export function foo(a: string)  ->  export function foo(__oracleProbe: number, a: string)
+//     export function foo(a: string)  ->  export function foo(__oracleProbe: never, a: string)
 //
-// Every call site now fails to compile — wrong arity, and wrong type in the first position. So `tsc`'s fresh
-// error set IS the complete call-site set. Prepending (not appending) so variadic and defaulted signatures work
-// too: `...rest` must stay last, and an appended param after a default is legal but forces no error.
+// Every call site now fails to compile — wrong arity when too few arguments are passed, wrong TYPE otherwise. So
+// `tsc`'s fresh error set IS the complete call-site set. Prepending (not appending) so variadic and defaulted
+// signatures work too: `...rest` must stay last, and an appended param after a default forces no error.
+//
+// `never` AND NOT `number`, and this was the harness's THIRD false accusation. With `number`, the probe fails to
+// break a call site whenever the injected type happens to accept the existing first argument AND the arity still
+// fits because the real parameters are defaulted. Measured:
+//
+//     export async function getClubFeed(limit = 10, offset = 0)   // accepts 0..2
+//     -> (__oracleProbe: number, limit = 10, offset = 0)          // accepts 1..3
+//     getClubFeed(limit, offset)                                  // 2 numbers: arity fits, types fit. COMPILES.
+//
+// tsc then honestly reported ZERO fresh errors, truth came out 0, and the sweep scored grep, the TypeScript
+// language service AND Seam as each over-claiming by one — all three agreeing against the judge, which is the
+// tell. `never` is the bottom type: nothing is assignable to it (not even `any`), so the first argument ALWAYS
+// fails to type-check and a zero-argument call always fails arity. The probe now breaks every call site
+// unconditionally, whatever the callee's defaults.
 //
 // EVERY COMMENT BELOW IS A FALSE ACCUSATION THIS HARNESS ONCE MADE. Read them before trusting a row.
 import { readFileSync, writeFileSync } from "node:fs";
@@ -118,7 +132,7 @@ export function openProbe(repo: string, tsconfig: string): Probe {
       const re = new RegExp(`(export (?:async )?function ${name})\\(`);
       if (!re.test(original)) return null;
       try {
-        writeFileSync(abs, original.replace(re, `$1(__oracleProbe: number, `));
+        writeFileSync(abs, original.replace(re, `$1(__oracleProbe: never, `));
         const fresh = [...errorsNow()].filter((e) => !baseline.has(e));
         const external = fresh.filter((e) => fileOf(e) !== file && CALL_SITE_ERROR.test(e));
         // Dedupe by FULL POSITION — file, line AND COLUMN. Dropping the column to collapse "one site, two
