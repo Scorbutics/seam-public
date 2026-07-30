@@ -805,6 +805,66 @@ pub struct Center {
 /// `mergeOne` loop (decompose.ts): grow each center's settled closure via `grow_to_terminals` (P5 answer-cached
 /// by symbol, so related concerns reuse shared centers), merge them sequentially — content-keyed + idempotent,
 /// every center's anchor accumulated — under the GLOBAL node budget, and stop adding mechanisms once the merged
+/// The seed's own budget. A seed must be able to carry the anchor plus enough of its neighbourhood to be
+/// worth reading, so this is not simply `max_nodes`: a `--max-nodes 5` run still wants the anchor's immediate
+/// ring. `SEED_FLOOR` is the smallest seed that still answers "what does this touch"; above it the caller's
+/// budget wins, and the multiplier leaves the flood something to prune rather than handing it a seed already
+/// at the cap.
+const SEED_FLOOR: usize = 60;
+fn seed_cap(max_nodes: usize) -> usize {
+    max_nodes.saturating_mul(2).max(SEED_FLOOR)
+}
+
+/// Keep the anchor + the `budget` NEAREST structural nodes; drop the rest and every edge that referenced one.
+/// Returns how many structural nodes were dropped. Coupling nodes are never dropped (see the call site).
+///
+/// "Nearest" is BFS hop distance over the seed's own edges, so the kept set is connected to the anchor rather
+/// than an arbitrary prefix of a node vector — a disconnected fragment would render as a region the reader
+/// cannot get to.
+fn truncate_seed(data: &mut ResolvedGraph, budget: usize) -> usize {
+    let anchor = data.anchor_id.clone();
+    let mut adj: HashMap<&str, Vec<&str>> = HashMap::new();
+    for e in &data.edges {
+        adj.entry(e.from.as_str()).or_default().push(e.to.as_str());
+        adj.entry(e.to.as_str()).or_default().push(e.from.as_str());
+    }
+    let mut keep: indexmap::IndexSet<String> = indexmap::IndexSet::new();
+    let mut queue: std::collections::VecDeque<&str> = std::collections::VecDeque::new();
+    if data.nodes.iter().any(|n| n.id == anchor) {
+        keep.insert(anchor.clone());
+        queue.push_back(&anchor);
+    }
+    // seed the walk from the anchor; if there is no anchor node, fall back to node order so a malformed seed
+    // still truncates deterministically instead of keeping nothing
+    while let Some(cur) = queue.pop_front() {
+        if keep.len() >= budget {
+            break;
+        }
+        for nxt in adj.get(cur).into_iter().flatten() {
+            if keep.len() >= budget {
+                break;
+            }
+            if !keep.contains(*nxt) {
+                keep.insert((*nxt).to_string());
+                queue.push_back(nxt);
+            }
+        }
+    }
+    for n in &data.nodes {
+        if keep.len() >= budget {
+            break;
+        }
+        if !n.coupling {
+            keep.insert(n.id.clone());
+        }
+    }
+    let before = data.nodes.iter().filter(|n| !n.coupling).count();
+    data.nodes.retain(|n| n.coupling || keep.contains(&n.id));
+    let live: std::collections::HashSet<&str> = data.nodes.iter().map(|n| n.id.as_str()).collect();
+    data.edges.retain(|e| live.contains(e.from.as_str()) && live.contains(e.to.as_str()));
+    before - data.nodes.iter().filter(|n| !n.coupling).count()
+}
+
 /// graph reaches `max_nodes`. Returns the merged center-rooted star (None if no center grew).
 ///
 /// The LLM-scoping orchestration (`grow_footprint_scoped`, the fork/flywheel-warming in the `dataCouplingLlm`
@@ -859,6 +919,36 @@ fn grow_to_terminals_impl(repo: &str, anchor_file: &str, symbol: &str, data_coup
     }
     let ex = opts.exclusion();
     let mut data = phase!("phase_seed", crate::seed::phase_seed(repo, anchor_file, symbol, &ex))?;
+    // SEED CAP — `max_nodes` has to bound the SEED, not just the flood after it.
+    //
+    // MEASURED: on Keycloak's `KeycloakSession` (9,941 resolved consumers), `--max-nodes 5` returned a
+    // 6,365-node answer. The seed materialised the whole consumer closure, `phase_expand`'s
+    // `while flood_n < max_nodes` was already false so the flood ran zero steps, and the cap bounded nothing.
+    // A cap that a hub anchor ignores is not a cap.
+    //
+    // Kept: the anchor, then NEAREST-FIRST. The nearest hops are the sites a change actually has to touch, and
+    // they are the same nodes the flood would have kept had it run. Coupling nodes are exempt exactly as they
+    // are in the flood's own accounting (`flood_n`) — they are self-bounded by the coupling phase, and counting
+    // them here would let a wide shared-key fan crowd out the structural answer.
+    let seed_budget = seed_cap(opts.max_nodes);
+    let structural_seed = data.nodes.iter().filter(|n| !n.coupling).count();
+    if structural_seed > seed_budget {
+        let dropped = truncate_seed(&mut data, seed_budget);
+        // HONEST, like the flood's own backstop: a silently cropped seed reads as a complete answer.
+        let anchor = if data.anchor_id.is_empty() { "n1".to_string() } else { data.anchor_id.clone() };
+        data.blindspots.push(Blindspot {
+            node: anchor,
+            mechanism: "seed-safety-cap".to_string(),
+            evidence: format!(
+                "the anchor's own footprint is {structural_seed} nodes — larger than the {seed_budget}-node seed budget \
+                 — so {dropped} of the FARTHEST were dropped before the wave ran. This is a ubiquitous anchor: the \
+                 nearest hops are kept because they are the sites a change has to touch. Raise --max-nodes to see \
+                 more, or anchor on a narrower symbol."
+            ),
+            candidates: Vec::new(),
+            persists: false,
+        });
+    }
     let ws = seam_resolve::Workspace::cached(repo);
     let mut coupled: HashSet<String> = HashSet::new();
     if data_coupling {
