@@ -112,6 +112,32 @@ LIFT vs token            5.50x
 expose. With n=33 scorable pairs (a 10k-file repo with only 124 commits of history leaves most files untouched in
 the window), this corpus supports the token comparison and little else. Do not average the two repos.
 
+## The cut that names the case an LSP cannot answer
+
+Cross-language is the vivid example, but it is not the common one. **A DB table couples two files in the SAME
+language, and a language service still returns nothing** — one `.ts` writing `work_orders` and another `.ts`
+reading it share no import and no call, so `getReferencesAtPosition` has nothing to resolve. The cross-language
+cut above misses exactly this case, because both sides are the same language.
+
+Per key kind, seam arm, with the same-language count shown because that is the point:
+
+| corpus | kind | co-changed | rate | same-language | base rate |
+|---|---|---|---|---|---|
+| private-app | **http-route** | 39/39 | **100%** | all 39 | 8.2% |
+| private-app | **db-table** | 19/28 | **67.9%** | all 28 | 8.2% |
+| private-app | **config-key** | 11/19 | **57.9%** | all 19 | 8.2% |
+| keycloak | **db-table** | 48/134 | **35.8%** | all 134 | 3.6% |
+| keycloak | **http-route** | 7/42 | **16.7%** | **0** — every pair crosses Java↔TS | 2.0% (cross-lang) |
+| keycloak | config-key | 1/2 | 50.0% | all 2 | 3.6% |
+
+Two things fall out. **`db-table` is the mass of the result and it is entirely same-language** — 28 pairs on private-app
+and 134 on keycloak, none of which any per-language tool can link, all co-changing at 8–10x the base rate. And on
+keycloak **`http-route` is entirely cross-language**: every one of those 42 pairs is a Java handler and the
+TypeScript admin client that calls it over HTTP, which is the cross-stack case in its purest form.
+
+So the claim does not depend on the cross-language slice being thick. Pure data coupling inside one language is
+the bigger, better-sampled half, and an LSP answers none of it.
+
 ## What this cannot do
 
 - **No causation.** Co-change is evidence that a pair matters, not that the key is why.
