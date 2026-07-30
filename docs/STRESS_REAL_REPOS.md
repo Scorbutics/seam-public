@@ -5,9 +5,24 @@ Ran the CLI surface (9 query shapes, decompose, module mode, depth-2, `--ask`, a
 
 | repo | tracked files | dominant | result |
 |---|---|---|---|
-| private-app | 472 | 249 tsx / 187 ts | **17/17 pass** |
-| cal.com | 10,349 | 5,692 ts / 1,677 tsx | 16/17 (one OOM, see below) |
-| Keycloak | 12,896 | 8,141 java | **10/17** — 2 timeouts, 3 OOM kills, 2 SIGBUS |
+| private-app | 472 | 249 tsx / 187 ts | **17/17** |
+| cal.com | 10,349 | 5,692 ts / 1,677 tsx | 16/17 -> **17/17** |
+| Keycloak | 12,896 | 8,141 java | 10/17 -> **17/17** |
+
+**ALL THREE PASS** after the four fixes below. The Keycloak commands that used to fail:
+
+| command | before | after |
+|---|---|---|
+| `q_impact` | TIMEOUT 300s | ok 21s |
+| `q_refactor` | TIMEOUT 300s | ok 26s |
+| `depth2` | SIGBUS (135) | ok 45s |
+| `grow_intent` | OOM kill (137) | ok 26s |
+| `grow_from` | OOM kill (137) | ok 4s |
+| `concern` | OOM kill (137) | ok 38s |
+| `concern_cf` | SIGBUS (135) | ok 279s |
+
+`concern_cf` at 279s is inside the harness's 300s timeout but only just — a center-first concern on a
+12,896-file Java repo does its own center detection plus a grow per center. It passes; it is not comfortable.
 
 Anchors were chosen as the real fan-in hubs, not guesses: `KeycloakSession` (9,941 resolved consumers),
 `customPrisma` (a file imported 1,020×), `lib/utils.ts#cn` (247 consumers).
