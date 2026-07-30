@@ -68,8 +68,47 @@ fi
 log "installing engine deps (ts/) — this pulls tree-sitter grammars"
 ( cd "$HOME_DIR/ts" && { "$BUN" install --frozen-lockfile || "$BUN" install; } )
 
-# does the engine even load?
-if "$BUN" "$HOME_DIR/ts/src/cli/decompose.ts" --check-backend >/dev/null 2>&1; then :; fi
+# ── the NATIVE CORE ─────────────────────────────────────────────────────────--
+# WITHOUT THIS THE INSTALL IS BROKEN, and it was: this script cloned, ran `bun install`, and stopped. There is no
+# TypeScript engine to fall back to (rust_core.ts says so in as many words), so every codebase query died with a
+# raw `Cannot find module '.../rust/seam_core.node'` -- a module-resolution stack trace as the first thing a new
+# user saw. Verified by pointing SEAM_RUST_CORE_PATH at a missing file, which is exactly the fresh-install state.
+CORE="$HOME_DIR/rust/seam_core.node"
+if [ ! -f "$CORE" ]; then
+  uname_s="$(uname -s)"; uname_m="$(uname -m)"
+  case "$uname_s-$uname_m" in
+    Linux-x86_64)  asset="seam_core-linux-x64.node" ;;
+    Linux-aarch64) asset="seam_core-linux-arm64.node" ;;
+    Darwin-arm64)  asset="seam_core-darwin-arm64.node" ;;
+    Darwin-x86_64) asset="seam_core-darwin-x64.node" ;;
+    *)             asset="" ;;
+  esac
+  if [ -n "$asset" ]; then
+    log "fetching prebuilt native core ($asset)"
+    curl -fsSL -o "$CORE" "https://github.com/Scorbutics/seam/releases/latest/download/$asset" 2>/dev/null || rm -f "$CORE"
+  fi
+fi
+if [ ! -f "$CORE" ] && command -v cargo >/dev/null 2>&1; then
+  log "building native core from source (cargo; the first build takes a few minutes)"
+  if ( cd "$HOME_DIR/rust" && cargo build --release -p seam-napi ); then
+    for ext in so dylib dll; do
+      [ -f "$HOME_DIR/rust/target/release/libseam_napi.$ext" ] && cp "$HOME_DIR/rust/target/release/libseam_napi.$ext" "$CORE" && break
+    done
+  fi
+fi
+
+# THE HEALTH CHECK IS NOW LOAD-BEARING. It used to run and throw its result away (`if ...; then :; fi`) -- a
+# check whose outcome is discarded is not a check, and it is why a broken install reported success.
+if [ ! -f "$CORE" ]; then
+  warn "native core MISSING -- the codebase queries will NOT run."
+  warn "  Install a Rust toolchain (https://rustup.rs) and re-run this script, or build it yourself:"
+  warn "    cd $HOME_DIR/rust && cargo build --release -p seam-napi && cp target/release/libseam_napi.* seam_core.node"
+elif "$BUN" "$HOME_DIR/ts/src/cli/decompose.ts" --locate seam --repo "$HOME_DIR" >/dev/null 2>&1; then
+  log "native core OK ($CORE)"
+else
+  warn "native core present but the engine did not answer. Please report, with the output of:"
+  warn "    $BUN $HOME_DIR/ts/src/cli/decompose.ts --locate seam --repo $HOME_DIR"
+fi
 log "engine ready: $BUN $HOME_DIR/ts/src/cli/decompose.ts"
 
 # Convenience CLI shims: `seam` (the engine) + `seam-adapters` (list/promote learned .seam adapters).

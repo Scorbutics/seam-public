@@ -79,7 +79,10 @@ curl -fsSL https://raw.githubusercontent.com/Scorbutics/seam/main/install.sh | b
 #   …| bash -s -- --branch <ref>   # track a specific branch or tag
 ```
 
-Installs a `seam` shim to `~/.local/bin/seam`; re-run any time to update.
+Installs a `seam` shim to `~/.local/bin/seam`; re-run any time to update. It fetches a **prebuilt native core**
+for your platform (linux x64/arm64, macOS arm64/x64) and falls back to building it with `cargo` if there is no
+prebuilt. If neither is possible it says so loudly and tells you what to install — it will not leave you with a
+tool that crashes on the first query.
 
 <details>
 <summary>From source (development)</summary>

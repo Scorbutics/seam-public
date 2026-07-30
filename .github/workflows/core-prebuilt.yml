@@ -1,0 +1,83 @@
+# PREBUILT NATIVE CORES — the thing standing between this repo and a one-line install that works.
+#
+# WHY. There is no TypeScript engine to fall back to: `ts/src/codebase/rust_core.ts` loads
+# `rust/seam_core.node` and every codebase query dies without it. Until this workflow exists, `install.sh` can
+# only get a core by building it, which needs a Rust toolchain the installing user may not have — so a new user
+# either waits several minutes for a cold cargo build or gets a tool that cannot answer a single query.
+#
+# Each job builds the napi cdylib for one target and uploads it under the exact asset name `install.sh` asks for.
+# Attached to a release on tag push; downloadable as workflow artifacts on manual dispatch, so the matrix can be
+# proven green BEFORE a tag is cut rather than discovered broken during one.
+name: core-prebuilt
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false          # one broken target must not hide the state of the other three
+      matrix:
+        include:
+          - { os: ubuntu-latest,  target: x86_64-unknown-linux-gnu,  asset: seam_core-linux-x64.node,    lib: libseam_napi.so }
+          - { os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, asset: seam_core-linux-arm64.node, lib: libseam_napi.so }
+          - { os: macos-14,       target: aarch64-apple-darwin,      asset: seam_core-darwin-arm64.node, lib: libseam_napi.dylib }
+          - { os: macos-13,       target: x86_64-apple-darwin,       asset: seam_core-darwin-x64.node,   lib: libseam_napi.dylib }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: Build the core
+        working-directory: rust
+        run: cargo build --release -p seam-napi --target ${{ matrix.target }}
+
+      - name: Stage the asset
+        working-directory: rust
+        run: cp "target/${{ matrix.target }}/release/${{ matrix.lib }}" "${{ matrix.asset }}"
+
+      # SMOKE THE ARTIFACT, not just the build. A cdylib that compiles and then fails to LOAD is the failure mode
+      # that matters here, and it is invisible to `cargo build`. Only on a native runner — a cross-built artifact
+      # cannot be loaded by the machine that produced it, and pretending otherwise would be a green check that
+      # means nothing.
+      - name: Load-check (native targets only)
+        if: matrix.os != 'ubuntu-24.04-arm'
+        run: |
+          curl -fsSL https://bun.sh/install | bash
+          export PATH="$HOME/.bun/bin:$PATH"
+          cd ts && bun install --frozen-lockfile || bun install
+          cd ..
+          cp "rust/${{ matrix.asset }}" rust/seam_core.node
+          bun ts/src/cli/decompose.ts --locate loadAddon --repo . | tee /tmp/out.txt
+          grep -q "rust_core.ts" /tmp/out.txt   # it answered with a real location, not an empty stub
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.asset }}
+          path: rust/${{ matrix.asset }}
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with: { path: dist, merge-multiple: true }
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.node
+          fail_on_unmatched_files: true
