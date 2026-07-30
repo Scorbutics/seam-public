@@ -942,6 +942,9 @@ async function main(argv: string[]): Promise<number> {
   // --query (shape queries) and --ask (router): these are unambiguously codebase operations, so their presence
   // implies scan mode. Without this a bare `--query … --center …` (no --scan) wrongly fell through to DIFF mode
   // and died with the misleading "No diff source given: pass --file or --git" — an agent then can't drive the CLI.
+  // --locate is answered BEFORE mode dispatch: it is an address lookup, needs no anchor, and its whole point is
+  // to be the cheap FIRST call that produces the `--center` for the second one.
+  if (a.locate) { const { runLocate } = await import("./locate.js"); return runLocate(a); }
   if (a.scan || a.graph || a.expandGraph || a.growFrom || a.query || a.ask) return runCodebase(a);
   reset_usage();
   let hunks: Hunk[];

@@ -30,7 +30,7 @@ export interface Args {
   // --snippets[=N] / --snippets N: embed the cited SOURCE LINE + N lines of context under each citation
   // (shape member lists, and the region render's ## Mechanism steps). OPT-IN — undefined = off, which is the
   // default: --skeleton's whole premise is ~1/3 the tokens, so this may never be spent implicitly.
-  snippets?: number; snippetsExplicit?: boolean;
+  snippets?: number; snippetsExplicit?: boolean; locate?: string;
   warm?: boolean; warmTop?: number;   // --warm: pre-grow the top-N highest-fan-in hub files to populate the per-node shards (footprint-v1 / coupling-delta-v1), so a later FIRST query on a covered region is served warm. --warm-top N caps the hub set (default 40).
 }
 
@@ -128,7 +128,9 @@ export function parseArgs(argv: string[]): Args {
       case "--to-symbol": a.toSymbol = next(); break;   // --query reaches: the TARGET symbol
       case "--to-file": a.toFile = next(); break;       // --query reaches: optionally pin the target's file
       case "--max-hops": a.maxHops = parseInt(next() ?? "40", 10); break;   // --query reaches: BFS budget
-      case "--ask": a.ask = next(); break;   // natural-language question → LLM routes to the right shape
+      case "--ask": a.ask = next(); break;
+      // --locate <name>: where does a name I ALREADY chose live? Address lookup, not center selection.
+      case "--locate": a.locate = next(); break;   // natural-language question → LLM routes to the right shape
       case "--review-impact": a.reviewImpact = true; break;   // diff: annotate seams with codebase impact + cross-stack coupling
       case "--triage": a.triage = true; break;   // review-impact: LLM triage of the `unknown` relevance residual
       case "--affinity": a.affinity = true; break;   // codebase: fold intent-related shared-subject seams (grow-confirmed → resolved; else suggested) into the footprint

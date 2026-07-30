@@ -48,6 +48,7 @@ export function helpText(queries: string[]): string {
        instead of file by file. Structural and deterministic: it resolves edges rather than matching text.
 
 USAGE
+  seam --locate <name> --repo <repo>                                      WHERE a name lives (do this first)
   seam --scan --repo <repo> --query <shape> --center <file>[#<symbol>]     a resolved SHAPE (no LLM)
   seam --scan --repo <repo> --center <file>#<symbol> --intent "<q>"        a footprint MAP around an anchor
   seam --scan --repo <repo> --auto --center <f>#<s> --intent "<q>"         GROW a flow to its culmination
@@ -65,6 +66,9 @@ ${rows.join("\n")}
 ${undocumented.length ? `\n  NOTE: documented but NOT registered: ${undocumented.join(", ")} — stale help entry.\n` : ""}
 KEY FLAGS
   --repo <dir>            the repository to analyse (default: cwd)
+  --locate <name>         every definition of a name, ranked, with what distinguishes them. Answers "where does
+                          the symbol I picked live" in ONE call, so you can pass --center instead of hunting for
+                          it. It does NOT choose for you: several definitions come back as several rows.
   --center <file>[#<sym>] THE ANCHOR. Pass it — do not make the engine guess. Several: comma-separated.
   --intent "<question>"   what you are looking for; ranks and tiers the result
   --scan                  codebase mode (implied by --query / --ask)
@@ -78,6 +82,7 @@ KEY FLAGS
   --data-coupling <mode>  off | floor (deterministic adapters) | llm | auto (DEFAULT)
   --emit-seams <file>     write the full JSON model (for the VS Code extension; ~40x larger than the map)
   --ask "<question>"      natural language -> routed to the right shape (needs an LLM backend)
+  --no-snippets           drop the source text (shown by default for the reading formats)
   -v, --verbose           progress + diagnostics on stderr;  --trace adds per-node timing
 
 READING THE OUTPUT

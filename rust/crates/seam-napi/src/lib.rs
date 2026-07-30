@@ -2876,6 +2876,28 @@ pub fn resolve_name(repo: String, name: String) -> Option<ResolvedNameDto> {
     })
 }
 
+/// Wire form of a `seam_shapes::LocatedName` — one candidate address for `--locate`.
+#[napi(object)]
+pub struct LocatedNameDto {
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+    pub signature: String,
+    pub enclosing: String,
+    pub is_test: bool,
+}
+
+/// locateName — EVERY definition of a name, ranked. The mechanical half of anchoring: the caller has already
+/// chosen the symbol, this says where it lives. It does NOT choose a center (that is semantic and stays with the
+/// caller); ambiguity is returned as multiple rows rather than resolved away.
+#[napi]
+pub fn locate_name(repo: String, name: String, limit: Option<u32>) -> Vec<LocatedNameDto> {
+    seam_shapes::locate_name(&repo, &name, limit.unwrap_or(25) as usize)
+        .into_iter()
+        .map(|r| LocatedNameDto { symbol: r.symbol, file: r.file, kind: r.kind, signature: r.signature, enclosing: r.enclosing, is_test: r.is_test })
+        .collect()
+}
+
 /// scanNameConsumers — the name-grounded recall candidates for an anchor symbol (UNVERIFIED leads). Exposed on
 /// its own so the recall scan is inspectable; `projectConsumerSet(recall)` is the wired path.
 #[napi]

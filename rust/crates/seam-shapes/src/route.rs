@@ -103,6 +103,54 @@ static EXT_TAIL: Lazy<Regex> = Lazy::new(|| Regex::new(r"(?i)\.[a-z]+$").unwrap(
 /// Resolve an extracted NAME to its definition (deterministic — a def lookup, NOT semantic). Exact name match,
 /// test files demoted, then the lexicographically-smallest file for stability; `ambiguous` flags a
 /// multi-definition name so the caller can surface it. A name that looks like a path resolves by filename.
+/// One candidate address for a NAME the caller has already chosen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LocatedName {
+    pub symbol: String,
+    pub file: String,
+    pub kind: String,
+    pub signature: String,
+    pub enclosing: String,
+    pub is_test: bool,
+}
+
+/// EVERY definition of `name`, ranked — the address lookup behind `--locate`.
+///
+/// SCOPE, deliberately narrow: this does NOT pick a center. Choosing which symbol answers a question is a
+/// semantic judgement and belongs to the caller; the engine's text-matcher is worse at it (see SKILL.md, which
+/// tells an agent to always pass `--center` itself). What this replaces is the MECHANICAL half the caller was
+/// paying for in grep calls: it already decided it wants `cn`, and then spent 3-8 searches discovering that `cn`
+/// lives in `lib/utils.ts`. Measured in bench/grep-vs-seam: every Seam arm opened with that hunt.
+///
+/// So it returns ALL candidates with what distinguishes them (kind, signature, enclosing type, test-ness) and
+/// lets the caller choose. `resolve_name` — which collapses to one hit for the LLM router — stays as it is;
+/// silently picking is right for a router that has a question to reason about, and wrong for an address lookup.
+pub fn locate_name(repo: &str, name: &str, limit: usize) -> Vec<LocatedName> {
+    let defs = seam_scan::def_table::enumerate_defs(repo, 4000, None, false);
+    let norm = PAREN_TAIL.replace(name, "").trim().to_string();
+    let mut hits: Vec<&seam_scan::def_table::Def> = defs.iter().filter(|d| d.name == norm).collect();
+    if hits.is_empty() {
+        let lower = norm.to_lowercase();
+        hits = defs.iter().filter(|d| d.name.to_lowercase() == lower).collect();
+    }
+    // NON-TEST FIRST, then stable by path — the same ordering `resolve_name` uses, so `--locate`'s first row is
+    // the one the router would have chosen. A caller comparing the two must not see them disagree.
+    hits.sort_by(|a, b| {
+        IS_TEST.is_match(&a.file).cmp(&IS_TEST.is_match(&b.file)).then_with(|| crate::collate::locale_compare(&a.file, &b.file))
+    });
+    hits.into_iter()
+        .take(limit)
+        .map(|d| LocatedName {
+            symbol: d.name.clone(),
+            file: d.file.clone(),
+            kind: d.kind.clone(),
+            signature: d.signature.clone(),
+            enclosing: d.enclosing.clone(),
+            is_test: IS_TEST.is_match(&d.file),
+        })
+        .collect()
+}
+
 pub fn resolve_name(repo: &str, name: &str) -> Option<ResolvedName> {
     let defs = seam_scan::def_table::enumerate_defs(repo, 4000, None, false);
     let norm = PAREN_TAIL.replace(name, "").trim().to_string();
