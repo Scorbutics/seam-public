@@ -239,7 +239,11 @@ async function runCodebase(a: Args): Promise<number> {
   // `Decomposed anchor 'mod'` line) instead of the map. The legacy `--scan --anchor-file --symbol` plain-footprint
   // path (no --center, no --intent, no map format) is untouched.
   const _MAP_FMT = new Set(["agent", "concern", "llm-context", "json"]);
-  if (a.scan && !a.auto && !a.growFrom && (a.intent || _MAP_FMT.has(a.format))) a.auto = true;
+  // A map format opts the run into the GROW — but only when the caller ASKED for it. The default is
+  // llm-context, and letting the default trigger this routed every plain shape query (--query set/reach/…)
+  // into the concern path, which then failed with "--intent is what finds the mechanism": 8 of the gate's
+  // paths went from a one-line answer to an error. An unchosen default must never change what a command DOES.
+  if (a.scan && !a.auto && !a.growFrom && (a.intent || (_MAP_FMT.has(a.format) && a.formatExplicit))) a.auto = true;
   // SINGLE-DEF FILE CENTER → resolve it STRUCTURALLY (don't fall into the SEMANTIC concern center-first, whose
   // intent-relevance ranking can crown an off-subject shared-key cluster — the `/member/v1/survey` route out-
   // scoring the real `/member/booking/v1`). A bare `--center <file>` leaves a.symbol unset. Resolve the file's

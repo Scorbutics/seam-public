@@ -18,7 +18,16 @@ describe("parseArgs — llm-context defaults the LLM seam-ranking pass OFF (skel
   test("non-llm-context formats are UNCHANGED — the ranking pass stays available (skeleton unset)", () => {
     expect(parseArgs(["--format", "ascii"]).skeleton).toBeUndefined();
     expect(parseArgs(["--format", "llm"]).skeleton).toBeUndefined();
-    expect(parseArgs([]).skeleton).toBeUndefined();
+    expect(parseArgs(["--format", "none"]).skeleton).toBeUndefined();
+    // WAS `parseArgs([])` — that asserted this via the DEFAULT, which is now llm-context, so it was really
+    // testing the default rather than the rule. The rule (a non-llm-context format leaves skeleton unset) is
+    // what matters and is now stated with an explicit format; the default's own behaviour is covered below.
+  });
+  test("the DEFAULT format is llm-context, so it defaults the ranking pass OFF", () => {
+    // the default changed from "none" (a one-line summary) to the full region render: the other formats are
+    // situational, and a caller who did not choose deserves the answer rather than a count.
+    expect(parseArgs([]).format).toBe("llm-context");
+    expect(parseArgs([]).skeleton).toBe(true);
   });
   test("--skeleton on its own (no format) still works (the original behaviour)", () => {
     expect(parseArgs(["--skeleton"]).skeleton).toBe(true);

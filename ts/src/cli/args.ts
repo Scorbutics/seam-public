@@ -3,7 +3,10 @@
 
 export interface Args {
   file?: string; git?: string; submodules?: boolean; fromClassified?: string; repo: string;
-  format: string; tokenBudget?: number; classifier?: string; cluster?: string; roles?: string; wiring?: string;
+  format: string;
+  /// did the caller CHOOSE the format, or is it the default? A map format asked for explicitly opts into the
+  /// grow, but the DEFAULT must not — see decompose.ts's _MAP_FMT routing.
+  formatExplicit?: boolean; tokenBudget?: number; classifier?: string; cluster?: string; roles?: string; wiring?: string;
   emitSeams?: string; emitHunks?: string; dumpClassified?: string; facts?: string;
   emitPrompts?: string; injectLlm?: string; model?: string; claudeBin?: string;
   factsEngine?: string; blastRadius: boolean; resolver: string; verbose: boolean;
@@ -42,7 +45,7 @@ export function resolveEngines(a: Args): { cluster: string; roles: string; wirin
 }
 
 export function parseArgs(argv: string[]): Args {
-  const a: Args = { repo: ".", format: "none", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, includeTests: false };
+  const a: Args = { repo: ".", format: "llm-context", blastRadius: false, resolver: "det", verbose: false, scan: false, depth: 1, down: false, auto: false, maxSteps: 4, dataCoupling: true, dataCouplingLlm: false, dataCouplingAuto: true, cache: false, bidirectional: false, includeTests: false };
   const SNIPPET_CTX = 2;   // default context lines each side of the cited line — small on purpose (5 lines/citation)
   for (let i = 0; i < argv.length; i++) {
     const v = argv[i];
@@ -60,7 +63,7 @@ export function parseArgs(argv: string[]): Args {
       case "--snippets": { const n = argv[i + 1]; a.snippets = /^\d+$/.test(n ?? "") ? parseInt(argv[++i], 10) : SNIPPET_CTX; break; }
       case "--warm": a.warm = true; break;   // pre-grow hub files to warm the per-node shards (repo-wide precompute)
       case "--warm-top": a.warmTop = parseInt(next(), 10) || undefined; break;
-      case "--format": a.format = next(); break;   // codebase grow: agent (DEFAULT — the token-budgeted map) | concern | llm-context (full region) | json (raw model to stdout). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
+      case "--format": a.format = next(); a.formatExplicit = true; break;   // codebase: llm-context (DEFAULT — the full region) | agent (token-budgeted map) | concern | json (raw model) | none (the one-line summary). diff: llm (default) | ascii. `--emit-seams <file>` = the machine model to a file.
       case "--token-budget": a.tokenBudget = parseInt(next(), 10) || undefined; break;   // --format agent: chars/4 budget (default ~4000)
       case "--stream": a.stream = true; break;   // wave-mode NDJSON stream on stdout
       case "--classifier": a.classifier = next(); break;
