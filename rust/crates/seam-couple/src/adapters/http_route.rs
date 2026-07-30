@@ -111,6 +111,25 @@ static METHOD_EXPORT: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\bexport\s+(?:async\s+)?(?:default\b|(?:function\s+|const\s+|let\s+|var\s+)(?:GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b)").unwrap());
 // A route literal NOT at a fetch site (the carrier-indirection: URL stashed in a field, read by `http.*`).
 static BARE_ROUTE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[`'"](/?[A-Za-z][\w-]*(?:/[\w{}$:.*-]+)+)[`'"]"#).unwrap());
+
+/// First segments that are NEVER a route, whatever follows them.
+///
+/// The leading slash is OPTIONAL in `BARE_ROUTE` because a slashless route literal is a real pattern — Angular's
+/// `getEndpointFor('api/operations')` against a configured base URL — and requiring the slash was tried and
+/// silently killed it (caught by `route_match.test.ts`, not by any run). So the guard has to be narrower than
+/// "must be rooted".
+///
+/// These are the false keys measured on real repos, and they were not marginal: `application/json` was shared by
+/// 38 files on one repo and `Europe/Paris` by 18, each silently coupling every file that mentioned it to every
+/// other. Both are CLOSED, well-known vocabularies — the MIME top-level types are an IANA registry of nine, and
+/// the timezone areas are an IANA registry of eleven — which is what makes this a denylist rather than a guess.
+/// Module specifiers (`next/server`) are handled separately, by position, since their vocabulary is open.
+const NEVER_ROUTE_HEAD: &[&str] = &[
+    // MIME top-level types
+    "application", "text", "image", "audio", "video", "multipart", "font", "model", "message",
+    // IANA timezone areas
+    "Africa", "America", "Antarctica", "Arctic", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific", "Etc",
+];
 static DYN_TAIL: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^["'`]\s*\+"#).unwrap());
 // A MODULE SPECIFIER IS NOT A ROUTE. `import { NextRequest } from "next/server"` matches BARE_ROUTE exactly —
 // `next` then `/server`, two literal segments, no file extension for FILE_LIKE to reject. So every Next.js route
@@ -223,6 +242,11 @@ impl CouplingAdapter for HttpRoute {
             if IMPORT_POS.is_match(&text[..b.get(0).unwrap().start()]) {
                 continue;
             }
+            // ...and not a MIME type or a timezone (see NEVER_ROUTE_HEAD).
+            let head = raw.trim_start_matches('/').split('/').next().unwrap_or("");
+            if NEVER_ROUTE_HEAD.contains(&head) {
+                continue;
+            }
             let path = norm_path(raw);
             if path.split('/').filter(|s| !s.is_empty() && *s != "*").count() < 2 {
                 continue; // ≥2 LITERAL segments
@@ -234,5 +258,49 @@ impl CouplingAdapter for HttpRoute {
             out.push(KeyHit { kind: "http-route".into(), value: path, line: line_of(text, b.get(0).unwrap().start()), produces: false, ..Default::default() });
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mask::MaskCtx;
+    use crate::types::CouplingAdapter;
+
+    fn keys(file: &str, text: &str) -> Vec<String> {
+        let mask = MaskCtx::new(text);
+        let mut v: Vec<String> = HttpRoute.scan(file, text, &mask).into_iter().map(|h| h.value).collect();
+        v.sort();
+        v.dedup();
+        v
+    }
+
+    #[test]
+    fn a_module_specifier_is_not_a_route() {
+        // `next/server` matched BARE_ROUTE exactly — two literal segments, no extension for FILE_LIKE to reject —
+        // so EVERY Next.js route handler reported a phantom route it "reads". Found in the first example picked
+        // for the README, on a real repo, in the flagship output.
+        let src = "import { NextRequest } from \"next/server\"\nconst x = require(\"pkg/sub\");\n";
+        let k = keys("app/api/x/route.ts", src);
+        assert!(k.iter().all(|v| !v.contains("next/server") && !v.contains("pkg/sub")), "module specifier leaked: {k:?}");
+    }
+
+    #[test]
+    fn a_mime_type_or_a_timezone_is_not_a_route() {
+        // Measured on real repos: `application/json` was a shared key across 38 files and `Europe/Paris` across
+        // 18, each silently coupling every file that merely mentioned it to every other.
+        let src = "const h = \"application/json\"; const tz = \"Europe/Paris\"; const t = \"text/html\";\n";
+        let k = keys("lib/x.ts", src);
+        assert!(k.is_empty(), "MIME/timezone leaked in as a route: {k:?}");
+    }
+
+    #[test]
+    fn a_slashless_route_literal_still_resolves() {
+        // FALSIFICATION. Requiring a leading slash was tried FIRST and killed this — a real Angular-style literal
+        // resolved against a configured base URL (caught by route_match.test.ts, not by any run). The guard has
+        // to be a closed vocabulary, not a shape rule.
+        let src = "protected resourceUrl = this.cfg.getEndpointFor('api/operations');\n";
+        let k = keys("lib/x.ts", src);
+        assert!(k.iter().any(|v| v.contains("api/operations")), "slashless route dropped: {k:?}");
     }
 }
