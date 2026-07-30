@@ -71,3 +71,43 @@ which this repo has now learned three separate times.
 - Re-run after any change to resolution, the coupling floor, or the shapes.
 - A case Seam loses is the most valuable row here. Keep it.
 - Report what the tool CLAIMED and what was TRUE. "Did not claim" is a third outcome and is not a failure.
+
+## The sweep — the oracle at scale
+
+`bun bench/oracle/sweep.ts <repo> <tsconfig> [limit]`
+
+One hand-written case proves the method; it does not measure the engine. The sweep generates its own cases, one
+per exported function, and scores them all. **Prepend a required parameter** to a declaration and every call site
+stops compiling, so `tsc`'s error set IS the call-site set — exactly the number `--query contract` claims.
+
+### First result (private-app, 20 symbols)
+
+    EXACT          20/20 (100%)
+    over-claimed   0
+    under-claimed  0        <- the expensive direction
+
+Including `cn` at **313** — the figure that started the 247-vs-313 investigation, now confirmed by the compiler —
+and `formatDate` at 12, `getIsoWeekNumber` at 10, `useFeatureGate` at 16. Runtime: ~10s per symbol (one compile),
+so the whole sweep is minutes. 908 exported functions are available in this repo alone.
+
+### THE ORACLE ACCUSED THE ENGINE TWICE, AND WAS WRONG BOTH TIMES
+
+Read this before trusting any row it prints.
+
+1. **Counting every fresh error.** Scored `useSocialMediaVerification` as claimed-2-actual-4 — Seam missing two
+   call sites. There are two calls. Breaking each ALSO emitted a downstream `TS7006 Parameter implicitly has an
+   'any' type` where the caller destructured the now-untyped result. Two sites, four errors. Cascade is not
+   truth, and counting it would systematically slander the tool for exactly the callers that use a result most.
+
+2. **Filtering to TS2554 only.** Scored `deriveMemberStatus` as claimed-3-actual-0 — Seam inventing three call
+   sites. It had not: the signature is `(a, b, c?, d = …, e?)`, so it accepts 2..5 arguments and a prepended 6th
+   REQUIRED parameter breaks no arity at all. Each real call site reported `TS2345` instead, as its first
+   argument slid onto the probe.
+
+The rule that survives: a broken call site announces itself as **TS2554** (too few arguments) or **TS2345** (the
+first argument no longer type-checks against the probe), deduped by (file, line). Everything else is cascade.
+
+Both accusations looked completely plausible and both were artefacts of the truth definition. An oracle is only
+an oracle once its own failure modes have been falsified — and note that the failure was asymmetric in a
+dangerous way: version 1 under-reported the tool's accuracy, version 2 over-reported a defect. A harness trusted
+after one run would have produced a bug report against working code.

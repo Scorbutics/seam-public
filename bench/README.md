@@ -29,8 +29,13 @@ rare event at n=4; the oracle raises n by three orders of magnitude at a fractio
 
 ## What each has already caught
 
-`oracle/` (first run): Seam predicted **60** breaking call sites from its arity histogram; `tsc` found **60**.
-An exact, falsifiable claim that grep cannot make at all — arity is not a textual property.
+`oracle/`: Seam predicted **60** breaking call sites from its arity histogram; `tsc` found **60**. Then the
+sweep scored 20 exported symbols against the compiler: **20/20 exact**, zero over-claims, zero under-claims,
+including `cn` at 313 — the figure that started the 247-vs-313 investigation. An exact, falsifiable claim grep
+cannot make at all, since arity is not a textual property.
+
+It also accused the engine of two defects it did not have, both artefacts of its own truth definition (see that
+README). Falsify a harness before believing it.
 
 `grep-vs-seam/`: the `createBooking` shadowing defect (silently resolved to a same-named class method); that
 `--query contract` returned 81 consumer names with zero signature facts; and that `seam --help` did not exist,
