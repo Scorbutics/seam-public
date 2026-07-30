@@ -91,7 +91,7 @@ purely that those 800 went through in one pass.
 
 15x on the embed call, 7.4x on the grow. The 108-path CLI gate is byte-identical, and 1022 tests pass.
 
-## DEFECT 2b — a vector depends on its batch-mates (pre-existing, NOT fixed)
+## DEFECT 2b — ROOT-CAUSED: int8 quantization, not masking
 
 Found while verifying the fix, and it is worth separating: chunking changes vectors slightly, so the obvious
 test is "chunked == unchunked". That test FAILS — but so does "one big batch == one text at a time", by ~0.03
@@ -100,9 +100,24 @@ pooled output moves with the padding.
 
 Since a batch is "whatever missed the cache this run", **an intent score is not reproducible across runs
 today**, independently of chunking. Chunking narrows the padding (per-chunk instead of per-run) rather than
-introducing the sensitivity. `chunk_tests::chunking_drifts_no_more_than_the_batching_it_replaces` pins that
-relationship and is written to fail loudly if the padding sensitivity is ever fixed, so it can tighten to
-exact equality then.
+introducing the sensitivity. **Root cause: int8 quantization.** Mean-pooling here is correct — it skips masked positions — and under fp32
+(`SEAM_EMBED_QUANTIZED=0`) one-big-batch and one-at-a-time agree EXACTLY. So the mask and the pooling are
+right; the drift is that different tensor shapes take different quantised kernels/scales, moving a vector by
+~0.03 per component depending on how long its longest batch-mate happened to be.
+
+What it costs: a def's intent score depends on which other defs missed the cache in the same run, so two
+machines can rank the same repo slightly differently. The per-repo disk cache pins a vector once computed, so
+it is stable WITHIN a machine — which is why this never surfaced as flakiness.
+
+Deliberately not "fixed", because the remedy is a product trade, not a bug fix:
+
+  * **fp32** — exact, at ~4x the weights and a slower pass.
+  * **fixed-bucket padding** — pad every text to a bucket derived from its OWN length, so its padding no longer
+    depends on its batch-mates. Keeps int8's speed and buys reproducibility; needs the tokenizer padding
+    strategy set per bucket.
+
+`batch_composition_moves_a_vector_only_under_int8` pins BOTH arms: it asserts exactness under fp32 and
+bounded drift under int8, so whichever way the trade is decided the test already states the expectation.
 
 ## DEFECT 3 — FIXED: a Rust-core change did not invalidate the on-disk cache
 

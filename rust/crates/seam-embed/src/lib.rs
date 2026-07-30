@@ -371,16 +371,22 @@ mod tests {
         assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
     }
 
-    /// A vector DEPENDS ON ITS BATCH-MATES, and chunking did not introduce that.
+    /// A vector depends on its batch-mates ONLY UNDER int8. Root-caused, not shrugged at.
     ///
-    /// `encode_batch` pads every text to the batch's longest and the pooled output moves with that padding:
-    /// measured, one pass over 70 mixed-length texts vs one text at a time differs by ~0.03 per component on
-    /// vectors whose components are ~0.05. The batch is "whatever missed the cache this run", so an intent
-    /// score is already not reproducible across runs. This pins the FACT rather than a false invariant --
-    /// chunking must stay within the drift the old batching had. If the padding sensitivity is ever fixed,
-    /// the first assert fails loudly and this should tighten to exact equality.
+    /// Mean-pooling here is correct (it skips masked positions), so padding should be invisible — and under
+    /// fp32 it IS: `SEAM_EMBED_QUANTIZED=0` makes one-big-batch and one-at-a-time agree EXACTLY. The drift is
+    /// an int8 QUANTIZATION artefact: different tensor shapes take different kernels/scales, so a text's vector
+    /// moves by ~0.03 per component (on components of ~0.05) depending on how long its longest batch-mate was.
+    ///
+    /// What that costs in practice: a def's intent score depends on which other defs missed the cache in the
+    /// same run, so two machines can rank the same repo slightly differently. The per-repo disk cache pins a
+    /// vector once computed, so it is stable WITHIN a machine — which is why this never surfaced as flakiness.
+    ///
+    /// Not "fixed" here because the remedy is a product trade: fp32 buys exactness at ~4x the weights and a
+    /// slower pass, and the alternative (pad every text to a fixed bucket so its padding depends only on its
+    /// own length) buys it while keeping int8. Both are real choices; silently switching either is not.
     #[test]
-    fn chunking_drifts_no_more_than_the_batching_it_replaces() {
+    fn batch_composition_moves_a_vector_only_under_int8() {
         if !available() {
             return; // no embedding runtime here
         }
@@ -397,7 +403,15 @@ mod tests {
         };
         let unchunked = worst(&embed_one_batch(&texts));
         let chunked = worst(&embed_many(&texts));
-        assert!(unchunked > 0.0, "padding stopped mattering — tighten this to exact equality");
+
+        if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("0") {
+            // fp32: padding is genuinely invisible, which is what proves the pooling and the mask are right.
+            assert!(unchunked < 1e-5, "fp32 should be padding-invariant, saw {unchunked}");
+            assert!(chunked < 1e-5, "fp32 chunking should be exact, saw {chunked}");
+            return;
+        }
+        // int8: drift exists, and chunking must not make it WORSE than the batching it replaced.
+        assert!(unchunked > 0.0, "int8 stopped drifting — re-check whether the quantised kernels changed");
         assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
     }
 
