@@ -75,6 +75,7 @@ for (const f of barrelFiles) {
   }
 }
 const starExported = new Set(starExportedModules.map((s) => s.replace(/^.*\//, "")));
+const barrelFileSet = new Set(barrelFiles);
 const stratumOf = (c: { file: string; name: string }): string =>
   namedReexport.get(c.name) ?? (starExported.has(c.file.replace(/^.*\//, "").replace(/\.tsx?$/, "")) ? "barrel" : "plain");
 
@@ -126,7 +127,7 @@ const { answers: lspAnswers, buildMs: lspBuildMs } = armLspBatch(repo, tsconfig,
 type Row = {
   file: string; name: string; stratum: string;
   truth: number; truthFiles: number;
-  arms: Record<string, { claim: number | null; delta: number | null; fileRecall: number; extraFiles: number; ms: number }>;
+  arms: Record<string, { claim: number | null; delta: number | null; fileRecall: number; refOnly: number; falseFiles: number; extra: string[]; ms: number }>;
 };
 const rows: Row[] = [];
 
@@ -142,11 +143,22 @@ for (const t of targets) {
   const arms: Row["arms"] = {};
   for (const [name, a] of Object.entries(answers)) {
     const missed = [...truth.files].filter((f) => !a.files.has(f));
+    // AN EXTRA FILE IS NOT AUTOMATICALLY A FALSE ONE, and conflating the two libelled the tool. Every one of
+    // Seam's 6 extras in the n=45 run was the BARREL FILE itself: a named re-export genuinely references the
+    // symbol, so it belongs on a consumer list, but it never CALLS it, so an arity change does not break it and
+    // tsc never flags it. That is a grain mismatch between "files that reference" and "files that call" — the
+    // same class of confusion as usage-site-vs-call-site — and reporting it as a precision fault would have been
+    // the exact misreading this benchmark exists to prevent. grep's extras are a different animal: prose,
+    // comments and same-named locals, none of which reference anything.
+    const extra = [...a.files].filter((f) => !truth.files.has(f));
+    const refOnly = extra.filter((f) => barrelFileSet.has(f)).length;
     arms[name] = {
       claim: a.callSites,
       delta: a.callSites === null ? null : a.callSites - truth.sites.size,
       fileRecall: truth.files.size ? +(((truth.files.size - missed.length) / truth.files.size) * 100).toFixed(1) : 100,
-      extraFiles: [...a.files].filter((f) => !truth.files.has(f)).length,
+      refOnly,
+      falseFiles: extra.length - refOnly,
+      extra,
       ms: name === "seam" ? (seamFileMs.get(t.file) ?? 0) : a.ms,
     };
   }
@@ -173,8 +185,9 @@ const summarise = (subset: Row[], label: string) => {
     const under = scored.filter((c) => (c.delta ?? 0) < 0).length;
     const over = scored.filter((c) => (c.delta ?? 0) > 0).length;
     const recall = subset.length ? (subset.reduce((s, r) => s + r.arms[a].fileRecall, 0) / subset.length).toFixed(1) : "—";
-    const extra = cells.reduce((s, c) => s + c.extraFiles, 0);
-    console.log(`   ${a.padEnd(5)} exact ${String(exact).padStart(3)}/${String(scored.length).padEnd(3)} (${pct(exact, scored.length).padStart(3)}%)   under ${String(under).padStart(3)}  over ${String(over).padStart(3)}   file-recall ${recall.padStart(5)}%   false files ${String(extra).padStart(4)}   no-claim ${cells.length - scored.length}`);
+    const falseF = cells.reduce((s, c) => s + c.falseFiles, 0);
+    const refF = cells.reduce((s, c) => s + c.refOnly, 0);
+    console.log(`   ${a.padEnd(5)} exact ${String(exact).padStart(3)}/${String(scored.length).padEnd(3)} (${pct(exact, scored.length).padStart(3)}%)   under ${String(under).padStart(3)}  over ${String(over).padStart(3)}   file-recall ${recall.padStart(5)}%   FALSE files ${String(falseF).padStart(4)}   ref-only(barrels) ${String(refF).padStart(3)}   no-claim ${cells.length - scored.length}`);
   }
 };
 console.log(`\n══════ ${rows.length} symbol(s), judged by tsc`);
