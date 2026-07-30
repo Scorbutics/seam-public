@@ -112,6 +112,16 @@ static METHOD_EXPORT: Lazy<Regex> =
 // A route literal NOT at a fetch site (the carrier-indirection: URL stashed in a field, read by `http.*`).
 static BARE_ROUTE: Lazy<Regex> = Lazy::new(|| Regex::new(r#"[`'"](/?[A-Za-z][\w-]*(?:/[\w{}$:.*-]+)+)[`'"]"#).unwrap());
 static DYN_TAIL: Lazy<Regex> = Lazy::new(|| Regex::new(r#"^["'`]\s*\+"#).unwrap());
+// A MODULE SPECIFIER IS NOT A ROUTE. `import { NextRequest } from "next/server"` matches BARE_ROUTE exactly —
+// `next` then `/server`, two literal segments, no file extension for FILE_LIKE to reject. So every Next.js route
+// handler in a repo reported a phantom `http-route "next/server"` that it "reads", and any two files importing
+// it were coupled to each other through it. Found in the FIRST example picked for the README, which is the
+// cheapest possible place to find it and the most embarrassing place to have missed it.
+//
+// Matched on what PRECEDES the literal, because that is what distinguishes the two uses: a route literal is an
+// argument or an assignment, an import specifier follows `from` / `import(` / `require(`.
+static IMPORT_POS: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r#"(?:\bfrom\s*|\bimport\s*\(\s*|\brequire\s*\(\s*)$"#).unwrap());
 static FILE_LIKE: Lazy<Regex> = Lazy::new(|| Regex::new(r"\.(?:[mc]?[jt]sx?|json|css|s[ca]ss|html|png|svg|jpe?g|md)$").unwrap());
 static LEAD_SLASH: Lazy<Regex> = Lazy::new(|| Regex::new(r"^/+").unwrap());
 
@@ -208,6 +218,10 @@ impl CouplingAdapter for HttpRoute {
             let raw = &b[1];
             if FILE_LIKE.is_match(raw) {
                 continue; // a file path, not a route
+            }
+            // ...and not a module specifier: `from "next/server"`, `import("pkg/sub")`, `require("a/b")`.
+            if IMPORT_POS.is_match(&text[..b.get(0).unwrap().start()]) {
+                continue;
             }
             let path = norm_path(raw);
             if path.split('/').filter(|s| !s.is_empty() && *s != "*").count() < 2 {
