@@ -245,3 +245,56 @@ Arm Seam flagged that `--query consumers` and `--query contract` disagree on the
 (**247 vs 313**). Both renders state their counting unit, and the agent still had to stop and reconcile them.
 Two shapes giving two numbers for one relationship is a real usability defect even when both are defensible.
 Not yet fixed.
+
+## Run 3 results (2026-07-30) — cal.com multi-hop
+
+The case where run 1's verified resolution defect was found, re-run after the three-part fix (import shadows a
+same-named method; const-bound export addressable as a dependency TARGET; body passes scoped to the RESOLVED
+anchor span) plus the contract enrichment and `--help`.
+
+| metric | run 1 grep | run 1 seam | run 2 grep | run 2 seam |
+|---|---|---|---|---|
+| live tokens | **128,852** | 145,539 | 154,129 | **119,572** |
+| tool uses (harness) | **62** | 66 | **54** | 66 |
+| wall clock | **456s** | 593s | **564s** | 580s |
+| score.ts proxy tokens | 9,965 | **9,049** | 10,314 | **8,151** |
+| trace lines | 59 | 60 | 47 | 61 |
+| rg/grep commands | 32 | 22 | 21 | **16** |
+| seam invocations | — | 9 | — | **5** |
+
+No independent ground truth for this case, so recall is NOT scored. Everything above is mechanical; everything
+below is named as judgement.
+
+### The defect is fixed, and fixed in the better way
+
+Run 1: Seam silently resolved `createBooking` at `RegularBookingService.ts:1939` to the same-named CLASS METHOD
+at :3061, so the prisma transaction never entered its mechanism list, and the agent had no way to know.
+
+Run 2, the arm's own words:
+
+> `seam` warned that the `createBooking` contract count is name-shadowed. Gap `contract-shadowed-name`:
+> `RegularBookingService.ts` declares its own symbol named `createBooking` (the class method at 3061) as well as
+> importing the helper, so the "1 call site" figure could be inflated. I read line 1939 directly and confirmed
+> it is the imported helper.
+
+That is the inversion of the run 1 failure, and it is a BETTER outcome than silently being right: the tool
+declared the ambiguity, the agent spent one read resolving it, and the answer names
+`createBooking() -> saveBooking() -> prisma.$transaction Booking.create` as THE DB WRITE. The
+`contract-shadowed-name` gap was added the same day for exactly this shape and fired on the real case.
+
+### Cost reversed on the hardest case
+
+Seam went from 13% MORE live tokens than grep (145,539 vs 128,852) to 22% FEWER (119,572 vs 154,129), and from
+9 seam invocations to 5. Within the Seam arm, grep fallback fell 22 -> 16. Richer per-call output bought fewer
+calls here, which is the opposite of what the private-app single-hop case showed in run 2 — so the honest reading is
+that the enrichment pays off where the question is MULTI-HOP and does not on a single-hop lookup.
+
+CAVEAT, same as always: n=1 per cell, and both arms did less work in run 2 than run 1 (grep's own trace fell
+59 -> 47 lines), so some of this is run-to-run variance. Tool uses did NOT move for Seam (66 both runs) even
+though seam invocations halved — the budget went into reading files instead. Wall clock stayed level (593s ->
+580s); nothing here made the engine faster.
+
+### Standing caveat on the axis that did not move
+
+Seam still loses tool uses to grep on this case (66 vs 54). The private-app case (run 2) plus this one together say:
+tool-call count is not the axis the enrichment moves, and it should stop being quoted as the target.
