@@ -449,6 +449,19 @@ export function renderContract(model: any): string {
         const arity = (ob.arity ?? []).map(([argc, n]: number[]) => `${n}×${argc}arg`).join(", ");
         const asRecv = ob.receiverSites ? `, plus ${plural(ob.receiverSites, "site")} using it as a receiver` : "";
         out.push(`    observed: ${plural(ob.callSites, "call site")}${arity ? ` — ${arity}` : ""}${asRecv}`);
+        // THE REPRODUCTION COMMAND. Verification is not waste to be engineered away — it is what a careful
+        // reader does with any number it is about to act on, and Seam PASSES it: in bench/grep-vs-seam run 2 the
+        // agent re-derived this exact count with its own scan and reported it "reproduced exactly". What cost
+        // calls was not the checking, it was having to INVENT the check. Handing over the one-liner turns an
+        // exploratory grep loop into a single confirming command, and a confirmed number is worth more than an
+        // unchallenged one. The count is deliberately stated as textual-hits-minus-definition, because that is
+        // what grep can actually see — it does not resolve, so it cannot be asked for the resolved figure.
+        // `\\b` / `\\(` and not `\b` / `\(`: inside a TEMPLATE LITERAL those are the BACKSPACE escape and a
+        // redundant escape, so the first version emitted `rg -o 'b('` — an unclosed group, an invalid regex, a
+        // command that fails the moment anyone pastes it. Verified by RUNNING what this prints, not by reading it.
+        out.push(`      verify: rg -o '\\b${p.symbol}\\(' --glob '!node_modules' | wc -l`
+          + `   (expect ${ob.callSites + 1} textual hits: ${ob.callSites} call site(s) + this declaration;`
+          + ` a LARGER number means same-named symbols elsewhere, which is what this shape resolves away)`);
       } else if (ob?.receiverSites) {
         // An exported CLIENT OBJECT (`supabase.from(…)`) is never itself called. Reporting that as "never
         // invoked" was flatly wrong on the first fixture it met, so the receiver case gets its own sentence.

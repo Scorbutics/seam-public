@@ -19,6 +19,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { projectContract } from "../helpers/shapes.js";
+import { renderContract } from "../../src/codebase/render/shapes.js";
 
 let REPO: string;
 const w = (rel: string, t: string) => { mkdirSync(join(REPO, dirname(rel)), { recursive: true }); writeFileSync(join(REPO, rel), t); };
@@ -151,5 +152,26 @@ describe("the observed half declares its own grain", () => {
     expect(g).toBeDefined();
     // it names the file, so the reader can check the one place the count could be high
     expect(g.evidence).toContain("src/registry.ts");
+  });
+});
+
+describe("the reproduction command (verify hint)", () => {
+  test("it is emitted for a called export, and predicts callSites + 1 textual hits", () => {
+    const t = renderContract({ ...contract, noStructure: false } as any);
+    const line = t.split("\n").find((l) => l.includes("verify:") && l.includes("charge"));
+    expect(line).toBeDefined();
+    // 3 call sites in the fixture (2 in checkout + 1 same-named local in registry) + the declaration
+    expect(line).toContain("expect 4 textual hits");
+  });
+
+  test("the regex is REAL — literal \\b and \\(, not template-literal escapes", () => {
+    // THE BUG THIS PINS: written as `\b${sym}\(` inside a template literal, `\b` is the BACKSPACE control
+    // character and `\(` is a redundant escape, so the first version emitted `rg -o 'charge('` — an unclosed
+    // group, an invalid regex, a command that fails the instant anyone pastes it. A verify hint that does not
+    // run is worse than none: it invites a check and then wastes the call.
+    const t = renderContract({ ...contract, noStructure: false } as any);
+    const line = t.split("\n").find((l) => l.includes("verify:") && l.includes("charge"))!;
+    expect(line).toContain("rg -o '\\bcharge\\(' ");   // the two-character escapes, verbatim
+    expect(line).not.toContain("\b");                    // no backspace control char leaked in
   });
 });
