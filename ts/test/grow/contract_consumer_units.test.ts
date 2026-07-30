@@ -113,10 +113,17 @@ describe("contract (file grain) and consumers (site grain) — both correct, bot
 
     expect(contractOut).toContain(`- db [constant] — ${FILES} consuming files`);
     expect(contractOut).toContain(`fan-in: ${FILES} consuming files`);
-    expect(contractOut).not.toMatch(/\d+ usage sites?\b/);      // never counts in the edge grain
     expect(contractOut).not.toContain("consumer(s)");           // the old unit-less label is gone
 
-    expect(consumersOut).toContain(`resolved: ${SITES} usage sites (${SYMBOLS} consuming symbols in ${FILES} files)`);
-    expect(consumersOut).not.toMatch(/\d+ consuming files?\b/); // never counts in the module grain
+    // RELABELLED from "usage sites" to "consumer edges". The count is unchanged and still correct; the NAME was
+    // false — a symbol using the anchor repeatedly inside one unit contributes ONE entry, so an entry is an edge,
+    // not an invocation. It also collided with the contract shape's genuine per-invocation `observed:` count,
+    // and a benchmark agent burned calls trying to reconcile 247 against 313 for the same symbol
+    // (bench/grep-vs-seam run 2). See test/codebase/counting_grains.test.ts.
+    expect(consumersOut).toContain(`resolved: ${SITES} consumer edges (${SYMBOLS} consuming symbols in ${FILES} files)`);
+    expect(consumersOut).not.toMatch(/\d+ usage sites?\b/);     // the false label must not come back
+    // The consumers render now POINTS AT the contract's call-site grain instead of leaving the reader to
+    // discover it, so "consuming files" may legitimately appear in the guidance prose — pin the HEADER instead.
+    expect(consumersOut.split("## How to use")[0]).not.toMatch(/\d+ consuming files?\b/);
   });
 });

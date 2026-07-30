@@ -57,7 +57,15 @@ run diff        --repo "$R" --file ../sample.patch
 # CENTER-FIRST concern (no --center): the ONE path that runs the intent-weighted center pick, and therefore
 # the only one that exercises embedScoreDefs. Every other case pins the anchor, which skips it entirely.
 run centerfirst --repo "$R" --scan --auto --concern --intent "how is a payment persisted" --data-coupling floor --format concern
-for q in set impact contract neighborhood reach refactor writers coupling dependencies; do
+# `set` and `reach` ARE NOT SHAPES. The registered handlers are `consumers` and `reaches` (decompose.ts
+# QUERY_HANDLERS), so `--query set` / `--query reach` matched nothing, fell through to a GROW, and these two
+# cases pinned a grow's output under a shape's name -- byte-identical to each other and to `q_depth1`. The
+# consumers shape (the most-used shape in the product) and the reaches shape therefore had NO gate coverage at
+# all, for the whole migration, while two cases made them look covered. Third instance of this file's own
+# null-answer trap found in one day; the first two were the contract shape's empty `provides` and the DI query.
+# `reaches` is NOT in the loop for the same reason `compare` is not: it needs `--to-symbol`, so a loop case
+# would pin an argument-validation error. Both get explicit cases below.
+for q in consumers impact contract neighborhood refactor writers coupling dependencies; do
   run "q_$q" --repo "$R" --scan --query "$q" --anchor-file "$A" --symbol "$S" --data-coupling floor
 done
 # `compare` is NOT in that loop: it needs a side B. It used to be, and so it exited 2 on
@@ -121,10 +129,18 @@ sed -i -E 's|/tmp/[a-zA-Z0-9_./-]+||g' "$OUT/candidates.out" "$OUT/candidates.er
 # three consumers, so those paths run the flag and assert an empty answer, exactly the way --query
 # dependencies hid the DI code path. booking-app/BookingsBean has real fan-out (impact 5 across 2 files,
 # 2 resolved dependencies, a 3-file subsystem), so these cases assert content rather than absence.
-for q in set impact contract neighborhood reach refactor coupling dependencies; do
+for q in consumers impact contract neighborhood refactor coupling dependencies; do
   run "b_$q" --repo test/fixtures/booking-app --scan --query "$q" \
     --anchor-file ejb/BookingsBean.java --symbol BookingsBean --data-coupling floor
 done
+# CONSUMERS with a NON-ZERO answer, and REACHES with a real target -- the two shapes the `set`/`reach` typo
+# left uncovered. crossstack-repo's `supabase` is imported by 4 files, so the consumer-EDGE count is non-zero
+# and the header's counting unit is actually observable (every other consumers case in this file answers 0,
+# which is how the "usage sites" -> "consumer edges" mislabel survived: no gate output contained a count).
+run q_consumers_nz --repo test/fixtures/crossstack-repo --scan --query consumers \
+  --anchor-file lib/db.ts --symbol supabase --data-coupling floor
+run q_reaches      --repo test/fixtures/chain-repo --scan --query reaches \
+  --anchor-file src/c.ts --symbol c --to-file src/a.ts --to-symbol a --data-coupling floor
 
 # DI-BINDING ENRICHMENT on --query dependencies (default-ON via SEAM_DI_RESOLVE). The gate ALREADY ran that
 # query — but only against route-repo, where the answer is "none resolved — a leaf", so the enrichment loop

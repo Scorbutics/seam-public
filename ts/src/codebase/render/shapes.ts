@@ -138,8 +138,14 @@ function renderEdgeSet(model: any, L: EdgeSetLabels, sr?: SnippetReader): string
   out.push(...crossStackTruncationLines(model.crossStackTruncations));
   out.push("## How to use",
     `COUNTING UNIT: one entry = one ${L.unit}, so \`resolved\` counts ${L.unit}s, NOT ${L.nounSg}s or files —`,
-    `the ${L.nounSg}/file rollup in the header is the same set counted at those grains. A module CONTRACT`,
-    `(\`--query contract\`) counts the SAME relationship per consuming FILE; the two figures are not interchangeable.`,
+    `the ${L.nounSg}/file rollup in the header is the same set counted at those grains. An edge is NOT an`,
+    `invocation: a symbol that uses the anchor repeatedly inside one unit contributes ONE edge here.`,
+    // No angle brackets in this prose: `test/render/snippets.test.ts` asserts the shape renders no `>` when no
+    // snippet reader is attached, using it as the gutter proxy. A placeholder like `--center <file>` trips it.
+    `For the per-INVOCATION count, and for the declared signature, run \`--query contract\` on the module:`,
+    `its \`observed: N call sites\` counts every call expression, so it is normally LARGER than this figure.`,
+    `Neither is wrong and they are not interchangeable — pick by the question ("who depends on this" = edges,`,
+    `"how many places would I have to edit" = call sites).`,
     `Resolved ${L.nounPl} are the verified set (correct where grep yields false positives from`,
     `comments/strings/same-name symbols). Suggested ${L.nounPl} are leads the resolver couldn't ground.`,
     `Unresolved ${L.nounPl} are opaque to static analysis — grep is the right tool for those.`,
@@ -226,7 +232,15 @@ export function renderCoupling(model: any, sr?: SnippetReader): string {
 // CONSUMERS (`shape:"set"`) — who calls/uses the anchor (in-edges).
 export function renderConsumerSet(model: any, sr?: SnippetReader): string {
   if (!model || model.shape !== "set") return "(not a consumer-set model)";
-  return renderEdgeSet(model, { title: "Consumers of", nounPl: "callers", unit: "usage site", nounSg: "consuming symbol",
+  // UNIT: "consumer edge", NOT "usage site". This shape emits one entry per resolved graph EDGE, and a symbol
+  // that uses the anchor many times inside ONE unit produces ONE edge — measured on private-app:
+  // `PartnerInlineProgress` calls `cn(…)` 13 times and appears here once, as a single `reference` edge.
+  // Calling that a "usage site" was false, and it collided head-on with `--query contract`, which reports the
+  // genuine per-invocation count (247 edges vs 313 call sites for the same symbol). A benchmark agent hit the
+  // contradiction, could not tell which number to trust, and spent calls reconciling them; both figures were
+  // defensible, but only one of them was labelled honestly. Matches the `dependencies` shape, which already
+  // said "dependency edge".
+  return renderEdgeSet(model, { title: "Consumers of", nounPl: "callers", unit: "consumer edge", nounSg: "consuming symbol",
     noneText: "Nothing in the repo calls this symbol — an entry point, dead code, or dispatched-only." }, sr);
 }
 
@@ -458,10 +472,11 @@ export function renderContract(model: any): string {
     "Provides is the module's real public surface (declared exports that are ACTUALLY imported), with each",
     "consumer. Unused exports are dead public API — safe-to-narrow candidates. Depends is the outbound cut.",
     "fan-in (afferent) / fan-out (efferent) are the coupling pair: high fan-in = changing this ripples wide.",
-    "COUNTING UNIT: every count here is CONSUMING FILES — one entry per importing file, cited by the enclosing",
-    "symbol of its first usage in that file, NOT one entry per usage site. For every usage site (and every",
-    "distinct consuming symbol) of one export, run `--query consumers --center \"<module>#<export>\"`: that shape",
-    "is edge-grained and reports a strictly larger number for the same relationship.",
+    "COUNTING UNIT: TWO grains here, deliberately. The consumer LIST and `fan-in` are CONSUMING FILES — one",
+    "entry per importing file, cited by the enclosing symbol of its first usage. The `observed:` line is",
+    "CALL SITES — every call expression, so it is normally the largest of the three figures. `--query consumers`",
+    "reports a THIRD grain, resolved consumer EDGES, which collapses repeated uses inside one unit to one entry;",
+    "expect it to sit between the file count and the call-site count. All three describe the same relationship.",
     "SCOPE: only exports DECLARED in this file are members. Symbols this module re-exports from elsewhere",
     "(`export * from \"./x\"`) belong to their declaring module's contract, so their importers are not counted here.");
   return out.join("\n");
