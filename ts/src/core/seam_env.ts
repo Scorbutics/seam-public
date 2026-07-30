@@ -87,8 +87,12 @@ export const SEAM_FLAGS: readonly FlagDoc[] = [
   { name: "SEAM_DI_RESOLVE", cls: "knob", dflt: "on",
     effect: "`=0` drops the DI-binding enrichment from a --query dependencies answer.",
     readAt: "ts/src/cli/queries.ts" },
-  { name: "SEAM_EMBED_QUANTIZED", cls: "knob", dflt: "on (int8 weights)",
-    effect: "`=0` loads fp32 weights — slower and larger, marginally different scores.",
+  { name: "SEAM_EMBED_QUANTIZED", cls: "knob", dflt: "off — fp32 weights",
+    effect: "`=1` opts back into int8. int8 inference is SHAPE-DEPENDENT: the same text embeds differently " +
+            "depending on its batch-mates, which moved 3 of the top 10 intent-ranked defs and so changed which " +
+            "defs the answer called the spine. fp32 is padding-invariant for +8% time / +10% RSS on a cold " +
+            "embed, paid once per repo because vectors are disk-cached. NOTE the weights tag is part of the " +
+            "embed cache key, so flipping this orphans existing caches and every repo re-embeds once.",
     readAt: "rust/crates/seam-scan/src/def_embed.rs" },
   { name: "SEAM_GROW_BORDER_FIELD", cls: "knob", dflt: '"" (the intent field)',
     effect: "Which field shapes the grow border. `opts.borderField` wins over it.",

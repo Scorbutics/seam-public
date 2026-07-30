@@ -69,8 +69,14 @@ fn onnx_path(dir: &PathBuf) -> Option<PathBuf> {
     // WHICH WEIGHTS decides whether the two engines agree. transformers.js loads the INT8-quantized file by
     // default, and int8 kernels differ between execution providers (onnxruntime-web/WASM vs native ORT) by
     // ~1e-2 on a cosine — enough to swap near-ties in the ranking, which is the only thing the grow reads.
-    // `SEAM_EMBED_QUANTIZED=0` selects the fp32 weights; both engines must make the SAME choice.
-    let quantized = std::env::var("SEAM_EMBED_QUANTIZED").map(|v| v != "0").unwrap_or(true);
+    // fp32 is the DEFAULT; `SEAM_EMBED_QUANTIZED=1` selects int8. Both engines must make the SAME choice.
+    // FP32 BY DEFAULT. int8 inference is shape-dependent: the same text embeds differently depending on how
+    // long its longest batch-mate was, which moved 3 of the top 10 intent-ranked defs (top-10 overlap 7/10,
+    // max rank shift 24 of 120) — and bandTiers splits spine/supporting/off BY RANK, so it changed which defs
+    // the answer called the spine. fp32 is padding-invariant (asserted in tests) and measured at +8% time /
+    // +10% RSS on a cold Keycloak embed, paid once per repo because the vectors are disk-cached.
+    // `SEAM_EMBED_QUANTIZED=1` opts back into int8 for anyone who wants the speed and not the stability.
+    let quantized = std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("1");
     let order: &[&str] = if quantized {
         &["onnx/model_quantized.onnx", "onnx/model.onnx", "model_quantized.onnx", "model.onnx"]
     } else {
@@ -371,22 +377,17 @@ mod tests {
         assert!(cosine(&[1.0, 0.0], &[0.0, 1.0]).abs() < 1e-6);
     }
 
-    /// A vector depends on its batch-mates ONLY UNDER int8. Root-caused, not shrugged at.
+    /// PADDING IS INVISIBLE — the property fp32 buys, asserted unconditionally now that it is the default.
     ///
-    /// Mean-pooling here is correct (it skips masked positions), so padding should be invisible — and under
-    /// fp32 it IS: `SEAM_EMBED_QUANTIZED=0` makes one-big-batch and one-at-a-time agree EXACTLY. The drift is
-    /// an int8 QUANTIZATION artefact: different tensor shapes take different kernels/scales, so a text's vector
-    /// moves by ~0.03 per component (on components of ~0.05) depending on how long its longest batch-mate was.
+    /// int8 inference is shape-dependent: a text embedded beside a long neighbour differs from the same text
+    /// embedded alone, by ~0.03 per component on components of ~0.05. That moved 3 of the top 10 intent-ranked
+    /// defs, and bandTiers splits spine/supporting/off BY RANK, so it changed which defs the answer called the
+    /// spine. Mean-pooling was never the problem (it skips masked positions); the quantised kernels were.
     ///
-    /// What that costs in practice: a def's intent score depends on which other defs missed the cache in the
-    /// same run, so two machines can rank the same repo slightly differently. The per-repo disk cache pins a
-    /// vector once computed, so it is stable WITHIN a machine — which is why this never surfaced as flakiness.
-    ///
-    /// Not "fixed" here because the remedy is a product trade: fp32 buys exactness at ~4x the weights and a
-    /// slower pass, and the alternative (pad every text to a fixed bucket so its padding depends only on its
-    /// own length) buys it while keeping int8. Both are real choices; silently switching either is not.
+    /// Under `SEAM_EMBED_QUANTIZED=1` the drift returns by design, so that arm only checks chunking does not
+    /// make it worse than the single batch it replaced.
     #[test]
-    fn batch_composition_moves_a_vector_only_under_int8() {
+    fn a_vector_does_not_depend_on_its_batch_mates() {
         if !available() {
             return; // no embedding runtime here
         }
@@ -404,53 +405,13 @@ mod tests {
         let unchunked = worst(&embed_one_batch(&texts));
         let chunked = worst(&embed_many(&texts));
 
-        if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("0") {
-            // fp32: padding is genuinely invisible, which is what proves the pooling and the mask are right.
-            assert!(unchunked < 1e-5, "fp32 should be padding-invariant, saw {unchunked}");
-            assert!(chunked < 1e-5, "fp32 chunking should be exact, saw {chunked}");
+        if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("1") {
+            // opted back into int8: drift is expected; chunking must not amplify it
+            assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
             return;
         }
-        // int8: drift exists, and chunking must not make it WORSE than the batching it replaced.
-        assert!(unchunked > 0.0, "int8 stopped drifting — re-check whether the quantised kernels changed");
-        assert!(chunked <= unchunked * 1.5 + 1e-3, "chunking drifted further than one big batch: {chunked} vs {unchunked}");
-    }
-
-    /// DOES THE int8 DRIFT ACTUALLY CHANGE THE ANSWER? Per-component drift is not the product question —
-    /// the scores feed a RANKING (spine/supporting/off), and 384 dimensions of noise partly cancel in a
-    /// cosine. So measure the ranking, not the vector. Diagnostic: prints top-k overlap and max rank shift.
-    #[test]
-    fn report_whether_int8_drift_reorders_the_ranking() {
-        if !available() || std::env::var("SEAM_EMBED_RANK_REPORT").is_err() {
-            return; // opt-in diagnostic, not an assertion
-        }
-        let corpus: Vec<String> = (0..120)
-            .map(|i| match i % 4 {
-                0 => format!("fn createBooking{i}(memberId: string) persists a booking row and emits confirmation"),
-                1 => format!("fn renderChart{i}(data) draws the analytics histogram for the dashboard"),
-                2 => format!("class PaymentProcessor{i} captures the card charge and reconciles the ledger"),
-                _ => format!("fn util{i}(x)"),
-            })
-            .collect();
-        let intent = embed_one_batch(&[format!("{}how is a booking confirmed", query_prefix())]).pop().unwrap_or_default();
-        let cos = |v: &[f32]| -> f32 { v.iter().zip(&intent).map(|(a, b)| a * b).sum() };
-        let rank = |vs: &[Vec<f32>]| -> Vec<usize> {
-            let mut idx: Vec<usize> = (0..vs.len()).collect();
-            idx.sort_by(|a, b| cos(&vs[*b]).partial_cmp(&cos(&vs[*a])).unwrap_or(std::cmp::Ordering::Equal));
-            idx
-        };
-        let a = rank(&embed_one_batch(&corpus));                       // one big batch
-        let b = rank(&embed_many(&corpus));                            // chunks of 32
-        let c: Vec<Vec<f32>> = corpus.iter().map(|t| embed_one_batch(std::slice::from_ref(t)).pop().unwrap_or_default()).collect();
-        let c = rank(&c);                                              // one at a time
-        let overlap = |x: &[usize], y: &[usize], k: usize| -> usize {
-            let sy: std::collections::HashSet<_> = y[..k].iter().collect();
-            x[..k].iter().filter(|i| sy.contains(i)).count()
-        };
-        let pos = |r: &[usize]| -> Vec<usize> { let mut p = vec![0; r.len()]; for (rank, &i) in r.iter().enumerate() { p[i] = rank; } p };
-        let (pa, pc) = (pos(&a), pos(&c));
-        let max_shift = pa.iter().zip(&pc).map(|(x, y)| (*x as i64 - *y as i64).abs()).max().unwrap_or(0);
-        eprintln!("RANK REPORT (n={}): top10 overlap big-vs-single={}/10  chunked-vs-single={}/10  top25={}/25  max rank shift={}",
-            corpus.len(), overlap(&a, &c, 10), overlap(&b, &c, 10), overlap(&a, &c, 25), max_shift);
+        assert!(unchunked < 1e-5, "the DEFAULT must be padding-invariant, saw {unchunked} — is fp32 still the default?");
+        assert!(chunked < 1e-5, "chunked embedding must be exact under fp32, saw {chunked}");
     }
 
     #[test]

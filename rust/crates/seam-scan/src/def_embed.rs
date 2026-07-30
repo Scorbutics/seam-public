@@ -161,7 +161,7 @@ fn hash_key(s: &str) -> String {
 // computes fp32 ones only for the new ones — a single field built from two different sets of weights, which
 // is worse than either. Under the OS cache dir; never written into the target repo.
 fn cache_path(repo: &str) -> std::path::PathBuf {
-    let weights = if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("0") { "fp32" } else { "int8" };
+    let weights = if std::env::var("SEAM_EMBED_QUANTIZED").as_deref() == Ok("1") { "int8" } else { "fp32" };
     let key = hash_key(&format!("{repo}|{}|{weights}", seam_embed::model_id()));
     std::path::PathBuf::from(std::env::var("HOME").unwrap_or_default()).join(".cache/seam/embed").join(format!("{key}.json"))
 }
